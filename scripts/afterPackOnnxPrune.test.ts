@@ -63,6 +63,19 @@ describe("pruneOnnxRuntimeForLinux", () => {
     );
   });
 
+  it("fails the package when the target arch's directory isn't there at all", () => {
+    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["riscv64"])).toThrow(
+      /binding missing for linux-riscv64/
+    );
+  });
+
+  it("fails the package when onnxruntime-node has no binaries", () => {
+    fs.rmSync(binRoot(), { recursive: true, force: true });
+    expect(() => pruneOnnxRuntimeForLinux(unpacked, ["x64"])).toThrow(
+      /binding missing for linux-x64/
+    );
+  });
+
   it("does nothing without onnxruntime-node", () => {
     fs.rmSync(path.join(unpacked, "node_modules"), { recursive: true, force: true });
     expect(() => pruneOnnxRuntimeForLinux(unpacked, ["x64"])).not.toThrow();

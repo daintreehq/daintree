@@ -1075,7 +1075,6 @@ class AutoUpdaterService {
         // otherwise be read back on the next boot and blamed on this one.
         this.forgetInstallStage();
         this.setMenuState("ready");
-        this.downloadedVersion = info.version;
         broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
@@ -1086,6 +1085,11 @@ class AutoUpdaterService {
       // attached once and never detached. Whatever names the old path follows.
       if (process.platform === "linux" && !this.appImageRelocationListenerAttached) {
         this.appImageRelocationListenerAttached = true;
+        // Also never detached: a download that lands during shutdown replaces the
+        // staged installer, and the rename below must carry that version.
+        autoUpdater.on("update-downloaded", (info: { version: string }) => {
+          this.downloadedVersion = info.version;
+        });
         autoUpdater.on("appimage-filename-updated", (next: string) => {
           const previous = process.env.APPIMAGE;
           if (!previous || previous === next) return;

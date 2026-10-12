@@ -503,9 +503,11 @@ const ONNX_GPU_PROVIDER_LIBS = [
 ];
 
 function pruneOnnxRuntimeForLinux(unpackedPath, arches) {
-  const binRoot = path.join(unpackedPath, "node_modules", "onnxruntime-node", "bin");
-  if (!fs.existsSync(binRoot)) return;
-  for (const napi of fs.readdirSync(binRoot)) {
+  const moduleDir = path.join(unpackedPath, "node_modules", "onnxruntime-node");
+  if (!fs.existsSync(moduleDir)) return;
+  const binRoot = path.join(moduleDir, "bin");
+  const napiDirs = fs.existsSync(binRoot) ? fs.readdirSync(binRoot) : [];
+  for (const napi of napiDirs) {
     const napiDir = path.join(binRoot, napi);
     for (const platform of fs.readdirSync(napiDir)) {
       const platformDir = path.join(napiDir, platform);
@@ -528,6 +530,17 @@ function pruneOnnxRuntimeForLinux(unpackedPath, arches) {
           );
         }
       }
+    }
+  }
+  // onnxruntime's loader requires exactly this file, so check it per expected
+  // arch: a package missing the whole directory passes the loop above.
+  for (const arch of arches) {
+    const binding = path.join(binRoot, "napi-v6", "linux", arch, "onnxruntime_binding.node");
+    if (!fs.existsSync(binding)) {
+      throw new Error(
+        `[afterPack] CRITICAL: onnxruntime binding missing for linux-${arch} at ${binding}. ` +
+          "Voice VAD segmentation would be disabled."
+      );
     }
   }
   console.log(`[afterPack] onnxruntime-node pruned to linux-${arches.join("/")} (CPU provider)`);

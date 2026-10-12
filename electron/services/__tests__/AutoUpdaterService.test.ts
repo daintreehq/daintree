@@ -725,6 +725,33 @@ describe("AutoUpdaterService", () => {
       ).toBe(false);
     });
 
+    // A newer download can replace the staged installer while the shutdown
+    // chain runs; the rename that installs it must carry its version.
+    it("tells the rename the version of a download that landed during shutdown", async () => {
+      const service = await freshService();
+      service.initialize();
+      service.dispose();
+
+      // Only what dispose() left attached hears a download after shutdown.
+      const detached = new Set(
+        (autoUpdaterMock.off as Mock).mock.calls
+          .filter(([event]) => event === "update-downloaded")
+          .map(([, listener]) => listener)
+      );
+      const stillAttached = (autoUpdaterMock.on as Mock).mock.calls
+        .filter(([event, listener]) => event === "update-downloaded" && !detached.has(listener))
+        .map(([, listener]) => listener as (info: { version: string }) => void);
+      expect(stillAttached.length).toBeGreaterThan(0);
+      for (const listener of stillAttached) listener({ version: "2.0.0" });
+      relocationListeners()[0]!(NEW_IMAGE);
+
+      expect(relocationMock.notifyAppImageRelocated).toHaveBeenCalledWith({
+        previous: OLD_IMAGE,
+        next: NEW_IMAGE,
+        version: "2.0.0",
+      });
+    });
+
     it("ignores an update that kept the image's path", async () => {
       const service = await freshService();
       service.initialize();
