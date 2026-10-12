@@ -45,6 +45,7 @@ import {
 } from "./skeletonCss.js";
 import { getPlatformWindowOptions } from "./platformWindowOptions.js";
 import { getLinuxWindowIcon } from "./linuxWindowIcon.js";
+import { showWindowInactive } from "./showWindowInactive.js";
 import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
@@ -253,7 +254,7 @@ export function setupBrowserWindow(
       // before the renderer loads, so a restored background window would
       // otherwise take focus here and never reach its showInactive().
       if (revealMode === "showInactive") {
-        win.showInactive();
+        showWindowInactive(win);
       } else {
         win.show();
       }
@@ -444,7 +445,7 @@ export function setupBrowserWindow(
       if (!win.isDestroyed()) {
         markPerformance(PERF_MARKS.MAIN_WINDOW_SHOWN, viaFallback ? { fallback: true } : undefined);
         if (revealMode === "showInactive") {
-          win.showInactive();
+          showWindowInactive(win);
         } else {
           win.show();
           // For a platform that activates inside show(); on Linux activation
