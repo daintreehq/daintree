@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
+import { windowsSystemTool } from "../utils/windowsExecutable.js";
 import { killWindowsProcessTrees } from "../utils/windowsTreeKill.js";
 import type { ClosedProcessOrigin } from "../../shared/types/processes.js";
 
@@ -267,7 +268,7 @@ async function probeStartTimesDetailed(pids: number[]): Promise<ProbeResult> {
       const { stdout } =
         process.platform === "win32"
           ? await execFileAsync(
-              "powershell.exe",
+              windowsSystemTool("powershell.exe"),
               [
                 "-NoProfile",
                 "-NonInteractive",
@@ -371,7 +372,7 @@ export function probeStartTimesSync(
       const spawned =
         process.platform === "win32"
           ? spawnSync(
-              "powershell.exe",
+              windowsSystemTool("powershell.exe"),
               [
                 "-NoProfile",
                 "-NonInteractive",
