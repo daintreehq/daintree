@@ -1,5 +1,7 @@
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { isHostWindows } from "@/hooks/useHostPlatform";
+import { pathComparisonKey } from "@shared/utils/path";
 import { classifyGitError, getGitRecoveryHint } from "../../../shared/utils/gitOperationErrors";
 import type { GitOperationReason } from "../../../shared/types/ipc/errors";
 
@@ -15,17 +17,27 @@ export interface WorktreeCreationError {
 }
 
 export function mapCreationError(rawMessage: string, onClose?: () => void): WorktreeCreationError {
-  if (rawMessage.includes("already checked out")) {
+  // Git 2.42 reworded "is already checked out at" to "is already used by worktree at".
+  if (
+    rawMessage.includes("already checked out") ||
+    rawMessage.includes("already used by worktree")
+  ) {
     let recovery: WorktreeCreationError["recovery"] | undefined;
     try {
-      const pathMatch = rawMessage.match(/already checked out at '([^']+)'/);
+      const pathMatch = rawMessage.match(/already (?:checked out|used by worktree) at '([^']+)'/);
       const worktreePath = pathMatch?.[1];
       if (worktreePath) {
         recovery = {
           label: "Open worktree",
           onAction: () => {
+            // On a Windows host git prints `C:/x` where the store holds `C:\x`,
+            // and paths compare case-insensitively. Elsewhere the match is exact.
             const worktrees = Array.from(getCurrentViewStore().getState().worktrees.values());
-            const wt = worktrees.find((w) => w.path === worktreePath);
+            const options = { caseInsensitive: true };
+            const wanted = pathComparisonKey(worktreePath, options);
+            const wt = isHostWindows()
+              ? worktrees.find((w) => pathComparisonKey(w.path, options) === wanted)
+              : worktrees.find((w) => w.path === worktreePath);
             if (wt) {
               useWorktreeSelectionStore.getState().selectWorktree(wt.id);
               onClose?.();

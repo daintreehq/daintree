@@ -17,6 +17,8 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
 import { getFleetArmedIds, getFleetLastArmedId } from "./storeAccessors";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { pathComparisonKey } from "@shared/utils/path";
+import { isHostWindows } from "@/hooks/useHostPlatform";
 import {
   getHostOwnedStateEpoch,
   sendHostOwnedWrite,
@@ -47,6 +49,28 @@ export interface PendingCreation extends PendingCreationDraft {
   startedAt: number;
   status: "creating" | "error";
   error?: string;
+}
+
+/**
+ * The key of the pending creation for `path`, however the two are spelled. The
+ * dialog keys a row by the path the user typed, while the host's worktree id is
+ * the realpath: on Windows a typed `c:/dev/app-worktrees/x` comes back as
+ * `C:\Dev\app-worktrees\x`, backslashed and in the on-disk case.
+ */
+function findPendingCreationKey(
+  pending: Map<string, PendingCreation>,
+  path: string
+): string | undefined {
+  if (pending.has(path)) return path;
+  // Off Windows the host reports the spelling the dialog keyed, so an exact
+  // match is the whole rule.
+  if (pending.size === 0 || !isHostWindows()) return undefined;
+  const options = { caseInsensitive: true };
+  const target = pathComparisonKey(path, options);
+  for (const key of pending.keys()) {
+    if (pathComparisonKey(key, options) === target) return key;
+  }
+  return undefined;
 }
 
 /**
@@ -988,9 +1012,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set((state) => {
       // Idempotent for in-flight creations (StrictMode-safe). An error entry is
       // replaced so a retry resubmission resets status to "creating".
-      const existing = state.pendingCreations.get(path);
+      const existingKey = findPendingCreationKey(state.pendingCreations, path);
+      const existing =
+        existingKey === undefined ? undefined : state.pendingCreations.get(existingKey);
       if (existing && existing.status === "creating") return state;
       const next = new Map(state.pendingCreations);
+      if (existingKey !== undefined && existingKey !== path) next.delete(existingKey);
       next.set(path, {
         ...meta,
         path,
@@ -1003,28 +1030,31 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
 
   resolvePendingCreation: (path) => {
     set((state) => {
-      if (!state.pendingCreations.has(path)) return state;
+      const key = findPendingCreationKey(state.pendingCreations, path);
+      if (key === undefined) return state;
       const next = new Map(state.pendingCreations);
-      next.delete(path);
+      next.delete(key);
       return { pendingCreations: next };
     });
   },
 
   failPendingCreation: (path, error) => {
     set((state) => {
-      const existing = state.pendingCreations.get(path);
-      if (!existing) return state;
+      const key = findPendingCreationKey(state.pendingCreations, path);
+      const existing = key === undefined ? undefined : state.pendingCreations.get(key);
+      if (key === undefined || !existing) return state;
       const next = new Map(state.pendingCreations);
-      next.set(path, { ...existing, status: "error", error });
+      next.set(key, { ...existing, status: "error", error });
       return { pendingCreations: next };
     });
   },
 
   dismissPendingCreation: (path) => {
     set((state) => {
-      if (!state.pendingCreations.has(path)) return state;
+      const key = findPendingCreationKey(state.pendingCreations, path);
+      if (key === undefined) return state;
       const next = new Map(state.pendingCreations);
-      next.delete(path);
+      next.delete(key);
       return { pendingCreations: next };
     });
   },

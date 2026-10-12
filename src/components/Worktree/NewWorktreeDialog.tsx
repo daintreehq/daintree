@@ -31,6 +31,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { isHostWindows } from "@/hooks/useHostPlatform";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useNewWorktreeProjectSettings } from "./hooks/useNewWorktreeProjectSettings";
 import { useBranchInput } from "./hooks/useBranchInput";
@@ -94,6 +95,16 @@ function deriveDefaultBaseBranch(branchList: BranchInfo[]): {
   const name = currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
   const info = branchList.find((b) => b.name === name);
   return { name, fromRemote: !!info?.remote };
+}
+
+/**
+ * Whether the host takes `path` as written rather than resolving it against a
+ * directory the renderer can't see. On Windows that means a drive or a UNC
+ * share: a rooted `\dir` lands on whichever drive the host process is on.
+ */
+function isHostAbsolutePath(path: string): boolean {
+  if (!isHostWindows()) return path.startsWith("/");
+  return /^[A-Za-z]:[\\/]/.test(path) || /^[\\/]{2}[^\\/]/.test(path);
 }
 
 /** Collapse the normalized forge PR state to the workspace-host form (declined folds into closed). */
@@ -724,7 +735,7 @@ export function NewWorktreeDialog({
     // host resolves them server-side, so the renderer-keyed Map entry would
     // never match the `worktree-update` event id. Skip the placeholder for
     // that case rather than risk a stuck row.
-    const placeholderPath = snapWorktreePath.startsWith("/") ? snapWorktreePath : null;
+    const placeholderPath = isHostAbsolutePath(snapWorktreePath) ? snapWorktreePath : null;
     const selectionStore = useWorktreeSelectionStore.getState();
 
     if (placeholderPath) {

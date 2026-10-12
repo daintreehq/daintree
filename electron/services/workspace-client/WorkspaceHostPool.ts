@@ -188,8 +188,17 @@ export class WorkspaceHostPool {
     const exactEntry = this.entries.get(normalized);
     if (exactEntry) return exactEntry.host;
 
+    // `path.resolve` already unifies win32 separators, but not case: Windows
+    // treats `c:\repo` and `C:\Repo` as one directory. POSIX stays exact.
+    const fold = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
+    const target = fold(normalized);
+    const isAtOrBelow = (root: string) => {
+      const folded = fold(root);
+      return target === folded || target.startsWith(folded + path.sep);
+    };
+
     for (const entry of this.entries.values()) {
-      if (normalized.startsWith(entry.projectPath + path.sep) || normalized === entry.projectPath) {
+      if (isAtOrBelow(entry.projectPath)) {
         return entry.host;
       }
     }
@@ -201,7 +210,7 @@ export class WorkspaceHostPool {
     }
 
     for (const [wtPath, projPath] of this.worktreePathToProject) {
-      if (normalized.startsWith(wtPath + path.sep)) {
+      if (isAtOrBelow(wtPath)) {
         const entry = this.entries.get(projPath);
         if (entry) return entry.host;
       }

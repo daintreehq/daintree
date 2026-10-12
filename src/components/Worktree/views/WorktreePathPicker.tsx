@@ -1,6 +1,7 @@
 import { Spinner } from "@/components/ui/Spinner";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { BrowseSlotButton, SlottedInputField } from "@/components/Project/projectDialogFields";
+import { useHostPlatform } from "@/hooks/useHostPlatform";
 
 interface WorktreePathPickerProps {
   value: string;
@@ -31,6 +32,7 @@ export function WorktreePathPicker({
   onBrowseClick,
   disabled,
 }: WorktreePathPickerProps) {
+  const { platform } = useHostPlatform();
   // isGeneratingPath goes true on every keystroke (it also gates submit), but
   // the debounced generation usually resolves fast — only show the spinner for
   // genuinely slow lookups.
@@ -44,7 +46,7 @@ export function WorktreePathPicker({
         data-testid="worktree-path-input"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="/path/to/worktree"
+        placeholder={platform === "win32" ? "C:\\path\\to\\worktree" : "/path/to/worktree"}
         spellCheck={false}
         autoComplete="off"
         autoCorrect="off"
