@@ -1,6 +1,7 @@
 import { execFile, type ExecFileOptionsWithStringEncoding } from "child_process";
 import os from "node:os";
 import { logDebug } from "../utils/logger.js";
+import { walkVerifiedTree, type VerifiedTree } from "../utils/windowsProcessTree.js";
 import { WindowsProcessCensus } from "./WindowsProcessCensus.js";
 
 function execProbe(
@@ -685,6 +686,16 @@ export class ProcessTreeCache {
 
   getProcess(pid: number): ProcessInfo | undefined {
     return this.cache.get(pid);
+  }
+
+  /**
+   * Windows only: the tree under `rootPid` as of the last sweep, split into
+   * what creation times prove and what merely names a tree member as parent —
+   * every raw ParentProcessId link, including the ones {@link getDescendantPids}
+   * refuses, because those are exactly what `taskkill /T` would follow.
+   */
+  walkTreeByCreationTime(rootPid: number): VerifiedTree {
+    return walkVerifiedTree(this.cache.values(), rootPid);
   }
 
   hasChildren(ppid: number): boolean {

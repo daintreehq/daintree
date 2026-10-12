@@ -57,9 +57,9 @@ import { app, MessagePortMain } from "electron";
 import { EventEmitter } from "events";
 import os from "os";
 import path from "path";
-import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { createLogger, ingestHostLogEvent, isValidLogOverrideLevel } from "../utils/logger.js";
+import { killWindowsProcessTreesSync } from "../utils/windowsTreeKill.js";
 import { store } from "../store.js";
 import { stripAssignedSessionIdArgs } from "../../shared/types/agentSettings.js";
 import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
@@ -1445,10 +1445,18 @@ export class PtyClient extends EventEmitter {
       `[PtyClient] Attempting to clean up ${uniquePids.size} orphaned PTY process(es) after host crash`
     );
 
-    for (const pid of uniquePids) {
-      if (!Number.isFinite(pid) || pid <= 0) continue;
-      if (pid === process.pid) continue;
+    const killable = [...uniquePids].filter(
+      (pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid
+    );
+    // One census for every tree, never `taskkill /T`, which can follow a reused
+    // parent PID into an unrelated program. Synchronous, as the per-PID taskkill
+    // was, so the trees are gone before this returns and the shard restarts.
+    const windowsKills =
+      process.platform === "win32"
+        ? killWindowsProcessTreesSync(killable, { timeoutMs: 3000 })
+        : null;
 
+    for (const pid of killable) {
       let killed = false;
       if (process.platform !== "win32") {
         try {
@@ -1459,15 +1467,8 @@ export class PtyClient extends EventEmitter {
         }
       }
 
-      if (!killed && process.platform === "win32") {
-        const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-          windowsHide: true,
-          stdio: "ignore",
-          timeout: 3000,
-        });
-        if (result.status === 0 || result.status === 128) {
-          killed = true;
-        }
+      if (!killed && windowsKills?.get(pid)?.rootEnded) {
+        killed = true;
       }
 
       if (!killed) {

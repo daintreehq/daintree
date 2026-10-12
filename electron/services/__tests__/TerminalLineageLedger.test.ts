@@ -7,9 +7,16 @@ import path from "node:path";
 // resolves as `{stdout, stderr}` only because Node's real execFile carries a
 // hidden `customPromisifyArgs` symbol, so the mock has to install a
 // `promisify.custom` implementation rather than a plain callback stub.
-const { mockExecFileAsync, mockSpawnSync } = vi.hoisted(() => ({
+const { mockExecFileAsync, mockSpawnSync, mockTreeKill } = vi.hoisted(() => ({
   mockExecFileAsync: vi.fn(),
   mockSpawnSync: vi.fn(),
+  mockTreeKill: vi.fn(),
+}));
+
+// The Windows tree kill reaps a crashed host's verified entries; it runs its
+// own census, so it is stubbed whole rather than through child_process.
+vi.mock("../../utils/windowsTreeKill.js", () => ({
+  killWindowsProcessTree: (...args: unknown[]) => mockTreeKill(...args) as unknown,
 }));
 
 vi.mock("node:child_process", async () => {
@@ -1043,6 +1050,7 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
     });
 
     it("never signals a recorded PID now held under another start time", async () => {
@@ -1057,6 +1065,7 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
     });
   });
 
@@ -1116,6 +1125,9 @@ describe("TerminalLineageLedger", () => {
         if (signal === "SIGKILL") killed.add(pid);
         return true;
       }) as typeof process.kill);
+      mockTreeKill.mockImplementation(async (pid: number) => {
+        killed.add(pid);
+      });
       mockExecFileAsync.mockImplementation(async (file: string, args: string[]) => {
         if (file === "taskkill") {
           killed.add(Number(args[args.length - 1]));
@@ -1162,11 +1174,7 @@ describe("TerminalLineageLedger", () => {
       await reapPersistedLineages(tmpDir);
 
       if (isWindows) {
-        expect(mockExecFileAsync).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", String(ORPHAN_PID)],
-          expect.anything()
-        );
+        expect(mockTreeKill).toHaveBeenCalledWith(ORPHAN_PID, { timeoutMs: 3000 });
       } else {
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
@@ -1195,11 +1203,7 @@ describe("TerminalLineageLedger", () => {
       await reapClaimedLineageFile(claimed!);
 
       if (isWindows) {
-        expect(mockExecFileAsync).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", String(ORPHAN_PID)],
-          expect.anything()
-        );
+        expect(mockTreeKill).toHaveBeenCalledWith(ORPHAN_PID, { timeoutMs: 3000 });
       } else {
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
         expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
@@ -1218,6 +1222,7 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -1234,6 +1239,7 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
@@ -1252,6 +1258,7 @@ describe("TerminalLineageLedger", () => {
         expect.anything(),
         expect.anything()
       );
+      expect(mockTreeKill).not.toHaveBeenCalled();
     });
 
     it("ignores a ledger written by a future schema version", async () => {

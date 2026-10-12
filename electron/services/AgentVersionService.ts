@@ -1,6 +1,10 @@
-import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import * as semver from "semver";
 import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
+import {
+  describeWindowsTreeKillProblem,
+  killWindowsProcessTreeSync,
+} from "../utils/windowsTreeKill.js";
 import {
   getEffectiveAgentConfig,
   getEffectiveAgentIds,
@@ -233,7 +237,7 @@ export class AgentVersionService {
    * `close` land. `exit` does NOT guarantee stdout is flushed, so we never
    * finish on it directly. Every settle that bypasses `close` — the exit-grace
    * timer and the hard wall-clock deadline — reaps the whole process group
-   * (`detached` SIGKILL on POSIX, `taskkill /T` on Windows) so a foreground that
+   * (`detached` SIGKILL on POSIX, a verified tree kill on Windows) so a foreground that
    * exited (or genuinely hangs) leaves no grandchild still holding the pipe,
    * then resolves with whatever was captured (usually the version line, else an
    * empty string → `parseVersion` → null → "indeterminate" → the launch proceeds
@@ -243,7 +247,7 @@ export class AgentVersionService {
     return new Promise<string>((resolve, reject) => {
       // `detached` puts the child in its own process group (POSIX) so the
       // deadline can SIGKILL the entire tree, including a grandchild that
-      // inherited the stdout pipe. Windows uses taskkill /T while the root lives.
+      // inherited the stdout pipe. Windows tree-kills while the root lives.
       const useGroup = process.platform !== "win32";
       // An npm-installed agent is a `.cmd` shim on Windows (see windowsCliSpawn).
       let child: ChildProcess;
@@ -287,30 +291,20 @@ export class AgentVersionService {
         if (typeof pid !== "number") return;
         if (!useGroup) {
           // Windows has no process groups here: `child.kill()` TerminateProcess-es
-          // only the foreground, orphaning the inherited-pipe grandchild. Use
-          // `taskkill /T` to reap the whole tree (repo pattern: ProcessTreeKiller,
-          // PtyClient). `timeout`/`stdio: ignore` keep it from blocking the probe.
+          // only the foreground, orphaning the inherited-pipe grandchild. Reap
+          // the whole tree with the creation-time-verified kill, never
+          // `taskkill /T`, which can follow a reused parent PID. A root already
+          // gone is benign (like ESRCH); a census or termination failure may
+          // leave the tree alive, so warn rather than swallow.
           try {
-            const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-              windowsHide: true,
-              stdio: "ignore",
-              timeout: 3000,
-            });
-            // spawnSync reports failure in the result, not by throwing: `error`
-            // is set if it couldn't launch / timed out; status 0 = killed and
-            // 128 = no such process (already exited — benign, like ESRCH). Any
-            // other non-zero (e.g. 1 access denied) leaves the tree alive, so
-            // warn rather than swallow.
-            if (result?.error) {
-              console.warn(
-                `[AgentVersionService] taskkill pid=${pid}: ${this.toErrorString(result.error)}`
-              );
-            } else if (result && result.status !== 0 && result.status !== 128) {
-              console.warn(`[AgentVersionService] taskkill pid=${pid} exited ${result.status}`);
-            }
+            const problem = describeWindowsTreeKillProblem(
+              killWindowsProcessTreeSync(pid, { timeoutMs: 3000 })
+            );
+            if (problem) console.warn(`[AgentVersionService] tree kill pid=${pid}: ${problem}`);
           } catch (error) {
-            // Defensive: spawnSync normally returns rather than throws.
-            console.warn(`[AgentVersionService] taskkill pid=${pid}: ${this.toErrorString(error)}`);
+            console.warn(
+              `[AgentVersionService] tree kill pid=${pid}: ${this.toErrorString(error)}`
+            );
           }
           return;
         }

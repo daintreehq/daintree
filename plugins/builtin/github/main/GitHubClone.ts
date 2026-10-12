@@ -1,11 +1,11 @@
 import path from "node:path";
 import {
   spawn,
-  spawnSync,
   execFile,
   type ChildProcess,
   type ChildProcessWithoutNullStreams,
 } from "child_process";
+import { killWindowsProcessTreeSync } from "../../../../electron/utils/windowsTreeKill.js";
 import type {
   CloneAuthProbe,
   CloneCapability,
@@ -34,9 +34,9 @@ function killProcessTree(child: ChildProcess): void {
   }
 
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/F", "/T", "/PID", child.pid.toString()], {
-      windowsHide: true,
-    });
+    // Never `taskkill /T`: it can follow a reused parent PID into an
+    // unrelated program.
+    killWindowsProcessTreeSync(child.pid);
     return;
   }
 

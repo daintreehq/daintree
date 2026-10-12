@@ -1,5 +1,6 @@
-import { execFile, spawnSync } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "node:util";
+import { describeWindowsTreeKillProblem, killWindowsProcessTreeSync } from "./windowsTreeKill.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -14,14 +15,10 @@ export const execFileWithTreeKill: typeof execFileAsync = ((
     child.kill = (signal) => {
       if (child.pid !== undefined) {
         try {
-          const result = spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(child.pid)], {
-            windowsHide: true,
-            stdio: "ignore",
-            timeout: 3000,
-          });
-          if (result?.error || (result && result.status !== 0 && result.status !== 128)) {
-            console.warn("[CLI probe] Process tree cleanup failed", result.error ?? result.status);
-          }
+          const problem = describeWindowsTreeKillProblem(
+            killWindowsProcessTreeSync(child.pid, { timeoutMs: 3000 })
+          );
+          if (problem) console.warn("[CLI probe] Process tree cleanup failed", problem);
         } catch (error) {
           console.warn("[CLI probe] Process tree cleanup failed", error);
         }

@@ -1,10 +1,9 @@
-import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const spawnMock = vi.fn();
+const treeKillMock = vi.fn();
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args) as unknown,
+vi.mock("../../../utils/windowsTreeKill.js", () => ({
+  killWindowsProcessTree: (...args: unknown[]) => treeKillMock(...args) as unknown,
 }));
 
 const {
@@ -40,7 +39,7 @@ describe("pluginChildTree (#13173)", () => {
 
   beforeEach(() => {
     setPlatform("linux");
-    spawnMock.mockReset();
+    treeKillMock.mockReset();
     killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
   });
 
@@ -246,39 +245,29 @@ describe("pluginChildTree (#13173)", () => {
       setPlatform("win32");
     });
 
-    it("runs taskkill /T before the direct kill, which would erase the parent links", () => {
-      const taskkill = new EventEmitter();
-      spawnMock.mockReturnValue(taskkill);
+    it("runs the verified tree kill before the direct kill, which ends its root", async () => {
+      let finishTreeKill!: () => void;
+      treeKillMock.mockReturnValue(
+        new Promise<void>((resolve) => {
+          finishTreeKill = resolve;
+        })
+      );
       const child = makeChild({ ownsProcessTree: true });
       signalChildTree(child, "SIGTERM");
-      expect(spawnMock).toHaveBeenCalledWith(
-        "taskkill",
-        ["/T", "/F", "/PID", "5150"],
-        expect.objectContaining({ windowsHide: true, timeout: 3000 })
-      );
+      expect(treeKillMock).toHaveBeenCalledWith(5150, { timeoutMs: 3000 });
+      await Promise.resolve();
       expect(child.kill).not.toHaveBeenCalled();
-      taskkill.emit("exit", 0);
-      expect(child.kill).toHaveBeenCalledTimes(1);
+      finishTreeKill();
+      await vi.waitFor(() => expect(child.kill).toHaveBeenCalledTimes(1));
       expect(killSpy).not.toHaveBeenCalled();
     });
 
-    it("still kills the direct child when taskkill cannot run", () => {
-      const taskkill = new EventEmitter();
-      spawnMock.mockReturnValue(taskkill);
+    it("still kills the direct child when the tree kill fails", async () => {
+      treeKillMock.mockRejectedValue(new Error("ENOENT"));
       const child = makeChild({ ownsProcessTree: true });
       signalChildTree(child, "SIGKILL");
-      taskkill.emit("error", new Error("ENOENT"));
-      taskkill.emit("exit", 1);
-      expect(child.kill).toHaveBeenCalledTimes(1);
-    });
-
-    it("still kills the direct child when taskkill cannot even be spawned", () => {
-      spawnMock.mockImplementation(() => {
-        throw new Error("EMFILE");
-      });
-      const child = makeChild({ ownsProcessTree: true });
-      signalChildTree(child, "SIGTERM");
-      expect(child.kill).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(child.kill).toHaveBeenCalledTimes(1));
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     });
 
     it("never schedules a group escalation", () => {
@@ -287,7 +276,7 @@ describe("pluginChildTree (#13173)", () => {
       scheduleChildTreeEscalation(child, "process", 100);
       vi.advanceTimersByTime(100);
       reapPendingChildTrees();
-      expect(spawnMock).not.toHaveBeenCalled();
+      expect(treeKillMock).not.toHaveBeenCalled();
       expect(isChildTreeAlive(child)).toBe(false);
     });
   });

@@ -28,7 +28,7 @@
  * that routinely spawn grandchildren holding the stdout pipe open.
  */
 
-import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { realpath } from "fs/promises";
 import {
   PROJECT_CHECK_DEFAULT_TIMEOUT_MS,
@@ -41,6 +41,10 @@ import {
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { buildInstallEnv } from "../utils/spawnEnv.js";
+import {
+  describeWindowsTreeKillProblem,
+  killWindowsProcessTreeSync,
+} from "../utils/windowsTreeKill.js";
 
 /**
  * Grace period between `exit` and a forced settle. `exit` does not guarantee
@@ -434,24 +438,16 @@ export class ProjectCheckService {
         if (!useGroup) {
           // Windows has no process groups here — `child.kill()` would terminate
           // only the shell and orphan the runner it launched.
+          // Synchronous: dispose() runs this on the quit path and must not
+          // return before the tree is gone. A root already gone is benign.
           try {
-            const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-              windowsHide: true,
-              stdio: "ignore",
-              timeout: 3_000,
-            });
-            // spawnSync reports failure in the result rather than throwing.
-            // status 0 = killed, 128 = already gone (benign).
-            if (result?.error) {
-              console.warn(
-                `[ProjectCheckService] taskkill pid=${pid}: ${formatErrorMessage(result.error, "unknown error")}`
-              );
-            } else if (result && result.status !== 0 && result.status !== 128) {
-              console.warn(`[ProjectCheckService] taskkill pid=${pid} exited ${result.status}`);
-            }
+            const problem = describeWindowsTreeKillProblem(
+              killWindowsProcessTreeSync(pid, { timeoutMs: 3_000 })
+            );
+            if (problem) console.warn(`[ProjectCheckService] tree kill pid=${pid}: ${problem}`);
           } catch (err) {
             console.warn(
-              `[ProjectCheckService] taskkill pid=${pid}: ${formatErrorMessage(err, "unknown error")}`
+              `[ProjectCheckService] tree kill pid=${pid}: ${formatErrorMessage(err, "unknown error")}`
             );
           }
           return;
@@ -519,7 +515,7 @@ export class ProjectCheckService {
 
       /**
        * Kill escalation cannot be assumed to work — a process wedged in
-       * uninterruptible I/O, or a failed Windows `taskkill`, emits neither
+       * uninterruptible I/O, or a failed Windows tree kill, emits neither
        * `exit` nor `close`. Without this the promise (and the cwd's
        * concurrency slot) would stay pending past the advertised ceiling
        * forever. Settles with a null exit code, which `passed` already treats
@@ -563,7 +559,7 @@ export class ProjectCheckService {
         if (settled) return;
         // Claims the cause without the polite kill, then issues exactly one
         // forced kill. Routing through onAbort() would run the tree-kill twice
-        // — on Windows that is two serial 3s `taskkill` calls per check,
+        // — on Windows that is two serial 3s tree kills per check,
         // blocking the main thread during quit.
         claimAbort();
         killTree(true);

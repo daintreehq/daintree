@@ -1,4 +1,5 @@
-import { spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
+import { terminateWindowsProcesses } from "../../utils/windowsProcessTree.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { KillCensus, LineageOrigin } from "../TerminalLineageLedger.js";
 
@@ -231,24 +232,18 @@ export class ProcessTreeKiller {
 
     this.lineage?.markRootClosing(shellPid);
 
-    // Windows: use taskkill /T /F which handles the entire tree atomically
+    // Windows: one tree kill handles the entire tree atomically
     if (process.platform === "win32") {
-      try {
-        spawnSync("taskkill", ["/T", "/F", "/PID", String(shellPid)], {
-          windowsHide: true,
-          stdio: "ignore",
-          timeout: 3000,
-        });
-      } catch {
-        // taskkill may fail if process already exited
-      }
-      // taskkill /T walks the live tree, so it has the same blind spot as the
+      this.killWindowsTree(shellPid, immediate);
+      // The tree kill walks the live tree, so it has the same blind spot as the
       // Unix walk below — reparented descendants need their own pass. Exclude
-      // what the walk already covered so the taskkill above isn't repeated
+      // what the walk already covered so the tree kill above isn't repeated
       // once per live descendant.
       const live = this.processTreeCache?.getDescendantPids(shellPid) ?? [];
       const orphans = this.resolveOrphans(shellPid, live);
-      this.taskkillOrphans(orphans);
+      this.killWindowsTrees(orphans, immediate);
+      // Not held for the tree kill: on the non-immediate path that is still
+      // running in its own process.
       try {
         this.ptyProcess.kill();
       } catch {
@@ -483,7 +478,7 @@ export class ProcessTreeKiller {
     if (orphans.length === 0) return [];
 
     if (process.platform === "win32") {
-      this.taskkillOrphans(orphans);
+      this.killWindowsTrees(orphans, immediate);
       return orphans;
     }
 
@@ -527,17 +522,47 @@ export class ProcessTreeKiller {
     }
   }
 
-  private taskkillOrphans(orphans: number[]): void {
-    for (const pid of orphans) {
-      try {
-        spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-          windowsHide: true,
-          stdio: "ignore",
-          timeout: 3000,
-        });
-      } catch {
-        // taskkill may fail if the process already exited
+  private killWindowsTrees(roots: number[], immediate: boolean): void {
+    for (const pid of roots) this.killWindowsTree(pid, immediate);
+  }
+
+  /**
+   * `taskkill /T` follows ParentProcessId links without checking creation
+   * times, and Windows leaves a dead parent's PID in its children's rows while
+   * handing that PID out again — so /T from one of ours can end an unrelated,
+   * older program that merely names a reused PID as its parent. The cached
+   * census carries creation times: when it shows such a link anywhere under
+   * this root, the kill goes one process at a time over the links it can
+   * prove. Otherwise /T stays, since it also reaches whatever was spawned
+   * after the last sweep. No PowerShell here: the decision runs on the
+   * pty-host's only thread.
+   *
+   * taskkill itself takes ~130 ms, so outside `immediate` it runs as its own
+   * process instead of blocking every terminal's I/O, and kills of different
+   * terminals overlap. `immediate` keeps it synchronous: that is the
+   * `process.on("exit")` context, where an async child would never be started.
+   */
+  private killWindowsTree(rootPid: number, immediate: boolean): void {
+    const walk = this.processTreeCache?.walkTreeByCreationTime(rootPid);
+    if (walk && walk.stale.length > 0) {
+      console.warn(
+        `[ProcessTreeKiller] pid=${rootPid}: ${walk.stale.length} older process(es) name a PID in this tree as parent through PID reuse; ending it without taskkill /T`
+      );
+      terminateWindowsProcesses(walk.pids.length > 0 ? walk.pids : [rootPid]);
+      return;
+    }
+    const args = ["/T", "/F", "/PID", String(rootPid)];
+    const options = { windowsHide: true, stdio: "ignore" as const, timeout: 3000 };
+    try {
+      if (immediate) {
+        spawnSync("taskkill", args, options);
+        return;
       }
+      spawn("taskkill", args, options).once("error", () => {
+        // taskkill could not start; nothing to recover
+      });
+    } catch {
+      // taskkill may fail if the process already exited
     }
   }
 

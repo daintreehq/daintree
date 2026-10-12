@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
+import { killWindowsProcessTree } from "../../utils/windowsTreeKill.js";
 
-const TASKKILL_TIMEOUT_MS = 3000;
+const TREE_KILL_TIMEOUT_MS = 3000;
 
 /**
  * Which subsystem armed a pending escalation. Quit reaps per owner, so one
@@ -26,7 +26,7 @@ let exitHookInstalled = false;
  * is set only by the real spawners, which start the child as its own process
  * group leader on POSIX (`detached: true`); a test fake leaves it unset and so
  * only ever sees its own `kill()` — a fake PID must never reach a real
- * `process.kill(-pid)` or `taskkill`.
+ * `process.kill(-pid)` or a Windows tree kill.
  */
 export interface TreeKillableChild {
   pid?: number | undefined;
@@ -64,9 +64,11 @@ function directKill(child: TreeKillableChild, signal: NodeJS.Signals): void {
  * not reached; that needs the lineage ledger the pty-host has and Main does not.
  *
  * Windows: there are no signals, and `child.kill()` is TerminateProcess on the
- * direct child — which erases the parent link `taskkill /T` walks. So the tree
- * kill runs first, asynchronously so it never blocks Main, and the direct kill
- * follows as the fallback once it finishes or times out.
+ * direct child — the root the tree walk starts from. So the tree kill runs
+ * first, asynchronously so it never blocks Main, and the direct kill follows as
+ * the fallback once it finishes or times out. The tree kill is the
+ * creation-time-verified one, never `taskkill /T`, which can follow a reused
+ * parent PID into an unrelated program.
  */
 export function signalChildTree(child: TreeKillableChild, signal: "SIGTERM" | "SIGKILL"): void {
   const pid = treePid(child);
@@ -76,7 +78,7 @@ export function signalChildTree(child: TreeKillableChild, signal: "SIGTERM" | "S
   }
 
   if (process.platform === "win32") {
-    taskkillTree(pid, () => directKill(child, signal));
+    killWindowsTree(pid, () => directKill(child, signal));
     return;
   }
 
@@ -225,22 +227,12 @@ function signalGroup(pid: number, signal: NodeJS.Signals): boolean {
   }
 }
 
-function taskkillTree(pid: number, then: () => void): void {
+function killWindowsTree(pid: number, then: () => void): void {
   let settled = false;
   const finish = (): void => {
     if (settled) return;
     settled = true;
     then();
   };
-  try {
-    const proc = spawn("taskkill", ["/T", "/F", "/PID", String(pid)], {
-      windowsHide: true,
-      stdio: "ignore",
-      timeout: TASKKILL_TIMEOUT_MS,
-    });
-    proc.once("exit", finish);
-    proc.once("error", finish);
-  } catch {
-    finish();
-  }
+  killWindowsProcessTree(pid, { timeoutMs: TREE_KILL_TIMEOUT_MS }).then(finish, finish);
 }

@@ -22,8 +22,12 @@
  *      call last time (#10705).
  */
 
-import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { cliSpawnTarget } from "../../utils/windowsCliSpawn.js";
+import {
+  describeWindowsTreeKillProblem,
+  killWindowsProcessTreeSync,
+} from "../../utils/windowsTreeKill.js";
 import { buildProbeEnv } from "../../utils/spawnEnv.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import type { AgentSubagentUnavailableReason } from "../../../shared/types/ipc/agentSubagents.js";
@@ -197,7 +201,7 @@ async function spawnCodexAppServerSession<T>(
   const timeoutMs = options.timeoutMs ?? SESSION_TIMEOUT_MS;
   const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   // POSIX process groups let the deadline reap a grandchild that inherited the
-  // stdout pipe. Windows has none here, so it falls back to `taskkill /T`.
+  // stdout pipe. Windows has none here, so it falls back to a verified tree kill.
   const useGroup = process.platform !== "win32";
 
   // On Windows an npm-installed Codex is a `.cmd` shim, which a shell-less
@@ -241,20 +245,14 @@ async function spawnCodexAppServerSession<T>(
     if (typeof pid !== "number") return;
     if (!useGroup) {
       try {
-        const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-          windowsHide: true,
-          stdio: "ignore",
-          timeout: 3000,
-        });
-        // spawnSync reports failure in the result, not by throwing. status 0 =
-        // killed, 128 = already gone (benign). Anything else left the tree alive.
-        if (result?.error) {
-          console.warn(`[CodexAppServer] taskkill pid=${pid}: ${result.error.message}`);
-        } else if (result && result.status !== 0 && result.status !== 128) {
-          console.warn(`[CodexAppServer] taskkill pid=${pid} exited ${result.status}`);
-        }
+        // A root already gone is benign; a census or termination failure may
+        // have left part of the tree alive.
+        const problem = describeWindowsTreeKillProblem(
+          killWindowsProcessTreeSync(pid, { timeoutMs: 3000 })
+        );
+        if (problem) console.warn(`[CodexAppServer] tree kill pid=${pid}: ${problem}`);
       } catch (error) {
-        console.warn(`[CodexAppServer] taskkill pid=${pid}: ${String(error)}`);
+        console.warn(`[CodexAppServer] tree kill pid=${pid}: ${String(error)}`);
       }
       return;
     }

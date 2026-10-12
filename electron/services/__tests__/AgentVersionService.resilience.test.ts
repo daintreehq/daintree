@@ -14,16 +14,19 @@ const registryMock = vi.hoisted(() => ({
 // `child_process`, so we substitute the whole module at hoist time. The
 // installed-version probe spawns `<command> --version` and resolves on the
 // child's `exit` event; tests drive a fake ChildProcess via the helpers below.
-const { spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+const { spawnMock, treeKillMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
-  spawnSyncMock: vi.fn(),
+  treeKillMock: vi.fn(),
 }));
 
 vi.mock("child_process", () => ({
   spawn: spawnMock,
-  // Windows tree-kill shells out to `taskkill` via spawnSync; POSIX CI never
-  // hits it, but the mock must export it so the import resolves.
-  spawnSync: spawnSyncMock,
+}));
+
+// The Windows tree kill; POSIX CI only reaches it with a faked platform.
+vi.mock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTreeSync: treeKillMock,
 }));
 
 vi.mock("../../../shared/config/agentRegistry.js", () => registryMock);
@@ -259,13 +262,9 @@ describe("AgentVersionService resilience", () => {
         expect(result.installedVersion).toBe("4.5.6");
         // The hung tree is reaped: POSIX SIGKILLs the whole process group
         // (negative pid) so a grandchild holding the pipe dies too; Windows has
-        // no group here and shells out to `taskkill /T` to kill the whole tree.
+        // no group here and runs the verified tree kill on the whole tree.
         if (process.platform === "win32") {
-          expect(spawnSyncMock).toHaveBeenCalledWith(
-            "taskkill",
-            ["/T", "/F", "/PID", "4242"],
-            expect.objectContaining({ windowsHide: true })
-          );
+          expect(treeKillMock).toHaveBeenCalledWith(4242, { timeoutMs: 3000 });
         } else {
           expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
         }
@@ -309,11 +308,7 @@ describe("AgentVersionService resilience", () => {
 
         expect(result.installedVersion).toBe("1.2.3");
         if (process.platform === "win32") {
-          expect(spawnSyncMock).toHaveBeenCalledWith(
-            "taskkill",
-            ["/T", "/F", "/PID", "4242"],
-            expect.objectContaining({ windowsHide: true })
-          );
+          expect(treeKillMock).toHaveBeenCalledWith(4242, { timeoutMs: 3000 });
         } else {
           expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
         }
@@ -349,9 +344,9 @@ describe("AgentVersionService resilience", () => {
 
       expect(result.installedVersion).toBe("1.2.3");
       // No reap of any kind on the close path — not a group kill, not a direct
-      // kill, not a taskkill — because every fd-holder has already exited.
+      // kill, not a tree kill — because every fd-holder has already exited.
       expect(killSpy).not.toHaveBeenCalled();
-      expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(treeKillMock).not.toHaveBeenCalled();
       killSpy.mockRestore();
     });
 
@@ -430,9 +425,9 @@ describe("AgentVersionService resilience", () => {
     });
 
     // The Windows reap branch is dead code on POSIX CI, so force-exercise it by
-    // faking `process.platform`. Asserts the exit-grace path shells out to
-    // `taskkill /T` (whole tree) and never falls back to a group/foreground kill.
-    it("reaps via taskkill on the exit-grace path when platform is win32", async () => {
+    // faking `process.platform`. Asserts the exit-grace path runs the verified
+    // tree kill (whole tree) and never falls back to a group/foreground kill.
+    it("reaps via the tree kill on the exit-grace path when platform is win32", async () => {
       (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
         id: "claude",
         name: "Claude",
@@ -443,7 +438,13 @@ describe("AgentVersionService resilience", () => {
       const realPlatform = process.platform;
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
-      spawnSyncMock.mockReturnValue({ status: 0 });
+      treeKillMock.mockReturnValue({
+        mode: "tree",
+        targeted: [4242],
+        failed: [],
+        stale: [],
+        rootEnded: true,
+      });
       spawnMock.mockImplementation((() => {
         const child = makeFakeChild();
         queueMicrotask(() => {
@@ -462,11 +463,7 @@ describe("AgentVersionService resilience", () => {
         const result = await pending;
 
         expect(result.installedVersion).toBe("1.2.3");
-        expect(spawnSyncMock).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", "4242"],
-          expect.objectContaining({ windowsHide: true, stdio: "ignore", timeout: 3000 })
-        );
+        expect(treeKillMock).toHaveBeenCalledWith(4242, { timeoutMs: 3000 });
         // Windows has no process group here — no SIGKILL fallback.
         expect(killSpy).not.toHaveBeenCalled();
       } finally {

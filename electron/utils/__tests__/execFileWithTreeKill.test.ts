@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 
-const { execMock, taskkillMock } = vi.hoisted(() => ({ execMock: vi.fn(), taskkillMock: vi.fn() }));
+const { execMock, treeKillMock } = vi.hoisted(() => ({ execMock: vi.fn(), treeKillMock: vi.fn() }));
 vi.mock("child_process", () => {
   // Node's execFile has a custom promisifier that retains .child and both streams.
   Object.defineProperty(execMock, Symbol.for("nodejs.util.promisify.custom"), {
@@ -17,8 +17,12 @@ vi.mock("child_process", () => {
       return Object.assign(pending, { child: child! });
     },
   });
-  return { execFile: execMock, spawnSync: taskkillMock };
+  return { execFile: execMock, spawnSync: vi.fn() };
 });
+vi.mock("../windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../windowsTreeKill.js")>()),
+  killWindowsProcessTreeSync: treeKillMock,
+}));
 import { execFileWithTreeKill } from "../execFileWithTreeKill.js";
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -37,9 +41,9 @@ describe("execFile process tree cleanup", () => {
     async (reason) => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       const order: string[] = [];
-      taskkillMock.mockImplementation(() => {
+      treeKillMock.mockImplementation(() => {
         order.push("tree");
-        return { status: 0 };
+        return { mode: "tree", targeted: [1234], failed: [], stale: [], rootEnded: true };
       });
       const child = new EventEmitter() as ChildProcess;
       Object.defineProperty(child, "pid", { value: 1234 });
@@ -64,18 +68,14 @@ describe("execFile process tree cleanup", () => {
       await vi.advanceTimersByTimeAsync(10);
       await rejection;
       expect(order).toEqual(["tree", "root"]);
-      expect(taskkillMock).toHaveBeenCalledWith(
-        "taskkill.exe",
-        ["/T", "/F", "/PID", "1234"],
-        expect.objectContaining({ timeout: 3000, windowsHide: true })
-      );
+      expect(treeKillMock).toHaveBeenCalledWith(1234, { timeoutMs: 3000 });
     }
   );
 
-  it("keeps the native kill fallback when taskkill cannot start", async () => {
+  it("keeps the native kill fallback when the tree kill throws", async () => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    taskkillMock.mockImplementation(() => {
+    treeKillMock.mockImplementation(() => {
       throw new Error("cannot start");
     });
     const child = new EventEmitter() as ChildProcess;

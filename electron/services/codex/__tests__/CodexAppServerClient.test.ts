@@ -5,11 +5,17 @@ import { EventEmitter } from "events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-const spawnSyncMock = vi.hoisted(() => vi.fn(() => ({ status: 0 })));
+const treeKillMock = vi.hoisted(() =>
+  vi.fn(() => ({ mode: "tree", targeted: [], failed: [], stale: [], rootEnded: true }))
+);
 
 vi.mock("child_process", () => ({
   spawn: spawnMock,
-  spawnSync: spawnSyncMock,
+}));
+
+vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTreeSync: treeKillMock,
 }));
 
 vi.mock("../../../utils/spawnEnv.js", () => ({
@@ -88,7 +94,7 @@ beforeEach(() => {
   child = new FakeChild();
   spawnMock.mockReset();
   spawnMock.mockImplementation(() => child);
-  spawnSyncMock.mockClear();
+  treeKillMock.mockClear();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -235,11 +241,7 @@ describe("runCodexAppServerSession", () => {
     await startSession(async () => "done");
 
     if (process.platform === "win32") {
-      expect(spawnSyncMock).toHaveBeenCalledWith(
-        "taskkill",
-        ["/T", "/F", "/PID", String(child.pid)],
-        expect.objectContaining({ windowsHide: true })
-      );
+      expect(treeKillMock).toHaveBeenCalledWith(child.pid, { timeoutMs: 3000 });
     } else {
       // Negative pid = whole group, so a grandchild holding the pipe goes too.
       expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
@@ -403,11 +405,7 @@ describe("runCodexAppServerSession", () => {
     expect(error).toBeInstanceOf(CodexAppServerError);
     expect((error as CodexAppServerError).reason).toBe("timeout");
     if (process.platform === "win32") {
-      expect(spawnSyncMock).toHaveBeenCalledWith(
-        "taskkill",
-        ["/T", "/F", "/PID", String(child.pid)],
-        expect.objectContaining({ windowsHide: true })
-      );
+      expect(treeKillMock).toHaveBeenCalledWith(child.pid, { timeoutMs: 3000 });
     } else {
       expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
     }

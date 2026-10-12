@@ -4,11 +4,14 @@ import path from "node:path";
 
 const childProcessMock = vi.hoisted(() => ({
   spawn: vi.fn(),
-  spawnSync: vi.fn(),
   execFile: vi.fn(),
 }));
+const treeKillMock = vi.hoisted(() => vi.fn());
 
 vi.mock("child_process", () => childProcessMock);
+vi.mock("../../../../../electron/utils/windowsTreeKill.js", () => ({
+  killWindowsProcessTreeSync: treeKillMock,
+}));
 
 vi.mock("../GitHubRepoContext.js", () => ({
   parseGitHubRepoUrl: (url: string) => {
@@ -192,11 +195,7 @@ describe("GitHubClone — cloneRepository", () => {
 
     await expect(clonePromise).rejects.toThrow(/Clone cancelled/);
     if (process.platform === "win32") {
-      expect(childProcessMock.spawnSync).toHaveBeenCalledWith(
-        "taskkill",
-        expect.arrayContaining(["/F", "/T", "/PID"]),
-        expect.objectContaining({ windowsHide: true })
-      );
+      expect(treeKillMock).toHaveBeenCalledWith(12345);
     } else {
       expect(killSpy).toHaveBeenCalledWith(-12345, "SIGTERM");
     }

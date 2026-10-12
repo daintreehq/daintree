@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
+import { killWindowsProcessTree } from "../utils/windowsTreeKill.js";
 import type { ClosedProcessOrigin } from "../../shared/types/processes.js";
 
 const execFileAsync = promisify(execFile);
@@ -1078,24 +1079,35 @@ export interface ReapLineageOptions {
   /** Log context for the reap line. */
   reason?: string;
   /**
-   * Windows only: `taskkill /T` also ends the target's current children, which
-   * the reaper never verified. Crash recovery wants that — the whole recorded
-   * tree is going anyway — but a user-requested kill must reach only the
-   * identities it was shown.
+   * Windows only: a tree kill also ends the target's current children, which
+   * the reaper never verified one by one. Crash recovery wants that — the whole
+   * recorded tree is going anyway — but a user-requested kill must reach only
+   * the identities it was shown.
    */
   windowsTree?: boolean;
 }
 
-/** Async so a slow `taskkill` never blocks the host thread its heartbeat runs on. */
+/**
+ * Async so a slow kill never blocks the host thread its heartbeat runs on.
+ *
+ * The tree kill is the creation-time-verified one, not `taskkill /T`: the
+ * entry's own identity is verified before this runs, but /T would still follow
+ * ParentProcessId links below it, and an older process naming a reused PID as
+ * its parent is no child of ours.
+ */
 async function taskkill(pid: number, tree: boolean): Promise<void> {
   try {
-    await execFileAsync("taskkill", [...(tree ? ["/T"] : []), "/F", "/PID", String(pid)], {
+    if (tree) {
+      await killWindowsProcessTree(pid, { timeoutMs: TASKKILL_TIMEOUT_MS });
+      return;
+    }
+    await execFileAsync("taskkill", ["/F", "/PID", String(pid)], {
       windowsHide: true,
       shell: false,
       signal: AbortSignal.timeout(TASKKILL_TIMEOUT_MS),
     });
   } catch {
-    // Exit status says what taskkill thought; the probe afterwards says what
+    // Exit status says what the kill thought; the probe afterwards says what
     // the OS shows, and only that is reported.
   }
 }

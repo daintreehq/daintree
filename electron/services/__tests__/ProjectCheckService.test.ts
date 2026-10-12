@@ -2,16 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import { Readable } from "stream";
 
-interface SpawnSyncResult {
-  status: number | null;
-  error?: Error;
-}
-
 // Explicitly typed so `.mock.calls` reads without casts that would regress the
 // no-unsafe-type-assertion ratchet, and so the mock factories below type-check.
 const spawnMock = vi.fn<(command: string, options: Record<string, unknown>) => unknown>();
-const spawnSyncMock =
-  vi.fn<(file: string, args: string[], options: Record<string, unknown>) => SpawnSyncResult>();
+const treeKillMock = vi.fn<(pid: number, options: { timeoutMs?: number }) => unknown>();
 const realpathMock = vi.fn<(target: string) => Promise<string>>();
 const detectMock =
   vi.fn<(path: string) => Promise<Array<{ id: string; name: string; command: string }>>>();
@@ -20,8 +14,12 @@ const listWorktreesMock = vi.fn<() => Promise<Array<{ path: string; bare: boolea
 
 vi.mock("child_process", () => ({
   spawn: (command: string, options: Record<string, unknown>) => spawnMock(command, options),
-  spawnSync: (file: string, args: string[], options: Record<string, unknown>) =>
-    spawnSyncMock(file, args, options),
+}));
+
+vi.mock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTreeSync: (pid: number, options: { timeoutMs?: number }) =>
+    treeKillMock(pid, options),
 }));
 
 vi.mock("fs/promises", () => ({
@@ -51,7 +49,7 @@ vi.mock("../../utils/spawnEnv.js", () => ({
 const { ProjectCheckService, ProjectCheckError } = await import("../ProjectCheckService.js");
 const { PROJECT_CHECK_MAX_OUTPUT_BYTES } = await import("../../../shared/types/projectCheck.js");
 
-/** POSIX signals the process group; Windows shells out to taskkill. */
+/** POSIX signals the process group; Windows runs the verified tree kill. */
 const IS_WIN = process.platform === "win32";
 
 /** Minimal ChildProcess stand-in: emits the events the service listens on. */
@@ -79,7 +77,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   child = new FakeChild();
   spawnMock.mockReturnValue(child);
-  spawnSyncMock.mockReturnValue({ status: 0, error: undefined });
+  treeKillMock.mockReturnValue({
+    mode: "tree",
+    targeted: [],
+    failed: [],
+    stale: [],
+    rootEnded: true,
+  });
   // Identity realpath: every path in these tests is already canonical.
   realpathMock.mockImplementation(async (p: string) => p);
   getProjectByIdMock.mockReturnValue(makeProject());
@@ -440,17 +444,13 @@ describe("ProjectCheckService — output handling", () => {
 
 describe("ProjectCheckService — cancellation and teardown", () => {
   /**
-   * Group-kill is platform-split: POSIX signals the negative pid, Windows shells
-   * out to `taskkill /T`. Asserting only the POSIX call would fail every
-   * Windows stabilize run and leave the taskkill branch untested everywhere.
+   * Group-kill is platform-split: POSIX signals the negative pid, Windows runs
+   * the verified tree kill. Asserting only the POSIX call would fail every
+   * Windows stabilize run and leave the Windows branch untested everywhere.
    */
   function expectTreeKilled(killSpy: ReturnType<typeof vi.spyOn>, signal: string): void {
     if (IS_WIN) {
-      expect(spawnSyncMock).toHaveBeenCalledWith(
-        "taskkill",
-        ["/T", "/F", "/PID", "4242"],
-        expect.objectContaining({ windowsHide: true })
-      );
+      expect(treeKillMock).toHaveBeenCalledWith(4242, { timeoutMs: 3_000 });
     } else {
       expect(killSpy).toHaveBeenCalledWith(-4242, signal);
     }

@@ -15,7 +15,10 @@ vi.mock("fs/promises", () => ({
 
 vi.mock("child_process", () => ({
   spawn: vi.fn(),
-  spawnSync: vi.fn(),
+}));
+
+vi.mock("../../utils/windowsTreeKill.js", () => ({
+  killWindowsProcessTreeSync: vi.fn(),
 }));
 
 vi.mock("../../utils/fs.js", () => ({
@@ -38,7 +41,7 @@ describe("WorktreeLifecycleService", () => {
   let mockReadFile: ReturnType<typeof vi.fn>;
   let mockCp: ReturnType<typeof vi.fn>;
   let mockSpawn: ReturnType<typeof vi.fn>;
-  let mockSpawnSync: ReturnType<typeof vi.fn>;
+  let mockTreeKill: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -50,8 +53,8 @@ describe("WorktreeLifecycleService", () => {
 
     const childProcessModule = await import("child_process");
     mockSpawn = vi.mocked(childProcessModule.spawn);
-    mockSpawnSync = vi.mocked(
-      (childProcessModule as unknown as { spawnSync: ReturnType<typeof vi.fn> }).spawnSync
+    mockTreeKill = vi.mocked(
+      (await import("../../utils/windowsTreeKill.js")).killWindowsProcessTreeSync
     );
 
     const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
@@ -546,7 +549,7 @@ describe("WorktreeLifecycleService", () => {
         vi.useRealTimers();
       });
 
-      it("uses taskkill on Windows for timeout kill", async () => {
+      it("uses the verified tree kill on Windows for timeout kill", async () => {
         Object.defineProperty(process, "platform", { value: "win32" });
         vi.useFakeTimers();
 
@@ -573,9 +576,7 @@ describe("WorktreeLifecycleService", () => {
         // Advance past the timeout
         vi.advanceTimersByTime(1001);
 
-        expect(mockSpawnSync).toHaveBeenCalledWith("taskkill", ["/F", "/T", "/PID", "12345"], {
-          windowsHide: true,
-        });
+        expect(mockTreeKill).toHaveBeenCalledWith(12345);
 
         // Emit close to resolve the promise
         listeners["close"]?.forEach((cb) => cb(1));
@@ -613,7 +614,7 @@ describe("WorktreeLifecycleService", () => {
         vi.advanceTimersByTime(1001);
 
         expect(processKillSpy).toHaveBeenCalledWith(-12345, "SIGTERM");
-        expect(mockSpawnSync).not.toHaveBeenCalled();
+        expect(mockTreeKill).not.toHaveBeenCalled();
 
         // Advance 5s for SIGKILL escalation
         vi.advanceTimersByTime(5000);
@@ -673,7 +674,7 @@ describe("WorktreeLifecycleService", () => {
 
         vi.advanceTimersByTime(1001);
 
-        expect(mockSpawnSync).not.toHaveBeenCalled();
+        expect(mockTreeKill).not.toHaveBeenCalled();
         expect(child.kill).toHaveBeenCalled();
 
         listeners["close"]?.forEach((cb) => cb(1));

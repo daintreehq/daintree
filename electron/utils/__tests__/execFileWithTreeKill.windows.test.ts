@@ -33,7 +33,7 @@ describe.skipIf(process.platform !== "win32")("Windows CLI process lifetime", ()
       expect(() => process.kill(pid!, 0)).toThrow();
     } finally {
       if (pid)
-        spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(pid)], {
+        spawnSync("taskkill.exe", ["/F", "/PID", String(pid)], {
           windowsHide: true,
           stdio: "ignore",
           timeout: 3000,

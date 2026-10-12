@@ -34,14 +34,23 @@ vi.mock("node:child_process", async () => {
     (mockExecFileAsync as unknown as (...a: unknown[]) => Promise<unknown>)(...args);
   return {
     execFile: wrapperExecFile,
-    spawnSync: vi.fn(() => ({ status: 0 })),
   };
 });
 
-import { TrashedPidTracker } from "../TrashedPidTracker.js";
-import { spawnSync } from "node:child_process";
+vi.mock("../../utils/windowsTreeKill.js", () => ({
+  killWindowsProcessTree: vi.fn(async () => ({
+    mode: "tree",
+    targeted: [],
+    failed: [],
+    stale: [],
+    rootEnded: true,
+  })),
+}));
 
-const mockedSpawnSync = vi.mocked(spawnSync);
+import { TrashedPidTracker } from "../TrashedPidTracker.js";
+import { killWindowsProcessTree } from "../../utils/windowsTreeKill.js";
+
+const mockedTreeKill = vi.mocked(killWindowsProcessTree);
 
 async function defaultExecFileAsync(): Promise<{ stdout: string; stderr: string }> {
   return { stdout: MOCK_START_TIME, stderr: "" };
@@ -187,11 +196,7 @@ describe("TrashedPidTracker", () => {
       await tracker.cleanupOrphans();
 
       if (process.platform === "win32") {
-        expect(mockedSpawnSync).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", "9999"],
-          expect.objectContaining({ windowsHide: true })
-        );
+        expect(mockedTreeKill).toHaveBeenCalledWith(9999, { timeoutMs: 3000 });
       } else {
         expect(killSpy).toHaveBeenCalledWith(-9999, "SIGKILL");
       }
@@ -270,7 +275,7 @@ describe("TrashedPidTracker", () => {
       await tracker.cleanupOrphans();
 
       if (process.platform === "win32") {
-        expect(mockedSpawnSync).toHaveBeenCalledTimes(1);
+        expect(mockedTreeKill).toHaveBeenCalledTimes(1);
       } else {
         expect(killSpy).toHaveBeenCalledTimes(1);
       }
@@ -364,12 +369,8 @@ describe("TrashedPidTracker", () => {
       await tracker.cleanupOrphans();
 
       if (process.platform === "win32") {
-        expect(mockedSpawnSync).toHaveBeenCalledTimes(1);
-        expect(mockedSpawnSync).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", "1002"],
-          expect.objectContaining({ windowsHide: true })
-        );
+        expect(mockedTreeKill).toHaveBeenCalledTimes(1);
+        expect(mockedTreeKill).toHaveBeenCalledWith(1002, { timeoutMs: 3000 });
       } else {
         expect(killSpy).toHaveBeenCalledTimes(1);
         expect(killSpy).toHaveBeenCalledWith(-1002, "SIGKILL");

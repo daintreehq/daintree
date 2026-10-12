@@ -14,6 +14,7 @@ import {
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { McpServerContributionSchema } from "../schemas/plugin.js";
 import { minimalWorkerEnv } from "../utils/minimalSpawnEnv.js";
+import { killWindowsProcessTree } from "../utils/windowsTreeKill.js";
 import {
   drainPendingChildTrees,
   PLUGIN_CHILD_DETACHED,
@@ -93,11 +94,12 @@ export type SubprocessSpawner = (
 ) => SpawnHandle | Promise<SpawnHandle>;
 
 /**
- * Windows process-tree teardown shim. We shell out to
- * `taskkill /T /F /PID <pid>` because Windows does not cascade kills and the
- * supervisor's direct child is often a shell (`npx`, `uvx`, `.bat`) whose
- * actual MCP server is a grandchild. It runs BEFORE the direct child is
- * killed: `taskkill /T` walks parent links, which the direct kill erases.
+ * Windows process-tree teardown shim. The default is the creation-time-verified
+ * tree kill (`windowsTreeKill.ts`, never `taskkill /T`) because Windows does
+ * not cascade kills and the supervisor's direct child is often a shell (`npx`,
+ * `uvx`, `.bat`) whose actual MCP server is a grandchild. It runs BEFORE the
+ * direct child is killed: the walk starts from the live root, and a root that
+ * is already gone leaves it nothing to walk from.
  * Injected so tests can assert the tree-kill is invoked without shelling out.
  *
  * POSIX does not use it: the server leads its own process group there, and
@@ -908,8 +910,8 @@ export class PluginMcpSupervisor {
    * Take down a server and everything it spawned (#13173). The direct child is
    * often a wrapper (`npx`, `uvx`, a `.bat`) whose real server is a grandchild.
    *
-   * Windows: tree-kill first, while the parent links `taskkill /T` walks still
-   * exist — killing the direct child first would orphan the server out of its
+   * Windows: tree-kill first, while the root its walk starts from still lives
+   * — killing the direct child first would orphan the server out of its
    * reach. POSIX: SIGTERM the server's process group, then SIGKILL whatever of
    * it outlives the grace window — even once the direct child has exited,
    * which is when its grandchildren are most likely to be left behind. The
@@ -1274,13 +1276,8 @@ const defaultSpawner: SubprocessSpawner = async (config) => {
 
 const defaultProcessTreeKiller: ProcessTreeKiller = async (pid) => {
   if (process.platform !== "win32") return;
-  const { execa } = await import("execa");
   try {
-    await execa("taskkill", ["/T", "/F", "/PID", String(pid)], {
-      reject: false,
-      windowsHide: true,
-      timeout: TASKKILL_TIMEOUT_MS,
-    });
+    await killWindowsProcessTree(pid, { timeoutMs: TASKKILL_TIMEOUT_MS });
   } catch {
     // best-effort — the process may have already exited cleanly
   }

@@ -2,9 +2,10 @@
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { resilientAtomicWriteFileSync } from "../utils/fs.js";
+import { killWindowsProcessTree } from "../utils/windowsTreeKill.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -159,12 +160,8 @@ export class TrashedPidTracker {
 
         let killed = false;
         if (process.platform === "win32") {
-          const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(entry.pid)], {
-            windowsHide: true,
-            stdio: "ignore",
-            timeout: 3000,
-          });
-          if (result.status === 0 || result.status === 128) {
+          const result = await killWindowsProcessTree(entry.pid, { timeoutMs: 3000 });
+          if (result.rootEnded) {
             killed = true;
           }
         } else {
