@@ -252,7 +252,7 @@ export const fleetNamespace = defineIpcNamespace({
     markRunRead: op(FLEET_METHOD_CHANNELS.markRunRead, async (runId: string): Promise<boolean> => {
       checkRateLimit(CHANNELS.FLEET_MARK_RUN_READ, 30, 10_000);
       assertRunId(runId, "run id");
-      return requireHandBackService().markRead(runId);
+      return requireHandBackService().markRead(runId, true);
     }),
 
     /** Mark a run's hand-back unread again. Resolves false when it has none. */
@@ -261,12 +261,20 @@ export const fleetNamespace = defineIpcNamespace({
       async (runId: string): Promise<boolean> => {
         checkRateLimit(CHANNELS.FLEET_MARK_RUN_UNREAD, 30, 10_000);
         assertRunId(runId, "run id");
-        return requireHandBackService().markUnread(runId);
+        return requireHandBackService().markUnread(runId, true);
       }
     ),
   },
 });
 
 export function registerFleetHandlers(): () => void {
-  return fleetNamespace.register();
+  const unregister = fleetNamespace.register();
+  return () => {
+    unregister();
+    for (const [id, unwatch] of watchedViewers) {
+      unwatch();
+      forgetViewer(id);
+    }
+    watchedViewers.clear();
+  };
 }

@@ -209,6 +209,32 @@ export function canopyPanelsListing(runId: string): number[] {
   return [...activeViews].filter((view) => viewShown.get(view)?.has(runId) ?? false);
 }
 
+/**
+ * Carries a read change made in the inbox to the run's hand-back, so the two
+ * read states agree. Only a run the inbox now holds wholly read is read there:
+ * a read through an older turn leaves newer work unread in both.
+ */
+function syncHandBack(mark: CanopyReadMark): void {
+  const handBacks = getRunHandBackService();
+  if (!handBacks) return;
+  if (mark.markedUnreadAt !== null) handBacks.markUnread(mark.runId);
+  else if (mark.readTurn >= mark.turn) handBacks.markRead(mark.runId);
+}
+
+/**
+ * The other direction: a hand-back the user read or marked unread from its own
+ * surfaces — the terminal's menu — is read or unread in the inbox too, for the
+ * incarnation the fleet shows. Only while Canopy is on and its service is up.
+ */
+function onHandBackChanged(change: { id: string; unseen: boolean; fromUser?: boolean }): void {
+  if (!change.fromUser || service === null || !currentPlan().activated) return;
+  const run = getFleetSnapshotService()
+    ?.getLastBroadcast()
+    ?.runs.find((entry) => entry.runId === change.id);
+  if (!run) return;
+  service.setRead(change.id, run.spawnedAt, !change.unseen);
+}
+
 function getService(): CanopyService {
   subscribeFleet();
   if (service) return service;
@@ -1126,7 +1152,7 @@ export const canopyNamespace = defineIpcNamespace({
         if (expectTurn !== undefined && !isTurn(expectTurn)) throw new Error("Invalid turn");
         // What archiving left read, for an undo to put back; null when refused.
         const mark = getService().archive(runId, target.spawnedAt, expectTurn);
-        if (mark !== null) getRunHandBackService()?.markRead(runId);
+        if (mark !== null) syncHandBack(mark);
         return mark;
       }
     ),
@@ -1267,13 +1293,7 @@ export const canopyNamespace = defineIpcNamespace({
         if (typeof read !== "boolean") throw new Error("Invalid read");
         if (turn !== undefined && !isTurn(turn)) throw new Error("Invalid turn");
         const mark = getService().setRead(runId, target.spawnedAt, read, turn);
-        // One read state, whichever surface set it: the inbox's read or unread
-        // is the run's hand-back's too.
-        if (mark !== null) {
-          const handBacks = getRunHandBackService();
-          if (read) handBacks?.markRead(runId);
-          else handBacks?.markUnread(runId);
-        }
+        if (mark !== null) syncHandBack(mark);
         return mark;
       }
     ),
@@ -1289,8 +1309,7 @@ export const canopyNamespace = defineIpcNamespace({
         }
         for (const target of targets) assertReadTarget(target);
         const marks = getService().markAllRead(targets);
-        const handBacks = getRunHandBackService();
-        for (const mark of marks) handBacks?.markRead(mark.runId);
+        for (const mark of marks) syncHandBack(mark);
         return marks;
       }
     ),
@@ -1305,7 +1324,7 @@ export const canopyNamespace = defineIpcNamespace({
           throw new Error("Invalid runs");
         }
         for (const restore of restores) assertReadRestore(restore);
-        getService().restoreReads(restores);
+        for (const mark of getService().restoreReads(restores)) syncHandBack(mark);
       }
     ),
 
@@ -1374,9 +1393,11 @@ export function registerCanopyHandlers(): () => void {
   // Restored anywhere — the grid's Undo, the trash, another toast — a trash
   // Canopy made is over, and its receipt must not restore a later one.
   const offRestored = events.on("terminal:restored", ({ id }) => onHostRestored(id));
+  const offHandBack = events.on("terminal:hand-back-changed", onHandBackChanged);
   return () => {
     unregister();
     offRestored();
+    offHandBack();
     unsubscribeFleet?.();
     unsubscribeFleet = null;
     unsubscribeInput?.();

@@ -932,6 +932,8 @@ export type DaintreeEventMap = {
   "terminal:hand-back-changed": {
     id: string;
     unseen: boolean;
+    /** The user marked it read or unread from a surface of the hand-back's own, not through a mirror of it. */
+    fromUser?: boolean;
     timestamp: number;
   };
 

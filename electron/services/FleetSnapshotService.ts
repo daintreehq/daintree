@@ -297,6 +297,7 @@ export class FleetSnapshotService {
     }
 
     try {
+      const readStartedAt = Date.now();
       const { terminals: allTerminals, degraded } = await getSharedTerminalSnapshot(this.ptyClient);
       if (this.generation !== gen) return;
 
@@ -319,7 +320,10 @@ export class FleetSnapshotService {
       const stallCutoff = Date.now() - STALL_QUIET_MS;
       const runs: FleetRunRow[] = [];
       // A complete inventory, so a terminal missing from it is gone.
-      this.handBacks?.retain(new Set(allTerminals.map((terminal) => terminal.id)));
+      this.handBacks?.retain(
+        new Set(allTerminals.map((terminal) => terminal.id)),
+        readStartedAt
+      );
 
       for (const terminal of allTerminals) {
         // Unowned terminals have no workspace to attribute a demand to, so they

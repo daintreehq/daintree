@@ -45,7 +45,7 @@ function transition(
   runId: string,
   previousState: string,
   state: string,
-  extra: { waitingReason?: string; timestamp?: number } = {}
+  extra: { waitingReason?: string; timestamp?: number; agentIncarnation?: number } = {}
 ) {
   eventEmitter.emit("agent:state-changed", {
     terminalId: runId,
@@ -54,6 +54,7 @@ function transition(
     trigger: "output",
     timestamp: extra.timestamp ?? Date.now(),
     ...(extra.waitingReason !== undefined ? { waitingReason: extra.waitingReason } : {}),
+    ...(extra.agentIncarnation !== undefined ? { agentIncarnation: extra.agentIncarnation } : {}),
   });
 }
 
@@ -261,9 +262,43 @@ describe("RunHandBackService", () => {
     const service = makeService();
     workThenStop("t1");
     workThenStop("t2");
-    service.retain(new Set(["t2"]));
+    service.retain(new Set(["t2"]), Date.now() + 1);
     expect(service.getRecord("t1")).toBeUndefined();
     expect(service.getRecord("t2")).toBeDefined();
+  });
+
+  it("keeps a run observed after the inventory read began", () => {
+    const service = makeService();
+    const readStartedAt = Date.now();
+    transition("t1", "idle", "working");
+    service.retain(new Set(), readStartedAt);
+    vi.advanceTimersByTime(HAND_BACK_MIN_WORK_MS);
+    transition("t1", "working", "completed");
+    expect(isHandBackUnseen(service.getRecord("t1"))).toBe(true);
+  });
+
+  it("starts afresh when another agent starts in the same terminal", () => {
+    const service = makeService();
+    transition("t1", "idle", "working", { agentIncarnation: 1 });
+    vi.advanceTimersByTime(HAND_BACK_MIN_WORK_MS);
+    transition("t1", "working", "completed", { agentIncarnation: 1 });
+    expect(service.getRecord("t1")).toBeDefined();
+
+    transition("t1", "completed", "idle", { agentIncarnation: 2 });
+    expect(service.getRecord("t1")).toBeUndefined();
+    expect(changes().at(-1)).toMatchObject({ id: "t1", unseen: false });
+    transition("t1", "idle", "working", { agentIncarnation: 2 });
+    transition("t1", "working", "waiting", { agentIncarnation: 2 });
+    expect(service.getRecord("t1")).toBeUndefined();
+  });
+
+  it("says when the user marked it from the hand-back's own surfaces", () => {
+    const service = makeService();
+    workThenStop("t1");
+    service.markRead("t1", true);
+    expect(changes().at(-1)).toMatchObject({ unseen: false, fromUser: true });
+    service.markUnread("t1");
+    expect(changes().at(-1)).not.toHaveProperty("fromUser");
   });
 
   it("leaves no timers armed after dispose", () => {

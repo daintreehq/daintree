@@ -19,6 +19,10 @@ const BUSY_STATES: ReadonlySet<AgentState> = new Set(["working", "directing"]);
 export const MAX_TRACKED_RUNS = 1_000;
 
 interface RunTrack {
+  /** The agent session in the PTY this track is about; a new one starts the run afresh. */
+  incarnation: number | undefined;
+  /** When anything was last observed of the run, so a fleet read begun before it cannot prune it. */
+  touchedAt: number;
   /** When the busy stint Daintree is watching began; null while stopped or never seen working. */
   workSince: number | null;
   record: RunHandBackRecord | null;
@@ -78,7 +82,8 @@ export class RunHandBackService {
           payload.state,
           payload.previousState,
           payload.waitingReason,
-          payload.timestamp
+          payload.timestamp,
+          payload.agentIncarnation
         );
       })
     );
@@ -100,10 +105,13 @@ export class RunHandBackService {
     return track.record;
   }
 
-  /** Forget every run the fleet no longer has. Call only with a complete inventory. */
-  retain(liveRunIds: ReadonlySet<string>): void {
+  /**
+   * Forget every run a complete inventory, read from `readStartedAt`, no longer
+   * has. A run observed since the read began may simply be newer than it.
+   */
+  retain(liveRunIds: ReadonlySet<string>, readStartedAt: number): void {
     for (const [runId, track] of this.tracks) {
-      if (liveRunIds.has(runId)) continue;
+      if (liveRunIds.has(runId) || track.touchedAt >= readStartedAt) continue;
       this.clearTimer(track);
       this.tracks.delete(runId);
     }
@@ -128,9 +136,10 @@ export class RunHandBackService {
     }
     if (!track) {
       if (this.tracks.size >= MAX_TRACKED_RUNS) return;
-      track = newTrack();
+      track = newTrack(now);
       this.tracks.set(runId, track);
     }
+    track.touchedAt = now;
     const held = track.lookers.get(viewer);
     if (held !== undefined && now - held.renewedAt <= HAND_BACK_LOOK_LEASE_MS) {
       held.renewedAt = now;
@@ -148,27 +157,32 @@ export class RunHandBackService {
     }
   }
 
-  /** The user read the run's hand-back by hand. False when there is none to read. */
-  markRead(runId: string): boolean {
+  /**
+   * The user read the run's hand-back by hand. False when there is none to
+   * read. `fromUser` says it came from a surface of the hand-back's own, so a
+   * mirror like Canopy's inbox follows it; one carried over from that mirror
+   * leaves it out.
+   */
+  markRead(runId: string, fromUser = false): boolean {
     if (this.disposed || this.isQuitting()) return false;
     const track = this.tracks.get(runId);
     const record = track?.record;
     if (!track || !record || !isHandBackUnseen(record)) return false;
     track.record = { stoppedAt: record.stoppedAt, seenAt: this.now() };
     this.clearTimer(track);
-    this.announce(runId, track.record);
+    this.announce(runId, track.record, fromUser);
     return true;
   }
 
   /** The user marked the run's hand-back unread again. False when there is none. */
-  markUnread(runId: string): boolean {
+  markUnread(runId: string, fromUser = false): boolean {
     if (this.disposed || this.isQuitting()) return false;
     const track = this.tracks.get(runId);
     const record = track?.record;
     if (!track || !record) return false;
     track.record = { ...record, markedUnreadAt: this.now() };
     this.clearTimer(track);
-    this.announce(runId, track.record);
+    this.announce(runId, track.record, fromUser);
     return true;
   }
 
@@ -177,16 +191,36 @@ export class RunHandBackService {
     state: AgentState,
     previousState: AgentState,
     waitingReason: Parameters<typeof isHandBackStop>[1],
-    timestamp: number
+    timestamp: number,
+    incarnation: number | undefined
   ): void {
     if (this.disposed || this.isQuitting()) return;
     const at = Number.isFinite(timestamp) ? timestamp : this.now();
     let track = this.tracks.get(runId);
+    if (track) {
+      track.touchedAt = this.now();
+      if (
+        incarnation !== undefined &&
+        track.incarnation !== undefined &&
+        incarnation !== track.incarnation
+      ) {
+        // Another agent in the same terminal: what the last one handed back,
+        // and the work it was doing, are not this one's.
+        const had = track.record !== null;
+        track.record = null;
+        track.replaced = undefined;
+        track.workSince = null;
+        this.clearTimer(track);
+        if (had) this.announce(runId, null);
+      }
+      if (incarnation !== undefined) track.incarnation = incarnation;
+    }
 
     if (BUSY_STATES.has(state)) {
       if (!track) {
         if (this.tracks.size >= MAX_TRACKED_RUNS) return;
-        track = newTrack();
+        track = newTrack(this.now());
+        track.incarnation = incarnation;
         this.tracks.set(runId, track);
       }
       track.replaced = undefined;
@@ -261,10 +295,11 @@ export class RunHandBackService {
     track.timer = null;
   }
 
-  private announce(runId: string, record: RunHandBackRecord | null): void {
+  private announce(runId: string, record: RunHandBackRecord | null, fromUser = false): void {
     events.emit("terminal:hand-back-changed", {
       id: runId,
       unseen: isHandBackUnseen(record ?? undefined),
+      ...(fromUser ? { fromUser: true } : {}),
       timestamp: this.now(),
     });
   }
@@ -278,6 +313,14 @@ export class RunHandBackService {
   }
 }
 
-function newTrack(): RunTrack {
-  return { workSince: null, record: null, replaced: undefined, lookers: new Map(), timer: null };
+function newTrack(now: number): RunTrack {
+  return {
+    incarnation: undefined,
+    touchedAt: now,
+    workSince: null,
+    record: null,
+    replaced: undefined,
+    lookers: new Map(),
+    timer: null,
+  };
 }

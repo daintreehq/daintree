@@ -717,7 +717,7 @@ describe("FleetSnapshotService", () => {
 
     expect(lastSnapshot().runs[0].handBack).toEqual({ stoppedAt: NOW - 1_000 });
     expect(getRecord).toHaveBeenCalledWith("t1", NOW - 60_000);
-    expect(retain).toHaveBeenCalledWith(new Set(["t1"]));
+    expect(retain).toHaveBeenCalledWith(new Set(["t1"]), expect.any(Number));
 
     // Seen is a fleet change on its own, with no agent state moving.
     record = { stoppedAt: NOW - 1_000, seenAt: NOW };
