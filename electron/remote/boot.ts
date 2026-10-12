@@ -1,5 +1,6 @@
 import path from "node:path";
 import { app } from "electron";
+import { isHostModeRequested } from "../boot/hostModeLaunch.js";
 import { ensureWorkspaceClient, isWorkspaceClientStarting } from "../boot/hostServices.js";
 import { notifyRemoteViewEndpointOpened } from "../ipc/hostSendRelay.js";
 import { setRemoteBoundViewFilter } from "../ipc/utils.js";
@@ -244,6 +245,8 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
   teardowns.push(registerRemoteService("hostMode", hostMode));
   teardowns.push(() => hostMode.dispose());
   if (options.hostMode) await hostMode.startListening();
+  // Started by its login item or unit: bring that item up to this build's text.
+  if (isHostModeRequested(process.argv)) void hostMode.refreshStartAtLogin();
 }
 
 export async function stopRemoteHosts(): Promise<void> {

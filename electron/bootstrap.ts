@@ -3,7 +3,7 @@
 // instance doesn't collide with the production app. Importing it here ensures
 // runBootMigrations, the compile-cache dir, and initializeStore all resolve to
 // the correct directory before main.ts re-imports it (idempotent via ESM cache).
-import "./setup/environment.js";
+import { isSmokeTest } from "./setup/environment.js";
 
 import { enableCompileCache, flushCompileCache, constants as moduleConstants } from "node:module";
 import fs from "node:fs";
@@ -123,6 +123,9 @@ await import("./main.js");
 // main.js loaded; the previous session's .bak stays valid for corrupt-config
 // recovery until this fires, so deferring loses nothing.
 setImmediate(() => {
+  // A second launch kept open to ask about a headless Host (see
+  // remote/host/headlessHostTakeover.ts) doesn't own the settings.
+  if (!isSmokeTest && !app.hasSingleInstanceLock()) return;
   runDeferredStoreBackup();
 });
 

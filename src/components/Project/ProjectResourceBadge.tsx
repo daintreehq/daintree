@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import { logError } from "@/utils/logger";
+import { isClientAppError } from "@/utils/clientAppError";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { actionService } from "@/services/ActionService";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
@@ -531,7 +532,14 @@ export function ProjectResourceBadge({
         projects: projects.map((p: Project) => ({ id: p.id, name: p.name })),
       };
     } catch (error) {
-      logError("[ProjectResourceBadge] Failed to fetch stats", error);
+      // A host window's link is down, or dropped mid-read: the connection
+      // banner says so, and the next poll after it reconnects reads again.
+      const linkDown =
+        isClientAppError(error) &&
+        (error.code === "HOST_DISCONNECTED" || error.code === "OUTCOME_UNKNOWN");
+      if (!linkDown) {
+        logError("[ProjectResourceBadge] Failed to fetch stats", error);
+      }
       return null;
     }
   }, []);

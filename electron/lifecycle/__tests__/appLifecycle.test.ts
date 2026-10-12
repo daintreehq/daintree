@@ -449,6 +449,23 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 
+  it("never opens a window in a Host with no display, which would crash it", async () => {
+    const onHostModeRequested = vi.fn();
+    const { opts, handle, handler } = await register({
+      onHostModeRequested,
+      canOpenWindows: () => false,
+    });
+
+    handler({}, ["/opt/Daintree/daintree"], "/home/greg");
+    handler({}, ["/opt/Daintree/daintree", cliDir], "/home/greg");
+    handle.onLaunchSettled();
+    // A Host-mode request still reaches it.
+    handler({}, ["/opt/Daintree/daintree", "--host-mode"], "/");
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+    expect(onHostModeRequested).toHaveBeenCalledOnce();
+  });
+
   it("does the same before the launch has settled, and after it settles opens nothing", async () => {
     const onHostModeRequested = vi.fn();
     const { opts, handle, handler } = await register({

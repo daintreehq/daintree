@@ -140,6 +140,35 @@ export class HostModeService {
     this.push();
   }
 
+  /**
+   * Rewrite a start-at-login item this build would write differently (a launch
+   * flag or service setting changed since), so an update reaches it. Only an
+   * item that launches this install: another install sharing the name keeps
+   * its own. Called from a launch that item started.
+   */
+  refreshStartAtLogin(): Promise<void> {
+    // Queued behind any switch in flight, so Host mode turned off meanwhile is never reinstalled.
+    const run = this.queue.then(() => this.applyRefreshStartAtLogin());
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
+  private async applyRefreshStartAtLogin(): Promise<void> {
+    const settings = this.deps.readSettings();
+    const startAtLogin = this.deps.startAtLogin;
+    if (this.disposed || !startAtLogin || !settings.enabled || !settings.startAtLogin) return;
+    const seen = await startAtLogin.observe().catch(() => null);
+    if (this.disposed || !seen?.installed || seen.current || seen.ownLaunch !== true) return;
+    try {
+      await startAtLogin.install();
+    } catch (error) {
+      console.warn("[RemoteHosts] Refreshing start at login failed:", messageOf(error));
+      return;
+    }
+    await this.observe();
+    this.push();
+  }
+
   getStatus(): Promise<HostModeStatus> {
     return this.observe().then(() => this.snapshot());
   }

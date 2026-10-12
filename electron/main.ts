@@ -114,6 +114,7 @@ import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotif
 import {
   getPendingOpenDirPaths,
   getPendingOpenFilePaths,
+  headlessOzone,
   isDemoMode,
   isSmokeTest,
   kickOffEarlyPathRefresh,
@@ -328,7 +329,30 @@ if (!gotTheLock) {
   // The running instance has this launch's arguments already. A quit would
   // carry on into Chromium's display setup, which aborts on a Linux box with
   // no display, as host setup's handoff over SSH is.
-  app.exit(0);
+  const exitNow = () => app.exit(0);
+  if (
+    __DAINTREE_REMOTE_HOSTS__ &&
+    process.platform === "linux" &&
+    isRemoteHostSupported() &&
+    (process.env.DISPLAY || process.env.WAYLAND_DISPLAY)
+  ) {
+    // A desktop launch while Daintree runs here as a headless Host, which can
+    // never show it a window: offer to restart it with one.
+    void import("./remote/host/headlessHostTakeover.js")
+      .then(async (takeover) => {
+        const host = takeover.wantsDesktopWindow(process.argv, process.env)
+          ? takeover.findHeadlessHost()
+          : null;
+        if (host) await takeover.offerHeadlessHostTakeover(host);
+        else exitNow();
+      })
+      .catch((error: unknown) => {
+        console.error("[MAIN] Couldn't check for a headless Host:", error);
+        exitNow();
+      });
+  } else {
+    exitNow();
+  }
 } else if (isRemoteHostSupported() && isHostModeHandoffOnly(process.argv)) {
   // Host setup runs this from an SSH session only to reach a running
   // Daintree; with none to hand over to, it must not become the backend there.
@@ -965,6 +989,7 @@ if (!gotTheLock) {
     windowRegistry,
     isHostModeActive: () => hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
     isLaunchSettled: () => launchSettled,
+    canOpenWindows: () => !headlessOzone,
     onHostModeRequested: isRemoteHostSupported()
       ? (commandLine) => {
           hostModeHandedOff = true;

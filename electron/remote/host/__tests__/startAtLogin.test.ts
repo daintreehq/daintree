@@ -138,6 +138,8 @@ Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
 Restart=on-failure
 RestartSec=10
+KillMode=mixed
+TimeoutStopSec=30
 
 [Install]
 WantedBy=default.target
@@ -198,6 +200,7 @@ WantedBy=default.target
       path: file,
       installed: true,
       current: true,
+      ownLaunch: true,
       unitState: "enabled",
       linger: "yes",
       userName: "greg",

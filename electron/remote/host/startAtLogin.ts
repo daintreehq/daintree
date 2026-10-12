@@ -32,6 +32,12 @@ export interface StartAtLoginObservation {
   installed: boolean;
   /** The file on disk is exactly what this launch would write (same binary, same flags). */
   current: boolean;
+  /**
+   * The file launches this install (its binary, and app folder when
+   * unpackaged), whatever else in it differs: an older build of this install
+   * wrote it, not another install sharing the name.
+   */
+  ownLaunch?: boolean;
   /** `systemctl --user is-enabled` output, or null where it doesn't apply or couldn't be read. */
   unitState: string | null;
   /** `loginctl show-user` Linger value; null where it doesn't apply or couldn't be read. */
@@ -65,8 +71,13 @@ export interface HostLaunchTarget {
 
 export const APPIMAGE_EXTRACT_AND_RUN_ENV = "APPIMAGE_EXTRACT_AND_RUN";
 
+/** What starts this install: its binary, and its app folder when unpackaged. */
+function launchArguments(target: HostLaunchTarget): string[] {
+  return [target.executable, ...(target.appPath ? [target.appPath] : [])];
+}
+
 export function hostModeLaunchArguments(target: HostLaunchTarget): string[] {
-  return [target.executable, ...(target.appPath ? [target.appPath] : []), HOST_MODE_FLAG];
+  return [...launchArguments(target), HOST_MODE_FLAG];
 }
 
 export interface StartAtLoginFs {
@@ -175,11 +186,15 @@ export function createLaunchAgentController(deps: {
     },
     async observe() {
       const onDisk = await files.readFile(file).catch(() => null);
+      const launch = launchArguments(deps.target)
+        .map((arg) => `\t\t<string>${xmlEscape(arg)}</string>\n`)
+        .join("");
       return {
         kind: "launch-agent",
         path: file,
         installed: onDisk !== null,
         current: onDisk === content(),
+        ownLaunch: onDisk !== null && onDisk.includes(`\t<array>\n${launch}`),
         unitState: null,
         linger: null,
         userName: null,
@@ -244,6 +259,11 @@ export function buildSystemdUnit(input: {
     ...(input.appImageExtractAndRun ? [`Environment=${APPIMAGE_EXTRACT_AND_RUN_ENV}=1`] : []),
     `Restart=on-failure`,
     `RestartSec=10`,
+    // A stop signals Daintree alone and lets it close its own helpers: one
+    // sent to all of them at once crashes Chromium on the way down. Its own
+    // shutdown gives up after 20 s, so the stop waits a little longer.
+    `KillMode=mixed`,
+    `TimeoutStopSec=30`,
     ``,
     `[Install]`,
     `WantedBy=default.target`,
@@ -332,11 +352,13 @@ export function createSystemdUserController(deps: {
         deps.run("loginctl", ["show-user", deps.userName, "-p", "Linger"]),
       ]);
       const unitState = enabled.failure ? null : enabled.stdout.trim().split("\n")[0] || null;
+      const launch = `ExecStart=${launchArguments(deps.target).map(systemdQuote).join(" ")} `;
       return {
         kind: "systemd-user",
         path: file,
         installed: onDisk !== null,
         current: onDisk === content(),
+        ownLaunch: onDisk !== null && onDisk.split("\n").some((line) => line.startsWith(launch)),
         unitState,
         linger: linger.code === 0 ? parseLinger(linger.stdout) : null,
         userName: deps.userName,

@@ -331,6 +331,59 @@ describe("HostModeService start at login consent", () => {
     return { fs, runner, controller };
   }
 
+  it("brings a unit an older build wrote up to this build's text, and leaves a current one alone", async () => {
+    const { fs, runner, controller } = withSystemd();
+    const on = { enabled: true, startAtLogin: true, advertise: true };
+    fs.files.set(unitPath, '[Service]\nExecStart="/opt/Daintree/daintree" "--host-mode"\n');
+    const { service } = makeService({ startAtLogin: controller, run: runner.run }, on);
+
+    await service.refreshStartAtLogin();
+    expect(fs.files.get(unitPath)).toBe(
+      buildSystemdUnit({
+        programArguments: ["/opt/Daintree/daintree", "--host-mode", "--ozone-platform=headless"],
+      })
+    );
+    const writes = runner.calls.filter((c) => c.includes("daemon-reload")).length;
+
+    await service.refreshStartAtLogin();
+    expect(runner.calls.filter((c) => c.includes("daemon-reload")).length).toBe(writes);
+  });
+
+  it("leaves a unit another install wrote under the same name alone", async () => {
+    const { fs, runner, controller } = withSystemd();
+    const foreign =
+      '[Service]\nExecStart="/home/greg/Applications/Daintree.AppImage" "--host-mode"\n';
+    fs.files.set(unitPath, foreign);
+    const { service } = makeService(
+      { startAtLogin: controller, run: runner.run },
+      { enabled: true, startAtLogin: true, advertise: true }
+    );
+    await service.refreshStartAtLogin();
+    expect(fs.files.get(unitPath)).toBe(foreign);
+  });
+
+  it("doesn't put back a unit that turning Host mode off removed while it was queued", async () => {
+    const { fs, runner, controller } = withSystemd();
+    fs.files.set(unitPath, '[Service]\nExecStart="/opt/Daintree/daintree" "--host-mode"\n');
+    const { service } = makeService(
+      { startAtLogin: controller, run: runner.run },
+      { enabled: true, startAtLogin: true, advertise: true }
+    );
+    await Promise.all([service.setEnabled({ enabled: false }), service.refreshStartAtLogin()]);
+    expect(fs.files.has(unitPath)).toBe(false);
+  });
+
+  it("never writes a unit for start at login the user didn't agree to", async () => {
+    const { fs, runner, controller } = withSystemd();
+    fs.files.set(unitPath, "old");
+    const { service } = makeService(
+      { startAtLogin: controller, run: runner.run },
+      { enabled: true, startAtLogin: false, advertise: true }
+    );
+    await service.refreshStartAtLogin();
+    expect(fs.files.get(unitPath)).toBe("old");
+  });
+
   it("writes no unit unless the user said yes", async () => {
     const { fs, runner, controller } = withSystemd();
     const { service, settings } = makeService({ startAtLogin: controller, run: runner.run });

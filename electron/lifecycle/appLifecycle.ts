@@ -242,6 +242,13 @@ export interface AppLifecycleOptions {
    */
   isLaunchSettled?: () => boolean;
   /**
+   * False for a Host running Chromium headless (a Linux service with no
+   * display): creating a window there crashes it, ending everything it runs.
+   * A launch on that machine's desktop offers to restart it instead (see
+   * `remote/host/headlessHostTakeover.ts`).
+   */
+  canOpenWindows?: () => boolean;
+  /**
    * A second launch asked for Host mode (`--host-mode`, from a login item or
    * the systemd unit, or `--enable-host-mode` from host setup). Given the
    * launch's command line. Only where Remote Hosts exists; without it such a
@@ -336,6 +343,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // A folder open only needs one when no window has ever set up the routing
   // that would make one for it; queued, it opens in the new window.
   const openWindowIfNeeded = (plainRelaunch: boolean): void => {
+    if (opts.canOpenWindows && !opts.canOpenWindows()) return;
     if (!plainRelaunch && hasOpenDirConsumer()) return;
     void Promise.resolve(opts.onCreateWindow()).catch((err) =>
       console.error("[MAIN] Failed to open a window for a second launch:", err)
@@ -350,6 +358,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     if (opts.onHostModeRequested && isHostModeRequested(commandLine)) {
       console.log("[MAIN] Second instance asked for Host mode");
       opts.onHostModeRequested(commandLine);
+      return;
+    }
+    if (opts.canOpenWindows && !opts.canOpenWindows()) {
+      console.log("[MAIN] Second instance wants a window, but this Host has no display");
       return;
     }
     const liveWindow = getLiveWindow();
