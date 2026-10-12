@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { HEADLESS_OZONE_SWITCH, HOST_MODE_FLAG } from "../../boot/hostModeLaunch.js";
 import type { CommandRunner } from "./hostCommands.js";
+import { HOST_MODE_STATUS_NAME } from "./hostModeStatusFile.js";
+import { LINUX_RUNTIME_DIR_NAME } from "./hostSocketPath.js";
 
 /**
  * Start at login for Host mode: a Daintree-owned LaunchAgent on macOS and a
@@ -242,6 +244,18 @@ export function systemdQuote(arg: string): string {
   return `"${escaped}"`;
 }
 
+/**
+ * An AppImage run without FUSE stays systemd's main process, with Daintree as
+ * its child, so a stop would signal the image's runtime and then kill
+ * Daintree outright. This asks Daintree itself to quit first and waits for it
+ * (within the stop timeout). Its pid comes from the status file it writes, and
+ * counts only while its parent is this service's main process: the file may
+ * name a Daintree opened on the desktop, or a pid since reused. (Membership of
+ * the unit's cgroup can't tell: Chromium moves its main process into a scope
+ * of its own as it starts.)
+ */
+export const APPIMAGE_STOP_SCRIPT = `p=$(grep -o '"pid":[0-9]*' "$XDG_RUNTIME_DIR/${LINUX_RUNTIME_DIR_NAME}/${HOST_MODE_STATUS_NAME}" 2>/dev/null | cut -d: -f2); [ -n "$p" ] && [ -n "$MAINPID" ] || exit 0; set -- $(cut -d')' -f2- "/proc/$p/stat" 2>/dev/null); [ "$2" = "$MAINPID" ] || exit 0; kill -TERM "$p" 2>/dev/null || exit 0; i=0; while kill -0 "$p" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.25; i=$((i + 1)); done; exit 0`;
+
 export function buildSystemdUnit(input: {
   programArguments: readonly string[];
   appImageExtractAndRun?: boolean;
@@ -256,7 +270,12 @@ export function buildSystemdUnit(input: {
     // Linger starts the unit before any login, when neither is in the environment.
     `Environment=XDG_RUNTIME_DIR=/run/user/%U`,
     `Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus`,
-    ...(input.appImageExtractAndRun ? [`Environment=${APPIMAGE_EXTRACT_AND_RUN_ENV}=1`] : []),
+    ...(input.appImageExtractAndRun
+      ? [
+          `Environment=${APPIMAGE_EXTRACT_AND_RUN_ENV}=1`,
+          `ExecStop=${["/bin/sh", "-c", APPIMAGE_STOP_SCRIPT].map(systemdQuote).join(" ")}`,
+        ]
+      : []),
     `Restart=on-failure`,
     `RestartSec=10`,
     // A stop signals Daintree alone and lets it close its own helpers: one

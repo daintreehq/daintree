@@ -246,6 +246,11 @@ describe("AppImage without FUSE", () => {
       'ExecStart="/home/greg/Applications/Daintree.AppImage" "--host-mode" "--ozone-platform=headless"\n'
     );
     expect(unit).toContain("\nEnvironment=APPIMAGE_EXTRACT_AND_RUN=1\n");
+    // Daintree, the image runtime's child, is asked to quit before the runtime is.
+    expect(unit).toContain('\nExecStop="/bin/sh" "-c" "p=$$(grep -o');
+    expect(systemdUnitFor({ executable: "/opt/Daintree/daintree", appPath: null })).not.toContain(
+      "ExecStop"
+    );
     expect(systemdUnitFor({ executable: "/opt/Daintree/daintree", appPath: null })).not.toContain(
       "APPIMAGE_EXTRACT_AND_RUN"
     );

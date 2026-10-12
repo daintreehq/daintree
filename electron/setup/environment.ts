@@ -19,7 +19,7 @@ import nodeV8 from "node:v8";
 import vm from "node:vm";
 import { spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { app } from "electron";
+import { app, dialog } from "electron";
 import path from "path";
 import fs from "fs";
 import { existsSync } from "fs";
@@ -46,6 +46,7 @@ import {
   isAttachStdioRequested,
   shouldUseHeadlessOzone,
 } from "../boot/hostModeLaunch.js";
+import { installHeadlessDialogGuards } from "./headlessDialogs.js";
 import {
   e2eCrashDumpsDir,
   isDemoMode,
@@ -176,6 +177,7 @@ export const headlessOzone = shouldUseHeadlessOzone({
 // Enable native Wayland support on Linux (Electron < 38)
 // Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
 if (headlessOzone) {
+  installHeadlessDialogGuards(dialog);
   app.commandLine.appendSwitch("ozone-platform", "headless");
   app.commandLine.appendSwitch("disable-gpu");
   if (!gpuHardwareAccelerationDisabled) app.disableHardwareAcceleration();

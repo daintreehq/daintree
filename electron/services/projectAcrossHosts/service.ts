@@ -872,16 +872,26 @@ export class ProjectAcrossHostsService {
   private async requireRepositoryFolder(resolved: string): Promise<void> {
     const refuse = (detail: string): AppError =>
       new AppError({ code: "VALIDATION", message: detail, userMessage: detail });
+    // Named in the message: the person sees which folder this host was asked about.
     const stat = await fs.lstat(resolved).catch(() => null);
-    if (!stat?.isDirectory()) throw refuse("That folder isn't there on this host.");
+    if (!stat?.isDirectory()) throw refuse(`${resolved} isn't there on this host.`);
+    const notMain = `${resolved} isn't a git repository's main folder.`;
     const gitDir = await fs.lstat(path.join(resolved, ".git")).catch(() => null);
-    if (!gitDir?.isDirectory()) throw refuse("That folder isn't a git repository's main folder.");
+    if (!gitDir?.isDirectory()) throw refuse(notMain);
     const real = await fs.realpath(resolved).catch(() => null);
     const git = await this.deps.git.local(resolved);
     const topLevel = (await tryRaw(git, ["rev-parse", "--show-toplevel"]))?.trim() ?? null;
     const realTop = topLevel ? await fs.realpath(topLevel).catch(() => null) : null;
     if (real === null || realTop !== real) {
-      throw refuse("That folder isn't a git repository's main folder.");
+      // How it differed, not where: console output can reach telemetry breadcrumbs.
+      const why =
+        topLevel === null
+          ? "git couldn't read its top level"
+          : realTop !== null && real !== null && real.startsWith(`${realTop}${path.sep}`)
+            ? "it's inside another repository"
+            : "git's top level is elsewhere";
+      console.warn(`[ProjectAcrossHosts] Refused a folder as a repository's main folder: ${why}`);
+      throw refuse(notMain);
     }
   }
 

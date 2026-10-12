@@ -24,6 +24,7 @@ const electronMock = vi.hoisted(() => ({
     disableHardwareAcceleration: vi.fn(),
     on: vi.fn(),
   },
+  dialog: {} as Record<string, unknown>,
 }));
 
 const osMock = vi.hoisted(() => ({
@@ -719,6 +720,8 @@ describe("Headless Host mode on Linux", () => {
     expect(keys.indexOf("ozone-platform")).toBeLessThan(keys.indexOf("enable-features"));
     expect(keys.indexOf("disable-gpu")).toBeLessThan(keys.indexOf("force-gpu-mem-available-mb"));
     expect(electronMock.app.disableHardwareAcceleration).toHaveBeenCalledTimes(1);
+    // Native dialogs crash Chromium with no display: they're answered instead.
+    expect(typeof electronMock.dialog.showMessageBox).toBe("function");
   });
 
   it.each([

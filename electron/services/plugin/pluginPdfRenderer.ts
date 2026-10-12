@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { BrowserWindow, session } from "electron";
+import { shouldUseHeadlessOzone } from "../../boot/hostModeLaunch.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
 /**
@@ -473,6 +474,13 @@ export async function renderHtmlToPdf(request: RenderPdfRequest): Promise<Buffer
         skipTaskbar: true,
         focusable: false,
         webPreferences: {
+          // A Host with no display crashes creating an ordinary hidden window;
+          // an offscreen one renders and prints the same.
+          offscreen: shouldUseHeadlessOzone({
+            platform: process.platform,
+            argv: process.argv,
+            env: process.env,
+          }),
           partition,
           javascript: false,
           sandbox: true,
