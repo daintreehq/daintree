@@ -490,6 +490,51 @@ function validateOnnxRuntime(unpackedPath) {
 }
 
 /**
+ * onnxruntime-node ships every platform's binaries, plus the CUDA and TensorRT
+ * execution providers on Linux (~270 MB). Daintree's only session (Silero VAD
+ * in avr-vad) uses the default CPU provider, so a Linux package needs nothing
+ * but `linux/<arch>` without those two libraries — the rest was ~380 MB of
+ * every Linux download. Linux only: a mac universal build merges per-arch
+ * intermediates that must keep identical file sets.
+ */
+const ONNX_GPU_PROVIDER_LIBS = [
+  "libonnxruntime_providers_cuda.so",
+  "libonnxruntime_providers_tensorrt.so",
+];
+
+function pruneOnnxRuntimeForLinux(unpackedPath, arches) {
+  const binRoot = path.join(unpackedPath, "node_modules", "onnxruntime-node", "bin");
+  if (!fs.existsSync(binRoot)) return;
+  for (const napi of fs.readdirSync(binRoot)) {
+    const napiDir = path.join(binRoot, napi);
+    for (const platform of fs.readdirSync(napiDir)) {
+      const platformDir = path.join(napiDir, platform);
+      if (platform !== "linux") {
+        fs.rmSync(platformDir, { recursive: true, force: true });
+        continue;
+      }
+      for (const arch of fs.readdirSync(platformDir)) {
+        const archDir = path.join(platformDir, arch);
+        if (!arches.includes(arch)) {
+          fs.rmSync(archDir, { recursive: true, force: true });
+          continue;
+        }
+        for (const lib of ONNX_GPU_PROVIDER_LIBS)
+          fs.rmSync(path.join(archDir, lib), { force: true });
+        if (!fs.existsSync(path.join(archDir, "onnxruntime_binding.node"))) {
+          throw new Error(
+            `[afterPack] CRITICAL: onnxruntime binding missing for linux-${arch} at ${archDir}. ` +
+              "Voice VAD segmentation would be disabled."
+          );
+        }
+      }
+    }
+  }
+  console.log(`[afterPack] onnxruntime-node pruned to linux-${arches.join("/")} (CPU provider)`);
+}
+exports.pruneOnnxRuntimeForLinux = pruneOnnxRuntimeForLinux;
+
+/**
  * Get the path to unpacked resources for the platform
  */
 function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
@@ -745,6 +790,9 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] better-sqlite3 verified: ${betterSqlitePath}`);
 
   validateOnnxRuntime(unpackedPath);
+  if (electronPlatformName === "linux" && prebuildTarget.exact) {
+    pruneOnnxRuntimeForLinux(unpackedPath, prebuildTarget.arches);
+  }
 
   console.log("[afterPack] Complete - native modules validated");
 };
