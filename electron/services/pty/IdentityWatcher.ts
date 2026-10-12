@@ -45,9 +45,10 @@ const MAC_BASH_PROMPT_PATTERN = /^\s*\S+:\S+\s+\S+\s*[#$%>]\s*$/;
 const POWERSHELL_PROMPT_PATTERN = /^\s*PS\s+\S.*>\s*$/i;
 // cmd.exe default (`$P$G`) — `C:\repo>`. Only cmd's own `^C` echo may follow
 // the `>` (a Ctrl+C that lands after a TUI agent quit), and the path excludes
-// the characters Windows forbids in one, so an echoed batch line
-// (`C:\repo>npm test`) or a redirect in output can't pass for a prompt.
-const CMD_PROMPT_PATTERN = /^\s*[A-Za-z]:\\[^<>|"*?\r\n]*>(?:\^C)*\s*$/;
+// the characters Windows forbids in one (control characters and a second `:`
+// included), so an echoed batch line (`C:\repo>npm test`) or a redirect in
+// output can't pass for a prompt.
+const CMD_PROMPT_PATTERN = /^\s*[A-Za-z]:\\[^<>:|"*?\p{Cc}]*>(?:\^C)*\s*$/u;
 
 const SHELL_PROMPT_PATTERNS = [
   SINGLE_CHAR_SHELL_PROMPT_PATTERN,

@@ -675,8 +675,9 @@ export class ViewportSnapshotCache {
 // A prompt or command wider than the terminal wraps, and the cursor sits on its
 // last row: `PS C:\long\path>` read row by row is just `path>`, which no prompt
 // pattern recognises. That stranded agent badges on Windows, where a returning
-// prompt is the only sign an agent quit. The walk back is bounded.
-const MAX_CURSOR_LINE_WRAPPED_ROWS = 8;
+// prompt is the only sign an agent quit. The walk back is bounded: 32 rows hold
+// a 640-character prompt in a 20-column split.
+const MAX_CURSOR_LINE_WRAPPED_ROWS = 32;
 
 /** The logical line under the cursor, rejoined across wrapped rows. */
 export function readCursorLine(terminal: HeadlessTerminal | undefined): string | null {

@@ -23,6 +23,13 @@ describe("readCursorLine", () => {
     expect(readCursorLine(term)).toBe(PROMPT);
   });
 
+  it("reads a long prompt in a narrow split in full", async () => {
+    const term = createTerminal(20);
+    const prompt = `PS C:\\${"deep\\".repeat(40)}repo> `;
+    await write(term, `output\r\n${prompt}`);
+    expect(readCursorLine(term)).toBe(prompt);
+  });
+
   it("does not join a row that starts a new line", async () => {
     const term = createTerminal(40);
     await write(term, "first line of output\r\nPS C:\\repo> ");
@@ -33,7 +40,7 @@ describe("readCursorLine", () => {
     const term = createTerminal(10);
     await write(term, "x".repeat(200));
     const line = readCursorLine(term) ?? "";
-    expect(line.length).toBeLessThanOrEqual(10 * 9);
+    expect(line.length).toBeLessThanOrEqual(10 * 33);
     expect(line.length).toBeGreaterThan(10);
   });
 });

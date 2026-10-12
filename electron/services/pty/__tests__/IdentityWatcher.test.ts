@@ -720,6 +720,37 @@ describe("IdentityWatcher", () => {
       }
     );
 
+    it.each([
+      ["a second colon", "C:\\dev\\a:b>"],
+      ["a control character", "C:\\dev\\\u0007repo>"],
+      ["text after the >", "C:\\dev\\project>npm test"],
+    ])("does not take a cmd-shaped line with %s for a returned prompt", async (_label, line) => {
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: vi.fn(),
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate, state } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["C:\\dev\\project>codex", "Welcome to Claude Code"],
+        cursorLine: "Welcome to Claude Code",
+        ptyDescendantCount: undefined,
+        foreground: null,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.visibleLines = ["Welcome to Claude Code", line];
+      state.cursorLine = line;
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
     it("does not read an echoed cmd.exe command line as a returned prompt", async () => {
       const clear = vi.fn();
       const fakeDetector = {
