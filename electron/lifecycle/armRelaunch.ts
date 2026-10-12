@@ -14,13 +14,21 @@ import { runningAppImage, stripAppDirPathLists } from "../utils/appImage.js";
  * running for good, and pass on to the new instance. bash rather than sh: dash
  * can't close a fd above 9, and has no arrays or `read -d ""` for the
  * NUL-separated command. Args: target file, pids….
+ *
+ * The file and its directory go however the waiter ends: before the exec, or
+ * from the EXIT trap when the file can't be read or a signal stops it. The
+ * signals get a handler rather than being ignored, so the image starts with
+ * their default dispositions.
  */
 export const WAIT_THEN_RUN_IMAGE = [
   'for fd in /proc/$$/fd/*; do fd=${fd##*/}; case $fd in 0|1|2) ;; *) eval "exec $fd>&-" 2>/dev/null ;; esac; done',
   "target=$1; shift",
+  'clean() { rm -f -- "$target" "$target.tmp"; rmdir -- "${target%/*}" 2>/dev/null; }',
+  "trap clean EXIT",
+  "trap 'exit 1' HUP INT TERM",
   'while [ "$#" -gt 0 ]; do while kill -0 "$1" 2>/dev/null; do sleep 0.2; done; shift; done',
-  'run=(); while IFS= read -r -d "" part; do run+=("$part"); done < "$target" || exit 1',
-  'rm -f -- "$target"; rmdir -- "${target%/*}" 2>/dev/null',
+  'run=(); while IFS= read -r -d "" part; do run+=("$part"); done < "$target"',
+  "clean",
   '[ "${#run[@]}" -gt 0 ] && exec "${run[@]}"',
 ].join("; ");
 
@@ -34,10 +42,33 @@ interface ArmedRelaunch {
 /** This process's waiter, once there is one. There is never a second. */
 let armed: ArmedRelaunch | null = null;
 
+/**
+ * The command file separates its parts with NUL, so a part holding one would
+ * split into two. Argv can't carry NUL anyway; like `spawn`, refuse it.
+ */
+function assertNoNul(parts: readonly string[]): void {
+  if (parts.some((part) => part.includes("\0"))) {
+    throw new TypeError("A relaunch command can't contain a NUL byte");
+  }
+}
+
+function removeQuietly(target: string): void {
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch {
+    // Best effort: a leftover is a few bytes in the user's own temp dir.
+  }
+}
+
 function writeCommand(file: string, image: string, args: readonly string[]): void {
   const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, [image, ...args].map((part) => `${part}\0`).join(""), { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  try {
+    fs.writeFileSync(tmp, [image, ...args].map((part) => `${part}\0`).join(""), { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    removeQuietly(tmp);
+    throw error;
+  }
 }
 
 function realpathOrNull(file: string): string | null {
@@ -85,11 +116,14 @@ function armWaiter(
     return;
   }
 
+  let dir: string | null = null;
   let file: string;
   try {
-    file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relaunch-")), "command");
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-relaunch-"));
+    file = path.join(dir, "command");
     writeCommand(file, image, args);
   } catch (error) {
+    if (dir) removeQuietly(dir);
     console.error("[MAIN] Couldn't arm the AppImage relaunch:", error);
     fallback();
     return;
@@ -105,22 +139,28 @@ function armWaiter(
 
   const pids = [process.pid, ...(runtimePid ? [runtimePid] : [])].map(String);
   const state: ArmedRelaunch = { file, image, args, fallback };
-  armed = state;
-  const waiter = spawn(
-    "/bin/bash",
-    ["-c", WAIT_THEN_RUN_IMAGE, "daintree-relaunch", file, ...pids],
-    {
-      detached: true,
-      stdio: "ignore",
-      env,
-    }
-  );
-  waiter.on("error", (error) => {
+  const failed = (error: unknown) => {
     console.error("[MAIN] Couldn't arm the AppImage relaunch:", error);
     if (armed === state) armed = null;
+    removeQuietly(path.dirname(state.file));
     state.fallback();
-  });
-  waiter.unref();
+  };
+  armed = state;
+  try {
+    const waiter = spawn(
+      "/bin/bash",
+      ["-c", WAIT_THEN_RUN_IMAGE, "daintree-relaunch", file, ...pids],
+      {
+        detached: true,
+        stdio: "ignore",
+        env,
+      }
+    );
+    waiter.on("error", failed);
+    waiter.unref();
+  } catch (error) {
+    failed(error);
+  }
 }
 
 /**
@@ -132,9 +172,11 @@ function armWaiter(
  * shell outside the image waits for this process to exit and runs the image
  * itself, which mounts it afresh. Like `app.relaunch()`, it takes effect when
  * the app exits; the current args are kept when the caller passes none. Only
- * an APPIMAGE whose mount holds this binary counts.
+ * an APPIMAGE whose mount holds this binary counts. Throws a TypeError, arming
+ * nothing, for an arg holding a NUL byte.
  */
 export function armRelaunch(options: Electron.RelaunchOptions = {}): void {
+  assertNoNul(options.args ?? []);
   const appImage = process.platform === "linux" ? runningAppImage() : null;
   if (!appImage) {
     app.relaunch(options);
@@ -148,13 +190,15 @@ export function armRelaunch(options: Electron.RelaunchOptions = {}): void {
  * Runs `image`, the AppImage an update has just put in place (possibly under a
  * new name), once this instance has exited, through the same waiter as
  * `armRelaunch`. False, arming nothing, when this process wasn't started from
- * an AppImage. `fallback` runs if the waiter can't start.
+ * an AppImage. `fallback` runs if the waiter can't start. Throws a TypeError,
+ * arming nothing, for an image or arg holding a NUL byte.
  */
 export function armAppImageRelaunch(
   image: string,
   args: readonly string[],
   fallback: () => void
 ): boolean {
+  assertNoNul([image, ...args]);
   const appImage = process.platform === "linux" ? runningAppImage() : null;
   if (!appImage) return false;
   armWaiter(appImage, image, args, fallback);
@@ -168,6 +212,7 @@ export function armAppImageRelaunch(
  * just before then would otherwise run the path the install has just deleted.
  */
 export function retargetRelaunch(previous: string, next: string): void {
+  assertNoNul([next]);
   if (!armed || armed.image !== previous) return;
   writeCommand(armed.file, next, armed.args);
   armed.image = next;

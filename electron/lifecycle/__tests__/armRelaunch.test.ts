@@ -268,6 +268,91 @@ describe("a relaunch already armed", () => {
   });
 });
 
+// The command can hold the user's args; a relaunch that never happens must not
+// leave it in the temp dir.
+describe("a relaunch that can't be armed", () => {
+  function createdDirs(spy: { mock: { results: Array<{ type: string; value: unknown }> } }) {
+    return spy.mock.results.filter((r) => r.type === "return").map((r) => r.value as string);
+  }
+
+  function failOnce(method: "writeFileSync" | "renameSync") {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(fs, method).mockImplementationOnce(() => {
+      throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+    });
+  }
+
+  it.each(["writeFileSync", "renameSync"] as const)(
+    "removes its private dir when %s fails, and falls back",
+    (method) => {
+      runFromImage();
+      const mkdtemp = vi.spyOn(fs, "mkdtempSync");
+      failOnce(method);
+      armRelaunch({ args: ["x"] });
+
+      const [dir] = createdDirs(mkdtemp);
+      expect(dir).toBeDefined();
+      expect(fs.existsSync(dir!)).toBe(false);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(mocks.relaunch).toHaveBeenCalledWith({ args: ["x"] });
+    }
+  );
+
+  it("removes the command when the waiter can't start", () => {
+    runFromImage();
+    armRelaunch();
+    const dir = path.dirname(commandFile());
+    waiterError()(new Error("ENOENT"));
+
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  it("removes the command when spawn throws, then arms afresh", () => {
+    runFromImage();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.spawn.mockImplementationOnce(() => {
+      throw new Error("EAGAIN");
+    });
+    armRelaunch({ args: ["x"] });
+
+    expect(fs.existsSync(path.dirname(commandFile()))).toBe(false);
+    expect(mocks.relaunch).toHaveBeenCalledWith({ args: ["x"] });
+    armRelaunch({ args: ["y"] });
+    expect(armedCommand(1)).toEqual([image, "y"]);
+  });
+
+  it("keeps the armed command, and no partial one, when a change can't be written", () => {
+    runFromImage();
+    armRelaunch({ args: ["a"] });
+    failOnce("renameSync");
+    armAppImageRelaunch(updated, [], vi.fn());
+
+    expect(armedCommand()).toEqual([image, "a"]);
+    expect(fs.readdirSync(path.dirname(commandFile()))).toEqual(["command"]);
+  });
+});
+
+// The command file is NUL-separated: a NUL inside a part would split it in two.
+describe("a NUL byte", () => {
+  it("is refused before anything is armed", () => {
+    runFromImage();
+
+    expect(() => armRelaunch({ args: ["--a\0--b"] })).toThrow(TypeError);
+    expect(() => armAppImageRelaunch(`${updated}\0x`, [], vi.fn())).toThrow(TypeError);
+    expect(() => armAppImageRelaunch(updated, ["\0"], vi.fn())).toThrow(TypeError);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("can't be moved into an armed command", () => {
+    runFromImage();
+    armRelaunch({ args: ["a"] });
+
+    expect(() => retargetRelaunch(image, `${updated}\0--evil`)).toThrow(TypeError);
+    expect(armedCommand()).toEqual([image, "a"]);
+  });
+});
+
 // The script itself, under real bash and /proc.
 describe.runIf(originalPlatform === "linux")("WAIT_THEN_RUN_IMAGE", () => {
   let dir: string;
@@ -352,5 +437,47 @@ describe.runIf(originalPlatform === "linux")("WAIT_THEN_RUN_IMAGE", () => {
     expect(fds.filter((fd) => !["0", "1", "2", "255"].includes(fd))).toEqual([]);
     expect(fs.existsSync(path.join(dir, "pwned"))).toBe(false);
     expect(fs.existsSync(path.dirname(target))).toBe(false);
+  });
+
+  function exitOf(child: ChildProcess): Promise<number | null> {
+    return new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+  }
+
+  it("runs nothing and leaves nothing behind when the command can't be read", async () => {
+    const target = path.join(dir, "relaunch", "command");
+    fs.mkdirSync(path.dirname(target));
+    fs.writeFileSync(`${target}.tmp`, "partial");
+    const waiter = realSpawn(
+      "/bin/bash",
+      ["-c", WAIT_THEN_RUN_IMAGE, "daintree-relaunch", target],
+      {
+        stdio: "ignore",
+      }
+    );
+    children.push(waiter);
+
+    expect(await exitOf(waiter)).not.toBe(0);
+    expect(fs.existsSync(path.dirname(target))).toBe(false);
+  });
+
+  it("runs nothing and leaves nothing behind when it's stopped while waiting", async () => {
+    const out = path.join(dir, "out");
+    const target = path.join(dir, "relaunch", "command");
+    fs.mkdirSync(path.dirname(target));
+    writeCommand(target, [fakeImage("Daintree.AppImage", out), "--secret-arg"]);
+    const sleeper = realSpawn("sleep", ["30"], { stdio: "ignore" });
+    children.push(sleeper);
+    const waiter = realSpawn(
+      "/bin/bash",
+      ["-c", WAIT_THEN_RUN_IMAGE, "daintree-relaunch", target, String(sleeper.pid)],
+      { stdio: "ignore" }
+    );
+    children.push(waiter);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    waiter.kill("SIGTERM");
+
+    expect(await exitOf(waiter)).not.toBe(0);
+    expect(fs.existsSync(path.dirname(target))).toBe(false);
+    expect(fs.existsSync(out)).toBe(false);
   });
 });
