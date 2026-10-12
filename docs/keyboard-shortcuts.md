@@ -62,10 +62,10 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Inject context into focused terminal | `⌘+⇧+I` | `Ctrl+Shift+I` |
 | Send selection to another terminal | `⌘+⇧+E` | `Ctrl+Shift+E` |
 | Arm all eligible terminals in the current worktree | `⌘+⇧+B` | `Ctrl+Shift+B` |
-| Focus terminal above | `⌘+⌥+↑` | `Ctrl+Alt+Up` |
-| Focus terminal below | `⌘+⌥+↓` | `Ctrl+Alt+Down` |
-| Focus terminal to the left | `⌘+⌥+←` | `Ctrl+Alt+Left` |
-| Focus terminal to the right | `⌘+⌥+→` | `Ctrl+Alt+Right` |
+| Focus terminal above | `⌘+⌥+↑` | `Ctrl+Alt+Up` (Windows), `Ctrl+Shift+Up` (Linux) |
+| Focus terminal below | `⌘+⌥+↓` | `Ctrl+Alt+Down` (Windows), `Ctrl+Shift+Down` (Linux) |
+| Focus terminal to the left | `⌘+⌥+←` | `Ctrl+Alt+Left` (Windows), `Ctrl+Shift+Left` (Linux) |
+| Focus terminal to the right | `⌘+⌥+→` | `Ctrl+Alt+Right` (Windows), `Ctrl+Shift+Right` (Linux) |
 | Focus terminal 1 | `⌘+1` | `Ctrl+1` |
 | Focus terminal 2 | `⌘+2` | `Ctrl+2` |
 | Focus terminal 3 | `⌘+3` | `Ctrl+3` |

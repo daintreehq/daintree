@@ -116,4 +116,20 @@ describe("buildKeybindingWhenContext", () => {
     useMacroFocusStore.setState({ visibility: { ...visibility, sidebar: true } });
     expect(buildKeybindingWhenContext(eventFrom(null)).sidebarVisible).toBe(true);
   });
+
+  it("marks a text field or editor as text input, but not a terminal's own textarea", () => {
+    document.body.innerHTML = `
+      <input id="field" />
+      <div id="editor" contenteditable="true"></div>
+      <div class="xterm"><textarea id="xterm-input"></textarea></div>
+      <button id="button">Go</button>`;
+    // jsdom doesn't implement isContentEditable; Chromium sets it for this element.
+    Object.defineProperty(document.getElementById("editor"), "isContentEditable", { value: true });
+    const ctx = (id: string) => buildKeybindingWhenContext(eventFrom(document.getElementById(id)));
+    expect(ctx("field").textInputFocused).toBe(true);
+    expect(ctx("editor").textInputFocused).toBe(true);
+    expect(ctx("xterm-input").textInputFocused).toBe(false);
+    expect(ctx("xterm-input").terminalFocused).toBe(true);
+    expect(ctx("button").textInputFocused).toBe(false);
+  });
 });

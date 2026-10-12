@@ -52,6 +52,10 @@ describe("buildDefaultKeybindings", () => {
     const changed = linux.filter((b, i) => b !== mac[i]).map((b) => b.actionId);
     expect(changed.sort()).toEqual([
       "canopy.toggle",
+      "terminal.focusDown",
+      "terminal.focusLeft",
+      "terminal.focusRight",
+      "terminal.focusUp",
       "terminal.new",
       "terminal.scrollToLastActivity",
       "voiceInput.toggle",
@@ -100,6 +104,20 @@ describe("buildDefaultKeybindings", () => {
   it("ships none of the Ctrl+Alt letter combos Linux desktops grab", () => {
     const grabbed = ["T", "L", "F"].map((key) => `Ctrl+Alt+${key}`);
     expect(linux.filter((b) => grabbed.includes(foldCmd(b.combo)))).toEqual([]);
+  });
+
+  // GNOME 46 and XFCE switch workspaces on Ctrl+Alt+Left/Right/Up/Down.
+  it("ships no Ctrl+Alt+arrow focus keys on Linux, where desktops switch workspaces", () => {
+    const grabbed = ["Up", "Down", "Left", "Right"].map((dir) => `Ctrl+Alt+Arrow${dir}`);
+    expect(linux.filter((b) => grabbed.includes(foldCmd(b.combo)))).toEqual([]);
+    // Ctrl+Shift+arrows select by word in text fields and extend a dialog's
+    // selection (the worktree overview); the bindings stay out of both.
+    for (const dir of ["Up", "Down", "Left", "Right"]) {
+      const binding = linux.find((b) => b.actionId === `terminal.focus${dir}`);
+      expect(binding?.combo).toBe(`Ctrl+Shift+Arrow${dir}`);
+      expect(binding?.when).toBe("!textInputFocused && !modalOpen");
+    }
+    expect(globalCombo(mac, "terminal.focusLeft")).toEqual(["Cmd+Alt+ArrowLeft"]);
   });
 
   // A focused terminal offers a key to the bindings only with Ctrl or Meta held

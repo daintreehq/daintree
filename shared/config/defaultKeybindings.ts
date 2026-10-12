@@ -1223,6 +1223,14 @@ const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
 // opens the system terminal (GNOME, XFCE, KDE), Ctrl+Alt+L locks the screen (XFCE,
 // KDE, Cinnamon, MATE) and Ctrl+Alt+F opens Thunar (XFCE). Adding Shift keeps the
 // letter and the Ctrl a focused terminal needs to hand a key to a binding.
+//
+// GNOME and XFCE also switch workspaces on every Ctrl+Alt+arrow, so directional
+// focus moves to Ctrl+Shift+arrows, WezTerm's pane-focus keys, which GNOME,
+// XFCE, KDE, Cinnamon and MATE leave unbound. They stay "select by word" in a
+// text field and Shift-extend selection in a dialog such as the worktree
+// overview; a TUI in a focused terminal (nano, micro) loses them, as under
+// WezTerm. Ctrl+Shift+Alt+arrows move the window to a workspace on those
+// desktops, so "move terminal" has no free Ctrl combo and keeps its default.
 const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "voiceInput.toggle",
@@ -1255,6 +1263,42 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Open file browser panel for focused worktree",
     category: "Worktrees",
+  },
+  {
+    actionId: "terminal.focusUp",
+    combo: "Ctrl+Shift+ArrowUp",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal above",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
+  },
+  {
+    actionId: "terminal.focusDown",
+    combo: "Ctrl+Shift+ArrowDown",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal below",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
+  },
+  {
+    actionId: "terminal.focusLeft",
+    combo: "Ctrl+Shift+ArrowLeft",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal to the left",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
+  },
+  {
+    actionId: "terminal.focusRight",
+    combo: "Ctrl+Shift+ArrowRight",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal to the right",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
   },
 ];
 

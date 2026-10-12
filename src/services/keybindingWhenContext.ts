@@ -32,8 +32,17 @@ export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseCont
     }
   }
 
+  const inTerminal = target?.closest(".xterm") !== null && target !== null;
+  const editable =
+    target instanceof HTMLElement &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.isContentEditable === true);
+
   return {
-    terminalFocused: target?.closest(".xterm") !== null && target !== null,
+    terminalFocused: inTerminal,
+    // xterm's own input is a textarea; it doesn't count as a text field.
+    textInputFocused: editable && !inTerminal,
     modalOpen: document.querySelector('[role="dialog"][aria-modal="true"]') !== null,
     paletteOpen: paletteId !== null,
     paletteId: paletteId ?? "",
