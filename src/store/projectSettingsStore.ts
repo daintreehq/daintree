@@ -3,6 +3,7 @@ import type { ProjectSettings, RunCommand } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import { projectClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { mergeBrowserAllowedHosts } from "@shared/utils/urlUtils";
 import { logError } from "@/utils/logger";
 
 interface ProjectSettingsState {
@@ -186,11 +187,21 @@ const createProjectSettingsStore: StateCreator<ProjectSettingsState & ProjectSet
   setSettings: (settings: ProjectSettings) => {
     settingsRevision++;
     const savedCommandStrings = new Set(settings.runCommands?.map((c) => c.command) || []);
-    set((state) => ({
-      settings,
-      detectedRunners: state.allDetectedRunners.filter((d) => !savedCommandStrings.has(d.command)),
-      error: null,
-    }));
+    set((state) => {
+      // Main keeps every approved host through a save whose copy predates it,
+      // so the cache keeps them too.
+      const browserAllowedHosts = mergeBrowserAllowedHosts(
+        state.settings?.browserAllowedHosts,
+        settings.browserAllowedHosts
+      );
+      return {
+        settings: browserAllowedHosts ? { ...settings, browserAllowedHosts } : settings,
+        detectedRunners: state.allDetectedRunners.filter(
+          (d) => !savedCommandStrings.has(d.command)
+        ),
+        error: null,
+      };
+    });
   },
 
   setDetectedRunners: (runners: RunCommand[]) => {

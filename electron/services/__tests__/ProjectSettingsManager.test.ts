@@ -602,6 +602,37 @@ describe("ProjectSettingsManager caching", () => {
       expect(saved.browserAllowedHosts).toEqual(["example.com"]);
     });
 
+    it("keeps the host through a save built from a copy read before the approval", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "npm start",
+      });
+      // Another settings control holds this copy, which predates the approval.
+      const copyBeforeApproval = await manager.getProjectSettings(projectId);
+
+      const add = manager.addBrowserAllowedHost(projectId, "example.com");
+      const staleSave = manager.saveProjectSettings(projectId, {
+        ...copyBeforeApproval,
+        devServerCommand: "pnpm dev",
+      });
+      await Promise.all([add, staleSave]);
+
+      const saved = await readFromDisk();
+      expect(saved.devServerCommand).toBe("pnpm dev");
+      expect(saved.browserAllowedHosts).toEqual(["example.com"]);
+    });
+
+    it("lets a whole save add hosts, keeping the ones already saved", async () => {
+      await manager.addBrowserAllowedHost(projectId, "example.com");
+
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        browserAllowedHosts: ["EXAMPLE.com", "docs.example"],
+      });
+
+      expect((await readFromDisk()).browserAllowedHosts).toEqual(["example.com", "docs.example"]);
+    });
+
     it("keeps every host when several are added at once", async () => {
       await Promise.all([
         manager.addBrowserAllowedHost(projectId, "a.example"),

@@ -13,6 +13,7 @@ import { getProjectStateDir, settingsFilePath, UTF8_BOM } from "./projectStorePa
 import { decode, encodeEnvelope } from "./projectSettingsCodec.js";
 import { Cache } from "../utils/cache.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { mergeBrowserAllowedHosts } from "../../shared/utils/urlUtils.js";
 
 export class ProjectSettingsManager {
   private notificationOverridesCache = new Map<string, Partial<NotificationSettings> | undefined>();
@@ -269,8 +270,36 @@ export class ProjectSettingsManager {
     }
   }
 
+  /**
+   * Replaces the project's settings, except the browser allow-list, which
+   * only grows. Nothing removes an approved host, so a save whose list lacks
+   * one that is on disk was built from a copy read before it was approved.
+   */
   async saveProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
-    return this.serializeWrite(projectId, () => this.writeProjectSettings(projectId, settings));
+    return this.serializeWrite(projectId, async () => {
+      const browserAllowedHosts = mergeBrowserAllowedHosts(
+        await this.readSavedBrowserAllowedHosts(projectId),
+        settings.browserAllowedHosts
+      );
+      await this.writeProjectSettings(
+        projectId,
+        browserAllowedHosts ? { ...settings, browserAllowedHosts } : settings
+      );
+    });
+  }
+
+  private async readSavedBrowserAllowedHosts(projectId: string): Promise<string[] | undefined> {
+    const filePath = settingsFilePath(this.projectsConfigDir, projectId);
+    if (!filePath) return undefined;
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+      const stripped = content.startsWith(UTF8_BOM) ? content.slice(UTF8_BOM.length) : content;
+      const decoded = decode(JSON.parse(stripped));
+      return decoded.ok ? decoded.settings.browserAllowedHosts : undefined;
+    } catch {
+      // Missing or unreadable: there is no saved list for the save to keep.
+      return undefined;
+    }
   }
 
   private async writeProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {

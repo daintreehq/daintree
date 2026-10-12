@@ -316,4 +316,23 @@ describe("projectSettingsStore", () => {
       ]);
     });
   });
+
+  it("keeps approved hosts through settings saved from a copy that predates them", () => {
+    useProjectSettingsStore.setState({
+      projectId: "project-a",
+      settings: { runCommands: [], browserAllowedHosts: ["example.com"] },
+    });
+
+    // A settings control saving the copy it read before the approval landed.
+    useProjectSettingsStore.getState().setSettings({
+      runCommands: [],
+      devServerCommand: "pnpm dev",
+    });
+
+    expect(useProjectSettingsStore.getState().settings).toEqual({
+      runCommands: [],
+      devServerCommand: "pnpm dev",
+      browserAllowedHosts: ["example.com"],
+    });
+  });
 });

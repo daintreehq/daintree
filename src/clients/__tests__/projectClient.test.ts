@@ -460,3 +460,74 @@ describe("projectClient.setTerminals fieldEdits forwarding (#11461)", () => {
     expect(setTerminalsMock).toHaveBeenCalledWith("proj-1", snapshots, ["t1"], [], undefined);
   });
 });
+
+describe("projectClient.addBrowserAllowedHost", () => {
+  let addHostMock: ReturnType<typeof vi.fn>;
+  let saveSettingsMock: ReturnType<typeof vi.fn>;
+  let client: typeof import("../projectClient").projectClient;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    addHostMock = vi.fn();
+    saveSettingsMock = vi.fn().mockResolvedValue(undefined);
+    typedGlobal.window = {
+      electron: {
+        project: {
+          onSwitch: vi.fn(() => () => {}),
+          addBrowserAllowedHost: addHostMock,
+          getSettings: vi.fn().mockResolvedValue({
+            runCommands: [],
+            devServerCommand: "npm run dev",
+            browserAllowedHosts: ["internal.corp.test"],
+          }),
+          saveSettings: saveSettingsMock,
+        },
+      },
+    };
+    client = (await import("../projectClient")).projectClient;
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("returns the list Main saved", async () => {
+    addHostMock.mockResolvedValue(["internal.corp.test", "example.com"]);
+
+    await expect(client.addBrowserAllowedHost("proj-1", "example.com")).resolves.toEqual([
+      "internal.corp.test",
+      "example.com",
+    ]);
+    expect(saveSettingsMock).not.toHaveBeenCalled();
+  });
+
+  it("saves the settings whole on a host that predates the channel", async () => {
+    // What the preload rebuilds from an older host refusing a channel it doesn't know.
+    addHostMock.mockRejectedValue(
+      new Error(
+        "[AppError|CHANNEL_NOT_REMOTABLE] Channel project:add-browser-allowed-host is not classified"
+      )
+    );
+
+    await expect(client.addBrowserAllowedHost("proj-1", "Example.com")).resolves.toEqual([
+      "internal.corp.test",
+      "example.com",
+    ]);
+    expect(saveSettingsMock).toHaveBeenCalledWith("proj-1", {
+      runCommands: [],
+      devServerCommand: "npm run dev",
+      browserAllowedHosts: ["internal.corp.test", "example.com"],
+    });
+  });
+
+  it("passes any other failure on without saving", async () => {
+    addHostMock.mockRejectedValue(
+      new Error("[AppError|DRIVEN_ELSEWHERE] Another window drives it")
+    );
+
+    await expect(client.addBrowserAllowedHost("proj-1", "example.com")).rejects.toThrow(
+      "Another window drives it"
+    );
+    expect(saveSettingsMock).not.toHaveBeenCalled();
+  });
+});
