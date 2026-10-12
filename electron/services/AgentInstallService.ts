@@ -35,8 +35,11 @@ function parseCommand(command: string): { bin: string; args: string[]; useShell:
   const isWindows = process.platform === "win32";
 
   if (bin === "npm" || (isWindows && bin === "npm.cmd")) {
+    // `--loglevel=error`, not `--silent`: silent drops npm's error report too,
+    // and the stderr it leaves behind is the failure the user sees — an
+    // EACCES on a root-owned global prefix was only ever "exit code 243".
     const suppressFlags = [
-      "--silent",
+      "--loglevel=error",
       "--no-progress",
       "--no-audit",
       "--no-fund",

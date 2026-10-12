@@ -527,4 +527,60 @@ describe("agentInstall", () => {
       expect(isBlockExecutable({ label: "no-commands" })).toBe(false);
     });
   });
+
+  describe("npm global permission failures", () => {
+    // What npm 10 prints at --loglevel=error when /usr/lib/node_modules is root's.
+    const EACCES_REPORT = [
+      "npm error code EACCES",
+      "npm error syscall mkdir",
+      "npm error path /usr/lib/node_modules/@anthropic-ai",
+      "npm error errno -13",
+      "npm error Error: EACCES: permission denied, mkdir '/usr/lib/node_modules/@anthropic-ai'",
+    ].join("\n");
+
+    it("recognises the global install spellings", async () => {
+      const { isNpmGlobalInstall } = await import("../agentInstall");
+      expect(isNpmGlobalInstall("npm install -g @anthropic-ai/claude-code")).toBe(true);
+      expect(isNpmGlobalInstall("npm i --global @openai/codex")).toBe(true);
+      expect(isNpmGlobalInstall("npm install @openai/codex -g")).toBe(true);
+      expect(isNpmGlobalInstall("npm.cmd install -g @openai/codex")).toBe(true);
+    });
+
+    it("ignores local npm installs and other installers", async () => {
+      const { isNpmGlobalInstall } = await import("../agentInstall");
+      expect(isNpmGlobalInstall("npm install @openai/codex")).toBe(false);
+      expect(isNpmGlobalInstall("npm install -g-not-a-flag")).toBe(false);
+      expect(isNpmGlobalInstall("pnpm add -g @openai/codex")).toBe(false);
+      expect(isNpmGlobalInstall("curl -fsSL https://claude.ai/install.sh | bash")).toBe(false);
+    });
+
+    it("flags EACCES and EPERM from a global npm install", async () => {
+      const { isNpmGlobalPermissionFailure } = await import("../agentInstall");
+      expect(isNpmGlobalPermissionFailure("npm install -g x", EACCES_REPORT)).toBe(true);
+      expect(isNpmGlobalPermissionFailure("npm install -g x", "npm error code EPERM")).toBe(true);
+    });
+
+    it("leaves other failures, and other installers' permission errors, alone", async () => {
+      const { isNpmGlobalPermissionFailure } = await import("../agentInstall");
+      expect(isNpmGlobalPermissionFailure("npm install -g x", "npm error code E404")).toBe(false);
+      expect(
+        isNpmGlobalPermissionFailure("Command failed with exit code 1: npm install -g x", "")
+      ).toBe(false);
+      expect(isNpmGlobalPermissionFailure("pipx install aider-chat", EACCES_REPORT)).toBe(false);
+    });
+
+    it("finds the first method that avoids npm's global prefix", async () => {
+      const { findNonNpmInstallBlock } = await import("../agentInstall");
+      const curl = { label: "curl", commands: ["curl -fsSL https://claude.ai/install.sh | bash"] };
+      expect(
+        findNonNpmInstallBlock([
+          { label: "npm", commands: ["npm install -g @anthropic-ai/claude-code"] },
+          { label: "steps only", steps: ["Download the binary"] },
+          curl,
+        ])
+      ).toBe(curl);
+      expect(findNonNpmInstallBlock([{ label: "npm", commands: ["npm i -g x"] }])).toBeNull();
+      expect(findNonNpmInstallBlock(null)).toBeNull();
+    });
+  });
 });

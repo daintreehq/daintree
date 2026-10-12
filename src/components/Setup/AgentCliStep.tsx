@@ -14,9 +14,13 @@ import { BrandMark } from "@/components/icons";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
   extractInspectUrl,
+  findNonNpmInstallBlock,
   getInstallBlocksForCurrentOS,
   isBlockExecutable,
+  isNpmGlobalPermissionFailure,
+  NPM_USER_PREFIX_COMMAND,
 } from "@/lib/agentInstall";
+import { Callout } from "@/components/ui/Callout";
 import { systemClient } from "@/clients";
 import { useAgentSettingsStore } from "@/store";
 import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agentSettings";
@@ -270,6 +274,13 @@ export function AgentCliStep({
           const canInstall = status === "idle" || status === "error";
           const errorLog = cardErrors[agentId];
           const isErrorExpanded = expandedErrors[agentId];
+          const npmPermissionFailure =
+            isError &&
+            !!errorLog &&
+            (currentBlock?.commands ?? []).some((cmd) =>
+              isNpmGlobalPermissionFailure(cmd, errorLog)
+            );
+          const nonNpmBlock = npmPermissionFailure ? findNonNpmInstallBlock(blocks) : null;
 
           return (
             <div key={agentId} className="space-y-0">
@@ -383,6 +394,27 @@ export function AgentCliStep({
 
               {isError && (
                 <div className="pl-14 pt-1.5 pb-1 space-y-1">
+                  {npmPermissionFailure && (
+                    <Callout
+                      severity="warning"
+                      size="compact"
+                      title="npm can't write to its global folder"
+                      data-testid={`npm-permission-${agentId}`}
+                    >
+                      <p>
+                        This Node keeps global packages where only root can write. Point npm at a
+                        folder you own, install again, then add ~/.npm-global/bin to your PATH.
+                      </p>
+                      <div className="mt-1.5">
+                        <CopyableCommand command={NPM_USER_PREFIX_COMMAND} />
+                      </div>
+                      {nonNpmBlock?.label && (
+                        <p className="mt-1.5">
+                          Or install with {nonNpmBlock.label}, which doesn't need npm.
+                        </p>
+                      )}
+                    </Callout>
+                  )}
                   {errorLog && (
                     <>
                       <Button
@@ -412,7 +444,8 @@ export function AgentCliStep({
                       </pre>
                     </>
                   )}
-                  {currentBlock?.commands && (
+                  {/* Re-running the npm line by hand hits the same root-owned folder. */}
+                  {currentBlock?.commands && !npmPermissionFailure && (
                     <div className="space-y-1">
                       <div className="text-2xs text-text-secondary">Or install manually:</div>
                       {currentBlock.commands.map((cmd) => (
