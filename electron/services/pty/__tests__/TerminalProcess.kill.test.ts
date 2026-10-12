@@ -7,7 +7,8 @@ import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
 import type { WindowsTreeKillResult } from "../../../utils/windowsTreeKill.js";
 
 const persistSyncMock = vi.hoisted(() => vi.fn());
-const treeKillMock = vi.hoisted(() => vi.fn());
+// Resolves by default: run on Windows, every kill below takes the async tree-kill path.
+const treeKillMock = vi.hoisted(() => vi.fn(async (): Promise<WindowsTreeKillResult[]> => []));
 
 vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
