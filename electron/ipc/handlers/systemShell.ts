@@ -1,4 +1,5 @@
 import { app, shell } from "electron";
+import { openWithDefaultApp } from "../../utils/openPath.js";
 import os from "os";
 import * as nodePath from "path";
 import * as nodeFs from "fs";
@@ -252,7 +253,7 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
   const handleSystemOpenPath = async ({ path: targetPath }: SystemOpenPathPayload) => {
     try {
       const realTarget = await assertPathAllowed(targetPath);
-      const errorString = await shell.openPath(realTarget);
+      const errorString = await openWithDefaultApp(realTarget);
       if (errorString) {
         throw new Error(`Failed to open path: ${errorString}`);
       }

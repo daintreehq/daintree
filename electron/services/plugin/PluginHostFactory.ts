@@ -7,6 +7,7 @@ import { runExclusive } from "../../utils/keyedMutex.js";
 import { watchShared } from "../FileObservationService.js";
 import { fileTreeService } from "../FileTreeService.js";
 import { clipboard, shell } from "electron";
+import { openWithDefaultApp } from "../../utils/openPath.js";
 import { decodeClipboardPng, MAX_CLIPBOARD_IMAGE_BYTES } from "../../utils/clipboardImage.js";
 import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
 import { pathToFileURL } from "node:url";
@@ -4675,7 +4676,7 @@ function buildSystemApi(
       refuseForRemoteDriver("openPath");
       // shell.openPath reports failure through a non-empty return string
       // rather than by rejecting, so an unchecked call fails silently.
-      const error = await shell.openPath(resolved);
+      const error = await openWithDefaultApp(resolved);
       if (error !== "") {
         throw new Error(`plugin "${pluginId}" system.openPath failed: ${error}`);
       }

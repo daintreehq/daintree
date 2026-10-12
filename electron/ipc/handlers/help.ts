@@ -1,4 +1,4 @@
-import { shell } from "electron";
+import { openWithDefaultApp } from "../../utils/openPath.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { HELP_METHOD_CHANNELS } from "./help.preload.js";
 import type * as HelpServiceModule from "../../services/HelpService.js";
@@ -57,9 +57,9 @@ async function handleGetFolderPath(): Promise<string | null> {
  * Scaffolds the global assistant content folder (~/.daintree/assistant —
  * README plus the .claude/.agents layout) and opens it in the OS file
  * manager. Returns null when scaffolding failed; otherwise the path plus
- * whether `shell.openPath` actually opened it (a broken file-manager
- * association fails silently apart from its error string), so the renderer
- * can tell the user where the folder is instead of showing nothing.
+ * whether the OS opener accepted it (a broken file-manager association fails
+ * silently apart from its error string), so the renderer can tell the user
+ * where the folder is instead of showing nothing.
  */
 async function handleOpenAssistantContentFolder(): Promise<{
   path: string;
@@ -73,7 +73,7 @@ async function handleOpenAssistantContentFolder(): Promise<{
     console.warn("[help] Failed to prepare the assistant content folder:", err);
     return null;
   }
-  const openError = await shell.openPath(dir);
+  const openError = await openWithDefaultApp(dir);
   if (openError) {
     console.warn("[help] Failed to open the assistant content folder:", openError);
   }

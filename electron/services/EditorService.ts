@@ -1,7 +1,8 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { shell } from "electron";
+import { openWithDefaultApp } from "../utils/openPath.js";
+import { linuxDesktopAppEnv } from "./pty/EnvironmentFilter.js";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "../../shared/types/editor.js";
 import { withPathProbeSlot } from "../utils/findOnPath.js";
 
@@ -439,10 +440,12 @@ export async function openFile(
 
   const launchEditor = async (binary: string, args: string[]): Promise<boolean> => {
     try {
+      const desktopEnv = linuxDesktopAppEnv();
       const child = execa(binary, args, {
         detached: true,
         stdio: "ignore",
         cleanup: false,
+        ...(desktopEnv ? { env: desktopEnv, extendEnv: false } : {}),
       });
       child.nodeChildProcess.unref();
       // Suppress unhandled async rejection from the detached process
@@ -528,7 +531,7 @@ export async function openFile(
   // 5. shell.openPath as last resort — the OS default handler, which for a
   // directory means the file manager. Reaching it is the failure the worktree
   // action used to start from, so it stays strictly last.
-  const errorString = await shell.openPath(filePath);
+  const errorString = await openWithDefaultApp(filePath);
   if (errorString) {
     throw new Error(`Failed to open file: ${errorString}`);
   }

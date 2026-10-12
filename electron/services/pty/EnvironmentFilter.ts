@@ -94,7 +94,7 @@ const HOST_RUNTIME_VARS = new Set(["NODE_ENV"]);
 const LINUX_LAUNCHER_VARS = ["CHROME_DESKTOP"];
 const APPIMAGE_RUNTIME_VARS = ["APPDIR", "APPIMAGE", "ARGV0", "OWD"];
 
-function stripLinuxLauncherEnv(env: Record<string, string>): void {
+function stripLinuxLauncherEnv(env: Record<string, string | undefined>): void {
   for (const name of LINUX_LAUNCHER_VARS) delete env[name];
   let appDir: string | undefined;
   if (env.APPIMAGE) {
@@ -107,6 +107,22 @@ function stripLinuxLauncherEnv(env: Record<string, string>): void {
     delete env.APPDIR;
   }
   if (appDir) stripAppDirPathLists(env, appDir);
+}
+
+/**
+ * The environment for a desktop app Daintree starts on the user's behalf (an
+ * editor, the default app for a file, the sound settings), or undefined off
+ * Linux. Without what Daintree's own launcher added: such an app must not take
+ * Daintree's desktop entry as its own (a Chromium or Electron editor would be
+ * grouped under Daintree's icon) or load an AppImage's bundled libraries.
+ */
+export function linuxDesktopAppEnv(
+  env: NodeJS.ProcessEnv = process.env
+): Record<string, string | undefined> | undefined {
+  if (process.platform !== "linux") return undefined;
+  const copy: Record<string, string | undefined> = { ...env };
+  stripLinuxLauncherEnv(copy);
+  return copy;
 }
 
 /** The AppDir this binary runs from when it was started through an AppRun. */

@@ -16,6 +16,13 @@ const appMock = vi.hoisted(() => ({
   getPath: vi.fn((name: string) => `/userdata/${name}`),
 }));
 
+// On Linux the default app opens through xdg-open rather than shell.openPath;
+// these tests check what reaches the OS opener, so route it to the shell mock.
+vi.mock("../../../utils/openPath.js", async () => {
+  const { shell } = await import("electron");
+  return { openWithDefaultApp: (target: string) => shell.openPath(target) };
+});
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   shell: shellMock,

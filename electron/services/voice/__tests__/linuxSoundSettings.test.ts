@@ -86,11 +86,37 @@ describe("openLinuxSoundSettings", () => {
 
     await expect(result).resolves.toBe(true);
     expect(failures).toEqual(["pavucontrol", "pwvucontrol"]);
-    expect(childProcessMock.spawn).toHaveBeenLastCalledWith("pavucontrol-qt", [], {
-      detached: true,
-      stdio: "ignore",
-    });
+    expect(childProcessMock.spawn).toHaveBeenLastCalledWith(
+      "pavucontrol-qt",
+      [],
+      expect.objectContaining({ detached: true, stdio: "ignore" })
+    );
     expect(children.every((child) => child.unref.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("starts the settings app without Daintree's desktop entry or an AppImage's libraries", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    process.env.CHROME_DESKTOP = "daintree.desktop";
+    process.env.APPIMAGE = "/home/u/Daintree.AppImage";
+    process.env.APPDIR = "/tmp/.mount_DaintrABC";
+    process.env.LD_LIBRARY_PATH = "/tmp/.mount_DaintrABC/usr/lib";
+    try {
+      scriptChildren(keepsRunning);
+      const result = openLinuxSoundSettings("GNOME");
+      await vi.advanceTimersByTimeAsync(SOUND_SETTINGS_START_GRACE_MS);
+      await expect(result).resolves.toBe(true);
+
+      const env = childProcessMock.spawn.mock.calls[0][2].env as Record<string, string | undefined>;
+      expect(env.CHROME_DESKTOP).toBeUndefined();
+      expect(env.APPIMAGE).toBeUndefined();
+      expect(env.LD_LIBRARY_PATH).toBeUndefined();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+      for (const name of ["CHROME_DESKTOP", "APPIMAGE", "APPDIR", "LD_LIBRARY_PATH"]) {
+        delete process.env[name];
+      }
+    }
   });
 
   it("counts a clean exit as open: a single-instance app handed off to its window", async () => {

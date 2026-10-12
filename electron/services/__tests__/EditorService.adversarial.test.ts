@@ -17,6 +17,13 @@ vi.mock("os", () => ({
   default: { homedir: () => "/Users/testuser" },
   homedir: () => "/Users/testuser",
 }));
+// On Linux the default app opens through xdg-open rather than shell.openPath;
+// these tests check what reaches the OS opener, so route it to the shell mock.
+vi.mock("../../utils/openPath.js", async () => {
+  const { shell } = await import("electron");
+  return { openWithDefaultApp: (target: string) => shell.openPath(target) };
+});
+
 vi.mock("electron", () => ({ shell: shellMock }));
 vi.mock("execa", () => ({ execa: execaMock.execa }));
 
@@ -130,6 +137,31 @@ describe("EditorService adversarial", () => {
 
     expect(execaMock.execa).toHaveBeenCalledTimes(1);
     expect(execaMock.execa.mock.calls[0][1]).toEqual(expected);
+  });
+
+  it("starts an editor on Linux without Daintree's desktop entry or an AppImage's libraries", async () => {
+    process.env.VISUAL = "code";
+    process.env.CHROME_DESKTOP = "daintree.desktop";
+    process.env.APPIMAGE = "/home/u/Daintree.AppImage";
+    process.env.APPDIR = "/tmp/.mount_DaintrABC";
+    process.env.LD_LIBRARY_PATH = "/tmp/.mount_DaintrABC/usr/lib:/opt/lib";
+    try {
+      const { openFile } = await loadModule();
+      await openFile("/repo/src/app.ts");
+
+      const [binary, , options] = execaMock.execa.mock.calls[0];
+      expect(binary).toBe("code");
+      expect(options).toMatchObject({ detached: true, extendEnv: false });
+      const env = options.env as Record<string, string | undefined>;
+      expect(env.CHROME_DESKTOP).toBeUndefined();
+      expect(env.APPIMAGE).toBeUndefined();
+      expect(env.LD_LIBRARY_PATH).toBe("/opt/lib");
+      expect(env.PATH).toBe("/usr/local/bin");
+    } finally {
+      for (const name of ["CHROME_DESKTOP", "APPIMAGE", "APPDIR", "LD_LIBRARY_PATH"]) {
+        delete process.env[name];
+      }
+    }
   });
 
   it("launches Antigravity IDE from its bundle, passing the spaced launcher path unquoted", async () => {

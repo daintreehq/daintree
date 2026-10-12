@@ -1,5 +1,5 @@
 // eager-import-allow: reads logging config via store.get synchronously in the IPC handler
-import { shell } from "electron";
+import { openWithDefaultApp } from "../../utils/openPath.js";
 import { CHANNELS } from "../channels.js";
 import { logBuffer } from "../../services/LogBuffer.js";
 import {
@@ -100,10 +100,10 @@ export function registerLogsHandlers(
     try {
       const fs = await import("fs");
       await fs.promises.access(logFilePath);
-      const openResult = await shell.openPath(logFilePath);
+      const openResult = await openWithDefaultApp(logFilePath);
       if (openResult) {
         const { dirname } = await import("path");
-        await shell.openPath(dirname(logFilePath));
+        await openWithDefaultApp(dirname(logFilePath));
       }
     } catch (error) {
       const fs = await import("fs");
@@ -114,15 +114,15 @@ export function registerLogsHandlers(
         try {
           await fs.promises.mkdir(dir, { recursive: true });
           await fs.promises.writeFile(logFilePath, "", "utf8");
-          const openResult = await shell.openPath(logFilePath);
+          const openResult = await openWithDefaultApp(logFilePath);
           if (openResult) {
-            await shell.openPath(dir);
+            await openWithDefaultApp(dir);
           }
         } catch {
-          await shell.openPath(dir);
+          await openWithDefaultApp(dir);
         }
       } else {
-        await shell.openPath(dir);
+        await openWithDefaultApp(dir);
       }
     }
   };

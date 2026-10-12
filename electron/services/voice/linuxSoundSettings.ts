@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import { linuxDesktopAppEnv } from "../pty/EnvironmentFilter.js";
 
 export interface SoundSettingsLauncher {
   command: string;
@@ -66,7 +67,11 @@ function launch(launcher: SoundSettingsLauncher, onFailure: (error: unknown) => 
       resolve(opened);
     };
     try {
-      const child = spawn(launcher.command, launcher.args, { detached: true, stdio: "ignore" });
+      const child = spawn(launcher.command, launcher.args, {
+        detached: true,
+        stdio: "ignore",
+        env: linuxDesktopAppEnv(),
+      });
       // A missing binary arrives as an async "error" event, not a throw. The
       // listener stays for the child's life: unhandled, a late one becomes an
       // uncaughtException and takes the app into fatal recovery.
