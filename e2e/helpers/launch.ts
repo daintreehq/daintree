@@ -1134,7 +1134,9 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
   for (const childPid of descendantPids) {
     try {
       if (process.platform === "win32") {
-        execSync(`taskkill /F /PID ${childPid} /T 2>nul`, { stdio: "ignore" });
+        // No /T: the list is already the whole verified tree, and taskkill's own
+        // walk trusts stale parent PIDs.
+        execSync(`taskkill /F /PID ${childPid} 2>nul`, { stdio: "ignore" });
       } else {
         process.kill(childPid, "SIGKILL");
       }
@@ -1148,7 +1150,14 @@ function forceKillProcessTree(pid: number | undefined): void {
   if (!pid) return;
   try {
     if (process.platform === "win32") {
-      execSync(`taskkill /F /PID ${pid} /T 2>nul`, { stdio: "ignore" });
+      // Each verified PID on its own: taskkill /T would trust stale parent PIDs.
+      for (const target of [pid, ...getDescendantPids(pid)]) {
+        try {
+          execSync(`taskkill /F /PID ${target} 2>nul`, { stdio: "ignore" });
+        } catch {
+          // Already gone.
+        }
+      }
     } else {
       try {
         execSync(`pkill -9 -P ${pid}`, { stdio: "ignore" });
