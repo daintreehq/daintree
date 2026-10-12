@@ -793,6 +793,15 @@ export class ProjectViewManager {
     );
   }
 
+  /**
+   * Whether a switch is holding the outgoing view over the incoming one. Unlike
+   * `getOutgoingBridgeProjectId` this covers an unbound welcome view as the
+   * outgoing side too.
+   */
+  isSwitchBridged(): boolean {
+    return this.pendingPaintGate !== null || this.pendingColdSwitch !== null;
+  }
+
   getActiveView(): WebContentsView | null {
     if (!this.activeProjectId) return null;
     return this.views.get(this.activeProjectId)?.view ?? null;

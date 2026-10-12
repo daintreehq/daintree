@@ -1,10 +1,12 @@
 // eager-import-allow: reads persisted window state via store.get synchronously when creating the window
 import { app, BrowserWindow, WebContentsView, dialog, ipcMain, session } from "electron";
 import {
+  getAppView,
   getWindowForWebContents,
   registerWebContents,
   registerAppView,
 } from "./webContentsRegistry.js";
+import { attachActiveViewFocus } from "./activeViewFocus.js";
 import { getWindowRegistry } from "./windowRef.js";
 import { routeNewWindowRequest } from "./windowHost.js";
 import { toggleWindowFullscreen } from "./fullscreen.js";
@@ -315,6 +317,14 @@ export function setupBrowserWindow(
   // first paint; WebContentsView defaults to white otherwise.
   appView.setBackgroundColor(windowBg);
 
+  // Attached before the reveal so the first activation is never missed. The
+  // registry's app view is whatever the window is showing — the startup view,
+  // the welcome view, or the project view a switch last revealed.
+  const activeViewFocus = attachActiveViewFocus(win, {
+    getActiveView: () => getAppView(win),
+    isSwitchBridged: () => getProjectViewManagerFor(win)?.isSwitchBridged() ?? false,
+  });
+
   if (isSmokeTest) {
     win.on("unresponsive", () => {
       _smokeRendererUnresponsive = true;
@@ -437,6 +447,9 @@ export function setupBrowserWindow(
           win.showInactive();
         } else {
           win.show();
+          // For a platform that activates inside show(); on Linux activation
+          // arrives later as the `focus` event, which runs the same check.
+          activeViewFocus.schedule();
         }
       }
     };
