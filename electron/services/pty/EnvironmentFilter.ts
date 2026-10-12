@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+
 /**
  * Environment variable filtering for terminal spawning.
  *
@@ -77,6 +80,54 @@ export interface DaintreeTerminalMetadata {
  * their shell profile or a project's terminal env.
  */
 const HOST_RUNTIME_VARS = new Set(["NODE_ENV"]);
+
+/**
+ * Set on Linux by how Daintree itself was launched, not by the user. Chromium
+ * exports `CHROME_DESKTOP` naming Daintree's desktop entry, which another
+ * Chromium or Electron app started from a terminal takes as its own (window
+ * grouping, Wayland app id). Under an AppImage the runtime adds `APPDIR`,
+ * `APPIMAGE`, `ARGV0` and `OWD`, and AppRun prefixes the path lists below with
+ * the image's mount, which vanishes when Daintree exits; `LD_LIBRARY_PATH` would
+ * also load the image's bundled libraries into the user's own tools.
+ */
+const LINUX_LAUNCHER_VARS = ["CHROME_DESKTOP"];
+const APPIMAGE_RUNTIME_VARS = ["APPDIR", "APPIMAGE", "ARGV0", "OWD"];
+const APPIMAGE_PATH_LISTS = ["PATH", "LD_LIBRARY_PATH", "XDG_DATA_DIRS", "GSETTINGS_SCHEMA_DIR"];
+
+function stripLinuxLauncherEnv(env: Record<string, string>): void {
+  for (const name of LINUX_LAUNCHER_VARS) delete env[name];
+  let appDir: string | undefined;
+  if (env.APPIMAGE) {
+    appDir = env.APPDIR;
+    for (const name of APPIMAGE_RUNTIME_VARS) delete env[name];
+  } else {
+    // An extracted image run through its AppRun exports the prefixed lists
+    // without APPIMAGE, and sets APPDIR only when its launcher did.
+    appDir = env.APPDIR ?? extractedAppRunDir();
+    delete env.APPDIR;
+  }
+  if (!appDir) return;
+  for (const name of APPIMAGE_PATH_LISTS) {
+    const value = env[name];
+    if (value === undefined) continue;
+    const kept = value
+      .split(":")
+      .filter((entry) => entry !== appDir && !entry.startsWith(`${appDir}/`));
+    if (kept.join(":") === value) continue;
+    if (kept.length > 0 || name === "PATH") env[name] = kept.join(":");
+    else delete env[name];
+  }
+}
+
+/** The AppDir this binary runs from when it was started through an AppRun. */
+function extractedAppRunDir(): string | undefined {
+  try {
+    const dir = path.dirname(process.execPath);
+    return fs.existsSync(path.join(dir, "AppRun")) ? dir : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function isSensitiveVar(name: string): boolean {
   return SENSITIVE_EXACT.has(name.toUpperCase()) || SENSITIVE_PATTERN.test(name);
@@ -169,8 +220,9 @@ export function mergeEnvVars(
 }
 
 /**
- * Filter an environment object, removing sensitive variables, DAINTREE_* vars and
- * Daintree's own runtime mode (`NODE_ENV`).
+ * Filter an environment object, removing sensitive variables, DAINTREE_* vars,
+ * Daintree's own runtime mode (`NODE_ENV`) and, on Linux, what Daintree's own
+ * launcher set (`CHROME_DESKTOP`, the AppImage runtime's variables and mount).
  * Undefined values are also stripped (node-pty requires Record<string, string>).
  *
  * Use this on **inherited `process.env`** to defend against spoofing — DAINTREE_*
@@ -192,6 +244,7 @@ export function filterEnvironment(env: Record<string, string | undefined>): Reco
     if (isSensitiveVar(key)) continue;
     setEnvVar(result, key, value);
   }
+  if (process.platform === "linux") stripLinuxLauncherEnv(result);
   return result;
 }
 

@@ -130,6 +130,67 @@ describe("isSensitiveVar", () => {
   });
 });
 
+describe("filterEnvironment on Linux", () => {
+  const originalPlatform = process.platform;
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  const mount = "/tmp/.mount_DaintrA1b2C3";
+  // What electron-builder's AppRun and the AppImage runtime hand Daintree.
+  const appImageEnv = {
+    HOME: "/home/u",
+    APPDIR: mount,
+    APPIMAGE: "/home/u/Applications/Daintree.AppImage",
+    ARGV0: "/home/u/Applications/Daintree.AppImage",
+    OWD: "/home/u",
+    CHROME_DESKTOP: "daintree.desktop",
+    PATH: `${mount}:${mount}/usr/sbin:/home/u/.local/bin:/usr/bin`,
+    LD_LIBRARY_PATH: `${mount}/usr/lib:/opt/cuda/lib64`,
+    XDG_DATA_DIRS: `${mount}/usr/share/:/usr/local/share:/usr/share:/usr/share/gnome:/usr/local/share/:/usr/share/`,
+    GSETTINGS_SCHEMA_DIR: `${mount}/usr/share/glib-2.0/schemas`,
+  };
+
+  it("leaves nothing of the AppImage's mount or runtime in a terminal", () => {
+    const result = filterEnvironment(appImageEnv);
+    expect(result).toEqual({
+      HOME: "/home/u",
+      PATH: "/home/u/.local/bin:/usr/bin",
+      LD_LIBRARY_PATH: "/opt/cuda/lib64",
+      XDG_DATA_DIRS: "/usr/local/share:/usr/share:/usr/share/gnome:/usr/local/share/:/usr/share/",
+    });
+  });
+
+  it("drops a path list the mount filled entirely", () => {
+    const result = filterEnvironment({ ...appImageEnv, LD_LIBRARY_PATH: `${mount}/usr/lib` });
+    expect(result).not.toHaveProperty("LD_LIBRARY_PATH");
+    expect(result).not.toHaveProperty("GSETTINGS_SCHEMA_DIR");
+  });
+
+  it("cleans an extracted image run through its AppRun, which exports no APPIMAGE", () => {
+    const dir = "/home/u/squashfs-root";
+    const result = filterEnvironment({
+      APPDIR: dir,
+      PATH: `${dir}:${dir}/usr/sbin:/usr/bin`,
+      LD_LIBRARY_PATH: `${dir}/usr/lib`,
+    });
+    expect(result).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("drops only CHROME_DESKTOP outside an AppImage", () => {
+    const result = filterEnvironment({
+      PATH: "/usr/bin",
+      CHROME_DESKTOP: "daintree.desktop",
+      OWD: "/home/u/kept",
+      LD_LIBRARY_PATH: "/opt/lib",
+    });
+    expect(result).toEqual({ PATH: "/usr/bin", OWD: "/home/u/kept", LD_LIBRARY_PATH: "/opt/lib" });
+  });
+});
+
 describe("filterEnvironment", () => {
   it("removes sensitive vars and keeps safe vars", () => {
     const env = {

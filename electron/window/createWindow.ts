@@ -42,6 +42,7 @@ import {
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
 import { getPlatformWindowOptions } from "./platformWindowOptions.js";
+import { getLinuxWindowIcon } from "./linuxWindowIcon.js";
 import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
@@ -223,6 +224,7 @@ export function setupBrowserWindow(
       minWidth: 800,
       minHeight: 600,
       ...getPlatformWindowOptions(windowBg),
+      icon: getLinuxWindowIcon(),
       backgroundColor: windowBg,
     },
     projectPath ?? undefined

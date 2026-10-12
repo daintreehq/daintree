@@ -11,6 +11,7 @@ import { clearAllSessionCaches } from "../../services/sessionCacheCleaner.js";
 import { typedBroadcast } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { PRIVACY_METHOD_CHANNELS } from "./privacy.preload.js";
+import { withRelaunchExecPath } from "../../lifecycle/relaunchExecPath.js";
 
 type TelemetryLevel = "off" | "errors" | "full";
 const VALID_LEVELS: TelemetryLevel[] = ["off", "errors", "full"];
@@ -57,7 +58,7 @@ export const privacyNamespace = defineIpcNamespace({
       (): Promise<{ cleared: number; failed: number }> => clearAllSessionCaches()
     ),
     resetAllData: op(PRIVACY_METHOD_CHANNELS.resetAllData, async (): Promise<void> => {
-      app.relaunch({ args: process.argv.slice(1).concat(["--reset-data"]) });
+      app.relaunch(withRelaunchExecPath({ args: process.argv.slice(1).concat(["--reset-data"]) }));
       await closeTelemetry();
       app.exit(0);
     }),

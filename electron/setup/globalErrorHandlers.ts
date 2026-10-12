@@ -8,6 +8,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { appendPendingError } from "../ipc/pendingErrorsStore.js";
 import type { ErrorRecord } from "../../shared/types/ipc/errors.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { withRelaunchExecPath } from "../lifecycle/relaunchExecPath.js";
 
 let handlingFatal = false;
 
@@ -94,7 +95,7 @@ export function registerGlobalErrorHandlers(): void {
 
     try {
       if (getCrashLoopGuard().shouldRelaunch()) {
-        app.relaunch();
+        app.relaunch(withRelaunchExecPath());
       } else {
         console.error("[FATAL] Crash loop hard stop reached — not relaunching");
       }
