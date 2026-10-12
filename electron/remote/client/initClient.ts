@@ -28,7 +28,12 @@ import {
 import { getWindowRegistry } from "../../window/windowRef.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { completeLocalProjectActivation } from "../../window/localProjectActivation.js";
-import { findOtherProjectOwner, revealWindow } from "../../window/projectOwnership.js";
+import {
+  claimProjectActivation,
+  findOtherProjectOwner,
+  redirectToProjectOwner,
+  revealWindow,
+} from "../../window/projectOwnership.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
 import {
   getPtyClient,
@@ -344,6 +349,22 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
       const owner = otherOwnerOf(key, exceptWindowId);
       return owner ? { windowId: owner.context.windowId, showing: owner.state !== "cached" } : null;
+    },
+    claimProject(hostId, projectId, windowId) {
+      const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
+      return claimProjectActivation(key, windowId);
+    },
+    redirectToLocalOwner(projectId, exceptWindowId) {
+      const owner = otherOwnerOf(projectId, exceptWindowId);
+      if (!owner) return null;
+      const project = projectStore.getProjectById(projectId);
+      if (project) {
+        const result = redirectToProjectOwner(owner, project);
+        return result.outcome === "switched" ? owner.context.windowId : result.targetWindowId;
+      }
+      // A scratch has no project row to hand over: its window comes forward.
+      revealWindow(owner.context.browserWindow);
+      return owner.context.windowId;
     },
     revealWindow(windowId) {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);

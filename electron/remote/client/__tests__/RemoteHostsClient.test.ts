@@ -618,9 +618,8 @@ describe("RemoteHostsClient", () => {
     expect(windows.revealWindow).toHaveBeenCalledWith(2);
   });
 
-  it("brings forward the window that has a local project rather than opening it a second time", async () => {
-    windows.projectOwner = vi.fn(() => ({ windowId: 3, showing: true }));
-    windows.revealWindow = vi.fn();
+  it("hands a local project another window has to that window, as a local open does", async () => {
+    windows.redirectToLocalOwner = vi.fn(() => 3);
     await expect(
       client.switchWindowHost(ctxFor(5, 1), {
         hostId: "local",
@@ -633,7 +632,94 @@ describe("RemoteHostsClient", () => {
       projectId: "local-proj",
       targetWindowId: 3,
     });
-    expect(windows.projectOwner).toHaveBeenCalledWith("local", "local-proj", 1);
+    expect(windows.redirectToLocalOwner).toHaveBeenCalledWith("local-proj", 1);
+    expect(windows.openLocalProject).not.toHaveBeenCalled();
+  });
+
+  it("claims the project for the window in the same tick it finds no owner, until the view is up", async () => {
+    const release = vi.fn();
+    windows.projectOwner = vi.fn(() => null);
+    windows.claimProject = vi.fn(() => release);
+    let opened: () => void = () => {};
+    windows.openRemoteProject = vi.fn(() => new Promise<void>((resolve) => (opened = resolve)));
+    const switching = client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
+    expect(windows.claimProject).toHaveBeenCalledWith("studio-01", "proj-1", 1);
+    expect(release).not.toHaveBeenCalled();
+    opened();
+    await expect(switching).resolves.toMatchObject({ outcome: "switched" });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores a window although its own claim reads as an open in flight there", async () => {
+    // The restore's stillWanted is false once anything is being opened in the
+    // window, the switch's own claim included: the claim comes after its last ask.
+    let claimed = false;
+    windows.projectOwner = vi.fn(() => null);
+    windows.claimProject = vi.fn(() => {
+      claimed = true;
+      return () => {
+        claimed = false;
+      };
+    });
+    await expect(
+      client.switchWindowToHostProject(1, "studio-01", "proj-1", () => !claimed)
+    ).resolves.toMatchObject({ outcome: "switched" });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(1, "studio-01", "proj-1", "/srv/proj-1");
+    expect(claimed).toBe(false);
+  });
+
+  it("shows a project two windows hold in their caches in the one it found, without passing the request back and forth", async () => {
+    // Each window's lookup finds the other: only the first lookup may count.
+    windows.projectOwner = vi.fn((_host: string, _project: string, except: number | null) => ({
+      windowId: except === 2 ? 1 : 2,
+      showing: false,
+    }));
+    windows.revealWindow = vi.fn();
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      })
+    ).resolves.toMatchObject({ outcome: "focused-elsewhere", targetWindowId: 2 });
+    expect(windows.projectOwner).toHaveBeenCalledTimes(1);
+    expect(windows.openRemoteProject).toHaveBeenCalledTimes(1);
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(2, "studio-01", "proj-1", "/srv/proj-1");
+  });
+
+  it("brings nothing forward when the person asked this window for something else meanwhile", async () => {
+    windows.projectOwner = vi.fn((_host: string, _project: string, except: number | null) =>
+      except === 1 ? { windowId: 2, showing: false } : null
+    );
+    windows.revealWindow = vi.fn();
+    let opened: () => void = () => {};
+    windows.openRemoteProject = vi.fn(() => new Promise<void>((resolve) => (opened = resolve)));
+    const first = client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
+    // A newer request for window 1 while window 2 was being switched.
+    void client.switchWindowHost(ctxFor(5, 1), { hostId: "local", newWindow: false });
+    opened();
+    await expect(first).resolves.toMatchObject({ outcome: "superseded" });
+    expect(windows.revealWindow).not.toHaveBeenCalled();
+  });
+
+  it("replaces a forgotten host's window whose local project another window took meanwhile", async () => {
+    manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
+    await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
+    vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-proj");
+    windows.redirectToLocalOwner = vi.fn(() => 4);
+    windows.replaceWithLocalWindow = vi.fn(async () => {});
+    await client.forget({ hostId: "studio-01" });
+    expect(windows.replaceWithLocalWindow).toHaveBeenCalledWith(1);
     expect(windows.openLocalProject).not.toHaveBeenCalled();
   });
 

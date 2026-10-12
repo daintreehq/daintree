@@ -101,6 +101,22 @@ describe("restoreRemoteWindows", () => {
     expect(stillWanted?.()).toBe(false);
   });
 
+  it("lets go of a window's place on the host when another window has that project by now", async () => {
+    fakeClient(async () => ({
+      outcome: "focused-elsewhere",
+      hostId: "studio-01",
+      projectId: PROJECT,
+      targetWindowId: 9,
+    }));
+    noteRemoteWindowRestore(3, KEY);
+    remoteWindowReady(3);
+    const { d, onRestored, sent } = deps(new Set([3]));
+    await restoreRemoteWindows(d);
+    expect(getPendingRemoteRestore(3)).toBeNull();
+    expect(onRestored).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual([]);
+  });
+
   it("keeps the window here with a Retry, and its place on the host, when the host is down", async () => {
     fakeClient(async () => {
       throw new AppError({

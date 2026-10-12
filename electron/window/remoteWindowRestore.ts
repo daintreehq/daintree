@@ -98,6 +98,12 @@ async function restoreOne(deps: RemoteWindowRestoreDeps, windowId: number): Prom
   try {
     const result = await client.switchWindowToHostProject(windowId, hostId, projectId, stillWanted);
     if (result.outcome === "switched") deps.onRestored();
+    if (result.outcome === "focused-elsewhere") {
+      // Another window has that project now: this one stays on this machine's
+      // picker, and the manifest stops saying it belongs on the host.
+      clearPendingRemoteRestore(windowId);
+      deps.onRestored();
+    }
   } catch (error) {
     if (!stillWanted()) return;
     // A save taken while the view was loading may have spent the intent; the

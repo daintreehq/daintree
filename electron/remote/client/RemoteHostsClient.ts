@@ -60,6 +60,20 @@ export interface WindowControl {
     projectId: string,
     exceptWindowId: number | null
   ): { windowId: number; showing: boolean } | null;
+  /**
+   * Mark a project as being opened in `windowId`, so a request for it from
+   * another window finds this one, until the returned release runs. Taken in
+   * the same tick as the {@link projectOwner} check, so two requests can't
+   * both find the project free.
+   */
+  claimProject?(hostId: HostId, projectId: string, windowId: number): () => void;
+  /**
+   * Hand a request for one of this machine's projects to the window that has
+   * it, as a local open does: brought forward, or shown again by that window's
+   * own renderer when it holds the project in its cache. Answers that window,
+   * or null when no other window has it.
+   */
+  redirectToLocalOwner?(projectId: string, exceptWindowId: number | null): number | null;
   /** Bring a window forward with its project view focused. */
   revealWindow?(windowId: number): void;
   /** Call `onClosed` once when the window closes. */
@@ -401,7 +415,9 @@ export class RemoteHostsClient {
   private async switchWindow(
     askingWindowId: number | null,
     payload: SwitchWindowHostPayload,
-    stillWanted?: () => boolean
+    stillWanted?: () => boolean,
+    /** Set when this window was chosen as the project's owner: it takes the project without looking for another. */
+    asOwner = false
   ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
     const newWindow = payload.newWindow === true;
@@ -494,16 +510,9 @@ export class RemoteHostsClient {
     // a second would be a second view on the same terminals (for a host's, a
     // second endpoint, the two claiming the lease from each other). The window
     // that has it comes forward instead.
-    if (projectId !== undefined) {
-      const owner = this.options.windows.projectOwner?.(hostId, projectId, sourceWindowId);
-      if (owner) {
-        // Held in that window's cache: that window shows it again, binding and view together.
-        if (!owner.showing) {
-          await this.switchWindow(owner.windowId, { hostId, newWindow: false, projectId });
-        }
-        this.options.windows.revealWindow?.(owner.windowId);
-        return { outcome: "focused-elsewhere", hostId, projectId, targetWindowId: owner.windowId };
-      }
+    if (projectId !== undefined && !asOwner) {
+      const redirected = await this.redirectToOwner(hostId, projectId, sourceWindowId, superseded);
+      if (redirected) return redirected;
     }
 
     const windowId = newWindow ? await this.options.windows.openWindow() : sourceWindowId;
@@ -512,7 +521,8 @@ export class RemoteHostsClient {
     }
     const targetProjectId = projectId;
     const targetPath = projectPath;
-    return this.inSwitchTurn(windowId, async (): Promise<SwitchWindowHostResult> => {
+    let releaseClaim: () => void = () => {};
+    const switching = this.inSwitchTurn(windowId, async (): Promise<SwitchWindowHostResult> => {
       // Checked again in turn: a newer request may have arrived while this
       // one waited behind the window's previous switch.
       const late = superseded();
@@ -527,6 +537,28 @@ export class RemoteHostsClient {
         this.options.windows.offerHostProjects?.(windowId);
         return { outcome: "window-opened", hostId };
       }
+      // Asked again here, and the project claimed for this window in the same
+      // tick: another request may have taken it while this one waited, and
+      // one arriving now finds this window instead of building a second view.
+      // Claimed only now, past the last cancellation check, since a window's
+      // own claim reads as an open of the person's in flight there.
+      if (!asOwner) {
+        const owner = isLocalHostId(hostId)
+          ? (this.options.windows.redirectToLocalOwner?.(targetProjectId, windowId) ?? null)
+          : (this.options.windows.projectOwner?.(hostId, targetProjectId, windowId)?.windowId ??
+            null);
+        if (owner !== null) {
+          if (remote) this.options.windows.revealWindow?.(owner);
+          return {
+            outcome: "focused-elsewhere",
+            hostId,
+            projectId: targetProjectId,
+            targetWindowId: owner,
+          };
+        }
+      }
+      releaseClaim =
+        this.options.windows.claimProject?.(hostId, targetProjectId, windowId) ?? releaseClaim;
       const previousHost = this.options.bindings.get(windowId);
       const nextHost = remote ? hostId : LOCAL_HOST_ID;
       this.options.bindings.set(windowId, nextHost);
@@ -572,6 +604,46 @@ export class RemoteHostsClient {
       connection?.noteActiveProject(targetProjectId);
       return { outcome: "switched", hostId, projectId: targetProjectId };
     });
+    // Held until the window's views have the project (or the switch gave up).
+    return switching.finally(() => releaseClaim());
+  }
+
+  /**
+   * Another window has the project: it comes forward instead of this one
+   * opening a second view. One holding it only in its cache shows it again
+   * first, a host's through a switch of that window (which doesn't look for
+   * another owner, so two cached copies can't pass the request back and
+   * forth), this machine's through that window's own renderer, as a local open
+   * does. Null when no other window has it.
+   */
+  private async redirectToOwner(
+    hostId: HostId,
+    projectId: string,
+    sourceWindowId: number | null,
+    superseded: () => SwitchWindowHostResult | null
+  ): Promise<SwitchWindowHostResult | null> {
+    if (isLocalHostId(hostId)) {
+      const target = this.options.windows.redirectToLocalOwner?.(projectId, sourceWindowId) ?? null;
+      return target === null
+        ? null
+        : { outcome: "focused-elsewhere", hostId, projectId, targetWindowId: target };
+    }
+    const owner = this.options.windows.projectOwner?.(hostId, projectId, sourceWindowId);
+    if (!owner) return null;
+    if (!owner.showing) {
+      const shown = await this.switchWindow(
+        owner.windowId,
+        { hostId, newWindow: false, projectId },
+        undefined,
+        true
+      );
+      if (shown.outcome !== "switched") return shown;
+    }
+    // The person may have asked this window for something else meanwhile.
+    const stale = superseded();
+    if (stale) return stale;
+    this.options.windows.revealWindow?.(owner.windowId);
+    return { outcome: "focused-elsewhere", hostId, projectId, targetWindowId: owner.windowId };
   }
 
   /** A window's newest switch request; any earlier one still in flight is superseded. */
