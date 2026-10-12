@@ -401,6 +401,7 @@ export function buildSidebarDerivationFixture(size: number): SidebarDerivationFi
     const hasWaitingAgent = i % 6 === 2;
     const hasCompletedAgent = i % 6 === 3;
     const hasExitedAgent = i % 6 === 5;
+    const hasAgent = hasWorkingAgent || hasWaitingAgent || hasCompletedAgent || hasExitedAgent;
     const sessionKeys: SessionFilter[] = [];
     if (terminalCount > 0) sessionKeys.push("hasTerminals");
     if (hasWorkingAgent) sessionKeys.push("working");
@@ -504,6 +505,7 @@ export function buildSidebarDerivationFixture(size: number): SidebarDerivationFi
 
     const meta: DerivedWorktreeMeta = {
       terminalCount,
+      hasAgent,
       hasWorkingAgent,
       hasWaitingAgent,
       hasCompletedAgent,
@@ -603,7 +605,12 @@ export function buildStepMatrix(): DerivationStep[] {
   for (const facets of FACET_LEVELS) {
     for (let queryLength = 0; queryLength <= SIDEBAR_NEEDLE.length; queryLength += 1) {
       const query = SIDEBAR_NEEDLE.slice(0, queryLength);
-      steps.push({ queryLength, facets, query, filters: { query, ...facets.selection } });
+      steps.push({
+        queryLength,
+        facets,
+        query,
+        filters: { query, hasAgentFilter: false, ...facets.selection },
+      });
     }
   }
   return steps;
@@ -791,11 +798,12 @@ export function expectedChipCounts(
     branchType: emptyCounts(TYPE_KEYS),
     prIssue: emptyCounts(PR_ISSUE_KEYS),
     sessions: emptyCounts(SESSION_KEYS),
+    hasAgent: 0,
     activity: emptyCounts(ACTIVITY_KEYS),
     devServer: emptyCounts(DEV_SERVER_KEYS),
   };
 
-  const inBaseFor = (planted: PlantedWorktree, exclude: ChipGroup): boolean => {
+  const inBaseFor = (planted: PlantedWorktree, exclude: ChipGroup | null): boolean => {
     if (!queryAdmits(planted, step.queryLength)) return false;
     return CHIP_GROUPS.every((group) => group === exclude || step.facets.passes[group](planted));
   };
@@ -811,6 +819,8 @@ export function expectedChipCounts(
     if (inBaseFor(planted, "sessionFilters")) {
       for (const key of planted.sessionKeys) counts.sessions[key] += 1;
     }
+    // No level selects "Has an agent", so its base set is every other group's.
+    if (planted.meta.hasAgent && inBaseFor(planted, null)) counts.hasAgent += 1;
     if (inBaseFor(planted, "activityFilters")) {
       for (const key of planted.activityKeys) counts.activity[key] += 1;
     }
@@ -908,6 +918,7 @@ export function gradeDerivationPass(
   compareGroup(observation.chipCounts.branchType, expectedChips.branchType, TYPE_KEYS);
   compareGroup(observation.chipCounts.prIssue, expectedChips.prIssue, PR_ISSUE_KEYS);
   compareGroup(observation.chipCounts.sessions, expectedChips.sessions, SESSION_KEYS);
+  if (observation.chipCounts.hasAgent !== expectedChips.hasAgent) chipCountMisses += 1;
   compareGroup(observation.chipCounts.activity, expectedChips.activity, ACTIVITY_KEYS);
   compareGroup(observation.chipCounts.devServer, expectedChips.devServer, DEV_SERVER_KEYS);
 

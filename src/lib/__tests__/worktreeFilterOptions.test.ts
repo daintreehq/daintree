@@ -14,6 +14,7 @@ const NONE = {
   typeFilters: new Set<never>(),
   prIssueFilters: new Set<never>(),
   sessionFilters: new Set<never>(),
+  hasAgentFilter: false,
   activityFilters: new Set<never>(),
   devServerFilters: new Set<never>(),
 };
@@ -29,6 +30,17 @@ describe("describeActiveFacets", () => {
     expect(describeActiveFacets({ ...NONE, statusFilters: new Set(["dirty"] as const) })).toBe(
       "Status: Dirty"
     );
+  });
+
+  it("names 'Has an agent' first and on its own, not as a Sessions value", () => {
+    expect(describeActiveFacets({ ...NONE, hasAgentFilter: true })).toBe("Has an agent");
+    expect(
+      describeActiveFacets({
+        ...NONE,
+        hasAgentFilter: true,
+        sessionFilters: new Set(["waiting"] as const),
+      })
+    ).toBe("Has an agent · Sessions: Waiting");
   });
 
   it("joins several values within a facet, and several facets", () => {
@@ -64,6 +76,7 @@ describe("describeActiveFacets", () => {
       typeFilters: new Set(TYPE_OPTIONS.map((o) => o.value)),
       prIssueFilters: new Set(PR_ISSUE_OPTIONS.map((o) => o.value)),
       sessionFilters: new Set(SESSION_OPTIONS.map((o) => o.value)),
+      hasAgentFilter: true,
       activityFilters: new Set(ACTIVITY_OPTIONS.map((o) => o.value)),
       devServerFilters: new Set(DEV_SERVER_OPTIONS.map((o) => o.value)),
     };

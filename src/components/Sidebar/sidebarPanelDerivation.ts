@@ -38,6 +38,7 @@ export interface SidebarPanelDerivationState {
 export interface WorktreePanelSummary {
   terminalCount: number;
   waitingTerminalCount: number;
+  hasAgent: boolean;
   hasWorkingAgent: boolean;
   hasWaitingAgent: boolean;
   hasCompletedAgent: boolean;
@@ -75,6 +76,24 @@ export function selectSidebarAgentStateByPanelId(
 }
 
 /**
+ * PTY agent panels, whatever their state. `selectSidebarAgentStateByPanelId`
+ * drops an agent until it reports a state, so a freshly launched one would read
+ * as "no agent" — this is the membership the "Has an agent" facet needs. The
+ * flat `1` values stay shallow-equal across buffer flushes even though
+ * `isAgentTerminal` consults exit fields; only a real membership change differs.
+ */
+export function selectSidebarAgentPanelIds(state: SidebarPanelDerivationState): Record<string, 1> {
+  const result: Record<string, 1> = {};
+  for (const id of Object.keys(state.panelsById)) {
+    const panel = state.panelsById[id];
+    if (!panel || !isPtyPanel(panel)) continue;
+    if (!isAgentTerminal(panel)) continue;
+    result[id] = 1;
+  }
+  return result;
+}
+
+/**
  * Agent panels eligible for the sidebar's filter-scoped bulk arm → their
  * worktree id. Agent-scoped rather than terminal-scoped so the quick-filter
  * arm affordance addresses the same terminals as the state filters beside it;
@@ -107,6 +126,7 @@ function emptySummary(): WorktreePanelSummary {
   return {
     terminalCount: 0,
     waitingTerminalCount: 0,
+    hasAgent: false,
     hasWorkingAgent: false,
     hasWaitingAgent: false,
     hasCompletedAgent: false,
@@ -120,6 +140,7 @@ export function computePanelStateByWorktree(
   panelIdsByWorktreeId: Record<string, string[]>,
   visiblePanelIds: Record<string, 1>,
   agentStateByPanelId: Record<string, AgentState>,
+  agentPanelIds: Record<string, 1>,
   worktreeIds: ReadonlySet<string>
 ): Record<string, WorktreePanelSummary> {
   const result: Record<string, WorktreePanelSummary> = {};
@@ -136,6 +157,7 @@ export function computePanelStateByWorktree(
     for (const id of ids) {
       if (!visiblePanelIds[id]) continue;
       summary.terminalCount++;
+      if (agentPanelIds[id]) summary.hasAgent = true;
       const agentState = agentStateByPanelId[id];
       if (!agentState) continue;
       if (agentState === "working") summary.hasWorkingAgent = true;

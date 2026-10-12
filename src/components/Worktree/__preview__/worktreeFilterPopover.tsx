@@ -34,6 +34,7 @@ function counts(): ChipCounts {
   c.branchType.other = 5;
   c.prIssue = { hasIssue: 3, hasPR: 2, prOpen: 2, prMerged: 0, prClosed: 0 };
   c.sessions = { hasTerminals: 4, working: 1, waiting: 1, completed: 2, exited: 0 };
+  c.hasAgent = 3;
   c.activity = { last15m: 1, last1h: 2, last24h: 4, last7d: 6 };
   c.devServer = { hasDevServer: 1, running: 1, starting: 0, error: 0 };
   return c;

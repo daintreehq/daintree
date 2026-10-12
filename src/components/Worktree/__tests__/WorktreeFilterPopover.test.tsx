@@ -45,6 +45,7 @@ const COUNTS = {
   },
   prIssue: { hasIssue: 0, hasPR: 0, prOpen: 0, prMerged: 0, prClosed: 0 },
   sessions: { hasTerminals: 0, working: 0, waiting: 0, completed: 0, exited: 0 },
+  hasAgent: 2,
   activity: { last15m: 0, last1h: 0, last24h: 0, last7d: 0 },
   devServer: { hasDevServer: 0, running: 0, starting: 0, error: 0 },
 } satisfies ChipCounts;
@@ -533,5 +534,56 @@ describe("WorktreeFilterPopover keyboard and focus surfaces", () => {
     const radios = screen.getAllByRole("radio");
     expect(radios.map((r) => r.textContent)).not.toContain("Custom order");
     expect(radios.filter((r) => r.getAttribute("tabindex") === "0")).toHaveLength(1);
+  });
+});
+
+describe("WorktreeFilterPopover 'Has an agent' facet", () => {
+  beforeEach(() => {
+    useWorktreeFilterStore.getState().clearAll();
+  });
+  afterEach(cleanup);
+
+  function renderWithCounts() {
+    return render(
+      <WorktreeFilterPopover
+        appearance="field"
+        hideSearchInput
+        open
+        onOpenChange={() => {}}
+        chipCounts={COUNTS}
+      />
+    );
+  }
+
+  it("sits outside every collapsible section, reachable with nothing expanded", () => {
+    renderWithCounts();
+    const agentChip = chip(/^Has an agent/);
+    expect(agentChip).toBeDefined();
+    expect(agentChip!.closest("[inert]")).toBeNull();
+    expect(agentChip!.closest('[aria-hidden="true"]')).toBeNull();
+    expect(agentChip!.textContent).toContain("(2)");
+  });
+
+  it("toggles the store filter and counts toward the trigger and bulk clear", () => {
+    renderWithCounts();
+    const agentChip = chip(/^Has an agent/)!;
+    expect(agentChip.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(agentChip);
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(true);
+    expect(chip(/^Has an agent/)!.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByLabelText(/^Filter and sort worktrees/).textContent).toContain("1");
+    expect(screen.queryByText("Clear all filters")).not.toBeNull();
+
+    fireEvent.click(screen.getByText("Clear all filters"));
+    expect(useWorktreeFilterStore.getState().hasAgentFilter).toBe(false);
+  });
+
+  it("does not open or badge the Sessions section", () => {
+    useWorktreeFilterStore.getState().setHasAgentFilter(true);
+    renderWithCounts();
+    const sessions = screen.getByRole("button", { name: /^Sessions/ });
+    expect(sessions.getAttribute("aria-expanded")).toBe("false");
+    expect(sessions.textContent).toBe("Sessions");
   });
 });

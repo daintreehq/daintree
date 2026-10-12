@@ -65,6 +65,12 @@ interface WorktreeFilterState {
   typeFilters: Set<TypeFilter>;
   prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
+  /**
+   * Keep only worktrees with at least one agent pane, whatever its state. A
+   * facet of its own rather than a Sessions value: Sessions ORs its values, so
+   * "Has an agent" + "Waiting" would collapse back to every agent worktree.
+   */
+  hasAgentFilter: boolean;
   activityFilters: Set<ActivityFilter>;
   /** Transient session-only dev-server facet filter (not persisted). */
   devServerFilters: Set<DevServerFilter>;
@@ -87,6 +93,7 @@ interface WorktreeFilterActions {
   toggleTypeFilter: (filter: TypeFilter) => void;
   togglePrIssueFilter: (filter: PrIssueFilter) => void;
   toggleSessionFilter: (filter: SessionFilter) => void;
+  setHasAgentFilter: (enabled: boolean) => void;
   toggleActivityFilter: (filter: ActivityFilter) => void;
   toggleDevServerFilter: (filter: DevServerFilter) => void;
   setAlwaysShowActive: (enabled: boolean) => void;
@@ -146,6 +153,7 @@ interface ProjectScopedState {
   typeFilters: Set<TypeFilter>;
   prIssueFilters: Set<PrIssueFilter>;
   sessionFilters: Set<SessionFilter>;
+  hasAgentFilter: boolean;
   activityFilters: Set<ActivityFilter>;
   pinnedWorktrees: string[];
   collapsedWorktrees: string[];
@@ -168,6 +176,7 @@ interface ProjectPersistedShape {
   typeFilters: TypeFilter[];
   prIssueFilters: PrIssueFilter[];
   sessionFilters: SessionFilter[];
+  hasAgentFilter: boolean;
   activityFilters: ActivityFilter[];
   pinnedWorktrees: string[];
   collapsedWorktrees: string[];
@@ -452,6 +461,7 @@ function toProjectFiltersPersisted(
     typeFilters: arrayOrUndefined<TypeFilter>(raw.typeFilters) ?? [],
     prIssueFilters: arrayOrUndefined<PrIssueFilter>(raw.prIssueFilters) ?? [],
     sessionFilters: arrayOrUndefined<SessionFilter>(raw.sessionFilters) ?? [],
+    hasAgentFilter: raw.hasAgentFilter === true,
     activityFilters: arrayOrUndefined<ActivityFilter>(raw.activityFilters) ?? [],
     pinnedWorktrees: arrayOrUndefined<string>(raw.pinnedWorktrees) ?? [],
     collapsedWorktrees: arrayOrUndefined<string>(raw.collapsedWorktrees) ?? [],
@@ -503,6 +513,11 @@ function mergeProjectFiltersPersistedWrite({
         inc.sessionFilters,
         disk.sessionFilters
       ),
+      hasAgentFilter: pickFieldByWriterDelta(
+        base.hasAgentFilter,
+        inc.hasAgentFilter,
+        disk.hasAgentFilter
+      ),
       activityFilters: pickFieldByWriterDelta(
         base.activityFilters,
         inc.activityFilters,
@@ -532,6 +547,7 @@ const _projectStore = create<ProjectScopedState>()(
       typeFilters: new Set<TypeFilter>(_legacySeed.typeFilters ?? []),
       prIssueFilters: new Set<PrIssueFilter>(_legacySeed.prIssueFilters ?? []),
       sessionFilters: new Set<SessionFilter>(_legacySeed.sessionFilters ?? []),
+      hasAgentFilter: false,
       activityFilters: new Set<ActivityFilter>(_legacySeed.activityFilters ?? []),
       pinnedWorktrees: _legacySeed.pinnedWorktrees ?? [],
       collapsedWorktrees: _legacySeed.collapsedWorktrees ?? [],
@@ -551,6 +567,7 @@ const _projectStore = create<ProjectScopedState>()(
         typeFilters: Array.from(state.typeFilters),
         prIssueFilters: Array.from(state.prIssueFilters),
         sessionFilters: Array.from(state.sessionFilters),
+        hasAgentFilter: state.hasAgentFilter,
         activityFilters: Array.from(state.activityFilters),
         pinnedWorktrees: state.pinnedWorktrees,
         collapsedWorktrees: state.collapsedWorktrees,
@@ -591,6 +608,8 @@ const _projectStore = create<ProjectScopedState>()(
           typeFilters: new Set(p?.typeFilters ?? Array.from(current.typeFilters)),
           prIssueFilters: new Set(p?.prIssueFilters ?? Array.from(current.prIssueFilters)),
           sessionFilters: new Set(persistedSessionFilters ?? Array.from(current.sessionFilters)),
+          hasAgentFilter:
+            typeof p?.hasAgentFilter === "boolean" ? p.hasAgentFilter : current.hasAgentFilter,
           activityFilters: new Set(p?.activityFilters ?? Array.from(current.activityFilters)),
           pinnedWorktrees: p?.pinnedWorktrees ?? current.pinnedWorktrees,
           collapsedWorktrees: p?.collapsedWorktrees ?? current.collapsedWorktrees,
@@ -653,6 +672,9 @@ const _actions: WorktreeFilterActions = {
       else next.add(filter);
       return { sessionFilters: next };
     });
+  },
+  setHasAgentFilter: (enabled) => {
+    _projectStore.setState({ hasAgentFilter: enabled });
   },
   toggleActivityFilter: (filter) => {
     _projectStore.setState((state) => {
@@ -758,6 +780,7 @@ const _actions: WorktreeFilterActions = {
       typeFilters: new Set(),
       prIssueFilters: new Set(),
       sessionFilters: new Set(),
+      hasAgentFilter: false,
       activityFilters: new Set(),
       quickStateFilter: "all",
       devServerFilters: new Set(),
@@ -773,6 +796,7 @@ const _actions: WorktreeFilterActions = {
       p.typeFilters.size +
       p.prIssueFilters.size +
       p.sessionFilters.size +
+      (p.hasAgentFilter ? 1 : 0) +
       p.activityFilters.size +
       p.devServerFilters.size +
       (p.quickStateFilter !== "all" ? 1 : 0)
@@ -787,6 +811,7 @@ const _actions: WorktreeFilterActions = {
       p.typeFilters.size > 0 ||
       p.prIssueFilters.size > 0 ||
       p.sessionFilters.size > 0 ||
+      p.hasAgentFilter ||
       p.activityFilters.size > 0 ||
       p.devServerFilters.size > 0 ||
       p.quickStateFilter !== "all"
@@ -799,6 +824,7 @@ const _actions: WorktreeFilterActions = {
       p.typeFilters.size > 0 ||
       p.prIssueFilters.size > 0 ||
       p.sessionFilters.size > 0 ||
+      p.hasAgentFilter ||
       p.activityFilters.size > 0 ||
       p.devServerFilters.size > 0
     );
@@ -825,6 +851,7 @@ function _computeMergedState(): WorktreeFilterStore {
     typeFilters: p.typeFilters,
     prIssueFilters: p.prIssueFilters,
     sessionFilters: p.sessionFilters,
+    hasAgentFilter: p.hasAgentFilter,
     activityFilters: p.activityFilters,
     devServerFilters: p.devServerFilters,
     alwaysShowActive: g.alwaysShowActive,
