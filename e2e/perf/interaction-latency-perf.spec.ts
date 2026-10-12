@@ -22,6 +22,7 @@ import {
   probeResult,
   type DoneCondition,
 } from "../helpers/interactionProbe";
+import { NEW_TERMINAL_CHORD } from "../helpers/shortcuts";
 
 // Everyday-interaction latency benchmark. Each scenario drives one thing a
 // user does many times a day — open a dropdown, switch a worktree, type into a
@@ -87,7 +88,6 @@ const BENCH_PLUGIN_READY = `${BENCH_PLUGIN_ROOT} [data-testid="ilat-plugin-butto
 const BENCH_PLUGIN_VIEW = String.raw`
 import { createElement as h } from "react";
 import { Button, Icon, useDaintreeTheme } from "@daintreehq/plugin-ui";
-import { NEW_TERMINAL_CHORD } from "../helpers/shortcuts";
 export default function View() {
   const theme = useDaintreeTheme();
   return h(
