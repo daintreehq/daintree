@@ -633,6 +633,7 @@ export function setupBrowserWindow(
   });
 
   win.once("closed", () => {
+    activeViewFocus.dispose();
     if (reclaimTimer) {
       clearTimeout(reclaimTimer);
       reclaimTimer = null;

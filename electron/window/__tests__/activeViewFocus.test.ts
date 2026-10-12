@@ -182,18 +182,23 @@ describe("attachActiveViewFocus", () => {
     expect(projectView.webContents.focus).not.toHaveBeenCalled();
   });
 
-  it("stops after the window closes", async () => {
+  // The window's own "closed" handler disposes it: a listener of its own would be
+  // the eleventh on the window and trip Node's leak warning.
+  it("stops once disposed", async () => {
     const { win, projectView, activate } = createScene();
-    attachActiveViewFocus(asWindow(win), { getActiveView: () => asView(projectView) });
+    const handle = attachActiveViewFocus(asWindow(win), {
+      getActiveView: () => asView(projectView),
+    });
 
     activate();
-    win.emit("closed");
+    handle.dispose();
     await flushImmediates();
     activate();
     await flushImmediates();
 
     expect(projectView.webContents.focus).not.toHaveBeenCalled();
     expect(win.listenerCount("focus")).toBe(0);
+    expect(win.listenerCount("closed")).toBe(0);
   });
 });
 

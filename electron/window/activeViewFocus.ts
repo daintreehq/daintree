@@ -104,7 +104,6 @@ export function attachActiveViewFocus(
   // Focusing a view activates its window on Linux and macOS: a check still
   // queued when the user has already left must not drag them back.
   win.on("blur", cancel);
-  win.once("closed", dispose);
 
   return { schedule, dispose };
 }
