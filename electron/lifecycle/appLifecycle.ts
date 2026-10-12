@@ -335,15 +335,23 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   process.on("SIGUSR2", signalHandler);
   // Electron installs its own SIGTERM/SIGINT/SIGHUP handlers while it starts
   // (POSIX), replacing the one libuv set up for a listener added before then:
-  // on Electron 42/Linux a SIGTERM listener added at load never ran, and
-  // Electron's handler quit with none of the above. libuv installs its handler
-  // when a signal gets its first listener, so registered once the app is ready
-  // it lands after Electron's and wins. SIGUSR2 is Node's alone.
+  // on Electron 42 (Linux and macOS) a SIGTERM listener added at load never ran,
+  // and Electron's handler quit with none of the above. libuv installs its
+  // handler only when a signal goes from no listeners to one, and dependencies
+  // (signal-exit) add theirs at load, so once the app is ready each signal's
+  // listeners are taken off and put back, ours first: that reinstalls libuv's
+  // handler after Electron's. SIGUSR2 is Node's alone.
+  const takeSignal = (signal: NodeJS.Signals) => {
+    const existing = process.listeners(signal);
+    process.removeAllListeners(signal);
+    process.on(signal, signalHandler);
+    for (const listener of existing) process.on(signal, listener);
+  };
   const registerTerminationSignals = () => {
-    process.on("SIGTERM", signalHandler);
-    process.on("SIGINT", signalHandler);
+    takeSignal("SIGTERM");
+    takeSignal("SIGINT");
     if (!app.isPackaged) {
-      process.on("SIGHUP", signalHandler);
+      takeSignal("SIGHUP");
     }
   };
   if (app.isReady()) registerTerminationSignals();

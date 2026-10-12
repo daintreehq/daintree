@@ -90,12 +90,19 @@ function makeOpts(overrides?: Partial<AppLifecycleOptions>): AppLifecycleOptions
 
 describe("registerAppLifecycleHandlers – signal handling", () => {
   let processOnSpy: ReturnType<typeof vi.spyOn>;
+  let processListenersSpy: ReturnType<typeof vi.spyOn>;
+  let removeAllListenersSpy: ReturnType<typeof vi.spyOn>;
   let processExitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     processOnSpy = vi.spyOn(process, "on").mockImplementation(() => process);
+    // The runner's own signal listeners must survive the re-arm.
+    processListenersSpy = vi.spyOn(process, "listeners").mockReturnValue([]);
+    removeAllListenersSpy = vi
+      .spyOn(process, "removeAllListeners")
+      .mockImplementation(() => process);
     processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   });
 
@@ -138,6 +145,22 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(registered()).toEqual(expect.arrayContaining(["SIGTERM", "SIGINT"]));
+  });
+
+  // Dependencies such as signal-exit listen from load, and libuv only installs
+  // its handler when a signal goes from no listeners to one.
+  it("re-arms each termination signal with its earlier listeners kept after ours", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const earlier = vi.fn();
+    processListenersSpy.mockImplementation((sig: string) => (sig === "SIGTERM" ? [earlier] : []));
+    appMock.isPackaged = true;
+    registerAppLifecycleHandlers(makeOpts());
+
+    expect(removeAllListenersSpy).toHaveBeenCalledWith("SIGTERM");
+    expect(removeAllListenersSpy).toHaveBeenCalledWith("SIGINT");
+    const sigterm = processOnSpy.mock.calls.filter(([sig]: string[]) => sig === "SIGTERM");
+    expect(sigterm).toHaveLength(2);
+    expect(sigterm[1][1]).toBe(earlier);
   });
 
   it("registers SIGHUP only when !isPackaged", async () => {
