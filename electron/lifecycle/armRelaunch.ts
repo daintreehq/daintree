@@ -19,18 +19,55 @@ export const WAIT_THEN_RUN_IMAGE = [
   'exec "$image" "$@"',
 ].join("; ");
 
-/**
- * The extract-and-run runtime, when it is this process's parent: it waits for
- * Daintree, then deletes the extraction the next run would reuse, so the
- * relaunch has to wait for it too.
- */
-function extractionRuntimePid(appImage: string): number | null {
+function realpathOrNull(file: string): string | null {
   try {
-    const parentExe = fs.realpathSync(`/proc/${process.ppid}/exe`);
-    return parentExe === fs.realpathSync(appImage) ? process.ppid : null;
+    return fs.realpathSync(file);
   } catch {
     return null;
   }
+}
+
+/**
+ * The extract-and-run runtime, when it is this process's parent: it waits for
+ * Daintree, then deletes the extraction the next run would reuse, so the
+ * relaunch has to wait for it too. An update has already deleted or replaced
+ * the image by the time it relaunches, which the kernel marks on the link.
+ */
+function extractionRuntimePid(appImage: string): number | null {
+  try {
+    const parentExe = fs.readlinkSync(`/proc/${process.ppid}/exe`).replace(/ \(deleted\)$/, "");
+    return parentExe === appImage || parentExe === realpathOrNull(appImage) ? process.ppid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Starts the waiter that runs `image` once this AppImage instance has exited. */
+function spawnWaiter(
+  runningImage: string,
+  image: string,
+  args: readonly string[],
+  fallback: () => void
+): void {
+  const appDir = process.env.APPDIR as string;
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  // AppRun prefixes these again on the next run; the old mount's entries would pile up.
+  stripAppDirPathLists(env, appDir);
+  const runtimePid = extractionRuntimePid(runningImage);
+  // `--appimage-extract-and-run` is consumed by the runtime, so argv can't carry it.
+  if (path.basename(appDir).startsWith("appimage_extracted_")) env.APPIMAGE_EXTRACT_AND_RUN = "1";
+
+  const pids = [process.pid, ...(runtimePid ? [runtimePid] : [])].map(String);
+  const waiter = spawn(
+    "/bin/bash",
+    ["-c", WAIT_THEN_RUN_IMAGE, "daintree-relaunch", image, ...pids, "--", ...args],
+    { detached: true, stdio: "ignore", env }
+  );
+  waiter.on("error", (error) => {
+    console.error("[MAIN] Couldn't arm the AppImage relaunch:", error);
+    fallback();
+  });
+  waiter.unref();
 }
 
 /**
@@ -50,25 +87,25 @@ export function armRelaunch(options: Electron.RelaunchOptions = {}): void {
     app.relaunch(options);
     return;
   }
-  const appDir = process.env.APPDIR as string;
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  // AppRun prefixes these again on the next run; the old mount's entries would pile up.
-  stripAppDirPathLists(env, appDir);
-  const runtimePid = extractionRuntimePid(appImage);
-  // `--appimage-extract-and-run` is consumed by the runtime, so argv can't carry it.
-  if (path.basename(appDir).startsWith("appimage_extracted_")) env.APPIMAGE_EXTRACT_AND_RUN = "1";
-
-  const pids = [process.pid, ...(runtimePid ? [runtimePid] : [])].map(String);
-  const args = options.args ?? process.argv.slice(1);
-  const waiter = spawn(
-    "/bin/bash",
-    ["-c", WAIT_THEN_RUN_IMAGE, "daintree-relaunch", appImage, ...pids, "--", ...args],
-    { detached: true, stdio: "ignore", env }
+  // No bash: Electron's relaunch is the only option left, even if it may not come back.
+  spawnWaiter(appImage, appImage, options.args ?? process.argv.slice(1), () =>
+    app.relaunch(options)
   );
-  waiter.on("error", (error) => {
-    // No bash: Electron's relaunch is the only option left, even if it may not come back.
-    console.error("[MAIN] Couldn't arm the AppImage relaunch, using Electron's:", error);
-    app.relaunch(options);
-  });
-  waiter.unref();
+}
+
+/**
+ * Runs `image`, the AppImage an update has just put in place (possibly under a
+ * new name), once this instance has exited, through the same waiter as
+ * `armRelaunch`. False, arming nothing, when this process wasn't started from
+ * an AppImage. `fallback` runs if the waiter can't start.
+ */
+export function armAppImageRelaunch(
+  image: string,
+  args: readonly string[],
+  fallback: () => void
+): boolean {
+  const appImage = process.platform === "linux" ? runningAppImage() : null;
+  if (!appImage) return false;
+  spawnWaiter(appImage, image, args, fallback);
+  return true;
 }

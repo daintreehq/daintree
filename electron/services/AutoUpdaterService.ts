@@ -17,6 +17,7 @@ import { PRODUCT_NAME, PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
 import { notifyAppImageRelocated } from "./appImageRelocation.js";
+import { routeAppImageRelaunchThroughWaiter } from "./appImageUpdateRelaunch.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -305,9 +306,12 @@ class AutoUpdaterService {
   // remains the right move, and it's the only thing standing between a failed
   // install and a torn-down zombie process. The `app.exit(0)` inside the watchdog
   // is wrapped so a shutdown-time throw doesn't become an unhandled rejection.
+  //
+  // From an AppImage, the new image is started by the relaunch waiter once this
+  // process has exited, not by the updater from inside it.
   private executeQuitAndInstall(): void {
     try {
-      autoUpdater.quitAndInstall();
+      routeAppImageRelaunchThroughWaiter(autoUpdater, () => autoUpdater.quitAndInstall());
     } catch (err) {
       console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
       this.recordInstallStage("handoff-threw");

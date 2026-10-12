@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("node:child_process", () => ({ spawn: mocks.spawn }));
 vi.mock("electron", () => ({ app: { relaunch: mocks.relaunch } }));
 
-import { armRelaunch, WAIT_THEN_RUN_IMAGE } from "../armRelaunch.js";
+import { armAppImageRelaunch, armRelaunch, WAIT_THEN_RUN_IMAGE } from "../armRelaunch.js";
 
 const originalPlatform = process.platform;
 const savedEnvNames = ["APPIMAGE", "APPDIR", "PATH", "LD_LIBRARY_PATH", "APPIMAGE_EXTRACT_AND_RUN"];
@@ -91,18 +91,39 @@ describe("armRelaunch", () => {
     expect(process.env.LD_LIBRARY_PATH).toBe(`${appDir}/usr/lib`);
   });
 
-  it("keeps extract-and-run mode and waits for the runtime that deletes the extraction", () => {
+  function runExtracted(parentExe: string) {
     const appDir = path.join(os.tmpdir(), "appimage_extracted_0123abcd");
     process.env.APPIMAGE = image;
     process.env.APPDIR = appDir;
     vi.spyOn(process, "execPath", "get").mockReturnValue(path.join(appDir, "daintree"));
-    vi.spyOn(fs, "realpathSync").mockImplementation(((p: fs.PathLike) =>
-      p === `/proc/${process.ppid}/exe` ? image : String(p)) as typeof fs.realpathSync);
+    vi.spyOn(fs, "readlinkSync").mockImplementation(((p: fs.PathLike) => {
+      if (p === `/proc/${process.ppid}/exe`) return parentExe;
+      throw Object.assign(new Error("EINVAL"), { code: "EINVAL" });
+    }) as typeof fs.readlinkSync);
+  }
+
+  it("keeps extract-and-run mode and waits for the runtime that deletes the extraction", () => {
+    runExtracted(image);
     armRelaunch({ args: ["x"] });
 
     const [, argv, { env }] = spawnCall();
     expect(argv.slice(3)).toEqual([image, String(process.pid), String(process.ppid), "--", "x"]);
     expect(env.APPIMAGE_EXTRACT_AND_RUN).toBe("1");
+  });
+
+  // An update deletes or replaces the image before it relaunches.
+  it("still recognises the runtime once its image is gone", () => {
+    runExtracted(`${image} (deleted)`);
+    armRelaunch({ args: [] });
+
+    expect(spawnCall()[1].slice(4, 6)).toEqual([String(process.pid), String(process.ppid)]);
+  });
+
+  it("doesn't wait for a parent that isn't the image's runtime", () => {
+    runExtracted("/usr/bin/bash");
+    armRelaunch({ args: [] });
+
+    expect(spawnCall()[1].slice(4)).toEqual([String(process.pid), "--"]);
   });
 
   it("falls back to Electron's relaunch when the waiter can't start", () => {
@@ -128,6 +149,59 @@ describe("armRelaunch", () => {
 
     expect(mocks.spawn).not.toHaveBeenCalled();
     expect(mocks.relaunch.mock.calls).toEqual([[{ args: ["a"] }], [{}], [{ args: ["b"] }]]);
+  });
+});
+
+describe("armAppImageRelaunch", () => {
+  const updated = "/home/u/Applications/Daintree-2.0.0.AppImage";
+
+  it("runs the image an update put in place through the same waiter", () => {
+    const appDir = path.dirname(process.execPath);
+    runFromImage(appDir);
+    process.env.LD_LIBRARY_PATH = `${appDir}/usr/lib`;
+    const fallback = vi.fn();
+
+    expect(armAppImageRelaunch(updated, [], fallback)).toBe(true);
+
+    const [command, argv, options] = spawnCall();
+    expect(command).toBe("/bin/bash");
+    expect(argv.slice(1)).toEqual([
+      WAIT_THEN_RUN_IMAGE,
+      "daintree-relaunch",
+      updated,
+      String(process.pid),
+      "--",
+    ]);
+    expect(options).toMatchObject({ detached: true, stdio: "ignore" });
+    expect(options.env).not.toHaveProperty("LD_LIBRARY_PATH");
+    expect(mocks.waiter.unref).toHaveBeenCalled();
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("runs the caller's fallback, not Electron's relaunch, when the waiter can't start", () => {
+    runFromImage();
+    const fallback = vi.fn();
+    armAppImageRelaunch(updated, [], fallback);
+    const onError = mocks.waiter.on.mock.calls.find(([event]) => event === "error")?.[1] as (
+      error: Error
+    ) => void;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    onError(new Error("ENOENT"));
+
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+  });
+
+  it("arms nothing outside an AppImage", () => {
+    delete process.env.APPIMAGE;
+    expect(armAppImageRelaunch(updated, [], vi.fn())).toBe(false);
+    runFromImage();
+    setPlatform("darwin");
+    expect(armAppImageRelaunch(updated, [], vi.fn())).toBe(false);
+
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.relaunch).not.toHaveBeenCalled();
   });
 });
 

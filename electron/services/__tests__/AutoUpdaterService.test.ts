@@ -144,6 +144,14 @@ const relocationMock = vi.hoisted(() => ({ notifyAppImageRelocated: vi.fn() }));
 
 vi.mock("../appImageRelocation.js", () => relocationMock);
 
+const armRelaunchMock = vi.hoisted(() => ({
+  armAppImageRelaunch: vi.fn(
+    (_image: string, _args: readonly string[], _fallback: () => void) => true
+  ),
+}));
+
+vi.mock("../../lifecycle/armRelaunch.js", () => armRelaunchMock);
+
 import { autoUpdaterService } from "../AutoUpdaterService.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { PENDING_UPDATE_INSTALL_STAGES } from "../../utils/updateInstallStages.js";
@@ -725,6 +733,70 @@ describe("AutoUpdaterService", () => {
 
       expect(relocationMock.notifyAppImageRelocated).not.toHaveBeenCalled();
       service.dispose();
+    });
+  });
+
+  // AppImageUpdater.doInstall ends by spawning the new image from this process,
+  // which handed it the old mount's descriptors and AppDir paths.
+  describe("AppImage relaunch after install", () => {
+    const OLD_IMAGE = "/home/u/Applications/Daintree-1.0.0.AppImage";
+    const NEW_IMAGE = "/home/u/Applications/Daintree-2.0.0.AppImage";
+    const updater = autoUpdaterMock as typeof autoUpdaterMock & {
+      spawnLog?: (cmd: string, args?: string[], env?: unknown) => Promise<boolean>;
+    };
+    let spawnLog: Mock;
+
+    beforeEach(() => {
+      autoUpdaterService.initialize();
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.APPIMAGE = OLD_IMAGE;
+      process.env.APPDIR = path.dirname(process.execPath);
+      spawnLog = vi.fn(() => Promise.resolve(true));
+      updater.spawnLog = spawnLog as never;
+      armRelaunchMock.armAppImageRelaunch.mockReset().mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      delete updater.spawnLog;
+      delete process.env.APPDIR;
+    });
+
+    function install() {
+      const downloaded = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+      downloaded({ version: "2.0.0" });
+      expect(autoUpdaterService.quitAndInstallIfReady()).toBe(true);
+      shutdownCoordinatorMock.settleShutdown("clean");
+    }
+
+    it("hands the installed image to the relaunch waiter instead of spawning it", () => {
+      autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+        void updater.spawnLog!(NEW_IMAGE, [], { APPIMAGE_SILENT_INSTALL: "true" });
+      });
+
+      install();
+
+      expect(armRelaunchMock.armAppImageRelaunch).toHaveBeenCalledWith(
+        NEW_IMAGE,
+        [],
+        expect.any(Function)
+      );
+      expect(spawnLog).not.toHaveBeenCalled();
+      expect(updater.spawnLog).toBe(spawnLog);
+    });
+
+    it("arms no relaunch when the install fails before the new image is in place", () => {
+      autoUpdaterMock.quitAndInstall.mockImplementationOnce(() => {
+        throw new Error("mv failed");
+      });
+
+      install();
+
+      expect(armRelaunchMock.armAppImageRelaunch).not.toHaveBeenCalled();
+      expect(updater.spawnLog).toBe(spawnLog);
+      vi.advanceTimersByTime(5_000);
+      expect(appMock.exit).toHaveBeenCalledWith(0);
     });
   });
 
