@@ -16,6 +16,7 @@ import { dispatchOpenDirPath, hasOpenDirConsumer } from "../setup/environment.js
 import { isHostModeRequested } from "../boot/hostModeLaunch.js";
 
 const DISABLE_GPU_CRASH_LIMIT_SWITCH = "disable-gpu-process-crash-limit";
+const SIGNAL_ECHO_WINDOW_MS = 500;
 
 const CLI_PATH_FLAG = "--cli-path";
 const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
@@ -303,14 +304,21 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // bypasses all Node.js shutdown hooks; that case is handled by
   // CrashRecoveryService on next startup.
   let firstSignalTime: number | null = null;
-  const signalHandler = () => {
+  let firstSignal: NodeJS.Signals | undefined;
+  const signalHandler = (signal?: NodeJS.Signals) => {
     if (firstSignalTime !== null) {
-      if (Date.now() - firstSignalTime < 2000) {
+      const since = Date.now() - firstSignalTime;
+      // signal-exit re-raises a signal at this process within milliseconds when
+      // its listener count happens to match its hook count; that echo of the
+      // same signal isn't a user asking twice.
+      const echo = signal === firstSignal && since < SIGNAL_ECHO_WINDOW_MS;
+      if (!echo && since < 2000) {
         process.exit(1);
       }
       return;
     }
     firstSignalTime = Date.now();
+    firstSignal = signal;
     setSignalShutdown();
     // Chromium aborts the browser ("GPU process isn't usable. Goodbye.") once
     // relaunches of a lost GPU process have used up every fallback mode, and a

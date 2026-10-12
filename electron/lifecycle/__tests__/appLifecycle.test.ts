@@ -260,7 +260,8 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(setSafetyBeltTimerMock).toHaveBeenCalledWith(null);
   });
 
-  it("rapid second signal within 2s force-exits with status 1", async () => {
+  it("a second signal within 2s force-exits with status 1", async () => {
+    vi.setSystemTime(new Date(1_000_000));
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
 
@@ -268,12 +269,30 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     const handler = sigTermCall![1] as () => void;
 
     handler();
-    // Same tick — Date.now() delta is ~0ms, well within the 2000ms force-exit window.
+    vi.setSystemTime(new Date(1_000_600));
     handler();
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
     expect(processExitSpy).toHaveBeenCalledWith(1);
+  });
+
+  // signal-exit re-raises the signal at this process when its listener count
+  // matches its hook count; live, that made every SIGTERM exit with status 1.
+  it("ignores the same signal echoed back within 500ms", async () => {
+    vi.setSystemTime(new Date(1_000_000));
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as (signal: string) => void;
+
+    handler("SIGTERM");
+    vi.setSystemTime(new Date(1_000_005));
+    handler("SIGTERM");
+
+    expect(appMock.quit).toHaveBeenCalledOnce();
+    expect(processExitSpy).not.toHaveBeenCalled();
   });
 
   it("second signal at 1999ms force-exits (boundary inside window)", async () => {
@@ -317,11 +336,12 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
 
     const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
     const sigIntCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGINT");
-    const termHandler = sigTermCall![1] as () => void;
-    const intHandler = sigIntCall![1] as () => void;
+    const termHandler = sigTermCall![1] as (signal: string) => void;
+    const intHandler = sigIntCall![1] as (signal: string) => void;
 
-    termHandler();
-    intHandler();
+    // Node passes each listener its signal; a different one is never an echo.
+    termHandler("SIGTERM");
+    intHandler("SIGINT");
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
