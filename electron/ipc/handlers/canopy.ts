@@ -17,7 +17,7 @@ import type {
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import type { TerminalInputNotice } from "../../services/PtyClient.js";
 import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
-import { getFleetSnapshotService } from "./projectCrud/index.js";
+import { getFleetSnapshotService, getRunHandBackService } from "./projectCrud/index.js";
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CanopyService } from "../../services/canopy/CanopyService.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
@@ -1125,7 +1125,9 @@ export const canopyNamespace = defineIpcNamespace({
         assertTarget(target);
         if (expectTurn !== undefined && !isTurn(expectTurn)) throw new Error("Invalid turn");
         // What archiving left read, for an undo to put back; null when refused.
-        return getService().archive(runId, target.spawnedAt, expectTurn);
+        const mark = getService().archive(runId, target.spawnedAt, expectTurn);
+        if (mark !== null) getRunHandBackService()?.markRead(runId);
+        return mark;
       }
     ),
 
@@ -1264,7 +1266,15 @@ export const canopyNamespace = defineIpcNamespace({
         assertTarget(target);
         if (typeof read !== "boolean") throw new Error("Invalid read");
         if (turn !== undefined && !isTurn(turn)) throw new Error("Invalid turn");
-        return getService().setRead(runId, target.spawnedAt, read, turn);
+        const mark = getService().setRead(runId, target.spawnedAt, read, turn);
+        // One read state, whichever surface set it: the inbox's read or unread
+        // is the run's hand-back's too.
+        if (mark !== null) {
+          const handBacks = getRunHandBackService();
+          if (read) handBacks?.markRead(runId);
+          else handBacks?.markUnread(runId);
+        }
+        return mark;
       }
     ),
 
@@ -1278,7 +1288,10 @@ export const canopyNamespace = defineIpcNamespace({
           throw new Error("Invalid runs");
         }
         for (const target of targets) assertReadTarget(target);
-        return getService().markAllRead(targets);
+        const marks = getService().markAllRead(targets);
+        const handBacks = getRunHandBackService();
+        for (const mark of marks) handBacks?.markRead(mark.runId);
+        return marks;
       }
     ),
 

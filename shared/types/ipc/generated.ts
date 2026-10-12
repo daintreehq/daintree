@@ -582,6 +582,18 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./fleet.js").FleetSnapshot | null;
   };
+  "fleet:mark-run-read": {
+    args: [runId: string];
+    result: boolean;
+  };
+  "fleet:mark-run-unread": {
+    args: [runId: string];
+    result: boolean;
+  };
+  "fleet:note-run-look": {
+    args: [runId: string, looking: boolean];
+    result: void;
+  };
   "fleet:park-run": {
     args: [
       runId: string,

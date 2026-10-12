@@ -47,6 +47,25 @@ export function reportCanopySeen(
   markSeen(runId, looking, place).catch(() => {});
 }
 
+const lastRunLook = new Map<string, { at: number; looking: boolean }>();
+
+/**
+ * Tells main the user started (`looking`) or stopped having this run's
+ * terminal in front of them, for whether its hand-back has been seen. Always
+ * on, Canopy or not; repeats within a moment are one report, but a look
+ * ending is always told.
+ */
+export function reportRunLook(runId: string, looking: boolean): void {
+  const noteRunLook = window.electron?.fleet?.noteRunLook;
+  if (!noteRunLook) return;
+  const now = Date.now();
+  const last = lastRunLook.get(runId);
+  if (looking && last?.looking === true && now - last.at < COALESCE_MS) return;
+  if (lastRunLook.size >= MAX_TRACKED) lastRunLook.clear();
+  lastRunLook.set(runId, { at: now, looking });
+  noteRunLook(runId, looking).catch(() => {});
+}
+
 /** Sends to one run closer together than this are one report. */
 const SENT_COALESCE_MS = 1_000;
 const lastSentInput = new Map<string, number>();
@@ -72,4 +91,5 @@ export function reportCanopySent(runId: string): void {
 export function __resetCanopySeenForTests(): void {
   lastSent.clear();
   lastSentInput.clear();
+  lastRunLook.clear();
 }

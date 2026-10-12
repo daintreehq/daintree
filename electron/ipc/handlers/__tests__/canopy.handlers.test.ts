@@ -79,6 +79,7 @@ vi.mock("../projectCrud/index.js", () => ({
     getLastBroadcast: () => ({ runs: state.runs, degraded: false, changedAt: 0 }),
     subscribe: () => () => {},
   }),
+  getRunHandBackService: () => null,
 }));
 vi.mock("../../../services/plugin/pluginTerminalScreenRead.js", () => ({
   readPluginTerminalScreen: vi.fn(async () => ({

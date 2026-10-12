@@ -33,6 +33,25 @@ export interface RunParkRecord {
 }
 
 /**
+ * The latest hand-back Daintree watched a run make: a stop after a stretch of
+ * work it observed, and whether the user has had the terminal in front of them
+ * since. Two observations, never a verdict — what a surface makes of an unseen
+ * one is its own call.
+ *
+ * Owned by Main (`RunHandBackService`) so every surface reads one fact, and
+ * held in memory only: a run first seen already stopped — every run after a
+ * restart — has no hand-back anyone here watched.
+ */
+export interface RunHandBackRecord {
+  /** When the run was seen stopping after work Daintree watched (epoch ms). */
+  stoppedAt: number;
+  /** When the user had the run in front of them for the dwell after that stop, or read it by hand. */
+  seenAt?: number;
+  /** When the user marked the run unread; while set, the hand-back reads as unseen whatever `seenAt` says. */
+  markedUnreadAt?: number;
+}
+
+/**
  * A user's decision that a run does not need them *yet*.
  *
  * The sibling of {@link RunParkRecord}, and deliberately a separate record
@@ -153,6 +172,12 @@ export interface FleetRunRow {
    * what lets the whole feature ship without a countdown timer anywhere.
    */
   snooze?: RunSnoozeRecord;
+  /**
+   * Present iff Daintree watched this run stop after work since it spawned.
+   * Survives the agent sliding from `completed` into a generic `waiting`, so a
+   * finished run stays tellable from one that never did anything here.
+   */
+  handBack?: RunHandBackRecord;
   /**
    * When a WORKING run last showed signs of life — the later of its last
    * output and its entry into the current working stint — present only once

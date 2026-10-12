@@ -335,6 +335,15 @@ export interface GeneratedElectronAPI {
     getSnapshot(
       ...args: IpcInvokeMap["fleet:get-snapshot"]["args"]
     ): Promise<IpcInvokeMap["fleet:get-snapshot"]["result"]>;
+    markRunRead(
+      ...args: IpcInvokeMap["fleet:mark-run-read"]["args"]
+    ): Promise<IpcInvokeMap["fleet:mark-run-read"]["result"]>;
+    markRunUnread(
+      ...args: IpcInvokeMap["fleet:mark-run-unread"]["args"]
+    ): Promise<IpcInvokeMap["fleet:mark-run-unread"]["result"]>;
+    noteRunLook(
+      ...args: IpcInvokeMap["fleet:note-run-look"]["args"]
+    ): Promise<IpcInvokeMap["fleet:note-run-look"]["result"]>;
     parkRun(
       ...args: IpcInvokeMap["fleet:park-run"]["args"]
     ): Promise<IpcInvokeMap["fleet:park-run"]["result"]>;

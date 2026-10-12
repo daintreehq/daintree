@@ -23,6 +23,7 @@ import {
   isFleetArmEligible,
 } from "@/store/fleetArmingStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { isHandBackUnseen } from "@shared/utils/runHandBack";
 import {
   AGENT_SNOOZE_DURATION_OPTIONS,
   AGENT_SNOOZE_LABEL,
@@ -94,6 +95,8 @@ import {
   Globe,
   Info,
   Lock,
+  Mail,
+  MailOpen,
   Maximize2,
   Mic,
   MicOff,
@@ -546,6 +549,14 @@ function TerminalContextMenuBody({
       (s.snapshot?.runs.some((run) => run.runId === terminalId && run.snooze !== undefined) ??
         false)
   );
+  // Whether main watched this run hand work back, and whether it has been seen
+  // since: only a run with a hand-back has anything to mark read or unread.
+  const handBackState = useFleetSnapshotStore((s): "none" | "unseen" | "seen" => {
+    if (!isMenuLive) return "none";
+    const handBack = s.snapshot?.runs.find((run) => run.runId === terminalId)?.handBack;
+    if (handBack === undefined) return "none";
+    return isHandBackUnseen(handBack) ? "unseen" : "seen";
+  });
   const sourceRef = useRef<MenuActionSourceValue>("user");
 
   const handleSnooze = useCallback(
@@ -556,6 +567,16 @@ function TerminalContextMenuBody({
     },
     [terminalId]
   );
+
+  const handleToggleHandBackRead = useCallback(() => {
+    const markRead = handBackState === "unseen";
+    safeFireAndForget(
+      markRead
+        ? window.electron.fleet.markRunRead(terminalId)
+        : window.electron.fleet.markRunUnread(terminalId),
+      { context: markRead ? "TerminalContextMenu markRunRead" : "TerminalContextMenu markRunUnread" }
+    );
+  }, [handBackState, terminalId]);
 
   const handleUnsnooze = useCallback(() => {
     safeFireAndForget(window.electron.fleet.unsnoozeRun(terminalId), {
@@ -1743,6 +1764,16 @@ function TerminalContextMenuBody({
                     )}
                   </ContextMenuSubContent>
                 </ContextMenuSub>
+              )}
+              {handBackState !== "none" && (
+                <ContextMenuItem onSelect={handleToggleHandBackRead}>
+                  {handBackState === "unseen" ? (
+                    <MailOpen className={ICON_CLASS} aria-hidden="true" />
+                  ) : (
+                    <Mail className={ICON_CLASS} aria-hidden="true" />
+                  )}
+                  {handBackState === "unseen" ? "Mark as read" : "Mark as unread"}
+                </ContextMenuItem>
               )}
               <ContextMenuSeparator />
             </>

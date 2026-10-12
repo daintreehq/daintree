@@ -153,3 +153,45 @@ describe("useCanopySeenTracking", () => {
     expect(looks()).toEqual(["a:true"]);
   });
 });
+
+describe("useCanopySeenTracking — run looks", () => {
+  let noteRunLook: ReturnType<typeof vi.fn>;
+  const runLooks = () =>
+    noteRunLook.mock.calls.map(([id, looking]) => `${String(id)}:${String(looking)}`);
+
+  beforeEach(() => {
+    noteRunLook = vi.fn(async () => {});
+    Object.defineProperty(window, "electron", {
+      value: { canopy: { markSeen }, fleet: { noteRunLook } },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("reports looks with Canopy off, and tells Canopy nothing", () => {
+    useCanopyStore.setState({ mode: "unset" });
+    renderHook(() => useCanopySeenTracking());
+    act(() => usePanelStore.setState({ focusedId: "b" }));
+
+    expect(runLooks()).toEqual(["a:true", "a:false", "b:true"]);
+    expect(markSeen).not.toHaveBeenCalled();
+  });
+
+  it("keeps the run look going when Canopy is turned on, and tells Canopy too", () => {
+    useCanopyStore.setState({ mode: "unset" });
+    renderHook(() => useCanopySeenTracking());
+    act(() => useCanopyStore.setState({ mode: "on" }));
+
+    expect(runLooks()).toEqual(["a:true"]);
+    expect(looks()).toEqual(["a:true"]);
+  });
+
+  it("renews the run look every heartbeat, and ends it when it goes away", () => {
+    useCanopyStore.setState({ mode: "unset" });
+    const { unmount } = renderHook(() => useCanopySeenTracking());
+    vi.advanceTimersByTime(CANOPY_SEEN_HEARTBEAT_MS);
+    expect(runLooks()).toEqual(["a:true", "a:true"]);
+    unmount();
+    expect(runLooks().at(-1)).toBe("a:false");
+  });
+});
