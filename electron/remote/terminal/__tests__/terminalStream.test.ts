@@ -664,6 +664,47 @@ describe("terminal stream over the link", () => {
     expect(budget.usedBytes).toBeLessThanOrEqual(64 * 1024);
   });
 
+  it("lets a quiet terminal's echo through a busy lane, holding back only terminals already waiting in it", async () => {
+    const h = await setup();
+    await h.connectLink();
+    const real = h.host.queuedBytes.bind(h.host);
+    // The lane is past its busy mark, all of it the flooding terminal's.
+    h.host.queuedBytes = (_lane, flow) =>
+      flow === undefined ? Number.MAX_SAFE_INTEGER : flow.endsWith("\0flood") ? 64 * 1024 : 0;
+    h.pty().emit("flood", "line 1");
+    h.pty().emit("quiet", "Q");
+    await waitFor(() =>
+      h
+        .renderer()
+        .ofType("data")
+        .some((m) => m.id === "quiet")
+    );
+    expect(
+      h
+        .renderer()
+        .ofType("data")
+        .filter((m) => m.id === "flood")
+    ).toEqual([]);
+
+    // Once the lane has room the held terminal follows, in order.
+    h.host.queuedBytes = real;
+    h.pty().emit("flood", "line 2");
+    await waitFor(
+      () =>
+        h
+          .renderer()
+          .ofType("data")
+          .filter((m) => m.id === "flood").length === 2
+    );
+    expect(
+      h
+        .renderer()
+        .ofType("data")
+        .filter((m) => m.id === "flood")
+        .map((m) => decode(m))
+    ).toEqual(["line 1", "line 2"]);
+  });
+
   it("caps tracked terminals even when all of them are still alive", async () => {
     const h = await setup({ maxStreams: 50 });
     await h.connectLink();

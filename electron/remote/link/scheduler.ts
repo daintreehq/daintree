@@ -15,6 +15,13 @@ import { FRAME_HEADER_BYTES, LANE_COUNT, LANE_PRIORITY, Lane, type LinkFrame } f
  * Control always goes first. Interactive traffic goes next but only for a
  * bounded burst while other lanes are waiting, so sustained terminal output
  * cannot starve request/response traffic indefinitely.
+ *
+ * Within a lane, frames enqueued under a flow key (one terminal's output) take
+ * turns with the lane's other flows, a frame each, and stay in order within
+ * their flow. One terminal pouring out a build log then delays another's
+ * keystroke echo by a frame per busy terminal, not by everything they have
+ * queued. Frames with no key share one flow, so a lane that never names one is
+ * plain FIFO.
  */
 export interface LaneLimits {
   highWaterBytes: number;
@@ -43,11 +50,26 @@ export const INTERACTIVE_BURST_FRAMES = 32;
 
 export type EnqueueResult = "queued" | "over-high-water" | "refused";
 
-interface LaneQueue {
+interface FlowQueue {
   frames: LinkFrame[];
   head: number;
   bytes: number;
+}
+
+interface LaneQueue {
+  flows: Map<string, FlowQueue>;
+  /** Keys of the flows with frames, in turn order. */
+  turns: string[];
+  frameCount: number;
+  bytes: number;
   wasOverHighWater: boolean;
+}
+
+/** The flow of frames enqueued without a key. */
+const SHARED_FLOW = "";
+
+function emptyLane(): LaneQueue {
+  return { flows: new Map(), turns: [], frameCount: 0, bytes: 0, wasOverHighWater: false };
 }
 
 function frameCost(frame: LinkFrame): number {
@@ -60,20 +82,24 @@ export class LaneScheduler {
   private interactiveBurst = 0;
 
   constructor(private readonly limits: Record<Lane, LaneLimits> = DEFAULT_LANE_LIMITS) {
-    this.lanes = Array.from({ length: LANE_COUNT }, () => ({
-      frames: [],
-      head: 0,
-      bytes: 0,
-      wasOverHighWater: false,
-    }));
+    this.lanes = Array.from({ length: LANE_COUNT }, emptyLane);
   }
 
-  enqueue(frame: LinkFrame): EnqueueResult {
+  /** `flow` names the stream the frame belongs to; frames of one flow leave in order. */
+  enqueue(frame: LinkFrame, flow: string = SHARED_FLOW): EnqueueResult {
     const q = this.lanes[frame.lane]!;
     const cost = frameCost(frame);
     const { highWaterBytes, hardCapBytes, maxFrames } = this.limits[frame.lane];
-    if (q.bytes + cost > hardCapBytes || q.frames.length - q.head >= maxFrames) return "refused";
-    q.frames.push(frame);
+    if (q.bytes + cost > hardCapBytes || q.frameCount >= maxFrames) return "refused";
+    let fq = q.flows.get(flow);
+    if (!fq) {
+      fq = { frames: [], head: 0, bytes: 0 };
+      q.flows.set(flow, fq);
+      q.turns.push(flow);
+    }
+    fq.frames.push(frame);
+    fq.bytes += cost;
+    q.frameCount++;
     q.bytes += cost;
     if (q.bytes > highWaterBytes) {
       q.wasOverHighWater = true;
@@ -92,8 +118,7 @@ export class LaneScheduler {
   }
 
   private hasFrames(lane: Lane): boolean {
-    const q = this.lanes[lane]!;
-    return q.head < q.frames.length;
+    return this.lanes[lane]!.frameCount > 0;
   }
 
   private pickLane(): Lane | undefined {
@@ -114,16 +139,23 @@ export class LaneScheduler {
 
   private shift(lane: Lane): LinkFrame {
     const q = this.lanes[lane]!;
-    const frame = q.frames[q.head]!;
-    q.frames[q.head] = undefined as unknown as LinkFrame;
-    q.head++;
-    if (q.head === q.frames.length) {
-      q.frames = [];
-      q.head = 0;
-    } else if (q.head > 1024 && q.head * 2 > q.frames.length) {
-      q.frames = q.frames.slice(q.head);
-      q.head = 0;
+    const flow = q.turns.shift()!;
+    const fq = q.flows.get(flow)!;
+    const frame = fq.frames[fq.head]!;
+    fq.frames[fq.head] = undefined as unknown as LinkFrame;
+    fq.head++;
+    fq.bytes -= frameCost(frame);
+    if (fq.head === fq.frames.length) {
+      // Drained: the flow gives up its turn until it has frames again.
+      q.flows.delete(flow);
+    } else {
+      if (fq.head > 1024 && fq.head * 2 > fq.frames.length) {
+        fq.frames = fq.frames.slice(fq.head);
+        fq.head = 0;
+      }
+      q.turns.push(flow);
     }
+    q.frameCount--;
     q.bytes -= frameCost(frame);
     if (q.wasOverHighWater && q.bytes <= this.limits[lane].highWaterBytes / 2) {
       q.wasOverHighWater = false;
@@ -132,12 +164,14 @@ export class LaneScheduler {
     return frame;
   }
 
-  queuedBytes(lane: Lane): number {
-    return this.lanes[lane]!.bytes;
+  /** Bytes waiting in a lane, or in one flow of it. */
+  queuedBytes(lane: Lane, flow?: string): number {
+    const q = this.lanes[lane]!;
+    return flow === undefined ? q.bytes : (q.flows.get(flow)?.bytes ?? 0);
   }
 
   get isEmpty(): boolean {
-    return this.lanes.every((q) => q.head >= q.frames.length);
+    return this.lanes.every((q) => q.frameCount === 0);
   }
 
   onDrain(cb: (lane: Lane) => void): () => void {
@@ -146,12 +180,7 @@ export class LaneScheduler {
   }
 
   clear(): void {
-    for (const q of this.lanes) {
-      q.frames = [];
-      q.head = 0;
-      q.bytes = 0;
-      q.wasOverHighWater = false;
-    }
+    for (let lane = 0; lane < this.lanes.length; lane++) this.lanes[lane] = emptyLane();
     this.interactiveBurst = 0;
   }
 }

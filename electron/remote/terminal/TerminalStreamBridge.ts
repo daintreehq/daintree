@@ -10,7 +10,7 @@ import {
 } from "../../../shared/types/terminal.js";
 import { Lane } from "../link/frames.js";
 import { InteractiveKind } from "../link/messages.js";
-import type { LinkSession } from "../link/session.js";
+import { terminalFlow, type LinkSession } from "../link/session.js";
 import type { EnqueueResult } from "../link/scheduler.js";
 import { safePost, type PortLike } from "./ports.js";
 import {
@@ -438,6 +438,21 @@ export class TerminalStreamBridge {
     return (this.session?.queuedBytes(Lane.INTERACTIVE) ?? 0) >= this.busyBytes;
   }
 
+  /**
+   * A busy lane holds back only the terminals already waiting in it. One with
+   * nothing queued (a keystroke's echo beside a flood of output) goes straight
+   * in, and the scheduler gives it the next turn; the lane's hard cap still
+   * bounds the total.
+   */
+  private heldBack(stream: StreamState): boolean {
+    if (!this.linkBusy) return false;
+    const queued = this.session?.queuedBytes(
+      Lane.INTERACTIVE,
+      terminalFlow(this.endpointId, stream.id)
+    );
+    return (queued ?? 0) > 0;
+  }
+
   private onPtyMessage(raw: unknown): void {
     if (!raw || typeof raw !== "object") return;
     const message = raw as { type?: unknown; id?: unknown; requestId?: unknown };
@@ -583,7 +598,7 @@ export class TerminalStreamBridge {
       return;
     }
     while (stream.sentSeq < stream.seq) {
-      if (this.linkBusy) {
+      if (this.heldBack(stream)) {
         this.behind.add(stream);
         return;
       }

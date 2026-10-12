@@ -83,4 +83,58 @@ describe("LaneScheduler", () => {
     );
     expect(order[INTERACTIVE_BURST_FRAMES]).toBe(Lane.RPC);
   });
+
+  it("puts one terminal's echo ahead of another terminal's backlog", () => {
+    const s = new LaneScheduler();
+    for (let i = 0; i < 200; i++) {
+      s.enqueue(
+        { lane: Lane.INTERACTIVE, kind: 1, streamId: i, payload: new Uint8Array(4096) },
+        "build-log"
+      );
+    }
+    s.enqueue(
+      { lane: Lane.INTERACTIVE, kind: 1, streamId: 999, payload: new Uint8Array(1) },
+      "shell"
+    );
+    const first = [s.next()!.streamId, s.next()!.streamId];
+    expect(first).toContain(999);
+  });
+
+  it("takes flows a frame each and keeps every flow in its own order", () => {
+    const s = new LaneScheduler();
+    const frame = (id: number): LinkFrame => ({
+      lane: Lane.INTERACTIVE,
+      kind: 1,
+      streamId: id,
+      payload: new Uint8Array(),
+    });
+    for (const id of [1, 2, 3]) s.enqueue(frame(id), "a");
+    for (const id of [11, 12]) s.enqueue(frame(id), "b");
+    s.enqueue(frame(21));
+    const order: number[] = [];
+    for (let fr = s.next(); fr; fr = s.next()) order.push(fr.streamId);
+    expect(order).toEqual([1, 11, 21, 2, 12, 3]);
+    expect(s.isEmpty).toBe(true);
+  });
+
+  it("counts every flow against the lane's bytes, frame cap and drain", () => {
+    const s = new LaneScheduler(tight);
+    const drained: Lane[] = [];
+    s.onDrain((lane) => drained.push(lane));
+    expect(s.enqueue(f(Lane.INTERACTIVE, 8), "a")).toBe("queued");
+    expect(s.enqueue(f(Lane.INTERACTIVE, 8), "b")).toBe("over-high-water");
+    expect(s.enqueue(f(Lane.INTERACTIVE, 8), "c")).toBe("refused");
+    expect(s.queuedBytes(Lane.INTERACTIVE)).toBe(16 + 2 * H);
+    s.next();
+    s.next();
+    expect(drained).toEqual([Lane.INTERACTIVE]);
+
+    const capped = new LaneScheduler({
+      ...tight,
+      3: { highWaterBytes: 1e9, hardCapBytes: 1e9, maxFrames: 2 },
+    });
+    capped.enqueue(f(Lane.INTERACTIVE, 0), "a");
+    capped.enqueue(f(Lane.INTERACTIVE, 0), "b");
+    expect(capped.enqueue(f(Lane.INTERACTIVE, 0), "c")).toBe("refused");
+  });
 });

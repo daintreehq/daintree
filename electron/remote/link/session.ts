@@ -14,6 +14,7 @@ import {
 } from "./frames.js";
 import {
   ControlKind,
+  InteractiveKind,
   RpcKind,
   messageToFrame,
   type InvokeMessage,
@@ -130,6 +131,27 @@ const DEFAULT_MAX_PENDING_REQUESTS = 4096;
 // Messages that follow WELCOME before the client has attached its handlers
 // are only the rest of the read that carried it; a peer filling this is broken.
 const MAX_HELD_MESSAGES = 4096;
+
+/**
+ * The scheduler flow a message takes turns in: each terminal's output is its
+ * own, so one terminal's backlog never sits in front of another's echo.
+ * Everything else keeps its lane's single order.
+ */
+function flowOf(message: LinkMessage): string | undefined {
+  if (
+    message.lane === Lane.INTERACTIVE &&
+    (message.kind === InteractiveKind.TERMINAL_OUT ||
+      message.kind === InteractiveKind.TERMINAL_RESET)
+  ) {
+    return terminalFlow(message.body.endpointId, message.body.terminalId);
+  }
+  return undefined;
+}
+
+/** The interactive-lane flow one endpoint's output for one terminal takes turns in. */
+export function terminalFlow(endpointId: string, terminalId: string): string {
+  return `${endpointId}\0${terminalId}`;
+}
 
 function listenerKey(lane: number, kind: number): number {
   return lane * 256 + kind;
@@ -251,8 +273,9 @@ export class LinkSession {
     return this.closeInfo;
   }
 
-  queuedBytes(lane: Lane): number {
-    return this.scheduler.queuedBytes(lane);
+  /** Bytes waiting to be written in a lane, or in one of its flows. */
+  queuedBytes(lane: Lane, flow?: string): number {
+    return this.scheduler.queuedBytes(lane, flow);
   }
 
   /** Receive handshake messages (HELLO on the host; WELCOME/REJECT on the client). */
@@ -398,7 +421,7 @@ export class LinkSession {
     assertOutboundMessage(message);
     const frame = messageToFrame(message, this.encodingLimits);
     this.assertFrameSize(frame);
-    const result = this.scheduler.enqueue(frame);
+    const result = this.scheduler.enqueue(frame, flowOf(message));
     if (result !== "refused") this.scheduleFlush();
     return { result, frame };
   }
