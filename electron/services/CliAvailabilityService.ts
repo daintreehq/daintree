@@ -21,7 +21,8 @@ import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
 import { findAllOnPath } from "../utils/findOnPath.js";
-import { windowsSystemTool } from "../utils/windowsExecutable.js";
+import { windowsSystemTool, windowsWhere } from "../utils/windowsExecutable.js";
+import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("main:CliAvailabilityService");
@@ -641,52 +642,34 @@ export class CliAvailabilityService {
     return this.probeViaWhere(command);
   }
 
-  /** `where.exe` prints every PATH match, PATHEXT-resolved. */
-  private probeViaWhere(command: string): Promise<ProbeResult> {
-    return new Promise((resolve) => {
-      execFile(
-        windowsSystemTool("where.exe"),
-        [command],
-        {
-          timeout: CliAvailabilityService.WHICH_TIMEOUT_MS,
-          windowsHide: true,
-        },
-        (err, stdout) => {
-          if (err) {
-            const code = (err as NodeJS.ErrnoException | undefined)?.code;
-            // EACCES / EPERM from `where` itself is rare — most endpoint
-            // security blocks surface on the spawn attempt. Still, when they
-            // do, the binary clearly exists on disk (otherwise we'd have
-            // ENOENT) so "blocked" is the correct classification.
-            if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
-              resolve({
-                status: "blocked",
-                reason: "security",
-                via: "which",
-                message: `where "${command}" failed with ${code} — likely blocked by security software or missing execute permission`,
-              });
-              return;
-            }
-            resolve({ status: "missing" });
-            return;
-          }
-          const lines = String(stdout ?? "")
-            .trim()
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter(Boolean);
-          if (lines.length === 0) {
-            // Exit 0 with empty stdout. Preserve the historical contract: fall
-            // back to the bare command so the binary is still launchable via
-            // PATH lookup at spawn time.
-            resolve({ status: "found", path: command, via: "which" });
-            return;
-          }
-          const allPaths = dedupePathsByDirectory(lines, true);
-          resolve({ status: "found", path: allPaths[0], via: "which", allPaths });
-        }
-      );
+  /**
+   * Every PATH match `where` lists, from absolute PATH entries only: the
+   * working directory `where` searches first never counts. One install
+   * directory can hold several (`claude.cmd` beside `claude.exe`), which the
+   * dedupe collapses, preferring the launchable wrapper.
+   */
+  private async probeViaWhere(command: string): Promise<ProbeResult> {
+    const where = await windowsWhere(command, process.env, {
+      timeoutMs: CliAvailabilityService.WHICH_TIMEOUT_MS,
     });
+    if (!where.ok) {
+      // EACCES / EPERM from `where` itself is rare — most endpoint security
+      // blocks surface on the spawn attempt — but the binary then clearly
+      // exists, so "blocked" is the right classification.
+      const code = (where.error as NodeJS.ErrnoException | undefined)?.code;
+      if (typeof code === "string" && SECURITY_ERROR_CODES.has(code)) {
+        return {
+          status: "blocked",
+          reason: "security",
+          via: "which",
+          message: `where "${command}" failed with ${code} — likely blocked by security software or missing execute permission`,
+        };
+      }
+      return { status: "missing" };
+    }
+    if (where.paths.length === 0) return { status: "missing" };
+    const allPaths = dedupePathsByDirectory(where.paths, true);
+    return { status: "found", path: allPaths[0], via: "which", allPaths };
   }
 
   private async probeNativePaths(paths: string[]): Promise<ProbeResult> {
@@ -782,12 +765,25 @@ export class CliAvailabilityService {
         this.npmPrefixCache = {
           checkId: this.checkId,
           promise: new Promise<string | null>((res) => {
+            // On Windows npm is `npm.cmd`, found in PATH only and started by
+            // absolute path (Node will not spawn a `.cmd` without a shell).
+            let target: ReturnType<typeof cliSpawnTarget>;
+            try {
+              target = cliSpawnTarget("npm", ["config", "get", "prefix"], process.platform, {
+                env: process.env,
+              });
+            } catch {
+              res(null);
+              return;
+            }
             execFile(
-              "npm",
-              ["config", "get", "prefix"],
+              target.command,
+              target.args,
               {
                 timeout: CliAvailabilityService.NPM_PREFIX_TIMEOUT_MS,
                 windowsHide: true,
+                ...(target.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+                ...(target.env ? { env: { ...process.env, ...target.env } } : {}),
               },
               (err, stdout) => {
                 if (err) {

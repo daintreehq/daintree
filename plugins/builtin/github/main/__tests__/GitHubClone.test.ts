@@ -21,8 +21,16 @@ vi.mock("../GitHubRepoContext.js", () => ({
   },
 }));
 
+// Windows-path files for the PATH lookup a simulated Windows spawn makes.
+vi.mock("node:fs", async (importOriginal) =>
+  (
+    await import("../../../../../electron/utils/__tests__/helpers/virtualWindowsFs.js")
+  ).withVirtualWindowsFiles(await importOriginal())
+);
+
 import { cloneCapability } from "../GitHubClone.js";
 import { executableForSpawn } from "../../../../../electron/utils/windowsExecutable.js";
+import { virtualWindowsFiles } from "../../../../../electron/utils/__tests__/helpers/virtualWindowsFs.js";
 
 // On Windows gh is spawned by its absolute PATH location; deriving the expected
 // command the same way keeps these assertions correct on every host.
@@ -213,7 +221,11 @@ describe("GitHubClone — cloneRepository", () => {
 
   it("on Windows, cancels without blocking and settles only once the tree is gone", async () => {
     const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const originalPath = process.env.PATH;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // Windows starts gh from PATH by absolute path.
+    process.env.PATH = "C:\\Program Files\\GitHub CLI";
+    virtualWindowsFiles.set({ "C:\\Program Files\\GitHub CLI\\gh.exe": "" });
     try {
       let treeGone: (value: null) => void = () => {};
       treeKillMock.mockImplementationOnce(() => new Promise((resolve) => (treeGone = resolve)));
@@ -242,10 +254,33 @@ describe("GitHubClone — cloneRepository", () => {
       // would refuse that until every member has exited.
       expect(settled).toBe(false);
       expect(treeKillMock).toHaveBeenCalledTimes(1);
+      expect(childProcessMock.spawn.mock.calls[0]?.[0]).toBe(
+        "C:\\Program Files\\GitHub CLI\\gh.exe"
+      );
       treeGone(null);
       await expect(clonePromise).rejects.toThrow(/Clone cancelled/);
     } finally {
       Object.defineProperty(process, "platform", original);
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      virtualWindowsFiles.clear();
+    }
+  });
+
+  it("on Windows, reports gh unavailable rather than running a bare gh when PATH has none", async () => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const originalPath = process.env.PATH;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    process.env.PATH = ".;C:\\empty";
+    try {
+      const probe = await cloneCapability.probeAuth();
+
+      expect(probe.authenticated).toBe(false);
+      expect(childProcessMock.execFile).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", original);
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
     }
   });
 

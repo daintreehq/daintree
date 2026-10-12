@@ -1,9 +1,12 @@
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import {
+  isWindowsAbsolutePath,
   isWindowsLaunchFile as isLaunchFile,
+  splitWindowsPath,
   windowsEnvKey as envKey,
   windowsEnvValue as envValue,
+  windowsLaunchExtensions,
   windowsSystemTool,
 } from "./windowsExecutable.js";
 
@@ -51,18 +54,16 @@ export function resolveWindowsCli(command: string, options: WindowsCliResolveOpt
   if (!isPath && !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(command)) {
     throw launchError(command, "EINVAL");
   }
-  const directories = isPath ? [cwd] : (envValue(env, "PATH") ?? "").split(";").filter(Boolean);
+  // A bare name is looked up in PATH only: relative entries (`.`,
+  // `.\\node_modules\\.bin`) would make the launch directory part of the search.
+  const directories = isPath
+    ? [cwd]
+    : splitWindowsPath(envValue(env, "PATH") ?? "").filter(isWindowsAbsolutePath);
   const ext = path.win32.extname(command).toLowerCase();
-  const extensions = ext
-    ? [""]
-    : (envValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
-        .split(";")
-        .filter((suffix) => LAUNCHABLE_EXTENSIONS.has(suffix.toLowerCase()));
+  const extensions = ext ? [""] : windowsLaunchExtensions(env);
   for (const directory of directories) {
     for (const suffix of extensions) {
-      // A relative PATH entry (`.\\node_modules\\.bin`) is relative to the
-      // launch directory, as it is for the shell that will run the command.
-      const candidate = path.win32.resolve(cwd, directory.replace(/^"|"$/g, ""), command + suffix);
+      const candidate = path.win32.resolve(cwd, directory, command + suffix);
       if (
         LAUNCHABLE_EXTENSIONS.has(path.win32.extname(candidate).toLowerCase()) &&
         isFile(candidate)

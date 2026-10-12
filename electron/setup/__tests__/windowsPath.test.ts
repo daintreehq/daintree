@@ -28,6 +28,12 @@ vi.mock("child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
+const invalidateExecutableCacheMock = vi.hoisted(() => vi.fn());
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsExecutable.js")>()),
+  invalidateWindowsExecutableCache: invalidateExecutableCacheMock,
+}));
+
 type ExecFileCallback = (err: Error | null, stdout: string) => void;
 
 /**
@@ -149,6 +155,25 @@ describe("windowsPath", () => {
       const { resolveWindowsRegistryPath } = await importWindowsPath();
 
       expect(await resolveWindowsRegistryPath()).toBeNull();
+    });
+
+    it("drops cached executable paths once each read settles, not before", async () => {
+      // A tool installed since the last read can sit ahead of a cached path in
+      // a PATH whose text has not changed.
+      const settle = stubRegistryDeferred({ hklm: "C:\\Windows", hkcu: "C:\\Tools" });
+      const { resolveWindowsRegistryPath } = await importWindowsPath();
+      invalidateExecutableCacheMock.mockClear();
+
+      const read = resolveWindowsRegistryPath();
+      await Promise.resolve();
+      expect(invalidateExecutableCacheMock).not.toHaveBeenCalled();
+      settle();
+      await read;
+      expect(invalidateExecutableCacheMock).toHaveBeenCalledTimes(1);
+
+      stubRegistry({ hklm: null, hkcu: null });
+      await resolveWindowsRegistryPath();
+      expect(invalidateExecutableCacheMock).toHaveBeenCalledTimes(2);
     });
 
     it("collapses concurrent callers onto one pair of registry reads", async () => {

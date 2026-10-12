@@ -190,6 +190,23 @@ describe("readGhToken", () => {
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
 
+  it("reports gh not found on Windows when PATH has none, without running a bare gh", async () => {
+    // A bare name would be looked up in the working directory first.
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    vi.stubEnv("PATH", ".;C:\\empty");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      await expect(readGhToken()).resolves.toEqual({
+        unavailable: true,
+        reason: "cli-not-found",
+      });
+      expect(childProcessMock.execFile).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", original);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("stops waiting on a PATH refresh that hangs once the caller aborts", async () => {
     environmentMock.refreshPath.mockImplementation(() => new Promise(() => {}));
     const controller = new AbortController();

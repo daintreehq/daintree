@@ -45,6 +45,23 @@ import {
 } from "../hardenedGit.js";
 import { simpleGit } from "simple-git";
 import { resetWindowsExecutableCache } from "../windowsExecutable.js";
+import { isMissingGitExecutableError } from "../../../shared/utils/gitOperationErrors.js";
+
+/** A git.exe on PATH while `run` builds a Windows instance, which now requires one. */
+async function withWindowsGitOnPath<T>(run: () => Promise<T>): Promise<T> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-win-git-"));
+  fs.writeFileSync(path.join(dir, "git.exe"), "");
+  const originalPath = process.env.PATH;
+  process.env.PATH = dir;
+  resetWindowsExecutableCache();
+  try {
+    return await run();
+  } finally {
+    process.env.PATH = originalPath;
+    resetWindowsExecutableCache();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 // The authenticated profile honours the user's own core.sshCommand; keep the
 // developer's git config out of these tests (hardenedGit.userSsh.test.ts covers it).
@@ -410,7 +427,7 @@ describe("createHardenedGit", () => {
     const origAskpass = process.env.GIT_ASKPASS;
     delete process.env.GIT_ASKPASS;
     try {
-      await createHardenedGit("/test/repo", undefined, "win32");
+      await withWindowsGitOnPath(() => createHardenedGit("/test/repo", undefined, "win32"));
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.GIT_ASKPASS).toBeUndefined();
@@ -700,10 +717,12 @@ describe("createBackgroundFetchGit", () => {
 
   it("does not set GIT_ASKPASS on Windows (no `true` binary on PATH)", async () => {
     const controller = new AbortController();
-    await createBackgroundFetchGit("/test/repo", {
-      signal: controller.signal,
-      platform: "win32",
-    });
+    await withWindowsGitOnPath(() =>
+      createBackgroundFetchGit("/test/repo", {
+        signal: controller.signal,
+        platform: "win32",
+      })
+    );
 
     // The base authenticated env() call doesn't set GIT_ASKPASS, and the
     // POSIX-only override is skipped. Only one env() call should happen.
@@ -1498,11 +1517,41 @@ describe("native git binary on Windows", () => {
     expect(lastOptions().binary).toBe(git);
   });
 
-  it("keeps simple-git's bare git when PATH has none, and off Windows", async () => {
-    process.env.PATH = path.join(root, "empty");
-    await createHardenedGit("/test/repo", undefined, "win32");
-    expect("binary" in lastOptions()).toBe(false);
+  it("fails as a missing git when PATH has none, without building an instance", async () => {
+    // A same-named file in the working directory, or under a relative PATH
+    // entry, is not git: the lookup never falls back to the bare name.
+    const repo = path.join(root, "repo");
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, "git.exe"), "");
+    const originalCwd = process.cwd();
+    process.chdir(repo);
+    process.env.PATH = `.;${path.join(root, "empty")}`;
+    try {
+      const factories = [
+        () => createHardenedGit("/test/repo", undefined, "win32"),
+        () => createAuthenticatedGit("/test/repo", { platform: "win32" }),
+        () =>
+          createBackgroundFetchGit("/test/repo", {
+            signal: new AbortController().signal,
+            platform: "win32",
+          }),
+      ];
+      for (const create of factories) {
+        const error = await create().then(
+          () => null,
+          (reason: unknown) => reason
+        );
+        expect(error).toMatchObject({ code: "ENOENT", syscall: "spawn git" });
+        // The classifier behind "Git executable not found" reads exactly this.
+        expect(isMissingGitExecutableError(error)).toBe(true);
+      }
+      expect(simpleGit).not.toHaveBeenCalled();
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
 
+  it("keeps simple-git's bare git off Windows", async () => {
     installGit("tools");
     await createHardenedGit("/test/repo", undefined, "darwin");
     expect("binary" in lastOptions()).toBe(false);

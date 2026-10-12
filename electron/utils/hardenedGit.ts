@@ -350,10 +350,14 @@ const SIMPLE_GIT_BINARY_WARNING = "Invalid value supplied for custom binary";
 
 type SimpleGitConfig = Omit<Partial<SimpleGitOptions>, "binary" | "unsafe">;
 
-/** On Windows, git's absolute path from PATH; elsewhere, or when PATH has none, simple-git's bare `git`. */
+/**
+ * On Windows, git's absolute path from PATH; elsewhere, simple-git's bare `git`.
+ * A Windows PATH without git throws spawn's `spawn git ENOENT`, which callers
+ * already report as "Git is not installed", rather than leaving simple-git to
+ * spawn the bare name from the repository directory.
+ */
 function nativeGitBinary(platform: NodeJS.Platform): string | undefined {
-  const git = executableForSpawn("git", process.env, platform);
-  return git === "git" ? undefined : git;
+  return platform === "win32" ? executableForSpawn("git", process.env, platform) : undefined;
 }
 
 /**

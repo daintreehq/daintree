@@ -31,6 +31,7 @@ import {
   resolveWindowsRegistryPath,
 } from "./windowsPath.js";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
+import { windowsSystemTool } from "../utils/windowsExecutable.js";
 import { getMaxWebGLContextCeiling } from "../utils/webglContextBudget.js";
 import { recordShellEnvironment } from "./shellEnvironmentObservation.js";
 // Deliberately the tiny pure-fs module, NOT GpuCrashMonitorService — importing
@@ -738,10 +739,14 @@ if (isSmokeTest) {
   // Verify native module (node-pty) loads and bindings work
   try {
     const pty = await import("node-pty");
-    const testProc = pty.spawn(process.platform === "win32" ? "cmd.exe" : "echo", ["smoke"], {
-      cols: 80,
-      rows: 24,
-    });
+    const testProc = pty.spawn(
+      process.platform === "win32" ? windowsSystemTool("cmd.exe") : "echo",
+      ["smoke"],
+      {
+        cols: 80,
+        rows: 24,
+      }
+    );
     testProc.kill();
     console.error("[SMOKE] CHECK: node-pty native module — OK");
   } catch (err) {

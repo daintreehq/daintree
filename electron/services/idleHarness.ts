@@ -49,6 +49,7 @@ import { store } from "../store.js";
 import { computeDefaultCachedViews } from "../utils/cachedProjectViews.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ProjectState } from "../../shared/types/project.js";
+import { executableForSpawn } from "../utils/windowsExecutable.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { ResourceProfileService } from "./ResourceProfileService.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
@@ -189,7 +190,7 @@ async function createFixtureRepo(root: string, name: string): Promise<string> {
   const repoPath = path.join(root, name);
   await mkdir(repoPath, { recursive: true });
   await writeFile(path.join(repoPath, "README.md"), `# ${name}\n`, "utf8");
-  await execFileAsync("git", ["init"], { cwd: repoPath });
+  await execFileAsync(executableForSpawn("git"), ["init"], { cwd: repoPath });
   return repoPath;
 }
 

@@ -6,19 +6,24 @@ import {
   getDefaultShellArgs,
   resetWindowsShellCache,
 } from "../terminalShell.js";
-import { resolveWindowsExecutable } from "../../../utils/windowsExecutable.js";
+import {
+  isWindowsLaunchFile,
+  resolveWindowsExecutable,
+  windowsSystemTool,
+} from "../../../utils/windowsExecutable.js";
 
 vi.mock("child_process", () => ({ execFileSync: vi.fn() }));
 
 // The PATH lookup reads the host's real filesystem; each case decides what it finds.
 vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsExecutable.js")>()),
-  resolveWindowsExecutable: vi.fn((name: string) => name),
+  resolveWindowsExecutable: vi.fn(() => null),
+  isWindowsLaunchFile: vi.fn(() => false),
 }));
 
 const execFileSyncMock = vi.mocked(execFileSync);
 const resolveWindowsExecutableMock = vi.mocked(resolveWindowsExecutable);
-const WHERE = expect.stringMatching(/^[A-Za-z]:\\.*\\System32\\where\.exe$/i);
+const isWindowsLaunchFileMock = vi.mocked(isWindowsLaunchFile);
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -116,20 +121,23 @@ describe("getDefaultShellArgs", () => {
   });
 });
 
-function throwOnce(): never {
-  throw new Error("where: not found");
+const PWSH = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
+const PATH_POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+
+function onPath(found: Record<string, string>): void {
+  resolveWindowsExecutableMock.mockImplementation((name: string) => found[name] ?? null);
 }
 
-// Shell DISCOVERY (which shell to spawn) was untested — only getDefaultShellArgs
-// (args for an already-resolved shell) had coverage. These tests drive the
-// Windows fallback chain `where pwsh.exe` → `where powershell.exe` → COMSPEC →
-// cmd.exe under a mocked execFileSync, so no real `where.exe` runs.
+// Shell DISCOVERY (which shell to spawn): PowerShell 7, then Windows PowerShell,
+// from PATH; then the in-box Windows PowerShell; then COMSPEC, then cmd.exe.
+// The PATH lookup is mocked, so no real `where.exe` or filesystem probe runs.
 describe("findWindowsShell (Windows shell discovery)", () => {
   const originalComspec = process.env.COMSPEC;
 
   beforeEach(() => {
     execFileSyncMock.mockReset();
-    resolveWindowsExecutableMock.mockImplementation((name: string) => name);
+    resolveWindowsExecutableMock.mockReset().mockImplementation(() => null);
+    isWindowsLaunchFileMock.mockReset().mockImplementation(() => false);
     resetWindowsShellCache();
   });
 
@@ -142,87 +150,74 @@ describe("findWindowsShell (Windows shell discovery)", () => {
     }
   });
 
-  it("returns pwsh.exe when 'where pwsh.exe' succeeds", () => {
-    execFileSyncMock.mockReturnValue(Buffer.from("") as never);
+  it("returns the absolute pwsh.exe PATH holds, without spawning a lookup", () => {
+    onPath({ "pwsh.exe": PWSH, "powershell.exe": PATH_POWERSHELL });
 
-    expect(findWindowsShell()).toBe("pwsh.exe");
-    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
-    expect(execFileSyncMock).toHaveBeenCalledWith(WHERE, ["pwsh.exe"], {
-      stdio: "ignore",
-      timeout: 3000,
-      windowsHide: true,
-    });
-  });
-
-  it("returns the absolute path a PATH directory holds for the shell where found", () => {
-    const pwsh = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
-    execFileSyncMock.mockReturnValue(Buffer.from("") as never);
-    resolveWindowsExecutableMock.mockImplementation((name: string) =>
-      name === "pwsh.exe" ? pwsh : name
-    );
-
-    expect(findWindowsShell()).toBe(pwsh);
+    expect(findWindowsShell()).toBe(PWSH);
     expect(resolveWindowsExecutableMock).toHaveBeenCalledWith("pwsh.exe");
+    expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 
   it("probes the shell once, however many terminals launch", () => {
     // getDefaultShell() runs per terminal spawn and per shell-quoting decision;
     // an unmemoized probe is where the reporter's 53 `where.exe` came from.
-    execFileSyncMock.mockReturnValue(Buffer.from("") as never);
+    onPath({ "pwsh.exe": PWSH });
 
-    expect(findWindowsShell()).toBe("pwsh.exe");
+    expect(findWindowsShell()).toBe(PWSH);
     // Pinned, not captured: a memo that never probed at all would make a
     // "count didn't grow" assertion pass for the wrong reason.
-    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    expect(resolveWindowsExecutableMock).toHaveBeenCalledTimes(1);
 
-    for (let i = 0; i < 20; i++) expect(findWindowsShell()).toBe("pwsh.exe");
-    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 20; i++) expect(findWindowsShell()).toBe(PWSH);
+    expect(resolveWindowsExecutableMock).toHaveBeenCalledTimes(1);
   });
 
-  it("memoizes the COMSPEC fallback too, so a PowerShell-less box stops probing", () => {
-    // The failure path costs two spawns per call, so it is the one that most
-    // needs the memo.
-    execFileSyncMock.mockImplementation(throwOnce);
+  it("falls back to powershell.exe from PATH when pwsh.exe is not on PATH", () => {
+    onPath({ "powershell.exe": PATH_POWERSHELL });
+
+    expect(findWindowsShell()).toBe(PATH_POWERSHELL);
+    expect(resolveWindowsExecutableMock.mock.calls.map(([name]) => name)).toEqual([
+      "pwsh.exe",
+      "powershell.exe",
+    ]);
+  });
+
+  it("uses the in-box Windows PowerShell by absolute path when PATH holds neither", () => {
+    // A PATH lookup that finds nothing never becomes a bare name, which spawn
+    // would look for in the working directory first.
+    const inbox = windowsSystemTool("powershell.exe");
+    isWindowsLaunchFileMock.mockImplementation((file: string) => file === inbox);
+
+    expect(findWindowsShell()).toBe(inbox);
+  });
+
+  it("falls back to an absolute COMSPEC when no PowerShell exists", () => {
     process.env.COMSPEC = "C:\\custom\\cmd.exe";
 
     expect(findWindowsShell()).toBe("C:\\custom\\cmd.exe");
-    // Both PowerShell probes ran once, and never again.
-    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the in-box cmd.exe when COMSPEC is unset or relative", () => {
+    const cmd = windowsSystemTool("cmd.exe");
+
+    delete process.env.COMSPEC;
+    expect(findWindowsShell()).toBe(cmd);
+
+    for (const comspec of ["cmd.exe", "C:cmd.exe", "\\Windows\\cmd.exe"]) {
+      resetWindowsShellCache();
+      process.env.COMSPEC = comspec;
+      expect(findWindowsShell()).toBe(cmd);
+    }
+  });
+
+  it("memoizes the fallback too, so a PowerShell-less box stops probing", () => {
+    process.env.COMSPEC = "C:\\custom\\cmd.exe";
+
+    expect(findWindowsShell()).toBe("C:\\custom\\cmd.exe");
+    expect(resolveWindowsExecutableMock).toHaveBeenCalledTimes(2);
 
     for (let i = 0; i < 5; i++) findWindowsShell();
-    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("falls back to powershell.exe when pwsh.exe is not on PATH", () => {
-    execFileSyncMock.mockImplementationOnce(throwOnce).mockReturnValue(Buffer.from("") as never);
-
-    expect(findWindowsShell()).toBe("powershell.exe");
-    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
-    expect(execFileSyncMock.mock.calls[1]?.[1]).toEqual(["powershell.exe"]);
-  });
-
-  it("falls back to COMSPEC when neither PowerShell is on PATH", () => {
-    execFileSyncMock.mockImplementation(throwOnce);
-    process.env.COMSPEC = "C:\\custom\\cmd.exe";
-
-    expect(findWindowsShell()).toBe("C:\\custom\\cmd.exe");
-    // Both `where pwsh.exe` and `where powershell.exe` must be probed, in order,
-    // before falling back to COMSPEC.
-    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
-    expect(execFileSyncMock.mock.calls[0]?.[1]).toEqual(["pwsh.exe"]);
-    expect(execFileSyncMock.mock.calls[1]?.[1]).toEqual(["powershell.exe"]);
-  });
-
-  it("falls back to cmd.exe when both PowerShell probes fail and COMSPEC is unset", () => {
-    execFileSyncMock.mockImplementation(throwOnce);
-    delete process.env.COMSPEC;
-
-    expect(findWindowsShell()).toBe("cmd.exe");
-    // Both `where pwsh.exe` and `where powershell.exe` must be probed, in order,
-    // before falling back to the hardcoded cmd.exe.
-    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
-    expect(execFileSyncMock.mock.calls[0]?.[1]).toEqual(["pwsh.exe"]);
-    expect(execFileSyncMock.mock.calls[1]?.[1]).toEqual(["powershell.exe"]);
+    expect(resolveWindowsExecutableMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -231,7 +226,7 @@ describe("getDefaultShell", () => {
 
   beforeEach(() => {
     execFileSyncMock.mockReset();
-    resolveWindowsExecutableMock.mockImplementation((name: string) => name);
+    resolveWindowsExecutableMock.mockReset().mockImplementation(() => null);
     resetWindowsShellCache();
   });
 
@@ -250,11 +245,9 @@ describe("getDefaultShell", () => {
   it("delegates to findWindowsShell on win32 (no POSIX shell resolution)", () => {
     setPlatform("win32");
     process.env.SHELL = "/bin/zsh"; // must be ignored on Windows
-    execFileSyncMock.mockReturnValue(Buffer.from("") as never);
+    onPath({ "pwsh.exe": PWSH });
 
-    expect(getDefaultShell()).toBe("pwsh.exe");
-    // Proves the win32 short-circuit: the POSIX $SHELL branch never runs.
-    expect(execFileSyncMock).toHaveBeenCalledWith(WHERE, ["pwsh.exe"], expect.anything());
+    expect(getDefaultShell()).toBe(PWSH);
   });
 
   it("returns process.env.SHELL when set on POSIX", () => {

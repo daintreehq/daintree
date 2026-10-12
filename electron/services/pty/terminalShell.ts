@@ -1,8 +1,13 @@
 // eager-import-allow: resolves the login shell via a sync fs check
 import { existsSync } from "fs";
-import { execFileSync } from "child_process";
 import { isPowerShellShell } from "../../../shared/utils/shellEscape.js";
-import { resolveWindowsExecutable, windowsSystemTool } from "../../utils/windowsExecutable.js";
+import {
+  isWindowsAbsolutePath,
+  isWindowsLaunchFile,
+  resolveWindowsExecutable,
+  windowsEnvValue,
+  windowsSystemTool,
+} from "../../utils/windowsExecutable.js";
 
 export interface ShellArgsOptions {
   nonInteractive?: boolean;
@@ -19,12 +24,10 @@ function shellQuote(value: string): string {
 
 // Which PowerShell is on PATH is a process-lifetime constant, but
 // `getDefaultShell()` is on the hot path for every terminal spawn and every
-// shell-quoting decision — so an uncached probe ran `where.exe` (twice, when
-// pwsh is absent) per launch, which is where the reporter's 53 `where.exe`
-// spawns came from (#12042). The fallback is memoized too: a machine with
-// neither PowerShell would otherwise keep paying two failed spawns forever.
-// A PATH change now needs an app restart to take effect, which is the right
-// trade for a value read this often.
+// shell-quoting decision, so the answer is memoized (an uncached `where.exe`
+// probe is where the reporter's 53 `where.exe` spawns came from, #12042). A
+// PATH change needs an app restart to take effect, which is the right trade
+// for a value read this often.
 let cachedWindowsShell: string | null = null;
 
 export function findWindowsShell(): string {
@@ -33,24 +36,20 @@ export function findWindowsShell(): string {
   return cachedWindowsShell;
 }
 
+/**
+ * Always an absolute path: PowerShell 7 or Windows PowerShell from PATH, then
+ * the in-box Windows PowerShell, then cmd.exe. Looked up in PATH only, so a
+ * same-named file in the directory Daintree was started from is never chosen.
+ */
 function probeWindowsShell(): string {
   for (const shell of ["pwsh.exe", "powershell.exe"]) {
-    try {
-      // windowsHide: libuv only sets CREATE_NO_WINDOW when the flag is passed,
-      // so without it this probe flashes a console window.
-      execFileSync(windowsSystemTool("where.exe"), [shell], {
-        stdio: "ignore",
-        timeout: 3000,
-        windowsHide: true,
-      });
-      // Absolute when a PATH directory holds it, so launching the shell never
-      // depends on which directory the launching process happens to be in.
-      return resolveWindowsExecutable(shell);
-    } catch {
-      // not on PATH or timed out, try next
-    }
+    const resolved = resolveWindowsExecutable(shell);
+    if (resolved) return resolved;
   }
-  return process.env.COMSPEC || "cmd.exe";
+  const inbox = windowsSystemTool("powershell.exe");
+  if (isWindowsLaunchFile(inbox)) return inbox;
+  const comspec = windowsEnvValue(process.env, "COMSPEC");
+  return comspec && isWindowsAbsolutePath(comspec) ? comspec : windowsSystemTool("cmd.exe");
 }
 
 /** Test-only: drop the memoized Windows shell so a case can re-probe. */

@@ -38,8 +38,15 @@ export function probeGitLfsAvailable(): Promise<boolean> {
       resolve(value);
     };
 
+    let git: string;
+    try {
+      git = executableForSpawn("git");
+    } catch {
+      done(false);
+      return;
+    }
     const child = execFile(
-      executableForSpawn("git"),
+      git,
       ["lfs", "version"],
       {
         timeout: LFS_PROBE_TIMEOUT_MS,

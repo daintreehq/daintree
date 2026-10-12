@@ -150,8 +150,9 @@ export async function readGhToken(signal?: AbortSignal): Promise<GhTokenRead> {
           settle(TOKEN_SHAPE.test(token) ? { token } : unavailable("invalid-output"));
         }
       );
-    } catch {
-      settle(unavailable("cli-failed"));
+    } catch (error) {
+      // A Windows PATH without gh throws spawn's ENOENT before anything runs.
+      settle(unavailable(classifyExecError(error, "", false)));
     }
   });
 }

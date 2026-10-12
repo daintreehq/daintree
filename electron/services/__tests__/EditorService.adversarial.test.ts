@@ -287,6 +287,65 @@ describe("EditorService adversarial", () => {
     );
   });
 
+  describe("Windows: a configured command is launched from PATH by absolute path", () => {
+    let originalPATHEXT: string | undefined;
+
+    beforeEach(() => {
+      setPlatform("win32");
+      originalPATHEXT = process.env.PATHEXT;
+      process.env.PATHEXT = ".EXE;.CMD";
+      // `.` and `bin` would be resolved against the working directory.
+      process.env.PATH = ".;bin;C:\\tools";
+    });
+
+    afterEach(() => {
+      if (originalPATHEXT === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = originalPATHEXT;
+    });
+
+    it("resolves a bare custom command, never a same-named file outside PATH", async () => {
+      mockExistingFiles(["code.exe", "bin\\code.exe", ".\\code.exe", "C:\\tools\\code.cmd"]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", undefined, undefined, {
+        id: "custom",
+        customCommand: "code",
+        customTemplate: "{file}",
+      });
+
+      expect(execaMock.execa).toHaveBeenCalledTimes(1);
+      expect(execaMock.execa.mock.calls[0]?.[0]).toBe("C:\\tools\\code.cmd");
+      const probed = fsMock.promises.stat.mock.calls.map(([p]) => p);
+      expect(probed.every((p) => /^[A-Za-z]:\\/.test(p))).toBe(true);
+    });
+
+    it("tries $EDITOR's own extension first, and skips a command PATH does not hold", async () => {
+      process.env.VISUAL = "missing-editor --wait";
+      process.env.EDITOR = "notepad++.exe";
+      mockExistingFiles(["missing-editor.exe", "C:\\tools\\notepad++.exe"]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts");
+
+      expect(execaMock.execa.mock.calls.map(([program]) => program)).toEqual([
+        "C:\\tools\\notepad++.exe",
+      ]);
+    });
+
+    it("passes a configured path through unchanged", async () => {
+      const editor = "D:\\Apps\\Editor\\editor.exe";
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", undefined, undefined, {
+        id: "custom",
+        customCommand: editor,
+        customTemplate: "{file}",
+      });
+
+      expect(execaMock.execa.mock.calls[0]?.[0]).toBe(editor);
+    });
+  });
+
   it("VISUAL=nvim.exe on Windows is detected as a terminal editor and skipped", async () => {
     setPlatform("win32");
     process.env.VISUAL = "nvim.exe";

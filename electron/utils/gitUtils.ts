@@ -139,12 +139,19 @@ class GitExecError extends Error {
 
 function execGit(args: string[], cwd: string, timeout: number): Promise<string> {
   return new Promise((resolve, reject) => {
+    let git: string;
+    try {
+      git = executableForSpawn("git");
+    } catch (error) {
+      reject(new GitExecError(error, ""));
+      return;
+    }
     // windowsHide keeps the probe from flashing a console window: libuv only
     // sets CREATE_NO_WINDOW when the flag is passed, and Windows 11's default
     // "let Windows decide" terminal host escalates an unhidden spawn into a
     // full Windows Terminal window (#12042).
     execFile(
-      executableForSpawn("git"),
+      git,
       args,
       {
         cwd,

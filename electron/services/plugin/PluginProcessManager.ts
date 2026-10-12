@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn as nodeSpawn } from "node:child_process";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
+import { executableForSpawn } from "../../utils/windowsExecutable.js";
 import {
   PLUGIN_PROCESS_KILL_GRACE_MS,
   PLUGIN_PROCESS_MAX_CONCURRENT,
@@ -627,7 +628,7 @@ export class PluginProcessManager {
       backend = await spawner(
         {
           mode: "pty",
-          command: managed.command,
+          command: spawnProgram(managed.command, managed.env),
           args: managed.args,
           cwd: managed.cwd,
           env: managed.env,
@@ -771,7 +772,7 @@ export class PluginProcessManager {
     try {
       child = this.spawner({
         mode,
-        command: managed.command,
+        command: spawnProgram(managed.command, managed.env),
         args: managed.args,
         cwd: managed.cwd,
         env: managed.env,
@@ -1301,6 +1302,18 @@ export class PluginProcessManager {
       restartCount: managed.restartCount,
     };
   }
+}
+
+/**
+ * The program a spawn starts. On Windows a bare name is resolved from PATH
+ * only (the PATH the child gets), because given a bare name process creation
+ * looks in the working directory first, and here that is a plugin or worktree
+ * directory. A name PATH does not hold fails as spawn's ENOENT and is recorded
+ * as a start failure. A path, absolute or relative, is the plugin's own choice
+ * and passes through, as does every name off Windows.
+ */
+function spawnProgram(command: string, env: Readonly<Record<string, string>>): string {
+  return process.platform === "win32" ? executableForSpawn(command, minimalSpawnEnv(env)) : command;
 }
 
 const defaultSpawner: ProcessSpawner = (config) => {

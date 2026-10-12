@@ -5,6 +5,7 @@ import { openWithDefaultApp } from "../utils/openPath.js";
 import { linuxDesktopAppEnv } from "./pty/EnvironmentFilter.js";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "../../shared/types/editor.js";
 import { withPathProbeSlot } from "../utils/findOnPath.js";
+import { isWindowsAbsolutePath, splitWindowsPath } from "../utils/windowsExecutable.js";
 
 interface EditorDefinition {
   id: KnownEditorId;
@@ -271,14 +272,22 @@ function jetbrainsToolboxScriptDirs(): string[] {
 }
 
 function binaryCandidates(binary: string, extraDirs: string[]): string[] {
-  const p = process.platform === "win32" ? path.win32 : path.posix;
-  const pathDirs = (process.env.PATH ?? "").split(p.delimiter).filter(Boolean);
+  const isWindows = process.platform === "win32";
+  const p = isWindows ? path.win32 : path.posix;
+  // On Windows only absolute PATH entries: a relative one (`.`) would be
+  // resolved against the working directory.
+  const pathDirs = isWindows
+    ? splitWindowsPath(process.env.PATH ?? "").filter(isWindowsAbsolutePath)
+    : (process.env.PATH ?? "").split(p.delimiter).filter(Boolean);
   const searchDirs = [...extraDirs, ...pathDirs];
 
-  const extensions =
-    process.platform === "win32"
-      ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";").map((e) => e.toLowerCase())
-      : [""];
+  // A name that already has an extension (`notepad++.exe`) is tried as given first.
+  const extensions = isWindows
+    ? [
+        ...(p.extname(binary) ? [""] : []),
+        ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";").map((e) => e.toLowerCase()),
+      ]
+    : [""];
 
   const candidates: string[] = [];
   for (const dir of searchDirs) {
@@ -319,6 +328,21 @@ async function findExecutable(def: EditorDefinition): Promise<string | null> {
     for (const candidate of binaryCandidates(binary, extraDirs)) {
       if (await withPathProbeSlot(() => isExecutableFile(candidate))) return candidate;
     }
+  }
+  return null;
+}
+
+/**
+ * The program to launch for an editor command the user configured (a custom
+ * command, `$VISUAL`, `$EDITOR`). On Windows a bare name is looked up in PATH
+ * first, because execa, like process creation, would otherwise look in the
+ * working directory before PATH; null when PATH has none, which the caller
+ * treats as a failed launch. A path, and every name off Windows, passes through.
+ */
+async function launchProgram(binary: string): Promise<string | null> {
+  if (process.platform !== "win32" || /[\\/:]/.test(binary)) return binary;
+  for (const candidate of binaryCandidates(binary, [])) {
+    if (await withPathProbeSlot(() => isExecutableFile(candidate))) return candidate;
   }
   return null;
 }
@@ -439,9 +463,11 @@ export async function openFile(
   const { execa } = await import("execa");
 
   const launchEditor = async (binary: string, args: string[]): Promise<boolean> => {
+    const program = await launchProgram(binary);
+    if (program === null) return false;
     try {
       const desktopEnv = linuxDesktopAppEnv();
-      const child = execa(binary, args, {
+      const child = execa(program, args, {
         detached: true,
         stdio: "ignore",
         cleanup: false,

@@ -54,10 +54,29 @@ describe("Windows CLI resolution", () => {
     expect(resolveWindowsCli("agent", options)).toBe("C:\\override\\agent.EXE");
   });
 
-  it("resolves a relative PATH entry against the launch directory", () => {
-    const options = filesystem({ "C:\\project\\node_modules\\.bin\\agent.EXE": "" });
-    options.env = { Path: ".\\node_modules\\.bin;C:\\tools", PATHEXT: ".EXE" };
-    expect(resolveWindowsCli("agent", options)).toBe("C:\\project\\node_modules\\.bin\\agent.EXE");
+  it("looks a bare name up in absolute PATH entries only, never the launch directory", () => {
+    const options = filesystem({
+      "C:\\project\\agent.EXE": "",
+      "C:\\project\\node_modules\\.bin\\agent.EXE": "",
+      "C:\\tools\\agent.CMD": "",
+    });
+    options.env = { Path: ".;.\\node_modules\\.bin;C:tools;C:\\tools", PATHEXT: ".EXE;.CMD" };
+    expect(resolveWindowsCli("agent", options)).toBe("C:\\tools\\agent.CMD");
+
+    options.env = { Path: ".;.\\node_modules\\.bin", PATHEXT: ".EXE;.CMD" };
+    expect(() => resolveWindowsCli("agent", options)).toThrow(
+      expect.objectContaining({ code: "ENOENT" })
+    );
+    // An explicit relative path is still the caller's choice.
+    expect(resolveWindowsCli(".\\node_modules\\.bin\\agent", options)).toBe(
+      "C:\\project\\node_modules\\.bin\\agent.EXE"
+    );
+  });
+
+  it("keeps a quoted semicolon inside one PATH directory", () => {
+    const options = filesystem({ "C:\\a;b\\agent.EXE": "" });
+    options.env = { Path: '"C:\\a;b";C:\\tools', PATHEXT: ".EXE" };
+    expect(resolveWindowsCli("agent", options)).toBe("C:\\a;b\\agent.EXE");
   });
 
   it("preserves structured missing-file errors and rejects drive-relative commands", () => {

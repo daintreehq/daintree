@@ -5,6 +5,12 @@ const spawnMock = vi.hoisted(() => vi.fn());
 const getAgentConfigMock = vi.hoisted(() => vi.fn());
 
 vi.mock("child_process", () => ({ spawn: spawnMock }));
+// Windows-path files for the PATH lookup a Windows install makes.
+vi.mock("node:fs", async (importOriginal) =>
+  (await import("../../utils/__tests__/helpers/virtualWindowsFs.js")).withVirtualWindowsFiles(
+    await importOriginal()
+  )
+);
 vi.mock("../../../shared/config/agentRegistry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../shared/config/agentRegistry.js")>();
   return {
@@ -18,6 +24,19 @@ import {
   runAgentInstall,
   resetInFlightInstalls,
 } from "../AgentInstallService.js";
+import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
+
+const NODE_DIR = "C:\\Program Files\\nodejs";
+const WINDOWS_APPS = "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps";
+
+/** A Windows PATH holding npm's shim and winget, with `.` ahead of them. */
+function windowsInstallPath(): void {
+  process.env.PATH = `.;${NODE_DIR};${WINDOWS_APPS}`;
+  virtualWindowsFiles.set({
+    [`${NODE_DIR}\\npm.cmd`]: "",
+    [`${WINDOWS_APPS}\\winget.exe`]: "",
+  });
+}
 
 interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
@@ -45,6 +64,8 @@ function setPlatform(p: NodeJS.Platform) {
 }
 
 describe("AgentInstallService adversarial", () => {
+  const originalPath = process.env.PATH;
+
   beforeEach(() => {
     vi.clearAllMocks();
     setPlatform("linux");
@@ -52,6 +73,9 @@ describe("AgentInstallService adversarial", () => {
 
   afterEach(() => {
     setPlatform(originalPlatform);
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    virtualWindowsFiles.clear();
   });
 
   describe("isBlockExecutable — manual-only detection", () => {
@@ -152,11 +176,12 @@ describe("AgentInstallService adversarial", () => {
       expect(spawnMock.mock.calls.some(([bin]) => bin === "wget")).toBe(false);
     });
 
-    it("Windows npm installs append suppression flags and use shell:true with CI env", async () => {
+    it("Windows npm installs run npm.cmd from PATH through cmd.exe, with flags and CI env", async () => {
       setPlatform("win32");
+      windowsInstallPath();
       getAgentConfigMock.mockReturnValue({
         install: {
-          byOs: { windows: [{ commands: ["npm install -g foo"] }] },
+          byOs: { windows: [{ commands: ["npm install -g @scope/foo"] }] },
         },
       });
       const child = makeFakeChild();
@@ -170,9 +195,18 @@ describe("AgentInstallService adversarial", () => {
       const [bin, args, opts] = spawnMock.mock.calls[0] as [
         string,
         string[],
-        { shell: boolean; env: Record<string, string>; windowsHide?: boolean },
+        {
+          shell: boolean;
+          env: Record<string, string>;
+          windowsHide?: boolean;
+          windowsVerbatimArguments?: boolean;
+        },
       ];
-      expect(bin).toBe("npm");
+      // The in-box cmd.exe by absolute path, never a bare `npm` or `cmd.exe`.
+      expect(bin).toMatch(/^[A-Za-z]:\\.*\\System32\\cmd\.exe$/i);
+      expect(args.slice(0, 4)).toEqual(["/d", "/s", "/v:off", "/c"]);
+      const line = args[4]!;
+      expect(line.startsWith(`""${NODE_DIR}\\npm.cmd" install -g @scope/foo `)).toBe(true);
       for (const flag of [
         "--loglevel=error",
         "--no-progress",
@@ -180,15 +214,51 @@ describe("AgentInstallService adversarial", () => {
         "--no-fund",
         "--no-update-notifier",
       ]) {
-        expect(args).toContain(flag);
+        expect(line).toContain(` ${flag}`);
       }
       // --silent would swallow npm's own error report, the only stderr the
       // install step shows when the command fails.
-      expect(args).not.toContain("--silent");
-      expect(opts.shell).toBe(true);
+      expect(line).not.toContain("--silent");
+      expect(opts.shell).toBe(false);
+      expect(opts.windowsVerbatimArguments).toBe(true);
       expect(opts.windowsHide).toBe(true);
       expect(opts.env.CI).toBe("1");
       expect(opts.env.NO_UPDATE_NOTIFIER).toBe("1");
+    });
+
+    it("Windows installs never start a program PATH does not hold", async () => {
+      // `.` comes first on this PATH; a same-named file there must not run.
+      setPlatform("win32");
+      process.env.PATH = `.;${NODE_DIR}`;
+      virtualWindowsFiles.set({});
+      getAgentConfigMock.mockReturnValue({
+        install: { byOs: { windows: [{ commands: ["npm install -g foo"] }] } },
+      });
+      const onProgress = vi.fn();
+
+      const result = await runAgentInstall({ agentId: "a", jobId: "j1" }, onProgress);
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.exitCode).toBe(1);
+      expect(onProgress).toHaveBeenCalledWith({
+        jobId: "j1",
+        chunk: "spawn npm ENOENT\n",
+        stream: "stderr",
+      });
+    });
+
+    it("Windows refuses to hand cmd.exe an argument it would read as syntax", async () => {
+      setPlatform("win32");
+      windowsInstallPath();
+      getAgentConfigMock.mockReturnValue({
+        install: { byOs: { windows: [{ commands: ["npm install -g foo&calc"] }] } },
+      });
+
+      const result = await runAgentInstall({ agentId: "a", jobId: "j1" }, vi.fn());
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
     });
 
     it("forwards progress events with correct stream + jobId across multiple commands in order", async () => {
@@ -619,6 +689,7 @@ describe("AgentInstallService — elevation and prerequisite targets (#11763)", 
   describe("windows git command", () => {
     it("passes the agreement flags winget needs under piped stdio", async () => {
       setPlatform("win32");
+      windowsInstallPath();
       const child = makeFakeChild();
       spawnMock.mockReturnValue(child);
 
@@ -628,7 +699,8 @@ describe("AgentInstallService — elevation and prerequisite targets (#11763)", 
       await promise;
 
       const args = spawnMock.mock.calls[0]?.[1] as string[];
-      expect(spawnMock.mock.calls[0]?.[0]).toBe("winget");
+      // An .exe from PATH starts directly, by absolute path.
+      expect(spawnMock.mock.calls[0]?.[0]).toBe(`${WINDOWS_APPS}\\winget.exe`);
       expect(args).toContain("--accept-source-agreements");
       expect(args).toContain("--accept-package-agreements");
     });

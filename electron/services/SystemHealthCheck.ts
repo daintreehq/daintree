@@ -1,10 +1,10 @@
 import { execFile } from "child_process";
 import {
+  cliSpawnTarget,
   isShellInertInvocation,
-  isWindowsShellShim,
   pickWindowsLaunchable,
 } from "../utils/windowsCliSpawn.js";
-import { executableForSpawn, windowsSystemTool } from "../utils/windowsExecutable.js";
+import { windowsWhere } from "../utils/windowsExecutable.js";
 import { promisify } from "util";
 import * as path from "path";
 import * as semver from "semver";
@@ -134,63 +134,53 @@ async function hasXcodeCommandLineTools(): Promise<boolean> {
   }
 }
 
-/** Whether the PATH lookup landed on a Windows shell shim. */
 /**
- * Runs a tool's version command. On Windows the entry point for a lot of tools
- * is a `.cmd`/`.bat` shim (`npm.cmd`, and anything installed as an npm global
- * bin), which current Node refuses to spawn without a shell — it rejects with
- * EINVAL. That used to be invisible because a failed version command still
- * reported the tool as available; now that a failure means unavailable, the
- * shim has to run through a shell or every such tool reads as missing.
- *
- * The shell is used only when the resolved path is genuinely a shim — a fact
- * main established from `where`, not something a caller can assert. A tool that
- * can be spawned directly is never re-run through a shell just because it
- * exited nonzero, which would both double-execute it and start interpreting its
- * arguments as shell syntax. Because a shim leaves no argv-safe way to invoke it
- * (spawning `cmd.exe` directly still hands cmd the raw line), the tokens are
- * checked instead: an invocation that isn't inert never reaches the shell, and
- * the caller sees the same unavailable result as any other failed probe.
+ * Runs a tool's version command. On Windows it runs the very file the PATH
+ * lookup found, by absolute path, through `cliSpawnTarget`: an `.exe` is
+ * spawned directly, an npm shim is unwrapped to Node and its script, and any
+ * other `.cmd`/`.bat` (`npm.cmd` itself) goes to cmd.exe only when every
+ * argument is inert, so a caller-supplied spec cannot smuggle shell syntax in.
+ * Current Node refuses to spawn a shim without a shell, and a failed version
+ * command means unavailable, so without this every such tool would read as
+ * missing.
  */
 async function runVersionCommand(
   command: string,
   versionArgs: string[],
   resolvedPath: string
 ): Promise<string> {
-  const useShell = process.platform === "win32" && isWindowsShellShim(resolvedPath);
-  if (useShell && !isShellInertInvocation(command, versionArgs)) {
-    throw new Error(`Refusing to run "${command}" through a shell: unsafe version arguments`);
+  if (process.platform !== "win32") {
+    const { stdout } = await execFileAsync(command, versionArgs, {
+      encoding: "utf8",
+      timeout: CHECK_TIMEOUT_MS,
+    });
+    return stdout;
   }
-  const file = useShell ? command : executableForSpawn(command);
-  const { stdout } = await execFileAsync(file, versionArgs, {
+  const target = cliSpawnTarget(resolvedPath, versionArgs, "win32", { env: process.env });
+  const { stdout } = await execFileAsync(target.command, target.args, {
     encoding: "utf8",
     timeout: CHECK_TIMEOUT_MS,
-    ...(useShell ? { shell: true, windowsHide: true } : {}),
+    windowsHide: true,
+    windowsVerbatimArguments: target.windowsVerbatimArguments,
+    env: { ...process.env, ...target.env },
   });
   return stdout;
 }
 
 /**
- * Where `command` resolves on PATH, or null. POSIX looks it up in-process —
- * the external `which` is absent from minimal Fedora and Arch installs, and
- * relying on it read every tool there as missing. Windows keeps `where`, whose
- * output (first line) also feeds the shell-shim detection below.
+ * Where PATH has `command`, or null. POSIX looks it up in-process — the
+ * external `which` is absent from minimal Fedora and Arch installs, and relying
+ * on it read every tool there as missing. On Windows only absolute PATH entries
+ * count (see `windowsWhere`), and `where` lists npm's extensionless sh script
+ * before the `.cmd` beside it (Node's own installer ships npm that way), of
+ * which only the `.cmd` runs.
  */
 async function resolveOnPath(command: string): Promise<string | null> {
   if (process.platform !== "win32") {
     return findOnPath(command, { timeoutMs: CHECK_TIMEOUT_MS });
   }
-  try {
-    const { stdout } = await execFileAsync(windowsSystemTool("where.exe"), [command], {
-      encoding: "utf8",
-      timeout: CHECK_TIMEOUT_MS,
-    });
-    // `where` lists npm's extensionless sh script before the `.cmd` beside it
-    // (Node's own installer ships npm that way), and only the `.cmd` runs.
-    return pickWindowsLaunchable(stdout.split(/\r?\n/)) ?? stdout;
-  } catch {
-    return null;
-  }
+  const where = await windowsWhere(command, process.env, { timeoutMs: CHECK_TIMEOUT_MS });
+  return where.ok ? (pickWindowsLaunchable(where.paths) ?? null) : null;
 }
 
 export async function checkPrerequisite(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult> {

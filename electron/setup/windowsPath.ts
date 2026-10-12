@@ -15,7 +15,7 @@ import { execFile } from "child_process";
 import { existsSync } from "fs";
 import os from "os";
 import path from "path";
-import { windowsSystemTool } from "../utils/windowsExecutable.js";
+import { invalidateWindowsExecutableCache, windowsSystemTool } from "../utils/windowsExecutable.js";
 
 // A terminal spawn re-reads the registry at most this often. `reg.exe` is two
 // process spawns (30-100ms+ each on Windows once Defender inspects them), which
@@ -211,6 +211,9 @@ async function runResolveWindowsRegistryPath(): Promise<string | null> {
     // next call to join it and get the previous answer.
     lastRegistryReadAt = performance.now();
     registryReadPromise = null;
+    // A tool installed since the last read can now sit ahead of a cached
+    // absolute path in an unchanged PATH, so every PATH lookup starts over.
+    invalidateWindowsExecutableCache();
   }
 }
 

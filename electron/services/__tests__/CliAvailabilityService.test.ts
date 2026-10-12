@@ -14,6 +14,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { logBuffer } from "../LogBuffer.js";
 import { getLogLevelOverrides, setLogLevelOverrides } from "../../utils/logger.js";
 import { findAllOnPath } from "../../utils/findOnPath.js";
+import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
 
 // Mock child_process. The service's subprocess probes (`where.exe`,
 // npm-global, WSL) run through async `execFile` — mock it or the probes will
@@ -84,6 +85,13 @@ vi.mock("child_process", () => ({
 vi.mock("../../utils/findOnPath.js", () => ({
   findAllOnPath: vi.fn(pathFixtureLookup),
 }));
+
+// Windows-path files for the npm shim lookup, which reads the disk.
+vi.mock("node:fs", async (importOriginal) =>
+  (await import("../../utils/__tests__/helpers/virtualWindowsFs.js")).withVirtualWindowsFiles(
+    await importOriginal()
+  )
+);
 
 // Mock os.homedir() to return a stable Unix-style path. On Windows runners
 // the real homedir is `C:\Users\<user>`, which (after join with `~/...`
@@ -200,8 +208,14 @@ describe("CliAvailabilityService", () => {
     mockedFindAllOnPath.mockImplementation(pathFixtureLookup);
   });
 
+  // Windows cases point PATH at the directories their `where` output names.
+  const originalPath = process.env.PATH;
+
   afterEach(() => {
     vi.restoreAllMocks();
+    virtualWindowsFiles.clear();
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
     for (const key of envKeysToClear) {
       if (savedEnv[key] === undefined) {
         delete process.env[key];
@@ -471,11 +485,12 @@ describe("CliAvailabilityService", () => {
 
         await service.checkAvailability();
 
-        expect(mockedExecFile).toHaveBeenCalledWith(
+        // Run from System32, never from the directory Daintree was started in,
+        // which `where` would search ahead of PATH.
+        expect(mockedExecFileSync).toHaveBeenCalledWith(
           expect.stringMatching(/^[A-Za-z]:\\.*\\System32\\where\.exe$/i),
           expect.any(Array),
-          expect.objectContaining({ timeout: expect.any(Number), windowsHide: true }),
-          expect.any(Function)
+          expect.objectContaining({ cwd: expect.stringMatching(/^[A-Za-z]:\\.*\\System32$/i) })
         );
         expect(mockedFindAllOnPath).not.toHaveBeenCalled();
       } finally {
@@ -1401,17 +1416,28 @@ describe("CliAvailabilityService", () => {
 
       const originalPlatform = process.platform;
       Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      // npm is a `.cmd` on Windows, found in PATH and run through cmd.exe by
+      // absolute path; Node's own npm.cmd is not a shim that can be unwrapped.
+      const npmCmd = "C:\\Program Files\\nodejs\\npm.cmd";
+      process.env.PATH = "C:\\Program Files\\nodejs";
+      virtualWindowsFiles.set({
+        [npmCmd]:
+          '@ECHO OFF\r\nSETLOCAL\r\n"%~dp0\\node.exe" "%~dp0\\npm-cli.js" %*\r\nCALL :x\r\n',
+      });
       try {
         mockedExecFileSync.mockImplementation(() => {
           throw Object.assign(new Error("not found"), { code: "ENOENT" });
         });
 
         mockedExecFile.mockImplementation(((...args: unknown[]) => {
-          const file = args[0] as string;
+          const [file, fileArgs] = args as [string, string[]];
           const callback = args.find(
             (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
           );
-          if (file === "npm") {
+          if (
+            /\\System32\\cmd\.exe$/i.test(file) &&
+            fileArgs.at(-1)?.toLowerCase().includes(npmCmd.toLowerCase())
+          ) {
             queueMicrotask(() => callback?.(null, "C\\:\\Users\\test\\AppData\\Roaming\\npm\n"));
           } else {
             const err = Object.assign(new Error("not found"), { code: "ENOENT" });
@@ -1433,6 +1459,38 @@ describe("CliAvailabilityService", () => {
         const details = service.getDetails();
         expect(details!.gemini?.via).toBe("npm-global");
         expect(details!.gemini?.resolvedPath).toBe(geminiShim);
+        const npmCall = mockedExecFile.mock.calls.find((c) => String(c[0]).endsWith("cmd.exe"));
+        // PATHEXT spells the extension the resolver appended (`.CMD` by default).
+        expect((npmCall?.[1] as string[]).map((arg) => arg.toLowerCase())).toEqual([
+          "/d",
+          "/s",
+          "/v:off",
+          "/c",
+          `""${npmCmd.toLowerCase()}" config get prefix"`,
+        ]);
+        expect(npmCall?.[2]).toEqual(expect.objectContaining({ windowsVerbatimArguments: true }));
+        expect(mockedExecFile.mock.calls.some((c) => c[0] === "npm")).toBe(false);
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+      }
+    });
+
+    it("never runs a bare npm on Windows when PATH has none", async () => {
+      // A bare name would be looked up in the working directory first.
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.PATH = ".;C:\\tools";
+      try {
+        mockedExecFileSync.mockImplementation(() => {
+          throw Object.assign(new Error("not found"), { code: "ENOENT" });
+        });
+
+        const result = await service.checkAvailability();
+
+        expect(result.gemini).toBe("missing");
+        const spawned = mockedExecFile.mock.calls.map((c) => String(c[0]));
+        expect(spawned.every((file) => /^[A-Za-z]:\\/.test(file))).toBe(true);
+        expect(spawned.some((file) => /npm/i.test(file))).toBe(false);
       } finally {
         Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
       }
@@ -2110,6 +2168,7 @@ describe("CliAvailabilityService", () => {
     it("dedupes Windows where.exe results that share a directory (.cmd + .exe)", async () => {
       const originalPlatform = process.platform;
       Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.PATH = "C:\\Users\\x\\AppData\\Roaming\\npm";
       try {
         mockedExecFileSync.mockImplementation((_file, args) => {
           const argv = args as string[] | undefined;
@@ -2146,6 +2205,7 @@ describe("CliAvailabilityService", () => {
     it("prefers Windows .cmd shims when where.exe lists an extensionless npm shim first", async () => {
       const originalPlatform = process.platform;
       Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.PATH = "C:\\npm\\prefix\\";
       try {
         mockedExecFileSync.mockImplementation((_file, args) => {
           const argv = args as string[] | undefined;
@@ -2169,6 +2229,72 @@ describe("CliAvailabilityService", () => {
           (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
         );
         expect(toastCalls).toHaveLength(0);
+      } finally {
+        Object.defineProperty(process, "platform", {
+          value: originalPlatform,
+          writable: true,
+        });
+      }
+    });
+
+    it("counts only where.exe matches in absolute PATH entries, in PATH order", async () => {
+      // `where` searches its working directory before PATH; a match there, or
+      // under a relative PATH entry, is not an install.
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.PATH = ".;tools;C:\\Users\\x\\scoop\\shims;C:\\Users\\x\\AppData\\Roaming\\npm";
+      try {
+        mockedExecFileSync.mockImplementation((_file, args) => {
+          const argv = args as string[] | undefined;
+          if (argv?.[0] === "claude") {
+            return Buffer.from(
+              [
+                "C:\\Windows\\System32\\claude.exe",
+                "C:\\Windows\\System32\\tools\\claude.exe",
+                "C:\\Users\\x\\AppData\\Roaming\\npm\\claude.cmd",
+                "C:\\Users\\x\\scoop\\shims\\claude.exe",
+                "",
+              ].join("\r\n")
+            );
+          }
+          return Buffer.from("");
+        });
+
+        await service.checkAvailability();
+
+        const detail = service.getDetails()!.claude!;
+        expect(detail.resolvedPath).toBe("C:\\Users\\x\\scoop\\shims\\claude.exe");
+        expect(detail.allResolvedPaths).toEqual([
+          "C:\\Users\\x\\scoop\\shims\\claude.exe",
+          "C:\\Users\\x\\AppData\\Roaming\\npm\\claude.cmd",
+        ]);
+        const toastCalls = mockedBroadcast.mock.calls.filter(
+          (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+        );
+        expect(toastCalls).toHaveLength(1);
+      } finally {
+        Object.defineProperty(process, "platform", {
+          value: originalPlatform,
+          writable: true,
+        });
+      }
+    });
+
+    it("reports an agent missing when where.exe only finds it outside PATH", async () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.PATH = ".;C:\\tools";
+      try {
+        mockedExecFileSync.mockImplementation((_file, args) => {
+          const argv = args as string[] | undefined;
+          if (argv?.[0] === "claude") return Buffer.from("C:\\Windows\\System32\\claude.exe\r\n");
+          return Buffer.from("");
+        });
+
+        const result = await service.checkAvailability();
+
+        expect(result.claude).toBe("missing");
+        expect(service.getDetails()!.claude!.resolvedPath).toBeNull();
       } finally {
         Object.defineProperty(process, "platform", {
           value: originalPlatform,

@@ -255,6 +255,31 @@ index 1a2b3c4..5d6e7f8 100644
     );
   });
 
+  it("reports a git missing from PATH as not installed, and finds it once installed", async () => {
+    // On Windows the factory itself fails when PATH holds no git.
+    const missing = Object.assign(new Error("spawn git ENOENT"), {
+      code: "ENOENT",
+      syscall: "spawn git",
+    });
+    createHardenedGitMock.mockRejectedValueOnce(missing);
+    gitClientMock.branch.mockResolvedValue({
+      branches: { main: { current: true, commit: "1" } },
+    });
+    const service = new GitService(tempDir);
+
+    const caught = await service.listBranches().then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(caught).toBeInstanceOf(GitOperationError);
+    expect((caught as GitOperationError).reason).toBe("git-not-installed");
+
+    // The failed build is not kept for the life of the service.
+    const branches = await service.listBranches();
+    expect(branches.map((b) => b.name)).toEqual(["main"]);
+    expect(createHardenedGitMock).toHaveBeenCalledTimes(2);
+  });
+
   it("listBranches classifies authentication failures", async () => {
     gitClientMock.branch.mockRejectedValue(
       new Error("remote: Authentication failed for 'https://github.com/foo/bar.git/'")

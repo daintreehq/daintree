@@ -106,24 +106,34 @@ async function probeGhAuth(externalSignal?: AbortSignal): Promise<CloneAuthProbe
     }
     const timer = setTimeout(() => controller.abort(), GH_AUTH_PROBE_TIMEOUT_MS);
 
+    const finish = (err: unknown) => {
+      clearTimeout(timer);
+      if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
+      resolve(
+        err
+          ? { authenticated: false, reason: "gh CLI unavailable or not signed in" }
+          : { authenticated: true }
+      );
+    };
+
     const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
+    let gh: string;
+    try {
+      gh = executableForSpawn("gh", env);
+    } catch (error) {
+      // A Windows PATH without gh: unavailable, exactly as a failed spawn reads.
+      finish(error);
+      return;
+    }
     execFile(
-      executableForSpawn("gh", env),
+      gh,
       ["auth", "status"],
       {
         env,
         signal: controller.signal,
         windowsHide: true,
       },
-      (err) => {
-        clearTimeout(timer);
-        if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
-        resolve(
-          err
-            ? { authenticated: false, reason: "gh CLI unavailable or not signed in" }
-            : { authenticated: true }
-        );
-      }
+      finish
     );
   });
 }

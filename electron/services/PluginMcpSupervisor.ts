@@ -14,6 +14,7 @@ import {
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { McpServerContributionSchema } from "../schemas/plugin.js";
 import { minimalWorkerEnv } from "../utils/minimalSpawnEnv.js";
+import { resolveWindowsCommand, windowsExecutableNotFound } from "../utils/windowsExecutable.js";
 import { killWindowsProcessTree, liveChildTreeTarget } from "../utils/windowsTreeKill.js";
 import {
   drainPendingChildTrees,
@@ -1243,16 +1244,33 @@ function plainError(code: string, message: string): Error & { code: string } {
   return err;
 }
 
+/**
+ * The program an MCP server starts. On Windows a bare name (`node`, `npx`) is
+ * resolved from the server's own PATH alone: execa would otherwise look in the
+ * working directory first, which is the plugin's directory. A `.cmd` shim such
+ * as `npx.cmd` counts, and execa runs it through cmd.exe with its own escaping.
+ * A name PATH does not hold fails as spawn's ENOENT. A path is the manifest's
+ * own choice and passes through, as does every name off Windows.
+ */
+export function mcpServerProgram(command: string, env: NodeJS.ProcessEnv): string {
+  if (process.platform !== "win32" || /[\\/:]/.test(command)) return command;
+  const file = resolveWindowsCommand(command, env);
+  if (file === null) throw windowsExecutableNotFound(command);
+  return file;
+}
+
 const defaultSpawner: SubprocessSpawner = async (config) => {
   const { execa } = await import("execa");
-  const subprocess = execa(config.command, config.args, {
+  // The server gets the shared allowlist (with proxy/CA settings, since these
+  // servers make outbound HTTPS) plus what its manifest `env` forwards — not
+  // the rest of the host environment, where API tokens and NODE_OPTIONS live
+  // (#12616).
+  const env = minimalWorkerEnv(config.env);
+  const subprocess = execa(mcpServerProgram(config.command, env), config.args, {
     cwd: config.cwd,
-    // The server gets the shared allowlist (with proxy/CA settings, since these
-    // servers make outbound HTTPS) plus what its manifest `env` forwards — not
-    // the rest of the host environment, where API tokens and NODE_OPTIONS live
-    // (#12616). `extendEnv: false` is load-bearing: execa otherwise merges
-    // `env` back onto the full `process.env`.
-    env: minimalWorkerEnv(config.env),
+    // `extendEnv: false` is load-bearing: execa otherwise merges `env` back
+    // onto the full `process.env`.
+    env,
     extendEnv: false,
     stdio: ["pipe", "pipe", "pipe"],
     // Inert once `detached` is set; the supervisor's own shutdown, which app

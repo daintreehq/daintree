@@ -118,6 +118,13 @@ vi.mock("../../utils.js", () => ({
   },
 }));
 
+const windowsWhereMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsExecutable.js")>()),
+  windowsWhere: windowsWhereMock,
+}));
+
 import { CHANNELS } from "../../channels.js";
 import { registerSystemShellHandlers } from "../systemShell.js";
 import { SystemShowItemInFolderUnconfinedPayloadSchema } from "../../../schemas/ipc.js";
@@ -889,18 +896,44 @@ describe("system:check-command", () => {
     expect(await handler(fakeEvent, "git;rm")).toBe(false);
     expect(findOnPathMock).not.toHaveBeenCalled();
   });
+});
 
-  it("still asks where.exe on windows", async () => {
+describe("system:check-command on Windows", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    execFileMock.mockImplementation(
-      (_file: string, _args: string[], _options: unknown, callback: (err: Error | null) => void) =>
-        callback(null)
-    );
+    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    cleanup();
+    Object.defineProperty(process, "platform", originalPlatform);
+  });
+
+  it("reports a command available only when PATH holds it", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
 
-    expect(await handler(fakeEvent, "winget")).toBe(true);
-    expect(execFileMock.mock.calls[0]?.slice(0, 2)).toEqual(["where", ["winget"]]);
-    expect(findOnPathMock).not.toHaveBeenCalled();
+    windowsWhereMock.mockResolvedValueOnce({ ok: true, paths: ["C:\\tools\\gh.exe"] });
+    await expect(handler(fakeEvent, "gh")).resolves.toBe(true);
+    expect(windowsWhereMock).toHaveBeenLastCalledWith("gh");
+
+    // `where` matched only outside PATH (its working directory), so nothing is left.
+    windowsWhereMock.mockResolvedValueOnce({ ok: true, paths: [] });
+    await expect(handler(fakeEvent, "gh")).resolves.toBe(false);
+
+    windowsWhereMock.mockResolvedValueOnce({ ok: false, error: new Error("exit 1") });
+    await expect(handler(fakeEvent, "gh")).resolves.toBe(false);
+  });
+
+  it("rejects names that are not plain command names before looking anything up", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(handler(fakeEvent, "..\\gh")).resolves.toBe(false);
+    expect(windowsWhereMock).not.toHaveBeenCalled();
   });
 });
 

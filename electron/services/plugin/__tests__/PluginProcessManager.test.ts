@@ -19,6 +19,14 @@ import {
   type PluginProcessStreamEvent,
 } from "../../../../shared/types/ipc/pluginProcess.js";
 import type { PluginProcessDataChunk } from "../../../../shared/types/plugin.js";
+import { virtualWindowsFiles } from "../../../utils/__tests__/helpers/virtualWindowsFs.js";
+
+// Windows-path files for the PATH lookup a Windows spawn makes.
+vi.mock("node:fs", async (importOriginal) =>
+  (await import("../../../utils/__tests__/helpers/virtualWindowsFs.js")).withVirtualWindowsFiles(
+    await importOriginal()
+  )
+);
 
 async function flushMicrotasks(): Promise<void> {
   await new Promise((r) => setImmediate(r));
@@ -1670,5 +1678,79 @@ describe("PluginProcessManager", () => {
       await vi.advanceTimersByTimeAsync(3_000);
       expect(groupSignals()).toEqual([]);
     });
+  });
+});
+
+describe("PluginProcessManager on Windows: program lookup", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    virtualWindowsFiles.set({
+      "C:\\tools\\flutter.exe": "",
+      "C:\\tools\\node.exe": "",
+      "C:\\plugin\\bin\\tool.exe": "",
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", originalPlatform);
+    virtualWindowsFiles.clear();
+  });
+
+  it("starts a bare name from the child's PATH by absolute path", async () => {
+    const h = makeHarness();
+    await h.manager.spawn(
+      "acme.tool",
+      pipeConfig({ command: "node", cwd: "C:\\repo", env: { PATH: ".;C:\\tools" } })
+    );
+    await h.manager.spawn(
+      "acme.tool",
+      ptyConfig({ command: "flutter", cwd: "C:\\repo", env: { PATH: "C:\\tools" } })
+    );
+
+    expect(h.spawnConfigs[0]?.command).toBe("C:\\tools\\node.exe");
+    expect(h.ptyConfigs[0]?.config.command).toBe("C:\\tools\\flutter.exe");
+    // What the plugin asked for is what the audit trail and listing report.
+    expect(h.auditCalls.map((call) => call.command)).toContain("node");
+    expect(h.manager.list("acme.tool").map((info) => info.command)).toEqual(["node", "flutter"]);
+  });
+
+  it("records a name PATH does not hold as a failed start, never spawning it bare", async () => {
+    // A same-named file in the working directory, or under a relative PATH
+    // entry, is not looked at.
+    const h = makeHarness();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const piped = await h.manager.spawn(
+      "acme.tool",
+      pipeConfig({ command: "node", cwd: "C:\\repo", env: { PATH: ".;bin;C:\\empty" } })
+    );
+    const pty = await h.manager.spawn(
+      "acme.tool",
+      ptyConfig({ command: "flutter", cwd: "C:\\repo", env: { PATH: "." } })
+    );
+    const crashes: unknown[] = [];
+    piped.onCrash((info) => crashes.push(info));
+    pty.onCrash((info) => crashes.push(info));
+    await flushMicrotasks();
+
+    expect(h.spawnConfigs).toHaveLength(0);
+    expect(h.ptyConfigs).toHaveLength(0);
+    expect(crashes).toHaveLength(2);
+    expect(h.manager.runningCount("acme.tool")).toBe(0);
+    errorSpy.mockRestore();
+  });
+
+  it("passes a path through as the plugin gave it", async () => {
+    const h = makeHarness();
+    for (const command of ["C:\\plugin\\bin\\tool.exe", ".\\bin\\tool.exe", "bin/tool"]) {
+      await h.manager.spawn("acme.tool", pipeConfig({ command, cwd: "C:\\plugin" }));
+    }
+
+    expect(h.spawnConfigs.map((config) => config.command)).toEqual([
+      "C:\\plugin\\bin\\tool.exe",
+      ".\\bin\\tool.exe",
+      "bin/tool",
+    ]);
   });
 });

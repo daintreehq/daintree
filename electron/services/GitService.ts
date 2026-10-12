@@ -76,9 +76,17 @@ export class GitService {
   }
 
   // Lazy so constructing a GitService that is never used cannot leave an
-  // unhandled rejection behind (createHardenedGit is async since #10395).
+  // unhandled rejection behind (createHardenedGit is async since #10395). A
+  // failed build is not kept, so the next call retries: on Windows the build
+  // fails while PATH holds no git, and a git installed since must be found.
   private getGit(): Promise<SimpleGit> {
-    this.git ??= createHardenedGit(this.rootPath);
+    if (!this.git) {
+      const git = Promise.resolve(createHardenedGit(this.rootPath));
+      this.git = git;
+      git.catch(() => {
+        if (this.git === git) this.git = null;
+      });
+    }
     return this.git;
   }
 

@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PassThrough } from "node:stream";
-import { PluginMcpSupervisor, TOOLS_LIST_MAX_PAGES } from "../PluginMcpSupervisor.js";
+import {
+  mcpServerProgram,
+  PluginMcpSupervisor,
+  TOOLS_LIST_MAX_PAGES,
+} from "../PluginMcpSupervisor.js";
 import { PLUGIN_MCP_STDERR_RING_LINES } from "../../../shared/types/ipc/pluginMcp.js";
 import { reapPendingChildTrees } from "../plugin/pluginChildTree.js";
+import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
+
+// Windows-path files for the PATH lookup a Windows server spawn makes.
+vi.mock("node:fs", async (importOriginal) =>
+  (await import("../../utils/__tests__/helpers/virtualWindowsFs.js")).withVirtualWindowsFiles(
+    await importOriginal()
+  )
+);
 
 async function flushMicrotasks(): Promise<void> {
   await new Promise((r) => setImmediate(r));
@@ -1530,4 +1542,56 @@ describe("PluginMcpSupervisor default spawner environment (issue #12616)", () =>
     expect(env.HTTPS_PROXY).toBe("http://manifest-proxy.test:8080");
     expect(env.NODE_OPTIONS).toBeUndefined();
   }, 20_000);
+});
+
+describe("MCP server program on Windows", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const originalPath = process.env.PATH;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    virtualWindowsFiles.set({
+      "C:\\nodejs\\node.exe": "",
+      "C:\\nodejs\\npx.cmd": "",
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", originalPlatform);
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    virtualWindowsFiles.clear();
+  });
+
+  it("resolves a bare name from the server's PATH alone, .cmd shims included", () => {
+    // The plugin directory is the working directory; `.` would search it.
+    const env = { PATH: ".;bin;C:\\nodejs" };
+    expect(mcpServerProgram("node", env)).toBe("C:\\nodejs\\node.exe");
+    expect(mcpServerProgram("npx", env)).toBe("C:\\nodejs\\npx.cmd");
+  });
+
+  it("passes a path through, and every name off Windows", () => {
+    const env = { PATH: "C:\\nodejs" };
+    for (const command of ["./dist/server.exe", "bin\\server", "C:\\tools\\server.exe"]) {
+      expect(mcpServerProgram(command, env)).toBe(command);
+    }
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    expect(mcpServerProgram("npx", env)).toBe("npx");
+  });
+
+  it("reports a name PATH does not hold as a spawn error, without starting anything", async () => {
+    process.env.PATH = ".;C:\\empty";
+    const probe = new PluginMcpSupervisor({ killTree: () => {} });
+    await probe.start({
+      pluginId: "acme.missing",
+      contributions: [{ id: "srv", name: "Server", command: "npx", args: ["-y", "server"] }],
+      resolveSettings: async () => "",
+    });
+
+    const [info] = probe.list();
+    expect(info?.status).toBe("crashed");
+    expect(info?.lastError).toContain("spawn npx ENOENT");
+    expect(info?.pid).toBeNull();
+    await probe.shutdown({ pluginId: "acme.missing" });
+  });
 });
