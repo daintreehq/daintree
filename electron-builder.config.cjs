@@ -426,10 +426,17 @@ module.exports = async function () {
     deb: {
       packageName: "daintree",
       depends: [
-        "libc6 (>= 2.31)",
+        // node-pty and better-sqlite3 need glibc 2.34 as the release workflow
+        // builds them (ubuntu-22.04); on 2.31 the app installed and every
+        // terminal failed to start.
+        "libc6 (>= 2.34)",
         "libgtk-3-0",
         "libnss3",
-        "libasound2",
+        // The real ALSA library first: since the 64-bit time_t transition,
+        // `libasound2` is only a virtual package that liboss4-salsa-asound2
+        // also provides, and apt picked that OSS shim on a clean Ubuntu 24.04,
+        // which lacks ALSA symbols Electron needs, so Daintree couldn't start.
+        "libasound2t64 | libasound2",
         "libgbm1",
         "libxkbcommon0",
         "libxrandr2",

@@ -208,6 +208,21 @@ describe("electron-builder config — OS folder context menus (#11406)", () => {
   });
 });
 
+describe("electron-builder config — .deb dependencies", () => {
+  it("asks apt for the real ALSA library before the virtual name an OSS shim also provides", async () => {
+    const config = await buildConfig();
+    // On a clean Ubuntu 24.04 a bare `libasound2` was satisfied by
+    // liboss4-salsa-asound2, which lacks ALSA symbols Electron needs.
+    const alsa = config.deb.depends.find((dep) => dep.includes("libasound2"));
+    expect(alsa).toBe("libasound2t64 | libasound2");
+  });
+
+  it("declares the glibc the packaged native modules need", async () => {
+    const config = await buildConfig();
+    expect(config.deb.depends).toContain("libc6 (>= 2.34)");
+  });
+});
+
 describe("NSIS installer — folder context-menu verbs (#11406)", () => {
   const SELECTED_VERB = "Directory\\shell";
   const BACKGROUND_VERB = "Directory\\Background\\shell";
