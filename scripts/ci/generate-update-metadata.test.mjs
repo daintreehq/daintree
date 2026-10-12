@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { inflateRawSync } from "node:zlib";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { load } from "js-yaml";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateUpdateMetadata } from "./generate-update-metadata.mjs";
@@ -132,6 +132,39 @@ describe("generate-update-metadata", () => {
 
     expect(metadata.files[0].blockMapSize).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("no embedded blockmap"));
+    warn.mockRestore();
+  });
+
+  it("lists no blockMapSize when the trailing stream inflates past the cap", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir, "2.0.0");
+    // A well-formed blockmap padded to 80 MB deflates to ~80 KB: small on disk,
+    // and only the inflate cap keeps it from being accepted.
+    const padded = JSON.stringify({
+      version: "2",
+      files: [{ name: "file", offset: 0, checksums: [], sizes: [] }],
+      pad: "a".repeat(80 * 1024 * 1024),
+    });
+    const bomb = deflateRawSync(Buffer.from(padded));
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(bomb.length, 0);
+    await writeFile(
+      path.join(releaseDir, "Daintree-2.0.0.AppImage"),
+      Buffer.concat([randomBytes(64), bomb, tail])
+    );
+    await writeArtifact(releaseDir, "daintree_2.0.0_amd64.deb", "deb");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const metadata = await generateUpdateMetadata({
+      platform: "linux",
+      releaseDir,
+      metadataPath: path.join(releaseDir, "latest-linux.yml"),
+      packagePath,
+    });
+
+    expect(metadata.files[0].blockMapSize).toBeUndefined();
     warn.mockRestore();
   });
 

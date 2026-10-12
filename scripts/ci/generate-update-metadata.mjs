@@ -48,8 +48,12 @@ export async function embeddedBlockMapSize(filePath) {
     const data = Buffer.alloc(length);
     const { bytesRead } = await handle.read(data, 0, length, size - 4 - length);
     if (bytesRead !== length) return null;
-    const blockMap = JSON.parse(inflateRawSync(data).toString("utf8"));
-    return Array.isArray(blockMap?.files) ? length : null;
+    // A blockmap is a few hundred KB of JSON; a stream that inflates past the
+    // cap isn't one, and mustn't exhaust the runner's memory finding out.
+    const json = inflateRawSync(data, { maxOutputLength: MAX_EMBEDDED_BLOCKMAP_BYTES });
+    const blockMap = JSON.parse(json.toString("utf8"));
+    const file = Array.isArray(blockMap?.files) ? blockMap.files[0] : undefined;
+    return Array.isArray(file?.sizes) && Array.isArray(file?.checksums) ? length : null;
   } catch {
     return null;
   } finally {
