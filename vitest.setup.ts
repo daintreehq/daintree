@@ -8,8 +8,19 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { markIpcSecurityReady } from "./electron/ipc/ipcGuard.js";
+import { installTestLocale } from "./scripts/lib/testLocale.js";
 
 markIpcSecurityReady();
+
+// vitest.config.ts pins LANG/LC_ALL so en-US formatting holds on any machine,
+// but Node on Windows takes ICU's default from the user's regional settings and
+// ignores both — an en-ZA laptop still grouped digits with spaces and failed
+// the kit suites. A locale-less Intl or toLocale* call gets en-US here instead;
+// an explicit locale passes through untouched.
+const TEST_LOCALE = "en-US";
+if (new Intl.NumberFormat().resolvedOptions().locale !== TEST_LOCALE) {
+  installTestLocale(TEST_LOCALE);
+}
 
 // `hardenedGit` resolves an app-owned `core.hooksPath` from DAINTREE_USER_DATA,
 // falling back to the real home directory when nothing else is available. Any
