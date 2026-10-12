@@ -234,7 +234,18 @@ export class ProcessTreeKiller {
 
     // Windows: one tree kill handles the entire tree atomically
     if (process.platform === "win32") {
-      this.killWindowsTree(shellPid, immediate);
+      // The pseudoconsole is closed only once the tree kill has finished:
+      // closing it ends the shell within milliseconds, and taskkill /T can only
+      // walk a tree whose root is still alive. Closing it after a natural exit
+      // is safe with the patched node-pty (scripts/patchNodePtyConpty.cjs),
+      // which closes each pseudoconsole at most once.
+      this.killWindowsTree(shellPid, immediate, () => {
+        try {
+          this.ptyProcess.kill();
+        } catch {
+          // Process may already be dead
+        }
+      });
       // The tree kill walks the live tree, so it has the same blind spot as the
       // Unix walk below — reparented descendants need their own pass. Exclude
       // what the walk already covered so the tree kill above isn't repeated
@@ -242,13 +253,6 @@ export class ProcessTreeKiller {
       const live = this.processTreeCache?.getDescendantPids(shellPid) ?? [];
       const orphans = this.resolveOrphans(shellPid, live);
       this.killWindowsTrees(orphans, immediate);
-      // Not held for the tree kill: on the non-immediate path that is still
-      // running in its own process.
-      try {
-        this.ptyProcess.kill();
-      } catch {
-        // Process may already be dead
-      }
       return [...orphans, ...live, shellPid];
     }
 
@@ -542,13 +546,24 @@ export class ProcessTreeKiller {
    * terminals overlap. `immediate` keeps it synchronous: that is the
    * `process.on("exit")` context, where an async child would never be started.
    */
-  private killWindowsTree(rootPid: number, immediate: boolean): void {
+  private killWindowsTree(
+    rootPid: number,
+    immediate: boolean,
+    onDone: () => void = () => {}
+  ): void {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      onDone();
+    };
     const walk = this.processTreeCache?.walkTreeByCreationTime(rootPid);
     if (walk && walk.stale.length > 0) {
       console.warn(
         `[ProcessTreeKiller] pid=${rootPid}: ${walk.stale.length} older process(es) name a PID in this tree as parent through PID reuse; ending it without taskkill /T`
       );
       terminateWindowsProcesses(walk.pids.length > 0 ? walk.pids : [rootPid]);
+      finish();
       return;
     }
     const args = ["/T", "/F", "/PID", String(rootPid)];
@@ -556,13 +571,17 @@ export class ProcessTreeKiller {
     try {
       if (immediate) {
         spawnSync("taskkill", args, options);
+        finish();
         return;
       }
-      spawn("taskkill", args, options).once("error", () => {
-        // taskkill could not start; nothing to recover
-      });
+      const child = spawn("taskkill", args, options);
+      child.once("exit", finish);
+      child.once("error", finish);
+      // taskkill caps itself at 3 s; never leave the pseudoconsole open past it.
+      setTimeout(finish, 3500).unref?.();
     } catch {
       // taskkill may fail if the process already exited
+      finish();
     }
   }
 

@@ -543,6 +543,8 @@ describe("ProcessTreeKiller — Windows kill does not block the host", () => {
 
   it("starts taskkill as its own process on the normal path", () => {
     const pty = makePty(SHELL);
+    const child = new EventEmitter();
+    spawnMock.mockReturnValueOnce(child as never);
 
     const targets = new ProcessTreeKiller(pty, makeTreeCache([])).execute(false);
 
@@ -552,9 +554,26 @@ describe("ProcessTreeKiller — Windows kill does not block the host", () => {
       TASKKILL_OPTIONS
     );
     expect(spawnSyncMock).not.toHaveBeenCalled();
-    // The PTY is released at once rather than after taskkill finishes.
-    expect(pty.kill).toHaveBeenCalledTimes(1);
     expect(targets).toEqual([SHELL]);
+    // The pseudoconsole stays open until the tree kill is done: closing it ends
+    // the shell, and taskkill /T needs the shell alive to walk its tree.
+    expect(pty.kill).not.toHaveBeenCalled();
+    child.emit("exit", 0);
+    child.emit("exit", 0);
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the pseudoconsole even if taskkill never reports back", () => {
+    vi.useFakeTimers();
+    try {
+      const pty = makePty(SHELL);
+      new ProcessTreeKiller(pty, makeTreeCache([])).execute(false);
+      expect(pty.kill).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(3500);
+      expect(pty.kill).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stays synchronous on the immediate path, where nothing async would run", () => {
