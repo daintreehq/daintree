@@ -22,12 +22,54 @@ export function isWebGLHardwareAccelerated(webgl2: unknown): boolean {
 }
 
 let cachedGpuFeatureStatus: ReturnType<typeof app.getGPUFeatureStatus> | null = null;
+let gpuInfoSettled = false;
 
+/**
+ * The GPU process has reported (its gpu-info-update has gone quiet). Until
+ * then `getGPUFeatureStatus()` is a provisional all-disabled status (seen on
+ * Electron 42 with a working D3D12 GPU: webgl "disabled_off" before
+ * "enabled"), which must not be kept for the session.
+ */
+export function markGpuInfoSettled(): void {
+  gpuInfoSettled = true;
+}
+
+let gpuReported = false;
+const gpuReportWaiters = new Set<() => void>();
+
+/** The GPU process has sent its first gpu-info-update. */
+export function noteGpuReported(): void {
+  gpuReported = true;
+  for (const wake of gpuReportWaiters) wake();
+  gpuReportWaiters.clear();
+}
+
+/**
+ * Resolves once the GPU process has reported, or after `timeoutMs`. Read the
+ * feature status after this when the answer is handed to a renderer for good:
+ * read earlier it is the provisional all-disabled status, and a view told
+ * "WebGL isn't accelerated" keeps its terminals off WebGL for its lifetime.
+ */
+export function whenGpuReported(timeoutMs: number): Promise<void> {
+  if (gpuReported) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const wake = (): void => {
+      clearTimeout(timer);
+      gpuReportWaiters.delete(wake);
+      resolve();
+    };
+    const timer = setTimeout(wake, timeoutMs);
+    timer.unref?.();
+    gpuReportWaiters.add(wake);
+  });
+}
+
+/** The feature status, kept for the session once the GPU has been reported. */
 export function getGpuFeatureStatus(): ReturnType<typeof app.getGPUFeatureStatus> {
-  if (!cachedGpuFeatureStatus) {
-    cachedGpuFeatureStatus = app.getGPUFeatureStatus();
-  }
-  return cachedGpuFeatureStatus;
+  if (cachedGpuFeatureStatus) return cachedGpuFeatureStatus;
+  const status = app.getGPUFeatureStatus();
+  if (gpuInfoSettled) cachedGpuFeatureStatus = status;
+  return status;
 }
 
 const VENDOR_NVIDIA = "0x10de";

@@ -36,8 +36,13 @@ import {
   getGpuFeatureStatus,
   getWebGLFeatureStatus,
   isWebGLHardwareAccelerated,
+  whenGpuReported,
 } from "../../../utils/gpuDetection.js";
 import { isRunningUnderRosetta } from "../../../utils/rosettaDetection.js";
+
+// Long enough for a cold GPU process (it reports ~300 ms after start), short
+// enough that a GPU that never reports doesn't hold the first window back.
+const GPU_REPORT_WAIT_MS = 1_500;
 import {
   isGpuDisabledByFlag,
   isGpuAngleFallbackApplied,
@@ -244,6 +249,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
   };
 
   const handleAppHydrate = async (ctx?: IpcContext) => {
+    // The GPU half of the answer is kept by the view for its lifetime; read
+    // before the GPU process reports it is the provisional all-disabled status.
+    // Only the first few hundred milliseconds of a session ever wait here.
+    await whenGpuReported(GPU_REPORT_WAIT_MS);
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
     // A remote Shell merges only this machine's host half of the answer, so
     // nothing addressed to this machine's own windows may be consumed for it.
@@ -320,6 +329,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         // The live sender's identity always wins over whatever the prefetch
         // stamped — only ever a project today, but never assume that.
         workspaceId,
+        // A cold-start prefetch can run before the GPU process reports, so the
+        // GPU answer is read now, not taken from the cached payload.
+        gpuWebGLHardware: isWebGLHardwareAccelerated(getWebGLFeatureStatus(getGpuFeatureStatus())),
         skippedPanelCount: 0,
         crashCount: cacheGuard.getCrashCount(),
         lastCrashAt: cacheGuard.getLastCrashTimestamp(),

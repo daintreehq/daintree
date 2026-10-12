@@ -1236,26 +1236,80 @@ describe("GpuCrashMonitorService", () => {
       return mod;
     }
 
-    it("logs gpu-startup-status once webgl2 is classified", async () => {
+    // The handler the freshest module bound; earlier tests' modules bound theirs too.
+    function fireGpuInfoUpdate(): void {
+      const binds = appMock.on.mock.calls.filter((call) => call[0] === "gpu-info-update");
+      (binds.at(-1)![1] as () => void)();
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("logs the status the GPU process reports once its updates go quiet", async () => {
+      vi.useFakeTimers();
+      // Provisional until the GPU process reports, even on a working GPU.
+      appMock.getGPUFeatureStatus.mockReturnValue({
+        webgl: "disabled_off",
+        gpu_compositing: "disabled_software",
+      });
+      await initFresh();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-startup-status", expect.anything());
+
       appMock.getGPUFeatureStatus.mockReturnValue({
         webgl2: "enabled",
         webgl: "enabled",
         gpu_compositing: "enabled",
       });
-      await initFresh();
+      fireGpuInfoUpdate();
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(loggerMethods.info).toHaveBeenCalledWith("gpu-startup-status", {
         webgl2: "enabled",
         webgl: "enabled",
         gpu_compositing: "enabled",
       });
+      expect(loggerMethods.info).not.toHaveBeenCalledWith(
+        "gpu-startup-status",
+        expect.objectContaining({ webgl: "disabled_off" })
+      );
     });
 
-    it("logs from webgl alone, which is all Chromium 148 reports", async () => {
+    it("waits for a quick second update to land before logging", async () => {
+      vi.useFakeTimers();
       appMock.getGPUFeatureStatus.mockReturnValue({
         webgl: "unavailable_off",
         gpu_compositing: "unavailable_off",
       });
       await initFresh();
+      fireGpuInfoUpdate();
+      await vi.advanceTimersByTimeAsync(3);
+      appMock.getGPUFeatureStatus.mockReturnValue({
+        webgl: "unavailable_off",
+        gpu_compositing: "disabled_software",
+      });
+      fireGpuInfoUpdate();
+      // The first update's timer would have fired here; the second restarted it.
+      await vi.advanceTimersByTimeAsync(997);
+      expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-startup-status", expect.anything());
+      await vi.advanceTimersByTimeAsync(3);
+      expect(loggerMethods.info).toHaveBeenCalledWith("gpu-startup-status", {
+        webgl2: undefined,
+        webgl: "unavailable_off",
+        gpu_compositing: "disabled_software",
+      });
+    });
+
+    it("logs from webgl alone at the deadline when no update ever comes", async () => {
+      vi.useFakeTimers();
+      appMock.getGPUFeatureStatus.mockReturnValue({
+        webgl: "unavailable_off",
+        gpu_compositing: "unavailable_off",
+      });
+      await initFresh();
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(loggerMethods.info).not.toHaveBeenCalledWith("gpu-startup-status", expect.anything());
+      await vi.advanceTimersByTimeAsync(1);
       expect(loggerMethods.info).toHaveBeenCalledWith("gpu-startup-status", {
         webgl2: undefined,
         webgl: "unavailable_off",
