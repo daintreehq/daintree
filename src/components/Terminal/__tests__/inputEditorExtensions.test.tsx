@@ -46,6 +46,7 @@ import {
   minimalDocChange,
   createComboboxAttributes,
 } from "../inputEditorExtensions";
+import { formatChipLabel } from "../inputEditorExtensions/base";
 import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
 import type { SlashCommand } from "@shared/types";
 
@@ -825,6 +826,23 @@ describe("createCustomKeymap", () => {
     expect(onEnter).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toContain("\n");
     view.destroy();
+  });
+});
+
+describe("formatChipLabel", () => {
+  it("labels a host inbox image by the time in its name, not as epoch milliseconds", () => {
+    expect(
+      formatChipLabel(
+        "/var/folders/x/T/daintree-inbox/clipboard/clipboard-20261012-022831-f6a4458a26c8.png"
+      )
+    ).toBe("Screenshot 02:28");
+  });
+
+  it("labels this machine's pasted image by its epoch timestamp", () => {
+    const at = new Date(2026, 9, 12, 14, 5, 0).getTime();
+    expect(formatChipLabel(`/tmp/daintree-clipboard/clipboard-${at}-abcd.png`)).toBe(
+      "Screenshot 14:05"
+    );
   });
 });
 
