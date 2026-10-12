@@ -506,6 +506,17 @@ export class IdentityWatcher {
     return this.committed;
   }
 
+  /**
+   * An agent command is running and no shell prompt has ended it, so a typed
+   * line goes to the agent. Detection confirms an agent a second or more after
+   * it starts on Windows (process census); a line typed before then, read as a
+   * new shell command, dropped the agent identity the prompt-return demotion
+   * needs, and the badge outlived the agent.
+   */
+  get agentOwnsInput(): boolean {
+    return !this.stopped && this.submittedAt !== null && this.identity?.agentType !== undefined;
+  }
+
   get seededCommandText(): string | undefined {
     return this.seededCommand;
   }
