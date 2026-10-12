@@ -100,7 +100,6 @@ function scriptedRunner(outputs: Record<string, Partial<CommandResult>> = {}) {
 
 function fakeKeychain(overrides: Partial<KeychainProbe> = {}): KeychainProbe {
   return {
-    secretTier: () => "keychain",
     getSelectedStorageBackend: () => "gnome_libsecret",
     isAsyncEncryptionAvailable: async () => true,
     encryptStringAsync: async (text) => Buffer.from(text),
@@ -546,7 +545,6 @@ describe("HostModeService status rows", () => {
     const encrypt = vi.fn(async (text: string) => Buffer.from(text));
     const { service } = makeService({
       keychain: fakeKeychain({
-        secretTier: () => "unavailable",
         getSelectedStorageBackend: () => "basic_text",
         encryptStringAsync: encrypt,
       }),

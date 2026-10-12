@@ -1,4 +1,5 @@
 import { safeStorage } from "electron";
+import { isLinuxKeyringBackend } from "./linuxKeyringBackend.js";
 
 /**
  * The at-rest tier a secret write would use right now, disclosed honestly in the
@@ -24,24 +25,6 @@ export interface SecretCipher {
   decrypt(ciphertextBase64: string): string;
 }
 
-type LinuxStorageBackend = ReturnType<typeof safeStorage.getSelectedStorageBackend>;
-
-/**
- * On Linux `isEncryptionAvailable()` doesn't say what backs the encryption:
- * `basic_text` uses Chromium's hardcoded key and `unknown` is what Electron
- * reports before `ready` (#12614). Exhaustive over Electron's backend union so a
- * new backend fails typecheck until it is classified; a string outside the union
- * at runtime is treated as not a keychain.
- */
-const LINUX_BACKEND_IS_KEYCHAIN: Record<LinuxStorageBackend, boolean> = {
-  gnome_libsecret: true,
-  kwallet: true,
-  kwallet5: true,
-  kwallet6: true,
-  basic_text: false,
-  unknown: false,
-};
-
 /**
  * `safeStorage.isEncryptionAvailable()` can throw on Linux when called before
  * the app `ready` event, and `safeStorage` is absent entirely outside an Electron
@@ -53,7 +36,15 @@ function keychainAvailable(): boolean {
   try {
     if (safeStorage?.isEncryptionAvailable() !== true) return false;
     if (process.platform !== "linux") return true;
-    return LINUX_BACKEND_IS_KEYCHAIN[safeStorage.getSelectedStorageBackend()] === true;
+    return isLinuxKeyringBackend(safeStorage.getSelectedStorageBackend());
+  } catch {
+    return false;
+  }
+}
+
+function linuxKeyringSelected(): boolean {
+  try {
+    return isLinuxKeyringBackend(safeStorage.getSelectedStorageBackend());
   } catch {
     return false;
   }
@@ -66,6 +57,11 @@ function keychainAvailable(): boolean {
  */
 export const safeStorageCipher: SecretCipher = {
   tier() {
+    // On Linux isEncryptionAvailable() fetches the key synchronously and holds
+    // the main thread on a keyring prompt (autologin, a locked or missing
+    // keyring) until the watchdog kills the app. The settings view only needs
+    // the tier, which the backend already tells; a write still checks fully.
+    if (process.platform === "linux") return linuxKeyringSelected() ? "keychain" : "unavailable";
     return keychainAvailable() ? "keychain" : "unavailable";
   },
   encrypt(plaintext) {

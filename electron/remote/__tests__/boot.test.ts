@@ -403,7 +403,6 @@ vi.mock("../host/hostModeDefaults.js", async () => {
           getState: () => ({ status: "off" as const }),
         }),
         keychain: {
-          secretTier: () => "unavailable",
           getSelectedStorageBackend: () => "basic_text",
           isAsyncEncryptionAvailable: async () => false,
           encryptStringAsync: async () => Buffer.alloc(0),

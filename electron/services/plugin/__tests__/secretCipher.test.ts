@@ -72,11 +72,19 @@ describe("safeStorageCipher tier", () => {
       expect(safeStorageCipher.encrypt("hunter2")).toBeNull();
     });
 
-    it("skips the backend lookup when encryption is unavailable", () => {
+    // isEncryptionAvailable() can hold the main thread on a keyring prompt,
+    // so the tier the settings view shows comes from the backend alone.
+    it("reads the tier without the synchronous availability check", () => {
+      safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
+
+      expect(safeStorageCipher.tier()).toBe("keychain");
+      expect(safeStorageMock.isEncryptionAvailable).not.toHaveBeenCalled();
+    });
+
+    it("still refuses a write when encryption turns out to be unavailable", () => {
       safeStorageMock.isEncryptionAvailable.mockReturnValue(false);
       safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
 
-      expect(safeStorageCipher.tier()).toBe("unavailable");
       expect(safeStorageCipher.encrypt("hunter2")).toBeNull();
       expect(safeStorageMock.getSelectedStorageBackend).not.toHaveBeenCalled();
       expect(safeStorageMock.encryptString).not.toHaveBeenCalled();

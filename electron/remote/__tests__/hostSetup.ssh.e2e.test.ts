@@ -455,8 +455,7 @@ describe.skipIf(!ENABLED)(
             getState: () => ({ status: "off" }),
           }),
           keychain: {
-            secretTier: () => "keychain",
-            getSelectedStorageBackend: () => "keychain",
+            getSelectedStorageBackend: () => "gnome_libsecret",
             isAsyncEncryptionAvailable: async () => true,
             encryptStringAsync: async (text) => Buffer.from(text),
             decryptStringAsync: async (buf) => ({ result: buf.toString() }),
