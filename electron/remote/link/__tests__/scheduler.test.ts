@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Lane, type LinkFrame } from "../frames.js";
 import { FRAME_HEADER_BYTES } from "../frames.js";
-import { INTERACTIVE_BURST_FRAMES, LaneScheduler, type LaneLimits } from "../scheduler.js";
+import {
+  INTERACTIVE_BURST_BYTES,
+  INTERACTIVE_BURST_FRAMES,
+  LaneScheduler,
+  type LaneLimits,
+} from "../scheduler.js";
 
 const f = (lane: Lane, size = 1): LinkFrame => ({
   lane,
@@ -163,5 +168,19 @@ describe("LaneScheduler", () => {
     // Every flow's first frame leaves before any flow's second.
     expect(Math.max(...seen.slice(0, flows))).toBeLessThan(flows);
     expect(s.isEmpty).toBe(true);
+  });
+
+  it("gives a waiting rpc frame a turn once large interactive frames pass the byte budget", () => {
+    const s = new LaneScheduler();
+    const big = 64 * 1024;
+    for (let i = 0; i < 16; i++) s.enqueue(f(Lane.INTERACTIVE, big), `t${i % 3}`);
+    s.enqueue(f(Lane.RPC));
+    const order: number[] = [];
+    for (let i = 0; i < 6; i++) order.push(s.next()!.lane);
+    const rpcAt = order.indexOf(Lane.RPC);
+    expect(rpcAt).toBeGreaterThan(0);
+    // Served once the interactive bytes before it reached the budget, not after 32 frames.
+    expect(rpcAt * (big + H)).toBeGreaterThanOrEqual(INTERACTIVE_BURST_BYTES);
+    expect((rpcAt - 1) * (big + H)).toBeLessThan(INTERACTIVE_BURST_BYTES);
   });
 });

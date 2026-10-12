@@ -47,6 +47,12 @@ export const DEFAULT_LANE_LIMITS: Record<Lane, LaneLimits> = {
 
 /** Interactive frames served back to back before one frame from a waiting lower lane. */
 export const INTERACTIVE_BURST_FRAMES = 32;
+/**
+ * And interactive bytes, whichever comes first: terminal output arrives in
+ * batches of 64 KiB and more, so 32 frames can be megabytes, seconds on a slow
+ * link, with a request's answer waiting behind them.
+ */
+export const INTERACTIVE_BURST_BYTES = 128 * 1024;
 
 export type EnqueueResult = "queued" | "over-high-water" | "refused";
 
@@ -88,6 +94,7 @@ export class LaneScheduler {
   private readonly lanes: LaneQueue[];
   private readonly drainListeners = new Set<(lane: Lane) => void>();
   private interactiveBurst = 0;
+  private interactiveBurstBytes = 0;
 
   constructor(private readonly limits: Record<Lane, LaneLimits> = DEFAULT_LANE_LIMITS) {
     this.lanes = Array.from({ length: LANE_COUNT }, emptyLane);
@@ -120,9 +127,15 @@ export class LaneScheduler {
   next(): LinkFrame | undefined {
     const lane = this.pickLane();
     if (lane === undefined) return undefined;
-    if (lane === Lane.INTERACTIVE) this.interactiveBurst++;
-    else if (lane !== Lane.CONTROL) this.interactiveBurst = 0;
-    return this.shift(lane);
+    const frame = this.shift(lane);
+    if (lane === Lane.INTERACTIVE) {
+      this.interactiveBurst++;
+      this.interactiveBurstBytes += frameCost(frame);
+    } else if (lane !== Lane.CONTROL) {
+      this.interactiveBurst = 0;
+      this.interactiveBurstBytes = 0;
+    }
+    return frame;
   }
 
   private hasFrames(lane: Lane): boolean {
@@ -132,11 +145,17 @@ export class LaneScheduler {
   private pickLane(): Lane | undefined {
     if (this.hasFrames(Lane.CONTROL)) return Lane.CONTROL;
     if (this.hasFrames(Lane.INTERACTIVE)) {
-      if (this.interactiveBurst < INTERACTIVE_BURST_FRAMES) return Lane.INTERACTIVE;
+      if (
+        this.interactiveBurst < INTERACTIVE_BURST_FRAMES &&
+        this.interactiveBurstBytes < INTERACTIVE_BURST_BYTES
+      ) {
+        return Lane.INTERACTIVE;
+      }
       for (const lane of LANE_PRIORITY) {
         if (lane !== Lane.CONTROL && lane !== Lane.INTERACTIVE && this.hasFrames(lane)) return lane;
       }
       this.interactiveBurst = 0;
+      this.interactiveBurstBytes = 0;
       return Lane.INTERACTIVE;
     }
     for (const lane of LANE_PRIORITY) {
@@ -195,5 +214,6 @@ export class LaneScheduler {
   clear(): void {
     for (let lane = 0; lane < this.lanes.length; lane++) this.lanes[lane] = emptyLane();
     this.interactiveBurst = 0;
+    this.interactiveBurstBytes = 0;
   }
 }
