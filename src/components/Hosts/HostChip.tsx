@@ -278,14 +278,9 @@ export function HostChip() {
           )}
         </span>
         {statusText && (
-          <span className="min-w-0 truncate text-2xs text-text-secondary">
-            {statusText}
-          </span>
+          <span className="min-w-0 truncate text-2xs text-text-secondary">{statusText}</span>
         )}
-        <ChevronDown
-          className="h-3 w-3 shrink-0 text-text-secondary"
-          aria-hidden="true"
-        />
+        <ChevronDown className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
       </button>
     </DropdownMenuTrigger>
   );
