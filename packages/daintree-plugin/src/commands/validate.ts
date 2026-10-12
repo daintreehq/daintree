@@ -4,6 +4,7 @@ import { getPluginManifestSchema } from "../../../../electron/schemas/plugin.js"
 import { collectManifestAdvisories } from "../../../../electron/schemas/pluginManifestAdvisories.js";
 import { collectPluginIconIssues } from "../../../../electron/services/plugin/pluginIconAssets.js";
 import type { PluginOrigin } from "../../../../shared/types/plugin.js";
+import { parseJsonText } from "../lib/parseJsonText.js";
 
 export interface ValidateOptions {
   /** Plugin project directory (default: cwd). */
@@ -78,7 +79,7 @@ export async function runValidate(opts: ValidateOptions = {}): Promise<ValidateR
 
   let json: unknown;
   try {
-    json = JSON.parse(raw);
+    json = parseJsonText(raw);
   } catch {
     return { ok: false, errors: ["plugin.json is not valid JSON"], warnings };
   }

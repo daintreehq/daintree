@@ -8,6 +8,7 @@ import { PERF_RULES } from "./rules/perf.js";
 import { prepareRaw, prepareScript, prepareStyle } from "./source.js";
 import { classesThatCompileToNothing } from "./styleReport.js";
 import type { LintFile, LintFileKind, LintFileRole, LintFinding, LintRule } from "./types.js";
+import { parseJsonText } from "../parseJsonText.js";
 
 export type {
   LintFile,
@@ -95,7 +96,7 @@ interface Manifest {
 
 async function readManifest(dir: string): Promise<Manifest | null> {
   try {
-    return JSON.parse(await fs.readFile(path.join(dir, "plugin.json"), "utf8")) as Manifest;
+    return parseJsonText(await fs.readFile(path.join(dir, "plugin.json"), "utf8")) as Manifest;
   } catch {
     return null;
   }
@@ -123,7 +124,7 @@ async function hasBuildStep(dir: string, entries: readonly string[]): Promise<bo
     if (compiled.length > 0) return true;
   }
   try {
-    const pkg = JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8")) as {
+    const pkg = parseJsonText(await fs.readFile(path.join(dir, "package.json"), "utf8")) as {
       scripts?: Record<string, unknown>;
     };
     return typeof pkg.scripts?.build === "string";

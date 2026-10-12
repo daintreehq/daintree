@@ -37,6 +37,18 @@ describe("runValidate", () => {
     expect(result.errors.join("\n")).toMatch(/name/);
   });
 
+  it("reads a plugin.json saved with a UTF-8 byte-order mark", async () => {
+    const manifest = { name: "acme.demo", version: "1.0.0", engines: { daintree: "^0.11.0" } };
+    await fs.writeFile(
+      path.join(tmpDir, "plugin.json"),
+      "\uFEFF" + JSON.stringify(manifest),
+      "utf8"
+    );
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
   it("fails when plugin.json is missing", async () => {
     const result = await runValidate({ dir: tmpDir });
     expect(result.ok).toBe(false);
