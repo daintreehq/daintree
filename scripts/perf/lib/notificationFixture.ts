@@ -240,7 +240,10 @@ export const session = {};
 export const net = {};
 export const safeStorage = { isEncryptionAvailable: () => false };
 export const utilityProcess = { fork: noop };
-export default { app, Notification: StubNotification, webContents, powerMonitor, systemPreferences, ipcMain, BrowserWindow, shell, nativeTheme, safeStorage };
+// Linux notifications carry the app icon (electron/window/linuxWindowIcon.ts).
+const emptyImage = { isEmpty: () => true, resize() { return emptyImage; } };
+export const nativeImage = { createFromPath: () => emptyImage, createEmpty: () => emptyImage };
+export default { app, Notification: StubNotification, webContents, powerMonitor, systemPreferences, ipcMain, BrowserWindow, shell, nativeTheme, safeStorage, nativeImage };
 `;
 
 const PROJECT_STORE_STUB_SOURCE = `${BUS_PREAMBLE}
