@@ -722,6 +722,50 @@ describe("findProjectRoot", () => {
     await fs.mkdir(orphan, { recursive: true });
     expect(await findProjectRoot(orphan)).toBeNull();
   });
+
+  it("does not take the home directory's own .daintree/ for a project", async () => {
+    // ~/.daintree is Daintree's data directory. Counting it put every directory
+    // under home (on Windows, every temp directory too) inside a "project" at ~.
+    const home = path.join(tmpDir, "home");
+    const loose = path.join(home, "notes", "drafts");
+    await fs.mkdir(path.join(home, ".daintree", "plugins"), { recursive: true });
+    await fs.mkdir(loose, { recursive: true });
+    expect(await findProjectRoot(loose, { homeDir: home })).not.toBe(home);
+
+    const project = path.join(home, "code", "app");
+    await fs.mkdir(path.join(project, ".daintree"), { recursive: true });
+    expect(await findProjectRoot(path.join(project), { homeDir: home })).toBe(project);
+  });
+
+  it("does not take home for a project when the walk starts at home", async () => {
+    const home = path.join(tmpDir, "bare-home");
+    await fs.mkdir(path.join(home, ".daintree"), { recursive: true });
+    expect(await findProjectRoot(home, { homeDir: home })).not.toBe(home);
+  });
+
+  it("recognises home through symlinks and Windows junctions in either direction", async () => {
+    const realHome = path.join(tmpDir, "real-home");
+    const linkHome = path.join(tmpDir, "link-home");
+    const loose = path.join(realHome, "notes");
+    await fs.mkdir(path.join(realHome, ".daintree"), { recursive: true });
+    await fs.mkdir(loose, { recursive: true });
+    await fs.symlink(realHome, linkHome, process.platform === "win32" ? "junction" : "dir");
+    expect(await findProjectRoot(loose, { homeDir: linkHome })).not.toBe(realHome);
+    expect(await findProjectRoot(path.join(linkHome, "notes"), { homeDir: realHome })).not.toBe(
+      linkHome
+    );
+
+    const project = path.join(linkHome, "project");
+    await fs.mkdir(path.join(project, ".daintree"), { recursive: true });
+    expect(await findProjectRoot(project, { homeDir: realHome })).toBe(project);
+  });
+
+  it("still accepts a home directory that is itself a git repository", async () => {
+    const home = path.join(tmpDir, "dotfiles-home");
+    await fs.mkdir(path.join(home, ".daintree"), { recursive: true });
+    await fs.mkdir(path.join(home, ".git"), { recursive: true });
+    expect(await findProjectRoot(home, { homeDir: home })).toBe(home);
+  });
 });
 
 describe("runNew --project", () => {
