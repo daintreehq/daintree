@@ -492,7 +492,7 @@ describe("PluginSettingsForm", () => {
       .mockResolvedValue(uiValues({ secretTier: "locked" }));
     pluginApi.setSettingValue.mockRejectedValue(
       new Error(
-        `The keyring wasn't unlocked this session, so the secret "token" wasn't saved — restart Daintree to be asked again`
+        `The keyring wasn't available this session, so the secret "token" wasn't saved — restart Daintree to try again`
       )
     );
     render(
@@ -515,7 +515,7 @@ describe("PluginSettingsForm", () => {
     // Every secret row now says so, not just the one that tried.
     await waitFor(() =>
       expect(
-        screen.getAllByText(/this session — restart Daintree to be asked again$/)
+        screen.getAllByText(/not available this session — restart Daintree to try again$/)
       ).toHaveLength(2)
     );
     expect(screen.queryByText("New secrets are stored in the OS keychain")).toBeNull();
@@ -894,10 +894,12 @@ describe("PluginSettingsForm", () => {
   });
 });
 
+// The no-key result can't say why, so neither do the words.
 describe("a keychain that gave no key this session", () => {
-  it("tells a Linux user the keyring stayed locked and that a restart asks again", () => {
+  // A dismissed unlock prompt and a keyring service that isn't running end alike.
+  it("claims no more than an unavailable keyring on Linux", () => {
     expect(lockedSecretStorageText(null, "linux")).toBe(
-      "Keyring not unlocked this session — restart Daintree to be asked again"
+      "Keyring not available this session — restart Daintree to try again"
     );
   });
 
@@ -909,6 +911,9 @@ describe("a keychain that gave no key this session", () => {
   });
 
   it("names the host and restarts Daintree there for a remote window", () => {
+    expect(lockedSecretStorageText({ name: "studio-01" }, "linux")).toBe(
+      "Keyring on studio-01 not available this session — restart Daintree there to try again"
+    );
     expect(lockedSecretStorageText({ name: "studio-01" }, "darwin")).toBe(
       "Keychain on studio-01 not available this session — restart Daintree there to try again"
     );

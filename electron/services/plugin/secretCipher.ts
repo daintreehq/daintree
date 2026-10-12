@@ -100,10 +100,12 @@ function prefixOf(ciphertext: Buffer): string {
  * How the keychain failed this session, once it has. Electron builds its async
  * encryptor once per process, so a keychain that gave it no key (an unlock
  * prompt dismissed or failed) gives none for the rest of the run, and nothing
- * asks again until Daintree restarts. Chromium's Keychain provider reports a
- * denial and any other Keychain error alike, so on macOS this says only that
- * the Keychain wasn't available. DPAPI has no prompt to dismiss, so on Windows
- * a failure just means there is no keychain to use.
+ * asks again until Daintree restarts. That no-key result can't say why: on
+ * Linux the same fixed-key fallback follows a dismissed unlock prompt and a
+ * keyring service that isn't running at all, and Chromium's Keychain provider
+ * reports a denial and any other Keychain error alike, so the words say only
+ * that the store wasn't available. DPAPI has no prompt to dismiss, so on
+ * Windows a failure just means there is no keychain to use.
  */
 let sessionFailure: "locked" | "unavailable" | null = null;
 
@@ -117,29 +119,25 @@ function noteKeychainKey(keyed: boolean): void {
   else sessionFailure = process.platform === "win32" ? "unavailable" : "locked";
 }
 
-/** What stopped this session getting a key, and what a restart will do about it. */
-function lockedWords(): { why: string; fix: string } {
-  return process.platform === "darwin"
-    ? { why: "The Keychain wasn't available this session", fix: "restart Daintree to try again" }
-    : {
-        why: "The keyring wasn't unlocked this session",
-        fix: "restart Daintree to be asked again",
-      };
+/** What stopped this session getting a key: all that is known is that it didn't. */
+function lockedReason(): string {
+  const store = process.platform === "darwin" ? "The Keychain" : "The keyring";
+  return `${store} wasn't available this session`;
 }
+
+const RESTART = "restart Daintree to try again";
 
 /** Why a secret write was refused at `tier`, in words for the person who tried it. */
 export function secretWriteRefusal(key: string, tier: SecretStorageTier): string {
   if (tier !== "locked") {
     return `Secure storage is unavailable on this device, so the secret "${key}" wasn't saved`;
   }
-  const { why, fix } = lockedWords();
-  return `${why}, so the secret "${key}" wasn't saved — ${fix}`;
+  return `${lockedReason()}, so the secret "${key}" wasn't saved — ${RESTART}`;
 }
 
 function readRefusal(cause?: unknown): unknown {
   if (sessionFailure === "locked") {
-    const { why, fix } = lockedWords();
-    return new Error(`${why}, so the secret couldn't be read — ${fix}`);
+    return new Error(`${lockedReason()}, so the secret couldn't be read — ${RESTART}`);
   }
   return cause ?? new Error("Secure storage is unavailable, so the secret couldn't be read");
 }

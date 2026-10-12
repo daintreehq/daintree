@@ -72,7 +72,7 @@ describe("a keychain that gave no key this session", () => {
       expect(await safeStorageCipher.encrypt("hunter2")).toBeNull();
       expect(safeStorageCipher.tier()).toBe("locked");
       expect(secretWriteRefusal("apiKey", safeStorageCipher.tier())).toBe(
-        `The keyring wasn't unlocked this session, so the secret "apiKey" wasn't saved — restart Daintree to be asked again`
+        `The keyring wasn't available this session, so the secret "apiKey" wasn't saved — restart Daintree to try again`
       );
     });
 
@@ -107,7 +107,7 @@ describe("a keychain that gave no key this session", () => {
       );
 
       await expect(safeStorageCipher.decrypt(b64(sealed("v11", "hunter2")))).rejects.toThrow(
-        "The keyring wasn't unlocked this session, so the secret couldn't be read — restart Daintree to be asked again"
+        "The keyring wasn't available this session, so the secret couldn't be read — restart Daintree to try again"
       );
       expect(safeStorageCipher.tier()).toBe("locked");
     });
@@ -387,7 +387,7 @@ describe("safeStorageCipher decrypt", () => {
       await expect(
         safeStorageCipher.decrypt(b64(sealed("v11", "hunter2")), { legacy: true })
       ).rejects.toThrow(
-        "The keyring wasn't unlocked this session, so the secret couldn't be read — restart Daintree to be asked again"
+        "The keyring wasn't available this session, so the secret couldn't be read — restart Daintree to try again"
       );
       expect(safeStorageMock.decryptString).not.toHaveBeenCalled();
     });

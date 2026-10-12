@@ -199,19 +199,17 @@ export function unavailableSecretStorageText(
 }
 
 /**
- * The keychain is there but gave Daintree no key this session: a keyring's
- * unlock prompt was dismissed or failed, or the macOS Keychain refused, which
- * Chromium doesn't tell apart from any other Keychain error. Electron asks once
- * per run, so retrying a save can't get past it; a restart is what tries again.
+ * The keychain is there but gave Daintree no key this session. Why isn't known:
+ * on Linux a dismissed unlock prompt and a keyring service that isn't running
+ * end the same way, and Chromium reports a Keychain refusal like any other
+ * Keychain error. Electron asks once per run, so retrying a save can't get past
+ * it; a restart is what tries again.
  */
 export function lockedSecretStorageText(host: { name: string } | null, platform: string): string {
-  const mac = platform === "darwin";
-  const what = mac ? "Keychain" : "Keyring";
-  const state = mac ? "not available this session" : "not unlocked this session";
-  const retry = mac ? "try again" : "be asked again";
+  const store = platform === "darwin" ? "Keychain" : "Keyring";
   return host === null
-    ? `${what} ${state} — restart Daintree to ${retry}`
-    : `${what} on ${host.name} ${state} — restart Daintree there to ${retry}`;
+    ? `${store} not available this session — restart Daintree to try again`
+    : `${store} on ${host.name} not available this session — restart Daintree there to try again`;
 }
 
 /**
