@@ -170,6 +170,10 @@ describe("view reverse requests", () => {
     "plugin.install",
     "acme.plugin.doThing",
     "workspace.list",
+    "file.openPanel",
+    "file.read",
+    "file.openDiff",
+    "file.openInEditor",
   ])("refuses %s from a host without touching the view", async (actionId) => {
     installViewReverseRequests();
     const answer = await ask("mcp:dispatch-action", {
@@ -190,7 +194,7 @@ describe("view reverse requests", () => {
     }
   });
 
-  it.each(["browser.captureScreenshot", "host.switch", "project.openOnHost"])(
+  it.each(["browser.captureScreenshot", "file.view", "host.switch", "project.openOnHost"])(
     "runs %s for a host, unconfirmed, so the view decides",
     async (actionId) => {
       installViewReverseRequests();
@@ -231,6 +235,18 @@ describe("view reverse requests", () => {
     ]);
     await expect(ask("mcp:get-manifest")).resolves.toEqual([{ id: "terminal.new" }]);
     expect(m.requestManifestForHost).toHaveBeenCalledWith(11);
+  });
+
+  it("lists file.view to a host but none of the file actions that persist or read back", async () => {
+    installViewReverseRequests();
+    m.requestManifestForHost.mockResolvedValue([
+      { id: "file.view" },
+      { id: "file.openPanel" },
+      { id: "file.read" },
+      { id: "file.openDiff" },
+      { id: "file.openInEditor" },
+    ]);
+    await expect(ask("mcp:get-manifest")).resolves.toEqual([{ id: "file.view" }]);
   });
 
   it("shows a host's notification as the addressed view's", async () => {

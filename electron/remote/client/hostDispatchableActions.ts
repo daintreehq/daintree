@@ -10,9 +10,16 @@
  * does not control. An action a new release adds stays out until it is added
  * here.
  *
- * Three reach a little further, each on this Shell's terms:
+ * Four reach a little further, each on this Shell's terms:
  * - `browser.captureScreenshot` returns the pixels of a browser panel in the
  *   view the host already drives, as bytes; nothing lands on this clipboard.
+ * - `file.view` shows a host file in the view's ephemeral read-only dialog,
+ *   so an agent can show the person here a file without `open` firing on the
+ *   host's own display. The view reads it from the host, whose file service
+ *   serves only files inside the project and its worktrees, and draws an SVG
+ *   as an isolated image so its markup cannot fetch from this machine. The
+ *   dialog is never restored; only the person here can promote it to a
+ *   lasting panel.
  * - `host.switch` is `danger: "confirm"`, so a host asking to move this window
  *   raises this Shell's own dialog naming that host, and does nothing unless
  *   the person here approves.
@@ -28,6 +35,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.listAvailable",
   "agent.listPresets",
   "browser.captureScreenshot",
+  "file.view",
   "fleet.getRunStatus",
   "host.switch",
   "project.openOnHost",

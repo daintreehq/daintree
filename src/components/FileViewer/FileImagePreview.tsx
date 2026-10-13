@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { svgToDataUrl } from "@/lib/svg";
 import { buildDaintreeFileUrl } from "./filePreviewKinds";
 
 interface FileImagePreviewProps {
@@ -9,9 +9,9 @@ interface FileImagePreviewProps {
   /** Alt text — the file name, so a broken image still names its file. */
   alt: string;
   /**
-   * Sanitized SVG markup. When present the SVG is inlined instead of loaded as
-   * an `<img>`, so it scales with the viewport. Sanitization happens upstream;
-   * raw SVG must never reach this component.
+   * Sanitized SVG markup. When present it is shown as an image of itself rather
+   * than loaded through the protocol. Sanitization happens upstream; raw SVG
+   * must never reach this component.
    */
   sanitizedSvg?: string | null;
   /**
@@ -19,7 +19,7 @@ interface FileImagePreviewProps {
    * is otherwise a pure function of path and root, so a rewritten image on disk
    * is never refetched — `Cache-Control: no-store` only governs a request that
    * actually happens. Changing this changes the URL, which is what asks for one.
-   * Ignored for inlined SVG, which is re-read and re-sanitized upstream.
+   * Ignored for SVG markup, which is re-read and re-sanitized upstream.
    */
   cacheBust?: string;
   onError?: () => void;
@@ -28,33 +28,33 @@ interface FileImagePreviewProps {
 }
 
 /**
- * Inserts sanitized SVG through `DOMParser` rather than `innerHTML`.
- *
- * `sanitizeSvg` documents this explicitly: its output is safe to embed only via
- * DOM APIs that do not re-tokenize the markup as HTML, because an HTML reparse
- * can resurrect mutation-XSS vectors its regex pass cannot model. Parsing as
- * `image/svg+xml` and adopting the resulting node avoids that reparse.
+ * SVG markup is shown as an `<img>` of its own data URL, never inserted into
+ * this document. An SVG image fetches nothing but `data:` URLs, runs no script
+ * and keeps its styles to itself, so CSS the regex sanitizer misses
+ * (`u\72l(…)`, `image-set("…")`) cannot make this machine fetch a
+ * `daintree-file://load` URL of its own disk. A remote view's SVG, and the
+ * agent asking to show it, come from another machine.
  */
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 /**
- * Parse sanitized SVG into a live element, or null if it isn't usable.
+ * The markup to render and whether it sets its own width, or null if it isn't
+ * usable. An SVG without a `width` has no intrinsic size as an image, so it is
+ * stretched to the stage as it was when inlined; one with a size keeps it.
  *
- * `image/svg+xml` parsing is namespace-strict, unlike the HTML parser that
- * `innerHTML` used to run: a document whose root `<svg>` omits `xmlns` (common
- * in hand-written and tool-exported files) parses into a null-namespace element
- * that renders blank. `sanitizeSvg` only requires the string to contain `<svg`,
- * so declare the namespace when it's absent rather than silently showing
- * nothing.
+ * `image/svg+xml` is namespace-strict: a root `<svg>` that omits `xmlns` (common
+ * in hand-written and tool-exported files) renders blank. `sanitizeSvg` only
+ * requires the string to contain `<svg`, so declare the namespace when it's
+ * absent rather than silently showing nothing.
  */
-function parseSanitizedSvg(sanitizedSvg: string): Element | null {
-  const parse = (markup: string): Element | null => {
+function renderableSvg(sanitizedSvg: string): { markup: string; sized: boolean } | null {
+  const parse = (markup: string): { markup: string; sized: boolean } | null => {
     const parsed = new DOMParser().parseFromString(markup, "image/svg+xml");
     // A parse failure yields a <parsererror> document rather than throwing.
     if (parsed.querySelector("parsererror")) return null;
     const root = parsed.documentElement;
     if (!root || root.localName !== "svg" || root.namespaceURI !== SVG_NAMESPACE) return null;
-    return root;
+    return { markup, sized: root.hasAttribute("width") };
   };
 
   const direct = parse(sanitizedSvg);
@@ -68,32 +68,8 @@ function parseSanitizedSvg(sanitizedSvg: string): Element | null {
   return null;
 }
 
-function useInlineSvg(sanitizedSvg: string | null | undefined) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    if (!sanitizedSvg) {
-      container.replaceChildren();
-      return;
-    }
-    const svg = parseSanitizedSvg(sanitizedSvg);
-    if (!svg) {
-      container.replaceChildren();
-      return;
-    }
-    // replaceChildren keeps this idempotent, so StrictMode's double invoke in
-    // dev re-runs it without stacking duplicate nodes.
-    container.replaceChildren(document.importNode(svg, true));
-    return () => container.replaceChildren();
-  }, [sanitizedSvg]);
-
-  return containerRef;
-}
-
 /**
- * Renders an image or inlined SVG preview.
+ * Renders an image or SVG preview.
  *
  * Shared by `FilePane` and `FileViewerModal` so both surfaces preview the same
  * files the same way — the file viewer existing twice is exactly what this
@@ -108,17 +84,20 @@ export function FileImagePreview({
   onError,
   maxHeightClassName = "max-h-[70vh]",
 }: FileImagePreviewProps) {
-  const svgContainerRef = useInlineSvg(sanitizedSvg);
+  const svg = sanitizedSvg ? renderableSvg(sanitizedSvg) : null;
 
   return (
     <div className="flex items-center justify-center p-6 min-h-[300px]">
       {sanitizedSvg ? (
-        <div
-          ref={svgContainerRef}
-          role="img"
-          aria-label={alt}
-          className={`max-w-full ${maxHeightClassName} overflow-auto [&>svg]:max-w-full [&>svg]:h-auto`}
-        />
+        svg && (
+          <img
+            src={svgToDataUrl(svg.markup)}
+            alt={alt}
+            className={`max-w-full ${maxHeightClassName} object-contain${svg.sized ? "" : " w-full h-auto"}`}
+            draggable={false}
+            onError={onError}
+          />
+        )
       ) : (
         <img
           // Keyed by path so switching files remounts rather than showing the

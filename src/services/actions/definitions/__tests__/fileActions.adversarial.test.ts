@@ -12,6 +12,7 @@ const systemClientMock = vi.hoisted(() => ({
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const openPanelDialogMock = vi.hoisted(() => vi.fn<(options: unknown) => Promise<string | null>>());
+const primePreviewCapabilityMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
 
 vi.mock("@/clients", () => ({ systemClient: systemClientMock }));
 vi.mock("@/store", () => ({ useProjectStore: projectStoreMock }));
@@ -19,6 +20,10 @@ vi.mock("@/store", () => ({ useProjectStore: projectStoreMock }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: vi.fn() } }));
 vi.mock("@/store/panelDialogStore", () => ({
   usePanelDialogStore: { getState: () => ({ openPanelDialog: openPanelDialogMock }) },
+}));
+
+vi.mock("@/components/FileViewer/filePreviewKinds", () => ({
+  primeHostPreviewCapability: primePreviewCapabilityMock,
 }));
 
 import { registerFileActions } from "../fileActions";
@@ -52,6 +57,7 @@ beforeEach(() => {
     { id: "wt-other", path: "/repo/wt-other" },
   ];
   openPanelDialogMock.mockReset().mockResolvedValue("file-panel-1");
+  primePreviewCapabilityMock.mockReset().mockResolvedValue(null);
   // `mockReset`, not `clearAllMocks` alone: the latter drains call records but
   // NOT queued `...Once` implementations, so a test that aborts before consuming
   // its rejection would hand it to the next one.
@@ -69,6 +75,28 @@ afterEach(() => {
 });
 
 describe("fileActions adversarial", () => {
+  it("file.view waits for a remote view's preview capability before opening the dialog", async () => {
+    let resolvePrime!: (capability: string | null) => void;
+    primePreviewCapabilityMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePrime = resolve;
+      })
+    );
+    const run = setupActions();
+
+    const pending = run("file.view", { path: "shots/after.png" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(primePreviewCapabilityMock).toHaveBeenCalledTimes(1);
+    expect(openPanelDialogMock).not.toHaveBeenCalled();
+
+    resolvePrime("cap-1");
+    await expect(pending).resolves.toEqual({ panelId: "file-panel-1" });
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "file", filePath: "/repo/shots/after.png" })
+    );
+  });
+
   it("file.view opens an ephemeral file panel dialog with the resolved path", async () => {
     const run = setupActions();
     const result = await run("file.view", {
