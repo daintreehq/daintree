@@ -51,6 +51,8 @@ describe("release-linux arm64 build (#13253)", () => {
   it("generates and validates the arch's own metadata inside its build", () => {
     const step = findStep(build, /validate update metadata/i);
     expect(step.env.METADATA_SUFFIX).toBe("${{ matrix.metadata_suffix }}");
+    // The suffix must reach the filename, or arm64 would write the x64 feed.
+    expect(step.run).toContain('"release/${UPDATE_METADATA_PREFIX}${METADATA_SUFFIX}.yml"');
     expect(step.run).toContain("generate-update-metadata.mjs linux");
     expect(step.run).toContain("validate-update-metadata.mjs");
   });
@@ -71,6 +73,22 @@ describe("release-linux arm64 build (#13253)", () => {
 
   it("publishes only after both arches built and smoked", () => {
     expect(publish.needs).toEqual(expect.arrayContaining(["build-daintree", "smoke-packaged"]));
+  });
+
+  it("starts each publish from a clean release/ so arches never cross-upload", () => {
+    // Both arches publish from one job; the composite action's own checkout
+    // runs `git clean -ffdx`, which empties the gitignored release/ before the
+    // next arch's download.
+    const action = load(
+      readFileSync(path.join(workflowsDir, "../actions/publish-daintree/action.yml"), "utf8")
+    );
+    const checkoutIdx = action.runs.steps.findIndex((s) => s.uses?.startsWith("actions/checkout"));
+    const downloadIdx = action.runs.steps.findIndex((s) =>
+      s.uses?.startsWith("actions/download-artifact")
+    );
+    expect(checkoutIdx).toBeGreaterThanOrEqual(0);
+    expect(action.runs.steps[checkoutIdx].with.clean).toBe(true);
+    expect(checkoutIdx).toBeLessThan(downloadIdx);
   });
 
   it("publishes each arch's artifact to its own feed", () => {
