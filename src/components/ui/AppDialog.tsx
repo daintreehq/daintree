@@ -70,6 +70,24 @@ type DialogPlacement = "center" | "right" | "left";
 type RestoreFocusTarget = React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
 
 /**
+ * A dialog opened from a menu item is recorded against the menu's trigger. The
+ * item's select handler runs before the menu closes, so the item still holds
+ * focus when the opener is read — and it unmounts with the menu, which would
+ * leave the close nothing to restore to but the app shell.
+ */
+function resolveOpener(active: HTMLElement | null): HTMLElement | null {
+  let opener = active;
+  // A submenu is labelled by its sub-trigger, itself an item of the parent menu.
+  for (let depth = 0; depth < 4; depth++) {
+    const triggerId = opener?.closest('[role="menu"]')?.getAttribute("aria-labelledby");
+    const trigger = triggerId ? document.getElementById(triggerId) : null;
+    if (!trigger || trigger === opener) break;
+    opener = trigger;
+  }
+  return opener;
+}
+
+/**
  * Resolve a {@link RestoreFocusTarget} to an element. Tolerates a throwing
  * resolver so the caller can still fall through to the app-shell fallback.
  */
@@ -123,6 +141,14 @@ export interface AppDialogProps {
    * opened it (a viewer stepped to another item returns focus to that item).
    */
   preferRestoreFocusTo?: boolean;
+  /**
+   * Runs once the dialog has finished closing and handed focus back. A
+   * follow-up dialog opened from here captures the control the user was on as
+   * its opener; opened any earlier, it would capture a closing control and
+   * this dialog's restore would then move focus out behind it. Not called
+   * when the dialog unmounts or reopens before its exit finishes.
+   */
+  onCloseComplete?: () => void;
   /**
    * Painted under the scrim, over the app — for a dialog that holds a still of
    * the app behind itself. The scrim's tint and blur stay live on top of it, and
@@ -205,6 +231,7 @@ export function AppDialog({
   initialFocus,
   restoreFocusTo,
   preferRestoreFocusTo = false,
+  onCloseComplete,
   backdrop,
   "data-testid": dataTestId,
 }: AppDialogProps) {
@@ -274,9 +301,11 @@ export function AppDialog({
     }
     if (document.contains(el)) {
       el.focus();
-      return;
+      // A recorded opener can be connected yet refuse focus (a menu labelled
+      // by something other than its trigger), so fall through when it did.
+      if (document.activeElement === el) return;
     }
-    // Trigger was unmounted before close. Prefer a caller-supplied logical
+    // Trigger was unmounted before close, or would not take focus. Prefer a caller-supplied logical
     // successor (e.g. the next row after a delete) when one is still connected
     // and actually accepts focus.
     const target = resolveRestoreFocusTarget(restoreFocusToRef.current);
@@ -291,10 +320,19 @@ export function AppDialog({
     fallback?.focus();
   }, []);
 
+  const onCloseCompleteRef = useRef(onCloseComplete);
+  useEffect(() => {
+    onCloseCompleteRef.current = onCloseComplete;
+  }, [onCloseComplete]);
+  const handleAnimateOut = useCallback(() => {
+    restoreFocus();
+    onCloseCompleteRef.current?.();
+  }, [restoreFocus]);
+
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen,
     animationDuration: getUiTransitionDuration("exit"),
-    onAnimateOut: restoreFocus,
+    onAnimateOut: handleAnimateOut,
     syncEnter: true,
   });
 
@@ -348,7 +386,7 @@ export function AppDialog({
     focusAtOpenRef.current = active;
     if (openerCapturedRef.current) return;
     openerCapturedRef.current = true;
-    previousActiveElement.current = active;
+    previousActiveElement.current = resolveOpener(active);
   }, [isOpen]);
 
   useEffect(() => {

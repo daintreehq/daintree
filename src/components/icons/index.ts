@@ -68,6 +68,7 @@ export {
   Server, // a machine a window runs on — the toolbar's host switcher, beside the project pill
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
+  Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
   TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
   Workflow, // terminal recipe / scripted command sequence

@@ -16,7 +16,7 @@
  *   DAINTREE_SHOT_RECIPES  required — any truthy value runs the capture
  *   DAINTREE_SHOT_DIR      required — an ABSOLUTE output directory outside the repo
  *   DAINTREE_SHOT_THEMES   themes for the rest-state sweep (default daintree,bondi,namib)
- *   DAINTREE_SHOT_ONLY     manager|runner|variables|editor|dialogs — capture one group only
+ *   DAINTREE_SHOT_ONLY     manager|runner|variables|editor|dialogs — comma-separated groups to capture
  *
  * Never writes a PNG it has not verified, and counts the files itself at the end.
  */
@@ -36,8 +36,11 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,namib")
   .split(",")
   .map((t) => t.trim())
   .filter(Boolean);
-const ONLY = process.env.DAINTREE_SHOT_ONLY ?? "";
-const wants = (group: string) => !ONLY || ONLY === group;
+const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "")
+  .split(",")
+  .map((g) => g.trim())
+  .filter(Boolean);
+const wants = (group: string) => ONLY.length === 0 || ONLY.includes(group);
 
 test.use({ deviceScaleFactor: 2 });
 
@@ -142,7 +145,7 @@ async function settle(page: Page, ms = 250): Promise<void> {
 async function snap(page: Page, selector: string, file: string, pad = 24): Promise<void> {
   expected.push(file);
   await settle(page, 150);
-  const box = await page.locator(selector).last().boundingBox();
+  const box = await page.locator(selector).last().boundingBox({ timeout: 10_000 });
   if (!box || box.width < 40 || box.height < 40) {
     throw new Error(`${file}: ${selector} has no real box (${JSON.stringify(box)})`);
   }

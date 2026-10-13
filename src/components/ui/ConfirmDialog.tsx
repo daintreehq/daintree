@@ -95,6 +95,8 @@ type ConfirmDialogBaseProps = {
    * or disconnected.
    */
   restoreFocusTo?: RestoreFocusTarget;
+  /** Forwarded to {@link AppDialog.onCloseComplete}. */
+  onCloseComplete?: () => void;
   /**
    * Forwarded to {@link AppDialog.Footer.hint}: a subdued status line rendered
    * beside the action row. Use it to say why the primary action is currently
@@ -164,6 +166,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     zIndex,
     initialFocus,
     restoreFocusTo,
+    onCloseComplete,
     hasPreview = false,
     size = "sm",
     hint,
@@ -282,6 +285,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       zIndex={zIndex}
       initialFocus={initialFocus}
       restoreFocusTo={restoreFocusTo}
+      onCloseComplete={onCloseComplete}
     >
       <AppDialog.Header>
         <AppDialog.Title icon={titleIcon}>{title}</AppDialog.Title>
