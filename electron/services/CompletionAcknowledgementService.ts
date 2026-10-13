@@ -1,4 +1,3 @@
-import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { logWarn } from "../utils/logger.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
@@ -21,8 +20,14 @@ export interface CompletionAcknowledgementDeps {
    * be acknowledged while the user is elsewhere.
    */
   getObservedProjectId: () => string | null;
-  /** Latest pushed status map (ProjectStatsService.getLastBroadcast). */
-  getStatusMap: () => ProjectStatusMap;
+  /**
+   * The latest unacknowledged completion the watermark can clear for a
+   * project, or undefined when there is none
+   * (`ProjectStatsService.getAcknowledgeableCompletionAt`). Hand-backs with a
+   * run record are excluded: they are seen per run, so stamping from them
+   * would never clear them and could drag the watermark backwards (#13238).
+   */
+  getAcknowledgeableCompletionAt: (projectId: string) => number | undefined;
   /** Persist the acknowledgement watermark for a project. */
   markSeen: (projectId: string, seenUpTo: number) => void;
   /** Fired after a stamp so the stats push can clear the attention state. */
@@ -57,6 +62,8 @@ export class CompletionAcknowledgementService {
   private dwellSince = 0;
   private started = false;
   private observing = true;
+  /** The last watermark this service stamped per workspace. */
+  private stamped = new Map<string, number>();
 
   constructor(private readonly deps: CompletionAcknowledgementDeps) {}
 
@@ -133,10 +140,11 @@ export class CompletionAcknowledgementService {
       return;
     }
 
-    const entry = this.deps.getStatusMap()[observed];
-    if (!entry || entry.unacknowledgedCompletedAgentCount <= 0) return;
-    const latest = entry.latestUnacknowledgedCompletionAt;
-    if (latest === undefined) return;
+    const latest = this.deps.getAcknowledgeableCompletionAt(observed);
+    // Already stamped: the candidate is read from the last compute, which lags
+    // the stamp until a recompute succeeds, and re-stamping it each tick would
+    // write and refresh once a second for as long as computes fail or overrun.
+    if (latest === undefined || latest <= (this.stamped.get(observed) ?? 0)) return;
 
     // The dwell clock starts at whichever is later: when the project came
     // under observation, or when the newest completion landed. A completion
@@ -153,6 +161,7 @@ export class CompletionAcknowledgementService {
     // covered; a completion landing after `latest` stays unacknowledged and
     // re-anchors the dwell above.
     this.deps.markSeen(observed, latest);
+    this.stamped.set(observed, latest);
     this.deps.onAcknowledged();
   }
 }

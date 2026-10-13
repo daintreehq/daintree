@@ -535,7 +535,7 @@ function classifyWorkspaceActivity(
   if (project.waitingAgentCount > 0) {
     // `blockedAgentCount` is a subset of `waitingAgentCount`, so the remainder
     // is still waiting on the user and has to be reported too — collapsing a
-    // "3 waiting, 1 blocked" project to "Agent blocked" would hide two agents
+    // "3 need input, 1 blocked" project to "Agent blocked" would hide two agents
     // that are asking for something.
     const blocked = Math.min(project.blockedAgentCount, project.waitingAgentCount);
     const unblocked = project.waitingAgentCount - blocked;
@@ -546,10 +546,11 @@ function classifyWorkspaceActivity(
       // can compare it against the running count in front of it without
       // re-parsing a sentence.
       //
-      // "waiting", not "need input": an agent that finished its turn settles
-      // into `waiting` at its prompt the same as one that asked a question, so
-      // claiming it needs input overstated what was observed (#13047).
-      parts.push(`${unblocked} waiting`);
+      // "need input" is honest again: a turn main watched an agent finish is
+      // counted as finished, not waiting, so what reaches this count is an
+      // approval, a question, or a prompt wait from before main was watching
+      // (#13238, which undoes the softening #13047 needed).
+      parts.push(`${unblocked} need input`);
       if (blocked > 0) parts.push(`${blocked} blocked`);
     } else {
       parts.push(`${blocked} blocked`);
