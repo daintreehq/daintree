@@ -49,20 +49,19 @@ describe("forgetHostLocalState", () => {
   });
 
   it("scrubs entries only another view knew, from each stored copy and its backup", () => {
+    // Nothing of the host in this view's memory, so no store writes over the
+    // stored copies: what is left there is the scrub's work alone.
+    useCommandHistoryStore.setState({ history: {} });
+    useUrlHistoryStore.setState({ entries: {} });
+    useTwoPaneSplitStore.setState({ ratioByWorktreeId: {} });
     const stores = [
       { name: useCommandHistoryStore.persist.getOptions().name!, field: "history" },
       { name: useUrlHistoryStore.persist.getOptions().name!, field: "entries" },
       { name: useTwoPaneSplitStore.persist.getOptions().name!, field: "ratioByWorktreeId" },
     ];
-    // Each store keeps only well-formed entries when it next writes.
-    const value = (field: string) =>
-      field === "ratioByWorktreeId" ? { ratio: 0.4, panels: ["a", "b"] } : ["entry"];
     const stored = (field: string) =>
       JSON.stringify({
-        state: {
-          [field]: { "studio:disk-only": value(field), "studio-2:disk-only": value(field) },
-          other: 1,
-        },
+        state: { [field]: { "studio:disk-only": 1, "studio-2:disk-only": 2 }, other: 1 },
         version: 3,
       });
     for (const { name, field } of stores) {
@@ -76,18 +75,10 @@ describe("forgetHostLocalState", () => {
 
     for (const { name, field } of stores) {
       for (const key of [name, backupKeyFor(name)]) {
-        // The store's own write may follow and reshape the blob; what must hold
-        // is that no copy keeps the removed host and the other host's entry stays.
-        const parsed: unknown = JSON.parse(localStorage.getItem(key)!);
-        const state: unknown =
-          parsed && typeof parsed === "object" ? Reflect.get(parsed, "state") : null;
-        const record: unknown =
-          state && typeof state === "object" ? Reflect.get(state, field) : null;
-        const keys = Object.keys(record ?? {});
-        expect(keys.filter((k) => k.startsWith("studio:"))).toEqual([]);
-        // The split store's own write keeps only what this view holds; the
-        // history stores also keep entries another view wrote.
-        if (field !== "ratioByWorktreeId") expect(keys).toContain("studio-2:disk-only");
+        expect(JSON.parse(localStorage.getItem(key)!)).toEqual({
+          state: { [field]: { "studio-2:disk-only": 2 }, other: 1 },
+          version: 3,
+        });
       }
     }
     expect(localStorage.getItem("daintree:host-build-noticed:studio\u00001.0\u0000abc")).toBeNull();
