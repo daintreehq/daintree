@@ -443,6 +443,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         id: terminal.id,
         projectId: terminal.projectId,
         kind: terminal.kind,
+        isTrashed: terminal.isTrashed,
 
         launchAgentId: terminal.launchAgentId,
         title: terminal.title,

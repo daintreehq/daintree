@@ -106,26 +106,33 @@ export async function rehydrateHostProjectState(
     if (!options.isCurrent()) return;
   }
 
+  let followDeps: FollowDeps | null = null;
   if (options.follow) {
-    const [{ transferBetweenWorktreeIndex }, { saveNormalized }, { followsHostLayout }] =
-      await Promise.all([
-        import("@/store/slices/panelRegistry/worktreeIndex"),
-        import("@/store/slices/panelRegistry/persistence"),
-        import("@/store/hostTerminalResync"),
-      ]);
+    const [
+      { transferBetweenWorktreeIndex },
+      { saveNormalized, saveTabGroups },
+      { followsHostLayout },
+    ] = await Promise.all([
+      import("@/store/slices/panelRegistry/worktreeIndex"),
+      import("@/store/slices/panelRegistry/persistence"),
+      import("@/store/hostTerminalResync"),
+    ]);
     if (!options.isCurrent()) return;
-    followSavedPanels(saved, usePanelStore, {
-      transferBetweenWorktreeIndex,
-      saveNormalized,
-      followsHostLayout,
-    });
+    followDeps = { transferBetweenWorktreeIndex, saveNormalized, saveTabGroups, followsHostLayout };
+    followSavedPanels(saved, usePanelStore, followDeps);
   }
 
   if (options.authoritative) {
     const store = usePanelStore.getState();
     store.restoreTerminalOrder(saved.map((entry) => entry.id));
     const tabGroups: TabGroup[] | undefined = hydrate.tabGroups;
-    if (tabGroups) store.hydrateTabGroups(tabGroups, { skipPersist: true });
+    if (tabGroups) {
+      store.hydrateTabGroups(tabGroups, { skipPersist: true });
+      // A removal above queued the groups as they stood before; queued again,
+      // the save that goes out (from a view that has just taken over) is the
+      // host's own, not a stale one written over it.
+      if (followDeps) followDeps.saveTabGroups(usePanelStore.getState().tabGroups);
+    }
     await applyActiveWorktree(hydrate.appState?.activeWorktreeId ?? null, options);
     if (!options.isCurrent()) return;
   }
@@ -172,6 +179,7 @@ type PanelState = ReturnType<PanelStore["getState"]>;
 interface FollowDeps {
   transferBetweenWorktreeIndex: typeof import("@/store/slices/panelRegistry/worktreeIndex").transferBetweenWorktreeIndex;
   saveNormalized: typeof import("@/store/slices/panelRegistry/persistence").saveNormalized;
+  saveTabGroups: typeof import("@/store/slices/panelRegistry/persistence").saveTabGroups;
   followsHostLayout: typeof import("@/store/hostTerminalResync").followsHostLayout;
 }
 

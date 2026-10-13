@@ -1,5 +1,5 @@
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
-import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
+import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { logWarn } from "@/utils/logger";
 
@@ -149,6 +149,9 @@ async function observeVanishedTerminals(
     return (
       panel !== undefined &&
       isPtyPanel(panel) &&
+      // Following, this screen's own panes (the assistant) are never on the
+      // host's project list, and say nothing about the driver.
+      (!options.follow || followsHostLayout(panel)) &&
       !panel.isRestarting &&
       !panel.spawnError &&
       // Held for restore recovery: it has no PTY on purpose, and is waiting on the user.
@@ -169,7 +172,7 @@ async function observeVanishedTerminals(
   );
   // A spawn still in flight when the list was read isn't on it yet; ask about
   // each one directly before calling it gone, and change nothing if unsure.
-  let confirmed: Record<string, { exists: boolean; conflict?: boolean }>;
+  let confirmed: Record<string, TerminalReconnectResult>;
   try {
     confirmed = await window.electron.terminal.reconnectBulk(live.slice(0, 256));
   } catch (error) {
@@ -189,11 +192,11 @@ async function observeVanishedTerminals(
     // A real exit reported while the probe was out already says it all, code included.
     if (panel.exitCode !== undefined || panel.runtimeStatus === "exited") continue;
     if (answer.exists) {
-      // Still running on the host but off its project list: the list leaves
-      // trashed terminals out, so the driver trashed it. It comes back through
-      // adoption if the driver restores it. A spawn can't be in flight here:
-      // a watcher starts nothing, and this pane was on an earlier list.
-      if (options.follow && followsHostLayout(panel)) {
+      // Off the project's list because the driver trashed it: the list leaves
+      // trashed terminals out. It comes back through adoption if the driver
+      // restores it. Anything else still running (a restart caught between
+      // its kill and its spawn) stays.
+      if (options.follow && answer.isTrashed === true && followsHostLayout(panel)) {
         state.removePanel(id, { backendAlreadyClosed: true });
       }
       continue;

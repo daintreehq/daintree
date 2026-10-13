@@ -15,6 +15,10 @@ vi.mock("../../../../services/pty/agentSessionCapturePersistence.js", () => ({
   acceptCapturedAgentSession: vi.fn(),
   releaseSupersededCapturedSession: vi.fn(),
 }));
+const notifyPanelsChanged = vi.hoisted(() => vi.fn());
+vi.mock("../../../../services/DriveLeaseService.js", () => ({
+  peekDriveLeaseService: () => ({ notifyPanelsChanged }),
+}));
 vi.mock("../../../../services/events.js", () => ({
   events: { on: vi.fn(() => vi.fn()), emit: vi.fn() },
 }));
@@ -74,6 +78,17 @@ describe("terminal event handlers — spawn confirmation (#12754)", () => {
 
     expect(spawnResultEnvelopes()).toHaveLength(1);
     expect(spawnResultEnvelopes()[0]![1].payload[1]).toMatchObject({ success: true });
+  });
+
+  it("tells the project's watchers of a terminal that started, restarts included (#13280)", () => {
+    ptyClient.emit("spawn-result", "t1", { success: true, id: "t1" });
+    expect(notifyPanelsChanged).toHaveBeenCalledWith("project-a");
+
+    notifyPanelsChanged.mockClear();
+    ptyClient.emit("spawn-result", "t2", { success: false, id: "t2", error: { code: "X" } });
+    ptyClient.getTerminalProjectId.mockReturnValueOnce(null);
+    ptyClient.emit("spawn-result", "t3", { success: true, id: "t3" });
+    expect(notifyPanelsChanged).not.toHaveBeenCalled();
   });
 
   it("a predecessor's exit does not disarm a restarted launch's window", () => {

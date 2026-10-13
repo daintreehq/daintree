@@ -284,6 +284,8 @@ export interface TerminalReconnectResult {
   id?: string;
   projectId?: string;
   kind?: PanelKind;
+  /** In the host's trash, which leaves it off the project's terminal list. */
+  isTrashed?: boolean;
   /** Launch hint — agent this terminal was launched to run. See `docs/architecture/terminal-identity.md`. */
   launchAgentId?: AgentId;
   title?: string;

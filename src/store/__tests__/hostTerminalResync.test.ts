@@ -220,12 +220,15 @@ describe("resyncHostTerminals following the driver (#13280)", () => {
     panel("t-trashed");
     panel("t-listed-trashed");
     panel("t-gone");
+    // Between its kill and its spawn: off the list, but not trashed.
+    panel("t-restarting-there");
     getForProject.mockResolvedValue([
       { id: "t-listed-trashed", cwd: "/repo", spawnedAt: 1, isTrashed: true },
     ]);
     reconnectBulk.mockResolvedValue({
-      "t-trashed": { exists: true },
+      "t-trashed": { exists: true, isTrashed: true },
       "t-gone": { exists: false },
+      "t-restarting-there": { exists: true },
     });
 
     await resyncHostTerminals("proj-1", following);
@@ -235,6 +238,7 @@ describe("resyncHostTerminals following the driver (#13280)", () => {
       ["t-trashed", { backendAlreadyClosed: true }],
     ]);
     // Gone from the host: shown exited, for the layout to remove if the driver closed it.
+    expect(store.setRuntimeStatus).toHaveBeenCalledTimes(1);
     expect(store.setRuntimeStatus).toHaveBeenCalledWith("t-gone", "exited");
   });
 
@@ -243,21 +247,24 @@ describe("resyncHostTerminals following the driver (#13280)", () => {
     panel("t-help", { removeOnExit: true });
     panel("t-dialog", { location: "dialog" });
     getForProject.mockResolvedValue([]);
+    // The host never lists the assistant, and won't hand it over either.
     reconnectBulk.mockResolvedValue({
-      assistant: { exists: true },
-      "t-help": { exists: true },
-      "t-dialog": { exists: true },
+      "t-help": { exists: true, isTrashed: true },
+      "t-dialog": { exists: true, isTrashed: true },
     });
 
     await resyncHostTerminals("proj-1", following);
 
+    expect(reconnectBulk).not.toHaveBeenCalled();
     expect(store.removePanel).not.toHaveBeenCalled();
+    expect(store.setRuntimeStatus).not.toHaveBeenCalled();
+    expect(reportLost).not.toHaveBeenCalled();
   });
 
   it("keeps a trashed terminal's pane when not following", async () => {
     panel("t-trashed");
     getForProject.mockResolvedValue([]);
-    reconnectBulk.mockResolvedValue({ "t-trashed": { exists: true } });
+    reconnectBulk.mockResolvedValue({ "t-trashed": { exists: true, isTrashed: true } });
 
     await resyncHostTerminals("proj-1", current);
 

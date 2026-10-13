@@ -6,6 +6,7 @@ const { store, drafts, selection } = vi.hoisted(() => {
     panelsById: {} as Record<string, Record<string, unknown>>,
     panelIds: [] as string[],
     panelIdsByWorktreeId: {} as Record<string, string[]>,
+    tabGroups: new Map<string, unknown>(),
     addPanel: vi.fn(async (args: { requestedId?: string; kind?: string }) => {
       const id = args.requestedId ?? "new";
       store.panelsById[id] = { id, kind: args.kind };
@@ -47,8 +48,11 @@ vi.mock("@/store/panelStore", () => ({
     },
   },
 }));
-const saveNormalized = vi.hoisted(() => vi.fn());
-vi.mock("@/store/slices/panelRegistry/persistence", () => ({ saveNormalized }));
+const { saveNormalized, saveTabGroups } = vi.hoisted(() => ({
+  saveNormalized: vi.fn(),
+  saveTabGroups: vi.fn(),
+}));
+vi.mock("@/store/slices/panelRegistry/persistence", () => ({ saveNormalized, saveTabGroups }));
 vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => drafts },
 }));
@@ -303,6 +307,23 @@ describe("rehydrateHostProjectState following the driver (#13280)", () => {
     expect(store.removePanel).not.toHaveBeenCalled();
   });
 
+  it("queues the host's tab groups after taking them, over any a removal queued", async () => {
+    watcherHas([
+      { id: "t1", kind: "terminal", location: "grid" },
+      { id: "closed", kind: "browser", location: "grid" },
+    ]);
+    hydrate.mockResolvedValue(hostSaved());
+
+    await rehydrateHostProjectState("proj-1", following);
+
+    expect(store.removePanel).toHaveBeenCalledWith("closed");
+    expect(saveTabGroups).toHaveBeenCalledTimes(1);
+    expect(saveTabGroups).toHaveBeenCalledWith(store.tabGroups);
+    expect(saveTabGroups.mock.invocationCallOrder[0]!).toBeGreaterThan(
+      store.hydrateTabGroups.mock.invocationCallOrder[0]!
+    );
+  });
+
   it("drops what the driver closed, keeping this screen's own panels and running terminals", async () => {
     watcherHas([
       { id: "kept", kind: "browser", location: "grid", worktreeId: "wt-main" },
@@ -354,5 +375,6 @@ describe("rehydrateHostProjectState following the driver (#13280)", () => {
     expect(store.panelsById.t1).toMatchObject({ location: "grid", worktreeId: "wt-main" });
     expect(store.removePanel).not.toHaveBeenCalled();
     expect(saveNormalized).not.toHaveBeenCalled();
+    expect(saveTabGroups).not.toHaveBeenCalled();
   });
 });
