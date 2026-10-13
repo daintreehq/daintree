@@ -1740,3 +1740,42 @@ describe("narrowing on the worktree axis", () => {
     expect(filtered[0]!.demandCount).toBe(1);
   });
 });
+
+describe("buildPilotGroups — Canopy attribution", () => {
+  const ASKED = {
+    kind: "asked",
+    quote: "Should I also migrate the tests?",
+    readAt: NOW - 2 * 60_000,
+  } as const;
+
+  it("shows the quoted evidence on a row Canopy placed, and on its accessible surface", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "completed",
+          handBack: { stoppedAt: NOW - 1, seenAt: NOW },
+          canopy: ASKED,
+        }),
+      ],
+      ctx()
+    );
+    const row = group!.rows[0]!;
+    expect(row.band).toBe("needs-you");
+    expect(row.canopyEvidence).toEqual({
+      claim: 'Asked: "Should I also migrate the tests?"',
+      attribution: "read by Canopy 2m ago",
+    });
+  });
+
+  it("carries no attribution where the free rules placed the row, or the user shelved it", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({ runId: "plain", agentState: "waiting", waitingReason: "question" }),
+        run({ runId: "parked", agentState: "completed", canopy: ASKED, park: { parkedAt: NOW } }),
+        run({ runId: "moved-on", agentState: "working", canopy: ASKED }),
+      ],
+      ctx()
+    );
+    expect(group!.rows.map((r) => r.canopyEvidence)).toEqual([null, null, null]);
+  });
+});

@@ -13,6 +13,7 @@ import {
   computeProjectAgentCounts,
   type CountableTerminal,
 } from "../projectAgentCounts.js";
+import type { RunCanopyRefinement } from "../../../shared/types/ipc/fleet.js";
 
 const agent = (over: Partial<CountableTerminal> = {}): CountableTerminal => ({
   id: "t1",
@@ -1032,5 +1033,102 @@ describe("computeProjectAgentCounts — hand-backs and parks (#13238)", () => {
     );
 
     expect(p1).toMatchObject({ completed: 1, unacknowledgedCompleted: 0, snoozed: 1 });
+  });
+});
+
+describe("computeProjectAgentCounts — Canopy refinements (#13239)", () => {
+  const count = (
+    terminals: CountableTerminal[],
+    refinement: RunCanopyRefinement | undefined,
+    records: Readonly<Partial<Record<string, { stoppedAt: number; seenAt?: number }>>> = {}
+  ) =>
+    computeProjectAgentCounts(
+      ["p1"],
+      terminals.map((t) => ({ detectedAgentId: "claude", spawnedAt: 1, ...t })),
+      undefined,
+      new Map(),
+      undefined,
+      undefined,
+      (id) => records[id],
+      new Map(),
+      () => refinement
+    ).get("p1")!;
+
+  it("counts a seen hand-back Canopy read as asking something as a wait, like the fleet bands it", () => {
+    // Slid from `completed` into a prompt wait at 900, after stopping at 500.
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "prompt", lastStateChange: 900 }),
+    ];
+    const records = { a: { stoppedAt: 500, seenAt: 600 } };
+    expect(count(terminals, undefined, records)).toMatchObject({ waiting: 0, completed: 1 });
+    expect(
+      count(
+        terminals,
+        { kind: "asked", quote: "Want me to update the tests?", readAt: 700 },
+        records
+      )
+    ).toMatchObject({ waiting: 1, completed: 0, oldestWaitingSince: 500 });
+  });
+
+  const NOT_ASKING = {
+    kind: "not-asking",
+    quote: "All tests pass.",
+    readAt: 700,
+    seen: false,
+  } as const;
+
+  it("counts a question wait Canopy read as asking nothing as an unseen hand-back of its own", () => {
+    // A first turn: a question wait is never recorded as a hand-back.
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "question", lastStateChange: 900 }),
+    ];
+    expect(count(terminals, undefined)).toMatchObject({ waiting: 1, completed: 0 });
+    expect(count(terminals, NOT_ASKING)).toMatchObject({
+      waiting: 0,
+      completed: 1,
+      unacknowledgedCompleted: 1,
+      latestCompletionAt: 900,
+      oldestUnacknowledgedCompletionAt: 900,
+    });
+    expect(count(terminals, { ...NOT_ASKING, seen: true })).toMatchObject({
+      waiting: 0,
+      completed: 1,
+      unacknowledgedCompleted: 0,
+    });
+  });
+
+  it("never lets an earlier stop's read mark speak for a question wait that asks nothing", () => {
+    // The record is the stop before this wait, seen before this wait began.
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "question", lastStateChange: 900 }),
+    ];
+    const records = { a: { stoppedAt: 300, seenAt: 400 } };
+    expect(count(terminals, NOT_ASKING, records)).toMatchObject({
+      completed: 1,
+      unacknowledgedCompleted: 1,
+      latestCompletionAt: 900,
+      oldestUnacknowledgedCompletionAt: 900,
+    });
+  });
+
+  it("withholds a shelved question wait that asks nothing from the unseen tally", () => {
+    const terminals = [agent({ id: "a", agentState: "waiting", waitingReason: "question" })];
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      terminals.map((t) => ({ detectedAgentId: "claude", spawnedAt: 1, ...t })),
+      undefined,
+      new Map(),
+      undefined,
+      undefined,
+      () => undefined,
+      new Map([["a", {}]]),
+      () => NOT_ASKING
+    ).get("p1")!;
+    expect(counts).toMatchObject({ waiting: 0, unacknowledgedCompleted: 0 });
+  });
+
+  it("never lets a reading clear an approval Daintree observed", () => {
+    const terminals = [agent({ id: "a", agentState: "waiting", waitingReason: "approval" })];
+    expect(count(terminals, NOT_ASKING).waiting).toBe(1);
   });
 });

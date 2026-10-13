@@ -188,3 +188,37 @@ describe("isWorktreeMergedForCleanup", () => {
     }
   });
 });
+
+describe("deriveWorktreeAgentBuckets with Canopy's readings", () => {
+  const ASKED = { kind: "asked", quote: "Want me to update the tests too?", readAt: NOW } as const;
+
+  it("moves a seen hand-back that asks something out of Finished and into Attention", () => {
+    const seen = { handBack: { stoppedAt: NOW - 1000, seenAt: NOW } };
+    expect(buckets([atPrompt("a", seen)]).finished).toBe(true);
+    const asked = buckets([atPrompt("a", { ...seen, canopy: ASKED })]);
+    expect(asked).toMatchObject({ attention: true, finished: false });
+  });
+
+  it("clears a question wait the reading shows asks nothing out of Attention", () => {
+    // The record is the stop before, already seen: a question wait never makes one.
+    const wait = run("a", {
+      agentState: "waiting",
+      waitingReason: "question",
+      handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 50_000 },
+    });
+    expect(buckets([wait]).attention).toBe(true);
+    const NOT_ASKING = { kind: "not-asking", quote: "All tests pass.", readAt: NOW } as const;
+    const cleared = buckets([{ ...wait, canopy: { ...NOT_ASKING, seen: false } }]);
+    expect(cleared).toMatchObject({ attention: false, finished: true, finishedUnseen: true });
+    const read = buckets([{ ...wait, canopy: { ...NOT_ASKING, seen: true } }]);
+    expect(read).toMatchObject({ attention: false, finished: true, finishedUnseen: false });
+  });
+
+  it("keeps a stalled agent in Working: the sidebar has no Quiet bucket", () => {
+    const stalled = run("a", {
+      agentState: "working",
+      canopy: { kind: "stalled", quote: "Running", readAt: NOW, stalledSince: NOW - 900_000 },
+    });
+    expect(buckets([stalled])).toMatchObject({ working: true, attention: false });
+  });
+});

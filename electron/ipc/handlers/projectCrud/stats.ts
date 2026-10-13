@@ -11,6 +11,7 @@ import { isCleaningUp } from "../../../lifecycle/shutdownCoordinator.js";
 import { store } from "../../../store.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
+import { canopyRefinementFor } from "../../../services/canopy/canopyRefinementSource.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { isValidScratchId } from "../../../services/scratchStorePaths.js";
@@ -266,7 +267,8 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
       // Hand-back seen state and parks, as the pushed status map reads them.
       runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
-      runAttentionServiceInstance?.getAll()
+      runAttentionServiceInstance?.getAll(),
+      canopyRefinementFor
     );
 
     const result: BulkProjectStats = {};

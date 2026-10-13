@@ -17,6 +17,10 @@ import type {
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import type { TerminalInputNotice } from "../../services/PtyClient.js";
 import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
+import {
+  notifyCanopyRefinementsChanged,
+  setCanopyRefinementSource,
+} from "../../services/canopy/canopyRefinementSource.js";
 import { getFleetSnapshotService, getRunHandBackService } from "./projectCrud/index.js";
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CanopyService } from "../../services/canopy/CanopyService.js";
@@ -302,7 +306,12 @@ function getService(): CanopyService {
     },
     broadcast: (snapshot) =>
       typedBroadcast<"canopy:snapshot-updated">(CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot),
+    // The fleet and the project counts re-read their refinements: that is how
+    // the sidebar hears of them with no panel open.
+    onRefinementsChanged: () => notifyCanopyRefinementsChanged(),
   });
+  const made = service;
+  setCanopyRefinementSource((runId, spawnedAt) => made.getRefinement(runId, spawnedAt));
   return service;
 }
 
@@ -1412,6 +1421,7 @@ export function registerCanopyHandlers(): () => void {
     recentlyTrashed.clear();
     ownRestores.clear();
     stopAllTerminalWatches();
+    setCanopyRefinementSource(null);
     service?.dispose();
     service = null;
   };

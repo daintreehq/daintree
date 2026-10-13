@@ -1,7 +1,8 @@
 import type { AgentState, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind } from "../../shared/types/panel.js";
-import type { RunHandBackRecord } from "../../shared/types/ipc/fleet.js";
+import type { RunCanopyRefinement, RunHandBackRecord } from "../../shared/types/ipc/fleet.js";
 import { isHandBackStop, isHandBackUnseen } from "../../shared/utils/runHandBack.js";
+import { canopyPlacement } from "../../shared/utils/canopyRefinement.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 
 /** Per-project agent tallies derived from the live terminal list. */
@@ -464,7 +465,15 @@ export function computeProjectAgentCounts(
    * from every attention tally whatever the run is doing, as the fleet bands
    * it (`bandForRun`); it still counts as presence.
    */
-  parkedRuns?: ReadonlyMap<string, unknown>
+  parkedRuns?: ReadonlyMap<string, unknown>,
+  /**
+   * Canopy's refinement for a run's incarnation, when it has one —
+   * `canopyRefinementFor` is the intended source. An ask it read counts as a
+   * wait, and a question it read as asking nothing as a hand-back of its own,
+   * as the fleet bands them; a stall changes no tally here. Omitted, the free
+   * rules alone.
+   */
+  canopyFor?: (terminalId: string, spawnedAt: number) => RunCanopyRefinement | undefined
 ): Map<string, ProjectAgentCounts> {
   const counts = new Map<string, ProjectAgentCounts>();
   for (const id of projectIds) counts.set(id, empty());
@@ -527,19 +536,38 @@ export function computeProjectAgentCounts(
     // from `completed` into a plain prompt wait, which otherwise reads as the
     // agent asking for something (#13238). Same decision `bandForRun` makes,
     // so the switcher and the fleet agree about what is outstanding.
+    const canopy =
+      terminal.id !== undefined && terminal.spawnedAt !== undefined
+        ? canopyPlacement(
+            terminal.agentState,
+            terminal.waitingReason,
+            canopyFor?.(terminal.id, terminal.spawnedAt)
+          )
+        : undefined;
+    const asked = canopy?.kind === "asked";
+    const notAsking = canopy?.kind === "not-asking" ? canopy : undefined;
     const handBack =
       terminal.id !== undefined &&
       terminal.agentState !== undefined &&
+      !asked &&
       isHandBackStop(terminal.agentState, terminal.waitingReason)
         ? handBackFor?.(terminal.id, terminal.spawnedAt)
         : undefined;
 
-    if (handBack !== undefined) {
+    if (notAsking !== undefined) {
+      // A question wait is never recorded as a hand-back, so a record the run
+      // carries is from an earlier stop. The wait is the stop, unseen until
+      // Canopy's read mark covers its turn, as the fleet bands it.
+      entry.completed += 1;
+      const at = usableTimestamp(terminal.lastStateChange);
+      if (at > 0) entry.latestCompletionAt = Math.max(entry.latestCompletionAt ?? 0, at);
+      if (!isShelved && !notAsking.seen) noteUnacknowledged(entry, at);
+    } else if (handBack !== undefined) {
       entry.completed += 1;
       const at = usableTimestamp(handBack.stoppedAt) || usableTimestamp(terminal.lastStateChange);
       if (at > 0) entry.latestCompletionAt = Math.max(entry.latestCompletionAt ?? 0, at);
       if (!isShelved && isHandBackUnseen(handBack)) noteUnacknowledged(entry, at);
-    } else if (terminal.agentState === "waiting") {
+    } else if (terminal.agentState === "waiting" || asked) {
       // A shelved wait is withheld from every attention tally — waiting, its
       // blocked subset, and the age that dates them. The run is still there and
       // still waiting; the user has said it does not need them yet.
@@ -552,7 +580,13 @@ export function computeProjectAgentCounts(
 
         // Age the wait from the transition into `waiting`. Terminals that haven't
         // recorded one yet still count toward `waiting` but can't contribute an age.
-        const since = terminal.lastStateChange;
+        // An ask Canopy read on a hand-back is as old as the stop it was asked at,
+        // as the fleet dates it, not the slide from `completed` into a prompt.
+        const askedAt =
+          asked && terminal.id !== undefined
+            ? handBackFor?.(terminal.id, terminal.spawnedAt)?.stoppedAt
+            : undefined;
+        const since = askedAt ?? terminal.lastStateChange;
         if (typeof since === "number" && since > 0) {
           entry.oldestWaitingSince =
             entry.oldestWaitingSince === null ? since : Math.min(entry.oldestWaitingSince, since);

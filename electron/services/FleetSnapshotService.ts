@@ -12,7 +12,15 @@ import {
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
 import type { RunHandBackService } from "./RunHandBackService.js";
-import type { FleetRunRow, FleetSnapshot } from "../../shared/types/ipc/fleet.js";
+import type {
+  FleetRunRow,
+  FleetSnapshot,
+  RunCanopyRefinement,
+} from "../../shared/types/ipc/fleet.js";
+import {
+  canopyRefinementFor,
+  onCanopyRefinementsChanged,
+} from "./canopy/canopyRefinementSource.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 
@@ -111,6 +119,9 @@ export class FleetSnapshotService {
     // A move re-files the row without moving any agent state, so without this
     // the palette keeps the old grouping until the next aligned poll (#12060).
     subscribe("terminal:worktree-changed");
+    // A refinement is a decoration, like a park: nothing on the host moved, so
+    // the recompute reuses its inventory rather than asking it again.
+    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.onCanopyChanged()));
   }
 
   updatePollInterval(ms: number): void {
@@ -280,7 +291,8 @@ export class FleetSnapshotService {
         x.handBack?.stoppedAt !== y.handBack?.stoppedAt ||
         x.handBack?.seenAt !== y.handBack?.seenAt ||
         x.handBack?.markedUnreadAt !== y.handBack?.markedUnreadAt ||
-        x.quietSince !== y.quietSince
+        x.quietSince !== y.quietSince ||
+        !sameCanopyRefinement(x.canopy, y.canopy)
       ) {
         return false;
       }
@@ -334,6 +346,7 @@ export class FleetSnapshotService {
         const park = parkRecords?.get(terminal.id);
         const snooze = snoozeRecords?.get(terminal.id);
         const handBack = this.handBacks?.getRecord(terminal.id, terminal.spawnedAt);
+        const canopy = canopyRefinementFor(terminal.id, terminal.spawnedAt);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -371,6 +384,7 @@ export class FleetSnapshotService {
           ...(park !== undefined ? { park } : {}),
           ...(snooze !== undefined ? { snooze } : {}),
           ...(handBack !== undefined ? { handBack } : {}),
+          ...(canopy !== undefined ? { canopy } : {}),
           // Stall cue: only for a working run, and only once the CURRENT
           // working stint has been silent past the threshold. Anchored on the
           // later of last output, the transition into this state and the
@@ -431,6 +445,28 @@ export class FleetSnapshotService {
    * snapshot the runs are empty AND `lastSuccessfulAt` is null, which is the
    * renderer's cue to say it cannot tell rather than to render an empty fleet.
    */
+  /**
+   * Canopy's refinements moved. A degraded fleet keeps its last good rows, and
+   * those must not keep a reading Canopy has since withdrawn — turned off, or
+   * the tier lapsed — until the host recovers: the retained rows are decorated
+   * afresh and sent, still marked degraded.
+   */
+  private onCanopyChanged(): void {
+    const previous = this.lastBroadcast;
+    if (previous?.degraded === true) {
+      const runs = previous.runs.map((run) => {
+        const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
+        const rest = { ...run };
+        delete rest.canopy;
+        return canopy === undefined ? rest : { ...rest, canopy };
+      });
+      if (!this.runsEqual(runs, previous.runs)) {
+        this.publish({ ...previous, runs, changedAt: Date.now() });
+      }
+    }
+    this.debouncedCompute();
+  }
+
   private publishDegraded(): void {
     const previous = this.lastBroadcast;
     if (previous?.degraded === true) return;
@@ -456,4 +492,16 @@ export class FleetSnapshotService {
       }
     }
   }
+}
+
+/** Every field of a refinement, so a new quote or a later read is a fleet change. */
+function sameCanopyRefinement(
+  a: RunCanopyRefinement | undefined,
+  b: RunCanopyRefinement | undefined
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.kind !== b.kind || a.quote !== b.quote || a.readAt !== b.readAt) return false;
+  if (a.kind === "stalled" && b.kind === "stalled") return a.stalledSince === b.stalledSince;
+  if (a.kind === "not-asking" && b.kind === "not-asking") return a.seen === b.seen;
+  return true;
 }
