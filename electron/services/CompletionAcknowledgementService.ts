@@ -62,6 +62,8 @@ export class CompletionAcknowledgementService {
   private dwellSince = 0;
   private started = false;
   private observing = true;
+  /** The last watermark this service stamped per workspace. */
+  private stamped = new Map<string, number>();
 
   constructor(private readonly deps: CompletionAcknowledgementDeps) {}
 
@@ -139,7 +141,10 @@ export class CompletionAcknowledgementService {
     }
 
     const latest = this.deps.getAcknowledgeableCompletionAt(observed);
-    if (latest === undefined) return;
+    // Already stamped: the candidate is read from the last compute, which lags
+    // the stamp until a recompute succeeds, and re-stamping it each tick would
+    // write and refresh once a second for as long as computes fail or overrun.
+    if (latest === undefined || latest <= (this.stamped.get(observed) ?? 0)) return;
 
     // The dwell clock starts at whichever is later: when the project came
     // under observation, or when the newest completion landed. A completion
@@ -156,6 +161,7 @@ export class CompletionAcknowledgementService {
     // covered; a completion landing after `latest` stays unacknowledged and
     // re-anchors the dwell above.
     this.deps.markSeen(observed, latest);
+    this.stamped.set(observed, latest);
     this.deps.onAcknowledged();
   }
 }

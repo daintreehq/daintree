@@ -82,6 +82,25 @@ describe("CompletionAcknowledgementService", () => {
     expect(refreshes).toBe(1);
   });
 
+  it("does not re-stamp a candidate the stats have not caught up with yet", () => {
+    // The candidate comes from the last compute. Until one succeeds after the
+    // stamp it still names the completion just acknowledged, and stamping it
+    // again every tick would write and refresh once a second.
+    const completedAt = BASE - 60_000;
+    statusMap = {
+      alpha: entry({
+        completedAgentCount: 1,
+        unacknowledgedCompletedAgentCount: 1,
+        latestUnacknowledgedCompletionAt: completedAt,
+      }),
+    };
+    observed = "alpha";
+
+    tick(10);
+    expect(stamps).toEqual([{ projectId: "alpha", seenUpTo: completedAt }]);
+    expect(refreshes).toBe(1);
+  });
+
   it("never acknowledges without an observed project", () => {
     statusMap = {
       alpha: entry({
