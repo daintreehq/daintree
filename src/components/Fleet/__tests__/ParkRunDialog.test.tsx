@@ -47,13 +47,13 @@ function run(runId: string, extra: Partial<FleetRunRow> = {}): FleetRunRow {
   } as FleetRunRow;
 }
 
-function setRuns(runs: FleetRunRow[]) {
+function setRuns(runs: FleetRunRow[], degraded = false) {
   act(() => {
     useFleetSnapshotStore.setState({
       snapshot: {
         runs,
         changedAt: 1,
-        degraded: false,
+        degraded,
         lastSuccessfulAt: null,
       } satisfies FleetSnapshot,
     });
@@ -175,6 +175,65 @@ describe("ParkRunDialog", () => {
       fireEvent.click(screen.getByRole("button", { name: "Park" }));
     });
     expect(parkRun).toHaveBeenCalledWith("a", {});
+  });
+
+  it("keeps an existing gate in another workspace, so a note-only edit doesn't drop it", async () => {
+    setRuns([
+      run("a", { park: { parkedAt: 1, note: "old", gateRunId: "x" } }),
+      run("x", { workspaceId: "ws-2" }),
+      run("y", { workspaceId: "ws-2" }),
+    ]);
+    render(<ParkRunDialog runId="a" onClose={vi.fn()} />);
+
+    expect(gateIds()).toEqual(["__none__", "x"]);
+    fireEvent.change(screen.getByTestId("park-run-note"), { target: { value: "new" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update park" }));
+    });
+
+    expect(parkRun).toHaveBeenCalledWith("a", { note: "new", gateRunId: "x" });
+  });
+
+  it("won't park over a degraded snapshot, but still unparks", async () => {
+    setRuns([run("a", { park: { parkedAt: 1 } })], true);
+    render(<ParkRunDialog runId="a" onClose={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update park" }));
+    });
+    expect(parkRun).not.toHaveBeenCalled();
+    expect(screen.getByTestId("app-dialog-hint").textContent).toContain("out of date");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Unpark" }));
+    });
+    expect(unparkRun).toHaveBeenCalledWith("a");
+  });
+
+  it("hands focus back to the note after a rejected Enter submit", async () => {
+    setRuns([run("a")]);
+    let reject: (cause: unknown) => void = () => {};
+    parkRun.mockReturnValueOnce(new Promise((_, r) => (reject = r)));
+    render(<ParkRunDialog runId="a" onClose={vi.fn()} />);
+    const note = screen.getByTestId("park-run-note") as HTMLInputElement;
+    note.focus();
+
+    await act(async () => {
+      fireEvent.keyDown(note, { key: "Enter" });
+    });
+    // Chromium drops focus from a control the moment it is disabled; jsdom
+    // does not, so move it away by hand to stand in for that.
+    const elsewhere = document.body.appendChild(document.createElement("button"));
+    act(() => {
+      elsewhere.focus();
+    });
+    expect(document.activeElement).not.toBe(note);
+
+    await act(async () => {
+      reject(new Error("nope"));
+    });
+    expect(document.activeElement).toBe(note);
+    elsewhere.remove();
   });
 
   it("closes when its run leaves the fleet", () => {

@@ -14,9 +14,24 @@ export type BulkParkVerb = "park" | "unpark";
 const RATE_WINDOW_MS = 10_000;
 const RATE_MAX_CALLS = 20;
 
+/**
+ * Call times per channel, shared by every bulk run in this renderer: main's
+ * budget is per channel, not per request, so two worktrees parked back to back
+ * — or a Retry straight after a failure — draw on the same window.
+ */
+const callTimesByVerb: Record<BulkParkVerb, number[]> = { park: [], unpark: [] };
+
+/** Test seam: forget the shared pacing window. */
+export function resetBulkParkPacing(): void {
+  callTimesByVerb.park = [];
+  callTimesByVerb.unpark = [];
+}
+
 function needsVerb(snapshot: FleetSnapshot | null, runId: string, verb: BulkParkVerb): boolean {
   const run = snapshot?.runs.find((r) => r.runId === runId);
   if (run === undefined) return false;
+  // Main rejects a park over retained data; an unpark needs no healthy view.
+  if (verb === "park" && snapshot?.degraded) return false;
   return verb === "park" ? run.park === undefined : run.park !== undefined;
 }
 
@@ -59,19 +74,23 @@ export async function runBulkPark(
 ): Promise<BulkParkResult> {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const callTimes: number[] = [];
+  const callTimes = callTimesByVerb[verb];
   const failed: string[] = [];
   let firstError: unknown = undefined;
   let succeeded = 0;
 
   for (const runId of runIds) {
-    if (callTimes.length >= RATE_MAX_CALLS) {
-      const oldest = callTimes[callTimes.length - RATE_MAX_CALLS]!;
-      const wait = oldest + RATE_WINDOW_MS - now();
-      if (wait > 0) await sleep(wait);
+    // A loop, not a single wait: a concurrent run can take the freed slot
+    // while this one sleeps.
+    while (callTimes.length >= RATE_MAX_CALLS) {
+      const wait = callTimes[callTimes.length - RATE_MAX_CALLS]! + RATE_WINDOW_MS - now();
+      if (wait <= 0) break;
+      await sleep(wait);
     }
     if (!needsVerb(useFleetSnapshotStore.getState().snapshot, runId, verb)) continue;
     callTimes.push(now());
+    // Only the last window's worth matters for the next wait.
+    if (callTimes.length > RATE_MAX_CALLS) callTimes.splice(0, callTimes.length - RATE_MAX_CALLS);
     try {
       if (verb === "park") {
         await window.electron.fleet.parkRun(runId, {});

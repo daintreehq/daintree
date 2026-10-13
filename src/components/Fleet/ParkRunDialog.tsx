@@ -80,13 +80,27 @@ export function ParkRunDialog({
   const ids = useId();
   const targetId = `${ids}-target`;
   const noteRef = useRef<HTMLInputElement>(null);
+  /**
+   * Submitting disables the form, and Chromium drops focus off a disabled
+   * control — so a rejection hands it back, or the keyboard is left on
+   * `document.body` beside the error.
+   */
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
 
   const candidates = useMemo<ParkGateCandidate[]>(() => {
     if (!snapshot || targetWorkspaceId === undefined) return [];
     return snapshot.runs
-      .filter((run) => run.runId !== runId && run.workspaceId === targetWorkspaceId)
+      .filter(
+        (run) =>
+          run.runId !== runId &&
+          // A park Pilot gated on another project's run keeps that gate on
+          // offer while it lives — editing only the note must not quietly
+          // turn it into a manual park.
+          (run.workspaceId === targetWorkspaceId || run.runId === existingPark?.gateRunId)
+      )
       .map(toCandidate);
-  }, [snapshot, runId, targetWorkspaceId]);
+  }, [snapshot, runId, targetWorkspaceId, existingPark?.gateRunId]);
+  const degraded = snapshot?.degraded ?? false;
 
   useEffect(() => {
     noteRef.current?.focus();
@@ -94,6 +108,14 @@ export function ParkRunDialog({
 
   /** Doherty-gated: nearly every park is a local write that lands at once. */
   const showBusy = useDeferredLoading(busy, UI_DOHERTY_THRESHOLD);
+
+  useEffect(() => {
+    if (pending !== null) return;
+    const restore = restoreFocusRef.current;
+    restoreFocusRef.current = null;
+    if (restore === null) return;
+    (restore.isConnected ? restore : noteRef.current)?.focus();
+  }, [pending]);
 
   const targetGone = target === null;
   useEffect(() => {
@@ -103,6 +125,8 @@ export function ParkRunDialog({
   const submit = useCallback(
     (verb: PendingVerb, request: () => Promise<unknown>, fallback: string) => {
       if (busy) return;
+      restoreFocusRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setPending(verb);
       setError(null);
       request()
@@ -116,6 +140,7 @@ export function ParkRunDialog({
   );
 
   const park = useCallback(() => {
+    if (degraded) return;
     const trimmed = note.trim();
     const gateRunId = resolveParkGateId(gateId, candidates);
     submit(
@@ -127,7 +152,7 @@ export function ParkRunDialog({
         }),
       "Couldn't park the agent"
     );
-  }, [submit, note, gateId, candidates, runId]);
+  }, [submit, note, gateId, candidates, runId, degraded]);
 
   const unpark = useCallback(() => {
     submit("unpark", () => window.electron.fleet.unparkRun(runId), "Couldn't unpark the agent");
@@ -219,11 +244,13 @@ export function ParkRunDialog({
               }
             : undefined
         }
+        // Main parks only against a current fleet view; Unpark needs none.
+        hint={degraded ? "Fleet state is out of date, so parking is paused" : undefined}
         secondaryAction={{ label: "Cancel", onClick: onClose, disabled: busy }}
         primaryAction={{
           label: isReparking ? "Update park" : "Park",
           onClick: park,
-          disabled: busy && pending !== "park",
+          disabled: degraded || (busy && pending !== "park"),
           loading: showBusy && pending === "park",
         }}
       />

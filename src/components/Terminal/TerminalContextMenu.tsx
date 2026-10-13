@@ -594,9 +594,15 @@ function TerminalContextMenuBody({
   const isParked = useFleetSnapshotStore(
     (s) =>
       isMenuLive &&
-      (s.snapshot?.runs.some((run) => run.runId === terminalId && run.park !== undefined) ??
-        false)
+      (s.snapshot?.runs.some((run) => run.runId === terminalId && run.park !== undefined) ?? false)
   );
+
+  // Main rejects a park over retained (degraded) data; Unpark needs no
+  // healthy snapshot, so only Park… waits for one.
+  const isFleetDegraded = useFleetSnapshotStore(
+    (s) => isMenuLive && (s.snapshot?.degraded ?? false)
+  );
+  const canPark = isKnownRun && !isFleetDegraded;
 
   const handleRequestPark = useCallback(() => {
     pendingParkRef.current = terminalId;
@@ -1624,6 +1630,27 @@ function TerminalContextMenuBody({
     );
   }
 
+  // One label whatever the state: the dialog's own title says whether it is a
+  // new park or an edit. Unpark sits beside it only once there is a park to
+  // lift — the discoverable inverse that lets parking skip a confirm.
+  const parkItems =
+    canPark || isParked ? (
+      <>
+        {canPark && (
+          <ContextMenuItem onSelect={handleRequestPark}>
+            <CirclePause className={ICON_CLASS} aria-hidden="true" />
+            Park…
+          </ContextMenuItem>
+        )}
+        {isParked && (
+          <ContextMenuItem onSelect={handleUnpark}>
+            <Bell className={ICON_CLASS} aria-hidden="true" />
+            Unpark
+          </ContextMenuItem>
+        )}
+      </>
+    ) : null;
+
   return (
     <>
       {destructiveConfirmDialog}
@@ -1763,6 +1790,15 @@ function TerminalContextMenuBody({
               <ContextMenuSeparator />
             </>
           )}
+          {/* Parking follows the snapshot, not broadcast eligibility: a docked
+              or exited agent can still be parked, and a parked one must
+              always offer its inverse. */}
+          {!fleetEligible && parkItems !== null && (
+            <>
+              {parkItems}
+              <ContextMenuSeparator />
+            </>
+          )}
           {fleetEligible && (
             <>
               <ContextMenuItem onSelect={() => handleAction("fleet-toggle")}>
@@ -1811,22 +1847,7 @@ function TerminalContextMenuBody({
                   </ContextMenuSubContent>
                 </ContextMenuSub>
               )}
-              {/* One label whatever the state: the dialog's own title says
-                  whether it is a new park or an edit. Unpark sits beside it
-                  only once there is a park to lift — the discoverable inverse
-                  that lets parking skip a confirm. */}
-              {isKnownRun && (
-                <ContextMenuItem onSelect={handleRequestPark}>
-                  <CirclePause className={ICON_CLASS} aria-hidden="true" />
-                  Park…
-                </ContextMenuItem>
-              )}
-              {isParked && (
-                <ContextMenuItem onSelect={handleUnpark}>
-                  <Bell className={ICON_CLASS} aria-hidden="true" />
-                  Unpark
-                </ContextMenuItem>
-              )}
+              {parkItems}
               {handBackState !== "none" && (
                 <ContextMenuItem onSelect={handleToggleHandBackRead}>
                   {handBackState === "unseen" ? (

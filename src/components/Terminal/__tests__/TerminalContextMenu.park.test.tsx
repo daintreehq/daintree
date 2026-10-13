@@ -60,11 +60,13 @@ vi.mock("@/store/voiceRecordingStore", () => ({
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: (selector: (s: { armedIds: Set<string> }) => unknown) =>
     selector({ armedIds: new Set<string>() }),
-  isFleetArmEligible: () => true,
+  isFleetArmEligible: () => fleetEligible.current,
 }));
 
+const fleetEligible = vi.hoisted(() => ({ current: true }));
+
 const snapshotState = vi.hoisted(() => ({
-  current: null as { runs: Array<Record<string, unknown>> } | null,
+  current: null as { runs: Array<Record<string, unknown>>; degraded?: boolean } | null,
 }));
 
 vi.mock("@/store/fleetSnapshotStore", () => ({
@@ -114,6 +116,7 @@ function renderMenu() {
 }
 
 beforeEach(() => {
+  fleetEligible.current = true;
   snapshotState.current = { runs: [{ runId: "panel-1" }] };
   Object.defineProperty(window, "electron", {
     value: { fleet: { parkRun, unparkRun } },
@@ -181,5 +184,23 @@ describe("TerminalContextMenu — Park and Unpark", () => {
     fireEvent.click(screen.getByText("Unpark"));
 
     expect(unparkRun).toHaveBeenCalledWith("panel-1");
+  });
+  it("withholds Park… over a degraded snapshot but keeps Unpark", () => {
+    // Main rejects a park against retained data; an unpark needs no current view.
+    snapshotState.current = { runs: [{ runId: "panel-1", park: { parkedAt: 1 } }], degraded: true };
+    renderMenu();
+
+    expect(screen.queryByText("Park…")).toBeNull();
+    expect(screen.getByText("Unpark")).toBeTruthy();
+  });
+
+  it("offers parking on an agent the fleet can't broadcast to (docked, exited)", () => {
+    fleetEligible.current = false;
+    snapshotState.current = { runs: [{ runId: "panel-1", park: { parkedAt: 1 } }] };
+    renderMenu();
+
+    expect(screen.getByText("Park…")).toBeTruthy();
+    expect(screen.getByText("Unpark")).toBeTruthy();
+    expect(screen.queryByText("Snooze")).toBeNull();
   });
 });

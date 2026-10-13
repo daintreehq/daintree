@@ -14,16 +14,24 @@ interface NotifyCall {
 const notify = vi.hoisted(() => vi.fn((_payload: NotifyCall) => {}));
 vi.mock("@/lib/notify", () => ({ notify }));
 
-import { bulkParkAgents, runBulkPark, selectParkTargets } from "../parkWorktreeAgents";
+import {
+  bulkParkAgents,
+  resetBulkParkPacing,
+  runBulkPark,
+  selectParkTargets,
+} from "../parkWorktreeAgents";
 
 const parkRun = vi.fn();
 const unparkRun = vi.fn();
 
-function snap(runs: Array<Partial<FleetRunRow> & { runId: string }>): FleetSnapshot {
+function snap(
+  runs: Array<Partial<FleetRunRow> & { runId: string }>,
+  degraded = false
+): FleetSnapshot {
   return {
     runs: runs.map((run) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/tmp", ...run })),
     changedAt: 1,
-    degraded: false,
+    degraded,
     lastSuccessfulAt: null,
   };
 }
@@ -33,6 +41,7 @@ function setSnapshot(snapshot: FleetSnapshot | null) {
 }
 
 beforeEach(() => {
+  resetBulkParkPacing();
   parkRun.mockReset().mockResolvedValue({ parkedAt: 1 });
   unparkRun.mockReset().mockResolvedValue(true);
   Object.defineProperty(window, "electron", {
@@ -61,6 +70,13 @@ describe("selectParkTargets", () => {
 
   it("unparks only the worktree's parked runs", () => {
     expect(selectParkTargets(snapshot, ["a", "b", "shell"], "unpark")).toEqual(["b"]);
+  });
+
+  it("parks nothing over a degraded snapshot but still unparks", () => {
+    // Main rejects a park against retained data, so sending one only burns budget.
+    const degraded = snap([{ runId: "a" }, { runId: "b", park: { parkedAt: 1 } }], true);
+    expect(selectParkTargets(degraded, ["a", "b"], "park")).toEqual([]);
+    expect(selectParkTargets(degraded, ["a", "b"], "unpark")).toEqual(["b"]);
   });
 
   it("selects nothing before a snapshot has landed", () => {
@@ -109,6 +125,28 @@ describe("runBulkPark", () => {
     expect(unparkRun).toHaveBeenCalledTimes(25);
     expect(result.succeeded).toBe(25);
     // All 20 of the first window landed at t=1000, so the 21st waits it out.
+    expect(sleeps).toEqual([10_000]);
+  });
+
+  it("shares one pacing window across back-to-back runs, as main's limit does", async () => {
+    const first = Array.from({ length: 15 }, (_, i) => `a${i}`);
+    const second = Array.from({ length: 10 }, (_, i) => `b${i}`);
+    setSnapshot(snap([...first, ...second].map((runId) => ({ runId }))));
+    let clock = 1_000;
+    const sleeps: number[] = [];
+    const deps = {
+      now: () => clock,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+        clock += ms;
+      },
+    };
+
+    await runBulkPark("park", first, deps);
+    await runBulkPark("park", second, deps);
+
+    // 15 + 5 fill the window; the 21st call overall waits it out.
+    expect(parkRun).toHaveBeenCalledTimes(25);
     expect(sleeps).toEqual([10_000]);
   });
 });
