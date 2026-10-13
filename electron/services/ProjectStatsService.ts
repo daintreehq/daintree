@@ -12,6 +12,7 @@ import {
 } from "./sharedTerminalSnapshot.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
+import type { RunHandBackService } from "./RunHandBackService.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
@@ -35,7 +36,8 @@ export class ProjectStatsService {
    */
   constructor(
     private ptyClient: PtyClient | undefined | null,
-    private runAttention?: RunAttentionService | null
+    private runAttention?: RunAttentionService | null,
+    private runHandBack?: RunHandBackService | null
   ) {}
 
   get isStarted(): boolean {
@@ -71,6 +73,10 @@ export class ProjectStatsService {
     // of a snooze needs this — expiry rides the poll, since a lapsed snooze
     // simply stops being returned by `getActiveSnoozes()`.
     subscribe("terminal:snooze-changed");
+    // Parking and the user seeing a hand-back move a run in or out of the
+    // attention tallies the same way, with nothing else to announce it (#13238).
+    subscribe("terminal:park-changed");
+    subscribe("terminal:hand-back-changed");
   }
 
   updatePollInterval(ms: number): void {
@@ -301,6 +307,7 @@ export class ProjectStatsService {
       // also the whole of the feature's "timer": a lapsed snooze stops being
       // returned, and the next poll (5s) recomputes without it.
       const activeSnoozes = this.runAttention?.getActiveSnoozes();
+      const runHandBack = this.runHandBack;
       const agentCounts = computeProjectAgentCounts(
         projectIds,
         allTerminals,
@@ -313,7 +320,11 @@ export class ProjectStatsService {
         (id) => helpSessionService.isPanelVisible(id),
         // Lets concurrent assistants be ranked by who needs the user,
         // rather than by whichever started last (#12108).
-        (terminalId) => helpSessionService.getSlotForTerminal(terminalId)
+        (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+        // Tells a finished turn from a real ask and keeps parked runs out of
+        // attention. The pull path passes the same two, for the reason above.
+        runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
+        this.runAttention?.getAll()
       );
 
       const statusMap: ProjectStatusMap = {};

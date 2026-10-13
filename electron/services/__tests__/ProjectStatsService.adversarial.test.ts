@@ -1319,4 +1319,48 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     stats.stop();
     fleet.stop();
   });
+
+  it("counts a watched hand-back as finished, and recomputes when the user sees it (#13238)", async () => {
+    const ptyClient = makePtyClient();
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      {
+        id: "t1",
+        projectId: "p1",
+        kind: "terminal",
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        spawnedAt: 10,
+      },
+      {
+        id: "t2",
+        projectId: "p1",
+        kind: "terminal",
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        waitingReason: "approval",
+      },
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 2 });
+    const record: { stoppedAt: number; seenAt?: number } = { stoppedAt: 100 };
+    const handBack = { getRecord: vi.fn((id: string) => (id === "t1" ? record : undefined)) };
+
+    const svc = new ProjectStatsService(ptyClient as never, null, handBack as never);
+    svc.start();
+    svc.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    type Entry = { waitingAgentCount: number; unacknowledgedCompletedAgentCount: number };
+    const latest = () => (broadcastMock.mock.calls.at(-1) as [string, { p1: Entry }])[1].p1;
+    expect(handBack.getRecord).toHaveBeenCalledWith("t1", 10);
+    expect(latest()).toMatchObject({ waitingAgentCount: 1, unacknowledgedCompletedAgentCount: 1 });
+
+    record.seenAt = 200;
+    eventEmitter.emit("terminal:hand-back-changed", { id: "t1", unseen: false, timestamp: 200 });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(latest()).toMatchObject({ waitingAgentCount: 1, unacknowledgedCompletedAgentCount: 0 });
+    svc.stop();
+  });
 });

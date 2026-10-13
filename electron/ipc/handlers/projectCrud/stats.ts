@@ -84,7 +84,11 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     }
   });
 
-  const projectStatsService = new ProjectStatsService(deps.ptyClient, runAttentionService);
+  const projectStatsService = new ProjectStatsService(
+    deps.ptyClient,
+    runAttentionService,
+    runHandBackService
+  );
   projectStatsServiceInstance = projectStatsService;
   projectStatsService.start();
   // Defer the initial compute off the first-interactive critical path. The
@@ -248,6 +252,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     // waiting, and the push path suppresses unchanged payloads, so nothing
     // would correct them until agent state next moved.
     const { helpSessionService } = await import("../../../services/HelpSessionService.js");
+    const runHandBack = runHandBackServiceInstance;
     const agentCounts = computeProjectAgentCounts(
       uniqueIds,
       allTerminals,
@@ -258,7 +263,10 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       (id) => helpSessionService.isPanelVisible(id),
       // Lets concurrent assistants be ranked by who needs the user,
       // rather than by whichever started last (#12108).
-      (terminalId) => helpSessionService.getSlotForTerminal(terminalId)
+      (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+      // Hand-back seen state and parks, as the pushed status map reads them.
+      runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
+      runAttentionServiceInstance?.getAll()
     );
 
     const result: BulkProjectStats = {};
