@@ -135,7 +135,7 @@ export const EVENT_KIND_TO_SETTING_KEY: Partial<
 ) as Partial<Record<NotificationEventKind, keyof NotificationSettings>>;
 
 export const EVENT_KIND_LABEL: Record<NotificationEventKind, string> = {
-  completed: "completed notifications",
+  completed: "finished notifications",
   waiting: "waiting notifications",
   workingPulse: "working pulse sound",
   uiFeedback: "UI feedback sounds",
