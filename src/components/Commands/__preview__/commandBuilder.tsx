@@ -1,4 +1,7 @@
 import "@/components/Layout/__preview__/bootstrap";
+// The page runs under the renderer's dev CSP, which requires Trusted Types; Radix
+// Select writes its viewport <style> through innerHTML and needs the default policy.
+import "@/lib/trustedTypesPolicy";
 import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
