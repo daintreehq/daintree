@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import type { TerminalInfoPayload } from "@shared/types/ipc/terminal";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
+import type { DriveLeaseHolder } from "@shared/types/remoteHosts";
 import type { ManagedTerminal } from "../types";
 
 let capturedResizeResultCb: ((id: string, result: TerminalResizeResult) => void) | null = null;
@@ -76,24 +77,56 @@ type WatchTestService = {
   };
 };
 
+/** The suite reaches the service's private watch and geometry state. */
+function reachesWatchState(value: unknown): value is WatchTestService {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "instances" in value &&
+    "resizeController" in value
+  );
+}
+
 type InputGate = typeof import("../inputGate");
+
+function holder(clientName: string, leaseId: number): DriveLeaseHolder {
+  return {
+    leaseId,
+    endpointId: `endpoint-${clientName}`,
+    clientId: `client-${clientName}`,
+    clientName,
+    isHostLocal: false,
+    acquiredAt: 0,
+  };
+}
 
 function lease(overrides: Partial<DriveLeaseView> = {}): DriveLeaseView {
   return {
     projectId: "proj-1",
-    holder: { clientName: "Studio", leaseId: 7 },
+    holder: holder("Studio", 7),
     drivingHere: false,
     isHolderEndpoint: false,
     viewerIsHostLocal: false,
     ...overrides,
-  } as unknown as DriveLeaseView;
+  };
 }
 
-const laptopLease = () =>
-  lease({ holder: { clientName: "Laptop", leaseId: 8 } } as unknown as Partial<DriveLeaseView>);
+const laptopLease = () => lease({ holder: holder("Laptop", 8) });
 
 function info(id: string, ptyCols?: number, ptyRows?: number): TerminalInfoPayload {
-  return { id, ptyCols, ptyRows } as TerminalInfoPayload;
+  return {
+    id,
+    cwd: "/",
+    spawnedAt: 0,
+    lastInputTime: 0,
+    lastOutputTime: 0,
+    activityTier: "focused",
+    outputBufferSize: 0,
+    semanticBufferLines: 0,
+    restartCount: 0,
+    ptyCols,
+    ptyRows,
+  };
 }
 
 /** Answers each info read from `grids`, by id. */
@@ -139,10 +172,9 @@ describe("TerminalInstanceService — watching a project another frontend drives
 
     gate = (await import("../inputGate")) as InputGate;
     gate.setDriveLeaseSnapshot(null);
-    ({ terminalInstanceService: service } =
-      (await import("../TerminalInstanceService")) as unknown as {
-        terminalInstanceService: WatchTestService;
-      });
+    const candidate: unknown = (await import("../TerminalInstanceService")).terminalInstanceService;
+    if (!reachesWatchState(candidate)) throw new Error("service shape changed");
+    service = candidate;
     service.instances.clear();
   });
 
