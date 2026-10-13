@@ -347,7 +347,9 @@ function RecentRow({
         isTruncated={isTruncated}
         focusable={false}
         side="left"
-        contentClassName="max-w-[min(32rem,60vw)] break-all"
+        // A path has no spaces to break on, so at the standard width it would
+        // clip the tail this tooltip exists to reveal.
+        contentClassName="[overflow-wrap:anywhere]"
       >
         <span className="flex min-w-0">
           <span ref={headRef} className="min-w-0 shrink-[1000] truncate">
