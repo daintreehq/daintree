@@ -19,8 +19,9 @@ import { useOtherHostTargets, useProjectPresence, type OtherHostTarget } from ".
 import { isNewWindowClick } from "./hostSwitching";
 
 /**
- * Opens the switch dialog, which matches the project on the host by its
- * remotes, checks the branch fresh, and offers its worktree or the clone.
+ * Opens the switch dialog to go to the host's copy of the project as it is,
+ * matched by its remotes, or to set one up there. The branch is left alone:
+ * "Continue this branch on…" is what hands a branch over.
  */
 async function openOnHost(
   hostId: string,
@@ -30,7 +31,7 @@ async function openOnHost(
 ): Promise<void> {
   const result = await actionService.dispatch(
     "project.openOnHost",
-    { hostId, projectId, newWindow },
+    { hostId, projectId, newWindow, navigateOnly: true },
     { source }
   );
   if (result.ok) return;

@@ -62,7 +62,7 @@ export interface HostGateway {
   /** The host's record of a push by opId, for one whose answer was lost with the link. */
   pushStatus(opId: string, projectId: string): Promise<HostPushStatus>;
   /** Where the branch and the remote branch stand now, as the host sees them. */
-  observePush(payload: PushBranchPayload): Promise<PushObservation>;
+  observePush(payload: Omit<PushBranchPayload, "sha">): Promise<PushObservation>;
   environment(): Promise<HostCloneEnvironment>;
   match(payload: FindProjectMatchPayload): Promise<ProjectMatchCandidate[]>;
   checkDestination(payload: CheckDestinationPayload): Promise<DestinationCheck>;
@@ -104,7 +104,7 @@ export class LocalHostGateway implements HostGateway {
   async pushStatus(): Promise<HostPushStatus> {
     return { state: "unknown" };
   }
-  observePush(payload: PushBranchPayload) {
+  observePush(payload: Omit<PushBranchPayload, "sha">) {
     return this.service.observePush(payload);
   }
   environment() {
@@ -248,7 +248,7 @@ export class RemoteHostGateway implements HostGateway {
   pushStatus(opId: string, projectId: string) {
     return this.call(ProjectLinkMethod.PUSH_STATUS, { opId, projectId }, PushStatusSchema);
   }
-  observePush(payload: PushBranchPayload) {
+  observePush(payload: Omit<PushBranchPayload, "sha">) {
     const { projectId, worktreePath, branch, remote, remoteBranch } = payload;
     return this.call(
       ProjectLinkMethod.PUSH_OBSERVE,

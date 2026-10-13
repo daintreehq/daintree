@@ -1,7 +1,7 @@
 import type { BranchCheck, HostSwitchPreparation } from "@shared/types/ipc/hostSwitch";
 import type { PlacedWorktree, ProjectMatchCandidate } from "@shared/types/ipc/projectMatch";
 import { extractHostname } from "@shared/utils/forgeHostnames";
-import { normalizeGitRemoteUrl } from "@shared/utils/gitRemoteUrl";
+import { isSupportedCloneUrl, normalizeGitRemoteUrl } from "@shared/utils/gitRemoteUrl";
 import { pluralize } from "@/lib/pluralize";
 
 /** What happens to the branch once the project is on the target host. */
@@ -28,35 +28,63 @@ export interface BranchHandoff {
   defaultPlan: BranchPlan;
 }
 
+/** `origin/topic`: where a push goes, as the choice names it. */
+function pushTarget(destination: { remote: string; branch: string }): string {
+  return `${destination.remote}/${destination.branch}`;
+}
+
 /**
  * The branch line of the dialog, from the fresh check on the source: what we
- * saw, and the ways forward. Pushing is offered, never done unasked.
+ * saw, and the ways forward. Pushing is offered, never done unasked, and only
+ * to where git itself pushes the branch, named in the choice.
+ * `existingCopy` is the host already having the project, so not taking the
+ * branch opens that copy as it is rather than a fresh clone's default branch.
  */
 export function describeBranchHandoff(
-  prep: Pick<HostSwitchPreparation, "branch" | "branchCheck">,
-  sourceName: string
+  prep: Pick<
+    HostSwitchPreparation,
+    "branch" | "branchCheck" | "pushDestination" | "headSha" | "unpushedCommitCount" | "isUnborn"
+  >,
+  sourceName: string,
+  existingCopy = false
 ): BranchHandoff {
   const branch = prep.branch;
   const check: BranchCheck | null = prep.branchCheck;
+  const stays = existingCopy ? "The copy there opens as it is." : null;
   if (!branch || !check || check.kind === "detached") {
+    const at = prep.headSha ? ` (at ${prep.headSha.slice(0, 8)})` : "";
     return {
-      summary: `No branch is checked out on ${sourceName}`,
-      detail: "The project opens on its default branch.",
+      summary: `No branch is checked out on ${sourceName}${at}`,
+      detail: stays ?? "The clone opens on its default branch.",
       tone: "neutral",
       choices: [],
       defaultPlan: "no-worktree",
     };
   }
-  const fromRemote: BranchChoice = {
+  if (prep.isUnborn) {
+    return {
+      summary: `${branch} has no commits on ${sourceName} yet`,
+      detail: stays,
+      tone: "neutral",
+      choices: [],
+      defaultPlan: "no-worktree",
+    };
+  }
+  const fromRemote = (remote: string | null): BranchChoice => ({
     plan: "worktree",
-    label: "Continue from the remote's version",
+    label: remote ? `Continue from ${remote}'s version` : "Continue from the pushed version",
     description: null,
-  };
+  });
   const startFresh: BranchChoice = {
     plan: "no-worktree",
-    label: "Start from the default branch",
+    label: existingCopy ? "Open the copy as it is" : "Start from the default branch",
     description: `${branch} stays on ${sourceName}.`,
   };
+  const destination = prep.pushDestination;
+  const noPush = (upstream: string | null, remote: string): string =>
+    upstream && upstream !== `${remote}/${branch}`
+      ? `It tracks ${upstream}, a different branch, so it isn't pushed from here.`
+      : `git has no push destination for ${branch} on ${sourceName}, so it isn't pushed from here.`;
   switch (check.kind) {
     case "same-tip":
       return {
@@ -74,25 +102,33 @@ export function describeBranchHandoff(
         choices: [],
         defaultPlan: "worktree",
       };
-    case "ahead":
-      return {
-        summary: `${branch} has ${pluralize(check.ahead, "unpushed commit")} on ${sourceName}`,
-        detail: null,
-        tone: "attention",
-        choices: [
+    case "ahead": {
+      const count = Math.max(prep.unpushedCommitCount, check.ahead);
+      const choices: BranchChoice[] = [];
+      if (destination) {
+        choices.push(
           {
             plan: "push-then-worktree",
-            label: "Push, then continue",
-            description: `Pushes to ${check.remote} from ${sourceName}, with ${sourceName}'s credentials.`,
+            label: `Push ${pluralize(count, "commit")} to ${pushTarget(destination)}, then continue`,
+            description: `Pushes from ${sourceName}, with ${sourceName}'s credentials.`,
           },
           {
-            ...fromRemote,
+            ...fromRemote(check.remote),
             description: `The unpushed commits stay on ${sourceName}.`,
-          },
-        ],
+          }
+        );
+      }
+      return {
+        summary: `${branch} has ${pluralize(check.ahead, "unpushed commit")} on ${sourceName}`,
+        detail: destination
+          ? null
+          : `${noPush(null, check.remote)} It continues from ${check.remote}'s version; the unpushed commits stay on ${sourceName}.`,
+        tone: "attention",
+        choices,
         // Pushing is outward-facing: it is chosen, never preselected.
         defaultPlan: "worktree",
       };
+    }
     case "diverged":
       return {
         summary: `${branch} has diverged from ${check.remote} on ${sourceName}`,
@@ -102,21 +138,18 @@ export function describeBranchHandoff(
         defaultPlan: "worktree",
       };
     case "not-on-remote": {
-      const upstream = check.upstream
-        ? `Its upstream is set to ${check.upstream}, which the remote doesn't have.`
-        : null;
       const choices: BranchChoice[] = [];
-      if (check.remote) {
+      if (destination) {
         choices.push({
           plan: "push-then-worktree",
-          label: "Push branch, then continue",
-          description: `Pushes to ${check.remote} from ${sourceName} and sets it as the upstream.`,
+          label: `Push ${branch} to ${pushTarget(destination)}, then continue`,
+          description: `Pushes from ${sourceName}, with ${sourceName}'s credentials.`,
         });
       }
       choices.push(startFresh);
       return {
         summary: `${branch} only exists on ${sourceName}`,
-        detail: upstream,
+        detail: destination || !check.remote ? null : noPush(check.upstream, check.remote),
         tone: "attention",
         choices,
         defaultPlan: "no-worktree",
@@ -124,10 +157,10 @@ export function describeBranchHandoff(
     }
     case "remote-unreachable":
       return {
-        summary: `Couldn't reach ${check.remote ?? "the remote"} from ${sourceName}`,
+        summary: `Couldn't reach ${check.remote ?? "the branch's remote"} from ${sourceName}`,
         detail: check.detail,
         tone: "attention",
-        choices: [fromRemote, startFresh],
+        choices: [fromRemote(check.remote), startFresh],
         defaultPlan: "worktree",
       };
   }
@@ -203,20 +236,38 @@ export function opensWithoutQuestion(
     | "candidates"
     | "branch"
     | "branchCheck"
+    | "pushDestination"
+    | "headSha"
+    | "unpushedCommitCount"
+    | "isUnborn"
     | "hasUncommittedChanges"
     | "usesLfs"
     | "targetGitLfsAvailable"
   >,
-  placedWorktree: boolean
+  placedWorktree: boolean,
+  navigateOnly = false
 ): boolean {
   if (placedWorktree) return false;
   const only = prep.candidates.length === 1 ? prep.candidates[0]! : null;
   // Matched by remote, never by a committed id alone: a fork inherits that id.
   if (!only || only.source !== "registered" || only.matchedBy !== "remote-url") return false;
+  // Going to the copy as it is moves nothing, so nothing here can be left behind.
+  if (navigateOnly) return true;
   if (prep.hasUncommittedChanges) return false;
   if (prep.usesLfs && !prep.targetGitLfsAvailable) return false;
   const handoff = describeBranchHandoff(prep, "");
   return handoff.tone === "ok" && handoff.choices.length === 0;
+}
+
+/**
+ * The remotes another host can clone from: a forge or server URL. A
+ * `file://` or local-path remote names this machine's disk, which the other
+ * host can't read.
+ */
+export function cloneableRemotes(
+  remotes: Array<{ name: string; url: string }>
+): Array<{ name: string; url: string }> {
+  return remotes.filter((r) => isSupportedCloneUrl(r.url));
 }
 
 /** The dialog's opening view, from what the target already has and the source's remotes. */
@@ -224,7 +275,7 @@ export function initialView(
   prep: Pick<HostSwitchPreparation, "candidates" | "remotes">
 ): "existing" | "clone" | "local-only" {
   if (prep.candidates.length > 0) return "existing";
-  return prep.remotes.length === 0 ? "local-only" : "clone";
+  return cloneableRemotes(prep.remotes).length === 0 ? "local-only" : "clone";
 }
 
 /** The name a host goes by in copy: its own name, or "This Mac" for this machine. */

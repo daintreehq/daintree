@@ -3,6 +3,7 @@ import type { BranchCheck } from "../../../shared/types/ipc/hostSwitch.js";
 import { readRemoteBranchTip } from "../../utils/remoteBranchTip.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { resolveGitPushAndUpstream } from "../../utils/gitPushDestination.js";
 import { countCommits, hasCommit, readConfigValue, tryRaw } from "./gitOps.js";
 
 type Git = Pick<SimpleGit, "raw">;
@@ -19,10 +20,24 @@ export interface BranchCheckInput {
 export interface BranchCheckResult {
   branch: string | null;
   check: BranchCheck;
-  /** The branch's name on `check.remote` (its upstream's name, else its own). */
+  /**
+   * The branch's name on `check.remote`: always its own name. Never its
+   * upstream's, which for a topic branched off `origin/develop` is `develop`.
+   */
   remoteBranch: string | null;
   /** The remote the branch lives on, or would be pushed to. */
   remote: string | null;
+  /**
+   * Where git itself would push the branch, when that is the same-named
+   * branch on one remote. Null when git has no such destination (nothing
+   * configured, several remotes, an upstream naming a different branch,
+   * `push.default` of nothing or matching): no push is offered then.
+   */
+  pushDestination: { remote: string; branch: string } | null;
+  /** The commit checked out here, or null when there is none (detached is still a commit). */
+  headSha: string | null;
+  /** The remote branch's tip as the remote reported it, when it has one. */
+  remoteTip: string | null;
 }
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -56,6 +71,59 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
+ * Git's own push destination for `branch`, kept only when it is the branch
+ * of the same name: a push is never aimed at another branch, and never
+ * guessed when git has no answer.
+ */
+export async function resolveSameNamePush(
+  git: Git,
+  branch: string,
+  remotes: Array<{ name: string }>
+): Promise<{ remote: string; branch: string } | null> {
+  const names = remotes.map((r) => r.name);
+  const reader = {
+    raw: (args: string[]) => git.raw(args),
+    getRemotes: async () => names.map((name) => ({ name, refs: { fetch: "", push: "" } })),
+  } as unknown as Parameters<typeof resolveGitPushAndUpstream>[0];
+  try {
+    const { push } = await resolveGitPushAndUpstream(reader, branch, names);
+    if (push.status !== "resolved") return null;
+    const { destination } = push;
+    if (destination.requiresUpstreamRepair || destination.branch !== branch) return null;
+    // The effective config in one read, refused if it can't be read: a
+    // setting that would forbid the push is never taken as absent.
+    const config = await tryRaw(git, ["config", "--list", "-z"]);
+    if (config === null) return null;
+    let pushDefault: string | null = null;
+    let merge: string | null = null;
+    for (const entry of config.split("\u0000")) {
+      if (!entry) continue;
+      const newline = entry.indexOf("\n");
+      const key = newline === -1 ? entry : entry.slice(0, newline);
+      const value = newline === -1 ? "" : entry.slice(newline + 1);
+      const lower = key.toLowerCase();
+      if (lower === "push.default") pushDefault = value.trim().toLowerCase();
+      // Section and variable names are case-insensitive; the remote and branch names aren't.
+      else if (lower.startsWith("remote.") && lower.endsWith(".push")) {
+        if (key.slice("remote.".length, -".push".length) === destination.remote) return null;
+      } else if (lower.startsWith("branch.") && lower.endsWith(".merge")) {
+        if (key.slice("branch.".length, -".merge".length) === branch) merge = value;
+      }
+    }
+    // With nothing configured the resolver falls back to the only remote;
+    // that is only git's own answer when no setting says otherwise.
+    if (pushDefault === "nothing" || pushDefault === "matching") return null;
+    // Under `push.default=current` git would push a topic that tracks
+    // `develop` to `topic`; tracking another branch still means the person
+    // set it up to land somewhere else, so it isn't pushed from here.
+    if (merge !== null && merge !== `refs/heads/${branch}`) return null;
+    return { remote: destination.remote, branch };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Ask the remote itself where the checked-out branch is and compare commit
  * ids. Upstream ahead/behind counts only compare against the local tracking
  * ref, which can be stale; this can't be.
@@ -65,8 +133,11 @@ export async function checkBranchAgainstRemote(
 ): Promise<BranchCheckResult> {
   const { git, networkGit, remotes } = input;
   const head = (await tryRaw(git, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim() ?? "";
+  const local =
+    (await tryRaw(git, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]))?.trim() || null;
+  const none = { remoteBranch: null, remote: null, pushDestination: null, remoteTip: null };
   if (head.length === 0) {
-    return { branch: null, check: { kind: "detached" }, remoteBranch: null, remote: null };
+    return { branch: null, check: { kind: "detached" }, headSha: local, ...none };
   }
   const branch = head;
   const upstreamRemote = await readConfigValue(git, `branch.${branch}.remote`);
@@ -74,31 +145,35 @@ export async function checkBranchAgainstRemote(
   const upstreamBranch = upstreamMerge?.replace(/^refs\/heads\//, "") ?? null;
   const upstream =
     upstreamRemote && upstreamBranch ? `${upstreamRemote}/${upstreamBranch}` : upstreamRemote;
-  const remote = pickRemote(upstreamRemote, remotes);
+  const pushDestination = await resolveSameNamePush(git, branch, remotes);
+  const remote = pushDestination?.remote ?? pickRemote(upstreamRemote, remotes);
   if (!remote) {
     return {
       branch,
       check: { kind: "not-on-remote", remote: null, upstream },
-      remoteBranch: null,
-      remote: null,
+      headSha: local,
+      ...none,
     };
   }
-  const remoteBranch = upstreamRemote === remote && upstreamBranch ? upstreamBranch : branch;
-  const base = { branch, remoteBranch, remote };
+  const remoteBranch = branch;
+  const base = { branch, remoteBranch, remote, pushDestination, headSha: local };
 
   const tip = await readRemoteBranchTip(networkGit, remote, remoteBranch, input.tipTimeoutMs);
   if (tip === undefined) {
-    return { ...base, check: { kind: "remote-unreachable", remote, detail: null } };
+    return {
+      ...base,
+      remoteTip: null,
+      check: { kind: "remote-unreachable", remote, detail: null },
+    };
   }
   if (tip === null) {
-    return { ...base, check: { kind: "not-on-remote", remote, upstream } };
+    return { ...base, remoteTip: null, check: { kind: "not-on-remote", remote, upstream } };
   }
-  const local = (await tryRaw(git, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]))?.trim();
   if (!local) {
-    return { ...base, check: { kind: "not-on-remote", remote, upstream } };
+    return { ...base, remoteTip: tip, check: { kind: "not-on-remote", remote, upstream } };
   }
   if (local.toLowerCase() === tip.toLowerCase()) {
-    return { ...base, check: { kind: "same-tip", remote, sha: tip } };
+    return { ...base, remoteTip: tip, check: { kind: "same-tip", remote, sha: tip } };
   }
 
   if (!(await hasCommit(git, tip))) {
@@ -119,6 +194,7 @@ export async function checkBranchAgainstRemote(
     } catch (error) {
       return {
         ...base,
+        remoteTip: tip,
         check: {
           kind: "remote-unreachable",
           remote,
@@ -127,16 +203,22 @@ export async function checkBranchAgainstRemote(
       };
     }
     if (!(await hasCommit(git, tip))) {
-      return { ...base, check: { kind: "remote-unreachable", remote, detail: null } };
+      return {
+        ...base,
+        remoteTip: tip,
+        check: { kind: "remote-unreachable", remote, detail: null },
+      };
     }
   }
 
-  const ahead = await countCommits(git, `${tip}..HEAD`);
-  const behind = await countCommits(git, `HEAD..${tip}`);
+  // The commit already read, not HEAD again: what is counted is what is shown and pushed.
+  const ahead = await countCommits(git, `${tip}..${local}`);
+  const behind = await countCommits(git, `${local}..${tip}`);
   if (ahead === null || behind === null) {
-    return { ...base, check: { kind: "remote-unreachable", remote, detail: null } };
+    return { ...base, remoteTip: tip, check: { kind: "remote-unreachable", remote, detail: null } };
   }
-  if (ahead > 0 && behind > 0) return { ...base, check: { kind: "diverged", remote } };
-  if (ahead > 0) return { ...base, check: { kind: "ahead", remote, ahead } };
-  return { ...base, check: { kind: "behind", remote, behind, sha: tip } };
+  if (ahead > 0 && behind > 0)
+    return { ...base, remoteTip: tip, check: { kind: "diverged", remote } };
+  if (ahead > 0) return { ...base, remoteTip: tip, check: { kind: "ahead", remote, ahead } };
+  return { ...base, remoteTip: tip, check: { kind: "behind", remote, behind, sha: tip } };
 }

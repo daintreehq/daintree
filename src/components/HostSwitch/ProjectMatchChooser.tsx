@@ -51,7 +51,9 @@ export function ProjectMatchChooser({
         <p className="text-sm text-text-primary">
           {only.source === "on-disk"
             ? `${hostName} has a clone of this repository that isn't added as a project yet.`
-            : `${hostName} already has this project.`}
+            : only.matchedBy === "committed-id"
+              ? `${hostName} has a project with the same project id, but none of its remotes match this one's.`
+              : `${hostName} already has this project.`}
         </p>
         <p className="text-xs text-text-secondary break-all">
           {describeCandidate(only, sourceRemotes)}
@@ -69,7 +71,7 @@ export function ProjectMatchChooser({
           checked={selected === index}
           onChange={() => onSelect(index)}
           label={candidate.name}
-          description={describeCandidate(candidate, sourceRemotes)}
+          description={`${hostName}: ${describeCandidate(candidate, sourceRemotes)}`}
           disabled={disabled}
         />
       ))}

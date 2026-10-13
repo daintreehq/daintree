@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
-import { requestHostSwitch } from "@/components/HostSwitch/hostSwitchRequests";
+import { isHostSwitchBusy, requestHostSwitch } from "@/components/HostSwitch/hostSwitchRequests";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { isSettingsTab } from "@/components/Settings/settingsTabIds";
 import { usePaletteStore } from "@/store/paletteStore";
@@ -57,6 +57,7 @@ const openOnHostArgsSchema = z.object({
     .describe(
       "Create this worktree on the host once the project is there, instead of handing over the current branch."
     ),
+  navigateOnly: z.boolean().optional().describe("Open the host's copy as is, branch untouched."),
 });
 
 /** Listed (palette, MCP) only once a host other than this machine exists; dispatch still works. */
@@ -193,14 +194,26 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
           "This window is already on that host."
         );
       }
+      // A dialog part way through a push or a clone keeps going; a new request would orphan it.
+      if (isHostSwitchBusy()) {
+        throw new ClientAppError(
+          "VALIDATION",
+          "A host switch is already running",
+          "A host switch is already running. Finish or cancel it first."
+        );
+      }
+      const navigateOnly = parsed.navigateOnly === true && !parsed.worktree;
       const worktreePath =
-        ctx.projectId === parsed.projectId ? (ctx.activeWorktreePath ?? null) : null;
+        !navigateOnly && ctx.projectId === parsed.projectId
+          ? (ctx.activeWorktreePath ?? null)
+          : null;
       const requestId = requestHostSwitch({
         toHostId: parsed.hostId,
         projectId: parsed.projectId,
         worktreePath,
         newWindow: parsed.newWindow ?? false,
         worktree: parsed.worktree ?? null,
+        navigateOnly,
         // An agent (a host's MCP included) or a plugin opens the dialog; only a person's click moves the window.
         askFirst: ctx.dispatchSource === "agent" || ctx.dispatchSource === "plugin",
       });

@@ -26,7 +26,9 @@ import type { HostDirectoryListing, HostPickerRoots } from "../../../shared/type
  */
 export const ProjectLinkMethod = {
   DESCRIBE_SOURCE: "projects.describe-source",
-  PUSH_BRANCH: "projects.push-branch",
+  // Named for the pinned push: a host from before it has no such method and
+  // refuses, rather than dropping the commit and pushing the branch's tip.
+  PUSH_BRANCH: "projects.push-branch-pinned",
   /** Kill the push this session started under that opId. */
   PUSH_CANCEL: "projects.push-cancel",
   /** The host's retained record of a push by opId, for a Shell whose answer was lost. */
@@ -86,17 +88,24 @@ const remotes = z.array(z.object({ name: text(256), url: text(4096) })).max(64);
 
 const branchTarget = z.object({ name: branchName, remoteBranch: branchName });
 
-export const DescribeSourceSchema = z.object({ projectId, worktreePath: hostPath.nullable() });
+export const DescribeSourceSchema = z.object({
+  projectId,
+  worktreePath: hostPath.nullable(),
+  skipBranch: z.boolean().optional(),
+});
+const commitSha = z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i);
 export const PushBranchSchema = z.object({
   projectId,
   worktreePath: hostPath,
   branch: branchName,
   remote: z.string().min(1).max(256),
   remoteBranch: branchName,
+  // Required: a push without the reviewed commit would send whatever the branch holds by then.
+  sha: commitSha,
   opId: opId.optional(),
 });
 export const PushStatusQuerySchema = z.object({ opId, projectId });
-export const PushObserveSchema = PushBranchSchema.omit({ opId: true });
+export const PushObserveSchema = PushBranchSchema.omit({ opId: true, sha: true });
 export const EmptySchema = z.union([z.null(), z.undefined(), z.object({}).strict()]);
 export const MatchSchema = z.object({ remoteUrls, committedProjectId: projectId.nullable() });
 export const CheckDestinationSchema = z.object({
@@ -131,6 +140,7 @@ export const OpenSchema = z.object({
   remoteUrls,
   branch: branchTarget.nullable(),
   branchRemoteUrl: z.string().max(4096).nullable(),
+  navigateOnly: z.boolean().optional(),
 });
 export const OpenFolderSchema = z.object({ path: hostPath });
 export const CheckOutSchema = z.object({
@@ -190,9 +200,19 @@ export const SourceDescriptionSchema: z.ZodType<SourceProjectDescription> = z.ob
   branchCheck: branchCheck.nullable(),
   remoteBranch: text(512).nullable(),
   remote: text(256).nullable(),
+  // A host from before these were reported offers no push, which is the safe reading.
+  pushDestination: z
+    .object({ remote: text(256), branch: text(512) })
+    .nullable()
+    .default(null),
+  headSha: commitSha.nullable().default(null),
   cloneUrl: text(4096).nullable(),
   hasUncommittedChanges: z.boolean(),
+  uncommittedChangeCount: z.number().int().min(0).default(0),
   unpushedCommits: z.array(z.object({ sha: text(64), subject: text(1024) })).max(50),
+  unpushedCommitCount: z.number().int().min(0).default(0),
+  isGitRepository: z.boolean().default(true),
+  isUnborn: z.boolean().default(false),
   remotes,
   committedProjectId: projectId.nullable(),
   homeRelativePath: hostPath.nullable(),

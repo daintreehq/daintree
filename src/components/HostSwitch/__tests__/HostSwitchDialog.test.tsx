@@ -19,11 +19,26 @@ vi.mock("@/components/ui/button", () => ({
 }));
 
 vi.mock("@/components/ui/AppDialog", () => {
-  const AppDialog = ({ isOpen, children }: { isOpen: boolean; children: ReactNode }) =>
-    isOpen ? <div data-testid="app-dialog">{children}</div> : null;
+  const AppDialog = ({
+    isOpen,
+    onClose,
+    children,
+  }: {
+    isOpen: boolean;
+    onClose: () => void;
+    children: ReactNode;
+  }) =>
+    isOpen ? (
+      <div data-testid="app-dialog">
+        <button type="button" onClick={onClose}>
+          close
+        </button>
+        {children}
+      </div>
+    ) : null;
   AppDialog.Header = ({ children }: { children: ReactNode }) => <div>{children}</div>;
   AppDialog.Title = ({ children }: { children: ReactNode }) => <h2>{children}</h2>;
-  AppDialog.CloseButton = () => <button type="button">close</button>;
+  AppDialog.CloseButton = () => null;
   AppDialog.Footer = ({ children, hint }: { children: ReactNode; hint?: ReactNode }) => (
     <div>
       <div data-testid="hint">{hint}</div>
@@ -62,6 +77,9 @@ vi.mock("@/components/HostFilePicker/hostFilePickerQueue", () => ({
 
 import { HostSwitchDialog } from "../HostSwitchDialog";
 
+const REVIEWED_SHA = "5d6e7f8a9b0c1d2e3f405162738495a6b7c8d9e0";
+const PUSH_CHOICE = "Push 1 commit to origin/feature/host-chip, then continue";
+
 function preparation(overrides: Partial<HostSwitchPreparation> = {}): HostSwitchPreparation {
   return {
     fromHostId: "local",
@@ -72,9 +90,15 @@ function preparation(overrides: Partial<HostSwitchPreparation> = {}): HostSwitch
     branch: "feature/host-chip",
     branchCheck: { kind: "same-tip", remote: "origin", sha: "abc" },
     remoteBranch: "feature/host-chip",
+    pushDestination: { remote: "origin", branch: "feature/host-chip" },
+    headSha: REVIEWED_SHA,
     cloneUrl: "git@github.com:daintreehq/daintree.git",
     hasUncommittedChanges: true,
+    uncommittedChangeCount: 2,
     unpushedCommits: [],
+    unpushedCommitCount: 0,
+    isGitRepository: true,
+    isUnborn: false,
     remotes: [{ name: "origin", url: "git@github.com:daintreehq/daintree.git" }],
     committedProjectId: null,
     candidates: [],
@@ -128,7 +152,7 @@ describe("HostSwitchDialog", () => {
     render(<HostSwitchDialog request={request} onClose={() => {}} />);
     expect(await screen.findByText("daintree isn't on studio-01 yet")).toBeTruthy();
     expect(screen.getByText("On origin at the same commit")).toBeTruthy();
-    expect(screen.getByText(/^Uncommitted changes on .+ stay there\.$/)).toBeTruthy();
+    expect(screen.getByText(/^2 uncommitted changes on .+ stay there\.$/)).toBeTruthy();
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -185,6 +209,7 @@ describe("HostSwitchDialog", () => {
       preparation({
         branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
         unpushedCommits: [{ sha: "abc1234", subject: "Draw the host chip" }],
+        unpushedCommitCount: 1,
       })
     );
     execute.mockResolvedValue({
@@ -200,7 +225,7 @@ describe("HostSwitchDialog", () => {
       },
     });
     render(<HostSwitchDialog request={request} onClose={() => {}} />);
-    fireEvent.click(await screen.findByRole("radio", { name: "Push, then continue" }));
+    fireEvent.click(await screen.findByRole("radio", { name: PUSH_CHOICE }));
     fireEvent.click(screen.getByRole("button", { name: "Push, then clone" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Couldn't confirm the push of feature/host-chip");
@@ -215,6 +240,7 @@ describe("HostSwitchDialog", () => {
       preparation({
         branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
         unpushedCommits: [{ sha: "abc1234", subject: "Draw the host chip" }],
+        unpushedCommitCount: 1,
       })
     );
     execute.mockResolvedValue({
@@ -227,13 +253,162 @@ describe("HostSwitchDialog", () => {
     render(<HostSwitchDialog request={request} onClose={() => {}} />);
     expect(await screen.findByRole("button", { name: "Clone and open" })).toBeTruthy();
     expect(screen.queryByText("Draw the host chip")).toBeNull();
-    fireEvent.click(screen.getByRole("radio", { name: "Push, then continue" }));
+    fireEvent.click(screen.getByRole("radio", { name: PUSH_CHOICE }));
     expect(screen.getByText("Draw the host chip")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Push, then clone" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("[rejected]");
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute.mock.calls[0]![0]).toMatchObject({ kind: "push", remote: "origin" });
+    expect(execute.mock.calls[0]![0]).toMatchObject({
+      kind: "push",
+      remote: "origin",
+      remoteBranch: "feature/host-chip",
+      sha: REVIEWED_SHA,
+    });
+  });
+
+  it("counts the commits past the first 20 it lists", async () => {
+    prepare.mockResolvedValue(
+      preparation({
+        branchCheck: { kind: "ahead", remote: "origin", ahead: 25 },
+        unpushedCommits: Array.from({ length: 20 }, (_, i) => ({
+          sha: `c${i}`,
+          subject: `Commit ${i}`,
+        })),
+        unpushedCommitCount: 25,
+      })
+    );
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    fireEvent.click(
+      await screen.findByRole("radio", {
+        name: "Push 25 commits to origin/feature/host-chip, then continue",
+      })
+    );
+    expect(screen.getByText("and 5 more")).toBeTruthy();
+  });
+
+  it("pushes nothing more when the branch moved since review, and looks again", async () => {
+    prepare.mockResolvedValue(
+      preparation({
+        branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
+        unpushedCommits: [{ sha: "abc1234", subject: "Draw the host chip" }],
+        unpushedCommitCount: 1,
+      })
+    );
+    execute.mockResolvedValue({
+      kind: "git-failed",
+      step: "push",
+      hostId: "local",
+      reason: "branch-moved",
+      message: "feature/host-chip moved since its commits were shown. Nothing was pushed.",
+    });
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("radio", { name: PUSH_CHOICE }));
+    fireEvent.click(screen.getByRole("button", { name: "Push, then clone" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Didn't push feature/host-chip");
+    await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks again rather than opening by itself once a moved branch was looked at again", async () => {
+    const ahead = preparation({
+      branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
+      unpushedCommitCount: 1,
+      hasUncommittedChanges: false,
+      candidates: [CANDIDATE],
+    });
+    prepare.mockResolvedValueOnce(ahead).mockResolvedValueOnce({
+      ...ahead,
+      branchCheck: { kind: "same-tip", remote: "origin", sha: "a" },
+    });
+    execute.mockResolvedValue({
+      kind: "git-failed",
+      step: "push",
+      hostId: "local",
+      reason: "branch-moved",
+      message: "feature/host-chip moved since its commits were shown. Nothing was pushed.",
+    });
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("radio", { name: PUSH_CHOICE }));
+    fireEvent.click(screen.getByRole("button", { name: "Push, then open" }));
+    await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "Open on studio-01" })).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(switchToHost).not.toHaveBeenCalled();
+  });
+
+  it("says it pushes on every control that runs the chosen push", async () => {
+    prepare.mockResolvedValue(
+      preparation({
+        branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
+        unpushedCommitCount: 1,
+        candidates: [{ ...CANDIDATE, projectId: null, source: "on-disk" }],
+      })
+    );
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Use existing folder" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: PUSH_CHOICE }));
+    expect(screen.getByRole("button", { name: "Push, then use existing folder" })).toBeTruthy();
+    pickHostPaths.mockResolvedValue(null);
+    fireEvent.click(screen.getByText("Push, then use another folder on studio-01…"));
+    await waitFor(() =>
+      expect(pickHostPaths).toHaveBeenCalledWith(
+        expect.objectContaining({ buttonLabel: "Push, then use this folder" })
+      )
+    );
+  });
+
+  it("closing mid-push cancels it and nothing follows, not even the window switch", async () => {
+    prepare.mockResolvedValue(
+      preparation({
+        branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
+        unpushedCommitCount: 1,
+      })
+    );
+    let finishPush!: (result: HostSwitchExecuteResult) => void;
+    execute.mockImplementationOnce(
+      () => new Promise<HostSwitchExecuteResult>((resolve) => (finishPush = resolve))
+    );
+    execute.mockResolvedValue(openedOn("host-p9"));
+    const onClose = vi.fn();
+    render(<HostSwitchDialog request={request} onClose={onClose} />);
+    fireEvent.click(await screen.findByRole("radio", { name: PUSH_CHOICE }));
+    fireEvent.click(screen.getByRole("button", { name: "Push, then clone" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "close" }));
+    expect(onClose).toHaveBeenCalled();
+    expect(window.electron.hostSwitch.cancel).toHaveBeenCalled();
+    finishPush({ kind: "pushed" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(switchToHost).not.toHaveBeenCalled();
+  });
+
+  it("goes to the host's copy as it is when only navigating", async () => {
+    prepare.mockResolvedValue(
+      preparation({
+        branch: "feature/host-chip",
+        branchCheck: null,
+        candidates: [CANDIDATE],
+      })
+    );
+    execute.mockResolvedValue(openedOn("host-p1"));
+    const onClose = vi.fn();
+    render(
+      <HostSwitchDialog
+        request={{ ...request, worktreePath: "/Users/greg/wt", navigateOnly: true }}
+        onClose={onClose}
+      />
+    );
+    await waitFor(() => expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "host-p1"));
+    expect(prepare.mock.calls[0]![0]).toMatchObject({ navigateOnly: true, worktreePath: null });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]![0]).toMatchObject({
+      kind: "open",
+      branch: null,
+      navigateOnly: true,
+    });
   });
 
   it("opens the host's own copy when it already has the project", async () => {
@@ -383,6 +558,15 @@ describe("HostSwitchDialog", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Switch host only" }));
     expect(switchToHost).toHaveBeenCalledWith("studio-01", false);
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("offers nothing to send for a folder that isn't a git repository", async () => {
+    prepare.mockResolvedValue(
+      preparation({ remotes: [], cloneUrl: null, isGitRepository: false, branch: null })
+    );
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    expect(await screen.findByText(/isn't a git repository/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send a copy of the repository" })).toBeNull();
   });
 
   it("offers a copy of a repository with no remote, saying what it leaves behind", async () => {

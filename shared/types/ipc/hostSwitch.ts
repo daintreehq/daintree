@@ -15,12 +15,14 @@ export interface HostSwitchPlanPayload {
   projectId: string;
   /** The worktree the user is in on the source host. */
   worktreePath: string | null;
+  /** Open the host's copy as it is: the branch isn't checked or fetched. */
+  navigateOnly?: boolean;
 }
 
 export interface HostSwitchPlan {
   projectName: string;
   branch: string | null;
-  branchState: BranchRemoteState | null;
+  branchState: BranchCheck | null;
   hasUncommittedChanges: boolean;
   remotes: Array<{ name: string; url: string }>;
   /** Candidates on the target host, best first. Empty means clone. */
@@ -52,13 +54,24 @@ export interface HostSwitchPreparation {
   worktreePath: string;
   branch: string | null;
   branchCheck: BranchCheck | null;
-  /** The branch's name on its remote (its upstream's name, else its own). */
+  /** The branch's name on its remote: always its own name. */
   remoteBranch: string | null;
+  /** Where git itself pushes the branch, else null: no push is offered. */
+  pushDestination: { remote: string; branch: string } | null;
+  /** The commit checked out on the source, which a push sends and nothing newer. */
+  headSha: string | null;
   /** URL of the remote the branch lives on, else the one to clone from. */
   cloneUrl: string | null;
   hasUncommittedChanges: boolean;
+  uncommittedChangeCount: number;
   /** Commits a push would publish (newest first, capped), shown before any push. */
   unpushedCommits: Array<{ sha: string; subject: string }>;
+  /** All the commits a push would publish. */
+  unpushedCommitCount: number;
+  /** The source folder is a git repository. */
+  isGitRepository: boolean;
+  /** It has no commits yet. */
+  isUnborn: boolean;
   remotes: Array<{ name: string; url: string }>;
   /** The committed `.daintree/project.json` id, when the repository carries one. */
   committedProjectId: string | null;
@@ -85,6 +98,8 @@ export type HostSwitchExecutePayload =
       branch: string;
       remote: string;
       remoteBranch: string;
+      /** The reviewed commit: only it is pushed. */
+      sha: string;
     }
   /** Clone onto the target (from the remote, or from a bundle of the source), register and open. */
   | {
@@ -108,6 +123,8 @@ export type HostSwitchExecutePayload =
       remoteUrls: string[];
       branch: import("./projectMatch.js").HostBranchTarget | null;
       branchRemoteUrl: string | null;
+      /** Go to the copy as it is: no fetch, no worktree. */
+      navigateOnly?: boolean;
     }
   /** Clone a repository by its URL onto a host, register and open it (Add project…). */
   | {

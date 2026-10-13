@@ -11,8 +11,27 @@ import {
   initialView,
 } from "../hostSwitchModel";
 
-const handoff = (branchCheck: BranchCheck | null, branch: string | null = "feature/host-chip") =>
-  describeBranchHandoff({ branch, branchCheck }, "This Mac");
+const PUSHES_TO_ORIGIN = { remote: "origin", branch: "feature/host-chip" };
+
+const handoff = (
+  branchCheck: BranchCheck | null,
+  branch: string | null = "feature/host-chip",
+  overrides: Partial<Parameters<typeof describeBranchHandoff>[0]> = {},
+  existingCopy = false
+) =>
+  describeBranchHandoff(
+    {
+      branch,
+      branchCheck,
+      pushDestination: PUSHES_TO_ORIGIN,
+      headSha: "0123456789abcdef0123456789abcdef01234567",
+      unpushedCommitCount: 0,
+      isUnborn: false,
+      ...overrides,
+    },
+    "This Mac",
+    existingCopy
+  );
 
 describe("describeBranchHandoff", () => {
   it("creates the worktree without asking when the remote has the same tip or more", () => {
@@ -27,12 +46,28 @@ describe("describeBranchHandoff", () => {
     });
   });
 
-  it("offers a push for unpushed commits, run on the source with its own credentials", () => {
-    const result = handoff({ kind: "ahead", remote: "upstream", ahead: 3 });
+  it("offers a push for unpushed commits, naming where git pushes them", () => {
+    const result = handoff({ kind: "ahead", remote: "origin", ahead: 3 }, undefined, {
+      unpushedCommitCount: 3,
+    });
     expect(result.summary).toBe("feature/host-chip has 3 unpushed commits on This Mac");
     expect(result.choices.map((c) => c.plan)).toEqual(["push-then-worktree", "worktree"]);
-    expect(result.choices[0]!.description).toContain("upstream from This Mac");
+    expect(result.choices[0]!.label).toBe(
+      "Push 3 commits to origin/feature/host-chip, then continue"
+    );
+    expect(result.choices[0]!.description).toContain("This Mac's credentials");
+    expect(result.choices[1]!.label).toBe("Continue from origin's version");
     expect(result.defaultPlan).toBe("worktree");
+  });
+
+  it("offers no push when git has no same-named destination for the branch", () => {
+    const result = handoff({ kind: "ahead", remote: "origin", ahead: 2 }, undefined, {
+      pushDestination: null,
+    });
+    expect(result.choices).toEqual([]);
+    expect(result.detail).toContain("isn't pushed from here");
+    expect(result.defaultPlan).toBe("worktree");
+    expect(result.tone).toBe("attention");
   });
 
   it("never offers a push for a diverged branch", () => {
@@ -43,13 +78,51 @@ describe("describeBranchHandoff", () => {
   });
 
   it("offers to push a branch the remote doesn't have, or to start from the default branch", () => {
-    const result = handoff({ kind: "not-on-remote", remote: "origin", upstream: "origin/renamed" });
+    const result = handoff({ kind: "not-on-remote", remote: "origin", upstream: null });
     expect(result.summary).toBe("feature/host-chip only exists on This Mac");
-    expect(result.detail).toContain("origin/renamed");
-    expect(result.choices.map((c) => c.plan)).toEqual(["push-then-worktree", "no-worktree"]);
+    expect(result.choices.map((c) => c.label)).toEqual([
+      "Push feature/host-chip to origin/feature/host-chip, then continue",
+      "Start from the default branch",
+    ]);
     expect(result.defaultPlan).toBe("no-worktree");
-    const nowhere = handoff({ kind: "not-on-remote", remote: null, upstream: null });
+    const nowhere = handoff({ kind: "not-on-remote", remote: null, upstream: null }, undefined, {
+      pushDestination: null,
+    });
     expect(nowhere.choices.map((c) => c.plan)).toEqual(["no-worktree"]);
+  });
+
+  it("never offers to push a branch whose upstream is another branch", () => {
+    const result = handoff(
+      { kind: "not-on-remote", remote: "origin", upstream: "origin/develop" },
+      undefined,
+      { pushDestination: null }
+    );
+    expect(result.detail).toBe(
+      "It tracks origin/develop, a different branch, so it isn't pushed from here."
+    );
+    expect(result.choices.map((c) => c.plan)).toEqual(["no-worktree"]);
+  });
+
+  it("opens an existing copy as it is rather than claiming a default branch", () => {
+    const result = handoff(
+      { kind: "not-on-remote", remote: "origin", upstream: null },
+      undefined,
+      {},
+      true
+    );
+    expect(result.choices.at(-1)!.label).toBe("Open the copy as it is");
+    const detached = handoff({ kind: "detached" }, null, {}, true);
+    expect(detached.summary).toBe("No branch is checked out on This Mac (at 01234567)");
+    expect(detached.detail).toBe("The copy there opens as it is.");
+  });
+
+  it("says a repository with no commits has nothing to hand over", () => {
+    const result = handoff({ kind: "not-on-remote", remote: "origin", upstream: null }, undefined, {
+      isUnborn: true,
+      headSha: null,
+    });
+    expect(result.summary).toBe("feature/host-chip has no commits on This Mac yet");
+    expect(result.choices).toEqual([]);
   });
 
   it("says what it couldn't reach and carries on with what's known", () => {
@@ -134,8 +207,21 @@ describe("initialView and hostDisplayName", () => {
       lastOpenedAt: null,
     };
     expect(initialView({ candidates: [candidate], remotes: [] })).toBe("existing");
-    expect(initialView({ candidates: [], remotes: [{ name: "origin", url: "x" }] })).toBe("clone");
+    expect(
+      initialView({
+        candidates: [],
+        remotes: [{ name: "origin", url: "git@github.com:daintreehq/daintree.git" }],
+      })
+    ).toBe("clone");
     expect(initialView({ candidates: [], remotes: [] })).toBe("local-only");
+  });
+
+  it("sends a copy when the only remotes are on this machine's disk", () => {
+    for (const url of ["/srv/git/app.git", "file:///srv/git/app.git", "../app.git"]) {
+      expect(initialView({ candidates: [], remotes: [{ name: "origin", url }] })).toBe(
+        "local-only"
+      );
+    }
   });
 
   it("calls this machine by its local label", () => {
@@ -192,6 +278,10 @@ describe("opensWithoutQuestion", () => {
       candidates: [candidate()],
       branch: "feature/x",
       branchCheck: { kind: "same-tip", remote: "origin", sha: "abc" },
+      pushDestination: { remote: "origin", branch: "feature/x" },
+      headSha: "abc",
+      unpushedCommitCount: 0,
+      isUnborn: false,
       hasUncommittedChanges: false,
       usesLfs: false,
       targetGitLfsAvailable: true,
@@ -217,6 +307,24 @@ describe("opensWithoutQuestion", () => {
     expect(opensWithoutQuestion(prep({ usesLfs: true, targetGitLfsAvailable: false }), false)).toBe(
       false
     );
+  });
+
+  it("goes straight to the one copy when only navigating, whatever the branch", () => {
+    const ahead = prep({
+      branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
+      hasUncommittedChanges: true,
+    });
+    expect(opensWithoutQuestion(ahead, false, true)).toBe(true);
+    expect(
+      opensWithoutQuestion(prep({ candidates: [candidate(), candidate()] }), false, true)
+    ).toBe(false);
+    expect(
+      opensWithoutQuestion(
+        prep({ candidates: [candidate({ matchedBy: "committed-id" })] }),
+        false,
+        true
+      )
+    ).toBe(false);
   });
 
   it("never opens a copy matched only by its committed project id: a fork inherits it", () => {

@@ -487,12 +487,75 @@ describe("source side", () => {
     ).rejects.toMatchObject({ code: "VALIDATION" });
   });
 
-  it("pushes with set-upstream, and hands back git's text when the push is refused", async () => {
+  it("counts every commit a push would publish while previewing the newest 20", async () => {
+    const host = createTestHost(root, "source-many");
+    const clone = path.join(root, "source-many-clone");
+    git(root, ["clone", "-q", "-b", "feature/host-chip", URL, clone]);
+    for (let i = 0; i < 25; i++) commit(clone, `Work ${i}`);
+    const project = host.addProject(clone);
+    const described = await host.service.describeSource({
+      projectId: project.id,
+      worktreePath: null,
+    });
+    expect(described.pushDestination).toEqual({ remote: "origin", branch: "feature/host-chip" });
+    expect(described.headSha).toBe(git(clone, ["rev-parse", "HEAD"]));
+    expect(described.unpushedCommits).toHaveLength(20);
+    expect(described.unpushedCommitCount).toBe(25);
+  });
+
+  it("offers no push for a topic that tracks its base branch", async () => {
+    const host = createTestHost(root, "source-base-tracking");
+    const clone = path.join(root, "source-base-tracking-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    git(clone, ["checkout", "-q", "-b", "topic", "origin/main"]);
+    commit(clone, "Topic work");
+    const project = host.addProject(clone);
+    const described = await host.service.describeSource({
+      projectId: project.id,
+      worktreePath: null,
+    });
+    expect(described.remoteBranch).toBe("topic");
+    expect(described.pushDestination).toBeNull();
+    expect(described.unpushedCommits).toEqual([]);
+  });
+
+  it("leaves the branch alone when asked to skip it", async () => {
+    const host = createTestHost(root, "source-skip");
+    const clone = path.join(root, "source-skip-clone");
+    git(root, ["clone", "-q", "-b", "feature/host-chip", URL, clone]);
+    commit(clone, "Unpushed work");
+    const project = host.addProject(clone);
+    const described = await host.service.describeSource({
+      projectId: project.id,
+      worktreePath: null,
+      skipBranch: true,
+    });
+    expect(described.branch).toBe("feature/host-chip");
+    expect(described.branchCheck).toBeNull();
+    expect(described.pushDestination).toBeNull();
+    expect(described.unpushedCommits).toEqual([]);
+  });
+
+  it("describes a folder that isn't a git repository as such", async () => {
+    const host = createTestHost(root, "source-plain");
+    const folder = path.join(root, "source-plain-folder");
+    fs.mkdirSync(folder, { recursive: true });
+    const project = host.addProject(folder);
+    const described = await host.service.describeSource({
+      projectId: project.id,
+      worktreePath: null,
+    });
+    expect(described.isGitRepository).toBe(false);
+    expect(described.branchCheck).toBeNull();
+    expect(described.headSha).toBeNull();
+  });
+
+  it("pushes exactly the reviewed commit and sets the upstream where there was none", async () => {
     const host = createTestHost(root, "source-c");
     const clone = path.join(root, "source-c-clone");
     git(root, ["clone", "-q", URL, clone]);
     git(clone, ["checkout", "-q", "-b", "new-branch"]);
-    commit(clone, "new");
+    const reviewed = commit(clone, "new");
     const project = host.addProject(clone);
     const payload = {
       projectId: project.id,
@@ -500,13 +563,100 @@ describe("source side", () => {
       branch: "new-branch",
       remote: "origin",
       remoteBranch: "new-branch",
+      sha: reviewed,
     };
     expect(await host.service.pushBranch(payload)).toEqual({ ok: true });
     expect(git(clone, ["config", "branch.new-branch.remote"])).toBe("origin");
+    expect(git(clone, ["config", "branch.new-branch.merge"])).toBe("refs/heads/new-branch");
+    expect(git(clone, ["ls-remote", "origin", "refs/heads/new-branch"])).toContain(reviewed);
+  });
 
+  it("pushes no tags or other refs along with the commit", async () => {
+    const host = createTestHost(root, "source-tags");
+    const clone = path.join(root, "source-tags-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    git(clone, ["checkout", "-q", "-b", "tagged-branch"]);
+    const reviewed = commit(clone, "tagged");
+    git(clone, ["tag", "-a", "-m", "release", "v-tagged", reviewed]);
+    git(clone, ["config", "push.followTags", "true"]);
+    // A branch named like the sha must not stand in for the commit.
+    git(clone, ["branch", reviewed, "main"]);
+    const project = host.addProject(clone);
+    const outcome = await host.service.pushBranch({
+      projectId: project.id,
+      worktreePath: clone,
+      branch: "tagged-branch",
+      remote: "origin",
+      remoteBranch: "tagged-branch",
+      sha: reviewed,
+    });
+    expect(outcome).toEqual({ ok: true });
+    expect(git(clone, ["ls-remote", "origin", "refs/heads/tagged-branch"])).toContain(reviewed);
+    expect(git(clone, ["ls-remote", "--tags", "origin", "v-tagged"])).toBe("");
+  });
+
+  it("pushes nothing once the branch moved past the reviewed commit", async () => {
+    const host = createTestHost(root, "source-moved");
+    const clone = path.join(root, "source-moved-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    git(clone, ["checkout", "-q", "-b", "moved-branch"]);
+    const reviewed = commit(clone, "reviewed");
+    commit(clone, "added by an agent afterwards");
+    const project = host.addProject(clone);
+    const outcome = await host.service.pushBranch({
+      projectId: project.id,
+      worktreePath: clone,
+      branch: "moved-branch",
+      remote: "origin",
+      remoteBranch: "moved-branch",
+      sha: reviewed,
+    });
+    expect(outcome).toMatchObject({ ok: false, reason: "branch-moved" });
+    expect(git(clone, ["ls-remote", "origin", "refs/heads/moved-branch"])).toBe("");
+  });
+
+  it("refuses a push to any branch but the branch's own name, or where git doesn't push it", async () => {
+    const host = createTestHost(root, "source-elsewhere");
+    const clone = path.join(root, "source-elsewhere-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    git(clone, ["checkout", "-q", "-b", "topic", "origin/main"]);
+    const reviewed = commit(clone, "topic work");
+    const project = host.addProject(clone);
+    const base = {
+      projectId: project.id,
+      worktreePath: clone,
+      branch: "topic",
+      remote: "origin",
+      sha: reviewed,
+    };
+    await expect(host.service.pushBranch({ ...base, remoteBranch: "main" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    expect(await host.service.pushBranch({ ...base, remoteBranch: "topic" })).toMatchObject({
+      ok: false,
+      reason: "destination-changed",
+    });
+    expect(git(clone, ["ls-remote", "origin", "refs/heads/topic"])).toBe("");
+  });
+
+  it("hands back git's text when the remote refuses a non-fast-forward", async () => {
+    const host = createTestHost(root, "source-rejected");
+    const clone = path.join(root, "source-rejected-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    git(clone, ["checkout", "-q", "-b", "rejected-branch"]);
+    const first = commit(clone, "new");
+    const project = host.addProject(clone);
+    const payload = {
+      projectId: project.id,
+      worktreePath: clone,
+      branch: "rejected-branch",
+      remote: "origin",
+      remoteBranch: "rejected-branch",
+    };
+    expect(await host.service.pushBranch({ ...payload, sha: first })).toEqual({ ok: true });
     git(clone, ["reset", "-q", "--hard", "HEAD~1"]);
-    commit(clone, "rewritten");
-    const refused = await host.service.pushBranch(payload);
+    const rewritten = commit(clone, "rewritten");
+    const refused = await host.service.pushBranch({ ...payload, sha: rewritten });
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.message).toMatch(/rejected|non-fast-forward|fetch first/);
   });
@@ -640,6 +790,7 @@ describe("a push that doesn't finish", () => {
         branch: "main",
         remote: "origin",
         remoteBranch: "main",
+        sha: git(clone, ["rev-parse", "HEAD"]),
       },
     };
   }
@@ -651,6 +802,7 @@ describe("a push that doesn't finish", () => {
       branch: string;
       remote: string;
       remoteBranch: string;
+      sha: string;
     },
     signal?: AbortSignal,
     timeoutMs?: number

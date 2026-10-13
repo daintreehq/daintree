@@ -158,6 +158,7 @@ export class HostSwitchService {
     const described = await from.describeSource({
       projectId: payload.projectId,
       worktreePath: payload.worktreePath ?? null,
+      ...(payload.navigateOnly === true ? { skipBranch: true } : {}),
     });
     // Neither the other host nor the dialog ever sees a remote's embedded credentials.
     const source = {
@@ -196,9 +197,15 @@ export class HostSwitchService {
       branch: source.branch,
       branchCheck: source.branchCheck,
       remoteBranch: source.remoteBranch,
+      pushDestination: source.pushDestination,
+      headSha: source.headSha,
       cloneUrl: source.cloneUrl,
       hasUncommittedChanges: source.hasUncommittedChanges,
+      uncommittedChangeCount: source.uncommittedChangeCount,
       unpushedCommits: source.unpushedCommits,
+      unpushedCommitCount: source.unpushedCommitCount,
+      isGitRepository: source.isGitRepository,
+      isUnborn: source.isUnborn,
       remotes: source.remotes,
       committedProjectId: source.committedProjectId,
       candidates,
@@ -213,15 +220,10 @@ export class HostSwitchService {
 
   async plan(ctx: IpcContext, payload: HostSwitchPlanPayload): Promise<HostSwitchPlan> {
     const prepared = await this.prepare(ctx, payload);
-    const check = prepared.branchCheck;
     return {
       projectName: prepared.projectName,
       branch: prepared.branch,
-      // Behind loses nothing by continuing from the remote, which is what a same tip means here.
-      branchState:
-        check?.kind === "behind"
-          ? { kind: "same-tip", remote: check.remote, sha: check.sha }
-          : check,
+      branchState: prepared.branchCheck,
       hasUncommittedChanges: prepared.hasUncommittedChanges,
       remotes: prepared.remotes,
       candidates: prepared.candidates,
@@ -317,6 +319,17 @@ export class HostSwitchService {
     let run: (track: Tracked) => Promise<HostSwitchExecuteResult>;
     switch (payload.kind) {
       case "push": {
+        // Checked here too, so a host from before pinned pushes is never asked
+        // to push to another branch or without the reviewed commit.
+        if (payload.remoteBranch !== payload.branch) {
+          throw invalid("A branch is only pushed to its own name");
+        }
+        if (
+          typeof payload.sha !== "string" ||
+          !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(payload.sha)
+        ) {
+          throw invalid("Invalid commit");
+        }
         const from = this.source(ctx, payload.fromHostId);
         run = (track) => this.push(from, payload, track);
         break;
@@ -336,8 +349,9 @@ export class HostSwitchService {
               projectId: payload.candidate.projectId,
               path: payload.candidate.path,
               remoteUrls: payload.remoteUrls.map(stripGitRemoteCredentials),
-              branch: payload.branch,
+              branch: payload.navigateOnly === true ? null : payload.branch,
               branchRemoteUrl: stripOptional(payload.branchRemoteUrl),
+              ...(payload.navigateOnly === true ? { navigateOnly: true } : {}),
             })
           );
         };
@@ -477,6 +491,7 @@ export class HostSwitchService {
       branch: payload.branch,
       remote: payload.remote,
       remoteBranch: payload.remoteBranch,
+      sha: payload.sha,
     };
     let outcome: PushBranchOutcome;
     try {
@@ -537,11 +552,11 @@ export class HostSwitchService {
           throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
         }
         const observed = await from.observePush(request);
+        // Pushed means the remote has the reviewed commit, whatever the branch here did since.
         if (
           observed.remoteReachable &&
-          observed.localSha !== null &&
           observed.remoteSha !== null &&
-          observed.localSha.toLowerCase() === observed.remoteSha.toLowerCase()
+          observed.remoteSha.toLowerCase() === request.sha.toLowerCase()
         ) {
           return { kind: "pushed" };
         }

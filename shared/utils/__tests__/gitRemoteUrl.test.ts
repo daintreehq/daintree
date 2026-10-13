@@ -134,11 +134,14 @@ describe("stripGitRemoteCredentials", () => {
 });
 
 describe("isSupportedCloneUrl", () => {
-  it("accepts HTTP(S), ssh:// and scp-like git@host:path remotes", () => {
+  it("accepts HTTP(S), ssh:// and scp-like [user@]host:path remotes", () => {
     for (const url of [
       "https://github.com/daintreehq/daintree.git",
       "ssh://git@github.com/daintreehq/daintree.git",
       "git@github.com:daintreehq/daintree.git",
+      "deploy@git.example.com:team/app.git",
+      "gitolite3@server:repo.git",
+      "server.local:repos/app.git",
     ]) {
       expect(isSupportedCloneUrl(url)).toBe(true);
     }
@@ -153,8 +156,13 @@ describe("isSupportedCloneUrl", () => {
       "https://github.com/a b",
       "https://github.com/a\nb",
       "file:///etc",
+      "git+file://host/repo",
       "ext::sh -c x",
       "/local/path",
+      "./local:path",
+      "C:\\repos\\app",
+      "C:/repos/app",
+      "user@host/with-slash:path",
     ]) {
       expect(isSupportedCloneUrl(url)).toBe(false);
     }

@@ -20,12 +20,19 @@ export interface HostSwitchRequest {
    * opens the project on its own, even when there is nothing to decide.
    */
   askFirst?: boolean;
+  /**
+   * Go to the copy the host already has, as it is: the branch isn't checked,
+   * fetched or given a worktree, and nothing is pushed.
+   */
+  navigateOnly?: boolean;
 }
 
 /** How a request ended: the project opened on the host, or the dialog went away without it. */
 export type HostSwitchSettlement = "completed" | "dismissed";
 
 let current: HostSwitchRequest | null = null;
+/** The request whose dialog has a step running (a push, a clone): it isn't replaced mid-way. */
+let busyId: number | null = null;
 let nextId = 1;
 let hosts = 0;
 const listeners = new Set<() => void>();
@@ -40,6 +47,7 @@ function settle(id: number, settlement: HostSwitchSettlement): void {
 function publish(next: HostSwitchRequest | null): void {
   const previous = current;
   current = next;
+  if (busyId !== null && busyId !== next?.id) busyId = null;
   // A request replaced before it finished was dismissed.
   if (previous && previous.id !== next?.id) settle(previous.id, "dismissed");
   for (const listener of [...listeners]) listener();
@@ -55,6 +63,20 @@ export function requestHostSwitch(request: Omit<HostSwitchRequest, "id">): numbe
   const id = nextId++;
   publish({ ...request, id });
   return id;
+}
+
+/** The dialog for `id` has a step running, or not; while it does, no request replaces it. */
+export function setHostSwitchBusy(id: number, busy: boolean): void {
+  if (busy) {
+    if (current?.id === id) busyId = id;
+  } else if (busyId === id) {
+    busyId = null;
+  }
+}
+
+/** A switch dialog is part way through a step. */
+export function isHostSwitchBusy(): boolean {
+  return busyId !== null && current?.id === busyId;
 }
 
 export function currentHostSwitchRequest(): HostSwitchRequest | null {
@@ -106,6 +128,7 @@ export function registerHostSwitchDialogHost(): () => void {
 
 export function _resetHostSwitchRequestsForTesting(): void {
   current = null;
+  busyId = null;
   nextId = 1;
   hosts = 0;
   listeners.clear();

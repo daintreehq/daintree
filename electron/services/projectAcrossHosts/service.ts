@@ -46,7 +46,11 @@ import { LOCAL_CLIENT_ID } from "../../ipc/endpoint.js";
 import { findWorktreeForBranch } from "../../workspace-host/worktreeUtils.js";
 import { normalizeOperationId } from "../operations/OperationRegistry.js";
 import { readRemoteBranchTip } from "../../utils/remoteBranchTip.js";
-import { checkBranchAgainstRemote } from "./branchCheck.js";
+import {
+  checkBranchAgainstRemote,
+  resolveSameNamePush,
+  type BranchCheckResult,
+} from "./branchCheck.js";
 import { BundleStore, isBundleToken } from "./bundles.js";
 import {
   checkDestination,
@@ -54,7 +58,7 @@ import {
   canonicalPath,
   isPlacedWorktreePathSafe,
 } from "./destination.js";
-import { refExists, tryRaw } from "./gitOps.js";
+import { readConfigValue, refExists, tryRaw } from "./gitOps.js";
 import {
   findRegisteredMatches,
   hostProjectsDir,
@@ -70,6 +74,10 @@ const BRANCH_FETCH_TIMEOUT_MS = 15_000;
 export const PUSH_TIMEOUT_MS = 10 * 60_000;
 const MAX_PENDING_SETUPS = 64;
 const MAX_PREVIEW_COMMITS = 20;
+const SHA_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
+
+/** The branch as described, checked against its remote or (opening a copy as it is) not. */
+type BranchState = Omit<BranchCheckResult, "check"> & { check: BranchCheck | null };
 /** The operation kinds this service starts, and so the only ones it reports or cancels. */
 const OWN_OPERATION_KINDS = new Set(["project-clone-and-open", "project-worktree-place"]);
 
@@ -261,7 +269,11 @@ export class ProjectAcrossHostsService {
     const networkGit = await this.deps.git.network(worktreePath);
     const remotes = await this.listRemotes(project.path).catch(() => []);
 
-    const branchResult = await checkBranchAgainstRemote({ git, networkGit, remotes });
+    const isGitRepository = await this.isGitRepository(git, worktreePath);
+    const branchResult: BranchState =
+      payload.skipBranch === true || !isGitRepository
+        ? await this.branchWithoutCheck(git, isGitRepository)
+        : await checkBranchAgainstRemote({ git, networkGit, remotes });
     // Everything below leaves this host: never a remote's embedded credentials.
     const shownRemotes = stripRemoteListCredentials(remotes);
     const cloneRemote =
@@ -270,8 +282,12 @@ export class ProjectAcrossHostsService {
       (shownRemotes.length === 1 ? shownRemotes[0] : undefined);
     const cloneUrl = cloneRemote?.url ?? null;
 
-    const status = await tryRaw(git, ["status", "--porcelain"]);
-    const unpushedCommits = await this.unpushedCommits(git, branchResult.check);
+    const status = isGitRepository ? await tryRaw(git, ["status", "--porcelain"]) : null;
+    const uncommittedChangeCount = (status ?? "").split("\n").filter((l) => l.length > 0).length;
+    const unpushed =
+      payload.skipBranch === true
+        ? { commits: [], count: 0 }
+        : await this.unpushedCommits(git, branchResult);
     const submodules = await tryRaw(git, ["submodule", "status"]);
     const hasSubmodules = (submodules ?? "")
       .split("\n")
@@ -311,9 +327,19 @@ export class ProjectAcrossHostsService {
       branchCheck: branchResult.check,
       remoteBranch: branchResult.remoteBranch,
       remote: branchResult.remote,
+      pushDestination: branchResult.pushDestination,
+      headSha: branchResult.headSha,
       cloneUrl,
-      hasUncommittedChanges: (status ?? "").trim().length > 0,
-      unpushedCommits,
+      hasUncommittedChanges: uncommittedChangeCount > 0,
+      uncommittedChangeCount,
+      unpushedCommits: unpushed.commits,
+      unpushedCommitCount: unpushed.count,
+      isGitRepository,
+      // Only a repository that answers with no commits at all: a read that failed isn't that.
+      isUnborn:
+        isGitRepository &&
+        branchResult.headSha === null &&
+        (await tryRaw(git, ["rev-list", "-n", "1", "--all"]))?.trim() === "",
       remotes: shownRemotes,
       committedProjectId,
       homeRelativePath,
@@ -344,22 +370,69 @@ export class ProjectAcrossHostsService {
     return { remotes, committedProjectId };
   }
 
-  /** What a push of the checked-out branch would publish, for the confirmation to show. */
+  /**
+   * A git repository by git's word, or by its `.git` when git couldn't be
+   * read (ownership, a lock): a failed read is never "not a repository".
+   */
+  private async isGitRepository(
+    git: Awaited<ReturnType<ProjectAcrossHostsDeps["git"]["local"]>>,
+    folder: string
+  ): Promise<boolean> {
+    const answer = await tryRaw(git, ["rev-parse", "--is-inside-work-tree"]);
+    if (answer !== null) return answer.trim() === "true";
+    return fs
+      .lstat(path.join(folder, ".git"))
+      .then(() => true)
+      .catch(() => false);
+  }
+
+  /**
+   * The branch as it stands here, without asking its remote: for opening a
+   * copy as it is, where nothing about the branch is acted on.
+   */
+  private async branchWithoutCheck(
+    git: Awaited<ReturnType<ProjectAcrossHostsDeps["git"]["local"]>>,
+    isGitRepository: boolean
+  ): Promise<BranchState> {
+    const none: BranchState = {
+      branch: null,
+      check: null,
+      remoteBranch: null,
+      remote: null,
+      pushDestination: null,
+      headSha: null,
+      remoteTip: null,
+    };
+    if (!isGitRepository) return none;
+    const branch = (await tryRaw(git, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim();
+    const headSha =
+      (await tryRaw(git, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]))?.trim() || null;
+    return { ...none, branch: branch || null, headSha };
+  }
+
+  /**
+   * What a push of the reviewed commit would publish, for the confirmation
+   * to show: the newest few and how many in all. Measured from the remote
+   * branch's own tip, never from an upstream that may name another branch.
+   */
   private async unpushedCommits(
     git: Awaited<ReturnType<ProjectAcrossHostsDeps["git"]["local"]>>,
-    check: BranchCheck
-  ): Promise<Array<{ sha: string; subject: string }>> {
+    result: Pick<BranchState, "check" | "headSha" | "remoteTip" | "pushDestination">
+  ): Promise<{ commits: Array<{ sha: string; subject: string }>; count: number }> {
+    const { check, headSha, remoteTip } = result;
+    const empty = { commits: [], count: 0 };
+    if (!headSha || !result.pushDestination || !check) return empty;
     let range: string[];
-    if (check.kind === "ahead" || check.kind === "diverged") {
-      const upstream = (
-        await tryRaw(git, ["rev-parse", "--verify", "--quiet", "@{upstream}"])
-      )?.trim();
-      range = upstream ? [`${upstream}..HEAD`] : ["HEAD", "--not", "--remotes"];
+    if (check.kind === "ahead" && remoteTip) {
+      range = [headSha, "--not", remoteTip];
     } else if (check.kind === "not-on-remote") {
-      range = ["HEAD", "--not", "--remotes"];
+      // A new branch publishes whatever that remote doesn't have yet.
+      range = [headSha, "--not", `--remotes=${result.pushDestination.remote}/*`];
     } else {
-      return [];
+      return empty;
     }
+    const countOut = await tryRaw(git, ["rev-list", "--count", ...range, "--"]);
+    const counted = Number.parseInt(countOut?.trim() ?? "", 10);
     const out = await tryRaw(git, [
       "log",
       `--max-count=${MAX_PREVIEW_COMMITS}`,
@@ -367,20 +440,24 @@ export class ProjectAcrossHostsService {
       ...range,
       "--",
     ]);
-    return (out ?? "")
+    const commits = (out ?? "")
       .split("\n")
       .filter((line) => line.includes("\t"))
       .map((line) => {
         const tab = line.indexOf("\t");
         return { sha: line.slice(0, tab), subject: line.slice(tab + 1).slice(0, 1024) };
       });
+    return { commits, count: Number.isFinite(counted) ? counted : commits.length };
   }
 
   /**
-   * Push the branch with this host's credentials and make the remote branch
-   * its upstream. `signal` cancels it (the git child is killed and the push
-   * throws CANCELLED); a push that runs past {@link PUSH_TIMEOUT_MS} is
-   * killed the same way and reported as timed out.
+   * Push the reviewed commit to where git itself pushes the branch, with this
+   * host's credentials, and make that the upstream when the branch has none.
+   * Nothing else is pushed: a branch that moved since the review, or whose
+   * push destination changed, is refused for the person to look again.
+   * `signal` cancels it (the git child is killed and the push throws
+   * CANCELLED); a push that runs past {@link PUSH_TIMEOUT_MS} is killed the
+   * same way and reported as timed out.
    */
   async pushBranch(
     payload: PushBranchPayload,
@@ -391,20 +468,51 @@ export class ProjectAcrossHostsService {
     const worktreePath = await this.resolveWorktree(project, payload.worktreePath);
     const branch = requireBranchName(payload.branch, "branch");
     const remoteBranch = requireBranchName(payload.remoteBranch, "remote branch");
+    if (remoteBranch !== branch) throw invalid("A branch is only pushed to its own name");
+    if (typeof payload.sha !== "string" || !SHA_PATTERN.test(payload.sha)) {
+      throw invalid("Invalid commit");
+    }
+    const sha = payload.sha.toLowerCase();
     const remotes = await this.listRemotes(project.path).catch(() => []);
     if (!remotes.some((r) => r.name === payload.remote)) throw invalid("Unknown remote");
+    const localGit = await this.deps.git.local(worktreePath);
+    const destination = await resolveSameNamePush(localGit, branch, remotes);
+    if (!destination || destination.remote !== payload.remote) {
+      return {
+        ok: false,
+        reason: "destination-changed",
+        message: `git no longer pushes ${branch} to ${payload.remote}/${branch}. Nothing was pushed.`,
+      };
+    }
+    const tip = (
+      await tryRaw(localGit, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`])
+    )
+      ?.trim()
+      .toLowerCase();
+    if (tip !== sha) {
+      return {
+        ok: false,
+        reason: "branch-moved",
+        message: `${branch} moved since its commits were shown. Nothing was pushed.`,
+      };
+    }
     if (signal?.aborted) throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
     const timeout = AbortSignal.timeout(timeoutMs);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     const git = await this.deps.git.network(worktreePath, combined);
     try {
+      // A commit, not the branch: what was reviewed, never what an agent added since.
+      // Without `+` the remote only fast-forwards.
+      // `^{commit}` so no ref named like the sha can stand in for it; no tags
+      // or submodules ride along, whatever push.followTags or recurseSubmodules say.
       await git.raw([
         "push",
-        "--set-upstream",
+        "--no-follow-tags",
+        "--recurse-submodules=no",
+        "--",
         payload.remote,
-        `refs/heads/${branch}:refs/heads/${remoteBranch}`,
+        `${sha}^{commit}:refs/heads/${branch}`,
       ]);
-      return { ok: true };
     } catch (error) {
       if (signal?.aborted) throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
       if (timeout.aborted) {
@@ -420,6 +528,16 @@ export class ProjectAcrossHostsService {
         message: gitText(error, "git push failed"),
       };
     }
+    // `--set-upstream` ignores a commit source, so the upstream is set here,
+    // and only where none was configured: an existing one is the person's.
+    if (
+      (await readConfigValue(localGit, `branch.${branch}.remote`)) === null &&
+      (await readConfigValue(localGit, `branch.${branch}.merge`)) === null
+    ) {
+      await tryRaw(localGit, ["config", `branch.${branch}.remote`, payload.remote]);
+      await tryRaw(localGit, ["config", `branch.${branch}.merge`, `refs/heads/${branch}`]);
+    }
+    return { ok: true };
   }
 
   /**
@@ -427,7 +545,7 @@ export class ProjectAcrossHostsService {
    * the link: this branch's tip here, and the remote branch's tip as the
    * remote itself reports it. Reads only; it pushes nothing.
    */
-  async observePush(payload: PushBranchPayload): Promise<PushObservation> {
+  async observePush(payload: Omit<PushBranchPayload, "sha">): Promise<PushObservation> {
     const project = this.requireProject(payload?.projectId);
     const worktreePath = await this.resolveWorktree(project, payload.worktreePath);
     const branch = requireBranchName(payload.branch, "branch");
@@ -668,7 +786,11 @@ export class ProjectAcrossHostsService {
       await publishClone(stagedRepo, destination);
       await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
       staging = null;
-      if (source.kind === "remote" && options.depth === "shallow" && payload.branch) {
+      // `clone.defaultRemoteName` on this host can call the clone's remote
+      // something other than origin: read what git named it.
+      const clonedRemote =
+        source.kind === "remote" ? await this.clonedRemoteName(destination) : null;
+      if (clonedRemote && options.depth === "shallow" && payload.branch) {
         // A shallow clone carries only the default branch; fetch the one asked for.
         const networkGit = await this.deps.git.network(destination);
         const ref = payload.branch.remoteBranch;
@@ -679,8 +801,8 @@ export class ProjectAcrossHostsService {
           "--no-tags",
           "--quiet",
           "--",
-          "origin",
-          `+refs/heads/${ref}:refs/remotes/origin/${ref}`,
+          clonedRemote,
+          `+refs/heads/${ref}:refs/remotes/${clonedRemote}/${ref}`,
         ]);
       }
 
@@ -695,11 +817,7 @@ export class ProjectAcrossHostsService {
       > = { worktreePath: null, canCheckOutBranch: false, branchNote: null };
       if (payload.branch) {
         op.progress({ fraction: null, stage: "worktree", message: "Creating the worktree" });
-        branchResult = await this.ensureBranchWorktree(
-          project,
-          payload.branch,
-          source.kind === "remote" ? "origin" : null
-        );
+        branchResult = await this.ensureBranchWorktree(project, payload.branch, clonedRemote);
       }
 
       let setupRecipeId: string | null = null;
@@ -845,6 +963,16 @@ export class ProjectAcrossHostsService {
     }
   }
 
+  /** The one remote a fresh clone has, by the name git gave it. */
+  private async clonedRemoteName(repoPath: string): Promise<string | null> {
+    const git = await this.deps.git.local(repoPath);
+    const names = ((await tryRaw(git, ["remote"])) ?? "")
+      .split("\n")
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0);
+    return names.length === 1 ? names[0]! : null;
+  }
+
   /** This host's remote that is the source's remote for the branch, else origin, else its only one. */
   private async matchingRemote(
     projectPath: string,
@@ -965,7 +1093,10 @@ export class ProjectAcrossHostsService {
       projectName: project.name,
       setupRecipeId: null,
     };
-    if (remoteName) this.backgroundFetch(project.path, remoteName);
+    // Opening a copy as it is touches nothing; anything else refreshes it for what follows.
+    if (remoteName && payload.navigateOnly !== true) {
+      this.backgroundFetch(project.path, remoteName);
+    }
 
     if (!payload.branch) {
       return { ...base, worktreePath: null, canCheckOutBranch: false, branchNote: null };
