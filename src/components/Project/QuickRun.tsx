@@ -282,6 +282,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   const [focusedSuggestionIndex, setFocusedSuggestionIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const isRunningRef = useRef(false);
+  // Bumped whenever the user changes what the next launch would be (types,
+  // completes, toggles an option). A failure that lands after that must not
+  // bring back a Retry, or an override, for a launch they have moved on from.
+  const intentRef = useRef(0);
 
   // The panel mounts when the footer's toggle opens it, and a panel that hides
   // a single text field has nothing else to offer — so opening it lands in the
@@ -541,6 +545,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
 
     const { dock, restart } = resolved ?? resolveRunOptions(item);
     const override = launchOverride?.value === item.value ? launchOverride : null;
+    const intent = ++intentRef.current;
     setShowSuggestions(false);
     setInput("");
     setFocusedSuggestionIndex(-1);
@@ -565,8 +570,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       // unless something new has been typed since.
       setInput((current) => (current === "" ? cmd : current));
       // And the options it was launched with, so the retry runs the same thing.
-      setLaunchOverride((current) => current ?? override);
-      setLaunchError({ item, options: { dock, restart }, worktreeId: activeWorktreeId });
+      if (intent === intentRef.current) {
+        setLaunchOverride((current) => current ?? override);
+        setLaunchError({ item, options: { dock, restart }, worktreeId: activeWorktreeId });
+      }
     } finally {
       isRunningRef.current = false;
     }
@@ -606,9 +613,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // The one thing Run means, for Enter and the arrow alike: the lit row, or
   // with the list shut, the text in the field. Text that is exactly a pinned
   // command or a script is still that command with the list shut, so a pinned
-  // command keeps its own output and restart choice after Escape.
+  // command keeps its own output and restart choice after Escape. Literal
+  // equality, not normalized: normalizing drops quotes, and `'$SHELL'` is not
+  // the command `$SHELL` is.
   const exactMatch = searching
-    ? suggestions.find((s) => s.type !== "typed" && normalizeCommand(s.value) === normalizedInput)
+    ? suggestions.find((s) => s.type !== "typed" && s.value === input.trim())
     : undefined;
   const runTarget: SuggestionItem | undefined =
     highlighted ??
@@ -623,6 +632,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // for it, in which case the press overrides that value for this launch and
   // leaves the saved command alone.
   const toggleOption = (key: "dock" | "restart") => {
+    intentRef.current++;
     setLaunchError(null);
     const ownsKey =
       runTarget?.type === "saved" &&
@@ -669,6 +679,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     } else if (e.key === "Tab" && !e.shiftKey && canComplete && highlighted) {
       e.preventDefault();
       setInput(highlighted.value);
+      intentRef.current++;
+      setLaunchError(null);
       setFocusedSuggestionIndex(LEAD_INDEX);
     } else if (e.altKey && e.code === "KeyP" && listOpen && highlighted) {
       // `code`, not `key`: Option+P types "π" on a Mac layout.
@@ -852,6 +864,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                 value={input}
                 onChange={(e) => {
                   setInput(e.target.value);
+                  intentRef.current++;
                   setLaunchError(null);
                   setShowSuggestions(true);
                   // Typing lights the first row, which is always what Enter runs.
@@ -1138,7 +1151,14 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                   // Keep the field focused, as Run does, so the retry lands
                   // where the command was given back.
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => void handleRunItem(launchError.item, launchError.options)}
+                  onClick={() => {
+                    // Retrying removes this row, and with it the focused
+                    // button, so a keyboard user lands back in the field.
+                    quietFocusRef.current = true;
+                    inputRef.current?.focus({ preventScroll: true });
+                    quietFocusRef.current = false;
+                    void handleRunItem(launchError.item, launchError.options);
+                  }}
                   className="-mr-1.5 shrink-0"
                 >
                   Retry
