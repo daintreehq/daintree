@@ -371,6 +371,7 @@ describe("pushing from the source first", () => {
       branch: "feature/host-chip",
       remote: "origin",
       remoteBranch: "feature/host-chip",
+      sha: git(project.path, ["rev-parse", "HEAD"]),
     });
     expect(result).toMatchObject({ kind: "git-failed", step: "push", hostId: "local" });
     expect(r.studio.projects).toEqual([]);
@@ -515,6 +516,17 @@ describe("what the host checks for itself", () => {
     branch: "feature/host-chip",
     remote: "origin",
     remoteBranch: "feature/host-chip",
+    sha: git(worktreePath, ["rev-parse", "HEAD"]),
+  });
+
+  it("refuses a push that doesn't name the reviewed commit", async () => {
+    const r = await rig();
+    const project = sourceProject(r.studio, "authz-no-sha");
+    r.views.bound.add(project.id);
+    const { sha: _sha, ...withoutSha } = pushPayload(project.id, project.path);
+    await expect(r.client.call(ProjectLinkMethod.PUSH_BRANCH, withoutSha)).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
   });
 
   it("pushes only for a session with a view of the project that drives it", async () => {
@@ -750,6 +762,7 @@ describe("what the host checks for itself", () => {
     branch: "main",
     remote: "origin",
     remoteBranch: "main",
+    sha: git(project.path, ["rev-parse", "main"]),
   });
 
   it("cancels a push on the host when the Shell cancels it", async () => {
@@ -823,6 +836,7 @@ describe("a push whose answer was lost with the link", () => {
     branch: "main",
     remote: "origin",
     remoteBranch: "main",
+    sha: git(project.path, ["rev-parse", "main"]),
   });
 
   it("takes the host's settled record over a new link instead of pushing again", async () => {

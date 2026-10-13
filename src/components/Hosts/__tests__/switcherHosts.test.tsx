@@ -243,12 +243,12 @@ describe("Open on… submenu", () => {
       toHostIds: ["studio-01", "studio-02"],
     });
 
-    // Even a host that has it goes through the switch dialog: fresh branch check, worktree choice.
+    // The row goes to the host's copy as it is: no branch is handed over from here.
     fireEvent.click(has, { metaKey: true });
     await waitFor(() =>
       expect(dispatch).toHaveBeenCalledWith(
         "project.openOnHost",
-        { hostId: "studio-01", projectId: "local-web", newWindow: true },
+        { hostId: "studio-01", projectId: "local-web", newWindow: true, navigateOnly: true },
         { source: "context-menu" }
       )
     );
@@ -260,7 +260,7 @@ describe("Open on… submenu", () => {
     await waitFor(() =>
       expect(dispatch).toHaveBeenLastCalledWith(
         "project.openOnHost",
-        { hostId: "studio-02", projectId: "local-web", newWindow: false },
+        { hostId: "studio-02", projectId: "local-web", newWindow: false, navigateOnly: true },
         { source: "context-menu" }
       )
     );

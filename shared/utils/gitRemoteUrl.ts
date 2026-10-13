@@ -129,7 +129,7 @@ export function repositoryNameFromRemote(url: string): string | null {
   return segments[segments.length - 1] || null;
 }
 
-/** Remotes a clone accepts: HTTP(S), SCP-style SSH (`git@host:path`) and `ssh://`. */
+/** Remotes a clone accepts: HTTP(S), SCP-style SSH (`[user@]host:path`) and `ssh://`. */
 export function isSupportedCloneUrl(url: string): boolean {
   // Nothing git would read as an option, and no space or control character.
   if (url.startsWith("-") || [...url].some((char) => char <= " " || char === "\x7f")) return false;
@@ -140,9 +140,14 @@ export function isSupportedCloneUrl(url: string): boolean {
       return false;
     }
   }
-  // scp-like `git@host:path`: a plain host, one colon, a path that isn't a
-  // `::` remote-helper address.
-  return /^git@[A-Za-z0-9.-]+:(?!:)[^:]+$/.test(url);
+  // `://` anywhere makes it a URL to git; only the schemes above are clonable remotes.
+  if (url.includes("://")) return false;
+  // A Windows drive (`C:\repo`, `C:/repo`) is a local path, as git reads it.
+  if (/^[A-Za-z]:[\\/]/.test(url)) return false;
+  // scp-like `[user@]host:path`, any user, as git's own grammar has it: a
+  // plain host (no slash before the colon, which would make it a local path),
+  // one colon, a path that isn't a `::` remote-helper address.
+  return /^(?:[^@/:\s]+@)?[A-Za-z0-9.-]+:(?!:)[^:]+$/.test(url);
 }
 
 /**

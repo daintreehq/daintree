@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useId, useMemo, useState } from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useRef, useState } from "react";
 import { FolderGit2, GitBranch, Server } from "lucide-react";
 import type {
   HostSwitchExecutePayload,
@@ -37,7 +37,9 @@ import { useHostList } from "@/components/Hosts/hostList";
 import { switchToHost } from "@/components/Hosts/hostSwitching";
 import { pickHostPaths } from "@/components/HostFilePicker/hostFilePickerQueue";
 import { ProjectMatchChooser } from "./ProjectMatchChooser";
+import { pluralize } from "@/lib/pluralize";
 import {
+  cloneableRemotes,
   describeBranchHandoff,
   describeCloneFailure,
   describePlacedWorktree,
@@ -48,7 +50,7 @@ import {
   type BranchPlan,
 } from "./hostSwitchModel";
 import { GitFailureCallout, type HostGitFailure } from "./GitFailureCallout";
-import type { HostSwitchRequest } from "./hostSwitchRequests";
+import { setHostSwitchBusy, type HostSwitchRequest } from "./hostSwitchRequests";
 
 const STATUS_POLL_MS = 300;
 const DESTINATION_CHECK_DELAY_MS = 300;
@@ -140,6 +142,7 @@ export function HostSwitchDialog({
   const targetName = hostDisplayName(request.toHostId, hosts, localLabel);
   const placed = request.worktree ?? null;
   const newWindow = request.newWindow === true;
+  const navigateOnly = request.navigateOnly === true && !placed;
 
   const [prep, setPrep] = useState<HostSwitchPreparation | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -166,6 +169,14 @@ export function HostSwitchDialog({
   const [autoOpenStarted, setAutoOpenStarted] = useState(false);
   /** That opening is still out; once it settles without closing the dialog, the dialog shows. */
   const [autoOpening, setAutoOpening] = useState(false);
+  /** Bumped to look at the source again, after a push found the branch had moved. */
+  const [prepareAttempt, setPrepareAttempt] = useState(0);
+  /**
+   * Cancel (or closing the dialog) ends the whole flow: a step that finishes
+   * anyway is not followed by the next one, and the window doesn't switch.
+   * Reset only when the person starts a new flow.
+   */
+  const stoppedRef = useRef(false);
   const submodulesId = useId();
   const showLoading = useDeferredLoading(prep === null && loadError === null, UI_DOHERTY_THRESHOLD);
 
@@ -176,15 +187,25 @@ export function HostSwitchDialog({
         fromHostId,
         toHostId: request.toHostId,
         projectId: request.projectId,
-        worktreePath: request.worktreePath,
+        worktreePath: navigateOnly ? null : request.worktreePath,
+        ...(navigateOnly ? { navigateOnly: true } : {}),
       })
       .then((prepared) => {
         if (cancelled) return;
         setPrep(prepared);
-        setView(initialView(prepared));
-        // A placed worktree replaces the branch handoff: nothing is pushed for it.
-        setBranchPlan(placed ? "no-worktree" : describeBranchHandoff(prepared, "").defaultPlan);
-        setCloneUrl(prepared.cloneUrl ?? prepared.remotes[0]?.url ?? "");
+        const firstView = initialView(prepared);
+        setView(firstView);
+        // A placed worktree replaces the branch handoff, and going to the copy
+        // as it is has none: nothing is pushed for either.
+        setBranchPlan(
+          placed || navigateOnly
+            ? "no-worktree"
+            : describeBranchHandoff(prepared, "", firstView === "existing").defaultPlan
+        );
+        const cloneable = cloneableRemotes(prepared.remotes);
+        setCloneUrl(
+          cloneable.find((r) => r.url === prepared.cloneUrl)?.url ?? cloneable[0]?.url ?? ""
+        );
         setDestination(prepared.destination?.path ?? "");
         setDestinationCheck(prepared.destination);
         setCheckedInput(prepared.destination?.path ?? null);
@@ -202,7 +223,15 @@ export function HostSwitchDialog({
     return () => {
       cancelled = true;
     };
-  }, [fromHostId, request.toHostId, request.projectId, request.worktreePath, placed]);
+  }, [
+    fromHostId,
+    request.toHostId,
+    request.projectId,
+    request.worktreePath,
+    placed,
+    navigateOnly,
+    prepareAttempt,
+  ]);
 
   useEffect(() => {
     if (!running) return;
@@ -248,7 +277,14 @@ export function HostSwitchDialog({
     };
   }, [destination, prep, view, remoteUrls, request.toHostId, targetName, checkAttempt]);
 
-  const handoff = prep ? describeBranchHandoff(prep, sourceName) : null;
+  const handoff =
+    prep && !navigateOnly && prep.isGitRepository
+      ? describeBranchHandoff(prep, sourceName, view === "existing")
+      : null;
+  const pushing = branchPlan === "push-then-worktree" && prep?.pushDestination != null;
+  const pushTarget = prep?.pushDestination
+    ? `${prep.pushDestination.remote}/${prep.pushDestination.branch}`
+    : null;
   const destinationReady =
     destinationCheck?.status === "free" && checkedInput === destination.trim();
 
@@ -263,31 +299,55 @@ export function HostSwitchDialog({
     return prep?.remotes.find((r) => r.name === remoteName)?.url ?? prep?.cloneUrl ?? null;
   };
 
+  /** One step; once the flow was stopped, its result is dropped and nothing follows it. */
   const execute = (
     label: string,
     payload: StepPayload
   ): Promise<HostSwitchExecuteResult | null> => {
+    if (stoppedRef.current) return Promise.resolve(null);
     const opId = mintOperationId();
     setRunning({ opId, label });
     setStatus(null);
-    return runStep(opId, payload, label, setFailure).finally(() => setRunning(null));
+    return runStep(opId, payload, label, setFailure)
+      .then((result) => (stoppedRef.current ? null : result))
+      .finally(() => setRunning(null));
+  };
+
+  /** A new flow, started by the person: an earlier Cancel no longer applies. */
+  const startFlow = () => {
+    stoppedRef.current = false;
+    setFailure(null);
   };
 
   /** The source-side push the user chose, before anything happens on the target. */
   const pushIfChosen = async (): Promise<boolean> => {
-    if (branchPlan !== "push-then-worktree" || !prep?.branch) return true;
-    const check = prep.branchCheck;
-    const remote = check && "remote" in check ? check.remote : null;
-    if (!remote) return false;
-    const result = await execute(`Pushing ${prep.branch}`, {
+    if (branchPlan !== "push-then-worktree") return true;
+    const destination = prep?.pushDestination;
+    // Exactly what was shown: this branch, this commit, to where git pushes it.
+    if (!prep?.branch || !destination || !prep.headSha) return false;
+    const result = await execute(`Pushing ${prep.branch} to ${pushTarget}`, {
       kind: "push",
       fromHostId,
       projectId: prep.projectId,
       worktreePath: prep.worktreePath,
       branch: prep.branch,
-      remote,
-      remoteBranch: prep.remoteBranch ?? prep.branch,
+      remote: destination.remote,
+      remoteBranch: destination.branch,
+      sha: prep.headSha,
     });
+    if (
+      result?.kind === "git-failed" &&
+      (result.reason === "branch-moved" || result.reason === "destination-changed")
+    ) {
+      setFailure({
+        title: `Didn't push ${prep.branch}`,
+        gitText: result.message,
+        fix: `Look over what ${sourceName} has now, then choose again.`,
+      });
+      setPrep(null);
+      setPrepareAttempt((n) => n + 1);
+      return false;
+    }
     if (result?.kind === "git-failed") {
       setFailure({
         title: `Couldn't push ${prep.branch} from ${sourceName}`,
@@ -308,6 +368,7 @@ export function HostSwitchDialog({
   };
 
   const finish = (result: Extract<HostSwitchExecuteResult, { kind: "opened" }>) => {
+    if (stoppedRef.current) return;
     if (onComplete) onComplete();
     else onClose();
     void switchToHost(result.hostId, newWindow, result.projectId);
@@ -369,7 +430,7 @@ export function HostSwitchDialog({
 
   const clone = async (source: "remote" | "bundle") => {
     if (!destinationReady || !prep || !destinationCheck) return;
-    setFailure(null);
+    startFlow();
     if (!(await pushIfChosen())) return;
     const result = await execute(source === "bundle" ? "Sending a copy" : "Cloning", {
       kind: "clone",
@@ -387,7 +448,7 @@ export function HostSwitchDialog({
 
   const openCandidate = async (candidate: { projectId: string | null; path: string }) => {
     if (!prep) return;
-    setFailure(null);
+    startFlow();
     if (!(await pushIfChosen())) return;
     const result = await execute("Opening", {
       kind: "open",
@@ -443,7 +504,7 @@ export function HostSwitchDialog({
     const offer = checkoutOffer;
     const target = branchTarget();
     if (!offer || !target) return;
-    setFailure(null);
+    startFlow();
     const result = await execute(`Checking out ${target.name}`, {
       kind: "checkout",
       toHostId: request.toHostId,
@@ -469,6 +530,7 @@ export function HostSwitchDialog({
 
   const cancelRunning = () => {
     if (!running) return;
+    stoppedRef.current = true;
     safeFireAndForget(window.electron.hostSwitch.cancel({ opId: running.opId }), {
       context: "Cancelling a host switch step",
     });
@@ -480,6 +542,16 @@ export function HostSwitchDialog({
       ? `Open ${projectName} on ${targetName}`
       : `${projectName} isn't on ${targetName} yet`;
   const busy = running !== null;
+  useEffect(() => {
+    setHostSwitchBusy(request.id, busy);
+    return () => setHostSwitchBusy(request.id, false);
+  }, [request.id, busy]);
+  /** Closing mid-step stops it: the step is cancelled and nothing switches afterwards. */
+  const closeDialog = () => {
+    if (busy) cancelRunning();
+    stoppedRef.current = true;
+    onClose();
+  };
   const autoOpen =
     prep !== null &&
     !autoOpenStarted &&
@@ -487,7 +559,7 @@ export function HostSwitchDialog({
     // Moving from another machine, what's on offer is that machine's say-so:
     // the person opens it with a click.
     prep.fromHostId === LOCAL_HOST_ID &&
-    opensWithoutQuestion(prep, placed !== null);
+    opensWithoutQuestion(prep, placed !== null, navigateOnly);
 
   // Nothing to decide: open it there instead of asking.
   const openWithoutAsking = useEffectEvent(() => {
@@ -572,7 +644,7 @@ export function HostSwitchDialog({
                 disabled={busy}
                 onClick={() => void openCandidate({ projectId: null, path: destinationCheck.path })}
               >
-                Use existing folder
+                {pushing ? "Push, then use existing folder" : "Use existing folder"}
               </button>
             </>
           )}
@@ -622,12 +694,12 @@ export function HostSwitchDialog({
               {handoff.summary}
             </p>
             {handoff.detail && <p className="text-xs text-text-secondary">{handoff.detail}</p>}
-            {branchPlan === "push-then-worktree" && prep && (
+            {pushing && prep && (
               <div className="space-y-1">
                 <p className="text-xs text-text-secondary">
                   {prep.unpushedCommits.length > 0
-                    ? `The push publishes ${prep.unpushedCommits.length === 1 ? "this commit" : "these commits"}:`
-                    : "The push publishes the branch as it is."}
+                    ? `The push publishes ${prep.unpushedCommitCount === 1 ? "this commit" : "these commits"} to ${pushTarget}:`
+                    : `The push publishes ${prep.branch} as it is to ${pushTarget}.`}
                 </p>
                 {prep.unpushedCommits.length > 0 && (
                   <ul className="max-h-32 overflow-auto rounded-[var(--radius-md)] border border-border-default px-2 py-1 font-mono text-xs text-text-primary">
@@ -636,7 +708,18 @@ export function HostSwitchDialog({
                         <span className="text-text-secondary">{c.sha}</span> {c.subject}
                       </li>
                     ))}
+                    {prep.unpushedCommitCount > prep.unpushedCommits.length && (
+                      <li className="text-text-secondary">
+                        and {prep.unpushedCommitCount - prep.unpushedCommits.length} more
+                      </li>
+                    )}
                   </ul>
+                )}
+                {prep.headSha && (
+                  <p className="text-xs text-text-secondary">
+                    Only up to {prep.headSha.slice(0, 8)}: commits added after this is shown aren't
+                    pushed.
+                  </p>
                 )}
               </div>
             )}
@@ -658,7 +741,8 @@ export function HostSwitchDialog({
             )}
             {prep?.hasUncommittedChanges && (
               <p className="text-xs text-text-secondary">
-                Uncommitted changes on {sourceName} stay there.
+                {pluralize(Math.max(prep.uncommittedChangeCount, 1), "uncommitted change")} on{" "}
+                {sourceName} {prep.uncommittedChangeCount === 1 ? "stays" : "stay"} there.
               </p>
             )}
           </div>
@@ -787,8 +871,12 @@ export function HostSwitchDialog({
         />
         {branchSection}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          {existingFolderLink(`Use another folder on ${targetName}…`)}
-          {prep.remotes.length > 0 && (
+          {existingFolderLink(
+            pushing
+              ? `Push, then use another folder on ${targetName}…`
+              : `Use another folder on ${targetName}…`
+          )}
+          {cloneableRemotes(prep.remotes).length > 0 && (
             <button
               type="button"
               className="text-xs text-text-secondary underline-offset-2 hover:underline"
@@ -805,7 +893,9 @@ export function HostSwitchDialog({
     primary = {
       label:
         candidate?.source === "on-disk"
-          ? "Use existing folder"
+          ? pushing
+            ? "Push, then use existing folder"
+            : "Use existing folder"
           : placed
             ? `Create worktree on ${targetName}`
             : branchPlan === "push-then-worktree"
@@ -817,13 +907,13 @@ export function HostSwitchDialog({
     body = (
       <div className="space-y-3">
         <Row label="Clone">
-          {prep.remotes.length > 1 ? (
+          {cloneableRemotes(prep.remotes).length > 1 ? (
             <Select value={cloneUrl} onValueChange={setCloneUrl} disabled={busy}>
               <SelectTrigger aria-label="Remote to clone" className="h-8">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {prep.remotes.map((remote) => (
+                {cloneableRemotes(prep.remotes).map((remote) => (
                   <SelectItem key={remote.name} value={remote.url}>
                     {remote.name} · {remote.url}
                   </SelectItem>
@@ -838,7 +928,11 @@ export function HostSwitchDialog({
         {branchSection}
         {lfsWarning && <p className="text-xs text-status-warning">{lfsWarning}</p>}
         {cloneOptions}
-        {existingFolderLink(`Use an existing folder on ${targetName}…`)}
+        {existingFolderLink(
+          pushing
+            ? `Push, then use an existing folder on ${targetName}…`
+            : `Use an existing folder on ${targetName}…`
+        )}
       </div>
     );
     primary = {
@@ -846,11 +940,21 @@ export function HostSwitchDialog({
       onClick: () => void clone("remote"),
       disabled: !destinationReady,
     };
+  } else if (!prep.isGitRepository || prep.isUnborn) {
+    body = (
+      <p className="text-sm text-text-primary">
+        {prep.isGitRepository
+          ? `${projectName} has no commits yet, so there's nothing to send to ${targetName}. Make a first commit, then switch again.`
+          : `${projectName} isn't a git repository, so it can't be sent to ${targetName}. Projects move between hosts through git.`}
+      </p>
+    );
   } else {
     body = (
       <div className="space-y-3">
         <p className="text-sm text-text-primary">
-          {projectName} has no remote, so there's nothing for {targetName} to clone from.
+          {prep.remotes.length === 0
+            ? `${projectName} has no remote, so there's nothing for ${targetName} to clone from.`
+            : `${projectName}'s remotes are on this machine's disk, which ${targetName} can't clone from.`}
         </p>
         <p className="text-sm text-text-secondary">
           Send a copy of the repository: its committed history only. The working tree, submodule
@@ -877,7 +981,7 @@ export function HostSwitchDialog({
   ) : undefined;
 
   return (
-    <AppDialog isOpen onClose={busy ? () => {} : onClose} size="md" initialFocus="none">
+    <AppDialog isOpen onClose={closeDialog} size="md" initialFocus="none">
       <AppDialog.Header className="py-3">
         <AppDialog.Title icon={<Server className="h-4 w-4 text-text-secondary" />}>
           {title}

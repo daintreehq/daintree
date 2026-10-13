@@ -87,7 +87,98 @@ describe("checkBranchAgainstRemote", () => {
       remote: "origin",
       upstream: "origin/renamed-topic",
     });
-    expect(result.remoteBranch).toBe("renamed-topic");
+    // Checked, and pushed, under its own name only.
+    expect(result.remoteBranch).toBe("topic");
+    expect(result.pushDestination).toBeNull();
+  });
+
+  it("never takes a base-tracking topic's upstream as its remote branch", async () => {
+    const bare = makeBare(root, "base-tracking-bare");
+    const dir = makeRepo(root, "base-tracking", bare);
+    git(dir, ["push", "-q", "origin", "main"]);
+    git(dir, ["fetch", "-q", "origin"]);
+    git(dir, ["checkout", "-q", "-b", "topic", "origin/main"]);
+    commit(dir, "topic work");
+    const result = await check(dir);
+    expect(result.remoteBranch).toBe("topic");
+    expect(result.check).toEqual({
+      kind: "not-on-remote",
+      remote: "origin",
+      upstream: "origin/main",
+    });
+    // push.default=simple refuses a differently named upstream: no push is offered.
+    expect(result.pushDestination).toBeNull();
+    expect(result.headSha).toBe(git(dir, ["rev-parse", "HEAD"]));
+  });
+
+  it("refuses a push.default=upstream destination that is another branch", async () => {
+    const bare = makeBare(root, "upstream-mode-bare");
+    const dir = makeRepo(root, "upstream-mode", bare);
+    git(dir, ["push", "-q", "origin", "main"]);
+    git(dir, ["fetch", "-q", "origin"]);
+    git(dir, ["checkout", "-q", "-b", "topic", "origin/main"]);
+    git(dir, ["config", "push.default", "upstream"]);
+    commit(dir, "topic work");
+    const result = await check(dir);
+    expect(result.pushDestination).toBeNull();
+    expect(result.remoteBranch).toBe("topic");
+  });
+
+  it("refuses a base-tracking topic even when push.default=current would push it", async () => {
+    const bare = makeBare(root, "current-mode-bare");
+    const dir = makeRepo(root, "current-mode", bare);
+    git(dir, ["push", "-q", "origin", "main"]);
+    git(dir, ["fetch", "-q", "origin"]);
+    git(dir, ["checkout", "-q", "-b", "topic", "origin/main"]);
+    git(dir, ["config", "push.default", "current"]);
+    commit(dir, "topic work");
+    expect((await check(dir)).pushDestination).toBeNull();
+  });
+
+  it("offers the same-named branch on the only remote for an untracked topic", async () => {
+    const bare = makeBare(root, "untracked-bare");
+    const dir = makeRepo(root, "untracked", bare);
+    git(dir, ["push", "-q", "origin", "main"]);
+    git(dir, ["checkout", "-q", "-b", "topic"]);
+    commit(dir, "topic work");
+    const result = await check(dir);
+    expect(result.pushDestination).toEqual({ remote: "origin", branch: "topic" });
+    expect(result.check).toEqual({ kind: "not-on-remote", remote: "origin", upstream: null });
+  });
+
+  it("follows pushRemote to the fork the branch pushes to", async () => {
+    const originBare = makeBare(root, "triangle-origin-bare");
+    const forkBare = makeBare(root, "triangle-fork-bare");
+    const dir = makeRepo(root, "triangle", originBare);
+    git(dir, ["remote", "add", "fork", forkBare]);
+    git(dir, ["checkout", "-q", "-b", "topic"]);
+    commit(dir, "topic work");
+    git(dir, ["config", "branch.topic.pushRemote", "fork"]);
+    git(dir, ["config", "push.default", "current"]);
+    const result = await check(dir);
+    expect(result.pushDestination).toEqual({ remote: "fork", branch: "topic" });
+    expect(result.check).toMatchObject({ kind: "not-on-remote", remote: "fork" });
+  });
+
+  it("offers no push when several remotes leave the destination ambiguous", async () => {
+    const originBare = makeBare(root, "ambiguous-origin-bare");
+    const otherBare = makeBare(root, "ambiguous-other-bare");
+    const dir = makeRepo(root, "ambiguous", originBare);
+    git(dir, ["remote", "add", "other", otherBare]);
+    git(dir, ["checkout", "-q", "-b", "topic"]);
+    commit(dir, "topic work");
+    const result = await check(dir);
+    expect(result.pushDestination).toBeNull();
+  });
+
+  it("reports both tips when the branch is ahead", async () => {
+    const { dir } = pushedRepo("tips");
+    const remoteTip = git(dir, ["rev-parse", "HEAD"]);
+    const head = commit(dir, "more");
+    const result = await check(dir);
+    expect(result.remoteTip).toBe(remoteTip);
+    expect(result.headSha).toBe(head);
+    expect(result.pushDestination).toEqual({ remote: "origin", branch: "feature/host-chip" });
   });
 
   it("follows the branch's own remote when it isn't origin", async () => {

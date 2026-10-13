@@ -28,6 +28,7 @@ import {
   _resetHostSwitchRequestsForTesting,
   currentHostSwitchRequest,
   registerHostSwitchDialogHost,
+  setHostSwitchBusy,
 } from "@/components/HostSwitch/hostSwitchRequests";
 import {
   _resetHostsOverviewRequestsForTesting,
@@ -314,6 +315,44 @@ describe("project.openOnHost", () => {
       run(registry, "project.openOnHost", { hostId: "local", projectId: "p1" })
     ).rejects.toThrow(/already on that host/);
     expect(currentHostSwitchRequest()).toBeNull();
+    releaseHost?.();
+  });
+
+  it("goes to the host's copy as it is when asked to only navigate, never handing over a branch", async () => {
+    withDialogHost();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    await registry.get("project.openOnHost")!().run(
+      { hostId: "studio-01", projectId: "p1", navigateOnly: true },
+      { projectId: "p1", activeWorktreePath: "/repo-worktrees/feature" } as ActionContext
+    );
+    expect(currentHostSwitchRequest()).toMatchObject({ navigateOnly: true, worktreePath: null });
+    // The default stays a branch handover.
+    await registry.get("project.openOnHost")!().run({ hostId: "studio-01", projectId: "p1" }, {
+      projectId: "p1",
+      activeWorktreePath: "/repo-worktrees/feature",
+    } as ActionContext);
+    expect(currentHostSwitchRequest()).toMatchObject({
+      navigateOnly: false,
+      worktreePath: "/repo-worktrees/feature",
+    });
+    releaseHost?.();
+  });
+
+  it("leaves a dialog that is part way through a step alone", async () => {
+    withDialogHost();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+    await run(registry, "project.openOnHost", { hostId: "studio-01", projectId: "p1" });
+    const running = currentHostSwitchRequest()!;
+    setHostSwitchBusy(running.id, true);
+    await expect(
+      run(registry, "project.openOnHost", { hostId: "studio-01", projectId: "p2" })
+    ).rejects.toThrow(/already running/);
+    expect(currentHostSwitchRequest()?.id).toBe(running.id);
+    setHostSwitchBusy(running.id, false);
+    await run(registry, "project.openOnHost", { hostId: "studio-01", projectId: "p2" });
+    expect(currentHostSwitchRequest()?.projectId).toBe("p2");
     releaseHost?.();
   });
 

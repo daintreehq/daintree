@@ -201,11 +201,23 @@ export interface SourceProjectDescription {
   remoteBranch: string | null;
   /** The remote the branch lives on (or would be pushed to). */
   remote: string | null;
+  /** Where git itself pushes the branch (its same-named branch), else null: no push is offered. */
+  pushDestination: { remote: string; branch: string } | null;
+  /** The commit checked out, which is the one a push sends. Null for a repository with no commits. */
+  headSha: string | null;
   /** That remote's URL, else origin's, else the only remote's. */
   cloneUrl: string | null;
   hasUncommittedChanges: boolean;
+  /** How many paths `git status` reports changed or untracked. */
+  uncommittedChangeCount: number;
   /** Commits a push would publish (newest first, capped), for the confirmation to show. */
   unpushedCommits: Array<{ sha: string; subject: string }>;
+  /** All the commits a push would publish, of which `unpushedCommits` is the newest few. */
+  unpushedCommitCount: number;
+  /** The folder is a git repository; nothing can be pushed, cloned or bundled from one that isn't. */
+  isGitRepository: boolean;
+  /** A git repository with no commits yet: nothing to push, clone or bundle. */
+  isUnborn: boolean;
   remotes: Array<{ name: string; url: string }>;
   committedProjectId: string | null;
   /** The project folder relative to this host's home, when inside it. */
@@ -220,6 +232,8 @@ export interface SourceProjectDescription {
 export interface DescribeSourcePayload {
   projectId: string;
   worktreePath: string | null;
+  /** Leave the branch alone: no remote is asked, nothing is fetched. */
+  skipBranch?: boolean;
 }
 
 export interface PushBranchPayload {
@@ -228,6 +242,8 @@ export interface PushBranchPayload {
   branch: string;
   remote: string;
   remoteBranch: string;
+  /** The commit the person reviewed: exactly this is pushed, and nothing if the branch moved. */
+  sha: string;
 }
 
 export type PushBranchOutcome = { ok: true } | { ok: false; reason: string; message: string };
