@@ -1,7 +1,7 @@
 {
   "generated": "2026-10-13",
-  "total": 31,
-  "files": 17,
+  "total": 30,
+  "files": 16,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -362,21 +362,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<Settings2> is an icon — the colour is an affordance, not prose"
-    },
-    {
-      "file": "src/components/Worktree/views/PrHeader.tsx",
-      "ordinal": 0,
-      "line": 12,
-      "start": 452,
-      "end": 473,
-      "token": "text-daintree-text/60",
-      "variants": "",
-      "step": 60,
-      "group": "src/components/Worktree/views/PrHeader.tsx#432",
-      "branch": "",
-      "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<FolderGit2> is an icon — the colour is an affordance, not prose"
     },
     {
       "file": "src/components/Worktree/WorktreeCard/MainWorktreeSummaryRows.tsx",
