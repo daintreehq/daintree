@@ -323,9 +323,9 @@ export class PluginSettingsStore {
       if (!storesEnvelope(await this.load(), key, read)) return;
       const ciphertext = await this.cipher.encrypt(plaintext);
       if (ciphertext === null) return;
-      // Checked against the very snapshot that is committed, with no await
-      // between, so nothing can replace the envelope after the check.
-      const cache = await this.load();
+      // Fast same-size rewrites can retain every stat field on Linux. Reload
+      // after the keychain wait, then check and commit without awaiting between.
+      const cache = await this.load({ fresh: true });
       if (storesEnvelope(cache, key, read)) {
         await this.commit(cache, key, asyncEnvelope(ciphertext), ticket);
       }
@@ -361,13 +361,14 @@ export class PluginSettingsStore {
    * The snapshot stands only while the file is the one it came from. A project
    * settings file is git-tracked, so a pull or a branch switch rewrites it under
    * us; served from a stale snapshot, the next write would put the old values
-   * back. The check is the file's identity, not its bytes: a same-length
-   * rewrite that also keeps the nanosecond mtime would go unnoticed, which a
-   * checkout or an editor save does not do.
+   * back. Ordinary reads check the file's identity; background secret rewrites
+   * request fresh contents after a keychain wait because fast same-size writes
+   * can retain the same identity and timestamp.
    */
-  private async load(): Promise<Map<string, unknown>> {
+  private async load({ fresh = false } = {}): Promise<Map<string, unknown>> {
+    if (fresh && this.loading) await this.loading;
     const current = this.snapshot;
-    if (current && !this.loading) {
+    if (current && !this.loading && !fresh) {
       if (this.persisting) return current.map;
       const signature = await this.fileSignature();
       // Whatever moved on while we waited is at least as new: a read another

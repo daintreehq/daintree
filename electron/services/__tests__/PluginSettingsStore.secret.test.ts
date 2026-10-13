@@ -435,29 +435,50 @@ describe("PluginSettingsStore secrets the sync safeStorage API wrote", () => {
     expect((await readRaw(filePath)).token).toMatchObject({ cipher: seal("sk-new") });
   });
 
-  it("drops a background re-encrypt when the file changes while the keychain encrypts", async () => {
-    const filePath = path.join(tmpDir, "acme.plugin.json");
-    await seed(filePath, { token: legacyEnvelope("sk-old") });
-    const cipher = fakeCipher(true);
-    cipher.stale.add(seal("sk-old"));
-    const encrypt = cipher.encrypt.bind(cipher);
-    const reached = deferred();
-    const release = deferred();
-    cipher.encrypt = async (plaintext) => {
-      reached.resolve();
-      await release.promise;
-      return encrypt(plaintext);
-    };
-    const store = new PluginSettingsStore(filePath, cipher);
+  it.each([false, true])(
+    "drops a background re-encrypt when the file changes while the keychain encrypts (same timestamp: %s)",
+    async (sameTimestamp) => {
+      const filePath = path.join(tmpDir, "acme.plugin.json");
+      await seed(filePath, { token: legacyEnvelope("sk-old") });
+      const cipher = fakeCipher(true);
+      cipher.stale.add(seal("sk-old"));
+      const encrypt = cipher.encrypt.bind(cipher);
+      const reached = deferred();
+      const release = deferred();
+      cipher.encrypt = async (plaintext) => {
+        reached.resolve();
+        await release.promise;
+        return encrypt(plaintext);
+      };
+      const store = new PluginSettingsStore(filePath, cipher);
+      const originalStat = fs.stat.bind(fs);
+      const before = await fs.stat(filePath, { bigint: true });
+      const stat = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const current = await originalStat(...(args as Parameters<typeof fs.stat>));
+        // Linux can give fast in-place rewrites the same timestamp.
+        if (sameTimestamp && args[0] === filePath) {
+          Object.assign(current, { mtimeNs: before.mtimeNs });
+        }
+        return current;
+      });
+      try {
+        expect(await store.get<string>("token", { secret: true })).toBe("sk-old");
+        await reached.promise;
+        await seed(filePath, { token: legacyEnvelope("sk-other") });
+        const after = await originalStat(filePath, { bigint: true });
+        expect(after.ino).toBe(before.ino);
+        expect(after.size).toBe(before.size);
+        release.resolve();
+        await writesSettled(store);
 
-    expect(await store.get<string>("token", { secret: true })).toBe("sk-old");
-    await reached.promise;
-    await seed(filePath, { token: legacyEnvelope("sk-other") });
-    release.resolve();
-    await writesSettled(store);
-
-    expect((await readRaw(filePath)).token).toEqual(legacyEnvelope("sk-other"));
-  });
+        expect((await readRaw(filePath)).token).toEqual(legacyEnvelope("sk-other"));
+      } finally {
+        release.resolve();
+        await writesSettled(store);
+        stat.mockRestore();
+      }
+    }
+  );
 
   it("writes an unchanged value when the file changed while the old one decrypted", async () => {
     const filePath = path.join(tmpDir, "acme.plugin.json");

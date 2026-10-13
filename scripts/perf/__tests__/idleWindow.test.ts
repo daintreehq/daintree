@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { idleWindowScenarios } from "../scenarios/idleWindow";
 import {
   createProcessTreeHarness,
@@ -197,10 +197,12 @@ describe("idleFixture probe fault", () => {
       // is what makes the blindness assertion below mean anything, and is why
       // PERF-093 does the same before it spawns its probe.
       expect(await waitForRefresh(harness)).toBe(true);
-      child = spawnProbeChild(20_000);
+      await vi.waitFor(() => expect(harness.hasObservedFailure()).toBe(true), { timeout: 20_000 });
+      child = spawnProbeChild(undefined, undefined, fault.probeChildEnv);
 
-      // Long enough for several poll attempts against the failing shim.
-      await sleep(2000);
+      // A completed failing poll proves blindness without assuming probe speed.
+      expect(await waitForRefresh(harness)).toBe(true);
+      expect(() => process.kill(child!.pid!, 0)).not.toThrow();
       expect(harness.cache.getProcess(child.pid!)).toBeUndefined();
       // Blindness alone is also what a poller that simply stopped looks like.
       // The service's own error record is what separates the two, and is the

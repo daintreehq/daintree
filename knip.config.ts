@@ -78,6 +78,8 @@ const baseConfig: KnipConfig = {
     // so declare the TypeScript roots directly and retain analysis of their
     // imported shims and fixtures.
     "src/components/Fleet/__preview__/preview.tsx",
+    "src/components/Canopy/__preview__/preview.tsx",
+    "src/components/Hosts/__preview__/hostPresencePreview.tsx",
     "src/components/Commands/__preview__/commandPicker.tsx",
     "src/components/Commands/__preview__/commandBuilder.tsx",
     "src/components/DevPreview/__preview__/preview.tsx",
@@ -151,6 +153,7 @@ const baseConfig: KnipConfig = {
     "src/components/ui/__preview__/skeletons.tsx",
     "src/components/ui/__preview__/tooltipConsistencyPreview.tsx",
     "src/components/Worktree/__preview__/preview.tsx",
+    "src/components/Worktree/__preview__/newWorktree.tsx",
     "src/components/Worktree/__preview__/bulkRemovePreview.tsx",
     "src/components/Worktree/__preview__/issuePicker.tsx",
     "src/components/Worktree/__preview__/prChecks.tsx",
@@ -163,6 +166,7 @@ const baseConfig: KnipConfig = {
     "src/components/Worktree/__preview__/statusTick.tsx",
     "src/components/Worktree/__preview__/worktreeFilterPopover.tsx",
     "src/components/Project/__preview__/preview.tsx",
+    "src/components/Project/__preview__/projectSwitcher.tsx",
     "src/components/Project/__preview__/projectIdentityEditor.tsx",
     "src/components/Project/__preview__/rowHighlight.tsx",
     "src/components/Settings/__preview__/toolbarSettings.tsx",
@@ -283,9 +287,11 @@ const baseConfig: KnipConfig = {
     "pkill",
     "reg",
     "sips",
+    "taskkill.exe",
     "top",
     "where",
     "wsl.exe",
+    "xdg-open",
   ],
 
   ignoreIssues: {

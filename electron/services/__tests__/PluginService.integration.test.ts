@@ -41,6 +41,7 @@ vi.mock("electron", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
+  isWithheldFromView: vi.fn(() => false),
 }));
 vi.mock("../../store.js", () => ({
   store: {
