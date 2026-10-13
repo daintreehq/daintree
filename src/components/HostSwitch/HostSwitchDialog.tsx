@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useState } from "react";
 import { FolderGit2, GitBranch, Server } from "lucide-react";
 import type {
   HostSwitchExecutePayload,
@@ -51,6 +51,28 @@ import {
 } from "./hostSwitchModel";
 import { GitFailureCallout, type HostGitFailure } from "./GitFailureCallout";
 import { setHostSwitchBusy, type HostSwitchRequest } from "./hostSwitchRequests";
+
+/**
+ * Each request's flow, kept outside React so a step finishing late reads it
+ * when it lands: `stopped` by Cancel, `closed` once the dialog went away
+ * (which nothing in it can undo).
+ */
+const flows = new Map<number, { stopped: boolean; closed: boolean }>();
+
+function flowOf(requestId: number): { stopped: boolean; closed: boolean } {
+  let flow = flows.get(requestId);
+  if (!flow) {
+    flow = { stopped: false, closed: false };
+    flows.set(requestId, flow);
+  }
+  return flow;
+}
+
+/** The flow was cancelled or its dialog closed: nothing more runs for it. */
+function flowEnded(requestId: number): boolean {
+  const flow = flowOf(requestId);
+  return flow.stopped || flow.closed;
+}
 
 const STATUS_POLL_MS = 300;
 const DESTINATION_CHECK_DELAY_MS = 300;
@@ -171,12 +193,6 @@ export function HostSwitchDialog({
   const [autoOpening, setAutoOpening] = useState(false);
   /** Bumped to look at the source again, after a push found the branch had moved. */
   const [prepareAttempt, setPrepareAttempt] = useState(0);
-  /**
-   * Cancel (or closing the dialog) ends the whole flow: a step that finishes
-   * anyway is not followed by the next one, and the window doesn't switch.
-   * Reset only when the person starts a new flow.
-   */
-  const stoppedRef = useRef(false);
   const submodulesId = useId();
   const showLoading = useDeferredLoading(prep === null && loadError === null, UI_DOHERTY_THRESHOLD);
 
@@ -304,18 +320,24 @@ export function HostSwitchDialog({
     label: string,
     payload: StepPayload
   ): Promise<HostSwitchExecuteResult | null> => {
-    if (stoppedRef.current) return Promise.resolve(null);
+    const requestId = request.id;
+    if (flowEnded(requestId)) return Promise.resolve(null);
     const opId = mintOperationId();
+    // Held before the step is sent, so no request replaces the dialog mid-step.
+    setHostSwitchBusy(requestId, true);
     setRunning({ opId, label });
     setStatus(null);
     return runStep(opId, payload, label, setFailure)
-      .then((result) => (stoppedRef.current ? null : result))
-      .finally(() => setRunning(null));
+      .then((result) => (flowEnded(requestId) ? null : result))
+      .finally(() => {
+        setHostSwitchBusy(requestId, false);
+        setRunning(null);
+      });
   };
 
   /** A new flow, started by the person: an earlier Cancel no longer applies. */
   const startFlow = () => {
-    stoppedRef.current = false;
+    flowOf(request.id).stopped = false;
     setFailure(null);
   };
 
@@ -345,6 +367,8 @@ export function HostSwitchDialog({
         fix: `Look over what ${sourceName} has now, then choose again.`,
       });
       setPrep(null);
+      // What comes back is looked at again by the person, never opened unasked.
+      setAutoOpenStarted(true);
       setPrepareAttempt((n) => n + 1);
       return false;
     }
@@ -368,7 +392,7 @@ export function HostSwitchDialog({
   };
 
   const finish = (result: Extract<HostSwitchExecuteResult, { kind: "opened" }>) => {
-    if (stoppedRef.current) return;
+    if (flowEnded(request.id)) return;
     if (onComplete) onComplete();
     else onClose();
     void switchToHost(result.hostId, newWindow, result.projectId);
@@ -457,6 +481,7 @@ export function HostSwitchDialog({
       remoteUrls,
       branch: branchTarget(),
       branchRemoteUrl: branchRemoteUrl(),
+      ...(navigateOnly ? { navigateOnly: true } : {}),
     });
     handleOpened(result);
   };
@@ -475,11 +500,12 @@ export function HostSwitchDialog({
     const picked = await pickHostPaths({
       mode: "directory",
       title: `Choose ${prep?.projectName ?? "the project"}'s folder on ${targetName}`,
-      buttonLabel: "Use this folder",
+      buttonLabel: pushing ? "Push, then use this folder" : "Use this folder",
       hostId: request.toHostId,
     });
     const path = picked?.[0];
-    if (path) await openCandidate({ projectId: null, path });
+    // The dialog may have gone while the picker was up: its choice then starts nothing.
+    if (path && !flowOf(request.id).closed) await openCandidate({ projectId: null, path });
   };
 
   /** "Change…": where the clone goes, chosen on the host. */
@@ -530,7 +556,7 @@ export function HostSwitchDialog({
 
   const cancelRunning = () => {
     if (!running) return;
-    stoppedRef.current = true;
+    flowOf(request.id).stopped = true;
     safeFireAndForget(window.electron.hostSwitch.cancel({ opId: running.opId }), {
       context: "Cancelling a host switch step",
     });
@@ -543,13 +569,17 @@ export function HostSwitchDialog({
       : `${projectName} isn't on ${targetName} yet`;
   const busy = running !== null;
   useEffect(() => {
-    setHostSwitchBusy(request.id, busy);
-    return () => setHostSwitchBusy(request.id, false);
-  }, [request.id, busy]);
+    const flow = flowOf(request.id);
+    flow.closed = false;
+    return () => {
+      flow.closed = true;
+      setHostSwitchBusy(request.id, false);
+    };
+  }, [request.id]);
   /** Closing mid-step stops it: the step is cancelled and nothing switches afterwards. */
   const closeDialog = () => {
     if (busy) cancelRunning();
-    stoppedRef.current = true;
+    flowOf(request.id).closed = true;
     onClose();
   };
   const autoOpen =

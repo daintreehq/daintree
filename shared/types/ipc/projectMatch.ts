@@ -150,6 +150,8 @@ export interface OpenOnHostPayload {
   branch: HostBranchTarget | null;
   /** The source's remote URL for the branch, to pick the same remote here. */
   branchRemoteUrl: string | null;
+  /** Open the copy as it is: nothing is fetched into it. */
+  navigateOnly?: boolean;
 }
 
 /**

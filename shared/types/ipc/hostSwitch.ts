@@ -123,6 +123,8 @@ export type HostSwitchExecutePayload =
       remoteUrls: string[];
       branch: import("./projectMatch.js").HostBranchTarget | null;
       branchRemoteUrl: string | null;
+      /** Go to the copy as it is: no fetch, no worktree. */
+      navigateOnly?: boolean;
     }
   /** Clone a repository by its URL onto a host, register and open it (Add project…). */
   | {

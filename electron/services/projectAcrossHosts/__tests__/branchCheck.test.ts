@@ -171,6 +171,18 @@ describe("checkBranchAgainstRemote", () => {
     expect(result.pushDestination).toBeNull();
   });
 
+  it("offers no push when push.default=nothing or a push refspec redirects it", async () => {
+    const bare = makeBare(root, "configured-away-bare");
+    const dir = makeRepo(root, "configured-away", bare);
+    git(dir, ["checkout", "-q", "-b", "topic"]);
+    commit(dir, "topic work");
+    git(dir, ["config", "push.default", "nothing"]);
+    expect((await check(dir)).pushDestination).toBeNull();
+    git(dir, ["config", "--unset", "push.default"]);
+    git(dir, ["config", "remote.origin.push", "refs/heads/topic:refs/for/topic"]);
+    expect((await check(dir)).pushDestination).toBeNull();
+  });
+
   it("reports both tips when the branch is ahead", async () => {
     const { dir } = pushedRepo("tips");
     const remoteTip = git(dir, ["rev-parse", "HEAD"]);

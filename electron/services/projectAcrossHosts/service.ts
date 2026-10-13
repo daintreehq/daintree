@@ -269,8 +269,7 @@ export class ProjectAcrossHostsService {
     const networkGit = await this.deps.git.network(worktreePath);
     const remotes = await this.listRemotes(project.path).catch(() => []);
 
-    const isGitRepository =
-      (await tryRaw(git, ["rev-parse", "--is-inside-work-tree"]))?.trim() === "true";
+    const isGitRepository = await this.isGitRepository(git, worktreePath);
     const branchResult: BranchState =
       payload.skipBranch === true || !isGitRepository
         ? await this.branchWithoutCheck(git, isGitRepository)
@@ -336,8 +335,11 @@ export class ProjectAcrossHostsService {
       unpushedCommits: unpushed.commits,
       unpushedCommitCount: unpushed.count,
       isGitRepository,
-      // A detached HEAD is always at a commit, so no commit at all means none was ever made.
-      isUnborn: isGitRepository && branchResult.headSha === null,
+      // Only a repository that answers with no commits at all: a read that failed isn't that.
+      isUnborn:
+        isGitRepository &&
+        branchResult.headSha === null &&
+        (await tryRaw(git, ["rev-list", "-n", "1", "--all"]))?.trim() === "",
       remotes: shownRemotes,
       committedProjectId,
       homeRelativePath,
@@ -366,6 +368,22 @@ export class ProjectAcrossHostsService {
         ? await this.deps.readCommittedProjectId(project.path).catch(() => null)
         : null;
     return { remotes, committedProjectId };
+  }
+
+  /**
+   * A git repository by git's word, or by its `.git` when git couldn't be
+   * read (ownership, a lock): a failed read is never "not a repository".
+   */
+  private async isGitRepository(
+    git: Awaited<ReturnType<ProjectAcrossHostsDeps["git"]["local"]>>,
+    folder: string
+  ): Promise<boolean> {
+    const answer = await tryRaw(git, ["rev-parse", "--is-inside-work-tree"]);
+    if (answer !== null) return answer.trim() === "true";
+    return fs
+      .lstat(path.join(folder, ".git"))
+      .then(() => true)
+      .catch(() => false);
   }
 
   /**
@@ -485,7 +503,16 @@ export class ProjectAcrossHostsService {
     try {
       // A commit, not the branch: what was reviewed, never what an agent added since.
       // Without `+` the remote only fast-forwards.
-      await git.raw(["push", "--", payload.remote, `${sha}:refs/heads/${branch}`]);
+      // `^{commit}` so no ref named like the sha can stand in for it; no tags
+      // or submodules ride along, whatever push.followTags or recurseSubmodules say.
+      await git.raw([
+        "push",
+        "--no-follow-tags",
+        "--recurse-submodules=no",
+        "--",
+        payload.remote,
+        `${sha}^{commit}:refs/heads/${branch}`,
+      ]);
     } catch (error) {
       if (signal?.aborted) throw new AppError({ code: "CANCELLED", message: "Push cancelled" });
       if (timeout.aborted) {
@@ -1066,8 +1093,10 @@ export class ProjectAcrossHostsService {
       projectName: project.name,
       setupRecipeId: null,
     };
-    // Opening a copy as it is touches nothing: only a branch handover refreshes it.
-    if (remoteName && payload.branch) this.backgroundFetch(project.path, remoteName);
+    // Opening a copy as it is touches nothing; anything else refreshes it for what follows.
+    if (remoteName && payload.navigateOnly !== true) {
+      this.backgroundFetch(project.path, remoteName);
+    }
 
     if (!payload.branch) {
       return { ...base, worktreePath: null, canCheckOutBranch: false, branchNote: null };

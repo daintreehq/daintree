@@ -319,6 +319,17 @@ export class HostSwitchService {
     let run: (track: Tracked) => Promise<HostSwitchExecuteResult>;
     switch (payload.kind) {
       case "push": {
+        // Checked here too, so a host from before pinned pushes is never asked
+        // to push to another branch or without the reviewed commit.
+        if (payload.remoteBranch !== payload.branch) {
+          throw invalid("A branch is only pushed to its own name");
+        }
+        if (
+          typeof payload.sha !== "string" ||
+          !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(payload.sha)
+        ) {
+          throw invalid("Invalid commit");
+        }
         const from = this.source(ctx, payload.fromHostId);
         run = (track) => this.push(from, payload, track);
         break;
@@ -338,8 +349,9 @@ export class HostSwitchService {
               projectId: payload.candidate.projectId,
               path: payload.candidate.path,
               remoteUrls: payload.remoteUrls.map(stripGitRemoteCredentials),
-              branch: payload.branch,
+              branch: payload.navigateOnly === true ? null : payload.branch,
               branchRemoteUrl: stripOptional(payload.branchRemoteUrl),
+              ...(payload.navigateOnly === true ? { navigateOnly: true } : {}),
             })
           );
         };

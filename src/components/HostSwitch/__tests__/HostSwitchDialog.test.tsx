@@ -311,6 +311,35 @@ describe("HostSwitchDialog", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it("asks again rather than opening by itself once a moved branch was looked at again", async () => {
+    const ahead = preparation({
+      branchCheck: { kind: "ahead", remote: "origin", ahead: 1 },
+      unpushedCommitCount: 1,
+      hasUncommittedChanges: false,
+      candidates: [CANDIDATE],
+    });
+    prepare
+      .mockResolvedValueOnce(ahead)
+      .mockResolvedValueOnce({
+        ...ahead,
+        branchCheck: { kind: "same-tip", remote: "origin", sha: "a" },
+      });
+    execute.mockResolvedValue({
+      kind: "git-failed",
+      step: "push",
+      hostId: "local",
+      reason: "branch-moved",
+      message: "feature/host-chip moved since its commits were shown. Nothing was pushed.",
+    });
+    render(<HostSwitchDialog request={request} onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("radio", { name: PUSH_CHOICE }));
+    fireEvent.click(screen.getByRole("button", { name: "Push, then open" }));
+    await waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "Open on studio-01" })).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(switchToHost).not.toHaveBeenCalled();
+  });
+
   it("says it pushes on every control that runs the chosen push", async () => {
     prepare.mockResolvedValue(
       preparation({
@@ -323,7 +352,13 @@ describe("HostSwitchDialog", () => {
     expect(await screen.findByRole("button", { name: "Use existing folder" })).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: PUSH_CHOICE }));
     expect(screen.getByRole("button", { name: "Push, then use existing folder" })).toBeTruthy();
-    expect(screen.getByText("Push, then use another folder on studio-01…")).toBeTruthy();
+    pickHostPaths.mockResolvedValue(null);
+    fireEvent.click(screen.getByText("Push, then use another folder on studio-01…"));
+    await waitFor(() =>
+      expect(pickHostPaths).toHaveBeenCalledWith(
+        expect.objectContaining({ buttonLabel: "Push, then use this folder" })
+      )
+    );
   });
 
   it("closing mid-push cancels it and nothing follows, not even the window switch", async () => {
@@ -371,7 +406,11 @@ describe("HostSwitchDialog", () => {
     await waitFor(() => expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "host-p1"));
     expect(prepare.mock.calls[0]![0]).toMatchObject({ navigateOnly: true, worktreePath: null });
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute.mock.calls[0]![0]).toMatchObject({ kind: "open", branch: null });
+    expect(execute.mock.calls[0]![0]).toMatchObject({
+      kind: "open",
+      branch: null,
+      navigateOnly: true,
+    });
   });
 
   it("opens the host's own copy when it already has the project", async () => {

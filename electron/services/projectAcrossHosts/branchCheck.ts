@@ -90,6 +90,16 @@ export async function resolveSameNamePush(
     if (push.status !== "resolved") return null;
     const { destination } = push;
     if (destination.requiresUpstreamRepair || destination.branch !== branch) return null;
+    // With nothing configured the resolver falls back to the only remote;
+    // that is only git's own answer when no setting says otherwise.
+    const pushDefault = (await readConfigValue(git, "push.default"))?.toLowerCase() ?? null;
+    if (pushDefault === "nothing" || pushDefault === "matching") return null;
+    const refspecs = await tryRaw(git, [
+      "config",
+      "--get-all",
+      `remote.${destination.remote}.push`,
+    ]);
+    if ((refspecs ?? "").trim().length > 0) return null;
     // Under `push.default=current` git would push a topic that tracks
     // `develop` to `topic`; tracking another branch still means the person
     // set it up to land somewhere else, so it isn't pushed from here.

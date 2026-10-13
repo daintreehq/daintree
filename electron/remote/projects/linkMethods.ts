@@ -138,6 +138,7 @@ export const OpenSchema = z.object({
   remoteUrls,
   branch: branchTarget.nullable(),
   branchRemoteUrl: z.string().max(4096).nullable(),
+  navigateOnly: z.boolean().optional(),
 });
 export const OpenFolderSchema = z.object({ path: hostPath });
 export const CheckOutSchema = z.object({

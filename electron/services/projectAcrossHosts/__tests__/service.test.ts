@@ -571,6 +571,30 @@ describe("source side", () => {
     expect(git(clone, ["ls-remote", "origin", "refs/heads/new-branch"])).toContain(reviewed);
   });
 
+  it("pushes no tags or other refs along with the commit", async () => {
+    const host = createTestHost(root, "source-tags");
+    const clone = path.join(root, "source-tags-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    git(clone, ["checkout", "-q", "-b", "tagged-branch"]);
+    const reviewed = commit(clone, "tagged");
+    git(clone, ["tag", "-a", "-m", "release", "v-tagged", reviewed]);
+    git(clone, ["config", "push.followTags", "true"]);
+    // A branch named like the sha must not stand in for the commit.
+    git(clone, ["branch", reviewed, "main"]);
+    const project = host.addProject(clone);
+    const outcome = await host.service.pushBranch({
+      projectId: project.id,
+      worktreePath: clone,
+      branch: "tagged-branch",
+      remote: "origin",
+      remoteBranch: "tagged-branch",
+      sha: reviewed,
+    });
+    expect(outcome).toEqual({ ok: true });
+    expect(git(clone, ["ls-remote", "origin", "refs/heads/tagged-branch"])).toContain(reviewed);
+    expect(git(clone, ["ls-remote", "--tags", "origin", "v-tagged"])).toBe("");
+  });
+
   it("pushes nothing once the branch moved past the reviewed commit", async () => {
     const host = createTestHost(root, "source-moved");
     const clone = path.join(root, "source-moved-clone");
