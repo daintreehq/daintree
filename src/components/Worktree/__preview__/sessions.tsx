@@ -176,7 +176,7 @@ const byState = {
   exited: 0,
 } as Record<AgentState, number>;
 for (const s of fixture.sessions) if (s.agentState) byState[s.agentState] += 1;
-const counts = { total: fixture.sessions.length, byState } as WorktreeTerminalCounts;
+const counts: WorktreeTerminalCounts = { total: fixture.sessions.length, byState, unread: 0 };
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- inert fixture
 const worktree = {

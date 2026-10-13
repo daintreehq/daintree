@@ -578,7 +578,9 @@ describe("WorktreeTerminalSection row state icon", () => {
         snapshot: {
           runs: [{ runId: "hb-1", workspaceId: "p1", spawnedAt: 0, cwd: "/tmp", ...overrides }],
           changedAt: 0,
-        } as FleetSnapshot,
+          degraded: false,
+          lastSuccessfulAt: null,
+        } satisfies FleetSnapshot,
       });
     }
 

@@ -382,10 +382,13 @@ describe("aggregateAgentStates (#6650)", () => {
       term({ id, launchAgentId: "claude", agentState: "waiting", ...overrides });
 
     it("counts a read hand-back as completed and an unread one apart from waiting", () => {
-      const states = { seen: "seen", unseen: "unseen" } as const;
+      const states = new Map<string, "seen" | "unseen">([
+        ["seen", "seen"],
+        ["unseen", "unseen"],
+      ]);
       const { byState, unread, agentStates } = aggregateAgentStates(
         [agent("seen"), agent("unseen", { agentState: "completed" }), agent("plain")],
-        (id) => states[id as keyof typeof states] ?? "none"
+        (id) => states.get(id) ?? "none"
       );
       expect(byState.completed).toBe(1);
       expect(unread).toBe(1);
@@ -445,12 +448,17 @@ describe("aggregateAgentStates (#6650)", () => {
                 },
               ],
               changedAt: 0,
-            } as FleetSnapshot,
+              degraded: false,
+              lastSuccessfulAt: null,
+            } satisfies FleetSnapshot,
           });
         });
       // A second act: the debounce timer is only scheduled once the first
       // act has flushed the re-render's effects.
-      const settle = () => act(() => vi.advanceTimersByTime(300));
+      const settle = () =>
+        act(() => {
+          vi.advanceTimersByTime(300);
+        });
 
       const { result } = renderHook(() => useWorktreeTerminals("wt-hb"));
       expect(result.current.counts.byState.waiting).toBe(1);

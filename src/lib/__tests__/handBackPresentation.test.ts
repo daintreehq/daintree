@@ -15,7 +15,7 @@ function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
 }
 
 function snapshot(runs: FleetRunRow[]): FleetSnapshot {
-  return { runs, changedAt: NOW } as FleetSnapshot;
+  return { runs, changedAt: NOW, degraded: false, lastSuccessfulAt: NOW };
 }
 
 const seen = { stoppedAt: NOW - 10_000, seenAt: NOW - 5_000 };

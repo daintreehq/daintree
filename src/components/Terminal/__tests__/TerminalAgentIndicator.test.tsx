@@ -119,7 +119,9 @@ function setHandBack(handBack: FleetRunRow["handBack"], overrides: Partial<Fleet
         },
       ],
       changedAt: 0,
-    } as FleetSnapshot,
+      degraded: false,
+      lastSuccessfulAt: null,
+    } satisfies FleetSnapshot,
   });
 }
 
