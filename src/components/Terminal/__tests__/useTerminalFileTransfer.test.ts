@@ -11,6 +11,7 @@ import { useRef } from "react";
 const instanceState = vi.hoisted(() => ({
   bracketedPasteMode: false,
   hasManagedInstance: true,
+  inputEpoch: 0,
 }));
 
 vi.mock("@/clients", () => ({
@@ -23,8 +24,13 @@ vi.mock("@/clients", () => ({
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
-    notifyUserInput: vi.fn(),
+    // Mirrors the service: anything but a drop landing on its own moves the
+    // input epoch, so queued drops are judged against what really happened.
+    notifyUserInput: vi.fn((_id: string, _data?: string, options?: { automatic?: boolean }) => {
+      if (!options?.automatic) instanceState.inputEpoch++;
+    }),
     focus: vi.fn(),
+    getUserInputEpoch: vi.fn(() => instanceState.inputEpoch),
     get: vi.fn(() =>
       instanceState.hasManagedInstance
         ? { terminal: { modes: { bracketedPasteMode: instanceState.bracketedPasteMode } } }
@@ -34,12 +40,26 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 // The real store constructs the terminal-instance singleton and several
-// controllers at module scope. Only the focus-preference setter is exercised
-// here, so the mock stays that narrow — a wider fake would drift.
+// controllers at module scope. Only the focus-preference setter and the
+// panel's lifecycle fields are read here, so the mock stays that narrow — a
+// wider fake would drift.
 const setPreferredTerminalFocusTarget = vi.hoisted(() => vi.fn<(target: string) => void>());
+interface PanelFixture {
+  worktreeId?: string;
+  restartKey?: number;
+  hasPty?: boolean;
+  isRestarting?: boolean;
+  runtimeStatus?: string;
+}
+const panelState = vi.hoisted(() => ({ panelsById: {} as Record<string, PanelFixture> }));
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget }) },
+  usePanelStore: {
+    getState: () => ({ setPreferredTerminalFocusTarget, panelsById: panelState.panelsById }),
+  },
 }));
+
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+vi.mock("@/lib/copyWithToast", () => ({ copyWithToast: vi.fn() }));
 
 // The agent-context drop has its own suite
 // (useTerminalFileTransfer.agentContext.test.ts). Its real draft module reaches
@@ -56,6 +76,10 @@ import { useDragDrop } from "../hooks/useDragDrop";
 import { formatAtFileToken } from "../hybridInputParsing";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { notify } from "@/lib/notify";
+import { copyWithToast } from "@/lib/copyWithToast";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { setHostInputBlock } from "@/services/terminal/inputGate";
 import { quoteLaunchArgOptional } from "@shared/utils/shellEscape.js";
 import * as hostPlatform from "@/hooks/useHostPlatform";
 import {
@@ -124,6 +148,9 @@ describe("useTerminalFileTransfer hook", () => {
     vi.clearAllMocks();
     instanceState.bracketedPasteMode = false;
     instanceState.hasManagedInstance = true;
+    instanceState.inputEpoch = 0;
+    panelState.panelsById = {};
+    useTerminalInputStore.setState({ hybridInputAutoFocus: true });
     container = document.createElement("div");
     document.body.appendChild(container);
 
@@ -146,6 +173,8 @@ describe("useTerminalFileTransfer hook", () => {
 
   afterEach(() => {
     setRemoteMaterializer(null);
+    setHostInputBlock(null);
+    _resetComposerDropTargetsForTests();
     cleanup();
     if (container.parentNode) document.body.removeChild(container);
     (window as unknown as Record<string, unknown>).electron = originalElectron;
@@ -307,7 +336,9 @@ describe("useTerminalFileTransfer hook", () => {
       "term-1",
       `${quoteLaunchArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
     );
-    expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
+    expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1", "", {
+      automatic: false,
+    });
     expect(event.defaultPrevented).toBe(true);
   });
 
@@ -475,7 +506,10 @@ describe("useTerminalFileTransfer hook", () => {
       "term-1",
       `${quoteLaunchArgOptional("/Users/test/document.pdf")} ${quoteLaunchArgOptional("/Users/test/script.sh")} `
     );
-    expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
+    // A drop landing on its own is activity, not the user changing the input.
+    expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1", "", {
+      automatic: true,
+    });
     expect(event.defaultPrevented).toBe(true);
   });
 
@@ -1589,15 +1623,239 @@ describe("useTerminalFileTransfer hook", () => {
       }
     });
 
-    it("formats for the program running when the drop lands, not when it started", async () => {
-      const { release } = holdMaterialize();
-      const { rerender } = renderFileTransferHook({ cwdProvider: () => CWD });
+    describe("a drop that lands after the terminal moved on", () => {
+      function notice() {
+        const calls = vi.mocked(notify).mock.calls;
+        const payload = calls[calls.length - 1]![0];
+        return {
+          title: payload.title,
+          message: payload.message,
+          labels: (payload.actions ?? []).map((action) => action.label),
+          act: (label: string) =>
+            act(async () => {
+              await (payload.actions ?? []).find((action) => action.label === label)!.onClick();
+              await settle();
+            }),
+        };
+      }
+
+      it("offers the path instead of typing it when the agent changed", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({ cwdProvider: () => CWD });
+        await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+
+        rerender({ detectedAgentId: "claude", cwdProvider: () => CWD });
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({
+          title: "File not inserted",
+          message: "The agent in the terminal changed before the transfer finished.",
+          labels: ["Insert path", "Copy path"],
+        });
+      });
+
+      it("offers the path instead of typing it when the user typed meanwhile", async () => {
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+        await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+
+        terminalInstanceService.notifyUserInput("term-1", "x");
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe("The terminal's input changed before the transfer finished.");
+      });
+
+      it("offers the path when the pane moved to another worktree", async () => {
+        panelState.panelsById = { "term-1": { worktreeId: "wt-a" } };
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+        await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+
+        panelState.panelsById = { "term-1": { worktreeId: "wt-b" } };
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe(
+          "The terminal moved to another worktree before the transfer finished."
+        );
+      });
+
+      it("offers the path when the agent restarted under the same name", async () => {
+        panelState.panelsById = { "term-1": { restartKey: 1 } };
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+        await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+
+        panelState.panelsById = { "term-1": { restartKey: 2 } };
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().title).toBe("File not inserted");
+      });
+
+      it("only offers a copy once the PTY has exited", async () => {
+        panelState.panelsById = { "term-1": { hasPty: true } };
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+        await dropFiles([fileAt("a.ts", "/Users/test/a.ts"), fileAt("b.ts", "/Users/test/b.ts")]);
+
+        panelState.panelsById = { "term-1": { hasPty: false, runtimeStatus: "exited" } };
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        const offered = notice();
+        expect(offered).toMatchObject({
+          title: "2 files not inserted",
+          message: "The terminal isn't taking input.",
+          labels: ["Copy paths"],
+        });
+        await offered.act("Copy paths");
+        expect(copyWithToast).toHaveBeenCalledWith("Paths", "/Users/test/a.ts\n/Users/test/b.ts");
+      });
+
+      it("only offers a copy while the window can't send input", async () => {
+        const { release } = holdMaterialize();
+        renderFileTransferHook({});
+        await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+
+        setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().labels).toEqual(["Copy path"]);
+      });
+
+      it("inserts the offered path, formatted for what runs now, when asked", async () => {
+        const { release } = holdMaterialize();
+        const onDropSelect = vi.fn();
+        const { rerender } = renderFileTransferHook({ cwdProvider: () => CWD, onDropSelect });
+        await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+        rerender({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+        await release();
+
+        await notice().act("Insert path");
+
+        expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
+        expect(onDropSelect).toHaveBeenCalledTimes(1);
+        expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
+      });
+
+      it("falls back to a copy when the terminal stopped taking input before Insert", async () => {
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+        await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+        terminalInstanceService.notifyUserInput("term-1", "x");
+        await release();
+
+        const offered = notice();
+        setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
+        await offered.act("Insert path");
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({ title: "Couldn't insert path", labels: [] });
+        expect(vi.mocked(notify).mock.calls.at(-1)![0].action?.label).toBe("Copy path");
+      });
+
+      it("drops the offer's Insert once the pane unmounted", async () => {
+        const { release } = holdMaterialize();
+        const { unmount } = renderFileTransferHook({});
+        await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+        unmount();
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({
+          message: "The terminal was moved or closed before the transfer finished.",
+          labels: ["Copy path"],
+        });
+      });
+
+      it("still types the path when only the cwd moved", async () => {
+        const { release } = holdMaterialize();
+        let cwd = "/srv/elsewhere";
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => cwd });
+        await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+        cwd = CWD;
+        await release();
+
+        expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
+        expect(notify).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe("where a drop on an agent terminal goes", () => {
+    const sourceFor = (path: string) => ({
+      kind: "local",
+      path,
+      name: path.split("/").pop(),
+      size: 0,
+    });
+
+    it.each([
+      ["a local", false],
+      ["a remote", true],
+    ])("goes to the input bar first in %s window when the setting is on", async (_, remote) => {
+      if (remote) window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      try {
+        const materializer = vi.fn();
+        setRemoteMaterializer(materializer);
+        const composer = vi.fn(() => true);
+        registerComposerDropTarget("term-1", composer);
+        const onDropSelect = vi.fn();
+        // The live focus preference never decides: only the setting does.
+        renderFileTransferHook({ detectedAgentId: "claude", onDropSelect });
+        await dropFiles([fileAt("a.png", "/Users/me/a.png")]);
+
+        expect(composer).toHaveBeenCalledWith([sourceFor("/Users/me/a.png")]);
+        expect(onDropSelect).toHaveBeenCalled();
+        expect(materializer).not.toHaveBeenCalled();
+        expect(terminalClient.write).not.toHaveBeenCalled();
+      } finally {
+        delete window.__DAINTREE_HOST_ID__;
+      }
+    });
+
+    it("lands on the terminal when the setting is off", async () => {
+      useTerminalInputStore.setState({ hybridInputAutoFocus: false });
+      const composer = vi.fn(() => true);
+      registerComposerDropTarget("term-1", composer);
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
       await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
-      rerender({ detectedAgentId: "claude", cwdProvider: () => CWD });
-      await release();
+      expect(composer).not.toHaveBeenCalled();
+      expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
+    });
+
+    it("lands on the terminal when the pane has no input bar", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
 
       expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
+    });
+
+    it("lands on the terminal when the input bar declines it", async () => {
+      const composer = vi.fn(() => false);
+      registerComposerDropTarget("term-1", composer);
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+      await dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+
+      expect(composer).toHaveBeenCalledTimes(1);
+      expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a plain shell's drop on the terminal whatever the setting", async () => {
+      const composer = vi.fn(() => true);
+      registerComposerDropTarget("term-1", composer);
+      renderFileTransferHook({});
+      await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+
+      expect(composer).not.toHaveBeenCalled();
+      expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional("/Users/test/a.ts")} `);
     });
   });
 
@@ -1634,26 +1892,25 @@ describe("useTerminalFileTransfer hook", () => {
       return finish;
     }
 
-    it("routes a drop on an agent terminal into the pane's composer", async () => {
-      const materializer = vi.fn();
-      setRemoteMaterializer(materializer);
-      const composer = vi.fn();
-      registerComposerDropTarget("term-1", composer);
-      const onDropSelect = vi.fn();
-      renderFileTransferHook({ detectedAgentId: "claude", onDropSelect });
-      await dropFiles([fileAt("a.png", "/Users/me/a.png")]);
+    it("uploads under the terminal's chip when the input bar declines", async () => {
+      const finish = holdUploads(() => "/tmp/daintree-inbox/files/x/a.md");
+      registerComposerDropTarget("term-1", () => false);
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => "/tmp" });
+      await dropFiles([fileAt("a.md", "/Users/me/a.md")]);
 
-      expect(composer).toHaveBeenCalledWith([
-        { kind: "local", path: "/Users/me/a.png", name: "a.png", size: 0 },
-      ]);
-      expect(onDropSelect).toHaveBeenCalled();
-      expect(materializer).not.toHaveBeenCalled();
+      expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(true);
       expect(terminalClient.write).not.toHaveBeenCalled();
+      await finish();
+
+      expect(lastWrittenPayload().trimEnd()).toContain("daintree-inbox/files/x/a.md");
     });
 
     it("writes a plain shell's path only once its upload completes, tracked meanwhile", async () => {
       const finish = holdUploads(() => "/tmp/daintree-inbox/files/x/a.txt");
-      registerComposerDropTarget("term-1", vi.fn());
+      registerComposerDropTarget(
+        "term-1",
+        vi.fn(() => true)
+      );
       renderFileTransferHook({});
       await dropFiles([fileAt("a.txt", "/Users/me/a.txt")]);
 

@@ -442,23 +442,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
     const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd);
 
-    // A drop on this pane's agent terminal, in a remote window, lands here —
-    // in the pane's own composer, never Canopy's reply box for the same terminal.
+    // A drop on this pane's agent terminal lands here when "Focus the input bar
+    // first" is on — in the pane's own composer, never Canopy's reply box for
+    // the same terminal. A bar that can't take the user's own typing declines,
+    // and the drop falls through to the terminal instead of vanishing.
     useEffect(() => {
-      if (!isRemote || isolated) return;
+      if (isolated) return;
       return registerComposerDropTarget(terminalId, (sources) => {
         const view = editorViewRef.current;
-        if (!view) return;
+        if (!view || !latestRef.current || latestRef.current.disabled) return false;
         const entries = sources.map(fileAttachmentEntryFromSource);
-        if (entries.length === 0) return;
+        if (entries.length === 0) return false;
         usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
         view.focus();
         void insertFileAttachments(editorViewRef, view, entries, cwd, {
           uploadSurface,
           cwdProvider: readCwd,
         });
+        return true;
       });
-    }, [isRemote, isolated, terminalId, cwd, uploadSurface, readCwd]);
+    }, [isolated, terminalId, cwd, uploadSurface, readCwd]);
 
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(
       cwd,

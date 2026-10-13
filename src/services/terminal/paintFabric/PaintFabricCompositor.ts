@@ -581,8 +581,12 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.planes().forEach((plane) => plane.refreshWebGLMode());
   }
 
-  notifyUserInput(id: string, data?: string): void {
-    this.plane(id).notifyUserInput(id, data);
+  notifyUserInput(id: string, data?: string, options?: { automatic?: boolean }): void {
+    this.plane(id).notifyUserInput(id, data, options);
+  }
+
+  getUserInputEpoch(id: string): number {
+    return this.plane(id).getUserInputEpoch(id);
   }
 
   notifyComposerDraft(id: string): void {

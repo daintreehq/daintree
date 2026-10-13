@@ -23,14 +23,23 @@ vi.mock("@/store/terminalInputStore", async (importOriginal) => {
   };
 });
 
+// The composer's own insertion has its suite; here only whether it takes the drop matters.
+const insertFileAttachments = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../fileAttachments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../fileAttachments")>();
+  return { ...actual, insertFileAttachments };
+});
+
 import { HybridInputBar } from "../HybridInputBar";
 import { routeDropToComposer } from "../uploads/composerRouting";
 
 const WT_ID = "/repo/wt";
+const DROPPED = [{ kind: "local", path: "/Users/me/a.md", name: "a.md", size: 0 }] as const;
 
 beforeEach(() => {
   registry.register.mockClear();
   registry.unregister.mockClear();
+  insertFileAttachments.mockClear();
   initBuiltInPanelKinds();
   const store = createWorktreeStore();
   setCurrentViewStore(store);
@@ -62,7 +71,7 @@ afterEach(() => {
   delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
 });
 
-function mount(isolated: boolean) {
+function mount(isolated: boolean, disabled = false) {
   return render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
@@ -72,6 +81,7 @@ function mount(isolated: boolean) {
           agentId="claude"
           onSend={() => {}}
           isolated={isolated}
+          disabled={disabled}
         />
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
@@ -87,16 +97,47 @@ describe("HybridInputBar isolated", () => {
     expect(registry.unregister).toHaveBeenCalledWith("term-1");
   });
 
-  it("leaves a remote pane's drops with its own composer while the canopy panel opens and closes", async () => {
-    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
-    const pane = mount(false);
+  it.each([
+    ["local", false],
+    ["remote", true],
+  ])(
+    "leaves a %s pane's drops with its own composer while the canopy panel opens and closes",
+    async (_, remote) => {
+      if (remote) window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      const pane = mount(false);
+      await act(async () => {});
+      const canopy = mount(true);
+      await act(async () => {});
+      canopy.unmount();
+      expect(routeDropToComposer("term-1", DROPPED)).toBe(true);
+      expect(insertFileAttachments).toHaveBeenCalledTimes(1);
+      pane.unmount();
+      expect(routeDropToComposer("term-1", DROPPED)).toBe(false);
+    }
+  );
+
+  it("declines a drop it has nothing to insert for", async () => {
+    mount(false);
     await act(async () => {});
-    const canopy = mount(true);
-    await act(async () => {});
-    canopy.unmount();
-    expect(routeDropToComposer("term-1", [])).toBe(true);
-    pane.unmount();
     expect(routeDropToComposer("term-1", [])).toBe(false);
+    expect(insertFileAttachments).not.toHaveBeenCalled();
+  });
+
+  it("declines a drop while disabled, so the terminal takes it", async () => {
+    const view = mount(false, true);
+    await act(async () => {});
+    expect(routeDropToComposer("term-1", DROPPED)).toBe(false);
+    expect(insertFileAttachments).not.toHaveBeenCalled();
+
+    view.rerender(
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <HybridInputBar terminalId="term-1" cwd={WT_ID} agentId="claude" onSend={() => {}} />
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    expect(routeDropToComposer("term-1", DROPPED)).toBe(true);
   });
 
   it("leaves the pane's controller alone from the canopy panel", async () => {

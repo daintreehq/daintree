@@ -171,6 +171,7 @@ interface AttachRevealJob {
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
+  private userInputEpochs = new Map<string, number>();
 
   /**
    * Consumers holding work against any live instance, notified on teardown.
@@ -662,7 +663,13 @@ class TerminalInstanceService {
     this.webGLManager.refreshMode();
   }
 
-  notifyUserInput(id: string, data = ""): void {
+  /**
+   * `automatic` marks input the app typed on the user's behalf (a dropped
+   * file's path landing): it still counts as activity, but leaves the input
+   * epoch alone so it cannot make other pending drops look overtaken.
+   */
+  notifyUserInput(id: string, data = "", options: { automatic?: boolean } = {}): void {
+    if (!options.automatic) this.bumpUserInputEpoch(id);
     this.onUserInput(id, data);
   }
 
@@ -672,6 +679,19 @@ class TerminalInstanceService {
 
   releaseComposerDraft(id: string): void {
     this.agentStateController.releaseComposerDraft(id);
+  }
+
+  /**
+   * Advances each time the user types into, or submits to, this terminal. A
+   * drop that lands after a slow upload compares it with the value at the
+   * gesture, so it never types a path into input the user has since changed.
+   */
+  getUserInputEpoch(id: string): number {
+    return this.userInputEpochs.get(id) ?? 0;
+  }
+
+  private bumpUserInputEpoch(id: string): void {
+    this.userInputEpochs.set(id, this.getUserInputEpoch(id) + 1);
   }
 
   notifyEnterPressed(id: string): void {
@@ -707,7 +727,10 @@ class TerminalInstanceService {
       notifyUserInput: (id) => this.notifyUserInput(id),
       clearDirectingState: (id, trigger) =>
         this.agentStateController.clearDirectingState(id, trigger),
-      onUserInput: (id, data) => this.onUserInput(id, data),
+      onUserInput: (id, data) => {
+        this.bumpUserInputEpoch(id);
+        this.onUserInput(id, data);
+      },
       onActiveWheel: (id) => this.burstController.onActiveWheel(id),
       onUserScrollIntent: (id) => this.burstController.onUserScrollIntent(id),
       onEnterPressed: (id) => this.onEnterPressed(id),
@@ -4018,6 +4041,7 @@ class TerminalInstanceService {
   }
 
   destroy(id: string): void {
+    this.userInputEpochs.delete(id);
     // Cancel an in-flight creation for this id: if the panel is torn down while
     // getOrCreate is still awaiting setupTerminalAddons, the instance isn't in
     // `instances` yet (so the guard below would no-op), but the pending build
