@@ -77,17 +77,12 @@ function mockExec(handler: (cmd: string, args: string[]) => string) {
 }
 
 /**
- * Commands the tool-presence probe should report as found — through the
- * in-process lookup on POSIX and `where` on Windows.
+ * Commands the POSIX tool-presence probe should report as found, and what each
+ * version command prints. Windows cases plant their tools on the virtual disk.
  */
 function mockLookup(found: string[], versions: Record<string, string>) {
   mockPathLookup((command) => (found.includes(command) ? `/usr/local/bin/${command}` : null));
-  mockExec((cmd, args) => {
-    if (cmd === "where") {
-      const target = args[0] ?? "";
-      if (!found.includes(target)) throw new Error(`${target} not found`);
-      return `C:\\tools\\${target}.exe\r\n`;
-    }
+  mockExec((cmd) => {
     const version = versions[cmd];
     if (version === undefined) throw new Error(`${cmd} failed`);
     return version;

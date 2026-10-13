@@ -500,9 +500,8 @@ export class CliAvailabilityService {
 
   /**
    * Layered binary probe. Tries in order:
-   * 1. `which`/`where` against PATH (existing behavior, now capturing resolved
-   *    path and classifying EACCES/EPERM errors as `blocked` instead of
-   *    `missing`).
+   * 1. PATH, searched in-process (`findAllOnPath` on POSIX, the directory scan
+   *    on Windows), capturing every resolved path. It only finds or misses.
    * 2. Absolute paths declared in `AgentConfig.nativePaths` — covers native
    *    installer locations not on Electron's PATH (e.g. `~/.local/bin/claude`).
    *    On Windows an entry without a launchable extension is probed with
@@ -520,10 +519,10 @@ export class CliAvailabilityService {
    *    against it. Identifying the default by marker rather than list order
    *    matters on multi-distro hosts (issue #7944).
    *
-   * A `blocked` result from the shell probe short-circuits the fallbacks:
-   * the same endpoint security policy that blocked the PATH binary will
-   * typically also block the native-path or npm-global binary, so probing
-   * them would only mask the real problem.
+   * `blocked` comes from the layers that probe a specific file (the prepended
+   * CLI path, native paths, the npm-global shim) and short-circuits the rest:
+   * the same endpoint security policy that blocked one copy of the binary will
+   * typically block the others, so probing them would only mask the problem.
    */
   private async probeCommand(config: AgentConfig): Promise<ProbeResult> {
     const command = config.command;

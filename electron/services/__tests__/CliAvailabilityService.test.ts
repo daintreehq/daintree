@@ -15,6 +15,7 @@ import { logBuffer } from "../LogBuffer.js";
 import { getLogLevelOverrides, setLogLevelOverrides } from "../../utils/logger.js";
 import { findAllOnPath } from "../../utils/findOnPath.js";
 import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
+import { resetWindowsExecutableCache } from "../../utils/windowsExecutable.js";
 
 // Mock child_process. The service's subprocess probes (npm-global, WSL) run
 // through async `execFile` — mock it or the probes will call `undefined(...)`
@@ -27,9 +28,9 @@ import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindow
 // answers that from the fixture: a throw is "not on PATH", stdout lines are the
 // matches, and empty stdout is a match at a synthetic location. Windows spawns
 // no lookup either: it reads PATH's directories (the virtual Windows disk
-// below). All other files (npm, wsl.exe, npx) get an ENOENT callback so
-// unmocked tests see the probe as "binary not found" rather than hanging on an
-// un-invoked callback.
+// below). Every spawn (npm, wsl.exe, npx) gets an ENOENT callback by default,
+// so unmocked tests see the probe as "binary not found" rather than hanging on
+// an un-invoked callback.
 //
 // `execFile` has an overloaded signature: (file, args, callback) or
 // (file, args, options, callback). `vi.hoisted` guarantees this runs before
@@ -54,22 +55,6 @@ const { defaultExecFileImpl, pathFixtureLookup } = vi.hoisted(() => ({
     const callback = args.find(
       (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
     );
-    const [file, fileArgs, options] = args;
-    if (
-      typeof file === "string" &&
-      (file === "which" || /^[A-Za-z]:\\.*\\System32\\where\.exe$/i.test(file))
-    ) {
-      queueMicrotask(() => {
-        try {
-          const out = execFileSync(file, fileArgs as readonly string[], options as never) as
-            string | Buffer;
-          callback?.(null, typeof out === "string" ? out : out.toString("utf8"));
-        } catch (err) {
-          callback?.(err);
-        }
-      });
-      return {} as never;
-    }
     const err = Object.assign(new Error("not found"), { code: "ENOENT" });
     queueMicrotask(() => callback?.(err));
     return {} as never;
@@ -142,9 +127,8 @@ vi.mock("../../ipc/utils.js", () => ({
 }));
 
 /**
- * Extract the command name from a PATH-fixture args array: `["-a", cmd]` from
- * the POSIX adapter, `[cmd]` from `where`. The command always sits at the
- * tail, so this works on both platforms.
+ * Extract the command name from the PATH fixture's `["-a", cmd]` args; the
+ * command always sits at the tail.
  */
 const cmdOf = (args: unknown): string | undefined => {
   if (!Array.isArray(args) || args.length === 0) return undefined;
@@ -205,9 +189,15 @@ describe("CliAvailabilityService", () => {
     // clearAllMocks wipes mock impls, so we reapply the factory default after each clear.
     mockedExecFile.mockImplementation(defaultExecFileImpl as never);
     mockedFindAllOnPath.mockImplementation(pathFixtureLookup);
+    // The Windows PATH search keeps directory listings for a few seconds. A
+    // Windows case that leaves PATH alone searches the host's own PATH, which
+    // on a Windows host names real directories (`C:\Program Files\nodejs`);
+    // read against an empty virtual disk, they would answer the next case's
+    // lookups as empty.
+    resetWindowsExecutableCache();
   });
 
-  // Windows cases point PATH at the directories their `where` output names.
+  // Windows cases point PATH at directories on the virtual disk.
   const originalPath = process.env.PATH;
 
   afterEach(() => {
@@ -405,13 +395,13 @@ describe("CliAvailabilityService", () => {
       Object.defineProperty(process, "platform", { value: "win32", writable: true });
       process.env.DAINTREE_CLI_PATH_PREPEND = "/tmp/daintree-fake-bin";
       const expectedClaudePath = join("/tmp/daintree-fake-bin", "claude.cmd");
-
-      mockedExecFileSync.mockImplementation((_file, args) => {
-        if (cmdOf(args) === "claude") {
-          return Buffer.from("C:\\npm\\prefix\\claude\r\n");
-        }
-        throw new Error("Command not found");
+      // A competing install PATH would otherwise answer for claude.
+      process.env.PATH = "C:\\npm\\prefix";
+      virtualWindowsFiles.set({
+        "C:\\npm\\prefix\\claude": "",
+        "C:\\npm\\prefix\\claude.cmd": "",
       });
+
       mockedAccess.mockImplementation(async (p, mode) => {
         const pathStr = String(p);
         if (
@@ -428,11 +418,11 @@ describe("CliAvailabilityService", () => {
 
         expect(result.claude).toBe("unauthenticated");
         expect(service.getDetails()?.claude?.resolvedPath).toBe(expectedClaudePath);
-        expect(mockedExecFileSync).not.toHaveBeenCalledWith(
-          expect.stringMatching(/where\.exe$/i),
-          ["claude"],
-          expect.any(Object)
-        );
+
+        // Without the prepend, the PATH install is what answers.
+        delete process.env.DAINTREE_CLI_PATH_PREPEND;
+        await service.refresh();
+        expect(service.getDetails()?.claude?.resolvedPath).toBe("C:\\npm\\prefix\\claude.cmd");
       } finally {
         Object.defineProperty(process, "platform", {
           value: originalPlatform,
@@ -1182,6 +1172,35 @@ describe("CliAvailabilityService", () => {
       expect(details!.claude?.resolvedPath).toBe(claudeNative);
       expect(details!.claude?.blockReason).toBe("permissions");
       expect(details!.claude?.via).toBe("native");
+    });
+    it("reports 'blocked' for security when fs.access on a native-path binary returns EPERM (Santa / CrowdStrike / Defender)", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude") {
+          throw Object.assign(new Error("not found"), { code: "ENOENT" });
+        }
+        return Buffer.from("");
+      });
+
+      const claudeNative = join(homedir(), ".local/bin/claude");
+      mockedAccess.mockImplementation(async (p) => {
+        if (String(p) === claudeNative) {
+          throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+        }
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.claude).toBe("blocked");
+
+      const details = service.getDetails();
+      expect(details!.claude?.state).toBe("blocked");
+      expect(details!.claude?.resolvedPath).toBe(claudeNative);
+      expect(details!.claude?.blockReason).toBe("security");
+      expect(details!.claude?.via).toBe("native");
+      expect(details!.claude?.message).toMatch(/EPERM/);
     });
   });
 
