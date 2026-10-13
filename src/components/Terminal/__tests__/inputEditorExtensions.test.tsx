@@ -1765,6 +1765,30 @@ describe("resolveInputBarColors", () => {
     const colors = resolveInputBarColors(fullTheme);
     expect(colors.voiceCursor).toBe("#e5c07b");
   });
+
+  it("fits an rgb() palette exactly as it fits the same colours in hex", () => {
+    const hex = resolveInputBarColors({ background: "#1e1e2e", foreground: "#cdd6f4" });
+    const rgb = resolveInputBarColors({
+      background: "rgb(30, 30, 46)",
+      foreground: "rgb(205, 214, 244)",
+    });
+    // 60%/66% are fitted; an unparsed palette falls back to 67%/72%.
+    expect(hex.placeholder).toBe("color-mix(in oklab, #cdd6f4 60%, #1e1e2e)");
+    expect(rgb.placeholder).toBe("color-mix(in oklab, rgb(205, 214, 244) 60%, rgb(30, 30, 46))");
+    expect(hex.placeholderSelected).toBe("color-mix(in oklab, #cdd6f4 66%, #1e1e2e)");
+    expect(rgb.placeholderSelected).toBe(
+      "color-mix(in oklab, rgb(205, 214, 244) 66%, rgb(30, 30, 46))"
+    );
+    expect(rgb.isDark).toBe(true);
+  });
+
+  it("composites a translucent rgba() foreground over the background before mixing", () => {
+    for (const foreground of ["rgba(255, 255, 255, 0.5)", "rgb(255 255 255 / 50%)"]) {
+      const colors = resolveInputBarColors({ background: "#000", foreground });
+      expect(colors.shellSelectedBg, foreground).toBe("color-mix(in oklab, #808080 3%, #000)");
+      expect(colors.placeholder, foreground).toBe("color-mix(in oklab, #808080 95%, #000)");
+    }
+  });
 });
 
 describe("buildInputBarTheme", () => {

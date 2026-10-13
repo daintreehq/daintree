@@ -71,8 +71,10 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-dropCursor": {
         borderLeftColor: c.accent,
       },
+      // The shell sets `--ib-placeholder` per state; the expanded editor
+      // portals out of the shell and takes the resting ink.
       ".cm-placeholder": {
-        color: `color-mix(in oklab, ${c.foreground} 48%, transparent)`,
+        color: `var(--ib-placeholder, ${c.placeholder})`,
       },
       ".cm-scroller": {
         overflow: "hidden",

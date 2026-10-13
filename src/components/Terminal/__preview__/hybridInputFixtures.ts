@@ -60,3 +60,30 @@ export const TILE_AGENTS = [
   "goose",
   "amp",
 ] as const;
+
+/**
+ * Agents for the whole-pane cases. Mostly Claude on purpose: the report is a
+ * row of composers that all read "Ask Claude", where the placeholder can say
+ * nothing about which pane is live.
+ */
+export const PANE_AGENTS = ["claude", "claude", "claude", "codex", "claude", "gemini"] as const;
+
+export const PANE_TITLES = [
+  "Fix flaky worktree test",
+  "Refactor panel store",
+  "Add host switcher",
+  "Review IPC handlers",
+  "Theme contrast pass",
+  "Upgrade xterm",
+] as const;
+
+/** A settled agent transcript, so the terminal body reads as one without stealing the eye. */
+export const TERMINAL_LINES = [
+  "● Read src/store/panelStore.ts (412 lines)",
+  "● Update src/components/Terminal/TerminalPane.tsx",
+  "  ⎿ Updated with 3 additions and 1 removal",
+  "● Bash(npm test -- src/store/__tests__/panelStore.test.ts)",
+  "  ⎿ 48 passed",
+  "",
+  "Done. The focus handoff now waits for the pane to mount.",
+] as const;
