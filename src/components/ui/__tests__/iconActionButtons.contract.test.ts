@@ -46,6 +46,11 @@ const SURVIVORS: Record<string, string> = {
   "src/components/Settings/VoiceInputSettingsTab.tsx": "suggestion chip",
   // A rounded-full scrim over a theme preview image, deliberately not chrome.
   "src/components/ThemeBrowser/ThemeBrowser.tsx": "scrim close over a preview",
+  // The commit row's hash chip is labelled by the hash itself, which must stay
+  // on screen through the check; CopyButton's labelled form would swap it for
+  // "Copied". Its copy state is the list's, shared with Enter on the cursor
+  // row (see the copy-feedback contract's matching entry).
+  "src/components/Layout/LocalCommitsDropdown.tsx": "commit-row hash chip",
 };
 
 const CLOSE_NAME = /^(Dismiss|Hide|Close)\b/;
