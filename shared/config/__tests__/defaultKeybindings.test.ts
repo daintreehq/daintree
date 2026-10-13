@@ -86,6 +86,20 @@ describe("buildDefaultKeybindings", () => {
     expect(windows.length).toBeGreaterThan(core.length);
   });
 
+  it("keeps Switch host clear of every other global default where it exists", () => {
+    for (const table of [mac, linux]) {
+      const [hostSwitch] = table.filter((b) => b.actionId === "host.switch");
+      expect(hostSwitch).toBeDefined();
+      const collisions = table.filter(
+        (b) =>
+          b !== hostSwitch &&
+          b.scope === "global" &&
+          foldCmd(b.combo) === foldCmd(hostSwitch!.combo)
+      );
+      expect(collisions).toEqual([]);
+    }
+  });
+
   it("keeps the Canopy replacement clear of every other global default", () => {
     for (const table of [windows, linux]) {
       const [replacement] = table.filter((b) => b.actionId === "canopy.toggle");

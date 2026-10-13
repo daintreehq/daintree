@@ -50,6 +50,7 @@ vi.mock("@/utils/logger", () => ({
 
 import { HostSwitcherPalette } from "../HostSwitcherPalette";
 import { usePaletteStore } from "@/store/paletteStore";
+import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
 
 const CONNECTED: HostListEntry["connection"] = {
   status: "connected",
@@ -119,6 +120,7 @@ beforeEach(() => {
     value: { remoteHosts: { switchWindowHost } },
   });
   usePaletteStore.setState({ activePaletteId: null });
+  consumePaletteFocusRestoreSuppression();
 });
 
 afterEach(() => cleanup());
@@ -237,5 +239,35 @@ describe("HostSwitcherPalette", () => {
     fireEvent.click(row("local"));
     expect(usePaletteStore.getState().activePaletteId).toBeNull();
     expect(switchWindowHost).not.toHaveBeenCalled();
+  });
+
+  it("switches to the host chosen with the arrow keys and Enter", async () => {
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    openPalette();
+    const search = screen.getByRole("combobox");
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: false })
+    );
+  });
+
+  // The switch hands the keyboard on (the host's view, or its project list);
+  // the palette's exit-time restore must not take it back.
+  it("leaves focus to the switch, but restores it when nothing moved", () => {
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    openPalette();
+    fireEvent.click(row("h1"));
+    expect(consumePaletteFocusRestoreSuppression()).toBe(true);
+
+    act(() => usePaletteStore.getState().openPalette("host-switcher"));
+    fireEvent.click(row("local"));
+    expect(consumePaletteFocusRestoreSuppression()).toBe(false);
   });
 });

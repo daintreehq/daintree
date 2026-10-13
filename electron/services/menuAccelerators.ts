@@ -207,7 +207,18 @@ function hasHostToSwitchTo(): boolean {
  * adding or forgetting a host needs no menu rebuild.
  */
 export function trackHostSwitchAccelerator(): void {
-  trackRendererOwnedAccelerator(getMenuAccelerator("host.switch"), hasHostToSwitchTo);
+  for (const combo of getEffectiveCombos("host.switch")) {
+    trackRendererOwnedAccelerator(comboToAccelerator(combo), hasHostToSwitchTo);
+  }
+}
+
+/** Every combo the renderer resolves for an action, not just the first a menu item shows. */
+function getEffectiveCombos(actionId: string): string[] {
+  const override = getValidatedOverrides()[actionId];
+  if (override) return override;
+  return getDefaultKeybindingsForPlatform()
+    .filter((b) => b.actionId === actionId && b.scope === "global" && b.combo)
+    .map((b) => b.combo);
 }
 
 /**

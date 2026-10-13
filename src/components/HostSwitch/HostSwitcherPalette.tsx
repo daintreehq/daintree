@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { useHostList } from "@/components/Hosts/hostList";
@@ -22,6 +23,9 @@ import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching
 export const HOST_SWITCHER_PALETTE_ID: PaletteId = "host-switcher";
 
 const FUSE_OPTIONS = { keys: ["name"], threshold: 0.4, ignoreLocation: true };
+
+// This machine plus the host list's 64: every host stays reachable by arrow keys.
+const MAX_ROWS = 65;
 
 const getRowId = (row: HostMenuRow) => row.hostId;
 
@@ -53,6 +57,7 @@ export function HostSwitcherPalette() {
     fuseOptions: FUSE_OPTIONS,
     paletteId: HOST_SWITCHER_PALETTE_ID,
     getItemId: getRowId,
+    maxResults: MAX_ROWS,
     deferFiltering: false,
   });
   const { query, results, selectedIndex, setQuery, setSelectedIndex, close } = palette;
@@ -63,9 +68,16 @@ export function HostSwitcherPalette() {
 
   const pick = useCallback(
     (row: HostMenuRow, newWindow: boolean) => {
+      // Already here: nothing to move, and the keyboard goes back where it was.
+      if (row.isCurrent && !newWindow) {
+        close();
+        return;
+      }
+      // The switch hands the keyboard on (to the host's view, or to its
+      // project list when it has nothing to return to); restoring focus from
+      // the exit animation would take it back a beat later.
+      suppressPaletteFocusRestore();
       close();
-      // Already here: nothing to move.
-      if (row.isCurrent && !newWindow) return;
       void switchToHost(row.hostId, newWindow);
     },
     [close]
