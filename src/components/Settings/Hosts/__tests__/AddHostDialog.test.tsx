@@ -278,6 +278,84 @@ describe("AddHostDialog", () => {
     );
   });
 
+  it("names the operations and Sessions an update ends when no terminals are running", async () => {
+    const impact = {
+      detail: { ...IMPACT.detail, projects: [], terminalIds: [] },
+      agents: null,
+    };
+    remoteHosts.install!.mockResolvedValue({ status: "needs-confirmation", impact });
+    render(
+      <AddHostDialog
+        isOpen
+        onClose={() => {}}
+        existing={{
+          hostId: "studio",
+          name: "studio",
+          connection: { kind: "ssh", target: "greg@studio" },
+        }}
+      />
+    );
+    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update now…" }));
+    await screen.findByText("Update 'studio' now?");
+    expect(screen.getByText(/which ends everything listed/)).toBeTruthy();
+    expect(screen.queryByText(/\b0 terminals\b/)).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Update and end 1 operation and 1 session" })
+    );
+    await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
+    expect(remoteHosts.install).toHaveBeenLastCalledWith(
+      expect.objectContaining({ whileWorking: "proceed", confirmed: impact })
+    );
+  });
+
+  it("lists two projects that read the same as two lines", async () => {
+    const twin = { projectName: "api", terminals: 1, working: 0, waiting: 0 };
+    remoteHosts.install!.mockResolvedValue({
+      status: "needs-confirmation",
+      impact: {
+        detail: {
+          ...IMPACT.detail,
+          projects: [twin, twin],
+          operations: 0,
+          otherShells: [],
+          terminalIds: ["t1", "t2"],
+          shellIds: [],
+        },
+        agents: null,
+      },
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(
+        <AddHostDialog
+          isOpen
+          onClose={() => {}}
+          existing={{
+            hostId: "studio",
+            name: "studio",
+            connection: { kind: "ssh", target: "greg@studio" },
+          }}
+        />
+      );
+      remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
+      await screen.findByTestId("host-restart-impact");
+      expect(screen.getAllByText("api: 1 terminal")).toHaveLength(2);
+      expect(consoleError.mock.calls.some((call) => String(call[0]).includes("same key"))).toBe(
+        false
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("dispatches nothing when the update confirmation is cancelled", async () => {
     render(
       <AddHostDialog

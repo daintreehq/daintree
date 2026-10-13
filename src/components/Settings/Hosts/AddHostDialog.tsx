@@ -40,6 +40,7 @@ import {
   installLabel,
   platformLabel,
   canWaitForIdle,
+  restartConfirmLabel,
   restartImpactLines,
   restartTerminalCount,
 } from "./hostLabels";
@@ -546,8 +547,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               Updating restarts Daintree on {hostLabel}, which ends:
             </p>
             <ul className="list-disc space-y-1 pl-5 text-sm text-text-secondary">
-              {restartImpactLines(installResult.impact).map((line) => (
-                <li key={line}>{line}</li>
+              {restartImpactLines(installResult.impact).map((line, index) => (
+                <li key={`${index}:${line}`}>{line}</li>
               ))}
             </ul>
             <p className="text-xs text-text-secondary">
@@ -733,12 +734,12 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         description={
           confirmTerminals === null
             ? `Daintree on ${hostLabel} restarts to update. Every terminal there ends, and any agent in one stops mid-task.`
-            : `Daintree on ${hostLabel} restarts to update. ${pluralize(confirmTerminals, "terminal")} there ${confirmTerminals === 1 ? "ends" : "end"}, and any agent in one stops mid-task. If anything new starts before the restart, the update stops and asks again.`
+            : confirmTerminals === 0
+              ? `Daintree on ${hostLabel} restarts to update, which ends everything listed. If anything new starts before the restart, the update stops and asks again.`
+              : `Daintree on ${hostLabel} restarts to update. ${pluralize(confirmTerminals, "terminal")} there ${confirmTerminals === 1 ? "ends" : "end"}, and any agent in one stops mid-task. If anything new starts before the restart, the update stops and asks again.`
         }
         confirmLabel={
-          confirmTerminals === null
-            ? "Update and end terminals"
-            : `Update and end ${pluralize(confirmTerminals, "terminal")}`
+          confirmImpact ? restartConfirmLabel(confirmImpact) : "Update and end terminals"
         }
         onConfirm={() => {
           setConfirmProceed(false);

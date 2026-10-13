@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { HostRestartImpact } from "@shared/types/ipc/remoteHosts";
 import {
   canWaitForIdle,
   connectionLabel,
   localNameSuggestion,
+  restartConfirmLabel,
   restartImpactLines,
   restartTerminalCount,
 } from "../hostLabels";
@@ -91,6 +93,32 @@ describe("restart impact", () => {
     ]);
     expect(restartTerminalCount(impact)).toBe(4);
     expect(canWaitForIdle(impact)).toBe(true);
+    expect(restartConfirmLabel(impact)).toBe("Update and end 4 terminals");
+  });
+
+  it("names what ends on the confirm button, never a zero terminal count", () => {
+    const none: NonNullable<HostRestartImpact["detail"]> = {
+      projects: [],
+      complete: true,
+      operations: 0,
+      otherShells: [],
+      terminalIds: [],
+      shellIds: [],
+    };
+    const label = (over: Partial<typeof none>) =>
+      restartConfirmLabel({ detail: { ...none, ...over }, agents: null });
+
+    expect(label({ operations: 2 })).toBe("Update and end 2 operations");
+    expect(label({ otherShells: ["greg-air"], shellIds: ["1"] })).toBe("Update and end 1 session");
+    expect(label({ operations: 1, otherShells: ["greg-air", "ci-box"] })).toBe(
+      "Update and end 1 operation and 2 sessions"
+    );
+    // Unlisted terminals may still be there, so it says terminals without a count.
+    expect(label({ complete: false, operations: 1 })).toBe("Update and end terminals");
+    expect(label({})).toBe("Update now");
+    expect(restartConfirmLabel({ detail: null, agents: { working: 1, waiting: 0 } })).toBe(
+      "Update and end terminals"
+    );
   });
 
   it("falls back to an older host's counts, naming what it can't see", () => {

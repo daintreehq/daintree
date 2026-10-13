@@ -203,6 +203,24 @@ export function restartTerminalCount(impact: HostRestartImpact): number | null {
   return impact.detail.projects.reduce((sum, project) => sum + project.terminals, 0);
 }
 
+/**
+ * The confirm button for an update that restarts the host, naming what it
+ * ends. With no terminals counted it names the operations and Sessions that
+ * held it up instead, never "0 terminals".
+ */
+export function restartConfirmLabel(impact: HostRestartImpact): string {
+  const detail = impact.detail;
+  const terminals = restartTerminalCount(impact);
+  if (!detail || terminals === null) return "Update and end terminals";
+  if (terminals > 0) return `Update and end ${pluralize(terminals, "terminal")}`;
+  if (!detail.complete) return "Update and end terminals";
+  const ends = [
+    detail.operations > 0 ? pluralize(detail.operations, "operation") : null,
+    detail.otherShells.length > 0 ? pluralize(detail.otherShells.length, "session") : null,
+  ].filter((part) => part !== null);
+  return ends.length > 0 ? `Update and end ${ends.join(" and ")}` : "Update now";
+}
+
 /** Whether waiting for idle can be watched: the host reports both working and waiting agents. */
 export function canWaitForIdle(impact: HostRestartImpact): boolean {
   return impact.detail !== null || (impact.agents !== null && impact.agents.waiting !== null);
