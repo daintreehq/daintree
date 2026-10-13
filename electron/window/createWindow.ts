@@ -43,7 +43,7 @@ import {
   INITIAL_COLOR_SCHEME_ARG,
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
-import { getPlatformWindowOptions } from "./platformWindowOptions.js";
+import { getMinimumWindowSize, getPlatformWindowOptions } from "./platformWindowOptions.js";
 import { getLinuxWindowIconOption } from "./linuxWindowIcon.js";
 import { showWindowInactive } from "./showWindowInactive.js";
 import { seedTitleBarOverlay } from "./titleBarOverlay.js";
@@ -231,8 +231,7 @@ export function setupBrowserWindow(
   const win = createWindowWithState(
     {
       show: false,
-      minWidth: 800,
-      minHeight: 600,
+      ...getMinimumWindowSize(),
       ...getPlatformWindowOptions(windowBg),
       ...getLinuxWindowIconOption(),
       backgroundColor: windowBg,
