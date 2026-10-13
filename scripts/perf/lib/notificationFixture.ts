@@ -929,7 +929,7 @@ export function buildRoutingScript(fleet: readonly FleetTerminal[]): RoutingCase
       ? { title: "Agent waiting", body: expectedWaitingBody(terminal.agentId, reason) }
       : null;
     const completedExpected: ExpectedNotification | null = terminal.watched
-      ? { title: "Agent completed", body: `${terminal.agentId} finished its task` }
+      ? { title: "Agent finished", body: `${terminal.agentId} finished its task` }
       : null;
     const watchNote = terminal.watched ? "watched panel" : "no renderer watches this panel";
 

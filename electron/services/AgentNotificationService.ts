@@ -796,7 +796,7 @@ class AgentNotificationService {
       const first = items[0];
       this.enqueue(
         {
-          title: "Agents completed",
+          title: "Agents finished",
           body: `${items.length} agents finished their tasks`,
           worktreeId: first.worktreeId,
           terminalId: first.terminalId,

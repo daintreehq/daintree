@@ -876,7 +876,7 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agents completed",
+        "Agents finished",
         "3 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",
@@ -1644,10 +1644,10 @@ describe("AgentNotificationService", () => {
       // Advance past the 2s completion debounce + 0ms flush timer
       vi.advanceTimersByTime(2001);
 
-      // Both completions should be captured (grouped into one "Agents completed"
+      // Both completions should be captured (grouped into one "Agents finished"
       // burst rather than silently dropping one).
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agents completed",
+        "Agents finished",
         "2 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",

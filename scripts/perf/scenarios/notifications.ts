@@ -772,7 +772,7 @@ function buildBurstArms(fleet: readonly FleetTerminal[]): BurstArm[] {
       label: "completion-burst",
       reason: "24 agents finishing together collapse to one notification naming all 24",
       settings: { completedEnabled: true },
-      expected: [{ title: "Agents completed", body: "24 agents finished their tasks" }],
+      expected: [{ title: "Agents finished", body: "24 agents finished their tasks" }],
       body: async (h) => {
         for (const terminal of burst) {
           emit(h, {
