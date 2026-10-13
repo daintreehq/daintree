@@ -11,6 +11,7 @@ import {
 import { Callout } from "@/components/ui/Callout";
 import { Button } from "@/components/ui/button";
 import { TimeAgo } from "@/components/ui/TimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
@@ -160,17 +161,20 @@ function ResumeSessionRow({
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-3">
-          <div
-            id={`${optionId}-title`}
-            // The whole title, one hover away, for the rows the ellipsis cuts.
-            title={item.title}
-            className={cn(
-              "flex-1 min-w-0 text-sm font-medium truncate",
-              item.isStale ? "text-text-secondary" : "text-text-primary"
-            )}
-          >
-            <HighlightedText text={item.title} indices={findMatchIndices(matches, "title")} />
-          </div>
+          {/* The whole title, one hover away, for the rows the ellipsis cuts.
+              Not focusable: the option is the keyboard's target, driven by
+              aria-activedescendant, and the footer names the full title. */}
+          <TruncatedTooltip content={item.title} focusable={false}>
+            <div
+              id={`${optionId}-title`}
+              className={cn(
+                "flex-1 min-w-0 text-sm font-medium truncate",
+                item.isStale ? "text-text-secondary" : "text-text-primary"
+              )}
+            >
+              <HighlightedText text={item.title} indices={findMatchIndices(matches, "title")} />
+            </div>
+          </TruncatedTooltip>
           {/* Recency is the strongest ranking signal a user has, so it gets a
               column of its own instead of the tail of a run of grey text — and
               it can never be the part that truncates. */}
@@ -180,13 +184,11 @@ function ResumeSessionRow({
           />
         </div>
         {meta && (
-          <div
-            id={`${optionId}-meta`}
-            title={meta}
-            className="text-xs text-text-secondary truncate"
-          >
-            {meta}
-          </div>
+          <TruncatedTooltip content={meta} focusable={false}>
+            <div id={`${optionId}-meta`} className="text-xs text-text-secondary truncate">
+              {meta}
+            </div>
+          </TruncatedTooltip>
         )}
       </div>
     </button>
