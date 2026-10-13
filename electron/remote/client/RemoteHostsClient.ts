@@ -90,6 +90,8 @@ export interface WindowControl {
    * project of this machine's to return to, since a view's host is fixed.
    */
   replaceWithLocalWindow?(windowId: number): Promise<void>;
+  /** Whether the view on screen in a window (or still leaving it) is one of this host's. */
+  showsHost?(windowId: number, hostId: HostId): boolean;
   /**
    * Tell a window's view, if it is up, that it has a host's project list to
    * offer ({@link RemoteHostsClient.takeProjectOffer}). A view still loading
@@ -128,6 +130,12 @@ export interface RemoteHostsClientOptions {
   forgetSwitchWaitMs?: number;
   /** After a host is forgotten: drop what this machine kept for it (SSH master, cached bundles). */
   onForget?: (descriptor: HostDescriptor) => Promise<void>;
+  /**
+   * Before a host is re-pointed at another SSH target: drop what this machine
+   * kept for the machine it named until now (its permissions, views, history,
+   * storage and SSH master), as a removal does, keeping the record itself.
+   */
+  onRetarget?: (before: HostDescriptor) => Promise<void>;
   /**
    * Whether an install or update is running on that connection. It reconnects
    * to the host when done, so the host's target can't change and the host
@@ -188,6 +196,17 @@ export class RemoteHostsClient {
   /** A window's switch to a host that hasn't committed yet, as its views are told. */
   private readonly pendingSwitches = new Map<number, PendingHostSwitch>();
   private readonly switchChains = new Map<number, Promise<void>>();
+  /**
+   * Hosts being removed or re-pointed, with the target they had: from the
+   * first moment until that settles, no window switches onto one and no
+   * install or Host mode setup starts on its connection.
+   */
+  private readonly retiring = new Map<HostId, HostConnection>();
+  /**
+   * Bumped each time a host starts being removed or re-pointed: a switch that
+   * began before then is about the old machine even once the change is done.
+   */
+  private readonly epochs = new Map<HostId, number>();
   private readonly unsubscribe: Array<() => void> = [];
   private readonly detached: DetachedViewRegistry;
 
@@ -231,34 +250,95 @@ export class RemoteHostsClient {
 
   async update(payload: UpdateHostPayload): Promise<HostDescriptor> {
     const before = this.options.registry.require(hostIdOf(payload));
-    if (payload.connection !== undefined) {
-      const next = parseHostConnection(payload.connection);
-      if (next && !sameHostConnection(next, before.connection)) {
-        this.refuseWhileInstalling(before, "Its SSH target can change");
-      }
+    const next = payload.connection !== undefined ? parseHostConnection(payload.connection) : null;
+    if (!next || sameHostConnection(next, before.connection)) {
+      return this.options.registry.update(payload);
     }
-    const after = this.options.registry.update(payload);
-    if (
-      !sameHostConnection(after.connection, before.connection) &&
-      this.options.manager.get(after.id)
-    ) {
-      // The link was built for the old target; dial the new one.
-      this.rememberBoundViews(after.id);
-      await this.options.manager.disconnect(after.id);
-      this.options.manager.connect(after.id);
+    // Another target may be another machine. Nothing of the old one's carries
+    // over: its windows come back here first, then its link, views and
+    // permissions go, and only then is the host rebound. Nothing dials the new
+    // target until someone connects.
+    this.refuseWhileInstalling(before, "Its SSH target can change");
+    this.refuseWhileRetiring(before);
+    this.options.registry.validateUpdate(payload);
+    this.retire(before);
+    try {
+      // The id stays, so a window still showing the old machine is replaced
+      // rather than waited on: its view must not outlive the cleanup and be
+      // reused against the new target.
+      await this.returnWindowsHome(before.id, { replaceOnTimeout: true });
+      await this.options.manager.disconnect(before.id);
+      this.detached.forget(before.id);
+      this.dropProjectOffers(before.id);
+      await this.options.onRetarget?.(before);
+      const after = this.options.registry.update(payload);
+      // A link dialled meanwhile by something that doesn't ask (a notification,
+      // an update's reconnect) was built for the old target.
+      await this.options.manager.disconnect(before.id);
+      return after;
+    } finally {
+      this.retiring.delete(before.id);
     }
-    return after;
   }
 
   async forget(payload: { hostId: string }): Promise<void> {
     const hostId = hostIdOf(payload);
     const descriptor = this.options.registry.require(hostId);
     this.refuseWhileInstalling(descriptor, "It can be removed");
-    // Windows on the host come back to this machine first, binding and view
-    // together, as the removal promises: only rebinding left the host's view
-    // on screen with nothing behind it and no host chip to leave by. A window
-    // the person moved elsewhere meanwhile is left where they put it.
+    this.refuseWhileRetiring(descriptor);
+    // Taken before the first await: an install, Host mode setup or window
+    // switch asked for meanwhile is refused rather than racing the cleanup.
+    this.retire(descriptor);
+    try {
+      await this.returnWindowsHome(hostId);
+      await this.options.manager.disconnect(hostId);
+      this.detached.forget(hostId);
+      this.dropProjectOffers(hostId);
+      this.options.registry.forget(hostId);
+      // Anything dialled it meanwhile without asking: the link goes with the record.
+      await this.options.manager.disconnect(hostId);
+      await this.options.onForget?.(descriptor).catch((error: unknown) => {
+        console.warn("[RemoteHosts] Cleanup after forgetting a host failed:", error);
+      });
+    } finally {
+      this.retiring.delete(hostId);
+    }
+  }
+
+  /**
+   * Whether a host on this connection is being removed or re-pointed: an
+   * install or Host mode setup there would race the cleanup that closes its
+   * SSH master, so none starts until that settles.
+   */
+  isRetiring(connection: HostConnection): boolean {
+    for (const retiring of this.retiring.values()) {
+      if (sameHostConnection(retiring, connection)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Windows on the host come back to this machine, binding and view together,
+   * as removing or re-pointing it promises: only rebinding left the host's view
+   * on screen with nothing behind it and no host chip to leave by. A window
+   * the person moved elsewhere meanwhile is left where they put it.
+   */
+  private retire(descriptor: HostDescriptor): void {
+    this.retiring.set(descriptor.id, descriptor.connection);
+    this.epochs.set(descriptor.id, (this.epochs.get(descriptor.id) ?? 0) + 1);
+  }
+
+  private async returnWindowsHome(
+    hostId: HostId,
+    { replaceOnTimeout = false }: { replaceOnTimeout?: boolean } = {}
+  ): Promise<void> {
     const waitMs = this.options.forgetSwitchWaitMs ?? DEFAULT_FORGET_SWITCH_WAIT_MS;
+    // Windows whose binding was moved here before their switch home landed.
+    // Their switch is still wanted: the view it replaces is still the host's,
+    // and one ahead of it in the window's queue may yet activate it.
+    const forced = new Set<number>();
+    const stillOnHost = (windowId: number) =>
+      forced.has(windowId) || this.options.bindings.get(windowId) === hostId;
     await Promise.all(
       [...this.options.bindings.windowsOn(hostId)].map(async (windowId) => {
         const projectId = this.options.windows.lastLocalProjectId(windowId);
@@ -266,7 +346,7 @@ export class RemoteHostsClient {
         const replace = () =>
           (this.options.windows.replaceWithLocalWindow?.(windowId) ?? Promise.resolve()).catch(
             (error: unknown) => {
-              console.warn("[RemoteHosts] Couldn't replace a forgotten host's window:", error);
+              console.warn("[RemoteHosts] Couldn't replace a host's window:", error);
             }
           );
         const moved =
@@ -275,21 +355,26 @@ export class RemoteHostsClient {
             : this.switchWindow(
                 windowId,
                 { hostId: LOCAL_HOST_ID, newWindow: false, projectId },
-                () => this.options.bindings.get(windowId) === hostId
+                () => stillOnHost(windowId)
               ).then(
                 // That project went to another window meanwhile: still nothing here to show.
                 (result) =>
-                  result.outcome === "focused-elsewhere" &&
-                  this.options.bindings.get(windowId) === hostId
+                  result.outcome === "focused-elsewhere" && stillOnHost(windowId)
                     ? replace()
                     : undefined,
                 (error: unknown) => {
-                  console.warn(
-                    "[RemoteHosts] Couldn't bring a window back from a forgotten host:",
-                    error
-                  );
+                  console.warn("[RemoteHosts] Couldn't bring a window back from a host:", error);
+                  // The switch home itself failed, so the host's view may be back on
+                  // screen whatever the binding says: a local window replaces it,
+                  // unless the person has since sent the window to another host.
+                  const bound = this.options.bindings.get(windowId);
+                  return isLocalHostId(bound) || bound === hostId ? replace() : undefined;
                 }
               );
+        let landed = false;
+        void moved.then(() => {
+          landed = true;
+        });
         let timer: ReturnType<typeof setTimeout> | undefined;
         const waited = new Promise<void>((resolve) => {
           timer = setTimeout(resolve, waitMs);
@@ -297,20 +382,33 @@ export class RemoteHostsClient {
         });
         await Promise.race([moved, waited]);
         clearTimeout(timer);
+        // Only while the old machine's view is still what it shows: a local
+        // project still finishing its activation is already this machine's.
+        if (
+          !landed &&
+          replaceOnTimeout &&
+          (this.options.windows.showsHost?.(windowId, hostId) ?? true)
+        ) {
+          await replace();
+        }
       })
     );
-    await this.options.manager.disconnect(hostId);
-    this.detached.forget(hostId);
     for (const windowId of this.options.bindings.windowsOn(hostId)) {
+      forced.add(windowId);
       this.options.bindings.set(windowId, LOCAL_HOST_ID);
     }
+  }
+
+  private dropProjectOffers(hostId: HostId): void {
     for (const [windowId, offered] of [...this.projectOffers]) {
       if (offered === hostId) this.projectOffers.delete(windowId);
     }
-    this.options.registry.forget(hostId);
-    await this.options.onForget?.(descriptor).catch((error: unknown) => {
-      console.warn("[RemoteHosts] Cleanup after forgetting a host failed:", error);
-    });
+  }
+
+  private refuseWhileRetiring(descriptor: HostDescriptor): void {
+    if (!this.retiring.has(descriptor.id)) return;
+    const message = `${descriptor.name} is already being changed. Try again once that finishes.`;
+    throw new AppError({ code: "VALIDATION", message, userMessage: message });
   }
 
   private refuseWhileInstalling(descriptor: HostDescriptor, then: string): void {
@@ -321,6 +419,8 @@ export class RemoteHostsClient {
 
   connect(payload: { hostId: string }): HostConnectionState {
     const hostId = hostIdOf(payload);
+    // Being removed or re-pointed: a link dialled now would be to the old machine.
+    if (this.retiring.has(hostId)) return this.options.manager.connectionState(hostId);
     this.ensureRouter();
     return this.options.manager.connect(hostId).state();
   }
@@ -479,13 +579,26 @@ export class RemoteHostsClient {
     }
 
     const remote = !isLocalHostId(hostId);
-    if (remote) this.options.registry.require(hostId);
+    const epoch = this.epochs.get(hostId) ?? 0;
+    if (remote) {
+      this.options.registry.require(hostId);
+      // Not even dialled: its removal or new target would close the link again.
+      if (this.retiring.has(hostId)) return { outcome: "superseded", hostId };
+    }
     const sourceWindowId = newWindow ? null : askingWindowId;
     // The latest request for a window wins: one still waiting on its host when
     // a newer one arrives resolves as superseded and never moves the window.
     const ticket = sourceWindowId === null ? null : this.takeSwitchTicket(sourceWindowId);
+    // A host being removed or re-pointed, or gone already, takes no window:
+    // checked at every await, so an open that was waiting on the host, on a
+    // project lookup or on `openWindow()` never binds to it afterwards.
     const superseded = (): SwitchWindowHostResult | null =>
-      (ticket !== null && !ticket.isCurrent()) || (stillWanted !== undefined && !stillWanted())
+      (ticket !== null && !ticket.isCurrent()) ||
+      (stillWanted !== undefined && !stillWanted()) ||
+      (remote &&
+        (this.retiring.has(hostId) ||
+          (this.epochs.get(hostId) ?? 0) !== epoch ||
+          this.options.registry.get(hostId) === null))
         ? { outcome: "superseded", hostId }
         : null;
     // What the window being switched hears while the host is on its way: only

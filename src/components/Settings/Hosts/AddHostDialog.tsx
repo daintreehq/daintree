@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Spinner } from "@/components/ui/Spinner";
@@ -16,10 +16,16 @@ import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
   formatHostConnection,
+  isReservedHostName,
+  sameHostAccount,
+  sameHostMachine,
+  sameHostName,
   sshConnection,
   sshTargetOf,
   type HostConnection,
+  type HostConnectionState,
   type HostId,
+  type HostListEntry,
   type OperationId,
 } from "@shared/types/remoteHosts";
 import type {
@@ -43,6 +49,7 @@ import {
   restartConfirmLabel,
   restartImpactLines,
   restartTerminalCount,
+  SSH_TARGET_HINT,
 } from "./hostLabels";
 import { pluralize } from "@/lib/pluralize";
 
@@ -107,6 +114,23 @@ function Line({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Why a name can't be a host's, said before anything is installed or switched on there. */
+function nameProblem(name: string, others: HostListEntry[]): string | null {
+  if (!name) return null;
+  if (isReservedHostName(name)) return `"${name}" is what Daintree calls this machine`;
+  const clash = others.find((host) => sameHostName(host.descriptor.name, name));
+  return clash ? `Another host is already called "${clash.descriptor.name}"` : null;
+}
+
+type SavedHost = { hostId: HostId; name: string };
+
+/** How setup ended: what the link reported once it settled, or that Host mode was skipped. */
+type Outcome = HostConnectionState | "skipped";
+
+function isUsable(state: HostConnectionState): boolean {
+  return state.status === "connected" || state.status === "driven-elsewhere";
+}
+
 function ErrorLine({ message }: { message: string }) {
   return (
     <p role="alert" className="mt-3 text-xs text-status-error select-text">
@@ -135,9 +159,17 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [confirmProceed, setConfirmProceed] = useState(false);
   /** Linux: the host refused `loginctl enable-linger`, in its words. */
   const [lingerRefused, setLingerRefused] = useState<string | null>(null);
-  /** Saved to the host list, but the connection that followed failed. */
-  const [added, setAdded] = useState<{ hostId: HostId; name: string } | null>(null);
+  /**
+   * In the host list from the moment Host mode is on there: closing the dialog
+   * after that leaves a record of the host, never Host mode on with none.
+   */
+  const [saved, setSaved] = useState<SavedHost | null>(null);
+  const saving = useRef<Promise<SavedHost> | null>(null);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  /** Enable was skipped: setup ends saved but not connected. */
+  const [skipped, setSkipped] = useState(false);
   const install = useRemoteHostsStore((s) => (opId ? (s.installs[opId] ?? null) : null));
+  const knownHosts = useRemoteHostsStore((s) => s.hosts);
   const discovering = !existing && discovered === null && discoverError === null;
   const showDiscovering = useDeferredLoading(discovering, UI_DOHERTY_THRESHOLD);
 
@@ -163,7 +195,26 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     setDiscoverAttempt((n) => n + 1);
   };
 
-  const hostLabel = existing?.name ?? (name.trim() || defaultHostName(target.trim()));
+  const hostLabel =
+    existing?.name ?? saved?.name ?? (name.trim() || defaultHostName(target.trim()));
+  const savedHost: SavedHost | null = existing
+    ? { hostId: existing.hostId, name: existing.name }
+    : saved;
+
+  // Checked as it's typed, against the same rules the host list applies on save:
+  // finding out at the end came after the app was copied and Host mode turned on.
+  const others = knownHosts.filter((entry) => entry.descriptor.id !== existing?.hostId);
+  const typed = target.trim() ? sshConnection(target.trim()) : null;
+  const nameError = existing || saved || !typed ? null : nameProblem(hostLabel, others);
+  const duplicate =
+    existing || saved || !typed
+      ? null
+      : (others.find((entry) => sameHostAccount(entry.descriptor.connection, typed)) ?? null);
+  // Another account on a machine already added is a host of its own: a warning, not a block.
+  const sameMachine =
+    existing || !typed || duplicate
+      ? null
+      : (others.find((entry) => sameHostMachine(entry.descriptor.connection, typed)) ?? null);
 
   const run = <T,>(work: () => Promise<T>, then: (value: T) => void) => {
     setBusy(true);
@@ -182,6 +233,29 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         );
       }
     );
+  };
+
+  /** Add the host to the list once; every later step reuses that record. */
+  const save = (): Promise<SavedHost> => {
+    if (savedHost) return Promise.resolve(savedHost);
+    saving.current ??= remoteHostsClient.add({ name: hostLabel, connection: connectionFor() }).then(
+      (descriptor) => {
+        const record = { hostId: descriptor.id, name: descriptor.name };
+        setSaved(record);
+        return record;
+      },
+      (err: unknown) => {
+        saving.current = null;
+        throw err;
+      }
+    );
+    return saving.current;
+  };
+
+  /** On to Enable; a host already switched on there is saved now. */
+  const toEnable = (seen: HostProbeResult | null) => {
+    setStep("enable");
+    if (hostModeSwitchedOn(seen)) run(save, () => {});
   };
 
   const check = (nextTarget?: string) => {
@@ -219,7 +293,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         remoteHostsClient.install({
           opId: id,
           connection: connectionFor(),
-          hostId: existing?.hostId,
+          hostId: savedHost?.hostId,
           linuxPackage: probe?.platform === "linux" ? linuxPackage : undefined,
           whileWorking,
           ...(confirmed ? { confirmed } : {}),
@@ -228,7 +302,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         setInstallResult(result);
         if (result.status === "installed" || result.status === "up-to-date") {
           setProbe(result.probe);
-          setStep("enable");
+          toEnable(result.probe);
         }
       }
     );
@@ -240,22 +314,20 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       (result) => {
         setProbe(result.probe);
         setLingerRefused(result.lingerRefused);
+        // Host mode is on there now: the host is saved before anything else can
+        // go wrong. A failed save is its own error, never a reason to switch it on again.
+        if (hostModeSwitchedOn(result.probe)) run(save, () => {});
       }
     );
 
-  const connectAdded = (hostId: HostId, hostName: string) =>
+  /** Connect and end on what the link reported, not on the dial having started. */
+  const connectSaved = (host: SavedHost) =>
     run(
-      async () => {
-        try {
-          await remoteHostsClient.connect(hostId);
-          return true;
-        } catch (err) {
-          // The host is in the list either way; only the connection is retried.
-          setAdded({ hostId, name: hostName });
-          throw err;
-        }
-      },
-      () => onClose()
+      () => remoteHostsClient.connectAndSettle(host.hostId),
+      (state) => {
+        if (isUsable(state)) onClose();
+        else setOutcome(state);
+      }
     );
 
   const finish = () => {
@@ -263,14 +335,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       onClose();
       return;
     }
-    const hostName = name.trim() || defaultHostName(target.trim());
-    run(
-      () => remoteHostsClient.add({ name: hostName, connection: connectionFor() }),
-      (descriptor) => {
-        if (probe?.hostModeListening) connectAdded(descriptor.id, hostName);
-        else onClose();
-      }
-    );
+    run(save, (host) => {
+      if (skipped || !probe?.hostModeListening) setOutcome("skipped");
+      else connectSaved(host);
+    });
   };
 
   const cancelInstall = () => {
@@ -278,29 +346,129 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   };
 
   const installRunning = busy && step === "install" && opId !== null;
+  // Work that changes the host settles with the dialog in view: closing it left
+  // an install or Host mode setup running with nothing to say how it ended.
+  const locked = busy && (step === "install" || step === "enable" || step === "advise");
 
   let primary: DialogAction | undefined;
-  let secondary: DialogAction | undefined = { label: "Cancel", onClick: onClose };
+  // Once the host is saved, closing keeps it: nothing is cancelled any more.
+  let secondary: DialogAction | undefined =
+    saved && !existing
+      ? { label: "Close", onClick: onClose, disabled: locked }
+      : { label: "Cancel", onClick: onClose, disabled: locked };
   let leading: DialogAction | undefined;
   let body: React.ReactNode;
 
-  if (added) {
-    body = (
-      <div className="space-y-2 text-sm">
-        <p className="text-text-primary">{added.name} was added to your hosts.</p>
-        <p className="text-text-secondary">
-          Daintree couldn&apos;t connect to it yet. It stays in the list, so you can connect now or
-          later from Settings → Hosts.
-        </p>
-      </div>
-    );
-    primary = {
-      label: "Connect",
-      onClick: () => connectAdded(added.hostId, added.name),
-      disabled: busy,
-      loading: busy,
-    };
-    secondary = { label: "Close", onClick: onClose };
+  if (outcome && savedHost) {
+    const close: DialogAction = { label: "Close", onClick: onClose, disabled: busy };
+    if (outcome === "skipped") {
+      body = (
+        <div className="space-y-2 text-sm">
+          <p className="font-medium text-text-primary">Saved, not connected</p>
+          <p className="text-text-secondary">
+            {savedHost.name} is in your host list. Host mode isn&apos;t on there, so this machine
+            can&apos;t connect yet. Set it up from its details in Settings → Hosts.
+          </p>
+        </div>
+      );
+      primary = { label: "Close", onClick: onClose };
+      secondary = undefined;
+    } else if (outcome.status === "unreachable" && outcome.hostModeOff) {
+      body = (
+        <div className="space-y-2 text-sm">
+          <p className="font-medium text-text-primary">
+            {savedHost.name} is saved, but Host mode is off there
+          </p>
+          <p className="text-text-secondary">
+            SSH reached it, and Daintree isn&apos;t running in Host mode there. Set it up to
+            connect.
+          </p>
+        </div>
+      );
+      primary = {
+        label: "Set up…",
+        onClick: () => {
+          setOutcome(null);
+          setSkipped(false);
+          // Checked again: the probe that said Host mode was on is what the link just contradicted.
+          check();
+        },
+        disabled: busy,
+      };
+      secondary = close;
+    } else if (outcome.status === "version-mismatch") {
+      body = (
+        <div className="space-y-2 text-sm">
+          <p className="font-medium text-text-primary">
+            {savedHost.name} is saved, but needs a compatible Daintree build
+          </p>
+          <p className="text-text-secondary">
+            It runs a different build, so this machine can&apos;t connect until it&apos;s updated.
+          </p>
+        </div>
+      );
+      primary = {
+        label: "Update…",
+        onClick: () => {
+          setOutcome(null);
+          loadPlan(linuxPackage);
+        },
+        disabled: busy,
+        loading: busy,
+      };
+      secondary = close;
+    } else if (outcome.status === "unreachable") {
+      body = (
+        <div className="space-y-2 text-sm">
+          <p className="font-medium text-text-primary">Couldn&apos;t connect to {savedHost.name}</p>
+          {outcome.detail && (
+            <pre
+              role="alert"
+              className="whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text"
+            >
+              {outcome.detail}
+            </pre>
+          )}
+          <p className="text-text-secondary">
+            It stays in your host list, so you can connect now or later from Settings → Hosts.
+          </p>
+        </div>
+      );
+      primary = {
+        label: "Retry",
+        onClick: () => connectSaved(savedHost),
+        disabled: busy,
+        loading: busy,
+      };
+      secondary = close;
+    } else if (outcome.status === "disconnected") {
+      body = (
+        <div className="space-y-2 text-sm">
+          <p className="font-medium text-text-primary">{savedHost.name} is saved, not connected</p>
+          <p className="text-text-secondary">
+            Its connection closed before it was up. It stays in your host list.
+          </p>
+        </div>
+      );
+      primary = {
+        label: "Connect",
+        onClick: () => connectSaved(savedHost),
+        disabled: busy,
+        loading: busy,
+      };
+      secondary = close;
+    } else {
+      body = (
+        <div className="space-y-2 text-sm">
+          <p className="font-medium text-text-primary">{savedHost.name} is saved</p>
+          <p className="text-text-secondary">
+            It&apos;s still connecting. Its status shows in Settings → Hosts.
+          </p>
+        </div>
+      );
+      primary = { label: "Close", onClick: onClose };
+      secondary = undefined;
+    }
   } else if (step === "discover") {
     body = (
       <div className="space-y-4">
@@ -337,6 +505,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                   <button
                     type="button"
                     disabled={host.alreadyAdded || busy}
+                    data-known-machine={host.knownMachine && !host.alreadyAdded ? "" : undefined}
                     aria-pressed={target === sshTargetOf(host.connection)}
                     onClick={() => {
                       setTarget(sshTargetOf(host.connection) ?? "");
@@ -358,7 +527,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                       </span>
                     </span>
                     <span className="shrink-0 text-xs text-text-secondary">
-                      {host.alreadyAdded ? "Added" : SOURCE_LABEL[host.source]}
+                      {host.alreadyAdded
+                        ? "Added"
+                        : host.knownMachine
+                          ? "Added as another account"
+                          : SOURCE_LABEL[host.source]}
                     </span>
                   </button>
                 </li>
@@ -382,10 +555,21 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             autoCapitalize="off"
             onChange={(e) => setTarget(e.target.value)}
           />
-          <FieldDescription>
-            Anything ssh accepts: user@host, a .local or tailnet name, or an ~/.ssh/config alias
-          </FieldDescription>
+          <FieldDescription>{SSH_TARGET_HINT}</FieldDescription>
+          {duplicate && (
+            <FieldError>
+              {formatHostConnection(typed!)} is already in your host list as &quot;
+              {duplicate.descriptor.name}&quot;
+            </FieldError>
+          )}
         </Field>
+        {sameMachine && (
+          <p className="text-xs text-text-secondary" data-testid="add-host-same-machine">
+            &quot;{sameMachine.descriptor.name}&quot; already reaches this machine as{" "}
+            {formatHostConnection(sameMachine.descriptor.connection)}. This one is saved as a
+            separate host.
+          </p>
+        )}
         <Field>
           <FieldLabel>Name</FieldLabel>
           <Input
@@ -393,20 +577,21 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             placeholder={target ? defaultHostName(target) : "devbox"}
             onChange={(e) => setName(e.target.value)}
           />
+          {nameError && <FieldError>{nameError}</FieldError>}
         </Field>
       </div>
     );
     primary = {
       label: "Check host",
       onClick: () => check(),
-      disabled: busy || target.trim().length === 0,
+      disabled: busy || target.trim().length === 0 || nameError !== null || duplicate !== null,
       loading: busy,
     };
   } else if (step === "check") {
     const localSuggestion =
       // Only while adding: an existing host keeps its saved target, which a
       // reconnect after install or Host mode would still dial.
-      !existing && probe && !probe.reachable
+      !existing && !saved && probe && !probe.reachable
         ? localNameSuggestion(target.trim(), probe.sshError)
         : null;
     body = !probe ? (
@@ -464,7 +649,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     if (probe && !probe.reachable) {
       primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
     } else if (probe?.matchesClient === true) {
-      primary = { label: "Continue", onClick: () => setStep("enable") };
+      primary = { label: "Continue", onClick: () => toEnable(probe), disabled: busy };
     } else if (probe) {
       primary = {
         label: probe.install ? "Plan update" : "Plan install",
@@ -474,13 +659,14 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       };
       // A different build still connects, best effort, with a warning.
       if (probe.install) {
-        leading = { label: "Continue anyway", onClick: () => setStep("enable"), disabled: busy };
+        leading = { label: "Continue anyway", onClick: () => toEnable(probe), disabled: busy };
       }
     } else {
       primary = { label: "Check host", onClick: () => check(), disabled: busy, loading: busy };
     }
     // Not while a check runs: its result would land against an edited target.
-    if (!existing)
+    // Nor once saved: the record names this target, so it stays.
+    if (!existing && !saved)
       secondary = { label: "Back", onClick: () => setStep("discover"), disabled: busy };
   } else if (step === "install") {
     const progress = install?.progress ?? null;
@@ -582,11 +768,12 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     ) : null;
     if (installRunning) {
       primary = { label: "Installing", onClick: () => {}, disabled: true, loading: true };
+      // The one way out while it runs: the dialog stays until the stop settles.
       secondary = { label: "Stop", onClick: cancelInstall };
     } else if (installResult?.status === "needs-user-command") {
       primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
     } else if (plan?.kind === "up-to-date") {
-      primary = { label: "Continue", onClick: () => setStep("enable") };
+      primary = { label: "Continue", onClick: () => toEnable(probe), disabled: busy };
     } else if (plan?.kind === "install" && installResult?.status !== "needs-confirmation") {
       primary = {
         label: probe?.install ? "Update host" : "Install on host",
@@ -617,9 +804,16 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     primary = switchedOn
       ? { label: "Continue", onClick: () => setStep("advise") }
       : { label: "Turn on Host mode", onClick: startHostMode, disabled: busy, loading: busy };
-    secondary = switchedOn
-      ? { label: "Cancel", onClick: onClose }
-      : { label: "Skip", onClick: () => setStep("advise") };
+    if (!switchedOn) {
+      secondary = {
+        label: "Skip",
+        onClick: () => {
+          setSkipped(true);
+          setStep("advise");
+        },
+        disabled: busy,
+      };
+    }
   } else {
     body = (
       <div className="space-y-4 text-sm">
@@ -698,7 +892,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       </div>
     );
     primary = {
-      label: existing ? "Done" : "Add host",
+      label: existing || saved ? "Done" : "Add host",
       onClick: finish,
       disabled: busy,
       loading: busy,
@@ -710,7 +904,13 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const confirmTerminals = confirmImpact ? restartTerminalCount(confirmImpact) : null;
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="md" data-testid="add-host-dialog">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      dismissible={!locked}
+      size="md"
+      data-testid="add-host-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title>{existing ? `Update ${existing.name}` : "Add host"}</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -718,6 +918,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       <AppDialog.Body>
         <StepBar current={step} />
         {body}
+        {saved && !existing && !outcome && (
+          <p className="mt-3 text-xs text-text-secondary">
+            {saved.name} is saved in your host list. Closing leaves it there.
+          </p>
+        )}
         {error && <ErrorLine message={error} />}
       </AppDialog.Body>
       <AppDialog.Footer

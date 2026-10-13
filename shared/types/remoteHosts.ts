@@ -151,6 +151,61 @@ export function sameHostConnection(a: HostConnection, b: HostConnection): boolea
 }
 
 /**
+ * The machine an ssh target names: its host part, lower-cased and whole. An IP
+ * address stays complete, and a name is never shortened to its first label,
+ * since `studio.local` and `studio.tailnet.ts.net` may be different machines.
+ */
+export function sshMachineKey(target: string): string {
+  const host = target.slice(target.lastIndexOf("@") + 1).toLowerCase();
+  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  return bare.endsWith(".") ? bare.slice(0, -1) : bare;
+}
+
+/** The account a target logs in as, as typed; empty when it leaves that to ssh. */
+function sshUserOf(target: string): string {
+  const at = target.lastIndexOf("@");
+  return at < 0 ? "" : target.slice(0, at);
+}
+
+/**
+ * The same account on the same machine: what can't be added twice. Host names
+ * compare case-insensitively, as DNS does; user names exactly, as logins do.
+ */
+export function sameHostAccount(a: HostConnection, b: HostConnection): boolean {
+  if (a.kind !== b.kind) return false;
+  const at = sshTargetOf(a);
+  const bt = sshTargetOf(b);
+  if (at === null || bt === null) return sameHostConnection(a, b);
+  return sshMachineKey(at) === sshMachineKey(bt) && sshUserOf(at) === sshUserOf(bt);
+}
+
+/**
+ * The same machine reached another way (another account, or the user left to
+ * ssh): a legitimate second host, worth a warning but never refused.
+ */
+export function sameHostMachine(a: HostConnection, b: HostConnection): boolean {
+  if (a.kind !== b.kind) return false;
+  const at = sshTargetOf(a);
+  const bt = sshTargetOf(b);
+  if (at === null || bt === null) return sameHostConnection(a, b);
+  return sshMachineKey(at) === sshMachineKey(bt);
+}
+
+/** What this machine is called in titles, chips and copy; a host can't take one of them. */
+export const RESERVED_HOST_NAMES: readonly string[] = ["This Mac", "This machine", "This computer"];
+
+const hostNameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
+
+/** Two host names people would read as the same one. */
+export function sameHostName(a: string, b: string): boolean {
+  return hostNameCollator.compare(a.trim(), b.trim()) === 0;
+}
+
+export function isReservedHostName(name: string): boolean {
+  return RESERVED_HOST_NAMES.some((reserved) => sameHostName(reserved, name));
+}
+
+/**
  * The connection an entry was saved with, from either shape: `connection`, or
  * the `sshTarget` string development builds of this feature wrote before it.
  * Null when neither is usable; the caller validates the target itself.

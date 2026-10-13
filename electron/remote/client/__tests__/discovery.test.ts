@@ -238,11 +238,14 @@ describe("discoverHosts", () => {
       knownConnections: [{ kind: "ssh", target: "greg@bigbox.tail1234.ts.net" }],
     });
     // studio-03.local may or may not be the tailnet's studio-03: nothing vouches for it.
-    expect(hosts.map((h) => [h.name, h.connection.target, h.source, h.alreadyAdded])).toEqual([
-      ["studio-03", "studio-03.tail1234.ts.net", "tailscale", false],
-      ["bigbox", "bigbox.tail1234.ts.net", "tailscale", true],
-      ["studio-03", "studio-03.local", "bonjour", false],
-      ["lanbox", "lanbox.local", "bonjour", false],
+    // greg's account on bigbox is added; the row names no account, so it warns rather than blocks.
+    expect(
+      hosts.map((h) => [h.name, h.connection.target, h.source, h.alreadyAdded, !!h.knownMachine])
+    ).toEqual([
+      ["studio-03", "studio-03.tail1234.ts.net", "tailscale", false, false],
+      ["bigbox", "bigbox.tail1234.ts.net", "tailscale", false, true],
+      ["studio-03", "studio-03.local", "bonjour", false, false],
+      ["lanbox", "lanbox.local", "bonjour", false, false],
     ]);
     expect(calls.some((c) => c.startsWith("avahi-browse"))).toBe(false);
   });
@@ -360,13 +363,26 @@ describe("discoverHosts", () => {
         { kind: "ssh", target: "greg@100.64.0.12" },
       ],
     });
-    expect(hosts.map((h) => [h.connection.target, h.alreadyAdded])).toEqual([
-      ["100.64.0.3", true],
-      ["100.64.0.9", false],
-      ["c.tail1234.ts.net", true],
+    expect(hosts.map((h) => [h.connection.target, h.alreadyAdded, !!h.knownMachine])).toEqual([
+      ["100.64.0.3", false, true],
+      ["100.64.0.9", false, false],
+      ["c.tail1234.ts.net", false, true],
     ]);
     expect(machineKey("greg@100.64.0.3")).toBe("100.64.0.3");
     expect(machineKey("Studio.Local.")).toBe("studio.local");
+  });
+
+  it("marks only the exact account added, matching the host part case-insensitively", async () => {
+    const status = JSON.stringify({
+      Peer: [{ HostName: "a", OS: "linux", Online: true, TailscaleIPs: ["100.64.0.3"] }],
+    });
+    const run: CommandRunner = async (command) => (command === "tailscale" ? ok(status) : missing);
+    const added = await discoverHosts({
+      run,
+      platform: "linux",
+      knownConnections: [{ kind: "ssh", target: "100.64.0.3" }],
+    });
+    expect(added.map((h) => [h.alreadyAdded, !!h.knownMachine])).toEqual([[true, true]]);
   });
 
   it("merges a LAN advert with a tailnet peer only on a shared address", async () => {

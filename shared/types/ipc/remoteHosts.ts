@@ -136,8 +136,10 @@ export interface DiscoveredHost {
   source: HostDiscoverySource;
   platform: HostPlatform | null;
   online: boolean;
-  /** True when this machine is already in the host list. */
+  /** True when this account on this machine is already in the host list. */
   alreadyAdded: boolean;
+  /** The machine is in the host list under another account (or ssh's default one). */
+  knownMachine?: boolean;
 }
 
 export interface HostInstallInfo {

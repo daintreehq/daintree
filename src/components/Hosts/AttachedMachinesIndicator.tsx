@@ -260,15 +260,20 @@ export function AttachedMachinesIndicator() {
             Take control of {thisProjectName}
           </DropdownMenuItem>
         )}
+        {/* About this machine as a host, so it opens that section, not the host list. */}
         <DropdownMenuItem
           onSelect={() =>
             safeFireAndForget(
-              actionService.dispatch("app.settings.openTab", { tab: "hosts" }, { source: "user" }),
-              { context: "Opening host settings from the connected-machines menu" }
+              actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "hosts", sectionId: "host-mode" },
+                { source: "user" }
+              ),
+              { context: "Opening Host mode settings from the connected-machines menu" }
             )
           }
         >
-          Host settings…
+          Host mode settings…
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

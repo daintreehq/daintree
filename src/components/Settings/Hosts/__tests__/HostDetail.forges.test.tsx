@@ -96,6 +96,17 @@ describe("HostDetail forge connections", () => {
     expect(accounts()).toContain("Connect to studio-01 to see its forge connections");
   });
 
+  it("never shows what a host reported before it disconnected as if it were current", () => {
+    const stale = entry([
+      { providerId: "github", name: "GitHub", hasCredential: true, account: "greg" },
+    ]);
+    render(
+      <HostDetail entry={{ ...stale, connection: { status: "disconnected" } }} onBack={() => {}} />
+    );
+    expect(accounts()).toContain("Connect to studio-01 to see its forge connections");
+    expect(accounts()).not.toContain("GitHub");
+  });
+
   it("says when the host has no forge providers", () => {
     render(<HostDetail entry={entry([])} onBack={() => {}} />);
     expect(accounts()).toContain("No forge providers are enabled on studio-01");

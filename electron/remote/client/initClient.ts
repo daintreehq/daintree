@@ -394,6 +394,13 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       const wc = ctx.services.projectViewManager?.getActiveView()?.webContents;
       if (wc && !wc.isDestroyed()) wc.focus();
     },
+    showsHost(windowId, hostId) {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      if (!pvm) return false;
+      return [pvm.getActiveProjectId(), pvm.getOutgoingBridgeProjectId()].some(
+        (key) => key !== null && parseHostScopedKey(key).hostId === hostId
+      );
+    },
     async replaceWithLocalWindow(windowId) {
       const old = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
       if (!old || old.isDestroyed()) return;
@@ -612,6 +619,11 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       await forgetHostState(descriptor.id, HOST_STATE_CLEANUPS);
       await setup.forgetArtifacts(descriptor);
     },
+    // The id stays, so everything kept under it about the old machine goes, as on removal.
+    onRetarget: async (before): Promise<void> => {
+      await forgetHostState(before.id, HOST_STATE_CLEANUPS);
+      await setup.forgetArtifacts(before);
+    },
     isStarting: (hostId) => (startingHosts.get(hostId) ?? 0) > 0,
     isInstalling: (connection) => setup.isInstallRunning(connection),
   });
@@ -718,6 +730,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     download: (url, destination, signal) =>
       downloadArtifact({ url, destination, signal, allowedPrefixes: RELEASE_FEED_PREFIXES }),
     emit: broadcastLocal,
+    isRetiring: (connection) => client.isRetiring(connection),
   });
   const unregister = registerRemoteService("remoteHostsClient", client);
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);

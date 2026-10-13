@@ -46,10 +46,10 @@ describe("HostRegistry", () => {
     expect(registry.list()).toEqual([added]);
   });
 
-  it("mints unique ids for hosts with the same name", () => {
+  it("mints unique ids for hosts whose names slug alike", () => {
     const registry = new HostRegistry(memoryStore());
     const a = registry.add({ name: "box", connection: { kind: "ssh", target: "a.example" } });
-    const b = registry.add({ name: "box", connection: { kind: "ssh", target: "b.example" } });
+    const b = registry.add({ name: "Box!", connection: { kind: "ssh", target: "b.example" } });
     expect(a.id).toBe("box");
     expect(b.id).toBe("box-2");
   });
@@ -82,6 +82,53 @@ describe("HostRegistry", () => {
       expect(() => registry.add(payload)).toThrow(expect.objectContaining({ code: "VALIDATION" }));
     }
     expect(registry.list()).toHaveLength(1);
+  });
+
+  it("keeps display names unique and never this machine's, ignoring case", () => {
+    const registry = new HostRegistry(memoryStore());
+    const box = registry.add({ name: "Studio", connection: { kind: "ssh", target: "a.example" } });
+    for (const name of ["studio", " STUDIO ", "This Mac", "this machine"]) {
+      expect(() =>
+        registry.add({ name, connection: { kind: "ssh", target: "b.example" } })
+      ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+    }
+    const other = registry.add({ name: "Lab", connection: { kind: "ssh", target: "b.example" } });
+    expect(() => registry.update({ hostId: other.id, name: "STUDIO" })).toThrow(
+      expect.objectContaining({ code: "VALIDATION" })
+    );
+    // Re-casing its own name is not a clash.
+    expect(registry.update({ hostId: box.id, name: "STUDIO" }).name).toBe("STUDIO");
+  });
+
+  it("refuses the same account twice but adds another account on the same machine", () => {
+    const registry = new HostRegistry(memoryStore());
+    registry.add({ name: "a", connection: { kind: "ssh", target: "greg@Studio.local" } });
+    expect(() =>
+      registry.add({ name: "b", connection: { kind: "ssh", target: "greg@studio.LOCAL" } })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+    const other = registry.add({
+      name: "b",
+      connection: { kind: "ssh", target: "admin@studio.local" },
+    });
+    expect(other.connection).toEqual({ kind: "ssh", target: "admin@studio.local" });
+    expect(() =>
+      registry.update({
+        hostId: other.id,
+        connection: { kind: "ssh", target: "greg@STUDIO.local" },
+      })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+  });
+
+  it("validates an update without writing it", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box.example" } });
+    const next = registry.validateUpdate({
+      hostId: host.id,
+      connection: { kind: "ssh", target: "new.example" },
+    });
+    expect(next.connection).toEqual({ kind: "ssh", target: "new.example" });
+    expect(registry.get(host.id)?.connection).toEqual({ kind: "ssh", target: "box.example" });
   });
 
   it("updates fields and clears what was observed about a previous target", () => {

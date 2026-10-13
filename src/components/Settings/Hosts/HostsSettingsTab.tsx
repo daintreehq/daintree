@@ -21,6 +21,9 @@ import { onHostUpdateRequest, takePendingHostUpdate } from "./hostUpdateRequests
 import { onHostPluginsRequest, takePendingHostPlugins } from "./hostPluginRequests";
 import { clientErrorText } from "@/utils/clientAppError";
 
+/** A to Z as people number machines (studio-2 before studio-10), like every other host list. */
+const hostNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 /**
  * Settings → Hosts: the machines this one opens projects on, adding one, and
  * this machine's own Host mode. Device-owned: nothing here is per project.
@@ -178,54 +181,56 @@ export default function HostsSettingsTab() {
                 : "Loading hosts"}
             </SettingsEmptyRow>
           ) : (
-            hosts.map(({ descriptor, connection }) => (
-              <SettingsRow
-                key={descriptor.id}
-                label={descriptor.name}
-                description={
-                  <>
-                    {formatHostConnection(descriptor.connection)} ·{" "}
-                    {descriptor.platform
-                      ? platformLabel(descriptor.platform, null)
-                      : "Not seen yet"}
-                    <br />
-                    {connectionLabel(connection)}
-                  </>
-                }
-                control={
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      aria-label={`Details for ${descriptor.name}`}
-                      data-host-details={descriptor.id}
-                      onClick={(event) => {
-                        setFocusBackFor(event.detail === 0 ? descriptor.id : null);
-                        setDetailHostId(descriptor.id);
-                      }}
-                    >
-                      Details
-                    </Button>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost-danger"
-                          size="icon-sm"
-                          aria-label={`Remove ${descriptor.name} from this device`}
-                          onClick={() => {
-                            setForgetError(null);
-                            setForgetTarget({ id: descriptor.id, name: descriptor.name });
-                          }}
-                        >
-                          <Trash2 aria-hidden="true" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Remove host</TooltipContent>
-                    </Tooltip>
-                  </div>
-                }
-              />
-            ))
+            [...hosts]
+              .sort((a, b) => hostNameCollator.compare(a.descriptor.name, b.descriptor.name))
+              .map(({ descriptor, connection }) => (
+                <SettingsRow
+                  key={descriptor.id}
+                  label={descriptor.name}
+                  description={
+                    <>
+                      {formatHostConnection(descriptor.connection)} ·{" "}
+                      {descriptor.platform
+                        ? platformLabel(descriptor.platform, null)
+                        : "Not seen yet"}
+                      <br />
+                      {connectionLabel(connection)}
+                    </>
+                  }
+                  control={
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={`Details for ${descriptor.name}`}
+                        data-host-details={descriptor.id}
+                        onClick={(event) => {
+                          setFocusBackFor(event.detail === 0 ? descriptor.id : null);
+                          setDetailHostId(descriptor.id);
+                        }}
+                      >
+                        Details
+                      </Button>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost-danger"
+                            size="icon-sm"
+                            aria-label={`Remove ${descriptor.name} from this device`}
+                            onClick={() => {
+                              setForgetError(null);
+                              setForgetTarget({ id: descriptor.id, name: descriptor.name });
+                            }}
+                          >
+                            <Trash2 aria-hidden="true" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Remove host</TooltipContent>
+                      </Tooltip>
+                    </div>
+                  }
+                />
+              ))
           )}
         </SettingsGroup>
       </SettingsSection>

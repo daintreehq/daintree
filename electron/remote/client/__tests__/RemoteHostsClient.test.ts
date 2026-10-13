@@ -1130,6 +1130,288 @@ describe("RemoteHostsClient", () => {
     warn.mockRestore();
   });
 
+  describe("removal races", () => {
+    function deferred<T = void>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((r) => (resolve = r));
+      return { promise, resolve };
+    }
+
+    function quickClient(overrides: Partial<WindowControl> = {}) {
+      return new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: (id) => (id === 5 ? 1 : null) },
+        windows: { ...windows, ...overrides },
+        installRouter,
+        emit: () => {},
+        forgetSwitchWaitMs: 5,
+      });
+    }
+
+    it("still brings a window home when its switch home timed out behind the host's own activation", async () => {
+      const activation = deferred();
+      const openRemoteProject = vi.fn(() => activation.promise);
+      const openLocalProject = vi.fn(async () => {});
+      const quick = quickClient({
+        openRemoteProject,
+        openLocalProject,
+        lastLocalProjectId: vi.fn(() => "local-proj"),
+      });
+      const opening = quick.switchWindowToHostProject(1, "studio-01", "proj-1");
+      await vi.waitFor(() => expect(openRemoteProject).toHaveBeenCalled());
+      // The switch home queues behind the activation, which outlasts the wait.
+      await quick.forget({ hostId: "studio-01" });
+      expect(registry.get("studio-01")).toBeNull();
+      expect(openLocalProject).not.toHaveBeenCalled();
+      activation.resolve();
+      await opening;
+      await vi.waitFor(() => expect(openLocalProject).toHaveBeenCalledWith(1, "local-proj"));
+      expect(bindings.get(1)).toBe("local");
+    });
+
+    it("binds no window opened for a host removed while the window was opening", async () => {
+      const opened = deferred<number>();
+      const openWindow = vi.fn(() => opened.promise);
+      const quick = quickClient({ openWindow });
+      const opening = quick.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: true,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(openWindow).toHaveBeenCalled());
+      await quick.forget({ hostId: "studio-01" });
+      opened.resolve(7);
+      await expect(opening).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      expect(bindings.get(7)).toBe("local");
+    });
+
+    it("doesn't replace a window sent to another host after its switch home failed", async () => {
+      registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
+      const replaceWithLocalWindow = vi.fn(async () => {});
+      const quick = quickClient({
+        openLocalProject: vi.fn(async () => {
+          // The person sends the window elsewhere while its switch home is failing.
+          bindings.set(1, "studio-02");
+          throw new Error("The local project didn't load");
+        }),
+        lastLocalProjectId: vi.fn(() => "local-proj"),
+        replaceWithLocalWindow,
+      });
+      bindings.set(1, "studio-01");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await quick.forget({ hostId: "studio-01" });
+      warn.mockRestore();
+      expect(replaceWithLocalWindow).not.toHaveBeenCalled();
+    });
+
+    it("holds the host from the first moment of its removal, so nothing starts on it meanwhile", async () => {
+      const home = deferred();
+      const quick = quickClient({
+        openLocalProject: vi.fn(() => home.promise),
+        lastLocalProjectId: vi.fn(() => "local-proj"),
+      });
+      bindings.set(1, "studio-01");
+      const connection = { kind: "ssh", target: "studio.example" } as const;
+      expect(quick.isRetiring(connection)).toBe(false);
+      const removal = quick.forget({ hostId: "studio-01" });
+      expect(quick.isRetiring(connection)).toBe(true);
+      manager.connect.mockClear();
+      // A switch onto it asked for meanwhile never dials it.
+      await expect(quick.switchWindowToHostProject(2, "studio-01", "proj-1")).resolves.toEqual({
+        outcome: "superseded",
+        hostId: "studio-01",
+      });
+      expect(manager.connect).not.toHaveBeenCalled();
+      await expect(quick.forget({ hostId: "studio-01" })).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      home.resolve();
+      await removal;
+      expect(quick.isRetiring(connection)).toBe(false);
+    });
+  });
+
+  describe("changing a host's SSH target", () => {
+    function retargetClient(onRetarget = vi.fn(async () => {})) {
+      const retarget = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: (id) => (id === 5 ? 1 : null) },
+        windows,
+        installRouter,
+        emit: () => {},
+        onRetarget,
+      });
+      return { retarget, onRetarget };
+    }
+
+    it("brings its windows home and clears the old machine's state before rebinding, without dialling", async () => {
+      const { retarget, onRetarget } = retargetClient(
+        vi.fn(async () => {
+          // Cleared while the record still names the old machine.
+          expect(registry.get("studio-01")?.connection).toEqual({
+            kind: "ssh",
+            target: "studio.example",
+          });
+        })
+      );
+      await retarget.switchWindowToHostProject(1, "studio-01", "proj-1");
+      vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-proj");
+      manager.connect.mockClear();
+      const after = await retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      expect(after.connection).toEqual({ kind: "ssh", target: "newbox.example" });
+      expect(windows.openLocalProject).toHaveBeenCalledWith(1, "local-proj");
+      expect(bindings.get(1)).toBe("local");
+      expect(manager.disconnect).toHaveBeenCalledWith("studio-01");
+      expect(onRetarget).toHaveBeenCalledWith(expect.objectContaining({ id: "studio-01" }));
+      expect(vi.mocked(windows.openLocalProject).mock.invocationCallOrder[0]).toBeLessThan(
+        manager.disconnect.mock.invocationCallOrder[0]!
+      );
+      expect(manager.connect).not.toHaveBeenCalled();
+    });
+
+    it("binds no window to an open that began before the target changed, even once the change is done", async () => {
+      let resolveOpen!: (id: number) => void;
+      const openWindow = vi.fn(() => new Promise<number>((r) => (resolveOpen = r)));
+      const retarget = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: (id) => (id === 5 ? 1 : null) },
+        windows: { ...windows, openWindow },
+        installRouter,
+        emit: () => {},
+      });
+      const opening = retarget.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: true,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(openWindow).toHaveBeenCalled());
+      await retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      resolveOpen(7);
+      await expect(opening).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    });
+
+    it("replaces a window still showing the old machine rather than leave its view behind", async () => {
+      const replaceWithLocalWindow = vi.fn(async () => {});
+      const retarget = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: () => null },
+        windows: {
+          ...windows,
+          openLocalProject: vi.fn(() => new Promise<void>(() => {})),
+          lastLocalProjectId: vi.fn(() => "local-proj"),
+          replaceWithLocalWindow,
+        },
+        installRouter,
+        emit: () => {},
+        forgetSwitchWaitMs: 5,
+      });
+      bindings.set(1, "studio-01");
+      await retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      expect(replaceWithLocalWindow).toHaveBeenCalledWith(1);
+    });
+
+    it("leaves a window whose local project is already on screen, however long it takes to finish", async () => {
+      const replaceWithLocalWindow = vi.fn(async () => {});
+      const retarget = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: () => null },
+        windows: {
+          ...windows,
+          openLocalProject: vi.fn(() => new Promise<void>(() => {})),
+          lastLocalProjectId: vi.fn(() => "local-proj"),
+          replaceWithLocalWindow,
+          showsHost: () => false,
+        },
+        installRouter,
+        emit: () => {},
+        forgetSwitchWaitMs: 5,
+      });
+      bindings.set(1, "studio-01");
+      await retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      expect(replaceWithLocalWindow).not.toHaveBeenCalled();
+    });
+
+    it("dials nothing for the host while it is being re-pointed", async () => {
+      let home!: () => void;
+      const retarget = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: () => null },
+        windows: {
+          ...windows,
+          openLocalProject: vi.fn(() => new Promise<void>((r) => (home = r))),
+          lastLocalProjectId: vi.fn(() => "local-proj"),
+        },
+        installRouter,
+        emit: () => {},
+      });
+      bindings.set(1, "studio-01");
+      const changing = retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      manager.connect.mockClear();
+      retarget.connect({ hostId: "studio-01" });
+      expect(manager.connect).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(home).toBeTypeOf("function"));
+      home();
+      await changing;
+    });
+
+    it("refuses an unusable target before moving any window", async () => {
+      registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
+      const { retarget, onRetarget } = retargetClient();
+      bindings.set(1, "studio-01");
+      vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-proj");
+      await expect(
+        retarget.update({ hostId: "studio-01", connection: { kind: "ssh", target: "S2.example" } })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(windows.openLocalProject).not.toHaveBeenCalled();
+      expect(onRetarget).not.toHaveBeenCalled();
+      expect(bindings.get(1)).toBe("studio-01");
+    });
+
+    it("renames without touching the link or its windows", async () => {
+      const { retarget, onRetarget } = retargetClient();
+      bindings.set(1, "studio-01");
+      await retarget.update({ hostId: "studio-01", name: "Studio" });
+      expect(manager.disconnect).not.toHaveBeenCalled();
+      expect(onRetarget).not.toHaveBeenCalled();
+      expect(bindings.get(1)).toBe("studio-01");
+    });
+  });
+
   it("lists hosts with their connection and pushes connection changes", () => {
     client.connect({ hostId: "studio-01" });
     expect(client.list()).toEqual([

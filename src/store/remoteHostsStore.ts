@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type {
   HostConnection,
   HostListEntry,
+  HostMetricsSummary,
   OperationId,
   OperationOutcome,
   OperationProgress,
@@ -26,6 +27,8 @@ interface RemoteHostsStoreState {
   setLoadError: (message: string | null) => void;
   trackInstall: (opId: OperationId, connection: HostConnection) => void;
   applyEvent: (event: RemoteHostsEvent) => void;
+  /** A host's latest report, as host metrics pushes it. */
+  applySummary: (summary: HostMetricsSummary) => void;
   reset: () => void;
 }
 
@@ -52,9 +55,11 @@ export const useRemoteHostsStore = create<RemoteHostsStoreState>((set) => ({
         case "hosts-changed":
           return { hosts: event.hosts, loaded: true, loadError: null };
         case "connection-changed": {
+          const up = event.connection.status === "connected";
           const hosts = state.hosts.map((entry) =>
             entry.descriptor.id === event.hostId
-              ? { ...entry, connection: event.connection }
+              ? // A summary from before a drop says nothing about the host now (as the host list has it).
+                { ...entry, connection: event.connection, summary: up ? entry.summary : null }
               : entry
           );
           return { hosts };
@@ -88,6 +93,16 @@ export const useRemoteHostsStore = create<RemoteHostsStoreState>((set) => ({
         default:
           return {};
       }
+    }),
+
+  applySummary: (summary) =>
+    set((state) => {
+      if (!state.hosts.some((entry) => entry.descriptor.id === summary.hostId)) return {};
+      return {
+        hosts: state.hosts.map((entry) =>
+          entry.descriptor.id === summary.hostId ? { ...entry, summary } : entry
+        ),
+      };
     }),
 
   reset: () => set(initial()),
