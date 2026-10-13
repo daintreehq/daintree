@@ -6,7 +6,7 @@ import { isEitherRemoteRoleSupported } from "@/lib/remoteHosts";
 import { useHostConnectionStore, isHostLinkUp } from "@/store/hostConnectionStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { resyncHostTerminals } from "@/store/hostTerminalResync";
-import { rehydrateHostProjectState } from "@/store/hostProjectRehydrate";
+import { refreshHostDrafts, rehydrateHostProjectState } from "@/store/hostProjectRehydrate";
 import { notifyHostResync } from "@/store/hostResyncSignal";
 import {
   dropDeferredHostOwnedWrites,
@@ -213,6 +213,48 @@ async function runFollowPass(): Promise<void> {
     await rehydrateHostProjectState(projectId, { isCurrent, authoritative: true, follow: true });
   } catch (error) {
     logWarn("[HostConnection] Couldn't read the driver's layout to follow it", { error });
+  }
+}
+
+let draftFollowRunning: Promise<void> | null = null;
+let draftFollowAgain = false;
+/** Bumped by every draft follow request and by teardown, as {@link followGeneration} is. */
+let draftFollowGeneration = 0;
+
+/**
+ * While another screen drives this view's project, show the drafts it is
+ * typing: read the host's drafts back each time it says they changed. Nothing
+ * is written back. Overlapping requests coalesce into one follow-up pass.
+ */
+function followHostDrafts(): Promise<void> {
+  draftFollowGeneration += 1;
+  if (draftFollowRunning) {
+    draftFollowAgain = true;
+    return draftFollowRunning;
+  }
+  draftFollowRunning = (async () => {
+    do {
+      draftFollowAgain = false;
+      await runDraftFollowPass();
+    } while (draftFollowAgain);
+  })().finally(() => {
+    draftFollowRunning = null;
+  });
+  return draftFollowRunning;
+}
+
+async function runDraftFollowPass(): Promise<void> {
+  const projectId = getViewWorkspaceId();
+  if (syncRefs === 0 || !projectId || !watches(projectId)) return;
+  const generation = draftFollowGeneration;
+  const isCurrent = () =>
+    generation === draftFollowGeneration &&
+    getViewWorkspaceId() === projectId &&
+    watches(projectId);
+  try {
+    await refreshHostDrafts(projectId, { isCurrent });
+  } catch (error) {
+    logWarn("[HostConnection] Couldn't read the driver's drafts to follow them", { error });
   }
 }
 
@@ -475,6 +517,8 @@ function beginSync(): () => void {
           applyLease(event.state);
         } else if (event.type === "panels-changed" && event.projectId === projectId) {
           if (watches(projectId)) void followHostPanels();
+        } else if (event.type === "drafts-changed" && event.projectId === projectId) {
+          if (watches(projectId)) void followHostDrafts();
         }
       })
     );
@@ -583,6 +627,7 @@ function beginSync(): () => void {
     leaseGeneration += 1;
     resyncGeneration += 1;
     followGeneration += 1;
+    draftFollowGeneration += 1;
     takeOverGeneration += 1;
     for (const dispose of disposers.splice(0)) dispose();
     setHostInputBlock(null);
@@ -708,6 +753,8 @@ export function _reloadHostConnectionSyncForTesting(): void {
   resyncProjectStateOwed = false;
   followRunning = null;
   followAgain = false;
+  draftFollowRunning = null;
+  draftFollowAgain = false;
   Object.assign(openClaim, { projectId: null, done: false, inFlight: false, owed: false });
 }
 

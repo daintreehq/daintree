@@ -576,8 +576,13 @@ function TerminalPaneComponent({
   // Single source of truth for "the hybrid editor cannot take input": it gates
   // both the bar's `disabled` prop and focus-target resolution. Resolving focus
   // against a narrower condition would route Enter to a disabled editor.
+  // Typing is held back while the host link is down or another machine
+  // drives the project; the pane says why rather than swallowing keys.
+  const inputBlock = useTerminalInputBlock();
+  // Another screen drives: the composer shows its draft as it types, read-only.
+  const followsDriver = inputBlock?.kind === "driven-elsewhere";
   const isHybridInputDisabled =
-    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting;
+    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting || followsDriver;
 
   const isHibernated = useIsHibernated(id);
 
@@ -687,9 +692,6 @@ function TerminalPaneComponent({
   // Single gate across waiting → injecting so the banner doesn't flicker on
   // the phase transition; fast injections (<400ms) show nothing.
   const showInjectionBanner = useDohertyGate(isInjecting || isPendingInjection);
-  // Typing is held back while the host link is down or another machine
-  // drives the project; the pane says why rather than swallowing keys.
-  const inputBlock = useTerminalInputBlock();
   const controlConfirmed = useControlConfirmed(id);
 
   // Cancel auto-restart if terminal is intentionally trashed/removed
@@ -1725,6 +1727,7 @@ function TerminalPaneComponent({
                     ref={inputBarRef}
                     terminalId={id}
                     disabled={isHybridInputDisabled}
+                    followsDriver={followsDriver}
                     cwd={cwd}
                     agentId={effectiveAgentId}
                     agentHasLifecycleEvent={stateChangeTrigger !== undefined}

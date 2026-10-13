@@ -16,7 +16,8 @@ vi.mock("@/clients", () => ({
 }));
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
-const { draftInputPersistence } = await import("../draftInputPersistence");
+const { draftInputPersistence, LIVE_DRAFT_FLUSH_DELAY_MS, LIVE_DRAFT_FLUSH_MAX_WAIT_MS } =
+  await import("../draftInputPersistence");
 const { useTerminalInputStore } = await import("@/store/terminalInputStore");
 
 let projectSeq = 0;
@@ -304,5 +305,121 @@ describe("draftInputPersistence.rebaseProject", () => {
     for (const [, , , removedIds] of setDraftInputsMock.mock.calls) {
       expect(removedIds).not.toContain("t2");
     }
+  });
+});
+
+const { setDriveLeaseSnapshot } = await import("@/services/terminal/inputGate");
+
+describe("draftInputPersistence.startLiveSync — drafts watchers can follow (#13283)", () => {
+  type Lease = Parameters<typeof setDriveLeaseSnapshot>[0];
+  let stop: (() => void) | null = null;
+
+  function lease(projectId: string, drivingHere: boolean, held = true): Lease {
+    return {
+      projectId,
+      holder: held ? { clientName: "Laptop", leaseId: 1, isHostLocal: false } : null,
+      drivingHere,
+      isHolderEndpoint: drivingHere,
+      viewerIsHostLocal: false,
+    } as unknown as Lease;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    stop = draftInputPersistence.startLiveSync();
+  });
+
+  afterEach(() => {
+    stop?.();
+    stop = null;
+    setDriveLeaseSnapshot(null);
+    vi.useRealTimers();
+  });
+
+  it("sends a driver's edit once typing pauses, as a delta", async () => {
+    const projectId = freshProjectId();
+    setDriveLeaseSnapshot(lease(projectId, true));
+    setDraft(projectId, "t1", "hel");
+    setDraft(projectId, "t1", "hello");
+
+    await vi.advanceTimersByTimeAsync(LIVE_DRAFT_FLUSH_DELAY_MS - 1);
+    expect(setDraftInputsMock).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
+    expect(setDraftInputsMock.mock.calls[0]).toEqual([projectId, { t1: "hello" }, ["t1"], []]);
+  });
+
+  it("sends at most the max wait behind while typing continues", async () => {
+    const projectId = freshProjectId();
+    setDriveLeaseSnapshot(lease(projectId, true));
+    let text = "";
+    for (let elapsed = 0; elapsed < LIVE_DRAFT_FLUSH_MAX_WAIT_MS; elapsed += 100) {
+      text += "x";
+      setDraft(projectId, "t1", text);
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a sent or cleared draft's removal at once", async () => {
+    const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, { t1: "draft" });
+    useTerminalInputStore.getState().restoreProjectDraftInputs(projectId, { t1: "draft" });
+    setDriveLeaseSnapshot(lease(projectId, true));
+
+    useTerminalInputStore.getState().clearDraftInput("t1", projectId);
+    await vi.advanceTimersByTimeAsync(0);
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
+    expect(setDraftInputsMock.mock.calls[0]).toEqual([projectId, {}, [], ["t1"]]);
+  });
+
+  it("sends nothing for a view that only runs locally", async () => {
+    const projectId = freshProjectId();
+    setDraft(projectId, "t1", "local only");
+    await vi.advanceTimersByTimeAsync(LIVE_DRAFT_FLUSH_MAX_WAIT_MS * 2);
+    expect(setDraftInputsMock).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing while nobody holds the project", async () => {
+    const projectId = freshProjectId();
+    setDriveLeaseSnapshot(lease(projectId, true, false));
+    setDraft(projectId, "t1", "unheld");
+    await vi.advanceTimersByTimeAsync(LIVE_DRAFT_FLUSH_MAX_WAIT_MS * 2);
+    expect(setDraftInputsMock).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing from a view that watches", async () => {
+    const projectId = freshProjectId();
+    setDriveLeaseSnapshot(lease(projectId, false));
+    setDraft(projectId, "t1", "the driver's text, read back");
+    useTerminalInputStore.getState().clearDraftInput("t1", projectId);
+    await vi.advanceTimersByTimeAsync(LIVE_DRAFT_FLUSH_MAX_WAIT_MS * 2);
+    expect(setDraftInputsMock).not.toHaveBeenCalled();
+  });
+
+  it("drops a pending edit once another screen takes the project over", async () => {
+    const projectId = freshProjectId();
+    setDriveLeaseSnapshot(lease(projectId, true));
+    setDraft(projectId, "t1", "pending");
+    setDriveLeaseSnapshot(lease(projectId, false));
+    await vi.advanceTimersByTimeAsync(LIVE_DRAFT_FLUSH_MAX_WAIT_MS * 2);
+    expect(setDraftInputsMock).not.toHaveBeenCalled();
+  });
+
+  it("stops following edits once disposed", async () => {
+    const projectId = freshProjectId();
+    setDriveLeaseSnapshot(lease(projectId, true));
+    setDraft(projectId, "t1", "pending");
+    stop?.();
+    stop = null;
+    setDraft(projectId, "t1", "pending more");
+    await vi.advanceTimersByTimeAsync(LIVE_DRAFT_FLUSH_MAX_WAIT_MS * 2);
+    expect(setDraftInputsMock).not.toHaveBeenCalled();
   });
 });

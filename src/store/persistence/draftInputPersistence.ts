@@ -2,7 +2,35 @@ import { projectClient } from "@/clients";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { computeRecordDelta, type IdArrayDelta } from "@shared/utils/layoutMerge";
 import { logError } from "@/utils/logger";
+import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "@/services/terminal/inputGate";
 import { sendHostOwnedWrite } from "./hostOwnedWrites";
+
+/** Quiet time after a driver's last draft edit before it goes to the host. */
+export const LIVE_DRAFT_FLUSH_DELAY_MS = 300;
+/** The longest an edit waits while typing continues, so watchers keep up within a second. */
+export const LIVE_DRAFT_FLUSH_MAX_WAIT_MS = 700;
+
+function projectRecord(drafts: Map<string, string>, projectId: string): Record<string, string> {
+  const prefix = `${projectId}:`;
+  const record: Record<string, string> = {};
+  for (const [key, value] of drafts) {
+    if (value && key.startsWith(prefix) && key.length > prefix.length) {
+      record[key.slice(prefix.length)] = value;
+    }
+  }
+  return record;
+}
+
+/**
+ * The project this view drives while another screen may be watching it: a
+ * lease is held, and this view holds it. Null for a view that only ever ran
+ * locally (no lease), one nobody holds, and one that watches.
+ */
+function liveSyncedProject(): string | null {
+  const lease = getDriveLeaseSnapshot();
+  if (!lease || lease.holder === null || !lease.drivingHere) return null;
+  return lease.projectId;
+}
 
 /**
  * Renderer-owned persistence for terminal draft inputs (#11352).
@@ -33,6 +61,8 @@ class DraftInputPersistence {
   private readonly writeTailByProject = new Map<string, Promise<void>>();
   /** Bumped by each rebase, so a flush queued before one re-reads the drafts it would send. */
   private readonly rebaseEpochByProject = new Map<string, number>();
+  private liveTimer: ReturnType<typeof setTimeout> | null = null;
+  private liveMaxWaitTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Seed the last-persisted baseline from hydration, before drafts are restored
@@ -80,6 +110,7 @@ class DraftInputPersistence {
    * emits its tombstones). Called on view teardown.
    */
   flushAll(): void {
+    this.cancelLiveFlush();
     const state = useTerminalInputStore.getState();
     const projectIds = new Set<string>(state.getDraftProjectIds());
     for (const projectId of this.persistedByProject.keys()) {
@@ -145,6 +176,62 @@ class DraftInputPersistence {
     );
     // Prevent an unhandled rejection warning for the background send.
     run.catch(() => {});
+  }
+
+  /**
+   * While this view drives a project others may watch, send its draft edits
+   * as they're made (#13283): debounced while typing, at most
+   * {@link LIVE_DRAFT_FLUSH_MAX_WAIT_MS} behind, and at once when a draft is
+   * sent or cleared, so a watcher never keeps showing it. A view that only
+   * ever ran locally or watches sends nothing more than before. Returns the
+   * disposer.
+   */
+  startLiveSync(): () => void {
+    const offStore = useTerminalInputStore.subscribe((next, prev) => {
+      if (next.draftInputs === prev.draftInputs) return;
+      const projectId = liveSyncedProject();
+      if (projectId === null) return;
+      const before = projectRecord(prev.draftInputs, projectId);
+      const after = projectRecord(next.draftInputs, projectId);
+      const { changedIds, removedIds } = computeRecordDelta(before, after);
+      if (removedIds.length > 0) {
+        this.flushLive(projectId);
+      } else if (changedIds.length > 0) {
+        this.scheduleLiveFlush(projectId);
+      }
+    });
+    // A view that stops driving can't save; a pending edit would be skipped.
+    const offLease = subscribeDriveLeaseSnapshot(() => {
+      if (liveSyncedProject() === null) this.cancelLiveFlush();
+    });
+    return () => {
+      offStore();
+      offLease();
+      this.cancelLiveFlush();
+    };
+  }
+
+  private scheduleLiveFlush(projectId: string): void {
+    if (this.liveTimer !== null) clearTimeout(this.liveTimer);
+    this.liveTimer = setTimeout(() => this.flushLive(projectId), LIVE_DRAFT_FLUSH_DELAY_MS);
+    this.liveMaxWaitTimer ??= setTimeout(
+      () => this.flushLive(projectId),
+      LIVE_DRAFT_FLUSH_MAX_WAIT_MS
+    );
+  }
+
+  private flushLive(projectId: string): void {
+    this.cancelLiveFlush();
+    // Read when it goes: the lease may have moved, and the drafts be newer.
+    if (liveSyncedProject() !== projectId) return;
+    this.flushProject(projectId, useTerminalInputStore.getState().getProjectDraftInputs(projectId));
+  }
+
+  private cancelLiveFlush(): void {
+    if (this.liveTimer !== null) clearTimeout(this.liveTimer);
+    if (this.liveMaxWaitTimer !== null) clearTimeout(this.liveMaxWaitTimer);
+    this.liveTimer = null;
+    this.liveMaxWaitTimer = null;
   }
 
   /** Await all in-flight per-project writes. Primarily for tests. */

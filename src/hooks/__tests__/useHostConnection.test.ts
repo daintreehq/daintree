@@ -36,7 +36,13 @@ vi.mock("@/store/panelStore", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: { setAgentState },
 }));
-vi.mock("@/store/hostProjectRehydrate", () => ({ rehydrateHostProjectState: rehydrate }));
+const refreshDrafts = vi.hoisted(() =>
+  vi.fn(async (_projectId: string, _options: { isCurrent: () => boolean }) => undefined)
+);
+vi.mock("@/store/hostProjectRehydrate", () => ({
+  rehydrateHostProjectState: rehydrate,
+  refreshHostDrafts: refreshDrafts,
+}));
 // Following the driver loads these lazily. The real module pulls in every IPC
 // client and the agent registry, and a cold load from one test's unawaited
 // follow pass held the next test's own lazy imports past vi.waitFor's timeout.
@@ -173,6 +179,7 @@ beforeEach(() => {
   updateAgentState.mockClear();
   setAgentState.mockClear();
   rehydrate.mockClear();
+  refreshDrafts.mockClear();
   for (const key of Object.keys(panels)) delete panels[key];
 });
 
@@ -994,6 +1001,60 @@ describe("following the driver while watching (#13280)", () => {
 
     expect(rehydrate).not.toHaveBeenCalled();
     expect(electron.terminal.getForProject).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("reads the driver's drafts back, and only the drafts, each time the host says they changed (#13283)", async () => {
+    const { electron, emitLease } = hostWindow(false);
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    electron.terminal.getForProject.mockClear();
+    refreshDrafts.mockClear();
+
+    emitLease({ type: "drafts-changed", projectId: "proj-1" });
+    await vi.waitFor(() => expect(refreshDrafts).toHaveBeenCalledTimes(1));
+    expect(refreshDrafts.mock.calls[0]![0]).toBe("proj-1");
+    expect(followCalls()).toHaveLength(1);
+    expect(electron.terminal.getForProject).not.toHaveBeenCalled();
+
+    emitLease({ type: "drafts-changed", projectId: "another-project" });
+    await flush();
+    expect(refreshDrafts).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("reads no drafts back while this view drives (#13283)", async () => {
+    const { emitLease } = hostWindow(true);
+    const stop = startHostConnectionSync();
+    await flush();
+
+    emitLease({ type: "drafts-changed", projectId: "proj-1" });
+    await flush();
+
+    expect(refreshDrafts).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("gathers draft notices that land during a read into one more read (#13283)", async () => {
+    const { emitLease } = hostWindow(false);
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    let answer!: () => void;
+    refreshDrafts.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (answer = () => resolve(undefined)))
+    );
+
+    emitLease({ type: "drafts-changed", projectId: "proj-1" });
+    await vi.waitFor(() => expect(refreshDrafts).toHaveBeenCalledTimes(1));
+    const firstIsCurrent = refreshDrafts.mock.calls[0]![1];
+    emitLease({ type: "drafts-changed", projectId: "proj-1" });
+    emitLease({ type: "drafts-changed", projectId: "proj-1" });
+    expect(firstIsCurrent.isCurrent()).toBe(false);
+    answer();
+
+    await vi.waitFor(() => expect(refreshDrafts).toHaveBeenCalledTimes(2));
+    await flush();
+    expect(refreshDrafts).toHaveBeenCalledTimes(2);
     stop();
   });
 

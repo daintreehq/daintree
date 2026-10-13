@@ -151,6 +151,11 @@ export interface HybridInputBarProps {
   agentState?: AgentState;
   restartKey?: number;
   disabled?: boolean;
+  /**
+   * Another screen drives the project: the draft shown is the driver's, read
+   * back from the host, so this bar never writes its text to the draft store.
+   */
+  followsDriver?: boolean;
   className?: string;
   /**
    * A second composer for a terminal that may also be open in its own pane
@@ -271,6 +276,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       agentHasLifecycleEvent = false,
       restartKey = 0,
       disabled = false,
+      followsDriver = false,
       className,
       isolated = false,
       submitText,
@@ -520,8 +526,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [terminalId, projectId, getDraftInput]);
 
     useEffect(() => {
+      // Written back, the text a render behind would land over a newer draft
+      // the host just sent.
+      if (followsDriver) return;
       setDraftInput(terminalId, value, projectId);
-    }, [terminalId, value, projectId, setDraftInput]);
+    }, [terminalId, value, projectId, setDraftInput, followsDriver]);
 
     // Fleet hybrid-input mirroring
     const armedIds = useFleetArmingStore((s) => s.armedIds);

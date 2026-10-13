@@ -451,6 +451,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         const changedIds = sanitizeIdList(payload.changedIds);
         const removedIds = sanitizeIdList(payload.removedIds);
 
+        let saved = false;
         await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => {
           const mergedDrafts =
             changedIds === undefined
@@ -473,6 +474,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           if (!existingState && Object.keys(mergedDrafts).length === 0) {
             return null;
           }
+          saved = true;
           return {
             projectId,
             activeWorktreeId: existingState?.activeWorktreeId,
@@ -488,6 +490,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
             mruList: existingState?.mruList,
           };
         });
+        if (saved) peekDriveLeaseService()?.notifyDraftsChanged(projectId);
       }
     ),
   },

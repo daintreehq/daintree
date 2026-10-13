@@ -37,6 +37,9 @@ export const DEFAULT_RESTORED_RESERVATION_GRACE_MS = 45_000;
 /** How long saves of a project's panels gather before its watchers are told. */
 export const PANELS_CHANGED_DELAY_MS = 200;
 
+/** How long saves of a project's composer drafts gather before its watchers are told. */
+export const DRAFTS_CHANGED_DELAY_MS = 200;
+
 type LeaseRegistry = Pick<EndpointRegistry, "get" | "getForProject" | "getRemote" | "onChange">;
 
 export interface DriveLeaseServiceOptions {
@@ -128,7 +131,8 @@ export class DriveLeaseService {
   private nextLeaseId = 1;
   private reconcileQueued = false;
   private publishedDriveLeases = "";
-  private readonly panelsChangedTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Pending watcher notices, keyed by notice type and project. */
+  private readonly watcherNoticeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposed = false;
 
   constructor(options: DriveLeaseServiceOptions = {}) {
@@ -401,13 +405,31 @@ export class DriveLeaseService {
    * watches is decided when it goes, not when the save landed.
    */
   notifyPanelsChanged(projectId: string): void {
-    if (this.disposed || this.panelsChangedTimers.has(projectId)) return;
+    this.notifyWatchers("panels-changed", projectId, PANELS_CHANGED_DELAY_MS);
+  }
+
+  /**
+   * The driver saved the project's composer drafts: tell the views that watch
+   * it to read them back, coalesced as {@link notifyPanelsChanged} is. The
+   * notice carries no text; watchers read the drafts through the draft read.
+   */
+  notifyDraftsChanged(projectId: string): void {
+    this.notifyWatchers("drafts-changed", projectId, DRAFTS_CHANGED_DELAY_MS);
+  }
+
+  private notifyWatchers(
+    type: "panels-changed" | "drafts-changed",
+    projectId: string,
+    delayMs: number
+  ): void {
+    const key = `${type}:${projectId}`;
+    if (this.disposed || this.watcherNoticeTimers.has(key)) return;
     const timer = setTimeout(() => {
-      this.panelsChangedTimers.delete(projectId);
+      this.watcherNoticeTimers.delete(key);
       if (this.disposed) return;
       const holder = this.getHolder(projectId);
       if (holder === null) return;
-      const event: DriveLeaseEvent = { type: "panels-changed", projectId };
+      const event: DriveLeaseEvent = { type, projectId };
       for (const endpoint of this.registry.getForProject(projectId)) {
         if (drives(holder, endpoint)) continue;
         try {
@@ -416,17 +438,17 @@ export class DriveLeaseService {
           // A closing endpoint must not keep the others from hearing about it.
         }
       }
-    }, PANELS_CHANGED_DELAY_MS);
+    }, delayMs);
     timer.unref?.();
-    this.panelsChangedTimers.set(projectId, timer);
+    this.watcherNoticeTimers.set(key, timer);
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.offRegistry();
-    for (const timer of this.panelsChangedTimers.values()) clearTimeout(timer);
-    this.panelsChangedTimers.clear();
+    for (const timer of this.watcherNoticeTimers.values()) clearTimeout(timer);
+    this.watcherNoticeTimers.clear();
     for (const lease of this.leases.values()) {
       if (lease.releaseTimer) clearTimeout(lease.releaseTimer);
     }

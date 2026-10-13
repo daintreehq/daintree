@@ -17,7 +17,7 @@ vi.mock("../../../services/pty/agentSessionCapturePersistence.js", () => ({
 }));
 
 const { leaseService, peekDriveLeaseService } = vi.hoisted(() => {
-  const leaseService = { notifyPanelsChanged: vi.fn() };
+  const leaseService = { notifyPanelsChanged: vi.fn(), notifyDraftsChanged: vi.fn() };
   return {
     leaseService,
     peekDriveLeaseService: vi.fn((): typeof leaseService | null => null),
@@ -102,6 +102,7 @@ const baseState = (terminals: TerminalSnapshot[], tabGroups: TabGroup[] = []): P
 beforeEach(() => {
   projectStoreMock.enqueueProjectStateUpdate.mockReset();
   leaseService.notifyPanelsChanged.mockReset();
+  leaseService.notifyDraftsChanged.mockReset();
   peekDriveLeaseService.mockReset();
   peekDriveLeaseService.mockReturnValue(null);
 });
@@ -143,6 +144,44 @@ describe("watchers hear of a saved panel set (#13280)", () => {
     await setTerminals({ projectId: "p1", terminals: [term("1")] });
     expect(peekDriveLeaseService).toHaveBeenCalled();
     expect(leaseService.notifyPanelsChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe("watchers hear of saved drafts (#13283)", () => {
+  it("tells the lease service once the drafts are saved", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    const saved = onDisk(baseState([term("1")]));
+
+    await setDraftInputs({
+      projectId: "p1",
+      draftInputs: { "1": "half typed" },
+      changedIds: ["1"],
+      removedIds: [],
+    });
+
+    expect(saved()?.draftInputs).toEqual({ "1": "half typed" });
+    expect(leaseService.notifyDraftsChanged).toHaveBeenCalledWith("p1");
+    expect(leaseService.notifyPanelsChanged).not.toHaveBeenCalled();
+  });
+
+  it("tells nobody when the save fails", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    projectStoreMock.enqueueProjectStateUpdate.mockRejectedValue(new Error("disk full"));
+
+    await expect(
+      setDraftInputs({ projectId: "p1", draftInputs: { "1": "x" }, changedIds: ["1"] })
+    ).rejects.toThrow("disk full");
+    expect(leaseService.notifyDraftsChanged).not.toHaveBeenCalled();
+  });
+
+  it("tells nobody when a removal finds no saved state to change", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    const saved = onDisk(null);
+
+    await setDraftInputs({ projectId: "p1", draftInputs: {}, changedIds: [], removedIds: ["1"] });
+
+    expect(saved()).toBeNull();
+    expect(leaseService.notifyDraftsChanged).not.toHaveBeenCalled();
   });
 });
 
