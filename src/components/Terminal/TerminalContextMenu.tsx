@@ -1,5 +1,7 @@
 import {
   Fragment,
+  lazy,
+  Suspense,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -80,7 +82,12 @@ import {
   TerminalHandOverMenuItems,
   useOrchestratorCandidates,
 } from "./TerminalHandOver";
-import { ParkRunDialog } from "@/components/Fleet/ParkRunDialog";
+
+// Loaded on first use: every pane and session row mounts this menu, and the
+// dialog pulls in Pilot's row and band modules that nothing else here needs.
+const LazyParkRunDialog = lazy(() =>
+  import("@/components/Fleet/ParkRunDialog").then((m) => ({ default: m.ParkRunDialog }))
+);
 import {
   ArrowDownFromLine,
   Bell,
@@ -1664,12 +1671,14 @@ function TerminalContextMenuBody({
         />
       )}
       {parkRequestId !== null && (
-        <ParkRunDialog
-          key={parkRequestId}
-          runId={parkRequestId}
-          onClose={closeParkRequest}
-          restoreFocusTo={movePickerReturnFocusRef}
-        />
+        <Suspense fallback={null}>
+          <LazyParkRunDialog
+            key={parkRequestId}
+            runId={parkRequestId}
+            onClose={closeParkRequest}
+            restoreFocusTo={movePickerReturnFocusRef}
+          />
+        </Suspense>
       )}
       <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
