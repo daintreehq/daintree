@@ -71,7 +71,11 @@ describe("SidebarContent header reveal — issue #6964", () => {
     // Once shown, all four read as one family.
     const header = headerSlice(source);
     expect(header).not.toMatch(/text-daintree-text\//);
-    const classNames = [...header.matchAll(/className=\{([^}]*)\}/g)].map((m) => m[1] ?? "");
+    // The buttons' own classes: the title row also holds non-action content
+    // (a remote window's "on <host>"), which is not part of the family.
+    const classNames = [
+      ...header.matchAll(/<Button\b(?:(?!<\/Button)[\s\S])*?className=\{([^}]*)\}/g),
+    ].map((m) => m[1] ?? "");
     expect(classNames).toHaveLength(4);
     expect(classNames.every((cls) => cls.includes("SIDEBAR_HEADER_ACTION"))).toBe(true);
   });
