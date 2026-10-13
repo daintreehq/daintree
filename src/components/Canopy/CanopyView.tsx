@@ -490,9 +490,6 @@ function CanopyInbox({
         lastOpened: project.lastOpened,
         ...(project.emoji ? { emoji: project.emoji } : {}),
         ...(project.color ? { color: project.color } : {}),
-        ...(project.lastCompletionSeenAt !== undefined
-          ? { lastCompletionSeenAt: project.lastCompletionSeenAt }
-          : {}),
       });
     }
     for (const scratch of scratches) {
@@ -500,9 +497,6 @@ function CanopyInbox({
         kind: "scratch",
         name: scratch.name,
         lastOpened: scratch.lastOpened,
-        ...(scratch.lastCompletionSeenAt !== undefined
-          ? { lastCompletionSeenAt: scratch.lastCompletionSeenAt }
-          : {}),
       });
     }
     return map;

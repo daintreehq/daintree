@@ -47,6 +47,7 @@ describe("buildPilotGroups", () => {
       [
         run({
           agentState: "waiting",
+          waitingReason: "question",
           agentId: "claude",
           title: "Fix the palette wait-age tick",
           since: NOW - 120_000,
@@ -168,7 +169,14 @@ describe("buildPilotGroups", () => {
   it("still renders a run whose workspace is no longer in the store", () => {
     // Dropping it would hide a live agent because a name lookup missed.
     const [group] = buildPilotGroups(
-      [run({ runId: "orphan", workspaceId: "gone", agentState: "waiting" })],
+      [
+        run({
+          runId: "orphan",
+          workspaceId: "gone",
+          agentState: "waiting",
+          waitingReason: "question",
+        }),
+      ],
       ctx()
     );
 
@@ -254,6 +262,7 @@ describe("buildPilotGroups", () => {
               runId: `px-${id}`,
               workspaceId: "px",
               agentState: "waiting",
+              waitingReason: "question",
               since: NOW - 600_000,
             })
           ),
@@ -324,7 +333,13 @@ describe("buildPilotGroups", () => {
     // Named so a name fallback would put the unknown group first instead.
     const groups = buildPilotGroups(
       [
-        run({ runId: "orphan", workspaceId: "gone", agentState: "waiting", since: NOW }),
+        run({
+          runId: "orphan",
+          workspaceId: "gone",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+        }),
         run({ runId: "known", workspaceId: "p1", agentState: "working", since: NOW }),
       ],
       ctx({
@@ -443,8 +458,18 @@ describe("buildPilotGroups", () => {
     const [group] = buildPilotGroups(
       [
         run({ runId: "working", agentState: "working", since: NOW - 1000 }),
-        run({ runId: "fresh-wait", agentState: "waiting", since: NOW - 60_000 }),
-        run({ runId: "stale-wait", agentState: "waiting", since: NOW - 40 * 60_000 }),
+        run({
+          runId: "fresh-wait",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "stale-wait",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW - 40 * 60_000,
+        }),
         run({ runId: "blocked", agentState: "waiting", waitingReason: "error", since: NOW }),
       ],
       ctx()
@@ -461,8 +486,8 @@ describe("buildPilotGroups", () => {
   it("counts only demands in a project's demand tally", () => {
     const [group] = buildPilotGroups(
       [
-        run({ runId: "a", agentState: "waiting", since: NOW }),
-        run({ runId: "b", agentState: "completed", since: NOW }),
+        run({ runId: "a", agentState: "waiting", waitingReason: "question", since: NOW }),
+        run({ runId: "b", agentState: "completed", handBack: { stoppedAt: NOW }, since: NOW }),
         run({ runId: "c", agentState: "working", since: NOW }),
         run({ runId: "d", agentState: "idle", since: NOW }),
       ],
@@ -480,8 +505,13 @@ describe("buildPilotGroups", () => {
   it("ages every row against one shared clock", () => {
     const [group] = buildPilotGroups(
       [
-        run({ runId: "a", agentState: "waiting", since: NOW - 60_000 }),
-        run({ runId: "b", agentState: "waiting", since: NOW - 3_600_000 }),
+        run({ runId: "a", agentState: "waiting", waitingReason: "question", since: NOW - 60_000 }),
+        run({
+          runId: "b",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW - 3_600_000,
+        }),
       ],
       ctx({ nowMs: NOW })
     );
@@ -489,46 +519,69 @@ describe("buildPilotGroups", () => {
     expect(group!.rows.map((r) => r.age)).toEqual(["1h", "1m"]);
   });
 
-  it("stops counting a completion the workspace has already acknowledged", () => {
+  it("stops counting a hand-back once the user has seen that run", () => {
     const seen = buildPilotGroups(
-      [run({ agentState: "completed", since: NOW - 60_000 })],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "daintree", lastCompletionSeenAt: NOW }],
-        ]),
-      })
+      [
+        run({
+          agentState: "completed",
+          since: NOW - 60_000,
+          handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+        }),
+      ],
+      ctx()
     );
     expect(seen[0]!.demandCount).toBe(0);
     expect(seen[0]!.rows[0]!.band).toBe("done");
 
     const unseen = buildPilotGroups(
-      [run({ agentState: "completed", since: NOW })],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "daintree", lastCompletionSeenAt: NOW - 60_000 }],
-        ]),
-      })
+      [run({ agentState: "completed", since: NOW, handBack: { stoppedAt: NOW } })],
+      ctx()
     );
     expect(unseen[0]!.demandCount).toBe(1);
+    expect(unseen[0]!.rows[0]!.band).toBe("review");
   });
 
-  it("acknowledges per workspace rather than fleet-wide", () => {
+  it("files a finished agent sliding to its prompt as a hand-back, not a wait", () => {
+    // The `completed` state lasts half a second; what the user actually sees is
+    // the agent back at its prompt, which must not read as it asking something.
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "waiting",
+          waitingReason: "prompt",
+          since: NOW,
+          handBack: { stoppedAt: NOW - 500 },
+        }),
+      ],
+      ctx()
+    );
+    expect(group!.rows[0]!.band).toBe("review");
+    expect(group!.rows[0]!.statusLabel).toBe("Ready for review");
+  });
+
+  it("acknowledges per run rather than per workspace", () => {
     const groups = buildPilotGroups(
       [
-        run({ runId: "a", workspaceId: "p1", agentState: "completed", since: NOW - 60_000 }),
-        run({ runId: "b", workspaceId: "p2", agentState: "completed", since: NOW - 60_000 }),
+        run({
+          runId: "a",
+          agentState: "completed",
+          since: NOW - 60_000,
+          handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+        }),
+        run({
+          runId: "b",
+          agentState: "completed",
+          since: NOW - 60_000,
+          handBack: { stoppedAt: NOW - 60_000 },
+        }),
       ],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "seen", lastCompletionSeenAt: NOW }],
-          ["p2", { kind: "project", name: "unseen" }],
-        ]),
-      })
+      ctx()
     );
 
-    const byName = new Map(groups.map((g) => [g.name, g.demandCount]));
-    expect(byName.get("seen")).toBe(0);
-    expect(byName.get("unseen")).toBe(1);
+    expect(groups[0]!.demandCount).toBe(1);
+    const bands = new Map(groups[0]!.rows.map((r) => [r.run.runId, r.band]));
+    expect(bands.get("a")).toBe("done");
+    expect(bands.get("b")).toBe("review");
   });
 
   it("carries the workspace kind so a scratch is not drawn as a project", () => {
@@ -687,8 +740,13 @@ describe("filterPilotGroups", () => {
     const filtered = filterPilotGroups(
       buildPilotGroups(
         [
-          run({ runId: "a", agentState: "waiting", title: "auth refactor" }),
-          run({ runId: "b", agentState: "waiting", title: "docs pass" }),
+          run({
+            runId: "a",
+            agentState: "waiting",
+            waitingReason: "question",
+            title: "auth refactor",
+          }),
+          run({ runId: "b", agentState: "waiting", waitingReason: "question", title: "docs pass" }),
         ],
         ctx()
       ),
@@ -735,19 +793,33 @@ describe("countPilotBands", () => {
           waitingReason: "error",
           since: NOW,
         }),
-        run({ runId: "needs", workspaceId: "p1", agentState: "waiting", since: NOW }),
-        run({ runId: "review", workspaceId: "p1", agentState: "completed", since: NOW }),
+        run({
+          runId: "needs",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+        }),
+        run({
+          runId: "review",
+          workspaceId: "p1",
+          agentState: "completed",
+          since: NOW,
+          handBack: { stoppedAt: NOW },
+        }),
         run({ runId: "running", workspaceId: "p2", agentState: "working", since: NOW }),
         run({
           runId: "done",
           workspaceId: "p2",
           agentState: "completed",
           since: NOW - 120_000,
+          handBack: { stoppedAt: NOW - 120_000, seenAt: NOW - 60_000 },
         }),
         run({
           runId: "parked",
           workspaceId: "p2",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW,
           park: { parkedAt: NOW - 60_000 },
         }),
@@ -756,9 +828,7 @@ describe("countPilotBands", () => {
       ctx({
         workspaces: new Map([
           ["p1", { kind: "project", name: "one" }],
-          // Acknowledged after `done` finished but before `review` did, so the
-          // two completions land in different bands.
-          ["p2", { kind: "project", name: "two", lastCompletionSeenAt: NOW - 60_000 }],
+          ["p2", { kind: "project", name: "two" }],
         ]),
       })
     );
@@ -791,8 +861,20 @@ describe("countPilotBands", () => {
   it("counts the population it was handed, so a query narrows the segments", () => {
     const built = buildPilotGroups(
       [
-        run({ runId: "a", agentState: "waiting", title: "auth refactor", since: NOW }),
-        run({ runId: "b", agentState: "waiting", title: "docs pass", since: NOW }),
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth refactor",
+          since: NOW,
+        }),
+        run({
+          runId: "b",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "docs pass",
+          since: NOW,
+        }),
       ],
       ctx()
     );
@@ -810,6 +892,7 @@ describe("parked rows", () => {
       [
         run({
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW - 3 * 3_600_000,
           park: { parkedAt: NOW - 120_000, note: "after the migration" },
         }),
@@ -830,12 +913,14 @@ describe("parked rows", () => {
         run({
           runId: "recent",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW - 3_600_000,
           park: { parkedAt: NOW - 60_000 },
         }),
         run({
           runId: "ancient",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW - 60_000,
           park: { parkedAt: NOW - 3_600_000 },
         }),
@@ -856,7 +941,7 @@ describe("parked rows", () => {
           since: NOW,
           park: { parkedAt: NOW },
         }),
-        run({ runId: "b", agentState: "waiting", since: NOW }),
+        run({ runId: "b", agentState: "waiting", waitingReason: "question", since: NOW }),
       ],
       ctx()
     );
@@ -868,7 +953,14 @@ describe("parked rows", () => {
 
   it("is admitted by no state segment — hiding from Waiting is the point of parking", () => {
     const groups = buildPilotGroups(
-      [run({ agentState: "waiting", since: NOW, park: { parkedAt: NOW } })],
+      [
+        run({
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+          park: { parkedAt: NOW },
+        }),
+      ],
       ctx()
     );
 
@@ -881,8 +973,14 @@ describe("parked rows", () => {
   it("gets a segment of its own that admits nothing else", () => {
     const groups = buildPilotGroups(
       [
-        run({ runId: "shelved", agentState: "waiting", since: NOW, park: { parkedAt: NOW } }),
-        run({ runId: "live", agentState: "waiting", since: NOW }),
+        run({
+          runId: "shelved",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+          park: { parkedAt: NOW },
+        }),
+        run({ runId: "live", agentState: "waiting", waitingReason: "question", since: NOW }),
       ],
       ctx()
     );
@@ -898,11 +996,18 @@ describe("parked rows", () => {
         run({
           runId: "shelved",
           agentState: "waiting",
+          waitingReason: "question",
           since: NOW,
           title: "auth refactor",
           park: { parkedAt: NOW, note: "resume after the migration lands" },
         }),
-        run({ runId: "other", agentState: "waiting", since: NOW, title: "docs pass" }),
+        run({
+          runId: "other",
+          agentState: "waiting",
+          waitingReason: "question",
+          since: NOW,
+          title: "docs pass",
+        }),
       ],
       ctx()
     );
@@ -1064,7 +1169,7 @@ describe("filterPilotBands", () => {
     const [built] = buildPilotGroups(
       [
         run({ runId: "urgent", agentState: "waiting", waitingReason: "error", since: NOW }),
-        run({ runId: "asking", agentState: "waiting", since: NOW }),
+        run({ runId: "asking", agentState: "waiting", waitingReason: "question", since: NOW }),
         run({ runId: "calm", agentState: "working", since: NOW }),
       ],
       ctx()
@@ -1083,9 +1188,21 @@ describe("filterPilotBands", () => {
   it("intersects with a query rather than replacing it", () => {
     const built = buildPilotGroups(
       [
-        run({ runId: "a", agentState: "waiting", title: "auth refactor", since: NOW }),
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth refactor",
+          since: NOW,
+        }),
         run({ runId: "b", agentState: "working", title: "auth rewrite", since: NOW }),
-        run({ runId: "c", agentState: "waiting", title: "docs pass", since: NOW }),
+        run({
+          runId: "c",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "docs pass",
+          since: NOW,
+        }),
       ],
       ctx()
     );
@@ -1105,7 +1222,7 @@ describe("summarizePilotGroups", () => {
           run({ runId: "a", agentState: "working" }),
           run({ runId: "b", agentState: "exited" }),
           run({ runId: "c", agentState: "idle" }),
-          run({ runId: "d", agentState: "waiting" }),
+          run({ runId: "d", agentState: "waiting", waitingReason: "question" }),
         ],
         ctx()
       )
@@ -1119,7 +1236,7 @@ describe("summarizePilotGroups", () => {
   it("agrees with the per-group demand counts it summarises", () => {
     const built = buildPilotGroups(
       [
-        run({ runId: "a", workspaceId: "p1", agentState: "waiting" }),
+        run({ runId: "a", workspaceId: "p1", agentState: "waiting", waitingReason: "question" }),
         run({ runId: "b", workspaceId: "p2", agentState: "waiting", waitingReason: "error" }),
         run({ runId: "c", workspaceId: "p2", agentState: "working" }),
       ],
@@ -1268,7 +1385,13 @@ describe("buildPilotWorktreeGroups", () => {
     ]);
     const alarmed = worktreeGroups([
       run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" }),
-      run({ runId: "z", worktreeId: "/repo/wt/zulu", agentState: "waiting", since: NOW - 60_000 }),
+      run({
+        runId: "z",
+        worktreeId: "/repo/wt/zulu",
+        agentState: "waiting",
+        waitingReason: "question",
+        since: NOW - 60_000,
+      }),
     ]);
 
     expect(alarmed.map((g) => g.name)).toEqual(calm.map((g) => g.name));
@@ -1284,6 +1407,7 @@ describe("buildPilotWorktreeGroups", () => {
         runId: "waiting",
         worktreeId: "/repo/wt/alpha",
         agentState: "waiting",
+        waitingReason: "question",
         since: NOW - 60_000,
       }),
     ]);
@@ -1299,6 +1423,7 @@ describe("buildPilotWorktreeGroups", () => {
         runId: "blocked",
         worktreeId: "/repo/wt/alpha",
         agentState: "waiting",
+        waitingReason: "question",
         since: NOW - 60_000,
       }),
       run({ runId: "busy", worktreeId: "/repo/wt/beta", agentState: "working" }),
@@ -1536,6 +1661,7 @@ describe("narrowing on the worktree axis", () => {
       worktreeId: "/repo/wt/alpha",
       title: "Fix auth",
       agentState: "waiting",
+      waitingReason: "question",
       since: NOW - 60_000,
     }),
     run({ runId: "busy", worktreeId: "/repo/wt/beta", title: "Run tests", agentState: "working" }),

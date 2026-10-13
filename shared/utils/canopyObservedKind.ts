@@ -1,23 +1,31 @@
 import type { CanopyCategory } from "../types/ipc/canopy.js";
+import type { RunHandBackRecord } from "../types/ipc/fleet.js";
 
 /**
  * The kind of run Daintree's own state says it is, before or apart from any
  * reading of its screen: the inbox places a run by it until it is read.
+ *
+ * A stop — finished, or at a prompt for no more specific reason — is only
+ * `finished` when main watched the work before it and recorded the hand-back;
+ * without that record nothing was handed back and the run is `idle`, never a
+ * question it was not observed asking.
  */
 export function observedCanopyKind(state: {
   agentState?: string | null;
   waitingReason?: string | null;
+  handBack?: RunHandBackRecord;
 }): CanopyCategory {
   switch (state.agentState) {
     case "waiting":
       if (state.waitingReason === "approval") return "approval";
       if (state.waitingReason === "error") return "error";
-      return "question";
+      if (state.waitingReason === "question") return "question";
+      return state.handBack !== undefined ? "finished" : "idle";
     case "working":
     case "directing":
       return "working";
     case "completed":
-      return "finished";
+      return state.handBack !== undefined ? "finished" : "idle";
     default:
       return "idle";
   }

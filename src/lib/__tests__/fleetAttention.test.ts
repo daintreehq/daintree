@@ -24,17 +24,22 @@ function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
 }
 
 describe("bandForRun", () => {
-  it("splits waiting into blocked and needs-you on the error reason", () => {
+  it("splits a specific wait into blocked and needs-you on the error reason", () => {
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "error" }))).toBe("blocked");
-    expect(bandForRun(run({ agentState: "waiting", waitingReason: "prompt" }))).toBe("needs-you");
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "question" }))).toBe("needs-you");
     expect(bandForRun(run({ agentState: "waiting", waitingReason: "approval" }))).toBe("needs-you");
   });
 
-  it("treats a waiting run with no reason as needing input, not blocked", () => {
-    // Escalating an unclassified wait to the top band would make the most
-    // urgent row the least trustworthy one.
-    expect(bandForRun(run({ agentState: "waiting" }))).toBe("needs-you");
+  it("reads a stop with no watched work before it as idle, not a demand", () => {
+    // Sitting at a prompt asks nothing; only a wait that names what it wants is
+    // the agent waiting on the user. A finish main never saw the work for has
+    // handed nothing back either.
+    for (const waitingReason of [undefined, "prompt"] as const) {
+      const band = bandForRun(run({ agentState: "waiting", waitingReason }));
+      expect(band).toBe("idle");
+      expect(isDemandBand(band)).toBe(false);
+    }
+    expect(bandForRun(run({ agentState: "completed", since: NOW }))).toBe("idle");
   });
 
   it("folds directing in with working rather than treating it as a demand", () => {
@@ -83,39 +88,6 @@ describe("parked runs", () => {
   });
 });
 
-describe("acknowledged completions", () => {
-  it("demotes a completion the user has already seen out of the demand bands", () => {
-    // Without the watermark every finished run demands attention forever, and a
-    // user who reviewed everything still reads "3 agents need you".
-    const finished = run({ agentState: "completed", since: NOW - 60_000 });
-    expect(bandForRun(finished)).toBe("review");
-    expect(isDemandBand(bandForRun(finished))).toBe(true);
-
-    const seen = bandForRun(finished, NOW);
-    expect(seen).toBe("done");
-    expect(isDemandBand(seen)).toBe(false);
-  });
-
-  it("keeps a completion newer than the watermark outstanding", () => {
-    const finished = run({ agentState: "completed", since: NOW });
-    expect(bandForRun(finished, NOW - 60_000)).toBe("review");
-  });
-
-  it("treats a completion exactly at the watermark as seen", () => {
-    expect(bandForRun(run({ agentState: "completed", since: NOW }), NOW)).toBe("done");
-  });
-
-  it("leaves a completion with no timestamp outstanding", () => {
-    // Unknown is not evidence of having been seen.
-    expect(bandForRun(run({ agentState: "completed" }), NOW)).toBe("review");
-  });
-
-  it("ignores the watermark for states that are not completions", () => {
-    expect(bandForRun(run({ agentState: "waiting", since: NOW - 60_000 }), NOW)).toBe("needs-you");
-    expect(bandForRun(run({ agentState: "working", since: NOW - 60_000 }), NOW)).toBe("running");
-  });
-});
-
 describe("bandLabel", () => {
   it("names every band", () => {
     for (const band of FLEET_BANDS) {
@@ -138,7 +110,7 @@ describe("bandLabel", () => {
     );
   });
 
-  it("stops calling an acknowledged completion a hand-back", () => {
+  it("stops calling a seen hand-back ready for review", () => {
     // The label has to move at the same moment the band does, or the row sorts
     // as done while still reading "ready for review".
     expect(bandLabel("done", run({ agentState: "completed" }))).not.toBe(
@@ -323,7 +295,7 @@ describe("bandForRun — snooze", () => {
 
   it("bands an unsnoozed run exactly as before", () => {
     // Snooze is the only new demotion lever; nothing else may shift.
-    expect(bandForRun(run({ agentState: "waiting" }))).toBe("needs-you");
+    expect(bandForRun(run({ agentState: "waiting", waitingReason: "question" }))).toBe("needs-you");
     expect(bandForRun(run({ agentState: "working" }))).toBe("running");
   });
 
@@ -352,8 +324,8 @@ describe("watched hand-backs", () => {
     ).toBe("done");
   });
 
-  it("lets the hand-back outrank the workspace watermark on a completion", () => {
-    expect(bandForRun(run({ agentState: "completed", since: NOW, handBack: unseen }), NOW)).toBe(
+  it("bands a completion by its own hand-back's seen state", () => {
+    expect(bandForRun(run({ agentState: "completed", since: NOW, handBack: unseen }))).toBe(
       "review"
     );
     expect(bandForRun(run({ agentState: "completed", since: NOW, handBack: seen }))).toBe("done");

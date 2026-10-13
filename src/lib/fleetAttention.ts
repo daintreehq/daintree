@@ -62,7 +62,7 @@ export function isDemandBand(band: FleetBand): boolean {
  * `quiet` is deliberately NOT a demand: nothing is asking the user for
  * anything, and folding it into the demand count would make "3 agents need
  * you" promise three conversations and deliver two — the exact overstatement
- * the acknowledged-completion watermark exists to prevent. It is still the
+ * the per-run seen state exists to prevent. It is still the
  * thing a group header has to be able to point at, so the chip and the summary
  * read this set rather than the demand one.
  */
@@ -75,16 +75,13 @@ export function isAttentionBand(band: FleetBand): boolean {
 /**
  * Which band a run belongs to.
  *
- * `acknowledgedAt` is the workspace's completion watermark: a completion at or
- * before it has already been seen, so it stops being a hand-back and becomes a
- * fact. Without it every finished run demands attention forever, and a user who
- * has reviewed everything still reads "3 agents need you" — the switcher makes
- * exactly this distinction (`getWorkspaceActivityStatus`) and the two surfaces
- * have to agree about what is still outstanding.
- *
- * A completion with no `since` cannot be compared to the watermark and stays in
- * `review`: unknown is not evidence of having been seen. A run main watched
- * hand back work carries its own seen state, which outranks the watermark.
+ * A stop is a hand-back only when main watched the run do the work before it:
+ * that record carries the run's own seen state, so `review` against `done` is
+ * the user's look at this run rather than a workspace-wide watermark. A stop
+ * main never saw work before — a restored session, a flicker under the work
+ * bar, a shell sitting at its prompt — has handed nothing back and reads as
+ * `idle`, not as the agent asking for something. Only a wait that names what
+ * it wants (an approval, a question, an error) is a demand.
  *
  * A park beats every state, including `blocked`. Parking is the user saying
  * "this one does not need me until further notice", and an attention model
@@ -94,7 +91,7 @@ export function isAttentionBand(band: FleetBand): boolean {
  * are the only ways back above the fold, and all of them are the user's own
  * rules firing.
  */
-export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand {
+export function bandForRun(run: FleetRunRow): FleetBand {
   if (run.park !== undefined) return "parked";
   // Presence alone, deliberately: main strips expired snoozes before the row is
   // built, so this needs no clock. A run carrying both records reads as parked
@@ -102,22 +99,15 @@ export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand
   if (run.snooze !== undefined) return "snoozed";
   // A stop main watched the run make after work it saw is a hand-back, and
   // whether the user has had it in front of them since is main's to say — so
-  // it holds through the slide from `completed` into a generic `waiting`, which
-  // otherwise reads as the agent asking for something.
-  if (
-    run.handBack !== undefined &&
-    run.agentState !== undefined &&
-    isHandBackStop(run.agentState, run.waitingReason)
-  ) {
+  // it holds through the slide from `completed` into a generic `waiting`. The
+  // same stop with no record handed nothing back: a prompt is not a question.
+  if (run.agentState !== undefined && isHandBackStop(run.agentState, run.waitingReason)) {
+    if (run.handBack === undefined) return "idle";
     return isHandBackUnseen(run.handBack) ? "review" : "done";
   }
   switch (run.agentState) {
     case "waiting":
       return run.waitingReason === "error" ? "blocked" : "needs-you";
-    case "completed":
-      return acknowledgedAt !== undefined && run.since !== undefined && run.since <= acknowledgedAt
-        ? "done"
-        : "review";
     case "working":
     case "directing":
       // Presence alone, like the park and snooze records above: main only puts
@@ -133,8 +123,8 @@ export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand
  * The band's own name for what the run is doing.
  *
  * Derived from the band rather than re-read from `agentState` so the visible
- * label, the tone and the ordering can never disagree — an acknowledged
- * completion must not still say "ready for review" while sorting as done.
+ * label, the tone and the ordering can never disagree — a seen hand-back
+ * must not still say "ready for review" while sorting as done.
  * `running` and `idle` split on state because they each cover two situations
  * the user can tell apart and would want to.
  *
