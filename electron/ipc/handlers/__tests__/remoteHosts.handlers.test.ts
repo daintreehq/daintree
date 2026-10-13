@@ -9,9 +9,9 @@ vi.mock("../../../store.js", () => ({
   store: { get: (key: string) => storeValues.get(key) },
 }));
 
-const getAllProjects = vi.hoisted(() => vi.fn());
+const getProjectSummaries = vi.hoisted(() => vi.fn());
 vi.mock("../../../services/ProjectStore.js", () => ({
-  projectStore: { getAllProjects },
+  projectStore: { getProjectSummaries },
 }));
 
 const { remoteHostsNamespace } = await import("../remoteHosts.js");
@@ -26,7 +26,7 @@ const ctx = { event: null, webContentsId: 5, senderWindow: null, projectId: null
 afterEach(() => {
   _resetRemoteServicesForTest();
   storeValues.clear();
-  getAllProjects.mockReset();
+  getProjectSummaries.mockReset();
 });
 
 describe("remoteHosts handlers", () => {
@@ -77,7 +77,7 @@ describe("remoteHosts handlers", () => {
   });
 
   it("lists this machine's projects from its own store, even before the runtime starts", async () => {
-    getAllProjects.mockReturnValue([
+    getProjectSummaries.mockReturnValue([
       { id: "p1", name: "App", path: "/work/app", emoji: "🌲", status: "active" },
       { id: "p2", name: "Lib", path: "/work/lib", emoji: "" },
     ]);
@@ -97,7 +97,7 @@ describe("remoteHosts handlers", () => {
       { id: "r1", name: "Remote", path: "/srv/r" },
     ]);
     expect(listHostProjects).toHaveBeenCalledWith({ hostId: "box" });
-    expect(getAllProjects).not.toHaveBeenCalled();
+    expect(getProjectSummaries).not.toHaveBeenCalled();
   });
 
   it("reports not in use for a user who never set up a host", async () => {

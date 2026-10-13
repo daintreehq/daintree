@@ -4,14 +4,22 @@ import type { HostProjectSummary } from "@shared/types/ipc/remoteHosts";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { PathTail } from "@/components/ui/PathTail";
 import { Button } from "@/components/ui/button";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { logWarn } from "@/utils/logger";
 import { useHostList } from "@/components/Hosts/hostList";
 import { clientPlatform, localHostLabel } from "@/components/Hosts/hostModel";
 import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
+import { matchesTokens, queryTokens } from "@/components/Hosts/hostProjectSearch";
 
-const FUSE_OPTIONS = { keys: ["name", "path"], threshold: 0.4, ignoreLocation: true };
+// Past this the list says how many it isn't showing; the rest stay a search away.
+const MAX_RESULTS = 100;
+
+function filterProjects(projects: HostProjectSummary[], query: string): HostProjectSummary[] {
+  const tokens = queryTokens(query);
+  return projects.filter((project) => matchesTokens(tokens, [project.name, project.path]));
+}
 
 type LoadState =
   | { status: "loading" }
@@ -32,6 +40,7 @@ function useHostName(hostId: HostId): string {
 export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose: () => void }) {
   const hostName = useHostName(hostId);
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,15 +56,29 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
     return () => {
       cancelled = true;
     };
-  }, [hostId]);
+  }, [hostId, attempt]);
+
+  const retry = useCallback(() => {
+    setLoad({ status: "loading" });
+    setAttempt((count) => count + 1);
+  }, []);
 
   const projects = load.status === "loaded" ? load.projects : [];
-  const { query, results, selectedIndex, setQuery, selectPrevious, selectNext, setSelectedIndex } =
-    useSearchablePalette<HostProjectSummary>({
-      items: projects,
-      fuseOptions: FUSE_OPTIONS,
-      getItemId: (project) => project.id,
-    });
+  const {
+    query,
+    results,
+    totalResults,
+    selectedIndex,
+    setQuery,
+    selectPrevious,
+    selectNext,
+    setSelectedIndex,
+  } = useSearchablePalette<HostProjectSummary>({
+    items: projects,
+    filterFn: filterProjects,
+    maxResults: MAX_RESULTS,
+    getItemId: (project) => project.id,
+  });
 
   const open = useCallback(
     (project: HostProjectSummary, newWindow: boolean) => {
@@ -65,10 +88,15 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
     [hostId, onClose]
   );
 
-  const handleConfirm = useCallback(() => {
-    const project = results[selectedIndex];
-    if (project) open(project, false);
-  }, [results, selectedIndex, open]);
+  const handleConfirm = useCallback(
+    (newWindow: boolean) => {
+      const project = results[selectedIndex];
+      if (project) open(project, newWindow);
+      // A failed list has nothing to pick; Enter asks again.
+      else if (load.status === "failed") retry();
+    },
+    [results, selectedIndex, open, load.status, retry]
+  );
 
   const openHostWindow = useCallback(() => {
     onClose();
@@ -107,8 +135,11 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
             {project.emoji}
           </span>
         )}
-        <span className="truncate font-medium text-text-primary">{project.name}</span>
-        <span className="ml-auto min-w-0 truncate text-xs text-text-secondary">{project.path}</span>
+        <span className="shrink-0 truncate font-medium text-text-primary max-w-[60%]">
+          {project.name}
+        </span>
+        {/* The folder end is what tells two clones apart, so the start gives way. */}
+        <PathTail className="ml-auto min-w-0 text-xs text-text-secondary">{project.path}</PathTail>
       </button>
     ),
     [open, setSelectedIndex]
@@ -126,6 +157,7 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
       isLoading={load.status === "loading"}
       query={query}
       results={results}
+      totalResults={totalResults}
       selectedIndex={selectedIndex}
       onQueryChange={setQuery}
       onSelectPrevious={selectPrevious}
@@ -141,7 +173,11 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
       itemIdPrefix="host-project-picker"
       emptyMessage={emptyMessage}
       emptyContent={
-        load.status === "loaded" ? (
+        load.status === "failed" ? (
+          <Button size="sm" variant="outline" onClick={retry}>
+            Retry
+          </Button>
+        ) : load.status === "loaded" && projects.length === 0 ? (
           <Button size="sm" variant="outline" onClick={openHostWindow}>
             Open {hostName} in a new window
           </Button>

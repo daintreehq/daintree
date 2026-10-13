@@ -1,116 +1,230 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { LOCAL_HOST_ID, type HostId, type HostPlatform } from "@shared/types/remoteHosts";
 import type { HostProjectPresence } from "@shared/types/ipc/hostSwitch";
+import type { HostProjectSummary } from "@shared/types/ipc/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "./hostList";
 import { buildHostMenuRows, type ClientPlatform } from "./hostModel";
 
 /** A project as another host lists it. Its id means something only on that host. */
-export interface HostProjectRef {
-  id: string;
-  name: string;
-  path: string;
-  emoji?: string;
-}
+export type HostProjectRef = HostProjectSummary;
 
 export type HostProjectsLoader = (hostId: HostId) => Promise<HostProjectRef[]>;
 
+/** A list a host gave, and when it answered. */
+export interface HostListing {
+  projects: readonly HostProjectRef[];
+  listedAt: number;
+}
+
 /**
- * Reads another host's project list. Unset until a host-scoped listing call
- * exists: a window only reaches its own host's projects today, so until one is
- * installed the other hosts simply list nothing.
+ * What can be said about a host's projects right now. `lastGood` is the last
+ * list it gave this session, kept so a host that drops or fails still shows
+ * what it had; it is never presented as live.
  */
+export type HostListingState =
+  | { status: "loading"; lastGood: HostListing | null }
+  | { status: "loaded"; list: HostListing }
+  | { status: "failed"; lastGood: HostListing | null }
+  | { status: "not-connected"; lastGood: HostListing | null };
+
+/** The projects a listing state can show, fresh or not. */
+export function listingProjects(state: HostListingState): readonly HostProjectRef[] {
+  return state.status === "loaded" ? state.list.projects : (state.lastGood?.projects ?? []);
+}
+
+/** Set by `installHostProjectsLoader`; until it is, every host lists nothing. */
 let loader: HostProjectsLoader | null = null;
 
 export function setHostProjectsLoader(next: HostProjectsLoader | null): void {
   loader = next;
-  cache.clear();
+  entries = new Map();
+  emit();
 }
 
+/** A finished listing is reused this long before a host is asked again. */
 const CACHE_TTL_MS = 10_000;
-const cache = new Map<HostId, { at: number; projects: Promise<HostProjectRef[] | null> }>();
 
-/** A host's projects; null when they couldn't be listed, which is not the same as none. */
-function loadHostProjects(hostId: HostId, now: number): Promise<HostProjectRef[] | null> {
-  const cached = cache.get(hostId);
-  if (cached && now - cached.at < CACHE_TTL_MS) return cached.projects;
-  const load = loader;
-  const projects = load
-    ? load(hostId).catch((error: unknown) => {
-        cache.delete(hostId);
-        logWarn("[Hosts] Couldn't list another host's projects", { error });
-        return null;
-      })
-    : Promise.resolve([]);
-  cache.set(hostId, { at: now, projects });
-  return projects;
+interface HostRequest {
+  generation: number;
+  outcome: "pending" | "ok" | "failed";
+  settledAt: number;
 }
 
-export interface OtherHostTarget {
+interface CatalogueEntry {
+  lastGood: HostListing | null;
+  request: HostRequest | null;
+}
+
+// Module-level, so every list in this view shares one request per host, and a
+// host's last list outlives the palette that asked for it.
+let entries: ReadonlyMap<HostId, CatalogueEntry> = new Map();
+let nextGeneration = 1;
+const listeners = new Set<() => void>();
+
+function emit(): void {
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function getEntries(): ReadonlyMap<HostId, CatalogueEntry> {
+  return entries;
+}
+
+function setEntry(hostId: HostId, entry: CatalogueEntry | null): void {
+  const next = new Map(entries);
+  if (entry) next.set(hostId, entry);
+  else next.delete(hostId);
+  entries = next;
+  emit();
+}
+
+/** Ask a host for its projects unless an answer is on its way or still fresh. */
+function requestHostProjects(hostId: HostId, now: number = Date.now()): void {
+  const entry = entries.get(hostId);
+  const request = entry?.request;
+  if (request?.outcome === "pending") return;
+  if (request?.outcome === "ok" && now - request.settledAt < CACHE_TTL_MS) return;
+  const load = loader ?? (async () => []);
+  const generation = nextGeneration++;
+  setEntry(hostId, {
+    lastGood: entry?.lastGood ?? null,
+    request: { generation, outcome: "pending", settledAt: 0 },
+  });
+  // Each host settles on its own: one slow host never holds back another's rows.
+  load(hostId).then(
+    (projects) => settle(hostId, generation, projects),
+    (error: unknown) => {
+      logWarn("[Hosts] Couldn't list another host's projects", { error });
+      settle(hostId, generation, null);
+    }
+  );
+}
+
+function settle(hostId: HostId, generation: number, projects: HostProjectRef[] | null): void {
+  const entry = entries.get(hostId);
+  // Superseded by a retry, a drop or a new loader: a late answer changes nothing.
+  if (!entry || entry.request?.generation !== generation) return;
+  const settledAt = Date.now();
+  setEntry(hostId, {
+    lastGood: projects ? { projects, listedAt: settledAt } : entry.lastGood,
+    request: { generation, outcome: projects ? "ok" : "failed", settledAt },
+  });
+}
+
+/** Ask a host again now, whatever was cached. Its last list stays until the answer. */
+export function retryHostProjects(hostId: HostId): void {
+  const entry = entries.get(hostId);
+  if (entry?.request) setEntry(hostId, { lastGood: entry.lastGood, request: null });
+  requestHostProjects(hostId);
+}
+
+/**
+ * A host whose link dropped: what it listed is kept as history, but nothing in
+ * flight or cached counts as fresh once it is back.
+ */
+function invalidateRequest(hostId: HostId): void {
+  const entry = entries.get(hostId);
+  if (entry?.request) setEntry(hostId, { lastGood: entry.lastGood, request: null });
+}
+
+function listingStateOf(entry: CatalogueEntry | undefined, reachable: boolean): HostListingState {
+  const lastGood = entry?.lastGood ?? null;
+  if (!reachable) return { status: "not-connected", lastGood };
+  switch (entry?.request?.outcome) {
+    case "ok":
+      return lastGood ? { status: "loaded", list: lastGood } : { status: "loading", lastGood };
+    case "failed":
+      return { status: "failed", lastGood };
+    default:
+      return { status: "loading", lastGood };
+  }
+}
+
+function useCatalogue(): ReadonlyMap<HostId, CatalogueEntry> {
+  return useSyncExternalStore(subscribe, getEntries, getEntries);
+}
+
+export interface OtherHost {
   hostId: HostId;
   name: string;
   platform: HostPlatform | null;
   /** The link is up (always true for this machine), so the host can be switched to. */
   reachable: boolean;
-  /** Null until listed, or when nothing can list it. */
-  projects: HostProjectRef[] | null;
+}
+
+export interface OtherHostTarget extends OtherHost {
+  listing: HostListingState;
 }
 
 /**
- * Every host other than the one this window is on, in host-menu order, with
- * their project lists once read. Empty for anyone with no remote host.
+ * Every host other than the one this window is on, in host-menu order. Asks
+ * nothing of any host. Empty for anyone with no remote host.
  */
-export function useOtherHostTargets(localPlatform: ClientPlatform): OtherHostTarget[] {
+export function useOtherHosts(localPlatform: ClientPlatform): OtherHost[] {
   const hostList = useHostList();
   const currentHostId = getViewHostId() ?? LOCAL_HOST_ID;
-  const [projectsByHost, setProjectsByHost] = useState<ReadonlyMap<HostId, HostProjectRef[]>>(
-    () => new Map()
-  );
-
-  const rows = hasRemoteHosts(hostList)
-    ? buildHostMenuRows(hostList.hosts, {
-        localPlatform,
-        currentHostId,
-        localSummary: hostList.localSummary,
-      }).filter((row) => !row.isCurrent)
-    : [];
-  const reachableIds = rows
-    .filter((row) => row.isLocal || row.connection?.status === "connected")
-    .map((row) => row.hostId);
-  const reachableKey = reachableIds.join("\n");
-
-  useEffect(() => {
-    const ids = reachableKey === "" ? [] : reachableKey.split("\n");
-    // A host that dropped may come back with different projects; nothing
-    // listed before the drop is shown or reused after it.
-    for (const id of [...cache.keys()]) if (!ids.includes(id)) cache.delete(id);
-    setProjectsByHost((prev) => {
-      const kept = [...prev].filter(([id]) => ids.includes(id));
-      return kept.length === prev.size ? prev : new Map(kept);
-    });
-    if (ids.length === 0) return;
-    let cancelled = false;
-    const now = Date.now();
-    void Promise.all(ids.map((id) => loadHostProjects(id, now))).then((lists) => {
-      if (cancelled) return;
-      setProjectsByHost(new Map(ids.map((id, index) => [id, lists[index] ?? []])));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [reachableKey]);
-
-  return rows.map((row) => {
-    const reachable = row.isLocal || row.connection?.status === "connected";
-    return {
+  if (!hasRemoteHosts(hostList)) return [];
+  return buildHostMenuRows(hostList.hosts, {
+    localPlatform,
+    currentHostId,
+    localSummary: hostList.localSummary,
+  })
+    .filter((row) => !row.isCurrent)
+    .map((row) => ({
       hostId: row.hostId,
       name: row.name,
       platform: row.platform,
-      reachable,
-      projects: reachable ? (projectsByHost.get(row.hostId) ?? null) : null,
-    };
-  });
+      reachable: row.isLocal || row.connection?.status === "connected",
+    }));
+}
+
+/**
+ * Every other host with what can be said about its projects. Connected hosts
+ * are listed as they answer; a host that isn't connected is never dialled
+ * here, and shows its last list from this session, if it gave one.
+ */
+export function useOtherHostTargets(localPlatform: ClientPlatform): OtherHostTarget[] {
+  const hosts = useOtherHosts(localPlatform);
+  const hostList = useHostList();
+  const catalogue = useCatalogue();
+  const reachableKey = hosts
+    .filter((host) => host.reachable)
+    .map((host) => host.hostId)
+    .join("\n");
+  const unreachableKey = hosts
+    .filter((host) => !host.reachable)
+    .map((host) => host.hostId)
+    .join("\n");
+  const knownKey = [LOCAL_HOST_ID, ...hostList.hosts.map((entry) => entry.descriptor.id)].join(
+    "\n"
+  );
+
+  useEffect(() => {
+    // A removed host's history goes with it; the id could come back as
+    // another machine.
+    const known = new Set(knownKey.split("\n"));
+    for (const id of [...getEntries().keys()]) if (!known.has(id)) setEntry(id, null);
+  }, [knownKey]);
+
+  useEffect(() => {
+    if (unreachableKey !== "") for (const id of unreachableKey.split("\n")) invalidateRequest(id);
+  }, [unreachableKey]);
+
+  useEffect(() => {
+    const now = Date.now();
+    if (reachableKey !== "") for (const id of reachableKey.split("\n")) requestHostProjects(id, now);
+  }, [reachableKey]);
+
+  return hosts.map((host) => ({
+    ...host,
+    listing: listingStateOf(catalogue.get(host.hostId), host.reachable),
+  }));
 }
 
 /**
@@ -120,24 +234,22 @@ export function useOtherHostTargets(localPlatform: ClientPlatform): OtherHostTar
  */
 export function useHostProjectLists(
   hostIds: readonly HostId[]
-): ReadonlyMap<HostId, HostProjectRef[] | null> {
+): ReadonlyMap<HostId, readonly HostProjectRef[] | null> {
   const key = hostIds.join("\n");
-  const [lists, setLists] = useState<ReadonlyMap<HostId, HostProjectRef[] | null>>(() => new Map());
+  const catalogue = useCatalogue();
   useEffect(() => {
-    const ids = key === "" ? [] : key.split("\n");
-    if (ids.length === 0) {
-      setLists((prev) => (prev.size === 0 ? prev : new Map()));
-      return;
-    }
-    let cancelled = false;
     const now = Date.now();
-    void Promise.all(ids.map((id) => loadHostProjects(id, now))).then((loaded) => {
-      if (!cancelled) setLists(new Map(ids.map((id, index) => [id, loaded[index] ?? null])));
-    });
-    return () => {
-      cancelled = true;
-    };
+    if (key !== "") for (const id of key.split("\n")) requestHostProjects(id, now);
   }, [key]);
+  const lists = new Map<HostId, readonly HostProjectRef[] | null>();
+  for (const hostId of hostIds) {
+    const entry = catalogue.get(hostId);
+    if (entry?.request?.outcome === "ok" && entry.lastGood) {
+      lists.set(hostId, entry.lastGood.projects);
+    } else if (entry?.request?.outcome === "failed") {
+      lists.set(hostId, null);
+    }
+  }
   return lists;
 }
 
@@ -179,5 +291,6 @@ export function useProjectPresence(
 
 export function _resetHostProjectsForTesting(): void {
   loader = null;
-  cache.clear();
+  entries = new Map();
+  listeners.clear();
 }

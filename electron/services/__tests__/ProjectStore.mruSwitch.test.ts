@@ -289,4 +289,36 @@ describe("ProjectStore.setCurrentProject MRU lastOpened bump", () => {
     expect(gammaRow?.status).toBe("active");
     expect(store.getCurrentProjectId()).toBe(gammaId);
   });
+
+  it("records a remote activation as engagement without moving this machine's pointer (#13290)", () => {
+    const before = db.select().from(schema.projects).where(eq(schema.projects.id, betaId)).get()!;
+    store.recordRemoteActivation(betaId);
+    const after = db.select().from(schema.projects).where(eq(schema.projects.id, betaId)).get()!;
+
+    expect(after.status).toBe("active");
+    expect(after.frecencyScore).toBeGreaterThan(before.frecencyScore);
+    expect(after.lastAccessedAt).toBeGreaterThan(before.lastAccessedAt);
+    expect(store.getCurrentProjectId()).toBe(alphaId);
+  });
+
+  it("records only the status of a remote activation under write suppression", () => {
+    setWritesSuppressed(true);
+    store.recordRemoteActivation(betaId);
+    const row = db.select().from(schema.projects).where(eq(schema.projects.id, betaId)).get()!;
+    expect(row.status).toBe("active");
+    expect(row.lastOpened).toBe(tBeta);
+    expect(row.frecencyScore).toBe(5.0);
+  });
+
+  it("lists summaries without repairing the status a remote switch wrote (#13290)", () => {
+    store.recordRemoteActivation(betaId);
+    const summaries = store.getProjectSummaries();
+    const row = db.select().from(schema.projects).where(eq(schema.projects.id, betaId)).get()!;
+
+    expect(row.status).toBe("active");
+    expect(summaries.map((project) => project.id)[0]).toBe(betaId);
+    expect(summaries.map((project) => project.id).sort()).toEqual(
+      [alphaId, betaId, gammaId].sort()
+    );
+  });
 });

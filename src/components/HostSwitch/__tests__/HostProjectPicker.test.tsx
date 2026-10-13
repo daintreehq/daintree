@@ -39,6 +39,11 @@ vi.mock("@/components/Hosts/hostList", () => ({
   }),
   getHostListSnapshot: () => ({ hosts: [], localSummary: null }),
 }));
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isMac: () => true,
+  isWindows: () => false,
+}));
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logDebug: vi.fn(),
@@ -101,9 +106,62 @@ describe("HostProjectPicker", () => {
     );
   });
 
-  it("says so when the host can't be listed", async () => {
-    listHostProjects.mockRejectedValue(new Error("link down"));
+  it("says so when the host can't be listed, and lists it again on Retry", async () => {
+    listHostProjects.mockRejectedValueOnce(new Error("link down"));
+    listHostProjects.mockResolvedValueOnce([{ id: "p1", name: "App", path: "/srv/app" }]);
     await renderPicker();
     expect(await screen.findByText("Couldn't list the projects on studio-01.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("App")).toBeTruthy();
+    expect(listHostProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a failed listing on Enter", async () => {
+    listHostProjects.mockRejectedValueOnce(new Error("link down"));
+    listHostProjects.mockResolvedValueOnce([]);
+    await renderPicker();
+    await screen.findByText("Couldn't list the projects on studio-01.");
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    expect(await screen.findByText("studio-01 has no projects yet.")).toBeTruthy();
+  });
+
+  it("says how many projects it isn't showing rather than stopping silently", async () => {
+    listHostProjects.mockResolvedValue(
+      Array.from({ length: 130 }, (_, index) => ({
+        id: `p${index}`,
+        name: `project-${index}`,
+        path: `/srv/project-${index}`,
+      }))
+    );
+    await renderPicker();
+    await screen.findByText("project-0");
+    expect(document.querySelectorAll('[role="option"]').length).toBeLessThan(130);
+    expect(document.body.textContent).toMatch(/\+\d+ more/);
+    // The rest are a search away.
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "project-129" } });
+    expect(await screen.findByText("project-129")).toBeTruthy();
+  });
+
+  it("opens the picked project in a new window on Cmd+Enter", async () => {
+    listHostProjects.mockResolvedValue([{ id: "p1", name: "App", path: "/srv/app" }]);
+    await renderPicker();
+    await screen.findByText("App");
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", metaKey: true });
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({
+        hostId: "h1",
+        newWindow: true,
+        projectId: "p1",
+      })
+    );
+  });
+
+  it("tells an empty host from a search that matched nothing", async () => {
+    listHostProjects.mockResolvedValue([{ id: "p1", name: "App", path: "/srv/app" }]);
+    await renderPicker();
+    await screen.findByText("App");
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "zzz" } });
+    expect(await screen.findByText(/No matches for/)).toBeTruthy();
+    expect(screen.queryByText("studio-01 has no projects yet.")).toBeNull();
   });
 });

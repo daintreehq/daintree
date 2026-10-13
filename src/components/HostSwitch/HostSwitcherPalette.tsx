@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Check } from "lucide-react";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import { isMac } from "@/lib/platform";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
@@ -28,6 +30,24 @@ const FUSE_OPTIONS = { keys: ["name"], threshold: 0.4, ignoreLocation: true };
 const MAX_ROWS = 65;
 
 const getRowId = (row: HostMenuRow) => row.hostId;
+
+/** Picking the host this window is on only moves anything while its link is down. */
+function isStayingPut(row: HostMenuRow): boolean {
+  return row.isCurrent && (row.isLocal || row.connection?.status === "connected");
+}
+
+function footerFor(row: HostMenuRow | null) {
+  if (!row) return null;
+  return (
+    <PaletteFooterHints
+      primaryHint={{
+        keys: ["↵"],
+        label: isStayingPut(row) ? "to stay here" : row.isCurrent ? "to reconnect" : "to switch",
+      }}
+      hints={[{ keys: [isMac() ? "⌘" : "Ctrl", "↵"], label: "in a new window" }]}
+    />
+  );
+}
 
 /**
  * "Switch host…" (#13268): every host as a searchable list, each row saying a
@@ -66,10 +86,27 @@ export function HostSwitcherPalette() {
     if (isOpen) setQuery("");
   }, [isOpen, setQuery]);
 
+  // Opens on the first host that isn't this one, as the project switcher opens
+  // on the first project that isn't current: Enter straight away goes
+  // somewhere rather than home. Once per opening, so a metrics update never
+  // takes the cursor back from the user.
+  const placedForOpening = useRef(false);
+  useEffect(() => {
+    if (!isOpen) {
+      placedForOpening.current = false;
+      return;
+    }
+    if (placedForOpening.current || query !== "" || results.length === 0) return;
+    placedForOpening.current = true;
+    const firstElsewhere = results.findIndex((row) => !row.isCurrent);
+    if (firstElsewhere > 0) setSelectedIndex(firstElsewhere);
+  }, [isOpen, query, results, setSelectedIndex]);
+
   const pick = useCallback(
     (row: HostMenuRow, newWindow: boolean) => {
       // Already here: nothing to move, and the keyboard goes back where it was.
-      if (row.isCurrent && !newWindow) {
+      // A current host whose link is down is picked to bring it back.
+      if (isStayingPut(row) && !newWindow) {
         close();
         return;
       }
@@ -94,10 +131,13 @@ export function HostSwitcherPalette() {
     [close]
   );
 
-  const handleConfirm = useCallback(() => {
-    const row = results[selectedIndex];
-    if (row) pick(row, false);
-  }, [results, selectedIndex, pick]);
+  const handleConfirm = useCallback(
+    (newWindow: boolean) => {
+      const row = results[selectedIndex];
+      if (row) pick(row, newWindow);
+    },
+    [results, selectedIndex, pick]
+  );
 
   const renderItem = useCallback(
     (
@@ -106,8 +146,11 @@ export function HostSwitcherPalette() {
       isSelected: boolean,
       onHoverIndex: (index: number) => void
     ) => {
-      const { state } = describeHostMenuState(row);
       const status = describeHostRowStatus(row);
+      // The status line leads with the link's state when it isn't up; saying
+      // it again beside the name only repeats it.
+      const menuState = describeHostMenuState(row).state;
+      const state = menuState && !status?.startsWith(menuState) ? menuState : null;
       const metrics = describeHostRowMetrics(row);
       return (
         <button
@@ -175,6 +218,7 @@ export function HostSwitcherPalette() {
       onHoverIndex={setSelectedIndex}
       getItemId={getRowId}
       renderItem={renderItem}
+      getFooter={footerFor}
       label="Switch host"
       ariaLabel="Switch host"
       searchPlaceholder="Search hosts"

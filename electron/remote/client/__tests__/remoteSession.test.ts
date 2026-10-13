@@ -656,6 +656,16 @@ describe("remote session wiring", () => {
     expect(getEndpointRegistry().getRemote()).toHaveLength(0);
   });
 
+  it("gives a listing its own short deadline rather than the link's 60 s one", async () => {
+    await startHarness();
+    await connect();
+    const connection = h.manager.get(HOST_ID)!;
+    const call = vi.spyOn(connection.currentSession!, "call");
+    await connection.listProjects();
+    const options = call.mock.calls[0]![2] as { timeoutMs?: number } | undefined;
+    expect(options?.timeoutMs).toBeLessThan(60_000);
+  });
+
   it("exposes the host's open session with no view bound, and none while the link is down", async () => {
     await startHarness();
     const connection = h.manager.connect(HOST_ID);

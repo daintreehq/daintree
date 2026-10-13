@@ -12,6 +12,7 @@ const projectStoreMock = vi.hoisted(() => ({
       (p: string) => Promise<{ found: boolean; name?: string; emoji?: string; color?: string }>
     >(),
   updateProject: vi.fn<(id: string, updates: Record<string, unknown>) => Record<string, unknown>>(),
+  recordRemoteActivation: vi.fn<(id: string) => Record<string, unknown>>(),
 }));
 
 const logBufferMock = vi.hoisted(() => ({
@@ -114,6 +115,10 @@ describe("ProjectSwitchService", () => {
     projectStoreMock.updateProject.mockImplementation(
       (id: string, updates: Record<string, unknown>) => ({ id, ...updates })
     );
+    projectStoreMock.recordRemoteActivation.mockImplementation((id: string) => ({
+      id,
+      status: "active",
+    }));
 
     logBufferMock.onProjectSwitch.mockImplementation(() => undefined);
     gitServiceCacheMock.clear.mockImplementation(() => undefined);
@@ -565,10 +570,7 @@ describe("Host activation for a remote view", () => {
     expect(ws.order).toEqual(["resume", "load"]);
     expect(ws.loadProject).toHaveBeenCalledWith("/tmp/new", -4);
     expect(getHostResidentProject(-4)).toBe("project-new");
-    expect(projectStoreMock.updateProject).toHaveBeenCalledWith(
-      "project-new",
-      expect.objectContaining({ status: "active", lastOpened: expect.any(Number) })
-    );
+    expect(projectStoreMock.recordRemoteActivation).toHaveBeenCalledWith("project-new");
     expect(sendToRendererMock).toHaveBeenCalledWith(
       CHANNELS.PROJECT_UPDATED,
       expect.objectContaining({ id: "project-new" })
@@ -582,7 +584,7 @@ describe("Host activation for a remote view", () => {
     const second = activateProjectOnHost(ws, project, -4);
     await Promise.all([first, second]);
     expect(ws.loadProject).toHaveBeenCalledTimes(1);
-    expect(projectStoreMock.updateProject).toHaveBeenCalledTimes(1);
+    expect(projectStoreMock.recordRemoteActivation).toHaveBeenCalledTimes(1);
   });
 
   it("drops residency when the load fails so a retry starts over", async () => {

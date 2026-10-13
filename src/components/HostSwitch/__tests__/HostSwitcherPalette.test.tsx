@@ -127,7 +127,10 @@ beforeEach(() => {
   consumeDeferredPaletteFocusRestore();
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  delete window.__DAINTREE_HOST_ID__;
+});
 
 function openPalette() {
   render(<HostSwitcherPalette />);
@@ -245,18 +248,69 @@ describe("HostSwitcherPalette", () => {
     expect(switchWindowHost).not.toHaveBeenCalled();
   });
 
-  it("switches to the host chosen with the arrow keys and Enter", async () => {
+  it("opens on the first host this window isn't on, so Enter goes there", async () => {
     hostList.value = {
       hosts: [host("h1", "studio-01", { status: "disconnected" })],
       localSummary: null,
     };
     openPalette();
     const search = screen.getByRole("combobox");
-    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(row("h1").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("to switch")).toBeTruthy();
     fireEvent.keyDown(search, { key: "Enter" });
     await waitFor(() =>
       expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: false })
     );
+  });
+
+  it("opens on this machine from a remote window, and switches with the arrow keys", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "h1" };
+    hostList.value = {
+      hosts: [host("h1", "studio-01", CONNECTED), host("h2", "studio-02", CONNECTED)],
+      localSummary: null,
+    };
+    openPalette();
+    expect(row("local").getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h2", newWindow: false })
+    );
+  });
+
+  it("opens the selected host in a new window on Cmd+Enter", async () => {
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    openPalette();
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", metaKey: true });
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: true })
+    );
+  });
+
+  it("reconnects the host this window is on when its link is down", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "h1" };
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    openPalette();
+    fireEvent.click(row("h1"));
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: false })
+    );
+  });
+
+  it("says a host's link state once", () => {
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    openPalette();
+    expect((row("h1").textContent ?? "").match(/Not connected/g)).toHaveLength(1);
   });
 
   // A switch that lands hands the keyboard on (the host's view, or its project

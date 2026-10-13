@@ -36,7 +36,7 @@ export function initRemoteHostsHost(
     },
     // An emoji the Shell's schema would refuse is dropped, not the whole list.
     listProjects: () =>
-      projectStore.getAllProjects().map(({ id, name, path, emoji }) => ({
+      projectStore.getProjectSummaries().map(({ id, name, path, emoji }) => ({
         id,
         name,
         path,
