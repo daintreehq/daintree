@@ -109,19 +109,54 @@ describe("observedKind", () => {
       "approval"
     );
     expect(observedKind(run("a", { agentState: "waiting", waitingReason: "error" }))).toBe("error");
-    expect(observedKind(run("a", { agentState: "waiting", waitingReason: "prompt" }))).toBe(
+    expect(observedKind(run("a", { agentState: "waiting", waitingReason: "question" }))).toBe(
       "question"
     );
-    expect(observedKind(run("a", { agentState: "completed" }))).toBe("finished");
     expect(observedKind(run("a", { agentState: "directing" }))).toBe("working");
     expect(observedKind(run("a", { agentState: "exited" }))).toBe("idle");
+  });
+
+  it("files a stop after watched work as finished, never as a question", () => {
+    // `completed` lasts half a second before the agent slides back to its
+    // prompt, so the prompt is what a finished agent looks like almost always.
+    const handBack = { stoppedAt: NOW - 60_000 };
+    for (const waitingReason of [undefined, "prompt"] as const) {
+      expect(observedKind(run("a", { agentState: "waiting", waitingReason, handBack }))).toBe(
+        "finished"
+      );
+    }
+    expect(observedKind(run("a", { agentState: "completed", handBack }))).toBe("finished");
+  });
+
+  it("reads a stop with no watched work before it as idle", () => {
+    for (const waitingReason of [undefined, "prompt"] as const) {
+      expect(observedKind(run("a", { agentState: "waiting", waitingReason }))).toBe("idle");
+    }
+    expect(observedKind(run("a", { agentState: "completed" }))).toBe("idle");
+  });
+
+  it("never lets a hand-back quiet a specific ask", () => {
+    const handBack = { stoppedAt: NOW - 60_000 };
+    expect(
+      observedKind(run("a", { agentState: "waiting", waitingReason: "approval", handBack }))
+    ).toBe("approval");
+    expect(
+      observedKind(run("a", { agentState: "waiting", waitingReason: "question", handBack }))
+    ).toBe("question");
+    expect(
+      observedKind(run("a", { agentState: "waiting", waitingReason: "error", handBack }))
+    ).toBe("error");
   });
 });
 
 describe("buildCanopyInbox", () => {
   it("is one list, most blocked first, before anything is read — a long-unseen working agent included", () => {
     const result = inbox([
-      run("finished", { agentState: "completed", since: NOW - 900_000 }),
+      run("finished", {
+        agentState: "completed",
+        since: NOW - 900_000,
+        handBack: { stoppedAt: NOW - 900_000 },
+      }),
       run("approval-new", {
         agentState: "waiting",
         waitingReason: "approval",
@@ -452,7 +487,7 @@ describe("buildCanopyInbox ordering", () => {
       ]
     );
     expect(itemNeedsAttention(asking!)).toBe(true);
-    const [unread] = inbox([run("b", { agentState: "waiting", waitingReason: "prompt" })]);
+    const [unread] = inbox([run("b", { agentState: "waiting", waitingReason: "question" })]);
     expect(itemNeedsAttention(unread!)).toBe(true);
   });
 

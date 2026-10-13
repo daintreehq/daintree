@@ -797,9 +797,6 @@ export function PilotView() {
         lastOpened: project.lastOpened,
         ...(project.emoji ? { emoji: project.emoji } : {}),
         ...(project.color ? { color: project.color } : {}),
-        ...(project.lastCompletionSeenAt !== undefined
-          ? { lastCompletionSeenAt: project.lastCompletionSeenAt }
-          : {}),
       });
     }
     for (const scratch of scratches) {
@@ -807,9 +804,6 @@ export function PilotView() {
         kind: "scratch",
         name: scratch.name,
         lastOpened: scratch.lastOpened,
-        ...(scratch.lastCompletionSeenAt !== undefined
-          ? { lastCompletionSeenAt: scratch.lastCompletionSeenAt }
-          : {}),
       });
     }
     return map;
@@ -1835,8 +1829,9 @@ export function PilotView() {
           /*
            * Names the next action rather than the absence. This is not the
            * completed-work state it first looks like: a finished agent stays in
-           * the fleet as a `review` or `done` row, and an exited one as `idle`,
-           * so an empty snapshot means no agent terminals exist at all.
+           * the fleet as a `review` or `done` row (or `idle`, when main never
+           * watched the work), and an exited one as `idle`, so an empty
+           * snapshot means no agent terminals exist at all.
            *
            * No button on the zero-data branch — launching is per-project and
            * this surface spans them all, so a CTA there would name an action it

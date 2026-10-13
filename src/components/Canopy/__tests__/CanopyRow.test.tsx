@@ -22,6 +22,7 @@ function itemFor(
     cwd: "/Users/dev/app",
     agentId: "claude",
     agentState: "waiting",
+    waitingReason: "question",
     title: "Fix flaky panel tests",
     since: NOW - 60_000,
     ...run,
@@ -194,6 +195,7 @@ describe("CanopyRow", () => {
         agentState: "completed",
         title: "Codex",
         since: NOW - 30_000,
+        handBack: { stoppedAt: NOW - 30_000 },
       };
       const groups = buildPilotGroups([run], {
         workspaces: new Map([["p1", { kind: "project", name: "app", emoji: "🦊" }]]),

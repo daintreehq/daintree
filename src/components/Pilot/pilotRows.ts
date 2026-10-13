@@ -203,11 +203,6 @@ export interface PilotWorkspaceMeta {
   emoji?: string;
   color?: string;
   /**
-   * The workspace's completion watermark. Completions at or before it have been
-   * seen and stop counting as a hand-back — see `bandForRun`.
-   */
-  lastCompletionSeenAt?: number;
-  /**
    * When the workspace was last switched to, which is what orders the groups.
    * A project-to-project switch also stamps the project being LEFT, a
    * millisecond behind, so that pair stays adjacent at the top; switches
@@ -433,11 +428,10 @@ export function buildPilotGroups(
     // A run whose workspace has been removed from the store still has to render
     // — dropping it would hide a live agent because a lookup missed.
     const name = meta?.name ?? "Unknown workspace";
-    const acknowledgedAt = meta?.lastCompletionSeenAt;
 
     const sorted = [...workspaceRuns].sort((a, b) => {
-      const bandA = bandForRun(a, acknowledgedAt);
-      const byBand = rank(bandA) - rank(bandForRun(b, acknowledgedAt));
+      const bandA = bandForRun(a);
+      const byBand = rank(bandA) - rank(bandForRun(b));
       if (byBand !== 0) return byBand;
       // Same band, so one clock governs the pair — and which clock that is
       // belongs to the band, not to this call site. `bandTimestamp` is what the
@@ -447,7 +441,7 @@ export function buildPilotGroups(
     });
 
     const rows: PilotRow[] = sorted.map((run) => {
-      const band = bandForRun(run, acknowledgedAt);
+      const band = bandForRun(run);
       const chrome = derivePilotRunChrome(run);
       const title = composePilotRunTitle(run, chrome);
 
