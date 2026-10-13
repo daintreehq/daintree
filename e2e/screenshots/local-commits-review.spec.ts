@@ -15,6 +15,8 @@
  *   DAINTREE_SHOT_DIR           output directory (default artifacts/local-commits-shots)
  *   DAINTREE_SHOT_THEMES        comma-separated sweep (default daintree,bondi,namib,svalbard);
  *                               the first two get every state, the rest a rest shot
+ *   DAINTREE_SHOT_FORGE         set to 0 to skip the GitHub forge-mode states, whose
+ *                               plugin view does not always mount in the preview
  *
  * Never writes a PNG it has not verified: every state asserts its fixture text
  * (or its absence) before the shot, and the test counts the files at the end.
@@ -26,6 +28,7 @@ import path from "path";
 import { startPreviewServer, stubViteHmrClient, makeSnap } from "../helpers/previewHarness";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_LOCALCOMMITS;
+const FORGE = process.env.DAINTREE_SHOT_FORGE !== "0";
 
 const OUT_DIR = path.resolve(
   process.env.DAINTREE_SHOT_DIR ?? path.join(process.cwd(), "artifacts", "local-commits-shots")
@@ -249,6 +252,17 @@ test("Local commits dropdown — states and themes", async ({ page }) => {
       written.push(out);
     }
 
+    // A push range longer than the marked rows, under the cursor: the caveat
+    // and the key hint compete for the footer.
+    panel = await openDropdown(page, "capped", theme);
+    await settled(panel, "newest 2 marked");
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(250);
+    await shot(panel, "20-capped-cursor");
+    expected += 17;
+
+    if (!FORGE) continue;
+
     // The GitHub plugin's commits list — the same surface in forge mode.
     panel = await openDropdown(page, "few", theme, "github");
     await settled(panel, NEWEST);
@@ -264,7 +278,7 @@ test("Local commits dropdown — states and themes", async ({ page }) => {
     await page.keyboard.press("ArrowDown");
     await page.waitForTimeout(250);
     await shot(panel, "19-github-capped-cursor");
-    expected += 19;
+    expected += 3;
   }
 
   for (const theme of rest) {
