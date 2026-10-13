@@ -4019,9 +4019,35 @@ describe("useProjectSwitcherPalette window presence (#12597)", () => {
     expect(rowFor(result, "here").isActive).toBe(true);
     expect(rowFor(result, "here").openInOtherWindow).toBeUndefined();
     expect(rowFor(result, "here").isOpenInThisWindow).toBe(true);
+    expect(rowFor(result, "here").isCachedInThisWindow).toBe(false);
 
     expect(rowFor(result, "cached-here").openInOtherWindow).toBeUndefined();
     expect(rowFor(result, "cached-here").isOpenInThisWindow).toBe(true);
+    expect(rowFor(result, "cached-here").isCachedInThisWindow).toBe(true);
+  });
+
+  it("follows a project this window holds from cached to in front (#13274)", async () => {
+    getPresenceSnapshotMock.mockImplementationOnce(() =>
+      Promise.resolve(snapshot([], [{ projectId: "elsewhere", windowId: 1, state: "cached" }]))
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").isCachedInThisWindow).toBe(true);
+    });
+
+    // Same project, same window: only its state changed.
+    getPresenceSnapshotMock.mockImplementationOnce(() =>
+      Promise.resolve(snapshot([], [{ projectId: "elsewhere", windowId: 1, state: "activating" }]))
+    );
+    emitPresenceChanged();
+
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").isCachedInThisWindow).toBe(false);
+    });
+    expect(rowFor(result, "elsewhere").isOpenInThisWindow).toBe(true);
   });
 
   it("never marks the current project as open elsewhere, whatever main says", async () => {

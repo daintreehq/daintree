@@ -54,16 +54,40 @@ describe("getNewWindowMenuLabel (#12597)", () => {
     expect(getNewWindowMenuLabel(projectRow())).toBe("Open in new window");
   });
 
-  it("says where the item goes for a project another window owns", () => {
+  it("says where the item goes for a project another window shows or is activating", () => {
     // Under #12596 a new-window request for it brings the owner forward.
-    for (const state of ["foreground", "activating", "cached"] as const) {
+    for (const state of ["foreground", "activating"] as const) {
       expect(getNewWindowMenuLabel(projectRow({ openInOtherWindow: state }))).toBe("Go to window");
     }
   });
 
-  it("offers nothing for a project this window already holds", () => {
+  it("offers a new window for a project another window only keeps cached (#13274)", () => {
+    expect(getNewWindowMenuLabel(projectRow({ openInOtherWindow: "cached" }))).toBe(
+      "Open in new window"
+    );
+  });
+
+  it("offers nothing for a project this window is activating, whatever another window caches", () => {
+    expect(
+      getNewWindowMenuLabel(projectRow({ isOpenInThisWindow: true, openInOtherWindow: "cached" }))
+    ).toBeNull();
+    const row = projectRow({ isOpenInThisWindow: true, openInOtherWindow: "cached" });
+    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
+      keys: "↵",
+      label: "Switch",
+    });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({ keys: "↵", label: "Switch" });
+  });
+
+  it("offers nothing for a project this window shows or is activating", () => {
     // The request would switch here — which clicking the row already does.
     expect(getNewWindowMenuLabel(projectRow({ isOpenInThisWindow: true }))).toBeNull();
+  });
+
+  it("offers a new window for a project this window only keeps cached (#13274)", () => {
+    expect(
+      getNewWindowMenuLabel(projectRow({ isOpenInThisWindow: true, isCachedInThisWindow: true }))
+    ).toBe("Open in new window");
   });
 
   it("keeps the current and missing rows' existing guards", () => {
@@ -102,8 +126,8 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
     expect(getProjectSwitcherEnterHint(elsewhere, true, true, false)?.keys).not.toContain("⌘");
   });
 
-  it("says Go to window on either key for a project another window owns", () => {
-    const row = projectRow({ openInOtherWindow: "cached" });
+  it("says Go to window on either key for a project another window shows", () => {
+    const row = projectRow({ openInOtherWindow: "foreground" });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
       keys: "↵",
       label: "Go to window",
@@ -114,9 +138,30 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
     });
   });
 
-  it("says Switch on either key for a project this window already holds", () => {
+  it("goes to a window keeping the project cached, or takes it to a new one (#13274)", () => {
+    const row = projectRow({ openInOtherWindow: "cached" });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
+      keys: "↵",
+      label: "Go to window",
+    });
+    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
+      keys: "⌘↵",
+      label: "New window",
+    });
+  });
+
+  it("says Switch on either key for a project this window shows or is activating", () => {
     const row = projectRow({ isOpenInThisWindow: true });
     expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({ keys: "↵", label: "Switch" });
+  });
+
+  it("switches here, or takes it to a new window, for a project this window keeps cached", () => {
+    const row = projectRow({ isOpenInThisWindow: true, isCachedInThisWindow: true });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({ keys: "↵", label: "Switch" });
+    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
+      keys: "⌘↵",
+      label: "New window",
+    });
   });
 
   it("never promises a new window the keypress can't open", () => {

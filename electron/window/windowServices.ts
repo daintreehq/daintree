@@ -149,6 +149,10 @@ function createOpenDirDeps(
       redirectToProjectOwner(owner, row);
       return true;
     },
+    releaseCachedView: (projectId, windowId) =>
+      getWindowRegistry()
+        ?.getByWindowId(windowId)
+        ?.services.projectViewManager?.releaseCachedView(projectId) === true,
   };
 }
 

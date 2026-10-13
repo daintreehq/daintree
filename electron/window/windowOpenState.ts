@@ -1,6 +1,7 @@
 import type { BrowserWindow } from "electron";
 import type { OpenFoldersInNewWindow } from "../../shared/types/windowOpen.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
+import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { OpenWorld, OpenWorldWindow, WindowOpenReservation } from "./windowOpenPolicy.js";
 import { getProjectHistory } from "../services/ProjectHistoryService.js";
 import { logError } from "../utils/logger.js";
@@ -149,6 +150,30 @@ export async function holdWindowForOpen(
 }
 
 /**
+ * The cached views an explicit new-window request may take from a window
+ * (#13274). A project with an open or activation in flight here is on its way
+ * to the front, so it stays. A manager that can't answer releases nothing: the
+ * open then falls back to switching the project in where it already is.
+ */
+function readReleasable(
+  pvm: ProjectViewManager | undefined,
+  viewProjectIds: readonly string[],
+  held: readonly WindowOpenReservation[],
+  windowId: number
+): string[] {
+  if (!pvm) return [];
+  try {
+    return viewProjectIds.filter(
+      (projectId) =>
+        !held.some((r) => r.projectId === projectId) && pvm.canReleaseCachedView(projectId)
+    );
+  } catch (error) {
+    logError("window-open-snapshot-releasable-failed", error, { windowId });
+    return [];
+  }
+}
+
+/**
  * Read every live window into the policy's snapshot shape, most recently
  * focused first. Each window is read from its own view manager — never the
  * process-global one, which only knows the last-created window (#11131) — and a
@@ -195,15 +220,17 @@ export function snapshotOpenWorld(
       ) {
         unboundOpens.delete(ctx.windowId);
       }
+      const viewProjectIds =
+        pvm
+          ?.getAllViews()
+          .filter((entry) => !entry.view.webContents.isDestroyed())
+          .map((entry) => entry.projectId) ?? [];
       windows.push({
         windowId: ctx.windowId,
         activeProjectId,
         bridgeProjectId,
-        viewProjectIds:
-          pvm
-            ?.getAllViews()
-            .filter((entry) => !entry.view.webContents.isDestroyed())
-            .map((entry) => entry.projectId) ?? [],
+        viewProjectIds,
+        releasableViewProjectIds: readReleasable(pvm, viewProjectIds, held, ctx.windowId),
         ready: pvm !== undefined && readyWindows.has(win),
         reservations: held,
         unboundOpens: [...(unboundOpens.get(ctx.windowId)?.claims ?? [])],

@@ -633,7 +633,7 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
     render(
       <ProjectSwitcherPalette
         {...baseProps}
-        results={[makeProject({ openInOtherWindow: "cached" })]}
+        results={[makeProject({ openInOtherWindow: "foreground" })]}
         onSelectNewWindow={vi.fn()}
       />
     );
@@ -660,6 +660,40 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).toContain("Switch");
     expect(footer.textContent).not.toContain("New window");
+  });
+
+  it("says New window, and opens one, for a project this window only keeps cached (#13274)", () => {
+    modifierKeysState.meta = true;
+    const onSelectNewWindow = vi.fn();
+    const row = makeProject({ isOpenInThisWindow: true, isCachedInThisWindow: true });
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[row]}
+        onSelectNewWindow={onSelectNewWindow}
+      />
+    );
+
+    expect(screen.getByTestId("palette-footer").textContent).toContain("New window");
+    fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Enter", metaKey: true });
+    expect(onSelectNewWindow).toHaveBeenCalledWith(row);
+  });
+
+  it("says New window, and opens one, for a project another window only keeps cached", () => {
+    modifierKeysState.meta = true;
+    const onSelectNewWindow = vi.fn();
+    const row = makeProject({ openInOtherWindow: "cached" });
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[row]}
+        onSelectNewWindow={onSelectNewWindow}
+      />
+    );
+
+    expect(screen.getByTestId("palette-footer").textContent).toContain("New window");
+    fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Enter", metaKey: true });
+    expect(onSelectNewWindow).toHaveBeenCalledWith(row);
   });
 
   it("no longer promises a new window where ⌘↵ can't open one", () => {

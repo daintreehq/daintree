@@ -4883,3 +4883,112 @@ describe("ProjectViewManager — user-granted workspace residency (#12313)", () 
     ).toEqual(["proj-b", "proj-c"]);
   });
 });
+
+describe("ProjectViewManager — releasing a cached view to another window (#13274)", () => {
+  let win: ReturnType<typeof createMockWindow>;
+  let mgr: ProjectViewManager;
+  let dispatching: Set<string>;
+  let bound: Set<string>;
+  let mcpBroken: boolean;
+
+  beforeEach(async () => {
+    nextWebContentsId = 100;
+    nextOsProcessId = 1000;
+    vi.clearAllMocks();
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
+    mockGetAppMetrics.mockReset();
+    mockGetAppMetrics.mockReturnValue([]);
+    assistantBackends.clear();
+    liveTerminals.clear();
+    dispatching = new Set();
+    bound = new Set();
+    mcpBroken = false;
+    win = createMockWindow();
+    mgr = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+      assistantBackendsForProject,
+      isTerminalLive,
+      mcpViewActivity: (workspaceId: string) => {
+        if (mcpBroken) throw new Error("registry gone");
+        return {
+          liveBinding: bound.has(workspaceId) || dispatching.has(workspaceId),
+          dispatchLease: dispatching.has(workspaceId),
+        };
+      },
+    });
+    // proj-a cached behind proj-b in front.
+    const wcA = createMockWebContents();
+    mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/path/a");
+    await mgr.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+  });
+
+  afterEach(() => {
+    mgr.dispose();
+  });
+
+  const wcOf = (projectId: string) =>
+    mgr.getAllViews().find((v) => v.projectId === projectId)!.view
+      .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+  it("tears down a cached view and leaves the one in front alone", () => {
+    const wcA = wcOf("proj-a");
+
+    expect(mgr.releaseCachedView("proj-a")).toBe(true);
+
+    expect(wcA.close).toHaveBeenCalled();
+    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b"]);
+    expect(mgr.getActiveProjectId()).toBe("proj-b");
+  });
+
+  it("never releases the view in front, or one it doesn't hold", () => {
+    expect(mgr.canReleaseCachedView("proj-b")).toBe(false);
+    expect(mgr.releaseCachedView("proj-b")).toBe(false);
+    expect(mgr.releaseCachedView("proj-z")).toBe(false);
+    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-b"]);
+  });
+
+  it("keeps a cached view backing a running assistant", () => {
+    const wcA = wcOf("proj-a");
+    assistantBackends.set("proj-a", { terminalId: "t-help-a", webContentsId: wcA.id });
+    liveTerminals.add("t-help-a");
+
+    expect(mgr.releaseCachedView("proj-a")).toBe(false);
+    expect(wcA.close).not.toHaveBeenCalled();
+
+    // Once that assistant has exited, its binding no longer pins the view.
+    liveTerminals.delete("t-help-a");
+    expect(mgr.canReleaseCachedView("proj-a")).toBe(true);
+  });
+
+  it("keeps a cached view an MCP dispatch is still waiting on", () => {
+    // A bound session that is quiet holds nothing.
+    bound.add("proj-a");
+    expect(mgr.canReleaseCachedView("proj-a")).toBe(true);
+    dispatching.add("proj-a");
+    expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+  });
+
+  it("keeps a cached view when MCP activity can't be read", () => {
+    mcpBroken = true;
+    expect(mgr.releaseCachedView("proj-a")).toBe(false);
+    expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
+  });
+
+  it("releases a view whose assistant is pinned to another window's view", () => {
+    assistantBackends.set("proj-a", { terminalId: "t-help-a", webContentsId: 9999 });
+    liveTerminals.add("t-help-a");
+    expect(mgr.canReleaseCachedView("proj-a")).toBe(true);
+  });
+
+  it("keeps a cached view still loading", () => {
+    mgr.views.get("proj-a")!.state = "loading";
+    expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+  });
+});

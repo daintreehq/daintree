@@ -1526,6 +1526,40 @@ export class ProjectViewManager {
     }
   }
 
+  /**
+   * Whether an explicit new-window request may take this project's cached view
+   * out of this window (#13274). Only a settled view in the background: never
+   * the one in front (a closed project's picker included) or still painted
+   * behind a switch, never one still loading, and never one whose loss would
+   * kill work — a running Daintree Assistant's process tree dies with the view
+   * it pinned, and an MCP dispatch in flight (or one that can't be ruled out)
+   * would lose the renderer it targets.
+   */
+  canReleaseCachedView(projectId: string): boolean {
+    const entry = this.views.get(projectId);
+    if (!entry || entry.state !== "cached") return false;
+    const wc = entry.view.webContents;
+    if (wc.isDestroyed()) return false;
+    if (projectId === this.activeProjectId) return false;
+    if (projectId === this.getOutgoingBridgeProjectId()) return false;
+    // Unlike pressure eviction, a move the user asked for can wait: activity
+    // that can't be read is treated as a dispatch in flight.
+    const mcp = this.mcpActivityFor(projectId, wc);
+    if (mcp.dispatchLease || mcp.unknown) return false;
+    return !EvictionController.hasLiveAssistantBackend(this, projectId, entry);
+  }
+
+  /**
+   * Tear down a cached view so the project can open in another window
+   * (#13274). Grid terminals live in the pty-host and reattach to the new
+   * window's view. False, leaving the view alone, if it can't be released.
+   */
+  releaseCachedView(projectId: string): boolean {
+    if (!this.canReleaseCachedView(projectId)) return false;
+    cleanupEntry(this, projectId);
+    return true;
+  }
+
   /** Returns true if a cached view existed for the project and was torn down. */
   destroyView(projectId: string): boolean {
     const entry = this.views.get(projectId);

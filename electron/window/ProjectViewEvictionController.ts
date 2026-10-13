@@ -109,7 +109,7 @@ function readProcessMemoryKb(proc: Electron.ProcessMetric): number {
  * sub-agent or background shell and go idle while that work runs on, which is
  * precisely the case the issue reports losing.
  */
-function hasLiveAssistantBackend(
+export function hasLiveAssistantBackend(
   host: ProjectViewManager,
   projectId: string,
   entry: ViewEntry

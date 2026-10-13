@@ -233,10 +233,15 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   openInOtherWindow?: ProjectPresenceState;
   /**
    * This window already holds a view of the project — the current one, or one
-   * it keeps cached. There is no second window to open it in: asking for one
-   * brings it up here instead.
+   * it keeps cached.
    */
   isOpenInThisWindow?: boolean;
+  /**
+   * The view this window holds is only cached, in the background. Asking for a
+   * new window moves it there (#13274), where one in front or still activating
+   * has no second window to go to.
+   */
+  isCachedInThisWindow?: boolean;
   /**
    * Effective (read-time decayed) frecency, computed against one shared `now`
    * per list build — never the raw persisted snapshot.
@@ -873,7 +878,7 @@ function isSamePresence(
 ): boolean {
   const key = (snapshot: ProjectPresenceSnapshot | null): string =>
     JSON.stringify([
-      (snapshot?.thisWindow ?? []).map((e) => e.projectId).sort(),
+      (snapshot?.thisWindow ?? []).map((e) => `${e.projectId}:${e.state}`).sort(),
       (snapshot?.otherWindows ?? []).map((e) => `${e.projectId}:${e.state}`).sort(),
     ]);
   return key(a) === key(b);
@@ -884,7 +889,7 @@ interface SearchableProjectContext {
   displayPathById: ReadonlyMap<string, string>;
   presenceByProjectId: {
     otherWindows: ReadonlyMap<string, ProjectPresenceState>;
-    thisWindow: ReadonlySet<string>;
+    thisWindow: ReadonlyMap<string, ProjectPresenceState>;
   };
   /**
    * One `now` for a whole build keeps every row's effective score on the same
@@ -932,6 +937,7 @@ function toSearchableProject(
     isPinned: p.pinned ?? false,
     openInOtherWindow: isActive ? undefined : context.presenceByProjectId.otherWindows.get(p.id),
     isOpenInThisWindow: context.presenceByProjectId.thisWindow.has(p.id),
+    isCachedInThisWindow: context.presenceByProjectId.thisWindow.get(p.id) === "cached",
     frecencyScore: decayFrecencyScore(
       p.frecencyScore ?? FRECENCY_COLD_START,
       p.lastAccessedAt ?? 0,
@@ -1249,7 +1255,10 @@ export function useProjectSwitcherPalette({
     for (const entry of presence?.otherWindows ?? []) {
       otherWindows.set(entry.projectId, entry.state);
     }
-    const thisWindow = new Set((presence?.thisWindow ?? []).map((entry) => entry.projectId));
+    const thisWindow = new Map<string, ProjectPresenceState>();
+    for (const entry of presence?.thisWindow ?? []) {
+      thisWindow.set(entry.projectId, entry.state);
+    }
     return { otherWindows, thisWindow };
   }, [presence]);
 

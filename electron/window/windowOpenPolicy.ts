@@ -46,6 +46,12 @@ export interface OpenWorldWindow {
   /** Every workspace with a live view in this window, foreground and cached. */
   viewProjectIds: readonly string[];
   /**
+   * The cached views an explicit new-window request may take from this window
+   * (#13274): not in front, not behind the bridge, not mid-activation, and not
+   * backing a running Daintree Assistant, whose process dies with its view.
+   */
+  releasableViewProjectIds?: readonly string[];
+  /**
    * False until the window has finished setting up. A booting window may still
    * be about to bind the workspace it was created or restored for, so it is
    * never treated as empty.
@@ -77,9 +83,15 @@ export type ProjectOpenDecision =
   /** The project is already in front in this window (or on its way there): bring the window forward. */
   | { kind: "focus"; windowId: number }
   /** Open or switch the project inside this existing window. */
-  | { kind: "activate"; windowId: number; reason: "owner" | "empty" | "current" }
+  | {
+      kind: "activate";
+      windowId: number;
+      reason: "owner" | "empty" | "current";
+      /** Tear down the project's cached view in this window first (#13274). */
+      releaseFromWindowId?: number;
+    }
   /** No existing window qualifies: make one. */
-  | { kind: "create" };
+  | { kind: "create"; releaseFromWindowId?: number };
 
 function reservationMatches(
   reservation: WindowOpenReservation,
@@ -112,7 +124,7 @@ function findOwner(request: ProjectOpenRequest, world: OpenWorld): ProjectOpenDe
 
   if (projectId !== null) {
     const cached = windows.find((w) => w.viewProjectIds.includes(projectId));
-    if (cached) return { kind: "activate", windowId: cached.windowId, reason: "owner" };
+    if (cached) return releaseCachedOwner(request, world, cached) ?? ownerOf(cached);
   }
 
   // Opened again rather than focused: the prompt it was waiting on may have
@@ -121,9 +133,40 @@ function findOwner(request: ProjectOpenRequest, world: OpenWorld): ProjectOpenDe
   const unbound = windows.find(
     (w) => !w.onRemoteHost && w.unboundOpens.some((r) => reservationMatches(r, request))
   );
-  if (unbound) return { kind: "activate", windowId: unbound.windowId, reason: "owner" };
+  if (unbound) return ownerOf(unbound);
 
   return null;
+}
+
+function ownerOf(w: OpenWorldWindow): ProjectOpenDecision {
+  return { kind: "activate", windowId: w.windowId, reason: "owner" };
+}
+
+/**
+ * An explicit new-window request for a project another window only keeps
+ * cached takes it out of that window rather than switching it in there
+ * (#13274): the single live view moves, it is never duplicated. Null where the
+ * holder must keep it — it is in front, still painted behind a switch, being
+ * activated, or backing a running assistant — where another window holds it
+ * too, or where the new-window target would be the holder itself, a picker
+ * window that simply shows it.
+ */
+function releaseCachedOwner(
+  request: ProjectOpenRequest,
+  world: OpenWorld,
+  holder: OpenWorldWindow
+): ProjectOpenDecision | null {
+  const { projectId } = request;
+  if (request.disposition !== "new" || projectId === null) return null;
+  if (!holder.releasableViewProjectIds?.includes(projectId)) return null;
+  // A legacy fleet can hold the project in two windows. Releasing one copy would
+  // only send the open to the other, so leave both and use the owner.
+  if (world.windows.some((w) => w !== holder && w.viewProjectIds.includes(projectId))) {
+    return null;
+  }
+  const target = newWindowTarget(request, world);
+  if (target.kind === "activate" && target.windowId === holder.windowId) return null;
+  return { ...target, releaseFromWindowId: holder.windowId };
 }
 
 function isEmptyWindow(w: OpenWorldWindow): boolean {
@@ -142,7 +185,10 @@ function isEmptyWindow(w: OpenWorldWindow): boolean {
  * explicit "new" never reuses the window that asked, even an empty one — the
  * gesture promises the asking window is left exactly as it was (#12594).
  */
-function newWindowTarget(request: ProjectOpenRequest, world: OpenWorld): ProjectOpenDecision {
+function newWindowTarget(
+  request: ProjectOpenRequest,
+  world: OpenWorld
+): Exclude<ProjectOpenDecision, { kind: "focus" }> {
   const excluded = request.disposition === "new" ? request.initiatingWindowId : null;
   const empty = candidateOrder(request, world).find(
     (w) => w.windowId !== excluded && isEmptyWindow(w)
