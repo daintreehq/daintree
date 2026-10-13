@@ -1396,37 +1396,37 @@ describe("KeybindingService", () => {
   });
 
   describe("platform-aware Cmd/Ctrl conflict detection — issue #7941", () => {
-    it("findConflicts treats Cmd+Shift+E and Ctrl+Shift+E as the same combo on Windows", () => {
-      // terminal.sendToAgent defaults to "Cmd+Shift+E". The rebind UI must
-      // surface a conflict when a user tries to assign "Ctrl+Shift+E" on
+    it("findConflicts treats Cmd+Shift+B and Ctrl+Shift+B as the same combo on Windows", () => {
+      // terminal.armDefault defaults to "Cmd+Shift+B". The rebind UI must
+      // surface a conflict when a user tries to assign "Ctrl+Shift+B" on
       // non-Mac because both map to the same physical key.
       setPlatform("Win32");
       const service = new KeybindingService();
 
-      const conflicts = service.findConflicts("Ctrl+Shift+E");
+      const conflicts = service.findConflicts("Ctrl+Shift+B");
       expect(
-        conflicts.some((c) => c.actionId === "terminal.sendToAgent" && c.kind === "conflict")
+        conflicts.some((c) => c.actionId === "terminal.armDefault" && c.kind === "conflict")
       ).toBe(true);
     });
 
-    it("findConflicts treats Cmd+Shift+E and Ctrl+Shift+E as the same combo on Linux", () => {
+    it("findConflicts treats Cmd+Shift+B and Ctrl+Shift+B as the same combo on Linux", () => {
       setPlatform("Linux x86_64");
       const service = new KeybindingService();
 
-      const conflicts = service.findConflicts("Ctrl+Shift+E");
+      const conflicts = service.findConflicts("Ctrl+Shift+B");
       expect(
-        conflicts.some((c) => c.actionId === "terminal.sendToAgent" && c.kind === "conflict")
+        conflicts.some((c) => c.actionId === "terminal.armDefault" && c.kind === "conflict")
       ).toBe(true);
     });
 
-    it("findConflicts keeps Cmd+Shift+E and Ctrl+Shift+E distinct on macOS", () => {
+    it("findConflicts keeps Cmd+Shift+B and Ctrl+Shift+B distinct on macOS", () => {
       // On macOS, Cmd and Ctrl are physically distinct keys — assigning
-      // Ctrl+Shift+E should NOT collide with the Cmd+Shift+E default.
+      // Ctrl+Shift+B should NOT collide with the Cmd+Shift+B default.
       setPlatform("MacIntel");
       const service = new KeybindingService();
 
-      const conflicts = service.findConflicts("Ctrl+Shift+E");
-      expect(conflicts.some((c) => c.actionId === "terminal.sendToAgent")).toBe(false);
+      const conflicts = service.findConflicts("Ctrl+Shift+B");
+      expect(conflicts.some((c) => c.actionId === "terminal.armDefault")).toBe(false);
     });
 
     it("findConflicts surfaces a cross-form chord-prefix shadow on non-Mac", () => {
@@ -2321,6 +2321,25 @@ describe("KeybindingService", () => {
       service.removePluginBindings("nonexistent");
 
       expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("lets a user override beat a plugin binding that registered first", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.registerBinding({
+        actionId: "p1.act",
+        combo: "Cmd+Shift+8",
+        scope: "global",
+        priority: 1,
+        pluginId: "p1",
+      });
+      // The user then binds a built-in to the same key: their choice wins,
+      // whatever order the two arrived in.
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+      const match = service.findMatchingAction(
+        createKeyboardEvent({ key: "8", code: "Digit8", metaKey: true, shiftKey: true })
+      );
+      expect(match?.actionId).toBe("nav.toggleSidebar");
     });
 
     it("does not clobber a built-in when a plugin binds the same action and combo", () => {

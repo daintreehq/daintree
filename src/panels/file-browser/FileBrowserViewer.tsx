@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
-import { CodeViewer } from "@/components/FileViewer/CodeViewer";
+import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import {
   FileViewerToolbar,
@@ -49,7 +49,7 @@ import {
   UNSUPPORTED_AUDIO_MESSAGE,
   UNSUPPORTED_VIDEO_MESSAGE,
 } from "@/components/FileViewer/filePreviewKinds";
-import { MarkdownViewer } from "@/components/Markdown/MarkdownViewer";
+import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import {
   MarkdownTextSizeControl,
@@ -101,6 +101,8 @@ export interface FileBrowserViewerProps {
   editorContext?: { projectId: string; worktreePath: string | null; isFocused: boolean };
   /** Owning panel's id, so a mode chosen in one panel stays in that panel. */
   panelId: string;
+  /** Whether the owning panel has focus, so Cmd+F searches this viewer. */
+  isFocused?: boolean;
   /** Absolute path of the selected file; null when nothing is selected. */
   filePath: string | null;
   /** Absolute worktree root — the containment root for reads and asset loads. */
@@ -301,6 +303,7 @@ function DiffLoadingSkeleton() {
 export function FileBrowserViewer({
   editorContext,
   panelId,
+  isFocused = false,
   filePath,
   rootPath,
   fileName,
@@ -458,6 +461,19 @@ export function FileBrowserViewer({
   // what replaced it instead of dropping it on the document body.
   const focusAfterNavigationRef = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const codeViewerRef = useRef<CodeViewerHandle>(null);
+  const markdownViewerRef = useRef<MarkdownViewerHandle>(null);
+  // Cmd+F opens the source view's find bar while this panel has focus, as it
+  // does in the file panel; rendered and media views have nothing to search.
+  useEffect(() => {
+    if (!isFocused) return;
+    const handleFindInPanel = () => {
+      markdownViewerRef.current?.openSearch();
+      codeViewerRef.current?.openSearch();
+    };
+    window.addEventListener("daintree:find-in-panel", handleFindInPanel);
+    return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
+  }, [isFocused]);
   const handleListingSelect = useCallback(
     (path: string, _isDirectory: boolean, viaKeyboard?: boolean) => {
       if (viaKeyboard) focusAfterNavigationRef.current = true;
@@ -1368,7 +1384,14 @@ export function FileBrowserViewer({
         // rendered mode rather than silently showing source: its empty state
         // says why and points at the Source segment, which now exists here.
         if (renderMode === "source") {
-          return <CodeViewer content={state.content} filePath={filePath} className="h-full" />;
+          return (
+            <CodeViewer
+              ref={codeViewerRef}
+              content={state.content}
+              filePath={filePath}
+              className="h-full"
+            />
+          );
         }
         return (
           <HtmlViewer previewUrl={state.previewUrl} reloadNonce={reloadNonce} title={fileName} />
@@ -1376,7 +1399,14 @@ export function FileBrowserViewer({
 
       case "text":
         if (!isMarkdown) {
-          return <CodeViewer content={state.content} filePath={filePath} className="h-full" />;
+          return (
+            <CodeViewer
+              ref={codeViewerRef}
+              content={state.content}
+              filePath={filePath}
+              className="h-full"
+            />
+          );
         }
         // Source mode was never part of #11441: CodeViewer's root is already a
         // scrollport, and at pane height it owns BOTH axes, so its horizontal
@@ -1389,6 +1419,7 @@ export function FileBrowserViewer({
         if (renderMode === "source") {
           return (
             <MarkdownViewer
+              ref={markdownViewerRef}
               content={state.content}
               filePath={filePath}
               rootPath={rootPath}

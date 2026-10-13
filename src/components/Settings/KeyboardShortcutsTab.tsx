@@ -393,7 +393,7 @@ export function KeyboardShortcutsTab() {
     return groups;
   }, [filteredBindings]);
 
-  // An imported profile replaces every binding, which invalidates any edit that
+  // An imported profile can replace any binding, which invalidates any edit that
   // was in flight when it landed: a save resolving afterwards would either raise
   // a banner about a binding that no longer exists, or let its Retry overwrite
   // the freshly imported profile with a stale captured combo. Bump the epoch on
@@ -667,7 +667,7 @@ export function KeyboardShortcutsTab() {
         <SettingsGroup>
           <SettingsRow
             label="Shortcut profile"
-            description="Save your customized shortcuts to a file, or load one exported on another machine. Importing replaces every customization."
+            description="Save your customized shortcuts to a file, or load one exported on another machine. Importing merges into your customizations: shortcuts in the file replace yours for the same action, and the rest are kept."
             control={<KeybindingProfileActions onImportComplete={handleImportComplete} />}
           />
         </SettingsGroup>

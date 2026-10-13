@@ -347,9 +347,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
             // Element (not HTMLElement) — only closest() is needed below, and
             // an unchecked HTMLElement cast trips no-unsafe-type-assertion.
             const active = document.activeElement;
-            // A surface inside an overlay that holds a terminal of its own —
-            // the canopy panel's agent pane — closes that terminal, as a grid
-            // pane's Cmd+W would, rather than the overlay around it.
+            // A surface inside an overlay that owns its own close — the canopy
+            // panel's agent pane, which closes the canopy panel rather than
+            // the agent's terminal — takes it before the branches below.
             if (requestOwnedClose(active)) return;
             // Cmd+W inside the Daintree Assistant closes the assistant itself.
             // Its escape handler intentionally bails when the embedded xterm /

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { actionService } from "@/services/ActionService";
+import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import type { FleetPendingActionSnapshot } from "@/store/fleetPendingActionStore";
 
 const DOUBLE_ESC_WINDOW_MS = 350;
@@ -89,6 +90,14 @@ export function useFleetEscapeChords(
             target.isContentEditable) &&
           target.closest(".xterm") === null
         ) {
+          lastBareEscapeMsRef.current = 0;
+          return;
+        }
+        // Broadcast follows the same rule as typed input: a pane outside the
+        // fleet keeps its keys. Esc Esc there is that program's own gesture
+        // (an agent's rewind, say), not an order to every armed agent.
+        const panelId = target?.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? null;
+        if (panelId !== null && !useFleetArmingStore.getState().armedIds.has(panelId)) {
           lastBareEscapeMsRef.current = 0;
           return;
         }

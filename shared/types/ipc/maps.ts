@@ -1797,7 +1797,7 @@ export interface IpcEventMap {
   "os-dnd:state-changed": import("./osDnd.js").OsDndState;
 
   // Menu events
-  "menu:action": { actionId: string; args?: unknown };
+  "menu:action": { actionId: string; args?: unknown; portalActionId?: string };
 
   // Window events
   "window:fullscreen-change": boolean;

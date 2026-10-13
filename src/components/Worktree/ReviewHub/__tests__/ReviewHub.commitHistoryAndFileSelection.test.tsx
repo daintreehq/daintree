@@ -529,6 +529,26 @@ describe("ReviewHub", () => {
       expect(screen.getByText("16/72")).toBeTruthy();
     });
 
+    it("Escape in the commit box leaves the field without closing the review or losing the draft", async () => {
+      const onClose = vi.fn();
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      await waitFor(() => screen.getByLabelText("Commit message"));
+
+      const textarea = screen.getByLabelText<HTMLTextAreaElement>("Commit message");
+      fireEvent.change(textarea, { target: { value: "fix: keep this draft" } });
+      textarea.focus();
+
+      fireEvent.keyDown(textarea, { key: "Escape" });
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Changed files");
+      expect(textarea.value).toBe("fix: keep this draft");
+
+      // Holding Escape: the repeats land on the list and must not close the hub.
+      fireEvent.keyDown(document.activeElement!, { key: "Escape", repeat: true });
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
     it("counter reflects subject length past the 72-char limit", async () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByLabelText("Commit message"));

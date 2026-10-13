@@ -81,7 +81,7 @@ export interface UseWorktreeSidebarKeyboardReturn {
  * The sidebar uses aria-activedescendant in list mode so off-screen rows never
  * need DOM presence to participate in navigation. The grid container holds the
  * single tab stop and tracks the active row via state. When the user enters a
- * row's action toolbar (Enter / ArrowRight), focus moves into the real DOM
+ * row's action toolbar (ArrowRight / F2), focus moves into the real DOM
  * toolbar buttons (the active row is always within Virtuoso's overscan when
  * this fires, so the toolbar is mounted) and tabIndex mutation handles the
  * toolbar's roving tab stop. Escape returns to list mode.
@@ -442,7 +442,10 @@ export function useWorktreeSidebarKeyboard({
         return;
       }
 
-      if (e.key === "Enter" || e.key === "ArrowRight") {
+      // Enter always opens, as it does in the worktree overview: every row
+      // carries a toolbar, so letting Enter step into it left no key but Space
+      // that opened a worktree. ArrowRight and F2 reach the controls.
+      if (e.key === "ArrowRight" || e.key === "F2") {
         if (enterToolbarMode(currentWorktreeId)) {
           e.preventDefault();
           e.stopPropagation();
@@ -453,7 +456,7 @@ export function useWorktreeSidebarKeyboard({
       }
 
       // j / k aliases for Vim-style navigation, alongside ArrowUp/ArrowDown.
-      if (e.key === " " || e.key === "Spacebar") {
+      if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
         selectRow(currentWorktreeId, e);
         return;
       }

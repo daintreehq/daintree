@@ -20,7 +20,6 @@ export const config: AgentConfig = {
   // undefined per the AssistantSupports docs — that excludes the agent
   // from both `getAssistantSupportedAgentIds()` and
   // `getAssistantWiredAgentIds()` until the overlay path is verified.
-  shortcut: "Cmd/Ctrl+Alt+A",
   tooltip: "Google's CLI",
   version: {
     args: ["--version"],

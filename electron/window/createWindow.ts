@@ -30,7 +30,7 @@ import { getDevServerUrl } from "../../shared/config/devServer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
-import { isRendererOwnedShortcut } from "../services/menuAccelerators.js";
+import { findTerminalCycleAction, isRendererOwnedShortcut } from "../services/menuAccelerators.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
   buildSkeletonCss,
@@ -559,22 +559,15 @@ export function setupBrowserWindow(
     webPreferences.partition = params.partition;
   });
 
-  // Prevent Cmd+W / Ctrl+W from closing the window, and route Ctrl+Tab terminal
-  // focus shortcuts for the initial app view. ProjectViewManager installs the
+  // Prevent Cmd+W / Ctrl+W from closing the window, and route the terminal
+  // cycle shortcuts (Ctrl+Tab by default) for the initial app view. ProjectViewManager installs the
   // same Ctrl+Tab bridge for cold-started project views.
   appWebContents.on("before-input-event", (event, input) => {
     const key = input.key.toLowerCase();
-    const isTerminalFocusShortcut =
-      input.type === "keyDown" &&
-      (key === "tab" || input.code === "Tab") &&
-      input.control &&
-      !input.meta &&
-      !input.alt;
-    if (isTerminalFocusShortcut) {
+    const terminalCycleAction = findTerminalCycleAction(input);
+    if (terminalCycleAction) {
       event.preventDefault();
-      appWebContents.send(CHANNELS.MENU_ACTION, {
-        actionId: input.shift ? "terminal.focusPrevious" : "terminal.focusNext",
-      });
+      appWebContents.send(CHANNELS.MENU_ACTION, terminalCycleAction);
       return;
     }
 
