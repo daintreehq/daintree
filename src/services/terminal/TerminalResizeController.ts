@@ -696,7 +696,7 @@ export class TerminalResizeController {
         // an older box fires later and drags BOTH grids to it (#11095). The
         // same send re-asserts the PTY when the cache ran ahead of the grid:
         // it was told that other target and nothing else here will correct it.
-        if (grid.cacheWasStale || this.hasPendingResize(id)) {
+        if (grid.cacheWasStale || this.hasPendingResize(id) || managed.reassertPtyGrid) {
           this.clearResizeJob(managed);
           this.sendPtyResize(id, grid.cols, grid.rows);
         }
@@ -768,7 +768,7 @@ export class TerminalResizeController {
         // target at the truth, and supersede the stale job.
         managed.latestCols = cols;
         managed.latestRows = rows;
-        if (this.hasPendingResize(id)) {
+        if (this.hasPendingResize(id) || managed.reassertPtyGrid) {
           this.clearResizeJob(managed);
           this.sendPtyResize(id, cols, rows);
         }
@@ -901,7 +901,7 @@ export class TerminalResizeController {
       // here would hand a settled-strategy agent's commit to a timer that
       // reflows a hidden, possibly frozen renderer — the delivery this path
       // exists to bypass. Queued work was already cancelled above.
-      if (grid.cacheWasStale) {
+      if (grid.cacheWasStale || managed.reassertPtyGrid) {
         this.postPtyResize(managed, id, grid.cols, grid.rows);
       }
       return null;
@@ -1400,6 +1400,7 @@ export class TerminalResizeController {
     if (this.geometryHolds.has(id)) return;
     managed.ptyCols = cols;
     managed.ptyRows = rows;
+    managed.reassertPtyGrid = undefined;
     terminalClient.resize(id, cols, rows);
   }
 

@@ -197,4 +197,46 @@ describe("TerminalResizeController geometry hold", () => {
       expect(panes.get("term-0").terminal.resize).toHaveBeenCalledWith(200, 50);
     });
   });
+
+  describe("sending the pane's grid after a watch ends (#13282)", () => {
+    // A pane already fit to its box, whose next measurement converges.
+    function converged(visible: boolean) {
+      const { panes, controller } = setup();
+      const managed = panes.get("term-0");
+      managed.terminal._core = {
+        _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } } },
+      };
+      if (!visible) {
+        managed.isVisible = false;
+        managed.isFocused = false;
+        managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      }
+      controller.resize("term-0", 1000, 700, { immediate: true });
+      expect(resizeMock).toHaveBeenCalled();
+      resizeMock.mockReset();
+      managed.lastWidth = 0;
+      managed.lastHeight = 0;
+      return { managed, controller };
+    }
+
+    it.each([
+      ["a visible", true],
+      ["a background", false],
+    ])("sends %s pane's unchanged grid only while the PTY is owed it", (_label, visible) => {
+      const { managed, controller } = converged(visible);
+      const grid = [managed.terminal.cols, managed.terminal.rows];
+
+      controller.resize("term-0", 1000, 700, { immediate: true });
+      expect(resizeMock).not.toHaveBeenCalled();
+
+      managed.lastWidth = 0;
+      managed.lastHeight = 0;
+      managed.reassertPtyGrid = true;
+      controller.resize("term-0", 1000, 700, { immediate: true });
+
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-0", grid[0], grid[1]);
+      expect(managed.reassertPtyGrid).toBeUndefined();
+    });
+  });
 });

@@ -1269,26 +1269,25 @@ class TerminalInstanceService {
   private stopWatching(): void {
     this.watchEpoch += 1;
     if (this.watchHolds.size === 0) return;
-    const unmeasured: string[] = [];
+    const refit: string[] = [];
     for (const id of this.watchHolds) {
       const managed = this.instances.get(id);
       if (managed) {
         // The PTY was last sized by the other frontend, and the pane's box was
-        // never applied while held: neither cache may dedup the re-fit away.
+        // never applied while held: no cache may dedup the re-fit away, even
+        // where the pane's grid is the one xterm already holds. A pane still
+        // locked or held by Canopy carries this to whichever pass frees it.
         managed.lastWidth = 0;
         managed.lastHeight = 0;
+        managed.reassertPtyGrid = true;
         this.resizeController.invalidatePtyGrid(id);
       }
-      if (!this.resizeController.releaseGeometry(id) || !managed) continue;
-      // `fit` rather than the resize pass for a pane it can measure: the pass
-      // sends nothing when the pane's grid is the one xterm already holds,
-      // and the PTY is still on the other frontend's.
-      if (this.resizeController.fit(id) === null) unmeasured.push(id);
+      if (this.resizeController.releaseGeometry(id) && managed) refit.push(id);
     }
     this.watchHolds.clear();
     this.watchEchoSeq.clear();
     this.watchUnseeded.clear();
-    if (unmeasured.length > 0) this.runResizePass(unmeasured, { immediate: true });
+    if (refit.length > 0) this.runResizePass(refit, { immediate: true });
   }
 
   /**

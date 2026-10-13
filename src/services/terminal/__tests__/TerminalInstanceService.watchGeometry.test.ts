@@ -111,13 +111,6 @@ function deferredInfo(): (value: TerminalInfoPayload) => void {
   return (value) => answer(value);
 }
 
-/** A pane laid out at a box that fits 100x30. */
-function makeMeasurable(managed: ManagedTerminal): void {
-  managed.hostElement.checkVisibility = () => true;
-  managed.hostElement.getBoundingClientRect = () => ({ width: 1000, height: 700 }) as DOMRect;
-  managed.fitAddon.proposeDimensions = () => ({ cols: 100, rows: 30 });
-}
-
 function echo(cols: number, rows: number): TerminalResizeResult {
   return {
     launchGeneration: 1,
@@ -138,8 +131,6 @@ describe("TerminalInstanceService — watching a project another frontend drives
   let gate: InputGate;
 
   beforeEach(async () => {
-    // jsdom has no layout: every pane reads as not laid out, as an unattached one does.
-    HTMLElement.prototype.checkVisibility ??= () => false;
     vi.resetModules();
     vi.clearAllMocks();
     capturedResizeResultCb = null;
@@ -256,27 +247,30 @@ describe("TerminalInstanceService — watching a project another frontend drives
     expect(grid("t1")).toEqual([150, 45]);
   });
 
-  it("re-fits and resizes the PTY on taking the project over, even at an unchanged grid", async () => {
+  it("re-fits every watched pane in one pass on taking the project over", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
     await service.prewarmTerminal("t2", "terminal", {});
-    // The driver's pane happens to fit the same grid as this one.
     answerFrom({ t1: [100, 30], t2: [200, 50] });
     gate.setDriveLeaseSnapshot(lease());
     await settle();
-    expect(grid("t1")).toEqual([100, 30]);
-    makeMeasurable(service.instances.get("t1")!);
     const pass = vi.spyOn(service, "runResizePass").mockImplementation(() => {});
+    for (const id of ["t1", "t2"]) {
+      service.instances.get(id)!.ptyCols = 100;
+      service.instances.get(id)!.ptyRows = 30;
+    }
 
     gate.setDriveLeaseSnapshot(lease({ drivingHere: true, isHolderEndpoint: true }));
 
     expect(locked("t1")).toBe(false);
     expect(locked("t2")).toBe(false);
-    // The PTY was last sized by the other frontend, so the grid xterm already
-    // holds still has to be sent.
-    expect(resize).toHaveBeenCalledWith("t1", 100, 30);
-    // A pane with no layout to measure yet goes to the pass instead.
     expect(pass).toHaveBeenCalledTimes(1);
-    expect(pass).toHaveBeenCalledWith(["t2"], { immediate: true });
+    expect(pass).toHaveBeenCalledWith(["t1", "t2"], { immediate: true });
+    // The PTY was last sized by the other frontend, so the re-fit must send
+    // even where the pane's grid is the one xterm already holds.
+    for (const id of ["t1", "t2"]) {
+      expect(service.instances.get(id)!.ptyCols).toBeUndefined();
+      expect(service.instances.get(id)!.reassertPtyGrid).toBe(true);
+    }
   });
 
   it("drops a read from before the take-over once watching starts again", async () => {
