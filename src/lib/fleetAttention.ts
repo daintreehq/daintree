@@ -73,6 +73,20 @@ export function isAttentionBand(band: FleetBand): boolean {
 }
 
 /**
+ * The bands behind the three state buckets every surface names the same way:
+ * Pilot's segments and the worktree sidebar's quick-state filter read these
+ * sets, so "Attention" or "Finished" cannot mean one set of agents in one place
+ * and another set elsewhere. Narrower than {@link isAttentionBand} on purpose —
+ * `review` is a hand-back, not something an agent is asking.
+ */
+export const ATTENTION_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>([
+  "blocked",
+  "needs-you",
+]);
+export const WORKING_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["running"]);
+export const FINISHED_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["review", "done"]);
+
+/**
  * Which band a run belongs to.
  *
  * A stop is a hand-back only when main watched the run do the work before it:

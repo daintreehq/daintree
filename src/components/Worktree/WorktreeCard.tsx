@@ -74,6 +74,9 @@ import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArm
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
 import { computeChipState } from "./utils/computeChipState";
+import { isAgentTerminal } from "@/utils/terminalType";
+import { deriveWorktreeAgentBuckets, isWorktreeMergedForCleanup } from "@/lib/worktreeAgentBuckets";
+import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
 import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
@@ -390,8 +393,6 @@ export function WorktreeCard({
     branchLabel,
     isMainOnStandardBranch,
     hasChanges,
-    isComplete,
-    lifecycleStage,
     effectiveNote,
     effectiveSummary,
     computedSubtitle,
@@ -676,12 +677,17 @@ export function WorktreeCard({
   const isStaleCard = spineState === "stale";
   const isWaitingCard = terminalCounts.byState.waiting > 0;
 
-  const chipState = computeChipState({
-    waitingTerminalCount: terminalCounts.byState.waiting,
-    lifecycleStage,
-    isComplete,
-    hasActiveAgent: terminalCounts.byState.working > 0,
-  });
+  // The same buckets the sidebar filter counts this worktree under, so the mark
+  // and the filter cannot disagree.
+  const { runsById, acknowledgedAt } = useWorktreeAgentBucketInputs();
+  const chipState = computeChipState(
+    deriveWorktreeAgentBuckets(
+      worktreeTerminals.filter(isAgentTerminal).map((t) => t.id),
+      runsById,
+      acknowledgedAt,
+      isWorktreeMergedForCleanup(worktree)
+    )
+  );
 
   // The active card used to opt out of being a drop target entirely — every
   // panel drag originated from the active worktree, so it could only ever be a
@@ -1038,7 +1044,7 @@ export function WorktreeCard({
           onPointerEnter={handlePointerEnter}
           onPointerLeave={handlePointerLeave}
         >
-          {/* Worktree-level state — waiting / ready-for-cleanup / complete — as
+          {/* Worktree-level state — attention / ready-for-cleanup / finished — as
               a mark in the card's top-left corner, not a dot in the title row.
 
               Two things a dot could not do. A 4px vertical is a different
@@ -1057,7 +1063,9 @@ export function WorktreeCard({
               corner.
 
               `computeChipState` returns one state or none, never a
-              combination, so one mark is the whole vocabulary.
+              combination, so one mark is the whole vocabulary. It projects
+              the worktree's quick-state buckets, the same ones the sidebar
+              filter counts it under.
 
               Each state gets its own segment count as well as its own hue, and
               that is a requirement rather than a flourish: three marks that
@@ -1071,7 +1079,7 @@ export function WorktreeCard({
               trails the terminal list is heard after everything it qualifies.
               The root's own `aria-label` does not cover it — that "Status:" is
               the spine's dirty/current/stale, a different axis from
-              waiting/cleanup/complete — so this label is the only place the
+              attention/cleanup/finished — so this label is the only place the
               lifecycle state is spoken.
 
               Which is also why it outranks the content column's own `z-10`

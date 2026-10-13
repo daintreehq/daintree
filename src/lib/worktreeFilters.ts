@@ -11,6 +11,10 @@ import type {
   DevServerFilter,
 } from "@/store/worktreeFilterStore";
 import type { ChipState } from "@/components/Worktree/utils/computeChipState";
+import {
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  type WorktreeAgentBuckets,
+} from "@/lib/worktreeAgentBuckets";
 import type { DevPreviewSessionState, DevPreviewSessionStatus } from "@shared/types/ipc/devPreview";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 
@@ -23,9 +27,12 @@ export interface DerivedWorktreeMeta {
   hasCompletedAgent: boolean;
   hasExitedAgent: boolean;
   hasMergeConflict: boolean;
+  /** The quick-state buckets, from the agents' fleet bands (`worktreeAgentBuckets`). */
+  buckets: WorktreeAgentBuckets;
   chipState: ChipState;
 }
 
+/** `"waiting"` is the persisted id of the Attention bucket. */
 export type QuickStateFilter = "all" | "working" | "waiting" | "finished";
 
 export function matchesQuickStateFilter(
@@ -36,11 +43,11 @@ export function matchesQuickStateFilter(
     case "all":
       return true;
     case "working":
-      return meta.hasWorkingAgent && meta.chipState === null;
+      return meta.buckets.working;
     case "waiting":
-      return meta.chipState === "waiting";
+      return meta.buckets.attention;
     case "finished":
-      return meta.chipState === "complete" || meta.chipState === "cleanup";
+      return meta.buckets.finished;
   }
 }
 
@@ -626,6 +633,7 @@ const DEFAULT_DERIVED_META: DerivedWorktreeMeta = {
   hasCompletedAgent: false,
   hasExitedAgent: false,
   hasMergeConflict: false,
+  buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
   chipState: null,
 };
 

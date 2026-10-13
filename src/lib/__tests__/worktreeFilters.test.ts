@@ -22,6 +22,10 @@ import {
   type SidebarOrderPrefs,
 } from "../worktreeFilters";
 import type { OrderBy } from "@/store/worktreeFilterStore";
+import {
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  type WorktreeAgentBuckets,
+} from "@/lib/worktreeAgentBuckets";
 import type { Worktree } from "@shared/types/worktree";
 import type {
   StatusFilter,
@@ -104,7 +108,13 @@ const createEmptyMeta = (): DerivedWorktreeMeta => ({
   hasCompletedAgent: false,
   hasExitedAgent: false,
   hasMergeConflict: false,
+  buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
   chipState: null,
+});
+
+const withBuckets = (buckets: Partial<WorktreeAgentBuckets>): DerivedWorktreeMeta => ({
+  ...createEmptyMeta(),
+  buckets: { ...EMPTY_WORKTREE_AGENT_BUCKETS, ...buckets },
 });
 
 describe("getWorktreeType", () => {
@@ -1334,53 +1344,29 @@ describe("matchesQuickStateFilter", () => {
     expect(matchesQuickStateFilter("all", createEmptyMeta())).toBe(true);
   });
 
-  it('"working" matches when hasWorkingAgent and chipState is null', () => {
-    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: null };
+  it("matches each bucket on its own flag", () => {
+    expect(matchesQuickStateFilter("working", withBuckets({ working: true }))).toBe(true);
+    expect(matchesQuickStateFilter("waiting", withBuckets({ attention: true }))).toBe(true);
+    expect(matchesQuickStateFilter("finished", withBuckets({ finished: true }))).toBe(true);
+  });
+
+  it("keeps a working worktree in Working when an agent beside it is asking", () => {
+    const meta = withBuckets({ working: true, attention: true });
     expect(matchesQuickStateFilter("working", meta)).toBe(true);
-  });
-
-  it('"working" does NOT match when chipState overrides to "waiting"', () => {
-    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: "waiting" as const };
-    expect(matchesQuickStateFilter("working", meta)).toBe(false);
-  });
-
-  it('"working" does NOT match when chipState is "complete"', () => {
-    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: "complete" as const };
-    expect(matchesQuickStateFilter("working", meta)).toBe(false);
-  });
-
-  it('"working" does NOT match when no active agents', () => {
-    expect(matchesQuickStateFilter("working", createEmptyMeta())).toBe(false);
-  });
-
-  it('"waiting" matches when chipState is "waiting"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "waiting" as const };
     expect(matchesQuickStateFilter("waiting", meta)).toBe(true);
-  });
-
-  it('"finished" matches chipState "complete"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "complete" as const };
-    expect(matchesQuickStateFilter("finished", meta)).toBe(true);
-  });
-
-  it('"finished" matches chipState "cleanup"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "cleanup" as const };
-    expect(matchesQuickStateFilter("finished", meta)).toBe(true);
-  });
-
-  it('"finished" does NOT match chipState null', () => {
-    expect(matchesQuickStateFilter("finished", createEmptyMeta())).toBe(false);
-  });
-
-  it('"finished" does NOT match chipState "waiting"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "waiting" as const };
     expect(matchesQuickStateFilter("finished", meta)).toBe(false);
   });
 
-  it('"finished" does NOT match a merged worktree with an active agent (chipState null)', () => {
-    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: null };
-    expect(matchesQuickStateFilter("finished", meta)).toBe(false);
-    expect(matchesQuickStateFilter("working", meta)).toBe(true);
+  it("ignores raw panel agent states — an agent idle at its prompt is not Attention", () => {
+    const meta = { ...createEmptyMeta(), hasAgent: true, hasWaitingAgent: true };
+    expect(matchesQuickStateFilter("waiting", meta)).toBe(false);
+    expect(matchesQuickStateFilter("working", meta)).toBe(false);
+  });
+
+  it("matches nothing but All for a worktree in no bucket", () => {
+    for (const filter of ["working", "waiting", "finished"] as const) {
+      expect(matchesQuickStateFilter(filter, createEmptyMeta())).toBe(false);
+    }
   });
 });
 

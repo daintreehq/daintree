@@ -15,7 +15,7 @@ import {
 /**
  * The card's status tick must not carry its meaning in colour alone
  * (WCAG SC 1.4.1). It is the only place on the card where `cleanup` and
- * `complete` are told apart at all, so if their fills were the whole
+ * `finished` are told apart at all, so if their fills were the whole
  * difference, nothing on screen would distinguish them for a reader who cannot
  * separate those two hues — and under `forced-colors`, where `.status-mark`
  * flattens every state to one system colour, for nobody at all.
@@ -156,7 +156,7 @@ describe("WorktreeStatusTick", () => {
   it("keeps the gaps as real elements, so nothing but geometry has to survive forced colors", () => {
     // Sibling spans with a flex gap, not one element with a patterned
     // background: a background pattern is exactly what forced colors strips.
-    const { segments } = renderTick("complete");
+    const { segments } = renderTick("finished");
     expect(segments.length).toBeGreaterThan(1);
     for (const segment of segments) {
       expect(segment.tagName).toBe("SPAN");
@@ -169,7 +169,7 @@ describe("WorktreeStatusTick", () => {
     // which is what an `inset-y-0` inside the header does — made it start and
     // end exactly where the title does, and it read as punctuation on that
     // line instead of as a flag on the card.
-    const { tick } = renderTick("waiting");
+    const { tick } = renderTick("attention");
     const height = [...tick.classList].find((c) => /^h-\d/.test(c));
     expect(height, "the tick renders no height of its own").toBeDefined();
     expect(
@@ -183,7 +183,7 @@ describe("WorktreeStatusTick", () => {
     // the gaps — which are the entire encoding. Read off what actually
     // rendered, so retuning the height or the gap has to keep the arithmetic
     // working rather than silently softening the mark.
-    const { tick } = renderTick("waiting");
+    const { tick } = renderTick("attention");
     expectWholePixelPieces(tick, (count) => count);
   });
 
@@ -192,7 +192,7 @@ describe("WorktreeStatusTick", () => {
     // one system colour — so they have to run ACROSS the mark, which is what
     // stacking the segments buys, and they have to be wide enough to still be
     // there after antialiasing.
-    const { tick } = renderTick("complete");
+    const { tick } = renderTick("finished");
     expect(
       tick.classList.contains("flex-col"),
       `the segments are not stacked along the slot: ${tick.className}`
@@ -207,11 +207,11 @@ describe("WorktreeStatusTick", () => {
     // The sidebar card has no radius, but its top edge is the PREVIOUS card's
     // 2px gutter — as thick as the gaps between segments, and a solid rule
     // under forced colors. At y=0 the first segment fused into it and the rule
-    // read as one more piece, so `cleanup` and `complete` stopped separating.
+    // read as one more piece, so `cleanup` and `finished` stopped separating.
     // More clearance than any internal gap is what keeps the rule outside the
     // count. The leading edge has nothing to clear, so it stays flush.
     for (const collapsed of [false, true]) {
-      const { tick } = renderTick("complete", "sidebar", collapsed);
+      const { tick } = renderTick("finished", "sidebar", collapsed);
       expect(
         readInset(tick, "top-"),
         `collapsed=${collapsed}: the gutter above is no further off than the gaps inside`
@@ -235,7 +235,7 @@ describe("WorktreeStatusTick", () => {
     const LARGEST_BUILT_IN_CLIP_RADIUS = 10 * 1.05 - 1;
     const minimumClearance = LARGEST_BUILT_IN_CLIP_RADIUS * (1 - 1 / Math.SQRT2);
 
-    const { tick } = renderTick("complete", "grid");
+    const { tick } = renderTick("finished", "grid");
     for (const axis of ["top-", "start-"] as const) {
       expect(
         readInset(tick, axis),
@@ -249,9 +249,9 @@ describe("WorktreeStatusTick", () => {
     // clearance is ever copied onto the sidebar, the flush leading edge is
     // silently gone, and if the sidebar's flush edge is copied onto the grid,
     // the clipping is silently back.
-    const grid = readInset(renderTick("complete", "grid").tick, "start-");
+    const grid = readInset(renderTick("finished", "grid").tick, "start-");
     cleanup();
-    const sidebar = readInset(renderTick("complete", "sidebar").tick, "start-");
+    const sidebar = readInset(renderTick("finished", "sidebar").tick, "start-");
     expect(grid, "both cards are using the same inset").toBeGreaterThan(sidebar);
   });
 
@@ -262,7 +262,7 @@ describe("WorktreeStatusTick", () => {
     // edge the mark is now flush against, and a continuous line over a
     // segmented one bridges the gaps rather than tinting them, flattening
     // every state to a single bar.
-    const { tick } = renderTick("complete", "sidebar");
+    const { tick } = renderTick("finished", "sidebar");
     const layer = [...tick.classList].find((c) => /^z-\d+$/.test(c));
     expect(layer, `the tick declares no stacking layer: ${tick.className}`).toBeDefined();
     expect(
@@ -276,17 +276,17 @@ describe("WorktreeStatusTick", () => {
  * The collapsed row is a single line, and a 16px bar down the side of it reads
  * as a rail the row hangs off rather than as a mark on a card. The square is
  * the answer, and the thing it must not quietly cost is the segment count —
- * the only channel that separates `cleanup` from `complete` anywhere, and the
+ * the only channel that separates `cleanup` from `finished` anywhere, and the
  * only channel of any kind once forced colors has taken the hue.
  */
 describe("WorktreeStatusTick — collapsed", () => {
   it("is square, and smaller than the bar it replaces", () => {
-    const { tick } = renderTick("complete", "sidebar", true);
+    const { tick } = renderTick("finished", "sidebar", true);
     const height = readAxis(tick, "h");
     const width = readAxis(tick, "w");
     expect(height, `not square: ${height}px tall, ${width}px wide`).toBe(width);
     cleanup();
-    const bar = readAxis(renderTick("complete", "sidebar").tick, "h");
+    const bar = readAxis(renderTick("finished", "sidebar").tick, "h");
     expect(height, "the collapsed mark is no shorter than the bar").toBeLessThan(bar);
   });
 
@@ -317,7 +317,7 @@ describe("WorktreeStatusTick — collapsed", () => {
   });
 
   it("keeps the pieces as real sibling elements, which is what forced colors leaves alone", () => {
-    const { segments } = renderTick("complete", "sidebar", true);
+    const { segments } = renderTick("finished", "sidebar", true);
     expect(segments.length).toBeGreaterThan(1);
     for (const segment of segments) {
       expect(segment.tagName).toBe("SPAN");
@@ -332,7 +332,7 @@ describe("WorktreeStatusTick — collapsed", () => {
     // segments would have needed. Asserted once per axis rather than once per
     // state: the tracks do not vary with the state, and a loop over states
     // here would repeat one sum three times under three different labels.
-    const { tick } = renderTick("waiting", "sidebar", true);
+    const { tick } = renderTick("attention", "sidebar", true);
     expect(tick.classList.contains("grid"), `not a grid: ${tick.className}`).toBe(true);
     for (const [axis, size] of [
       ["y", readAxis(tick, "h")],
@@ -373,7 +373,7 @@ describe("WorktreeStatusTick — collapsed", () => {
         return total + cols * rows;
       }, 0);
       expect(covered, `${state}: its pieces cover ${covered} of ${cells} cells`).toBe(
-        state === "complete" ? CHIP_SEGMENTS[state] : cells
+        state === "finished" ? CHIP_SEGMENTS[state] : cells
       );
       expect(covered, `${state}: its pieces need more cells than the grid has`).toBeLessThanOrEqual(
         cells
@@ -417,7 +417,7 @@ describe("WorktreeStatusTick — collapsed", () => {
   });
 
   it("still outranks the full-card overlays it shares an edge with", () => {
-    const { tick } = renderTick("complete", "sidebar", true);
+    const { tick } = renderTick("finished", "sidebar", true);
     const layer = [...tick.classList].find((c) => /^z-\d+$/.test(c));
     expect(layer, `the tick declares no stacking layer: ${tick.className}`).toBeDefined();
     expect(

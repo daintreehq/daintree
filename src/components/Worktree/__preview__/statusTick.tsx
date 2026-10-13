@@ -15,6 +15,7 @@ import {
   type WorktreeStatusTickState,
 } from "../WorktreeCard/WorktreeStatusTick";
 import { computeChipState } from "../utils/computeChipState";
+import { isWorktreeMergedForCleanup } from "@/lib/worktreeAgentBuckets";
 import "@/index.css";
 
 /**
@@ -25,8 +26,8 @@ import "@/index.css";
  * `WorktreeHeader`, inside the sidebar card's and the overview cell's real
  * chrome classes. The state is not picked here: each row's worktree fields go
  * through `computeChipState`, the same function the card calls, so `cleanup`
- * is a merged PR and `complete` is an issue with an open PR and a clean tree.
- * Those two need a live forge lookup in the full app, which is why this page
+ * is a merged PR and `finished` is an agent that handed work back unseen.
+ * `cleanup` needs a live forge lookup in the full app, which is why this page
  * exists rather than a step in the Electron card harness.
  *
  * Query parameters:
@@ -84,7 +85,7 @@ const clean: Partial<WorktreeState> = {
 
 const ROWS: RowFixture[] = [
   {
-    id: "waiting",
+    id: "attention",
     branch: "feature/issue-4810-stream-upload-retry",
     fields: {
       ...clean,
@@ -104,7 +105,7 @@ const ROWS: RowFixture[] = [
     },
   },
   {
-    id: "complete",
+    id: "finished",
     branch: "feature/issue-4833-dark-mode-token-audit",
     fields: {
       ...clean,
@@ -112,6 +113,7 @@ const ROWS: RowFixture[] = [
       issueNumber: 4833,
       issueTitle: "Audit dark-mode tokens against the contrast gate",
     },
+    sessions: { completed: 1 },
   },
   {
     id: "quiet",
@@ -119,14 +121,14 @@ const ROWS: RowFixture[] = [
     fields: { ...clean },
   },
   {
-    id: "waiting-active",
+    id: "attention-active",
     branch: "feature/collapse-inspector-panel",
     fields: { ...clean, issueNumber: 4850, issueTitle: "Collapse the inspector below 960px" },
     sessions: { waiting: 2, idle: 1 },
     active: true,
   },
   {
-    id: "complete-main",
+    id: "finished-main",
     branch: "main",
     fields: {
       ...clean,
@@ -134,6 +136,7 @@ const ROWS: RowFixture[] = [
       issueNumber: 4861,
       issueTitle: "Release checklist",
     },
+    sessions: { completed: 1 },
     noGrip: true,
   },
 ];
@@ -166,27 +169,23 @@ function sessionStates(sessions: RowFixture["sessions"]) {
 }
 
 /**
- * The chip state exactly as `WorktreeCard` derives it. The two inputs the card
- * reads from `useWorktreeStatus` are recomputed here from the same fields,
- * since the hook needs the app's stores.
+ * The chip state as `WorktreeCard` projects it. The card joins its agents to
+ * fleet runs; the preview has no fleet, so it reads each session state as the
+ * band it would land in — a waiting session as an agent asking, a completed one
+ * as an unseen hand-back.
  */
 function chipStateFor(worktree: WorktreeState, byState: Record<AgentState, number>) {
-  const prState = worktree.linked?.pr?.state;
-  const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
-  const isComplete =
-    !!worktree.issueNumber &&
-    !!worktree.linked?.pr &&
-    prState !== "closed" &&
-    prState !== "declined" &&
-    !hasChanges &&
-    worktree.worktreeChanges !== null;
-  const lifecycleStage =
-    prState === "merged" ? (worktree.issueNumber ? "ready-for-cleanup" : "merged") : null;
+  const working = byState.working > 0;
+  const attention = byState.waiting > 0;
+  const settled = !working && !attention;
+  const merged = isWorktreeMergedForCleanup(worktree);
+  const finished = settled && (byState.completed > 0 || merged);
   return computeChipState({
-    waitingTerminalCount: byState.waiting,
-    lifecycleStage,
-    isComplete,
-    hasActiveAgent: byState.working > 0,
+    working,
+    attention,
+    finished,
+    finishedUnseen: finished && byState.completed > 0,
+    cleanup: settled && merged,
   });
 }
 
@@ -306,7 +305,7 @@ function GridCell({ row, selected }: { row: RowFixture; selected?: boolean }) {
   );
 }
 
-const STATES: WorktreeStatusTickState[] = ["waiting", "cleanup", "complete"];
+const STATES: WorktreeStatusTickState[] = ["attention", "cleanup", "finished"];
 
 /** Each state's mark on its own, both footprints, both variants' anchoring. */
 function Specimen() {
@@ -338,7 +337,7 @@ function Specimen() {
 function Body() {
   if (fixtureName === "specimen") return <Specimen />;
   if (fixtureName === "grid") {
-    const cells = ROWS.filter((r) => r.id !== "complete-main");
+    const cells = ROWS.filter((r) => r.id !== "finished-main");
     return (
       <div
         data-preview-card

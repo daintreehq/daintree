@@ -5,7 +5,15 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
-import type { WorktreeLifecycleStage } from "@/components/Worktree/WorktreeCard/hooks/useWorktreeStatus";
+import {
+  deriveWorktreeAgentBuckets,
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  isWorktreeMergedForCleanup,
+} from "@/lib/worktreeAgentBuckets";
+import {
+  readWorktreeAgentBucketInputs,
+  type WorktreeAgentBucketInputs,
+} from "@/hooks/useWorktreeAgentBucketInputs";
 import {
   compareWorktreeNames,
   groupByType,
@@ -40,15 +48,16 @@ function buildDerivedMeta(
   // scan over all panel ids.
   worktreePanelIds: readonly string[] | undefined,
   isInTrash: (id: string) => boolean,
-  worktreeIds: Set<string>
+  worktreeIds: Set<string>,
+  bucketInputs: WorktreeAgentBucketInputs
 ): DerivedWorktreeMeta {
   let terminalCount = 0;
-  let waitingTerminalCount = 0;
   let hasAgent = false;
   let hasWorkingAgent = false;
   let hasWaitingAgent = false;
   let hasCompletedAgent = false;
   let hasExitedAgent = false;
+  const agentIds: string[] = [];
 
   for (const id of worktreePanelIds ?? []) {
     const t = panelsById[id];
@@ -57,39 +66,19 @@ function buildDerivedMeta(
     if (!isAgentTerminal(t)) continue;
     if (!isPtyPanel(t)) continue;
     hasAgent = true;
+    agentIds.push(id);
     if (t.agentState === "working") hasWorkingAgent = true;
-    if (t.agentState === "waiting") {
-      hasWaitingAgent = true;
-      waitingTerminalCount++;
-    }
+    if (t.agentState === "waiting") hasWaitingAgent = true;
     if (t.agentState === "completed") hasCompletedAgent = true;
     if (t.agentState === "exited") hasExitedAgent = true;
   }
 
-  const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
-  const isComplete =
-    !!worktree.issueNumber &&
-    !!worktree.linked?.pr &&
-    worktree.linked.pr.state !== "closed" &&
-    worktree.linked.pr.state !== "declined" &&
-    !hasChanges &&
-    worktree.worktreeChanges !== null;
-
-  let lifecycleStage: WorktreeLifecycleStage | null = null;
-  if (!worktree.isMainWorktree && worktree.worktreeChanges !== null) {
-    if (worktree.linked?.pr?.state === "merged") {
-      lifecycleStage = worktree.issueNumber ? "ready-for-cleanup" : "merged";
-    } else if (worktree.linked?.pr?.state === "open") {
-      lifecycleStage = "in-review";
-    }
-  }
-
-  const chipState = computeChipState({
-    waitingTerminalCount,
-    lifecycleStage,
-    isComplete,
-    hasActiveAgent: hasWorkingAgent,
-  });
+  const buckets = deriveWorktreeAgentBuckets(
+    agentIds,
+    bucketInputs.runsById,
+    bucketInputs.acknowledgedAt,
+    isWorktreeMergedForCleanup(worktree)
+  );
 
   return {
     terminalCount,
@@ -100,7 +89,8 @@ function buildDerivedMeta(
     hasExitedAgent,
     hasMergeConflict:
       worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
-    chipState,
+    buckets,
+    chipState: computeChipState(buckets),
   };
 }
 
@@ -176,6 +166,7 @@ export function getVisibleWorktreesForCycling(
     if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
   }
   const derivedMetaMap = new Map<string, DerivedWorktreeMeta>();
+  const bucketInputs = readWorktreeAgentBucketInputs();
   for (const worktree of rawWorktrees) {
     derivedMetaMap.set(
       worktree.id,
@@ -184,7 +175,8 @@ export function getVisibleWorktreesForCycling(
         panelState.panelsById,
         panelState.panelIdsByWorktreeId[worktree.id],
         panelState.isInTrash,
-        validWorktreeIds
+        validWorktreeIds,
+        bucketInputs
       )
     );
   }
@@ -261,6 +253,7 @@ export function getVisibleWorktreesForCycling(
       hasCompletedAgent: false,
       hasExitedAgent: false,
       hasMergeConflict: false,
+      buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
       chipState: null,
     };
     if (

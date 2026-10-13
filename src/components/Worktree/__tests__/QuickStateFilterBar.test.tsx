@@ -329,7 +329,7 @@ describe("QuickStateFilterBar", () => {
     const hueBySegment: [RegExp, string][] = [
       [/Working/, "text-state-working"],
       [/Attention/, "text-state-waiting"],
-      [/Finished/, "text-category-blue"],
+      [/Finished/, "text-text-secondary"],
     ];
     for (const [name, hue] of hueBySegment) {
       const svg = glyphBox(screen.getByRole("radio", { name }));
@@ -344,6 +344,7 @@ describe("QuickStateFilterBar", () => {
         value="all"
         onChange={() => {}}
         counts={{ all: 9, working: 3, waiting: 1, finished: 2 }}
+        finishedUnseen={1}
       />
     );
     const colorBySegment: [RegExp, string][] = [
@@ -384,9 +385,50 @@ describe("QuickStateFilterBar", () => {
         .querySelector(GLYPH_SELECTOR)
         ?.getAttribute("class") ?? "";
     expect(isFadedHue(workingClass, "text-state-working")).toBe(true);
-    expect(isFadedHue(finishedClass, "text-category-blue")).toBe(true);
+    expect(isFadedHue(finishedClass, "text-text-secondary")).toBe(true);
     expect(waitingClass).toContain("text-state-waiting");
     expect(waitingClass).not.toMatch(FADED);
+  });
+
+  it("hues Finished only while it holds an unseen hand-back, as Pilot does (#13234)", () => {
+    const finishedGlyphClass = (finishedUnseen: number) => {
+      const { unmount } = renderBar(
+        <QuickStateFilterBar
+          value="all"
+          onChange={() => {}}
+          counts={{ all: 9, working: 0, waiting: 0, finished: 3 }}
+          finishedUnseen={finishedUnseen}
+        />
+      );
+      const cls =
+        glyphBox(screen.getByRole("radio", { name: /Finished/ }))?.getAttribute("class") ?? "";
+      unmount();
+      return cls;
+    };
+    const seen = finishedGlyphClass(0);
+    const unseen = finishedGlyphClass(1);
+    expect(seen).not.toBe(unseen);
+    expect(seen).toContain("text-text-secondary");
+    expect(seen).not.toMatch(FADED);
+  });
+
+  it("says in the accessible name how many Finished worktrees are unseen", () => {
+    const nameFor = (finishedUnseen: number) => {
+      const { unmount } = renderBar(
+        <QuickStateFilterBar
+          value="all"
+          onChange={() => {}}
+          counts={{ all: 9, working: 0, waiting: 0, finished: 3 }}
+          finishedUnseen={finishedUnseen}
+        />
+      );
+      const name = screen.getByRole("radio", { name: /Finished/ }).getAttribute("aria-label") ?? "";
+      unmount();
+      return name;
+    };
+    expect(nameFor(0)).toBe("Finished, 3 worktrees");
+    expect(nameFor(2)).toBe("Finished, 3 worktrees, including 2 unseen");
+    expect(nameFor(3)).toBe("Finished, 3 worktrees, all unseen");
   });
 
   it("does not fade icons when the counts prop is omitted", () => {

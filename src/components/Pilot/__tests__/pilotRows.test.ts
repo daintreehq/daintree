@@ -28,6 +28,11 @@ function run(overrides: Partial<FleetRunRow> = {}): FleetRunRow {
     workspaceId: "p1",
     spawnedAt: NOW - 3_600_000,
     cwd: "/Users/dev/daintree-worktrees/issue-11518-scratch-rows",
+    // A waiting fixture is an agent asking unless it says otherwise: a bare
+    // prompt is a hand-back and bands as `review` (#13234).
+    ...(overrides.agentState === "waiting" && !("waitingReason" in overrides)
+      ? { waitingReason: "question" as const }
+      : {}),
     ...overrides,
   };
 }
@@ -832,6 +837,21 @@ describe("countPilotBands", () => {
         ]),
       })
     );
+
+  it("counts an agent idle at its prompt as Finished, not Attention — as the sidebar does (#13234)", () => {
+    const counts = countPilotBands(
+      buildPilotGroups(
+        [
+          run({ runId: "prompt", agentState: "waiting", waitingReason: "prompt", since: NOW }),
+          run({ runId: "bare", agentState: "waiting", waitingReason: undefined, since: NOW }),
+          run({ runId: "approval", agentState: "waiting", waitingReason: "approval", since: NOW }),
+        ],
+        ctx()
+      )
+    );
+    expect(counts["needs-you"]).toBe(1);
+    expect(counts.finished).toBe(2);
+  });
 
   it("maps every band onto the segments", () => {
     const counts = countPilotBands(wholeFleet());

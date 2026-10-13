@@ -67,6 +67,11 @@ function run(overrides: Partial<FleetSnapshot["runs"][number]> = {}) {
     workspaceId: "p1",
     spawnedAt: NOW - 3_600_000,
     cwd: "/repo/feature-x",
+    // A waiting fixture is an agent asking unless it says otherwise: a bare
+    // prompt is a hand-back and bands as `review` (#13234).
+    ...(overrides.agentState === "waiting" && !("waitingReason" in overrides)
+      ? { waitingReason: "question" as const }
+      : {}),
     ...overrides,
   };
 }
