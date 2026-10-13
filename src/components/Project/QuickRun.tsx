@@ -24,6 +24,8 @@ import { HighlightedText } from "@/components/ui/HighlightedText";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { KbdChord } from "@/components/ui/Kbd";
+import { Button } from "@/components/ui/button";
+import { SeverityMark } from "@/lib/statusSeverity";
 import { isMac } from "@/lib/platform";
 import { describeChord } from "@/lib/kbdShortcut";
 import { hostScopedKey } from "@/hooks/useHostPlatform";
@@ -242,7 +244,12 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   const { worktreeMap } = useWorktrees();
 
   const [input, setInput] = useState("");
-  const [launchError, setLaunchError] = useState<string | null>(null);
+  // The launch that failed, as it was resolved, so Retry repeats exactly that.
+  const [launchError, setLaunchError] = useState<{
+    item: SuggestionItem;
+    options: { dock: boolean; restart: boolean };
+    worktreeId: string | null;
+  } | null>(null);
   const [launchOverride, setLaunchOverride] = useState<{
     value: string;
     dock?: boolean;
@@ -275,6 +282,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   const [focusedSuggestionIndex, setFocusedSuggestionIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const isRunningRef = useRef(false);
+  // Bumped whenever the user changes what the next launch would be (types,
+  // completes, toggles an option). A failure that lands after that must not
+  // bring back a Retry, or an override, for a launch they have moved on from.
+  const intentRef = useRef(0);
 
   // The panel mounts when the footer's toggle opens it, and a panel that hides
   // a single text field has nothing else to offer — so opening it lands in the
@@ -517,7 +528,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     };
   };
 
-  const handleRunItem = async (item: SuggestionItem) => {
+  const handleRunItem = async (
+    item: SuggestionItem,
+    resolved?: { dock: boolean; restart: boolean }
+  ) => {
     const cmd = item.value;
     if (!cmd.trim()) return;
 
@@ -529,7 +543,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     if (isRunningRef.current) return;
     isRunningRef.current = true;
 
-    const { dock, restart } = resolveRunOptions(item);
+    const { dock, restart } = resolved ?? resolveRunOptions(item);
+    const override = launchOverride?.value === item.value ? launchOverride : null;
+    const intent = ++intentRef.current;
     setShowSuggestions(false);
     setInput("");
     setFocusedSuggestionIndex(-1);
@@ -553,7 +569,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       // Give the command back rather than leaving an empty field and no task —
       // unless something new has been typed since.
       setInput((current) => (current === "" ? cmd : current));
-      setLaunchError(cmd);
+      // And the options it was launched with, so the retry runs the same thing.
+      if (intent === intentRef.current) {
+        setLaunchOverride((current) => current ?? override);
+        setLaunchError({ item, options: { dock, restart }, worktreeId: activeWorktreeId });
+      }
     } finally {
       isRunningRef.current = false;
     }
@@ -578,17 +598,30 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // its cap Enter could run a command the user could not see.
   useEffect(() => {
     if (activeIndex < 0) return;
-    document
-      .getElementById(suggestionOptionId(activeIndex))
-      ?.scrollIntoView?.({ block: "nearest" });
+    const option = document.getElementById(suggestionOptionId(activeIndex));
+    // The first row of a band brings its label with it, so arrowing back up
+    // never leaves pinned rows showing under no heading.
+    const band = option?.previousElementSibling;
+    if (band instanceof HTMLElement && band.dataset.band) {
+      band.scrollIntoView?.({ block: "nearest" });
+    }
+    option?.scrollIntoView?.({ block: "nearest" });
     // `listOpen` too: reopening mounts a fresh scroller at the top while the
     // lit row may be one the user had scrolled down to.
   }, [activeIndex, listOpen]);
 
   // The one thing Run means, for Enter and the arrow alike: the lit row, or
-  // with the list shut, the text in the field.
+  // with the list shut, the text in the field. Text that is exactly a pinned
+  // command or a script is still that command with the list shut, so a pinned
+  // command keeps its own output and restart choice after Escape. Literal
+  // equality, not normalized: normalizing drops quotes, and `'$SHELL'` is not
+  // the command `$SHELL` is.
+  const exactMatch = searching
+    ? suggestions.find((s) => s.type !== "typed" && s.value === input.trim())
+    : undefined;
   const runTarget: SuggestionItem | undefined =
     highlighted ??
+    exactMatch ??
     (searching ? { label: input.trim(), value: input.trim(), type: "typed" } : undefined);
 
   const effective = runTarget
@@ -599,6 +632,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // for it, in which case the press overrides that value for this launch and
   // leaves the saved command alone.
   const toggleOption = (key: "dock" | "restart") => {
+    intentRef.current++;
+    setLaunchError(null);
     const ownsKey =
       runTarget?.type === "saved" &&
       (key === "dock"
@@ -644,6 +679,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     } else if (e.key === "Tab" && !e.shiftKey && canComplete && highlighted) {
       e.preventDefault();
       setInput(highlighted.value);
+      intentRef.current++;
+      setLaunchError(null);
       setFocusedSuggestionIndex(LEAD_INDEX);
     } else if (e.altKey && e.code === "KeyP" && listOpen && highlighted) {
       // `code`, not `key`: Option+P types "π" on a Mac layout.
@@ -827,6 +864,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                 value={input}
                 onChange={(e) => {
                   setInput(e.target.value);
+                  intentRef.current++;
                   setLaunchError(null);
                   setShowSuggestions(true);
                   // Typing lights the first row, which is always what Enter runs.
@@ -848,6 +886,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                 aria-expanded={listOpen}
                 aria-controls={SUGGESTION_LIST_ID}
                 aria-activedescendant={highlighted ? suggestionOptionId(activeIndex) : undefined}
+                // With no lit row to carry the summary, the field does.
+                aria-describedby={listOpen && !highlighted && runTarget ? SUMMARY_ID : undefined}
                 className={cn(
                   // `pr-2` is load-bearing at the narrow end: without it the
                   // field's text runs flush into the button cluster and the
@@ -1039,10 +1079,13 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       <span
                         className={cn(
                           "min-w-0 flex-1 truncate",
-                          highlighted && cn("text-text-primary", COMMAND_TEXT_CLASS)
+                          runTarget && cn("text-text-primary", COMMAND_TEXT_CLASS)
                         )}
                       >
-                        {highlighted ? highlighted.value : "Choose a command, or type one"}
+                        {/* What Enter runs, lit row or not: a list reopened
+                            over typed text has no lit row, but Enter still
+                            runs the field. */}
+                        {runTarget ? runTarget.value : "Choose a command, or type one"}
                       </span>
                       {highlighted && (
                         <PinHint
@@ -1053,8 +1096,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                       )}
                     </div>
                     {/* Below 280px the settings take their own line so the
-                        branch keeps its width, and the key hint rides with them
-                        instead of taking the command's. */}
+                        branch keeps its width, and the key hints take a line
+                        of their own under them: beside the settings they cut
+                        "Grid · Restarts" to "G…". */}
                     <div className="flex h-4 min-w-0 items-center gap-x-1 @max-[280px]/footer:h-auto @max-[280px]/footer:flex-wrap">
                       <span className="flex min-w-0 items-center gap-1 @max-[280px]/footer:basis-full">
                         <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -1068,13 +1112,18 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                           </span>
                           {runSummary}
                         </span>
-                        {highlighted && (
-                          <PinHint
-                            saved={highlighted.type === "saved"}
-                            className="ml-auto hidden @max-[280px]/footer:flex"
-                          />
-                        )}
                       </span>
+                    </div>
+                    {/* Held at its height while nothing is lit, so lighting a
+                        row never grows the strip under the pointer. */}
+                    <div className="hidden h-4 items-center @max-[280px]/footer:flex">
+                      {highlighted && (
+                        <PinHint
+                          saved={highlighted.type === "saved"}
+                          canComplete={canComplete}
+                          className="flex"
+                        />
+                      )}
                     </div>
                     {highlighted && (
                       <span className="sr-only">
@@ -1085,12 +1134,36 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
                 </div>
               )}
             </div>
-            {launchError && (
-              <TruncatedTooltip content={`Couldn't start ${launchError}`}>
-                <div role="alert" className="mt-1 truncate text-2xs text-text-primary">
-                  Couldn't start {launchError}
-                </div>
-              </TruncatedTooltip>
+            {/* Only for the worktree it failed in, and only until the options
+                change: past either, Retry would no longer mean the same launch. */}
+            {launchError && launchError.worktreeId === activeWorktreeId && (
+              <div className="mt-1 flex min-w-0 items-center gap-1.5 text-2xs text-text-primary">
+                <SeverityMark severity="error" label="Error" decorative className="h-3 w-3" />
+                <TruncatedTooltip content={`Couldn't start ${launchError.item.value}`}>
+                  <span role="alert" className="min-w-0 flex-1 truncate">
+                    Couldn't start{" "}
+                    <span className={COMMAND_TEXT_CLASS}>{launchError.item.value}</span>
+                  </span>
+                </TruncatedTooltip>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  // Keep the field focused, as Run does, so the retry lands
+                  // where the command was given back.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    // Retrying removes this row, and with it the focused
+                    // button, so a keyboard user lands back in the field.
+                    quietFocusRef.current = true;
+                    inputRef.current?.focus({ preventScroll: true });
+                    quietFocusRef.current = false;
+                    void handleRunItem(launchError.item, launchError.options);
+                  }}
+                  className="-mr-1.5 shrink-0"
+                >
+                  Retry
+                </Button>
+              </div>
             )}
           </>
         )}

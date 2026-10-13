@@ -204,6 +204,15 @@ test("QuickRun — open, choose, run, find the task", async ({ page }) => {
     await page.waitForTimeout(200);
     await shot(`12-options-on-${tag}`);
 
+    // A launch that fails: the command comes back with a way to retry it.
+    await open(page, "launch-fails", theme, width);
+    await input(page).fill("npm run dev");
+    await input(page).press("Enter");
+    await expect(page.getByRole("alert")).toContainText("Couldn't start");
+    await page.mouse.move(width + 30, 5);
+    await page.waitForTimeout(200);
+    await shot(`15-launch-error-${tag}`);
+
     // No worktree, and a branch far wider than the column.
     await open(page, "no-worktree", theme, width);
     await shot(`13-no-worktree-${tag}`);

@@ -526,6 +526,19 @@ export const FIXTURES: Record<string, Fixture> = {
     },
   },
 
+  /** A launch the panel store rejects: the command comes back with a Retry. */
+  "launch-fails": {
+    what: "the terminal for a command could not be started",
+    seed: () => {
+      baseline();
+      usePanelStore.setState({
+        addPanel: async () => {
+          throw new Error("spawn failed");
+        },
+      });
+    },
+  },
+
   /** A fresh project: nothing detected, nothing pinned, nothing run yet. */
   "no-suggestions": {
     what: "no scripts detected, nothing pinned, no history",
@@ -635,6 +648,12 @@ function answering(methods: Record<string, unknown>): unknown {
 }
 
 installPreviewShims({
+  // An incomplete census, which `useClosedTerminalProcessNotice` ignores. The
+  // inert default resolves `undefined`, and reading `.complete` off it threw on
+  // every load and failed the capture's page-error gate.
+  processes: answering({
+    getSnapshot: async () => ({ complete: false, samplesAvailable: false }),
+  }),
   project: answering({
     getAll: async () => PROJECT_LIST,
     getSettings: async () => ({ runCommands: SAVED_RUNNERS }),
