@@ -282,6 +282,10 @@ module.exports = async function () {
         NSPrefersDisplaySafeAreaCompatibilityMode: false,
         NSMicrophoneUsageDescription:
           "Daintree uses the microphone for voice dictation into terminal inputs.",
+        // A shell's Apple Events are attributed to Daintree, so without this
+        // (and the automation entitlement) macOS refuses them with no prompt.
+        NSAppleEventsUsageDescription:
+          "A program running in a Daintree terminal wants to control another app with AppleScript.",
         // macOS 15+ gates local-network traffic, including an `ssh` Daintree
         // spawns to reach another machine, behind this prompt; the Bonjour type
         // is the one Remote Hosts browses and advertises.
