@@ -300,7 +300,13 @@ export class HostSetupService {
           : null;
     if (!script) return "not-startable";
     // Last look before changing anything on the host.
-    if (signal?.aborted || this.isInstallRunning(connection)) return "not-startable";
+    if (
+      signal?.aborted ||
+      this.isInstallRunning(connection) ||
+      this.deps.isRetiring?.(connection)
+    ) {
+      return "not-startable";
+    }
     const label = formatHostConnection(connection);
     const started = await channel.exec(script, { timeoutMs: 30_000, signal });
     if (started.code !== 0) {

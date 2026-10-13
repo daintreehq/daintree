@@ -291,8 +291,14 @@ describe("AddHostDialog", () => {
     render(<AddHostDialog isOpen onClose={() => {}} />);
     await walkToAddHost();
     expect(await screen.findByText("studio is saved, but Host mode is off there")).toBeTruthy();
+    remoteHosts.probe!.mockResolvedValue(probeResult({ hostModeListening: false }));
     fireEvent.click(screen.getByRole("button", { name: "Set up…" }));
-    expect(await screen.findByText(/Host mode is on at studio/)).toBeTruthy();
+    // Checked again rather than trusting the probe the link just contradicted.
+    await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    expect(await screen.findByRole("button", { name: "Turn on Host mode" })).toBeTruthy();
+    // The saved record keeps its target: no way back to change it.
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   });
 
   it("ends on a build that doesn't match, with Update…", async () => {
@@ -384,7 +390,8 @@ describe("AddHostDialog", () => {
     remoteHosts.probe!.mockResolvedValue(probeResult({ hostModeListening: false }));
     let finish!: (value: unknown) => void;
     remoteHosts.startHostMode!.mockImplementationOnce(() => new Promise((r) => (finish = r)));
-    render(<AddHostDialog isOpen onClose={() => {}} />);
+    const onClose = vi.fn();
+    render(<AddHostDialog isOpen onClose={onClose} />);
     fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
       target: { value: "greg@studio" },
     });
@@ -392,7 +399,11 @@ describe("AddHostDialog", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
     expect(screen.getByRole("button", { name: "Skip" }).getAttribute("aria-disabled")).toBe("true");
+    fireEvent.keyDown(screen.getByTestId("add-host-dialog"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
     await act(async () => finish({ probe: probeResult(), lingerRefused: null }));
+    fireEvent.keyDown(screen.getByTestId("add-host-dialog"), { key: "Escape" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
   it("closes straight away when the host is added and connects", async () => {

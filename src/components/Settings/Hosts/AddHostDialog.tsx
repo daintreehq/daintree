@@ -310,15 +310,13 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
 
   const startHostMode = () =>
     run(
-      async () => {
-        const result = await remoteHostsClient.startHostMode(connectionFor());
-        // Host mode is on there now: the host is saved before anything else can go wrong.
-        if (hostModeSwitchedOn(result.probe)) await save();
-        return result;
-      },
+      () => remoteHostsClient.startHostMode(connectionFor()),
       (result) => {
         setProbe(result.probe);
         setLingerRefused(result.lingerRefused);
+        // Host mode is on there now: the host is saved before anything else can
+        // go wrong. A failed save is its own error, never a reason to switch it on again.
+        if (hostModeSwitchedOn(result.probe)) run(save, () => {});
       }
     );
 
@@ -392,7 +390,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         onClick: () => {
           setOutcome(null);
           setSkipped(false);
-          setStep("enable");
+          // Checked again: the probe that said Host mode was on is what the link just contradicted.
+          check();
         },
         disabled: busy,
       };
@@ -437,6 +436,22 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       );
       primary = {
         label: "Retry",
+        onClick: () => connectSaved(savedHost),
+        disabled: busy,
+        loading: busy,
+      };
+      secondary = close;
+    } else if (outcome.status === "disconnected") {
+      body = (
+        <div className="space-y-2 text-sm">
+          <p className="font-medium text-text-primary">{savedHost.name} is saved, not connected</p>
+          <p className="text-text-secondary">
+            Its connection closed before it was up. It stays in your host list.
+          </p>
+        </div>
+      );
+      primary = {
+        label: "Connect",
         onClick: () => connectSaved(savedHost),
         disabled: busy,
         loading: busy,
@@ -576,7 +591,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     const localSuggestion =
       // Only while adding: an existing host keeps its saved target, which a
       // reconnect after install or Host mode would still dial.
-      !existing && probe && !probe.reachable
+      !existing && !saved && probe && !probe.reachable
         ? localNameSuggestion(target.trim(), probe.sshError)
         : null;
     body = !probe ? (
@@ -650,7 +665,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       primary = { label: "Check host", onClick: () => check(), disabled: busy, loading: busy };
     }
     // Not while a check runs: its result would land against an edited target.
-    if (!existing)
+    // Nor once saved: the record names this target, so it stays.
+    if (!existing && !saved)
       secondary = { label: "Back", onClick: () => setStep("discover"), disabled: busy };
   } else if (step === "install") {
     const progress = install?.progress ?? null;

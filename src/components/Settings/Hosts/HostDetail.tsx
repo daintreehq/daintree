@@ -38,9 +38,15 @@ interface HostDetailProps {
  */
 function useCommittedField(current: string, commit: (value: string) => Promise<unknown>) {
   const [draft, setDraft] = useState(current);
+  /** The value the draft was started from. */
   const [base, setBase] = useState(current);
+  /** A save in flight: its value arriving from the store is no change made elsewhere. */
+  const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | undefined>(undefined);
-  if (current !== base && draft === base) {
+  if (pending !== null && current === pending) {
+    setPending(null);
+    setBase(current);
+  } else if (pending === null && current !== base && draft === base) {
     setBase(current);
     setDraft(current);
   }
@@ -50,18 +56,23 @@ function useCommittedField(current: string, commit: (value: string) => Promise<u
       setBase(current);
       return;
     }
-    if (base !== current) {
+    if (pending === null && base !== current) {
       // Asked once: saving again keeps the edit, now made against the new value.
       setBase(current);
       setError(`Renamed to "${current}" in another window. Save again to use "${next}" instead`);
       return;
     }
+    setPending(next);
     commit(next).then(
       () => {
+        setPending(null);
         setBase(next);
         setError(undefined);
       },
-      (err: unknown) => setError(clientErrorText(err, "Couldn't save"))
+      (err: unknown) => {
+        setPending(null);
+        setError(clientErrorText(err, "Couldn't save"));
+      }
     );
   };
   return { draft, setDraft, error, save };

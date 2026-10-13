@@ -1096,6 +1096,89 @@ describe("RemoteHostsClient", () => {
       expect(manager.connect).not.toHaveBeenCalled();
     });
 
+    it("binds no window to an open that began before the target changed, even once the change is done", async () => {
+      let resolveOpen!: (id: number) => void;
+      const openWindow = vi.fn(() => new Promise<number>((r) => (resolveOpen = r)));
+      const retarget = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: (id) => (id === 5 ? 1 : null) },
+        windows: { ...windows, openWindow },
+        installRouter,
+        emit: () => {},
+      });
+      const opening = retarget.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: true,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(openWindow).toHaveBeenCalled());
+      await retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      resolveOpen(7);
+      await expect(opening).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    });
+
+    it("replaces a window still showing the old machine rather than leave its view behind", async () => {
+      const replaceWithLocalWindow = vi.fn(async () => {});
+      const retarget = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: () => null },
+        windows: {
+          ...windows,
+          openLocalProject: vi.fn(() => new Promise<void>(() => {})),
+          lastLocalProjectId: vi.fn(() => "local-proj"),
+          replaceWithLocalWindow,
+        },
+        installRouter,
+        emit: () => {},
+        forgetSwitchWaitMs: 5,
+      });
+      bindings.set(1, "studio-01");
+      await retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      expect(replaceWithLocalWindow).toHaveBeenCalledWith(1);
+    });
+
+    it("dials nothing for the host while it is being re-pointed", async () => {
+      let home!: () => void;
+      const retarget = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: () => null },
+        windows: {
+          ...windows,
+          openLocalProject: vi.fn(() => new Promise<void>((r) => (home = r))),
+          lastLocalProjectId: vi.fn(() => "local-proj"),
+        },
+        installRouter,
+        emit: () => {},
+      });
+      bindings.set(1, "studio-01");
+      const changing = retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      manager.connect.mockClear();
+      retarget.connect({ hostId: "studio-01" });
+      expect(manager.connect).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(home).toBeTypeOf("function"));
+      home();
+      await changing;
+    });
+
     it("refuses an unusable target before moving any window", async () => {
       registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
       const { retarget, onRetarget } = retargetClient();

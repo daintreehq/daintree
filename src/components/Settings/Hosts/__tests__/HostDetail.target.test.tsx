@@ -136,6 +136,24 @@ describe("HostDetail name", () => {
     expect(client.update).not.toHaveBeenCalled();
   });
 
+  it("keeps an edit typed while its own rename is still saving", async () => {
+    let finish!: () => void;
+    client.update.mockImplementationOnce(
+      (payload: unknown) => new Promise((r) => (finish = () => r(payload)))
+    );
+    const { rerender } = render(<HostDetail entry={entry("studio-01")} onBack={() => {}} />);
+    const field = screen.getByDisplayValue("studio-01");
+    fireEvent.change(field, { target: { value: "Lab" } });
+    fireEvent.blur(field);
+    // The draft holds while the save is in flight, never flicking back.
+    expect(screen.getByDisplayValue("Lab")).toBeTruthy();
+    fireEvent.change(field, { target: { value: "Lab two" } });
+    rerender(<HostDetail entry={entry("Lab")} onBack={() => {}} />);
+    await act(async () => finish());
+    expect(screen.getByDisplayValue("Lab two")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("in another window");
+  });
+
   it("never writes an edit begun before another window's rename over it without asking", async () => {
     const { rerender } = render(<HostDetail entry={entry("studio-01")} onBack={() => {}} />);
     fireEvent.change(screen.getByDisplayValue("studio-01"), { target: { value: "Mine" } });
