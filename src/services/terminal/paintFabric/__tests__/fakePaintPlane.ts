@@ -20,6 +20,8 @@ export function makeFakePlane() {
     notifyUserInput: vi.fn(),
     notifyComposerDraft: vi.fn(),
     releaseComposerDraft: vi.fn(),
+    noteUserInput: vi.fn(),
+    getUserInputEpoch: vi.fn((_id: string) => 0),
     notifyEnterPressed: vi.fn(),
     clearDirectingState: vi.fn(),
     applyGlobalOptions: vi.fn(),

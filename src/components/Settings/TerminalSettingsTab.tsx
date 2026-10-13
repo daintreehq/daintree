@@ -679,7 +679,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 <SettingsSwitchCard
                   id="terminal-hybrid-autofocus"
                   title="Focus the input bar first"
-                  subtitle="Agent panes start with the input bar focused instead of the terminal. Clicking either still wins, and Cmd-Opt-Arrow follows whichever you're using."
+                  subtitle="Agent panes start with the input bar focused instead of the terminal, and files dropped on the terminal go into the input bar. Clicking either still wins, and Cmd-Opt-Arrow follows whichever you're using."
                   isEnabled={hybridInputAutoFocus}
                   onChange={() => void setHybridInputAutoFocus(!hybridInputAutoFocus)}
                   isModified={!hybridInputAutoFocus}

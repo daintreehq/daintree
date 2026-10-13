@@ -872,8 +872,9 @@ export const SETTINGS_REGISTRY = [
         subtabLabel: "Input",
         section: "Hybrid input bar",
         title: "Auto-focus input",
-        description: "Selecting a pane focuses the input bar or the terminal (xterm)",
-        keywords: ["focus", "autofocus", "input", "pane", "select"],
+        description:
+          "Selecting a pane focuses the input bar or the terminal (xterm), and decides where files dropped on the terminal go",
+        keywords: ["focus", "autofocus", "input", "pane", "select", "drop", "file"],
       },
       {
         id: "terminal-two-pane-split",

@@ -35,6 +35,20 @@ describe("PaintFabricCompositor", () => {
     expect(a.focus).not.toHaveBeenCalled();
   });
 
+  it("keeps a terminal's input epoch on the plane that owns it", async () => {
+    const { compositor, a, b } = makeCompositor();
+    await compositor.getOrCreate("t1-b", undefined, {});
+    b.getUserInputEpoch.mockReturnValue(3);
+
+    compositor.notifyUserInput("t1-b", "", { automatic: true });
+    compositor.noteUserInput("t1-b");
+
+    expect(b.notifyUserInput).toHaveBeenCalledWith("t1-b", "", { automatic: true });
+    expect(b.noteUserInput).toHaveBeenCalledWith("t1-b");
+    expect(compositor.getUserInputEpoch("t1-b")).toBe(3);
+    expect(a.noteUserInput).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "carries the resync options through to the owning plane and returns its verdict (%s)",
     async (verdict) => {

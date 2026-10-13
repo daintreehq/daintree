@@ -42,6 +42,11 @@ export function isTerminalReply(data: string): boolean {
   return CSI_REPORT_RE.test(data) || STRING_REPLY_RE.test(data);
 }
 
+/** A mouse report xterm sends for a mouse-tracking program: never typing. */
+export function isMouseReport(data: string): boolean {
+  return data.startsWith("\x1b[M") || data.startsWith("\x1b[<") || URXVT_MOUSE_RE.test(data);
+}
+
 export function isNonKeyboardInput(data: string): boolean {
   // Mouse sequences
   if (data.startsWith("\x1b[M")) return true;

@@ -101,6 +101,7 @@ import { TerminalWorkerIngestController } from "./TerminalWorkerIngestController
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
+import { isMouseReport, isTerminalReply } from "./inputUtils";
 
 /**
  * Automatic rebuild budget for a terminal that cannot be opened (#11776).
@@ -171,6 +172,7 @@ interface AttachRevealJob {
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
+  private userInputEpochs = new Map<string, number>();
 
   /**
    * Consumers holding work against any live instance, notified on teardown.
@@ -662,7 +664,17 @@ class TerminalInstanceService {
     this.webGLManager.refreshMode();
   }
 
-  notifyUserInput(id: string, data = ""): void {
+  /**
+   * `automatic` marks input the app typed on the user's behalf (a dropped
+   * file's path landing): it still counts as activity, but leaves the input
+   * epoch alone so it cannot make other pending drops look overtaken.
+   */
+  notifyUserInput(id: string, data = "", options: { automatic?: boolean } = {}): void {
+    // A fleet follower is told about the origin's raw input, which can be a
+    // reply or a mouse report rather than anything the user typed.
+    if (!options.automatic && !isTerminalReply(data) && !isMouseReport(data)) {
+      this.noteUserInput(id);
+    }
     this.onUserInput(id, data);
   }
 
@@ -672,6 +684,20 @@ class TerminalInstanceService {
 
   releaseComposerDraft(id: string): void {
     this.agentStateController.releaseComposerDraft(id);
+  }
+
+  /**
+   * Advances each time the user types into, or submits to, this terminal. A
+   * drop that lands after a slow upload compares it with the value at the
+   * gesture, so it never types a path into input the user has since changed.
+   */
+  getUserInputEpoch(id: string): number {
+    return this.userInputEpochs.get(id) ?? 0;
+  }
+
+  /** Records that the user changed this terminal's input, without the activity side effects. */
+  noteUserInput(id: string): void {
+    this.userInputEpochs.set(id, this.getUserInputEpoch(id) + 1);
   }
 
   notifyEnterPressed(id: string): void {
@@ -708,6 +734,7 @@ class TerminalInstanceService {
       clearDirectingState: (id, trigger) =>
         this.agentStateController.clearDirectingState(id, trigger),
       onUserInput: (id, data) => this.onUserInput(id, data),
+      noteUserInput: (id) => this.noteUserInput(id),
       onActiveWheel: (id) => this.burstController.onActiveWheel(id),
       onUserScrollIntent: (id) => this.burstController.onUserScrollIntent(id),
       onEnterPressed: (id) => this.onEnterPressed(id),
@@ -4018,6 +4045,7 @@ class TerminalInstanceService {
   }
 
   destroy(id: string): void {
+    this.userInputEpochs.delete(id);
     // Cancel an in-flight creation for this id: if the panel is torn down while
     // getOrCreate is still awaiting setupTerminalAddons, the instance isn't in
     // `instances` yet (so the guard below would no-op), but the pending build
