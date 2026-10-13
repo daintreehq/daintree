@@ -317,6 +317,15 @@ describe("useContextDetection directing signals", () => {
     expect(service.releaseComposerDraft).toHaveBeenCalledWith("t1");
   });
 
+  it("does not release on unmount once the draft was emptied", () => {
+    const { result, unmount } = setupHook();
+    result.current.handleUpdateRef.current(edit("draft", ["input.type"]));
+    result.current.handleUpdateRef.current(edit("", ["delete.backward"]));
+    service.releaseComposerDraft.mockClear();
+    unmount();
+    expect(service.releaseComposerDraft).not.toHaveBeenCalled();
+  });
+
   it("does not release on unmount when nothing was held", () => {
     const { unmount } = setupHook();
     unmount();

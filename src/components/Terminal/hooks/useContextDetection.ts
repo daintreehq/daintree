@@ -115,7 +115,12 @@ export function useContextDetection({
             } else {
               terminalInstanceService.releaseComposerDraft(terminalId);
             }
+            heldTerminalIdRef.current = null;
           } else if (isUserChange) {
+            const previous = heldTerminalIdRef.current;
+            if (previous && previous !== terminalId) {
+              terminalInstanceService.releaseComposerDraft(previous);
+            }
             heldTerminalIdRef.current = terminalId;
             terminalInstanceService.notifyComposerDraft(terminalId);
           }
