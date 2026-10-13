@@ -111,22 +111,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result of the command the user just ran; leaves with the dialog",
     },
   ],
-  "src/components/DevPreview/ConsolePanel.tsx": [
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'aria-label="Copy console message"',
-      expectedOccurrences: 1,
-      rationale: "Copy-message confirmation; resets when the copy flash times out",
-    },
-    {
-      category: "transient",
-      signature: "text-status-success",
-      anchor: 'aria-label="Copy visible console messages"',
-      expectedOccurrences: 1,
-      rationale: "Copy-all-messages confirmation; resets when the copy flash times out",
-    },
-  ],
   "src/components/FileViewer/diffChangeSet.ts": [
     {
       category: "domain",
@@ -569,5 +553,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 63;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 65;
+export const EXPECTED_STATUS_SUCCESS_SITES = 61;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 63;
