@@ -139,11 +139,10 @@ async function runResyncPass(projectState: boolean): Promise<void> {
         // just adopted; after the lease, to know whose layout wins.
         // And after the worktrees, so the saved active worktree can be found.
         await Promise.allSettled([terminals, lease, worktrees]);
-        if (!isCurrent()) return;
-        await rehydrateHostProjectState(projectId, {
-          isCurrent,
-          authoritative: getDriveLeaseSnapshot()?.drivingHere === false,
-        });
+        // A view that watches reads it back by following the driver, which
+        // the lease just read has set going.
+        if (!isCurrent() || watches(projectId)) return;
+        await rehydrateHostProjectState(projectId, { isCurrent, authoritative: false });
       },
     ]);
   }
@@ -158,6 +157,64 @@ async function runResyncPass(projectState: boolean): Promise<void> {
 
 /** Bumped by every lease event and by teardown, so a slower lookup never overrides either. */
 let leaseGeneration = 0;
+/** Bumped by every takeover and by teardown: only the latest takeover reads the host's state back. */
+let takeOverGeneration = 0;
+
+let followRunning: Promise<void> | null = null;
+let followAgain = false;
+/** Bumped by every follow request and by teardown, as {@link resyncGeneration} is for resyncs. */
+let followGeneration = 0;
+
+function watches(projectId: string): boolean {
+  const lease = getDriveLeaseSnapshot();
+  return lease?.projectId === projectId && lease.drivingHere === false;
+}
+
+/**
+ * While another screen drives this view's project, show the panels it shows:
+ * adopt the terminals the host runs, drop the ones it closed, and take the
+ * driver's saved layout. Runs whenever this view starts watching and whenever
+ * the host says the driver saved a different panel set. Nothing is written
+ * back: a watcher's saves of the host's project state are skipped. Overlapping
+ * requests coalesce into one follow-up pass.
+ */
+function followHostPanels(): Promise<void> {
+  followGeneration += 1;
+  if (followRunning) {
+    followAgain = true;
+    return followRunning;
+  }
+  followRunning = (async () => {
+    do {
+      followAgain = false;
+      await runFollowPass();
+    } while (followAgain);
+  })().finally(() => {
+    followRunning = null;
+  });
+  return followRunning;
+}
+
+async function runFollowPass(): Promise<void> {
+  const projectId = getViewWorkspaceId();
+  if (syncRefs === 0 || !projectId || !watches(projectId)) return;
+  const generation = followGeneration;
+  const isCurrent = () =>
+    generation === followGeneration && getViewWorkspaceId() === projectId && watches(projectId);
+  // The terminals first, so the host's saved order also places the ones just
+  // adopted; the layout is still worth taking if they couldn't be read.
+  try {
+    await resyncHostTerminals(projectId, { isCurrent, follow: true });
+  } catch (error) {
+    logWarn("[HostConnection] Couldn't read the host's terminals to follow the driver", { error });
+  }
+  if (!isCurrent()) return;
+  try {
+    await rehydrateHostProjectState(projectId, { isCurrent, authoritative: true, follow: true });
+  } catch (error) {
+    logWarn("[HostConnection] Couldn't read the driver's layout to follow it", { error });
+  }
+}
 
 async function refreshLease(): Promise<void> {
   const projectId = getViewWorkspaceId();
@@ -177,6 +234,7 @@ async function refreshLease(): Promise<void> {
 
 function applyLease(lease: DriveLeaseView): void {
   setDriveLeaseSnapshot(lease);
+  if (!lease.drivingHere) void followHostPanels();
   const driver = drivenElsewhereBy(lease);
   setLeaseInputBlock(
     driver === null
@@ -228,13 +286,26 @@ export async function takeOverDrive(
   // before the takeover must not land on top of it.
   dropDeferredHostOwnedWrites("this view took the project over");
   applyLease(view);
-  // The previous driver's saved layout is the project's now; this view's was
-  // stale while it was displaced.
-  const generation = leaseGeneration;
-  void rehydrateHostProjectState(projectId, {
-    isCurrent: () => generation === leaseGeneration && getViewWorkspaceId() === projectId,
-    authoritative: true,
-  }).catch((error: unknown) => {
+  // The previous driver's terminals and saved layout are the project's now;
+  // this view's were stale while it was displaced. The terminals first, so the
+  // saved order also places the ones just adopted.
+  // Current while this view still drives the project: the host's own event
+  // about this very takeover may land after its answer, and changes nothing.
+  const generation = ++takeOverGeneration;
+  const isCurrent = () =>
+    generation === takeOverGeneration &&
+    getViewWorkspaceId() === projectId &&
+    getDriveLeaseSnapshot()?.projectId === projectId &&
+    getDriveLeaseSnapshot()?.drivingHere === true;
+  void (async () => {
+    try {
+      await resyncHostTerminals(projectId, { isCurrent, follow: true });
+    } catch (error) {
+      logWarn("[HostConnection] Couldn't read the host's terminals after taking over", { error });
+    }
+    if (!isCurrent()) return;
+    await rehydrateHostProjectState(projectId, { isCurrent, authoritative: true, follow: true });
+  })().catch((error: unknown) => {
     logWarn("[HostConnection] Couldn't read the project's saved state after taking over", {
       error,
     });
@@ -391,6 +462,8 @@ function beginSync(): () => void {
         if (event.type === "changed" && event.state.projectId === projectId) {
           leaseGeneration += 1;
           applyLease(event.state);
+        } else if (event.type === "panels-changed" && event.projectId === projectId) {
+          if (watches(projectId)) void followHostPanels();
         }
       })
     );
@@ -471,6 +544,8 @@ function beginSync(): () => void {
           case "resync-required":
             if (event.hostId === hostId) {
               void resyncFromHost({ freshSession: event.reason === "reconnected" });
+              // A dropped event may have been the driver's panels changing.
+              if (projectId && watches(projectId)) void followHostPanels();
             }
             return;
           default:
@@ -496,6 +571,8 @@ function beginSync(): () => void {
     disposed = true;
     leaseGeneration += 1;
     resyncGeneration += 1;
+    followGeneration += 1;
+    takeOverGeneration += 1;
     for (const dispose of disposers.splice(0)) dispose();
     setHostInputBlock(null);
     setLeaseInputBlock(null);
@@ -618,6 +695,8 @@ export function _reloadHostConnectionSyncForTesting(): void {
   resyncRunning = null;
   resyncAgain = false;
   resyncProjectStateOwed = false;
+  followRunning = null;
+  followAgain = false;
   Object.assign(openClaim, { projectId: null, done: false, inFlight: false, owed: false });
 }
 

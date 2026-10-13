@@ -1,5 +1,5 @@
 import { isPtyPanel, type PanelKind } from "@shared/types/panel";
-import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
+import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { logWarn } from "@/utils/logger";
 
@@ -9,6 +9,14 @@ export interface HostTerminalResyncOptions {
    * after every await, so an obsolete snapshot is never applied over a newer one.
    */
   isCurrent: () => boolean;
+  /**
+   * This view follows the driver's panels (it watches, or has just taken the
+   * project over): a terminal the host has trashed leaves this view's layout,
+   * and one shown as exited that the host runs again (a restart) is shown
+   * running. Removing what the driver closed is the layout rehydrate's, which
+   * knows what the driver still shows.
+   */
+  follow?: boolean;
 }
 
 /**
@@ -29,6 +37,10 @@ export async function resyncHostTerminals(
     import("@/services/TerminalInstanceService"),
   ]);
   const knownBefore = new Set(usePanelStore.getState().panelIds);
+  const before = usePanelStore.getState();
+  const exitedBefore = new Set(
+    options.follow ? [...knownBefore].filter((id) => showsExited(before, id)) : []
+  );
   const infos = await window.electron.terminal.getForProject(projectId);
   if (!options.isCurrent()) return;
 
@@ -62,6 +74,11 @@ export async function resyncHostTerminals(
       undefined,
       info.waitingReason
     );
+  }
+
+  if (options.follow) {
+    await followHostTerminals(infos, exitedBefore, usePanelStore);
+    if (!options.isCurrent()) return;
   }
 
   await adoptNewTerminals(
@@ -138,6 +155,9 @@ async function observeVanishedTerminals(
     return (
       panel !== undefined &&
       isPtyPanel(panel) &&
+      // Following, this screen's own panes (the assistant) are never on the
+      // host's project list, and say nothing about the driver.
+      (!options.follow || followsHostLayout(panel)) &&
       !panel.isRestarting &&
       !panel.spawnError &&
       // Held for restore recovery: it has no PTY on purpose, and is waiting on the user.
@@ -158,7 +178,7 @@ async function observeVanishedTerminals(
   );
   // A spawn still in flight when the list was read isn't on it yet; ask about
   // each one directly before calling it gone, and change nothing if unsure.
-  let confirmed: Record<string, { exists: boolean; conflict?: boolean }>;
+  let confirmed: Record<string, TerminalReconnectResult>;
   try {
     confirmed = await window.electron.terminal.reconnectBulk(live.slice(0, 256));
   } catch (error) {
@@ -171,12 +191,22 @@ async function observeVanishedTerminals(
   const state = getState();
   for (const id of live) {
     const answer = confirmed[id];
-    if (!answer || answer.exists || answer.conflict) continue;
+    if (!answer || answer.conflict) continue;
     const panel = state.panelsById[id];
     if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
     if ((panel.restartKey ?? 0) !== probed.get(id)) continue;
     // A real exit reported while the probe was out already says it all, code included.
     if (panel.exitCode !== undefined || panel.runtimeStatus === "exited") continue;
+    if (answer.exists) {
+      // Off the project's list because the driver trashed it: the list leaves
+      // trashed terminals out. It comes back through adoption if the driver
+      // restores it. Anything else still running (a restart caught between
+      // its kill and its spawn) stays.
+      if (options.follow && answer.isTrashed === true && followsHostLayout(panel)) {
+        state.removePanel(id, { backendAlreadyClosed: true });
+      }
+      continue;
+    }
     if (panel.location === "trash") {
       state.removePanel(id, { backendAlreadyClosed: true });
     } else {
@@ -185,6 +215,72 @@ async function observeVanishedTerminals(
       state.setRuntimeStatus(id, "exited");
       terminalInstanceService.reportLost(id, "The host no longer has this terminal");
     }
+  }
+}
+
+type PanelStore = typeof import("@/store/panelStore").usePanelStore;
+
+function showsExited(state: PanelState, id: string): boolean {
+  const panel = state.panelsById[id];
+  return (
+    panel !== undefined &&
+    isPtyPanel(panel) &&
+    (panel.exitCode !== undefined || panel.runtimeStatus === "exited")
+  );
+}
+
+/**
+ * A pane that shows the driver's layout, as opposed to one that belongs to this
+ * screen alone (the assistant, a dialog) or is held for restore recovery.
+ */
+export function followsHostLayout(panel: PanelState["panelsById"][string]): boolean {
+  if ((panel.kind ?? "terminal") !== "terminal") return false;
+  if (panel.location !== "grid" && panel.location !== "dock") return false;
+  if (panel.excludeFromPersistence) return false;
+  return !isPtyPanel(panel) || (panel.removeOnExit !== true && panel.restoreRecovery === undefined);
+}
+
+/**
+ * Following the driver: a terminal the host lists as trashed leaves this
+ * view's layout, and one shown as exited that the host runs again was
+ * restarted there. Only a pane already exited before the list was read is
+ * revived: an exit landing while the answer travelled is about the process
+ * the list saw.
+ */
+async function followHostTerminals(
+  infos: BackendTerminalInfo[],
+  exitedBefore: ReadonlySet<string>,
+  store: PanelStore
+): Promise<void> {
+  const { deriveRuntimeStatus } = await import("@/store/slices/panelRegistry/helpers");
+  for (const info of infos) {
+    const state = store.getState();
+    const panel = state.panelsById[info.id];
+    if (!panel || !isPtyPanel(panel) || panel.isRestarting || !followsHostLayout(panel)) continue;
+    if (info.isTrashed) {
+      state.removePanel(info.id, { backendAlreadyClosed: true });
+      continue;
+    }
+    if (info.hasPty === false || !exitedBefore.has(info.id) || !showsExited(state, info.id)) {
+      continue;
+    }
+    // The host already runs the new process under this id; nothing is started
+    // here. The new restart key remounts the pane, which drops the exit it showed.
+    store.setState((current) => {
+      const target = current.panelsById[info.id];
+      if (!target || !isPtyPanel(target)) return current;
+      return {
+        panelsById: {
+          ...current.panelsById,
+          [info.id]: {
+            ...target,
+            exitCode: undefined,
+            restartKey: (target.restartKey ?? 0) + 1,
+            runtimeStatus: deriveRuntimeStatus(target.isVisible, target.flowStatus),
+          },
+        },
+      };
+    });
   }
 }
 

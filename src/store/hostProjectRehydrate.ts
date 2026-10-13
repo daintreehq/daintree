@@ -1,6 +1,11 @@
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HydrateResult } from "@shared/types/ipc/app";
-import type { TabGroup } from "@shared/types/panel";
+import {
+  isDevPreviewPanel,
+  isPtyPanel,
+  type PanelLocation,
+  type TabGroup,
+} from "@shared/types/panel";
 import { getWorktreeIdSet, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { logWarn } from "@/utils/logger";
 
@@ -19,6 +24,13 @@ export interface HostProjectRehydrateOptions {
    * because writes made while the link was down never reached the host.
    */
   authoritative: boolean;
+  /**
+   * This view watches while another screen drives, so beyond taking the
+   * host's order and groups it follows the driver's panels: a panel the
+   * host's save files elsewhere moves there, and one the save no longer has
+   * leaves this view. Terminals are the terminal resync's to remove.
+   */
+  follow?: boolean;
 }
 
 /**
@@ -94,11 +106,33 @@ export async function rehydrateHostProjectState(
     if (!options.isCurrent()) return;
   }
 
+  let followDeps: FollowDeps | null = null;
+  if (options.follow) {
+    const [
+      { transferBetweenWorktreeIndex },
+      { saveNormalized, saveTabGroups },
+      { followsHostLayout },
+    ] = await Promise.all([
+      import("@/store/slices/panelRegistry/worktreeIndex"),
+      import("@/store/slices/panelRegistry/persistence"),
+      import("@/store/hostTerminalResync"),
+    ]);
+    if (!options.isCurrent()) return;
+    followDeps = { transferBetweenWorktreeIndex, saveNormalized, saveTabGroups, followsHostLayout };
+    followSavedPanels(saved, usePanelStore, followDeps);
+  }
+
   if (options.authoritative) {
     const store = usePanelStore.getState();
     store.restoreTerminalOrder(saved.map((entry) => entry.id));
     const tabGroups: TabGroup[] | undefined = hydrate.tabGroups;
-    if (tabGroups) store.hydrateTabGroups(tabGroups, { skipPersist: true });
+    if (tabGroups) {
+      store.hydrateTabGroups(tabGroups, { skipPersist: true });
+      // A removal above queued the groups as they stood before; queued again,
+      // the save that goes out (from a view that has just taken over) is the
+      // host's own, not a stale one written over it.
+      if (followDeps) followDeps.saveTabGroups(usePanelStore.getState().tabGroups);
+    }
     await applyActiveWorktree(hydrate.appState?.activeWorktreeId ?? null, options);
     if (!options.isCurrent()) return;
   }
@@ -137,6 +171,83 @@ export async function rehydrateHostProjectState(
     if (typeof text === "string") hostRecord[terminalId] = text;
   }
   draftInputPersistence.rebaseProject(projectId, hostRecord);
+}
+
+type PanelStore = typeof import("@/store/panelStore").usePanelStore;
+type PanelState = ReturnType<PanelStore["getState"]>;
+
+interface FollowDeps {
+  transferBetweenWorktreeIndex: typeof import("@/store/slices/panelRegistry/worktreeIndex").transferBetweenWorktreeIndex;
+  saveNormalized: typeof import("@/store/slices/panelRegistry/persistence").saveNormalized;
+  saveTabGroups: typeof import("@/store/slices/panelRegistry/persistence").saveTabGroups;
+  followsHostLayout: typeof import("@/store/hostTerminalResync").followsHostLayout;
+}
+
+const FOLLOWED_LOCATIONS: ReadonlySet<unknown> = new Set<PanelLocation>(["grid", "dock"]);
+
+function isFollowedLocation(location: unknown): location is "grid" | "dock" {
+  return FOLLOWED_LOCATIONS.has(location);
+}
+
+/**
+ * Lay this view's panels out as the host's save files them, and drop the ones
+ * the driver closed. Visibility is left to the panes' own observers, which
+ * see the move and set it, with the renderer policy that follows from it.
+ */
+function followSavedPanels(
+  saved: ReadonlyArray<{ id: string; location?: unknown; worktreeId?: unknown }>,
+  store: PanelStore,
+  deps: FollowDeps
+): void {
+  const savedIds = new Set(saved.map((entry) => entry.id));
+  const ownedByScreen = (panel: PanelState["panelsById"][string]) =>
+    !FOLLOWED_LOCATIONS.has(panel.location) || panel.excludeFromPersistence === true;
+  let moved = false;
+  store.setState((state) => {
+    let panelsById = state.panelsById;
+    let panelIdsByWorktreeId = state.panelIdsByWorktreeId;
+    for (const entry of saved) {
+      const panel = panelsById[entry.id];
+      if (!panel || ownedByScreen(panel)) continue;
+      const location = isFollowedLocation(entry.location) ? entry.location : panel.location;
+      // An absent worktree is the save's own answer: the panel is filed globally.
+      const worktreeId = typeof entry.worktreeId === "string" ? entry.worktreeId : undefined;
+      if (location === panel.location && worktreeId === panel.worktreeId) continue;
+      panelsById = { ...panelsById, [entry.id]: { ...panel, location, worktreeId } };
+      panelIdsByWorktreeId = deps.transferBetweenWorktreeIndex(
+        panelIdsByWorktreeId,
+        panel.worktreeId,
+        worktreeId,
+        entry.id
+      );
+    }
+    if (panelsById === state.panelsById) return state;
+    moved = true;
+    return { panelsById, panelIdsByWorktreeId };
+  });
+  if (moved) {
+    // Queued like any other layout change: a watcher's save is skipped, and a
+    // view that has just taken the project over sends the host's placement
+    // rather than one an adoption queued a moment ago.
+    const state = store.getState();
+    deps.saveNormalized(state.panelsById, state.panelIds);
+  }
+  // Closed or trashed by the driver. A terminal goes once it shows exited
+  // here (a running one may be in a save still on its way); a dev preview
+  // stays, since removing it would ask the host to stop a server only the
+  // driver may stop.
+  const state = store.getState();
+  for (const id of [...state.panelIds]) {
+    const panel = state.panelsById[id];
+    if (!panel || savedIds.has(id) || ownedByScreen(panel)) continue;
+    if (panelKindHasPty(panel.kind ?? "terminal")) {
+      if (!isPtyPanel(panel) || !deps.followsHostLayout(panel) || panel.isRestarting) continue;
+      if (panel.exitCode === undefined && panel.runtimeStatus !== "exited") continue;
+      state.removePanel(id, { backendAlreadyClosed: true });
+    } else if (!isDevPreviewPanel(panel)) {
+      state.removePanel(id);
+    }
+  }
 }
 
 async function applyActiveWorktree(

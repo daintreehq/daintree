@@ -34,4 +34,10 @@ export interface DriveLeaseView extends DriveLeaseState {
   heldByThisClient?: boolean;
 }
 
-export type DriveLeaseEvent = { type: "changed"; state: DriveLeaseView };
+export type DriveLeaseEvent =
+  | { type: "changed"; state: DriveLeaseView }
+  /**
+   * The driver saved a different panel set or layout for the project. Sent
+   * only to the views that watch it, which read the host's panels back.
+   */
+  | { type: "panels-changed"; projectId: string };

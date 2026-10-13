@@ -16,6 +16,15 @@ vi.mock("../../../services/pty/agentSessionCapturePersistence.js", () => ({
   noteRendererSessionIdentityEdits,
 }));
 
+const { leaseService, peekDriveLeaseService } = vi.hoisted(() => {
+  const leaseService = { notifyPanelsChanged: vi.fn() };
+  return {
+    leaseService,
+    peekDriveLeaseService: vi.fn((): typeof leaseService | null => null),
+  };
+});
+vi.mock("../../../services/DriveLeaseService.js", () => ({ peekDriveLeaseService }));
+
 import {
   terminalLayoutNamespace,
   sanitizeFieldEdits,
@@ -92,6 +101,49 @@ const baseState = (terminals: TerminalSnapshot[], tabGroups: TabGroup[] = []): P
 
 beforeEach(() => {
   projectStoreMock.enqueueProjectStateUpdate.mockReset();
+  leaseService.notifyPanelsChanged.mockReset();
+  peekDriveLeaseService.mockReset();
+  peekDriveLeaseService.mockReturnValue(null);
+});
+
+describe("watchers hear of a saved panel set (#13280)", () => {
+  it("tells the lease service once the panels and the tab groups are saved", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    let commit!: () => void;
+    projectStoreMock.enqueueProjectStateUpdate.mockImplementation(
+      () => new Promise<void>((resolve) => (commit = resolve))
+    );
+
+    const saving = setTerminals({ projectId: "p1", terminals: [term("1")] });
+    await Promise.resolve();
+    expect(leaseService.notifyPanelsChanged).not.toHaveBeenCalled();
+    commit();
+    await saving;
+    expect(leaseService.notifyPanelsChanged).toHaveBeenCalledWith("p1");
+
+    const grouping = setTabGroups({ projectId: "p1", tabGroups: [group("g1", ["1"])] });
+    await Promise.resolve();
+    commit();
+    await grouping;
+    expect(leaseService.notifyPanelsChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it("tells nobody when the save fails", async () => {
+    peekDriveLeaseService.mockReturnValue(leaseService);
+    projectStoreMock.enqueueProjectStateUpdate.mockRejectedValue(new Error("disk full"));
+
+    await expect(setTerminals({ projectId: "p1", terminals: [term("1")] })).rejects.toThrow(
+      "disk full"
+    );
+    expect(leaseService.notifyPanelsChanged).not.toHaveBeenCalled();
+  });
+
+  it("does nothing more without Host mode", async () => {
+    onDisk(baseState([]));
+    await setTerminals({ projectId: "p1", terminals: [term("1")] });
+    expect(peekDriveLeaseService).toHaveBeenCalled();
+    expect(leaseService.notifyPanelsChanged).not.toHaveBeenCalled();
+  });
 });
 
 describe("setFocusMode record preservation (#11497)", () => {
