@@ -1,5 +1,6 @@
-import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import type { FleetRunRow, RunCanopyRefinement } from "@shared/types/ipc/fleet";
 import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
+import { canopyPlacement } from "@shared/utils/canopyRefinement";
 
 /**
  * Attention bands, worst-first.
@@ -111,6 +112,18 @@ export function bandForRun(run: FleetRunRow): FleetBand {
   // built, so this needs no clock. A run carrying both records reads as parked
   // — the stronger, indefinite decision wins, matching FLEET_BANDS' order.
   if (run.snooze !== undefined) return "snoozed";
+  // Canopy's reading refines the free rules below and sits under the user's
+  // own decisions above. Seeing a question answers nothing, so an ask holds
+  // whatever the hand-back's seen state says — the seen mark itself is left
+  // alone, and comes back into force the moment the turn moves on.
+  const canopy = runCanopyPlacement(run);
+  if (canopy?.kind === "asked") return "needs-you";
+  if (canopy?.kind === "not-asking") {
+    // Only a stop Daintree watched work before is a hand-back; a reading that
+    // nothing is being asked does not make one.
+    if (run.handBack === undefined) return "idle";
+    return isHandBackUnseen(run.handBack) ? "review" : "done";
+  }
   // A stop main watched the run make after work it saw is a hand-back, and
   // whether the user has had it in front of them since is main's to say — so
   // it holds through the slide from `completed` into a generic `waiting`. The
@@ -127,10 +140,20 @@ export function bandForRun(run: FleetRunRow): FleetBand {
       // Presence alone, like the park and snooze records above: main only puts
       // `quietSince` on the wire once the silence has crossed its stall
       // threshold, so this needs no clock and no threshold of its own.
-      return run.quietSince !== undefined ? "quiet" : "running";
+      return run.quietSince !== undefined || canopy?.kind === "stalled" ? "quiet" : "running";
     default:
       return "idle";
   }
+}
+
+/** The Canopy refinement placing this run now, if any; see `canopyPlacement`. */
+export function runCanopyPlacement(run: FleetRunRow): RunCanopyRefinement | undefined {
+  return canopyPlacement(
+    run.agentState,
+    run.waitingReason,
+    run.canopy,
+    run.quietSince !== undefined
+  );
 }
 
 /**
@@ -198,8 +221,11 @@ export function bandTimestamp(run: FleetRunRow, band: FleetBand): number | undef
       return run.park?.parkedAt ?? run.since;
     case "snoozed":
       return run.snooze?.snoozedAt ?? run.since;
-    case "quiet":
-      return run.quietSince ?? run.since;
+    case "quiet": {
+      if (run.quietSince !== undefined) return run.quietSince;
+      const canopy = runCanopyPlacement(run);
+      return canopy?.kind === "stalled" ? canopy.stalledSince : run.since;
+    }
     case "review":
     case "done":
       // Dated from the stop itself, not the slide into `waiting` after it.

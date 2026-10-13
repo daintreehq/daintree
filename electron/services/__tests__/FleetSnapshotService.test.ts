@@ -28,6 +28,10 @@ vi.mock("../AgentAvailabilityStore.js", () => ({
 }));
 
 import { FleetSnapshotService, STALL_QUIET_MS } from "../FleetSnapshotService.js";
+import {
+  notifyCanopyRefinementsChanged,
+  setCanopyRefinementSource,
+} from "../canopy/canopyRefinementSource.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 
 const NOW = 1_830_001;
@@ -726,6 +730,41 @@ describe("FleetSnapshotService", () => {
     expect(broadcastMock).toHaveBeenCalledTimes(2);
     expect(lastSnapshot().runs[0].handBack).toEqual(record);
     service.stop();
+  });
+
+  it("decorates a run with Canopy's refinement for its incarnation, and re-publishes when it changes", async () => {
+    const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
+    let refinement: { kind: "asked"; quote: string; readAt: number } | undefined = undefined;
+    const source = vi.fn((_id: string, _spawnedAt: number) => refinement);
+    setCanopyRefinementSource(source);
+    const service = new FleetSnapshotService(client as never);
+    try {
+      service.start();
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().runs[0].canopy).toBeUndefined();
+      expect(source).toHaveBeenCalledWith("t1", NOW - 60_000);
+      const published = broadcastMock.mock.calls.length;
+
+      refinement = { kind: "asked", quote: "Want me to update the tests too?", readAt: NOW };
+      notifyCanopyRefinementsChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 1);
+      expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
+
+      // The same reading told again is no fleet change.
+      notifyCanopyRefinementsChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 1);
+
+      // Canopy going away takes every refinement with it.
+      setCanopyRefinementSource(null);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(lastSnapshot().runs[0].canopy).toBeUndefined();
+    } finally {
+      setCanopyRefinementSource(null);
+      service.stop();
+    }
   });
 
   it("never prunes hand-backs from a degraded read", async () => {

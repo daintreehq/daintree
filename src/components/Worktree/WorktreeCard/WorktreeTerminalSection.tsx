@@ -20,6 +20,10 @@ import { resolveSessionPresentation } from "@/lib/handBackPresentation";
 import { useRunHandBackState } from "@/hooks/useRunHandBackState";
 import { useRunParkState } from "@/hooks/useRunParkState";
 import { CirclePause } from "@/components/icons";
+import { useRunCanopyPlacement } from "@/hooks/useRunCanopyPlacement";
+import { useWallClock } from "@/hooks/useWallClock";
+import { canopyEvidence } from "@/lib/canopyRefinementPresentation";
+import type { RunCanopyRefinement } from "@shared/types/ipc/fleet";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -60,6 +64,41 @@ interface TerminalRowProps {
   canArm: boolean;
 }
 
+/** How often a Canopy attribution re-reads the clock: its age is in minutes. */
+const EVIDENCE_TICK_MS = 30_000;
+const nextEvidenceTick = () => EVIDENCE_TICK_MS;
+
+interface CanopyEvidenceLineProps {
+  refinement: RunCanopyRefinement;
+  id: string;
+  pointer: Pick<React.HTMLAttributes<HTMLElement>, "onPointerEnter" | "onPointerLeave">;
+}
+
+/**
+ * What Canopy read that moved this session into its bucket, quoted and
+ * attributed, under the title. The glyph beside it keeps showing what Daintree
+ * observed: a reading sits alongside the observation and never replaces it.
+ */
+function CanopyEvidenceLine({ refinement, id, pointer }: CanopyEvidenceLineProps) {
+  const now = useWallClock(refinement.readAt, nextEvidenceTick);
+  const text = canopyEvidence(refinement, now);
+  return (
+    <Tooltip autoDismiss={false}>
+      <TooltipTrigger asChild>
+        <span
+          id={id}
+          data-canopy-evidence={refinement.kind}
+          className="truncate text-2xs text-text-secondary"
+          {...pointer}
+        >
+          {text}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{text}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   const { ref, isTruncated } = useTruncationDetection();
   const dragHandle = useDragHandle();
@@ -78,6 +117,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   // the state glyph rather than replacing it — and leaves the data attribute
   // alone.
   const park = useRunParkState(term.id);
+  const canopy = useRunCanopyPlacement(term.id);
   const glyphState = resolveSessionPresentation(
     agentState,
     term.agentState,
@@ -100,6 +140,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   const titleId = `${idBase}-title`;
   const placementId = `${idBase}-placement`;
   const commandId = `${idBase}-command`;
+  const evidenceId = `${idBase}-evidence`;
   const parkId = `${idBase}-park`;
   // The metadata tooltips sit inside the title tooltip's trigger, so pointing
   // at one would otherwise open both.
@@ -168,6 +209,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
               aria-labelledby={titleId}
               aria-describedby={[
                 showCommand ? commandId : null,
+                canopy !== undefined ? evidenceId : null,
                 park.parked ? parkId : null,
                 placementId,
               ]
@@ -203,6 +245,9 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
                     </TooltipTrigger>
                     <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
                   </Tooltip>
+                )}
+                {canopy !== undefined && (
+                  <CanopyEvidenceLine refinement={canopy} id={evidenceId} pointer={metaPointer} />
                 )}
               </span>
 

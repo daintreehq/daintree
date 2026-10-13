@@ -12,7 +12,15 @@ import {
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
 import type { RunHandBackService } from "./RunHandBackService.js";
-import type { FleetRunRow, FleetSnapshot } from "../../shared/types/ipc/fleet.js";
+import type {
+  FleetRunRow,
+  FleetSnapshot,
+  RunCanopyRefinement,
+} from "../../shared/types/ipc/fleet.js";
+import {
+  canopyRefinementFor,
+  onCanopyRefinementsChanged,
+} from "./canopy/canopyRefinementSource.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 
@@ -111,6 +119,9 @@ export class FleetSnapshotService {
     // A move re-files the row without moving any agent state, so without this
     // the palette keeps the old grouping until the next aligned poll (#12060).
     subscribe("terminal:worktree-changed");
+    // A refinement is a decoration, like a park: nothing on the host moved, so
+    // the recompute reuses its inventory rather than asking it again.
+    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.debouncedCompute()));
   }
 
   updatePollInterval(ms: number): void {
@@ -280,7 +291,8 @@ export class FleetSnapshotService {
         x.handBack?.stoppedAt !== y.handBack?.stoppedAt ||
         x.handBack?.seenAt !== y.handBack?.seenAt ||
         x.handBack?.markedUnreadAt !== y.handBack?.markedUnreadAt ||
-        x.quietSince !== y.quietSince
+        x.quietSince !== y.quietSince ||
+        !sameCanopyRefinement(x.canopy, y.canopy)
       ) {
         return false;
       }
@@ -334,6 +346,7 @@ export class FleetSnapshotService {
         const park = parkRecords?.get(terminal.id);
         const snooze = snoozeRecords?.get(terminal.id);
         const handBack = this.handBacks?.getRecord(terminal.id, terminal.spawnedAt);
+        const canopy = canopyRefinementFor(terminal.id, terminal.spawnedAt);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -371,6 +384,7 @@ export class FleetSnapshotService {
           ...(park !== undefined ? { park } : {}),
           ...(snooze !== undefined ? { snooze } : {}),
           ...(handBack !== undefined ? { handBack } : {}),
+          ...(canopy !== undefined ? { canopy } : {}),
           // Stall cue: only for a working run, and only once the CURRENT
           // working stint has been silent past the threshold. Anchored on the
           // later of last output, the transition into this state and the
@@ -456,4 +470,14 @@ export class FleetSnapshotService {
       }
     }
   }
+}
+
+/** Every field of a refinement, so a new quote or a later read is a fleet change. */
+function sameCanopyRefinement(
+  a: RunCanopyRefinement | undefined,
+  b: RunCanopyRefinement | undefined
+): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.kind !== b.kind || a.quote !== b.quote || a.readAt !== b.readAt) return false;
+  return a.kind !== "stalled" || b.kind !== "stalled" || a.stalledSince === b.stalledSince;
 }

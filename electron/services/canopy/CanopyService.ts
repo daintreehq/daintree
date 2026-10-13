@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
+import type { FleetRunRow, RunCanopyRefinement } from "../../../shared/types/ipc/fleet.js";
 import {
   CANOPY_ATTENTION_THRESHOLD,
   CANOPY_URGENT_PRIORITY,
@@ -41,6 +41,7 @@ import type { TerminalAnswer } from "../../../shared/utils/terminalSubmission.js
 import { EMPTY_GLANCE, glanceScreen } from "./canopyGlance.js";
 import { CANOPY_REFLOW_MS, reflowPrint, sameAfterReflow } from "./canopyReflow.js";
 import { observedCaughtUp } from "../../../shared/utils/canopyObservedKind.js";
+import { isHandBackStop } from "../../../shared/utils/runHandBack.js";
 import { heldCanopyPriority } from "../../../shared/utils/canopyPriorityTier.js";
 import {
   CANOPY_READ_DWELL_MS,
@@ -220,6 +221,8 @@ export interface CanopyServiceDeps {
   serviceWaking?: () => boolean;
   /** The host Canopy's service is reached at, for the status bar. */
   serviceHost?: () => string;
+  /** What `getRefinement` answers changed for at least one run, removals included. */
+  onRefinementsChanged?: () => void;
 }
 
 export interface ScreenRead {
@@ -384,6 +387,12 @@ interface RunEntry {
    * that moved since is read as any other.
    */
   rereadOf: string | null;
+  /**
+   * What the reading refines of where the run lands, held for the turn it was
+   * read in (`reads.turn`) so a re-read can't flip it back and forth; null
+   * while nothing has qualified this turn.
+   */
+  refinement: { turn: number; value: RunCanopyRefinement } | null;
 }
 
 /**
@@ -431,6 +440,8 @@ export class CanopyService {
   private lastBroadcast: string | null = null;
   /** Whether the last snapshot sent said a scan was under way. */
   private lastBroadcastBusy = false;
+  /** Every run's refinement as last told to `onRefinementsChanged`, so an unchanged settle tells nothing. */
+  private refinementKey = "";
   private sequence = 0;
   /** Cards being written, apart from the scan that read their screens. */
   private readonly cardJobs = new Set<Promise<void>>();
@@ -568,6 +579,7 @@ export class CanopyService {
         entry.cardProgress = false;
         entry.cardStreams = false;
         entry.rereadOf = null;
+        entry.refinement = null;
         // No view tells main a look ended once reading stops, so the looks go
         // now: one left to its lease would read the next turn after reading
         // comes back on.
@@ -2515,11 +2527,78 @@ export class CanopyService {
     return changed;
   }
 
+  /**
+   * Canopy's refinement of where the run lands, for the incarnation given, or
+   * undefined when there is none: Canopy off or on the free tier, the user put
+   * the run aside, or nothing this turn read as an ask, a false alarm or a
+   * stall. Reads only what is held — it never reads a screen.
+   */
+  getRefinement(runId: string, spawnedAt: number): RunCanopyRefinement | undefined {
+    if (!this.refines) return undefined;
+    const entry = this.entries.get(runId);
+    // Archived or replied to is the user's own call on what the run showed,
+    // and it outranks what the reader made of it.
+    if (!entry || entry.spawnedAt !== spawnedAt || entry.disposition !== null) return undefined;
+    const held = entry.refinement;
+    return held !== null && held.turn === entry.reads.turn ? held.value : undefined;
+  }
+
+  /** Readings refine attention only for a user who turned Canopy on and pays for it. */
+  private get refines(): boolean {
+    return (
+      !this.disposed &&
+      this.plan.mode === "on" &&
+      this.plan.activated &&
+      this.plan.tier === "priority"
+    );
+  }
+
+  /**
+   * Latches each run's first qualifying verdict for its turn, and tells
+   * `onRefinementsChanged` when what `getRefinement` answers has moved.
+   */
+  private settleRefinements(): void {
+    const runs = this.deps.getRuns();
+    const refines = this.refines;
+    const byId = runs === null ? null : new Map(runs.map((run) => [run.runId, run]));
+    const parts: string[] = [];
+    for (const [runId, entry] of this.entries) {
+      if (!refines) {
+        entry.refinement = null;
+        continue;
+      }
+      const run = byId?.get(runId);
+      if (run !== undefined && run.spawnedAt === entry.spawnedAt) {
+        const turn = entry.reads.turn;
+        const held = entry.refinement;
+        // A stall is an observation of a still screen: once it moves, there is
+        // nothing left to quote, whatever turn it is.
+        const stallEnded =
+          held !== null &&
+          held.value.kind === "stalled" &&
+          (entry.card?.stalledSince ?? null) === null;
+        if (held === null || held.turn !== turn || stallEnded) {
+          const value = refinementOf(entry, run, this.now());
+          entry.refinement = value === null ? null : { turn, value };
+        }
+      }
+      const value = this.getRefinement(runId, entry.spawnedAt);
+      if (value !== undefined) parts.push(`${runId}:${entry.spawnedAt}:${JSON.stringify(value)}`);
+    }
+    const key = parts.join("\n");
+    if (key === this.refinementKey) return;
+    this.refinementKey = key;
+    this.deps.onRefinementsChanged?.();
+  }
+
   private scheduleBroadcast(): void {
     if (this.disposed || this.broadcastTimer !== null) return;
     this.broadcastTimer = setTimeout(() => {
       this.broadcastTimer = null;
       if (this.disposed) return;
+      // Every change worth a broadcast passes here — a new reading, a turn, a
+      // stall, a run gone — whether or not a panel is open to be sent it.
+      this.settleRefinements();
       const snapshot = this.getSnapshot();
       // `busy` alone flips on every poll and nothing shows it: a scan that
       // changed nothing else is not news to any view.
@@ -2594,6 +2673,7 @@ function newEntry(spawnedAt: number): RunEntry {
     glance: null,
     reads: newReadTrack(),
     rereadOf: null,
+    refinement: null,
   };
 }
 
@@ -2724,6 +2804,43 @@ function showsWork(screen: PreparedScreen): boolean {
 /** What Daintree observes of a run, as far as reading it goes: its state and why it waits. */
 function observedKey(run: FleetRunRow): string {
   return `${run.agentState ?? ""}:${run.waitingReason ?? ""}`;
+}
+
+/**
+ * What a run's reading refines of where it lands, or null when it refines
+ * nothing. The classifier's category is the verdict and its verbatim words the
+ * evidence; no score or priority places a run, so a finished turn with loose
+ * ends — which can score high — stays where the free rules put it.
+ */
+/** An `observedKey` taken while the run was at work. */
+const BUSY_READ_STATE = /^(working|directing):/;
+
+function refinementOf(entry: RunEntry, run: FleetRunRow, now: number): RunCanopyRefinement | null {
+  if (run.agentState === undefined) return null;
+  if (isBusy(run)) {
+    const stalledSince = entry.card?.stalledSince ?? null;
+    const quote = (entry.card?.activity ?? entry.card?.glance.doing ?? "").trim();
+    if (stalledSince === null || !quote) return null;
+    return { kind: "stalled", quote, readAt: now, stalledSince };
+  }
+  const classified = entry.classified;
+  // A pass for a newer screen is under way: what is held is about the old one.
+  if (classified === null || entry.pending || classified.confidence < ASK_CONFIDENCE) return null;
+  if (isHandBackStop(run.agentState, run.waitingReason)) {
+    // Read while stopped: a reading of the run at work says nothing of what it stopped on.
+    if (classified.category !== "question" || BUSY_READ_STATE.test(entry.readState)) return null;
+    const quote = classified.question?.trim();
+    return quote ? { kind: "asked", quote, readAt: entry.readAt } : null;
+  }
+  if (run.agentState === "waiting" && run.waitingReason === "question") {
+    // Only a reading of this very wait can say it asks nothing.
+    if (entry.readState !== observedKey(run)) return null;
+    if (classified.category !== "finished" && classified.category !== "idle") return null;
+    if (classified.question !== null && classified.question.trim() !== "") return null;
+    const quote = (classified.status ?? entry.card?.activity ?? "").trim();
+    return quote ? { kind: "not-asking", quote, readAt: entry.readAt } : null;
+  }
+  return null;
 }
 
 function isBusy(run: FleetRunRow): boolean {

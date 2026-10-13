@@ -5,6 +5,10 @@ import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
 import { scratchStore } from "./ScratchStore.js";
 import { computeProjectAgentCounts } from "./projectAgentCounts.js";
+import {
+  canopyRefinementFor,
+  onCanopyRefinementsChanged,
+} from "./canopy/canopyRefinementSource.js";
 import { helpSessionService } from "./HelpSessionService.js";
 import {
   getSharedTerminalSnapshot,
@@ -78,6 +82,9 @@ export class ProjectStatsService {
     // attention tallies the same way, with nothing else to announce it (#13238).
     subscribe("terminal:park-changed");
     subscribe("terminal:hand-back-changed");
+    // Canopy reading an ask or a false alarm moves the same tallies, and the
+    // host has nothing new to say about it.
+    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.debouncedCompute()));
   }
 
   updatePollInterval(ms: number): void {
@@ -336,7 +343,8 @@ export class ProjectStatsService {
         // Tells a finished turn from a real ask and keeps parked runs out of
         // attention. The pull path passes the same two, for the reason above.
         runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
-        this.runAttention?.getAll()
+        this.runAttention?.getAll(),
+        canopyRefinementFor
       );
 
       const statusMap: ProjectStatusMap = {};

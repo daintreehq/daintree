@@ -2,6 +2,7 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
 import {
   bandForRun,
+  runCanopyPlacement,
   bandLabel,
   bandTimestamp,
   compareWithinBand,
@@ -18,6 +19,7 @@ import { isFilterMatch } from "@/lib/projectSwitcherSearch";
 import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { worktreeLabels } from "@/lib/worktreeLabels";
+import { canopyEvidence } from "@/lib/canopyRefinementPresentation";
 
 export interface PilotRow {
   run: FleetRunRow;
@@ -83,6 +85,12 @@ export interface PilotRow {
    * type when hunting for the run you shelved behind it.
    */
   parkNote: string | null;
+  /**
+   * What Canopy read that placed this row, quoted and attributed; null when
+   * the free rules alone placed it. A reading is a suggestion, so a row it
+   * moved has to say so and show the words it moved on.
+   */
+  canopyEvidence: string | null;
   /**
    * How long the run has been WORKING, on a row whose clock is measuring
    * something else. Only a quiet row has one, and it exists purely for the
@@ -366,6 +374,16 @@ function openedAt(value: number | undefined): number {
  * ago did I shelve this". A quiet row is dated from the silence for the same
  * reason: the silence is the thing that might need a hand.
  */
+/**
+ * The attribution for a row Canopy placed. A park or snooze outranks the
+ * reading, and a row the user shelved must not claim a reading moved it.
+ */
+function canopyEvidenceFor(run: FleetRunRow, band: FleetBand, nowMs: number): string | null {
+  if (band === "parked" || band === "snoozed") return null;
+  const placement = runCanopyPlacement(run);
+  return placement === undefined ? null : canopyEvidence(placement, nowMs);
+}
+
 function ageOf(
   run: FleetRunRow,
   band: FleetBand,
@@ -458,6 +476,7 @@ export function buildPilotGroups(
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
         ...ageOf(run, band, ctx.nowMs),
         parkNote: run.park?.note ?? null,
+        canopyEvidence: canopyEvidenceFor(run, band, ctx.nowMs),
       };
     });
 

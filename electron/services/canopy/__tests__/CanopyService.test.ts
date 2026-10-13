@@ -92,6 +92,7 @@ async function makeHarness(options: {
   fleetKnown?: () => boolean;
   /** Awaited before every screen read, to hold a scan part way. */
   screenGate?: () => Promise<void>;
+  onRefinementsChanged?: () => void;
 }): Promise<Harness> {
   const screens = new Map<string, string>();
   const runs: FleetRunRow[] = [];
@@ -155,6 +156,7 @@ async function makeHarness(options: {
     ...(options.onAsk ? { onAsk: options.onAsk } : {}),
     ...(options.serviceWaking ? { serviceWaking: options.serviceWaking } : {}),
     ...(options.serviceHost ? { serviceHost: options.serviceHost } : {}),
+    ...(options.onRefinementsChanged ? { onRefinementsChanged: options.onRefinementsChanged } : {}),
     ...(options.stateChangeScanMs !== undefined
       ? { stateChangeScanMs: options.stateChangeScanMs }
       : {}),
@@ -4665,5 +4667,160 @@ describe("CanopyService stopping what is in flight", () => {
     await h.service.scan();
     await settle();
     expect(h.classify.mock.calls.at(-1)![0].note ?? null).toBeNull();
+  });
+});
+
+describe("CanopyService refining attention", () => {
+  const ASK_SCREEN = "⏺ Done — the store is migrated.\n\n  Want me to update the tests too?";
+  const QUESTION_READ: Reading = {
+    category: "question",
+    confidence: 0.95,
+    attention: 0.9,
+    question: "Want me to update the tests too?",
+  };
+  const FINISHED_READ: Reading = {
+    category: "finished",
+    confidence: 0.95,
+    attention: 0.95,
+    question: null,
+    status: "All 14 tests pass.",
+  };
+
+  it("reads a stop that asks something as an ask, quoted, and says so", async () => {
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: async () => QUESTION_READ,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("a", { agentState: "completed" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({
+        kind: "asked",
+        quote: "Want me to update the tests too?",
+      })
+    );
+    expect(changed).toHaveBeenCalled();
+    // Another incarnation of the same terminal id was never read.
+    expect(h.service.getRefinement("a", 2)).toBeUndefined();
+  });
+
+  it("never places a run on a score alone", async () => {
+    const h = await makeHarness({ classify: async () => FINISHED_READ });
+    h.runs.push(run("a", { agentState: "completed" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await settle();
+    await vi.waitFor(() => expect(h.service.getSnapshot().cards[0]?.priority).toBeGreaterThan(55));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+  });
+
+  it("holds its verdict for the turn while re-reads of the same stop disagree", async () => {
+    let reading = QUESTION_READ;
+    const h = await makeHarness({ classify: async () => reading });
+    h.runs.push(run("a", { agentState: "completed" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() => expect(h.service.getRefinement("a", 1)?.kind).toBe("asked"));
+
+    reading = FINISHED_READ;
+    h.screens.set("a", `${ASK_SCREEN}\n`);
+    await h.service.reread("a", 1);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(h.service.getRefinement("a", 1)?.kind).toBe("asked");
+  });
+
+  it("clears a question wait the screen shows asks nothing, but never an approval", async () => {
+    const h = await makeHarness({ classify: async () => FINISHED_READ });
+    h.runs.push(
+      run("q", { agentState: "waiting", waitingReason: "question" }),
+      run("y", { agentState: "waiting", waitingReason: "approval" })
+    );
+    h.screens.set("q", "⏺ All 14 tests pass.");
+    h.screens.set("y", "⏺ All 14 tests pass.");
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("q", 1)).toMatchObject({
+        kind: "not-asking",
+        quote: "All 14 tests pass.",
+      })
+    );
+    expect(h.service.getRefinement("y", 1)).toBeUndefined();
+  });
+
+  it("drops every refinement when the tier lapses or Canopy goes off, and tells the fleet", async () => {
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: async () => QUESTION_READ,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("a", { agentState: "completed" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() => expect(h.service.getRefinement("a", 1)).toBeDefined());
+    changed.mockClear();
+
+    h.service.setPlan({ mode: "on", activated: true, tier: "free" });
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+
+    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+  });
+
+  it("gives way to the user archiving the run", async () => {
+    const h = await makeHarness({ classify: async () => QUESTION_READ });
+    h.runs.push(run("a", { agentState: "completed" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() => expect(h.service.getRefinement("a", 1)).toBeDefined());
+    h.service.archive("a", 1);
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+  });
+
+  it("reads an ask with the panel closed", async () => {
+    const BG = 20_000;
+    const h = await makeHarness({ backgroundPollMs: BG, classify: async () => QUESTION_READ });
+    // The opening scan's broadcast was armed on the real clock: let it go
+    // before the fake one takes over, or every later one waits behind it.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    vi.useFakeTimers();
+    try {
+      h.service.setActive(false);
+      h.runs.push(run("a", { agentState: "completed" }));
+      h.screens.set("a", ASK_SCREEN);
+      await vi.advanceTimersByTimeAsync(BG + 100);
+      expect(h.describe).not.toHaveBeenCalled();
+      expect(h.service.getRefinement("a", 1)?.kind).toBe("asked");
+    } finally {
+      harness?.service.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("flags a working run whose screen stood still behind its spinner, until it moves", async () => {
+    let now = 1_000_000;
+    const h = await makeHarness({ now: () => now });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", "• Waiting for background terminal (1m 02s • esc to interrupt)");
+    await h.service.refresh();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+
+    now += CANOPY_STALL_MS + 1_000;
+    h.screens.set("a", "• Waiting for background terminal (11m 03s • esc to interrupt)");
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({
+        kind: "stalled",
+        stalledSince: 1_000_000,
+      })
+    );
+
+    h.screens.set("a", "• Ran npm test\n└ ok 14 tests");
+    await h.service.refresh();
+    await vi.waitFor(() => expect(h.service.getRefinement("a", 1)).toBeUndefined());
   });
 });

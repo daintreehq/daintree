@@ -431,6 +431,7 @@ function RunRow({
     agentLabel,
     row.statusLabel,
     row.parkNote,
+    row.canopyEvidence,
     row.agePhrase,
     row.secondaryPhrase,
   ]
@@ -493,6 +494,19 @@ function RunRow({
           className="max-w-[45%] min-w-0 shrink truncate text-xs leading-tight text-text-secondary"
         >
           {row.parkNote}
+        </span>
+      )}
+
+      {/*
+        The evidence for a row Canopy placed, in the note's slot: a park
+        outranks any reading, so the two never share a row.
+      */}
+      {row.canopyEvidence !== null && (
+        <span
+          aria-hidden="true"
+          className="max-w-[45%] min-w-0 shrink truncate text-xs leading-tight text-text-secondary"
+        >
+          {row.canopyEvidence}
         </span>
       )}
 

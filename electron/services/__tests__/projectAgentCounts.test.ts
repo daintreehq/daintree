@@ -13,6 +13,7 @@ import {
   computeProjectAgentCounts,
   type CountableTerminal,
 } from "../projectAgentCounts.js";
+import type { RunCanopyRefinement } from "../../../shared/types/ipc/fleet.js";
 
 const agent = (over: Partial<CountableTerminal> = {}): CountableTerminal => ({
   id: "t1",
@@ -1032,5 +1033,52 @@ describe("computeProjectAgentCounts — hand-backs and parks (#13238)", () => {
     );
 
     expect(p1).toMatchObject({ completed: 1, unacknowledgedCompleted: 0, snoozed: 1 });
+  });
+});
+
+describe("computeProjectAgentCounts — Canopy refinements (#13239)", () => {
+  const count = (
+    terminals: CountableTerminal[],
+    refinement: RunCanopyRefinement | undefined,
+    records: Readonly<Partial<Record<string, { stoppedAt: number; seenAt?: number }>>> = {}
+  ) =>
+    computeProjectAgentCounts(
+      ["p1"],
+      terminals.map((t) => ({ detectedAgentId: "claude", spawnedAt: 1, ...t })),
+      undefined,
+      new Map(),
+      undefined,
+      undefined,
+      (id) => records[id],
+      new Map(),
+      () => refinement
+    ).get("p1")!;
+
+  it("counts a seen hand-back Canopy read as asking something as a wait, like the fleet bands it", () => {
+    const terminals = [agent({ id: "a", agentState: "completed", lastStateChange: 500 })];
+    const records = { a: { stoppedAt: 500, seenAt: 600 } };
+    expect(count(terminals, undefined, records)).toMatchObject({ waiting: 0, completed: 1 });
+    expect(
+      count(
+        terminals,
+        { kind: "asked", quote: "Want me to update the tests?", readAt: 700 },
+        records
+      )
+    ).toMatchObject({ waiting: 1, completed: 0, oldestWaitingSince: 500 });
+  });
+
+  it("withdraws a question wait Canopy read as asking nothing from the waiting tally", () => {
+    const terminals = [agent({ id: "a", agentState: "waiting", waitingReason: "question" })];
+    expect(count(terminals, undefined).waiting).toBe(1);
+    expect(
+      count(terminals, { kind: "not-asking", quote: "All tests pass.", readAt: 700 })
+    ).toMatchObject({ waiting: 0 });
+  });
+
+  it("never lets a reading clear an approval Daintree observed", () => {
+    const terminals = [agent({ id: "a", agentState: "waiting", waitingReason: "approval" })];
+    expect(
+      count(terminals, { kind: "not-asking", quote: "All tests pass.", readAt: 700 }).waiting
+    ).toBe(1);
   });
 });

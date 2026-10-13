@@ -52,6 +52,42 @@ export interface RunHandBackRecord {
 }
 
 /**
+ * What Canopy read off a run's screen that refines where it lands, held for
+ * the agent's turn it was read in.
+ *
+ * A suggestion from a reader the user turned on, never an observation: it
+ * rides beside `agentState` and `waitingReason` and replaces neither. Every
+ * variant carries the screen's own words as its evidence, so a surface that
+ * places a run by it can say what was read and when.
+ *
+ * - `asked`: the run stopped on a message that asks the user something.
+ * - `not-asking`: a wait Daintree's patterns took for a question asks nothing.
+ * - `stalled`: a working run's screen has stood still behind its spinner.
+ */
+export type RunCanopyRefinement =
+  | {
+      kind: "asked";
+      /** The question, verbatim from the screen. */
+      quote: string;
+      /** When the screen behind the verdict was read (epoch ms). */
+      readAt: number;
+    }
+  | {
+      kind: "not-asking";
+      /** The screen's own line that says what the run is doing instead, verbatim. */
+      quote: string;
+      readAt: number;
+    }
+  | {
+      kind: "stalled";
+      /** The screen's newest meaningful line, verbatim. */
+      quote: string;
+      readAt: number;
+      /** When the screen last moved (epoch ms). */
+      stalledSince: number;
+    };
+
+/**
  * A user's decision that a run does not need them *yet*.
  *
  * The sibling of {@link RunParkRecord}, and deliberately a separate record
@@ -189,6 +225,13 @@ export interface FleetRunRow {
    * unknown.
    */
   quietSince?: number;
+  /**
+   * Present iff Canopy is on, on the priority tier, and read something this
+   * turn that refines where the run lands. Whether it still applies to what
+   * Daintree observes now is `canopyPlacement`'s to say, not presence alone:
+   * the verdict is held for its turn while the observed state moves under it.
+   */
+  canopy?: RunCanopyRefinement;
 }
 
 /**
