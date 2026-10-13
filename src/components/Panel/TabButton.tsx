@@ -20,10 +20,11 @@ import {
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import {
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
-  getEffectiveStateLabel,
+  SESSION_COLORS,
+  SESSION_ICONS,
+  SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
+import { useSessionPresentation } from "@/hooks/useRunHandBackState";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { DURATION_100 } from "@/lib/animationUtils";
@@ -311,8 +312,13 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     [isActive, onClick, sortableKeyDown, startEditing]
   );
 
-  const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
-  const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
+  // A hand-back draws unread or done here as it does on the pane's own chip,
+  // never as the amber waiting ring.
+  const displayAgentState = useSessionPresentation(
+    id,
+    getTerminalAgentDisplayState(chrome, agentState)
+  );
+  const StateIcon = displayAgentState ? SESSION_ICONS[displayAgentState] : null;
 
   return (
     <div className="relative flex">
@@ -367,7 +373,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               {/* Visually-hidden state text so the agent state icon (aria-hidden, decorative)
               is announced as part of the tab's accessible name. */}
               {displayAgentState && (
-                <span className="sr-only">Agent {getEffectiveStateLabel(displayAgentState)}</span>
+                <span className="sr-only">Agent {SESSION_LABELS[displayAgentState]}</span>
               )}
 
               {document.body.dataset.performanceMode === "true" ? (
@@ -376,7 +382,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                   <StateIcon
                     className={cn(
                       "w-3 h-3 shrink-0",
-                      getEffectiveStateColor(displayAgentState),
+                      SESSION_COLORS[displayAgentState],
                       displayAgentState === "working" && "animate-spin-slow",
                       "motion-reduce:animate-none"
                     )}
@@ -397,7 +403,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                       <StateIcon
                         className={cn(
                           "w-3 h-3",
-                          getEffectiveStateColor(displayAgentState),
+                          SESSION_COLORS[displayAgentState],
                           displayAgentState === "working" && "animate-spin-slow",
                           "motion-reduce:animate-none"
                         )}

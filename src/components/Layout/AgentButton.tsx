@@ -77,6 +77,8 @@ import {
 } from "@/components/Worktree/terminalStateConfig";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
 import { isPtyPanel } from "@shared/types/panel";
+import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+import { isHandBackWait } from "@/lib/handBackPresentation";
 
 type AgentType = BuiltInAgentId;
 
@@ -255,6 +257,8 @@ export function AgentButton({
   // bucket so per-terminal ticks in unrelated worktrees do not re-evaluate this
   // selector body. When `activeWorktreeId` is null, fall back to scanning all
   // panel ids (rare, only during project switch hydration). See issue #7451.
+  // A hand-back is no wait, so it never earns the amber pip.
+  const handBackRunIds = useHandBackRunIds();
   const activeSession = usePanelStore(
     useShallow((state) => {
       const ids = activeWorktreeId ? state.panelIdsByWorktreeId[activeWorktreeId] : state.panelIds;
@@ -269,7 +273,7 @@ export function AgentButton({
           continue;
         if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
         if (!firstId) firstId = pid;
-        states.push(p.agentState);
+        states.push(isHandBackWait(handBackRunIds, p) ? "completed" : p.agentState);
       }
       if (!firstId) return null;
       return { id: firstId, attentionState: getAttentionAgentState(states) };

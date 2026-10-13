@@ -1,10 +1,11 @@
 import { useRef, type KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
+import { pluralNoun } from "@/lib/pluralize";
+import { AGENT_BUCKET_LABEL } from "@/lib/agentStateVocabulary";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
-import { CheckCircle2 } from "lucide-react";
-import { HollowCircle, SpinnerCircle } from "@/components/icons";
+import { DoneCircle, HollowCircle, SpinnerCircle, UnreadCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { STATE_COLORS } from "./terminalStateConfig";
+import { SESSION_COLORS, STATE_COLORS } from "./terminalStateConfig";
 import { EMPTY_BUCKET_GLYPH_CLASS } from "./quickStateGlyph";
 
 /**
@@ -26,9 +27,9 @@ import { EMPTY_BUCKET_GLYPH_CLASS } from "./quickStateGlyph";
  */
 const FILTER_OPTIONS: { value: QuickStateFilter; label: string }[] = [
   { value: "all", label: "All" },
-  { value: "working", label: "Working" },
-  { value: "waiting", label: "Attention" },
-  { value: "finished", label: "Finished" },
+  { value: "working", label: AGENT_BUCKET_LABEL.working },
+  { value: "waiting", label: AGENT_BUCKET_LABEL.attention },
+  { value: "finished", label: AGENT_BUCKET_LABEL.finished },
 ];
 
 const FILTER_VISUALS: Record<
@@ -37,7 +38,7 @@ const FILTER_VISUALS: Record<
 > = {
   working: { Icon: SpinnerCircle, color: STATE_COLORS.working },
   waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting },
-  finished: { Icon: CheckCircle2, color: "text-category-blue" },
+  finished: { Icon: DoneCircle, color: STATE_COLORS.completed },
 };
 
 /**
@@ -58,9 +59,9 @@ interface QuickStateFilterBarProps {
   counts?: Record<QuickStateFilter, number>;
   /**
    * How many Finished worktrees hold a hand-back nobody has looked at. The
-   * Finished glyph is hued only while this is above zero — Pilot's Finished
-   * segment makes the same distinction between `review` and `done` — so a
-   * bucket of acknowledged work does not read as news.
+   * Finished segment draws the unread glyph while this is above zero and the
+   * done glyph once every one has been read — Pilot's Finished segment makes
+   * the same distinction between `review` and `done`.
    */
   finishedUnseen?: number;
   /**
@@ -142,16 +143,20 @@ export function QuickStateFilterBar({
           const shouldFadeIcon = hasCount && rawCount === 0;
           const visual = option.value === "all" ? null : FILTER_VISUALS[option.value];
           const isSpinningWorking = option.value === "working" && workingActive;
-          const Icon = isSpinningWorking ? SpinnerCircle : visual?.Icon;
+          const isFinishedUnread = option.value === "finished" && finishedUnseen > 0;
+          const Icon = isSpinningWorking
+            ? SpinnerCircle
+            : isFinishedUnread
+              ? UnreadCircle
+              : visual?.Icon;
           // The status icon + count carry the meaning now that the text label is
           // gone; the name lives in the accessible name and the hover tooltip.
-          const noun = rawCount === 1 ? "worktree" : "worktrees";
-          const isFinishedSeen = option.value === "finished" && finishedUnseen === 0;
+          const noun = pluralNoun(rawCount ?? 0, "worktree");
           const qualifier =
             option.value === "finished" && finishedUnseen > 0 && hasCount
               ? finishedUnseen >= rawCount
-                ? "all unseen"
-                : `including ${finishedUnseen} unseen`
+                ? "all unread"
+                : `including ${finishedUnseen} unread`
               : null;
           const baseName = hasCount ? `${option.label}, ${rawCount} ${noun}` : option.label;
           const accessibleName = qualifier === null ? baseName : `${baseName}, ${qualifier}`;
@@ -191,7 +196,7 @@ export function QuickStateFilterBar({
                     <Icon
                       className={cn(
                         "w-3 h-3 shrink-0 transition-[color,opacity]",
-                        isFinishedSeen ? "text-text-secondary" : visual.color,
+                        isFinishedUnread ? SESSION_COLORS.unread : visual.color,
                         shouldFadeIcon && EMPTY_BUCKET_GLYPH_CLASS,
                         isSpinningWorking && "animate-spin-slow motion-reduce:animate-none"
                       )}

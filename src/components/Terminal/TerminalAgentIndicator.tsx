@@ -53,19 +53,21 @@ export function AgentStateChip({
 }) {
   const StateIcon = SESSION_ICONS[agentState];
   if (!StateIcon) return null;
+  // Settled: done and unread are solid glyphs and stand on their own, so they
+  // drop the chip's tinted ring — a ring around a disc read as a circle inside a
+  // circle. Neither gets a hue of its own (#12002): they are not asking for
+  // anything, and stay apart from each other by their cut-out mark.
+  const isSolid = agentState === "completed" || agentState === "unread";
   const chipStyle =
     agentState === "working"
       ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
       : agentState === "directing"
         ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-        : // Settled: finished and exited share one neutral chip. Completion is
-          // not asking for anything, so it does not get a hue of its own
-          // (#12002) — and the two stay apart on the channels that survive
-          // without one, `CheckCircle2` against `ExitedCircle` in slate
-          // against secondary. An unread hand-back is not asking either.
-          agentState === "completed" || agentState === "exited" || agentState === "unread"
-          ? "bg-overlay-soft border-divider"
-          : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+        : isSolid
+          ? "border-transparent"
+          : agentState === "exited"
+            ? "bg-overlay-soft border-divider"
+            : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
   return (
     <div
       className={cn(
@@ -79,7 +81,7 @@ export function AgentStateChip({
     >
       <StateIcon
         className={cn(
-          "w-3 h-3",
+          isSolid ? "w-4 h-4" : "w-3 h-3",
           agentState === "working" && "animate-spin-slow",
           "motion-reduce:animate-none"
         )}

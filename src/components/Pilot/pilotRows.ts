@@ -1,4 +1,5 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { AGENT_BUCKET_LABEL } from "@/lib/agentStateVocabulary";
 import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
 import {
   bandForRun,
@@ -872,13 +873,13 @@ export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
  */
 export const PILOT_BAND_FILTER_LABEL: Record<PilotBandFilter, string> = {
   all: "All",
-  "needs-you": "Attention",
+  "needs-you": AGENT_BUCKET_LABEL.attention,
   // Observed, not inferred. The fleet knows the agent has said nothing for
   // twelve minutes; it does not know the agent is stuck, and a segment called
   // "Stalled" would be the surface guessing on the user's behalf.
   quiet: "Quiet",
-  working: "Working",
-  finished: "Finished",
+  working: AGENT_BUCKET_LABEL.working,
+  finished: AGENT_BUCKET_LABEL.finished,
   parked: "Parked",
   other: "Other",
 };

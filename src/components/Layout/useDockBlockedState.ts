@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentState } from "@shared/types/agent";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 import { isAgentTerminal } from "@/utils/terminalType";
+import { isHandBackWait } from "@/lib/handBackPresentation";
 
 type BlockedState = "waiting" | null;
 
@@ -13,7 +14,9 @@ function toBlockedState(agentState: AgentState | undefined): BlockedState {
 }
 
 type AgentStateSource = {
+  id?: string;
   agentState?: AgentState;
+  waitingReason?: WaitingReason;
   activityStatus?: "working" | "waiting" | "success" | "failure";
   detectedAgentId?: string;
   runtimeIdentity?: TerminalRuntimeIdentity;
@@ -117,22 +120,33 @@ export function useDockBlockedState(agentState: AgentState | undefined): Blocked
   return debouncedState;
 }
 
+const NO_HAND_BACKS: ReadonlySet<string> = new Set();
+
+/** A hand-back sits at its prompt without asking for anything, so it is no wait. */
+function isGroupHandBack(panel: AgentStateSource, handBackRunIds: ReadonlySet<string>): boolean {
+  return panel.id !== undefined && isHandBackWait(handBackRunIds, { ...panel, id: panel.id });
+}
+
 export function getGroupBlockedAgentState(
-  panels: ReadonlyArray<AgentStateSource>
+  panels: ReadonlyArray<AgentStateSource>,
+  handBackRunIds: ReadonlySet<string> = NO_HAND_BACKS
 ): AgentState | undefined {
   for (const panel of panels) {
+    if (isGroupHandBack(panel, handBackRunIds)) continue;
     if (getDockDisplayAgentState(panel) === "waiting") return "waiting";
   }
   return undefined;
 }
 
 export function getGroupAmbientAgentState(
-  panels: ReadonlyArray<AgentStateSource>
+  panels: ReadonlyArray<AgentStateSource>,
+  handBackRunIds: ReadonlySet<string> = NO_HAND_BACKS
 ): AgentState | undefined {
   let hasWaiting = false;
   let hasWorking = false;
 
   for (const panel of panels) {
+    if (isGroupHandBack(panel, handBackRunIds)) continue;
     const state = getDockDisplayAgentState(panel);
     if (state === "waiting") hasWaiting = true;
     else if (state === "working") hasWorking = true;

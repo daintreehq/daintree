@@ -4,7 +4,8 @@ import {
   HollowCircle,
   InteractingCircle,
   ExitedCircle,
-  CircleCheck,
+  DoneCircle,
+  UnreadCircle,
   CircleDashed,
   CircleDot,
   CirclePause,
@@ -50,9 +51,9 @@ const NEUTRAL_TONE = "text-text-secondary";
  *
  * Three of these marks are the app's own standards and are not this surface's
  * to reinterpret: the green spinner is working, the amber hollow circle is
- * waiting, and the blue circle-with-a-check is finished. The sidebar, the dock,
- * the assistant header and the panel chrome all say the same three things the
- * same three ways.
+ * waiting, and the solid disc is settled — a check cut out of it for done, a
+ * dot for unread. The sidebar, the dock, the assistant header and the panel
+ * chrome all say the same things the same ways.
  *
  * So the invariant here is NOT that every band draws a different shape — it is
  * that no two bands share a shape AND a tone, and that among the bands wearing
@@ -65,9 +66,9 @@ const NEUTRAL_TONE = "text-text-secondary";
  *   hand. It does not animate, which is the other half of what it means. The
  *   row spells "quiet 12m" beside it in words, so the pair is never separated
  *   by colour alone.
- * - `done` is the finished mark in the settled tone: the same check the app
- *   uses for finished work, greyed because an acknowledged completion has left
- *   the attention model.
+ * - `done` is the solid check in the settled tone, and `review` (an unread
+ *   hand-back) the solid dot in the primary tone: the same pair the pane
+ *   chip and the sidebar draw.
  * - `idle` takes the dotted circle — alive, at rest, nothing running. It used
  *   to share the hollow circle with `needs-you`, which is the one collision
  *   worth removing: it left the amber hollow circle meaning waiting while a
@@ -80,9 +81,9 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
   blocked: CircleSlash,
   "needs-you": HollowCircle,
   quiet: SpinnerCircle,
-  review: CircleCheck,
+  review: UnreadCircle,
   running: SpinnerCircle,
-  done: CircleCheck,
+  done: DoneCircle,
   parked: CirclePause,
   // Dashed rather than paused: a park is held, a snooze is merely silent for
   // now, and the two must not share a shape when the row's only other
@@ -101,12 +102,10 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
  * chrome all already say working in green, and the overview reading it grey was
  * the one surface speaking a second language.
  *
- * `review` is blue rather than the completed token because that token is unset
- * in every built-in theme and falls back to `status-success` — the same hex as
- * `activity-working` in five of them. Green working beside green ready-for-
- * review would leave spinner-vs-check as the only difference between two states
- * an operator has to tell apart at a glance. Blue is also what the sidebar's
- * `QuickStateFilterBar` already gives Finished.
+ * `review` is an unread hand-back, and wears the same primary tone it does
+ * on the pane chip and the sidebar: brighter than the settled states because
+ * it is news, but no hue, because nothing is being asked (#12002). Its solid
+ * dot keeps it apart from the green spinner by shape as well as colour.
  *
  * `done` and `idle` stay neutral: an acknowledged completion and an exited
  * shell are not news.
@@ -122,7 +121,7 @@ export const BAND_GLYPH_TONE: Record<FleetBand, string> = {
   // and inventing a third hue for it would spend a colour on a distinction the
   // shape already carries.
   quiet: "text-state-waiting",
-  review: "text-category-blue",
+  review: "text-text-primary",
   running: "text-state-working",
   done: NEUTRAL_TONE,
   // Parked is the user's own quiet, so it takes the quiet tone: hued parked

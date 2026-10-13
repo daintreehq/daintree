@@ -175,7 +175,7 @@ const ATTENTION_WORD: Record<FleetBand, string> = {
   blocked: "blocked",
   "needs-you": "waiting",
   quiet: "quiet",
-  review: "ready for review",
+  review: "unread",
   running: "working",
   done: "finished",
   parked: "parked",
@@ -185,7 +185,7 @@ const ATTENTION_WORD: Record<FleetBand, string> = {
 
 /** Work handed back, plural-aware. The footer's sentence when nothing is asking. */
 function reviewPhrase(count: number): string {
-  return count === 1 ? "Ready for review" : `${count} agents ready for review`;
+  return count === 1 ? "Agent unread" : `${count} agents unread`;
 }
 
 /**

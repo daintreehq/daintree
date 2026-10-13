@@ -1022,7 +1022,7 @@ describe("CanopyView", () => {
     installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
     const { container } = render(<CanopyView />);
     await frames();
-    expect(container.ownerDocument.body.textContent).toContain("2 need you · 1 unread");
+    expect(container.ownerDocument.body.textContent).toContain("2 agents need you · 1 unread");
   });
 
   it("offers each row's actions on a right-click, with their keys", async () => {
@@ -1247,7 +1247,7 @@ describe("CanopyView", () => {
     await frames();
     fireEvent.click(screenButton(container.ownerDocument.body, "Unread1"));
     expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-working"]);
-    expect(container.ownerDocument.body.textContent).toContain("2 need you · 1 unread");
+    expect(container.ownerDocument.body.textContent).toContain("2 agents need you · 1 unread");
   });
 
   it("opens the selected row's menu from Shift+F10", async () => {

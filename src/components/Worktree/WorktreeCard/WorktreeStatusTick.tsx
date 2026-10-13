@@ -10,7 +10,7 @@ export const CHIP_LABELS: Record<WorktreeStatusTickState, string> = {
   cleanup: "Ready for cleanup",
   // What was observed, not a verdict: an agent at its prompt is also what a
   // missed approval dialog looks like.
-  finished: "Finished, unseen: no agent working or asking for anything",
+  finished: "Finished, unread: no agent working or asking for anything",
 };
 
 /**

@@ -36,8 +36,10 @@ describe("getEffectiveStateColor", () => {
     expect(getEffectiveStateColor("working")).toBe(STATE_COLORS.working);
   });
 
-  it("uses slate (not info) for completed state", () => {
-    expect(STATE_COLORS.completed).toBe("text-category-slate");
+  it("draws completed in a neutral, never a state hue (#12002)", () => {
+    expect(STATE_COLORS.completed).toBe(STATE_COLORS.exited);
+    expect(STATE_COLORS.completed).not.toBe(STATE_COLORS.waiting);
+    expect(STATE_COLORS.completed).not.toBe(STATE_COLORS.working);
   });
 });
 
@@ -48,6 +50,6 @@ describe("getEffectiveStateLabel", () => {
 
   it("returns default labels for non-waiting states", () => {
     expect(getEffectiveStateLabel("working")).toBe("working");
-    expect(getEffectiveStateLabel("completed")).toBe("done");
+    expect(getEffectiveStateLabel("completed")).toBe("finished");
   });
 });

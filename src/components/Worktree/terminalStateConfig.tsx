@@ -1,10 +1,11 @@
-import { Circle, CheckCircle2 } from "lucide-react";
+import { Circle } from "lucide-react";
 import type { AgentState } from "@/types";
 import {
   SpinnerCircle,
   HollowCircle,
   InteractingCircle,
   ExitedCircle,
+  DoneCircle,
   UnreadCircle,
 } from "@/components/icons";
 import { pluralize } from "@/lib/pluralize";
@@ -15,7 +16,7 @@ export const STATE_ICONS = {
   waiting: HollowCircle,
   directing: InteractingCircle,
   idle: Circle,
-  completed: CheckCircle2,
+  completed: DoneCircle,
   exited: ExitedCircle,
 } satisfies Record<AgentState, React.ComponentType<{ className?: string }>>;
 
@@ -24,7 +25,7 @@ export const STATE_COLORS = {
   waiting: "text-state-waiting",
   directing: "text-category-blue",
   idle: "text-text-secondary",
-  completed: "text-category-slate",
+  completed: "text-text-secondary",
   exited: "text-text-secondary",
 } as const satisfies Record<AgentState, string>;
 
@@ -33,7 +34,7 @@ export const STATE_LABELS = {
   idle: "idle",
   waiting: "waiting",
   directing: "directing",
-  completed: "done",
+  completed: "finished",
   exited: "exited",
 } as const satisfies Record<AgentState, string>;
 

@@ -25,7 +25,9 @@ import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AgentStateChip } from "@/components/Terminal/TerminalAgentIndicator";
-import { getEffectiveStateLabel } from "@/components/Worktree/terminalStateConfig";
+import { SESSION_LABELS } from "@/components/Worktree/terminalStateConfig";
+import { resolveSessionPresentation, type HandBackSeenState } from "@/lib/handBackPresentation";
+import { isHandBackUnseen } from "@shared/utils/runHandBack";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { isMac } from "@/lib/platform";
@@ -478,12 +480,21 @@ export function CanopyCard({
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid's chip rules: nothing while idle, and a settled agent keeps its
   // glyph only to explain a session cost, which the panel does not have.
-  const agentState = run.agentState;
+  // A hand-back draws unread or done, as on the grid's own chip, rather than
+  // the amber waiting ring; a plain settled agent still draws nothing.
+  const handBack: HandBackSeenState =
+    run.handBack === undefined ? "none" : isHandBackUnseen(run.handBack) ? "unseen" : "seen";
+  const agentState = resolveSessionPresentation(
+    run.agentState,
+    run.agentState,
+    run.waitingReason,
+    handBack
+  );
+  const isHandBack = agentState !== run.agentState;
   const showState =
     agentState !== undefined &&
     agentState !== "idle" &&
-    agentState !== "completed" &&
-    agentState !== "exited";
+    (isHandBack || (agentState !== "completed" && agentState !== "exited"));
   const brandSurface: BrandMarkSurface = focused
     ? { surface: "surface-panel", extension: "panel-header-focus-bg", lift: "overlay-medium" }
     : { surface: "surface-panel", extension: "panel-header-bg" };
@@ -611,7 +622,7 @@ export function CanopyCard({
             {showState && (
               <AgentStateChip
                 agentState={agentState}
-                ariaLabel={`Agent state: ${getEffectiveStateLabel(agentState)}`}
+                ariaLabel={`Agent state: ${SESSION_LABELS[agentState]}`}
               />
             )}
           </span>
