@@ -162,6 +162,16 @@ describe("observeClaudeTranscript", () => {
     expect(fs.readdirCalls).toEqual([]);
   });
 
+  it("takes the fast path for a cwd with a dot in it, where Claude Code writes a dash", async () => {
+    await writeTranscript("-work-my-app", SESSION);
+    const fs = countingFs();
+
+    await expect(
+      observeClaudeTranscript(SESSION, "/work/my.app", projectsRoot, { fs })
+    ).resolves.toBe("present");
+    expect(fs.readdirCalls).toEqual([]);
+  });
+
   it("finds a transcript in a project directory the slug guess doesn't match", async () => {
     await writeTranscript("C--work-app", SESSION);
     await expect(observeClaudeTranscript(SESSION, CWD, projectsRoot)).resolves.toBe("present");

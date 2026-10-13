@@ -51,7 +51,10 @@ export function resolveLaunchIntent(signals: LaunchIntentSignals): LaunchIntent 
   // A double-clicked `.dntr` archive is still "I launched you to do this one
   // thing". Treating it as targeted keeps today's single-window behaviour for
   // every launch that names something, which is the conservative default.
+  // macOS queues it from `open-file`; Windows/Linux hand it over in argv, and a
+  // fleet restored on top of the window holding the install prompt hides it.
   if (signals.pendingOpenFilePaths.length > 0) return "targeted";
+  if (signals.argv.some(isDntrToken)) return "targeted";
 
   return "cold";
 }

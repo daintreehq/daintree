@@ -1,8 +1,30 @@
 import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
-import { escapeShellArg, escapeShellArgOptional } from "../utils/shellEscape.js";
+import {
+  escapeShellArg,
+  isSafeUnescaped,
+  isSafeShellOption,
+  isWindows,
+  quotePowerShellArg,
+} from "../utils/shellEscape.js";
 import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
 import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
+
+/**
+ * Quotes one argument of an agent launch command. On Windows the command runs
+ * through PowerShell: the base command is `& '...'` (agentLaunchCommand.ts) and
+ * main launches it with `-EncodedCommand`. cmd-style `"..."` quoting there is a
+ * PowerShell expandable string, so a prompt's `$(...)` ran before the agent
+ * started and its `$var`s and backticks were rewritten. Single quotes are literal.
+ */
+function quoteAgentArg(arg: string): string {
+  return isWindows() ? quotePowerShellArg(arg) : escapeShellArg(arg, "posix");
+}
+
+/** {@link quoteAgentArg}, leaving a plain word (letters, digits, `_-/`) bare. */
+function quoteAgentArgOptional(arg: string): string {
+  return arg !== "" && isSafeUnescaped(arg) ? arg : quoteAgentArg(arg);
+}
 
 /**
  * Tri-state permission-bypass intent. `"on"`/`"off"` are explicit user choices
@@ -727,10 +749,10 @@ export function generateAgentCommand(
     if (agentConfig?.args?.length) {
       // Apply same escaping logic as user flags
       for (const arg of agentConfig.args) {
-        if (arg.startsWith("-")) {
+        if (isSafeShellOption(arg)) {
           parts.push(arg);
         } else {
-          parts.push(escapeShellArg(arg));
+          parts.push(quoteAgentArg(arg));
         }
       }
     }
@@ -755,23 +777,26 @@ export function generateAgentCommand(
     // never be parsed as the prompt itself.
     if (options?.sessionId) {
       for (const arg of buildAssignedSessionIdArgs(agentId, options.sessionId) ?? []) {
-        parts.push(arg.startsWith("-") ? arg : escapeShellArg(arg));
+        parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
       }
     }
   }
 
   // Add --model flag if a specific model was selected for this launch
   if (options?.modelId) {
-    parts.push("--model", options.modelId);
+    parts.push(
+      "--model",
+      /^[A-Za-z0-9_.:/-]+$/.test(options.modelId) ? options.modelId : quoteAgentArg(options.modelId)
+    );
   }
 
   // Add preset-level args (env overrides applied separately via spawn env)
   if (options?.presetArgs) {
     for (const token of options.presetArgs.trim().split(/\s+/).filter(Boolean)) {
-      if (token.startsWith("-")) {
+      if (isSafeShellOption(token)) {
         parts.push(token);
       } else {
-        parts.push(escapeShellArg(token));
+        parts.push(quoteAgentArg(token));
       }
     }
   }
@@ -779,20 +804,20 @@ export function generateAgentCommand(
   // Add recipe-level args (per-terminal overrides from recipe editor)
   if (options?.recipeArgs) {
     for (const token of options.recipeArgs.trim().split(/\s+/).filter(Boolean)) {
-      if (token.startsWith("-")) {
+      if (isSafeShellOption(token)) {
         parts.push(token);
       } else {
-        parts.push(escapeShellArg(token));
+        parts.push(quoteAgentArg(token));
       }
     }
   }
 
   // Add flags, escaping non-flag values
   for (const flag of flags) {
-    if (flag.startsWith("-")) {
+    if (isSafeShellOption(flag)) {
       parts.push(flag);
     } else {
-      parts.push(escapeShellArg(flag));
+      parts.push(quoteAgentArg(flag));
     }
   }
 
@@ -801,7 +826,7 @@ export function generateAgentCommand(
   // is one argv token even when it holds spaces, so it is quoted whole rather
   // than split like the preset/recipe strings above.
   for (const arg of options?.systemPromptArgs ?? []) {
-    parts.push(arg.startsWith("-") ? arg : escapeShellArg(arg));
+    parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
   // Add initial prompt if provided
@@ -810,7 +835,7 @@ export function generateAgentCommand(
     const interactive = options?.interactive ?? true;
     // Normalize multi-line prompts to single line (replace newlines with spaces)
     const normalizedPrompt = prompt.replace(/\r\n/g, " ").replace(/\n/g, " ");
-    const escapedPrompt = escapeShellArg(normalizedPrompt);
+    const escapedPrompt = quoteAgentArg(normalizedPrompt);
 
     switch (agentId) {
       case "claude":
@@ -890,7 +915,7 @@ export function generateAgentCommand(
         // registry's `session` arg (pushed shell-escaped above) for `run -t`,
         // staying interactive after the initial input when requested
         const sessionIdx = parts.findIndex(
-          (p) => p === "session" || p === escapeShellArg("session")
+          (p) => p === "session" || p === quoteAgentArg("session")
         );
         if (sessionIdx !== -1) {
           parts[sessionIdx] = "run";
@@ -1056,10 +1081,10 @@ export function buildResumeCommand(
   // Prepend persisted launch flags (original process-level flags)
   if (launchFlags?.length) {
     for (const flag of launchFlags) {
-      if (flag.startsWith("-")) {
+      if (isSafeShellOption(flag)) {
         parts.push(flag);
       } else {
-        parts.push(escapeShellArg(flag));
+        parts.push(quoteAgentArg(flag));
       }
     }
   }
@@ -1086,10 +1111,10 @@ export function buildResumeCommand(
   }
 
   for (const arg of args) {
-    if (arg.startsWith("-")) {
+    if (isSafeShellOption(arg)) {
       parts.push(arg);
     } else {
-      parts.push(escapeShellArgOptional(arg));
+      parts.push(quoteAgentArgOptional(arg));
     }
   }
   return parts.join(" ");
@@ -1128,19 +1153,19 @@ export function buildResumeLatestCommand(
 
   if (launchFlags?.length) {
     for (const flag of launchFlags) {
-      if (flag.startsWith("-")) {
+      if (isSafeShellOption(flag)) {
         parts.push(flag);
       } else {
-        parts.push(escapeShellArg(flag));
+        parts.push(quoteAgentArg(flag));
       }
     }
   }
 
   for (const arg of fallbackArgs) {
-    if (arg.startsWith("-")) {
+    if (isSafeShellOption(arg)) {
       parts.push(arg);
     } else {
-      parts.push(escapeShellArgOptional(arg));
+      parts.push(quoteAgentArgOptional(arg));
     }
   }
   return parts.join(" ");
@@ -1219,7 +1244,7 @@ export function mintAssignedSessionId(agentId: string | undefined): string | und
 }
 
 /** Sentinel used to locate the id slot among an agent's assigning args. */
-const SESSION_ID_SLOT = " daintree-session-id-slot ";
+const SESSION_ID_SLOT = "\0daintree-session-id-slot\0";
 
 /**
  * Split a command into shell words, keeping quoted runs whole (quotes and all).
@@ -1411,7 +1436,7 @@ export function relaunchResumeAsAssignedSession(
   words.splice(
     at,
     shape.length,
-    ...assigning.map((arg) => (arg.startsWith("-") ? arg : escapeShellArgOptional(arg)))
+    ...assigning.map((arg) => (isSafeShellOption(arg) ? arg : quoteAgentArgOptional(arg)))
   );
   return { sessionId, command: words.join(" ") };
 }
@@ -1467,10 +1492,10 @@ export function buildLaunchCommandFromFlags(
   // Fresh launches that should carry one go through `generateAgentCommand`.
   const parts: string[] = [baseCommand];
   for (const flag of flags) {
-    if (flag.startsWith("-")) {
+    if (isSafeShellOption(flag)) {
       parts.push(flag);
     } else {
-      parts.push(escapeShellArg(flag));
+      parts.push(quoteAgentArg(flag));
     }
   }
   return parts.join(" ");

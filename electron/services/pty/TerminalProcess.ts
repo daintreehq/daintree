@@ -1183,7 +1183,8 @@ export class TerminalProcess {
     //
     // Windows is excluded (#9551): there is no ptmx fd to release, and node-pty's
     // WindowsTerminal.kill()/destroy() are *deferred* native kills that race the
-    // taskkill-driven natural exit run by processTreeKiller above. Adding a
+    // tree-kill-driven natural exit run by processTreeKiller, which releases the
+    // pseudoconsole itself once its kill has finished. Adding a
     // pty.kill() here can land on an already-freed pseudoconsole handle and
     // crash the pty-host with STATUS_HEAP_CORRUPTION (0xC0000374). Skipping it
     // restores the proven pre-#9539 Windows teardown, where processTreeKiller +
@@ -1668,6 +1669,12 @@ export class TerminalProcess {
     // `forensicsBuffer.getRecentOutput()` and emits `terminal:exited` with
     // `reason: "kill"` carried through the lifecycle state machine.
     this.disposeHeadless();
+    // Everything else the live terminal used goes before the tree kill starts,
+    // not when the exit lands: on Windows the pseudoconsole — and with it the
+    // exit — waits for that kill to settle, and neither the kill nor the exit
+    // report reads these.
+    this.identityWatcher.dispose();
+    this.semanticBufferManager.dispose();
 
     const targets = this.processTreeKiller.execute(false, escalationDelayMs);
     this.auditKill(reason ?? "kill", targets, escalationDelayMs);

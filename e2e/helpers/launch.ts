@@ -547,6 +547,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     if (isMacOSLocal) {
       cleanupMacElectronE2eProcesses(options.alongside ? [userDataDir] : launchedUserDataDirs);
     }
+    if (process.platform === "win32" && !process.env.CI && !options.enableWebgl) {
+      // `DAINTREE_DISABLE_WEBGL` is read at build time (Vite envPrefix), so the
+      // launch env above cannot turn WebGL off. Without a GPU flag a local
+      // Windows run renders terminals with WebGL and specs that read
+      // `.xterm-rows` find no DOM rows; CI and local macOS already disable it.
+      args.unshift("--disable-gpu", "--disable-software-rasterizer");
+    }
     if (isMacOSLocal && !options.enableWebgl) {
       // Local macOS Electron E2E can hit Crashpad/GPU-process FATALs during
       // restart-heavy specs. Mirror the screenshot harness mitigation for
@@ -688,23 +695,32 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       // Skip for restart tests to preserve persisted window state.
       if (!options.userDataDir || options.windowSize) {
         const explicitSize = options.windowSize;
-        await app.evaluate(({ BrowserWindow, screen }, payload) => {
-          const win = BrowserWindow.getAllWindows()[0];
-          if (!win) return;
-          if (payload) {
-            win.setSize(payload.width, payload.height);
+        // On Windows, Playwright intermittently loses this call's result
+        // ("Resulting promise was garbage collected"), which failed whole
+        // serial describes at launch. Sizing is best-effort, so only that
+        // lost acknowledgement is tolerated.
+        await app
+          .evaluate(({ BrowserWindow, screen }, payload) => {
+            const win = BrowserWindow.getAllWindows()[0];
+            if (!win) return;
+            if (payload) {
+              win.setSize(payload.width, payload.height);
+              win.center();
+              return;
+            }
+            const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+            const targetW = Math.max(width, 1920);
+            const targetH = Math.max(height, 1080);
+            win.setSize(targetW, targetH);
             win.center();
-            return;
-          }
-          const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-          const targetW = Math.max(width, 1920);
-          const targetH = Math.max(height, 1080);
-          win.setSize(targetW, targetH);
-          win.center();
-          if (width >= targetW && height >= targetH) {
-            win.maximize();
-          }
-        }, explicitSize ?? null);
+            if (width >= targetW && height >= targetH) {
+              win.maximize();
+            }
+          }, explicitSize ?? null)
+          .catch((error: unknown) => {
+            if (!String(error).includes("Resulting promise was garbage collected")) throw error;
+            console.warn("[e2e] Window sizing result was lost; continuing with the launch");
+          });
       }
 
       await window.waitForLoadState("domcontentloaded");
@@ -1125,7 +1141,9 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
   for (const childPid of descendantPids) {
     try {
       if (process.platform === "win32") {
-        execSync(`taskkill /F /PID ${childPid} /T 2>nul`, { stdio: "ignore" });
+        // No /T: the list is already the whole verified tree, and taskkill's own
+        // walk trusts stale parent PIDs.
+        execSync(`taskkill /F /PID ${childPid} 2>nul`, { stdio: "ignore" });
       } else {
         process.kill(childPid, "SIGKILL");
       }
@@ -1139,7 +1157,14 @@ function forceKillProcessTree(pid: number | undefined): void {
   if (!pid) return;
   try {
     if (process.platform === "win32") {
-      execSync(`taskkill /F /PID ${pid} /T 2>nul`, { stdio: "ignore" });
+      // Each verified PID on its own: taskkill /T would trust stale parent PIDs.
+      for (const target of [pid, ...getDescendantPids(pid)]) {
+        try {
+          execSync(`taskkill /F /PID ${target} 2>nul`, { stdio: "ignore" });
+        } catch {
+          // Already gone.
+        }
+      }
     } else {
       try {
         execSync(`pkill -9 -P ${pid}`, { stdio: "ignore" });

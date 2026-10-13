@@ -37,9 +37,9 @@ import {
  * cache-bypassing: it awaits a PATH refresh, bumps `checkId`, drops any
  * in-flight check and re-probes all 18 agents from scratch. On a machine with
  * nothing installed — a brand-new user, which is exactly who has the wizard
- * open — every one of those probes misses. On POSIX a miss walks PATH
- * in-process and starts no subprocess (it used to cost two `which` starts); on
- * Windows it costs one `where.exe` start.
+ * open — every one of those probes misses. A miss searches PATH in-process and
+ * starts no subprocess on any platform (it used to cost two `which` starts, and
+ * one `where.exe` start on Windows).
  *
  * `lib/cliAvailabilityFixture.ts` states what is real and what is stubbed. The
  * limit to carry into every reading: `refreshPath()` is stubbed, so the
@@ -140,7 +140,7 @@ export const cliAvailabilityScenarios: PerfScenario[] = [
     id: "PERF-393",
     name: "CLI Availability First-Run Probe Storm",
     description:
-      "Three back-to-back cache-bypassing CliAvailabilityService.refresh() calls against a synthetic bin directory with nothing installed — one agent setup wizard poll window with the 3-second waits removed, and the worst case a brand-new user hits. Reports subprocess starts per refresh through the harness's own spawn observer and projects them to the wizard's real cadence. On POSIX the PATH probe walks PATH in-process, so a refresh starts only `npm config get prefix`; on Windows each agent costs one `where.exe` start. Graded against arithmetic this fixture did over its own planting decisions: the signed spawn count, a deliberately never-planted agent that must report absent, full registry coverage in the returned map, and a PATH-hermeticity check so a machine with an agent CLI in /usr/bin cannot produce a quietly wrong found set. The real checkAuth walk is inside the bracket and is graded per agent: this fixture plants credentials for half the roster and clears every credential env var the roster recognises, so bypassing auth discovery scores rather than reporting ready for free.",
+      "Three back-to-back cache-bypassing CliAvailabilityService.refresh() calls against a synthetic bin directory with nothing installed — one agent setup wizard poll window with the 3-second waits removed, and the worst case a brand-new user hits. Reports subprocess starts per refresh through the harness's own spawn observer and projects them to the wizard's real cadence. The PATH probe searches PATH in-process on every platform, so a refresh starts only `npm config get prefix` — on POSIX always, on Windows only when the arm's PATH holds an npm to run, which this fixture never plants. Graded against arithmetic this fixture did over its own planting decisions: the signed spawn count, a deliberately never-planted agent that must report absent, full registry coverage in the returned map, and a PATH-hermeticity check so a machine with an agent CLI in /usr/bin cannot produce a quietly wrong found set. The real checkAuth walk is inside the bracket and is graded per agent: this fixture plants credentials for half the roster and clears every credential env var the roster recognises, so bypassing auth discovery scores rather than reporting ready for free.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     warmups: WARMUPS,
@@ -209,7 +209,7 @@ export const cliAvailabilityScenarios: PerfScenario[] = [
     id: "PERF-394",
     name: "CLI Availability Cost by Hit Ratio",
     description:
-      "One cache-bypassing refresh() per arm across a 0% / ~50% / 100% hit ratio against synthetic bin directories, plus the DAINTREE_CLI_PATH_PREPEND seam and a plain checkAvailability() on an already-populated service. The spread is the whole finding: a hit found through the prepended path costs no subprocess at all (it is an access() that returns before the PATH probe), and on POSIX neither a PATH hit nor a PATH miss costs one either, since the PATH probe walks PATH in-process (on Windows each costs one `where.exe` start). The 100% arm plants a second install of one agent in a second PATH directory, so the real all-matches PATH walk, its duplicate detection and the notifyDuplicateInstalls milestone write are on the measured path and carry their own predicates. The milestone is now graded rather than assumed: the stubbed store is reset at the top of every iteration, so exactly one orchestrationMilestones write carrying this agent's key must land on the duplicate arm, the arm with no duplicate must write none, and the two checkAvailability re-probes that follow must add none. Auth discovery is graded per agent against credentials this fixture planted for half the roster, so a probe that skips checkAuth reports ready for the unauthenticated half and scores.",
+      "One cache-bypassing refresh() per arm across a 0% / ~50% / 100% hit ratio against synthetic bin directories, plus the DAINTREE_CLI_PATH_PREPEND seam and a plain checkAvailability() on an already-populated service. The spread is the whole finding: a hit found through the prepended path costs no subprocess at all (it is an access() that returns before the PATH probe), and neither a PATH hit nor a PATH miss costs one either, since the PATH probe searches PATH in-process on every platform. The 100% arm plants a second install of one agent in a second PATH directory, so the real all-matches PATH walk, its duplicate detection and the notifyDuplicateInstalls milestone write are on the measured path and carry their own predicates. The milestone is now graded rather than assumed: the stubbed store is reset at the top of every iteration, so exactly one orchestrationMilestones write carrying this agent's key must land on the duplicate arm, the arm with no duplicate must write none, and the two checkAvailability re-probes that follow must add none. Auth discovery is graded per agent against credentials this fixture planted for half the roster, so a probe that skips checkAuth reports ready for the unauthenticated half and scores.",
     tier: "fast",
     modes: ["smoke", "ci", "nightly"],
     warmups: WARMUPS,

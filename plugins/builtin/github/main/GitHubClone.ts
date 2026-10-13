@@ -1,11 +1,15 @@
 import path from "node:path";
 import {
   spawn,
-  spawnSync,
   execFile,
   type ChildProcess,
   type ChildProcessWithoutNullStreams,
 } from "child_process";
+import {
+  killWindowsProcessTreeInBackground,
+  liveChildTreeTarget,
+} from "../../../../electron/utils/windowsTreeKill.js";
+import { resolveExecutableForSpawn } from "../../../../electron/utils/windowsExecutable.js";
 import type {
   CloneAuthProbe,
   CloneCapability,
@@ -23,21 +27,28 @@ const GH_NON_INTERACTIVE_ENV = {
   GH_TERMINAL_PROMPT: "0",
 } as const;
 
-function killProcessTree(child: ChildProcess): void {
+/**
+ * End the clone's process tree. Windows returns the kill in flight, which
+ * resolves once every member has exited: it runs on Main, so it must not block,
+ * and the caller deletes the partial clone afterwards, which the tree's open
+ * `.git/` handles would refuse.
+ */
+function killProcessTree(child: ChildProcess): Promise<unknown> | null {
   if (child.pid === undefined) {
     try {
       child.kill();
     } catch {
       // Already exited.
     }
-    return;
+    return null;
   }
 
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/F", "/T", "/PID", child.pid.toString()], {
-      windowsHide: true,
-    });
-    return;
+    // Never `taskkill /T`: it can follow a reused parent PID into an
+    // unrelated program. Nothing once the root has exited: its PID is free
+    // for reuse.
+    const target = liveChildTreeTarget(child);
+    return target ? killWindowsProcessTreeInBackground(target, "[GitHubClone]") : null;
   }
 
   try {
@@ -56,6 +67,7 @@ function killProcessTree(child: ChildProcess): void {
   }, 5_000);
   // Don't keep the event loop alive solely for the SIGKILL escalation.
   sigkillTimer.unref();
+  return null;
 }
 
 const GH_STAGE_PATTERNS: Array<{ re: RegExp; stage: string }> = [
@@ -86,6 +98,15 @@ function parseGhStderrLine(line: string): { stage: string; progress: number } | 
  */
 async function probeGhAuth(externalSignal?: AbortSignal): Promise<CloneAuthProbe> {
   if (externalSignal?.aborted) return { authenticated: false, reason: "Probe aborted" };
+  const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
+  let gh: string;
+  try {
+    gh = await resolveExecutableForSpawn("gh", env);
+  } catch {
+    // A Windows PATH without gh: unavailable, exactly as a failed spawn reads.
+    return { authenticated: false, reason: "gh CLI unavailable or not signed in" };
+  }
+  if (externalSignal?.aborted) return { authenticated: false, reason: "Probe aborted" };
   return new Promise((resolve) => {
     const controller = new AbortController();
     const onExternalAbort = () => controller.abort();
@@ -94,23 +115,25 @@ async function probeGhAuth(externalSignal?: AbortSignal): Promise<CloneAuthProbe
     }
     const timer = setTimeout(() => controller.abort(), GH_AUTH_PROBE_TIMEOUT_MS);
 
+    const finish = (err: unknown) => {
+      clearTimeout(timer);
+      if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
+      resolve(
+        err
+          ? { authenticated: false, reason: "gh CLI unavailable or not signed in" }
+          : { authenticated: true }
+      );
+    };
+
     execFile(
-      "gh",
+      gh,
       ["auth", "status"],
       {
-        env: { ...process.env, ...GH_NON_INTERACTIVE_ENV },
+        env,
         signal: controller.signal,
         windowsHide: true,
       },
-      (err) => {
-        clearTimeout(timer);
-        if (externalSignal) externalSignal.removeEventListener("abort", onExternalAbort);
-        resolve(
-          err
-            ? { authenticated: false, reason: "gh CLI unavailable or not signed in" }
-            : { authenticated: true }
-        );
-      }
+      finish
     );
   });
 }
@@ -135,9 +158,11 @@ async function cloneWithGh(
   ];
 
   const isWin = process.platform === "win32";
-  const child: ChildProcessWithoutNullStreams = spawn("gh", args, {
+  const env = { ...process.env, ...GH_NON_INTERACTIVE_ENV };
+  const gh = await resolveExecutableForSpawn("gh", env);
+  const child: ChildProcessWithoutNullStreams = spawn(gh, args, {
     cwd: path.dirname(targetDir),
-    env: { ...process.env, ...GH_NON_INTERACTIVE_ENV },
+    env,
     detached: !isWin,
     windowsHide: true,
   });
@@ -162,13 +187,17 @@ async function cloneWithGh(
     }
   });
 
+  // Windows: the tree kill in flight, awaited before this returns so the
+  // caller's cleanup of the partial clone finds the tree gone.
+  let treeKill: Promise<unknown> | null = null;
+
   const timeoutHandle = setTimeout(() => {
     timedOut = true;
-    killProcessTree(child);
+    treeKill ??= killProcessTree(child);
   }, GH_CLONE_TIMEOUT_MS);
 
   const onAbort = () => {
-    killProcessTree(child);
+    treeKill ??= killProcessTree(child);
   };
   signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -202,6 +231,7 @@ async function cloneWithGh(
   } finally {
     clearTimeout(timeoutHandle);
     signal?.removeEventListener("abort", onAbort);
+    if (treeKill) await treeKill;
   }
 }
 

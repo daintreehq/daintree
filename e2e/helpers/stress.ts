@@ -16,6 +16,8 @@ export interface ProcessEntry {
   pid: number;
   ppid: number;
   comm: string;
+  /** Start time, where the platform listing provides one (Windows). */
+  startMs?: number;
 }
 
 export interface ProcessIdentity {
@@ -214,6 +216,7 @@ interface WindowsProcessRow {
   ProcessId?: number;
   ParentProcessId?: number;
   Name?: string;
+  Created?: string | null;
 }
 
 function getWindowsProcessEntries(): ProcessEntry[] {
@@ -225,7 +228,7 @@ function getWindowsProcessEntries(): ProcessEntry[] {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name | ConvertTo-Json -Compress",
+        "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,@{N='Created';E={if ($_.CreationDate) { $_.CreationDate.ToString('o') }}} | ConvertTo-Json -Compress",
       ],
       {
         encoding: "utf8",
@@ -242,6 +245,7 @@ function getWindowsProcessEntries(): ProcessEntry[] {
         pid: Number(row.ProcessId),
         ppid: Number(row.ParentProcessId),
         comm: String(row.Name ?? ""),
+        startMs: row.Created ? Date.parse(row.Created) : undefined,
       }))
       .filter((entry) => Number.isInteger(entry.pid) && Number.isInteger(entry.ppid));
   } catch {
@@ -250,8 +254,24 @@ function getWindowsProcessEntries(): ProcessEntry[] {
 }
 
 function collectDescendantsFromEntries(pid: number, entries: ProcessEntry[]): number[] {
+  // A Windows ParentProcessId outlives the parent, and its PID gets reused: an
+  // Electron main handed the PID of a long-gone launcher would otherwise
+  // "own" that launcher's children — the job running this very test included —
+  // and closeApp would taskkill their whole tree. A parent that started after
+  // its child is such a reuse.
+  const startByPid = new Map(entries.map((entry) => [entry.pid, entry.startMs]));
   const childrenByParent = new Map<number, number[]>();
   for (const entry of entries) {
+    const parentStart = startByPid.get(entry.ppid);
+    if (
+      parentStart !== undefined &&
+      entry.startMs !== undefined &&
+      Number.isFinite(parentStart) &&
+      Number.isFinite(entry.startMs) &&
+      parentStart > entry.startMs
+    ) {
+      continue;
+    }
     const children = childrenByParent.get(entry.ppid);
     if (children) {
       children.push(entry.pid);

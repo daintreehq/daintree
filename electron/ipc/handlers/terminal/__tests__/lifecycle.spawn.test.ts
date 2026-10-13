@@ -1,3 +1,15 @@
+// Unit IPC fixtures don't install CLIs; real Windows argv coverage lives in utils.
+const resolveWindowsCliTargetMock = vi.hoisted(() =>
+  vi.fn(async (_command: string, _options?: unknown) => ({
+    kind: "direct" as const,
+    command: "C:\\test\\agent.exe",
+    args: [] as string[],
+  }))
+);
+vi.mock("../../../../utils/windowsCliSpawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../utils/windowsCliSpawn.js")>()),
+  resolveWindowsCliTarget: resolveWindowsCliTargetMock,
+}));
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const ipcMainMock = vi.hoisted(() => ({
@@ -35,8 +47,15 @@ vi.mock("../../../../services/ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../../../../services/pty/terminalShell.js", () => ({
-  getDefaultShell: vi.fn(() => "/bin/zsh"),
+const { getDefaultShellMock, waitForWindowsShellMock } = vi.hoisted(() => ({
+  getDefaultShellMock: vi.fn(() => "/bin/zsh"),
+  waitForWindowsShellMock: vi.fn(async (_maxWaitMs: number) => {}),
+}));
+
+vi.mock("../../../../services/pty/terminalShell.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../services/pty/terminalShell.js")>()),
+  getDefaultShell: getDefaultShellMock,
+  waitForWindowsShell: waitForWindowsShellMock,
 }));
 
 const { persistAgentSessionMock } = vi.hoisted(() => ({
@@ -1002,6 +1021,11 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
 
     it("starts a fresh conversation under the same id instead of a resume that can't open", async () => {
       findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+      // On Windows a generated agent command is quoted for, and launched
+      // through, PowerShell whatever the pane's own shell: the store is
+      // resolved for that shell, and the command rides its startup arguments
+      // instead of being typed in after the spawn.
+      const windows = process.platform === "win32";
 
       const { spawnArgs, cwd } = await spawnClaude({
         shell: "/usr/bin/nu",
@@ -1014,7 +1038,9 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
         expect.objectContaining({ cwd, agentSessionId: SESSION, projectsRoot: CLAUDE_STORE })
       );
       expect(claudeStoreMocks.resolvePaneClaudeProjectsRoot).toHaveBeenCalledWith(
-        expect.objectContaining({ shell: "/usr/bin/nu" })
+        expect.objectContaining({
+          shell: windows ? expect.stringMatching(/powershell\.exe$/i) : "/usr/bin/nu",
+        })
       );
       expect(claudeStoreMocks.rememberClaudePaneStore).toHaveBeenCalledWith(
         expect.any(String),
@@ -1022,7 +1048,7 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       );
       expect(spawnArgs.command).toContain(`--session-id ${SESSION}`);
       expect(spawnArgs.command).not.toContain("--resume");
-      expect(spawnArgs.postSpawnInput).toBe(`${spawnArgs.command}\r`);
+      expect(spawnArgs.postSpawnInput).toBe(windows ? undefined : `${spawnArgs.command}\r`);
       expect(spawnArgs.agentSessionId).toBe(SESSION);
     });
 
@@ -3237,7 +3263,9 @@ describe("terminal spawn handler - plugin agent ${settings:*} resolution (#10619
     registerTerminalLifecycleHandlers(deps);
 
     const handler = getSpawnHandler();
-    await handler(
+    // A refused launch releases its pane config on the way out.
+    mockRevokePaneConfig.mockResolvedValue(undefined);
+    const spawning = handler(
       {} as Electron.IpcMainInvokeEvent,
       {
         cols: 80,
@@ -3247,6 +3275,16 @@ describe("terminal spawn handler - plugin agent ${settings:*} resolution (#10619
         launchAgentId: "vanilla-agent",
       } as unknown as Parameters<typeof handler>[1]
     );
+
+    if (process.platform === "win32") {
+      // The untouched literal reaches the Windows agent launcher, which runs
+      // only literal arguments (windowsAgentLaunch.ts) and so refuses it.
+      await expect(spawning).rejects.toThrow(/Windows agent arguments must be literal values/);
+      expect(mockResolveSettingTemplate).not.toHaveBeenCalled();
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      return;
+    }
+    await spawning;
 
     expect(mockResolveSettingTemplate).not.toHaveBeenCalled();
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
@@ -3485,6 +3523,157 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
     registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
     return getSpawnHandler();
   }
+
+  it("releases the pane config when the agent executable cannot be resolved", async () => {
+    setPlatform("win32");
+    resolveWindowsCliTargetMock.mockImplementationOnce(async () => {
+      throw Object.assign(new Error("Cannot launch CLI: daintree-assistant"), { code: "ENOENT" });
+    });
+    const handler = spawnHandlerForTest();
+
+    await expect(
+      handler(
+        { senderWindow: { id: 7 } } as unknown as Electron.IpcMainInvokeEvent,
+        {
+          id: "assistant-pane",
+          cols: 80,
+          rows: 24,
+          command: "daintree-assistant",
+          launchAgentId: "daintree-assistant",
+        } as unknown as Parameters<typeof handler>[1]
+      )
+    ).rejects.toThrow(/Failed to spawn terminal: Cannot launch CLI/);
+
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    expect(mockRevokePaneConfig).toHaveBeenCalledWith("assistant-pane");
+  });
+
+  it("resolves the agent against the pane's PATH whatever its casing", async () => {
+    setPlatform("win32");
+    const savedPath = process.env.PATH;
+    process.env.PATH = "C:\\global";
+    try {
+      const handler = spawnHandlerForTest();
+      await handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          command: "daintree-assistant",
+          launchAgentId: "daintree-assistant",
+          env: { Path: "C:\\project-tools" },
+        } as unknown as Parameters<typeof handler>[1]
+      );
+
+      const options = resolveWindowsCliTargetMock.mock.calls.at(-1)?.[1] as {
+        env: Record<string, string>;
+      };
+      const pathEntries = Object.entries(options.env).filter(([key]) => /^path$/i.test(key));
+      expect(pathEntries.map(([, value]) => value)).toEqual(["C:\\project-tools"]);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it("resolves the agent executable before binding the pane's MCP config, once", async () => {
+    setPlatform("win32");
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45454);
+    mockPreparePaneConfig.mockResolvedValue({
+      configPath: "C:\\cfg\\pane.json",
+      args: ["--mcp-config", "C:\\cfg\\pane.json"],
+      env: {},
+      token: "pane-token",
+    });
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
+    const handler = spawnHandlerForTest();
+
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        command: "claude",
+        launchAgentId: "claude",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(resolveWindowsCliTargetMock).toHaveBeenCalledTimes(1);
+    expect(resolveWindowsCliTargetMock.mock.calls[0]?.[0]).toBe("claude");
+    expect(mockPreparePaneConfig).toHaveBeenCalledTimes(1);
+    // No await between the bindings and the spawn: the PATH search is done first.
+    expect(resolveWindowsCliTargetMock.mock.invocationCallOrder[0]).toBeLessThan(
+      mockPreparePaneConfig.mock.invocationCallOrder[0]!
+    );
+    const spawnArgs = ptyClient.spawn.mock.calls[0]?.[1] as { command: string };
+    expect(spawnArgs.command).toContain("--mcp-config");
+  });
+
+  it("chooses a command launch's shell after the PATH refresh, waiting briefly for its search", async () => {
+    setPlatform("win32");
+    const PWSH = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
+    let defaultShell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    let release!: () => void;
+    refreshWindowsPathForSpawnMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => resolve();
+        })
+    );
+    // The adopted PATH holds PowerShell 7; the search for it answers in the wait.
+    waitForWindowsShellMock.mockImplementation(async () => {
+      defaultShell = PWSH;
+    });
+    getDefaultShellMock.mockImplementation(() => defaultShell);
+    try {
+      const handler = spawnHandlerForTest();
+      const pending = handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          cols: 80,
+          rows: 24,
+          command: "claude",
+          launchAgentId: "claude",
+        } as unknown as Parameters<typeof handler>[1]
+      );
+      await vi.waitFor(() => expect(refreshWindowsPathForSpawnMock).toHaveBeenCalled());
+      expect(waitForWindowsShellMock).not.toHaveBeenCalled();
+      expect(getDefaultShellMock).not.toHaveBeenCalled();
+
+      release();
+      await pending;
+      expect(waitForWindowsShellMock).toHaveBeenCalledWith(2_000);
+      expect(waitForWindowsShellMock.mock.invocationCallOrder[0]).toBeLessThan(
+        getDefaultShellMock.mock.invocationCallOrder[0]!
+      );
+      const spawnArgs = ptyClient.spawn.mock.calls[0]?.[1] as { shell: string };
+      expect(spawnArgs.shell).toBe(PWSH);
+    } finally {
+      waitForWindowsShellMock.mockImplementation(async () => {});
+      getDefaultShellMock.mockImplementation(() => "/bin/zsh");
+    }
+  });
+
+  it("does not wait for the default shell when nothing is launched in it", async () => {
+    setPlatform("win32");
+    const handler = spawnHandlerForTest();
+
+    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 });
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        command: "claude",
+        launchAgentId: "claude",
+        shell: "C:\\Program Files\\Git\\bin\\bash.exe",
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(waitForWindowsShellMock).not.toHaveBeenCalled();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+  });
 
   it("refreshes the registry PATH before spawning on Windows", async () => {
     setPlatform("win32");

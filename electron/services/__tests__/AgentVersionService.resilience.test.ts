@@ -1,3 +1,6 @@
+vi.mock("../../utils/windowsCliSpawn.js", () => ({
+  cliSpawnTarget: (command: string, args: string[]) => ({ command, args, shell: false }),
+}));
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { EventEmitter } from "events";
 import type { AgentId } from "../../../shared/types/agent.js";
@@ -11,16 +14,19 @@ const registryMock = vi.hoisted(() => ({
 // `child_process`, so we substitute the whole module at hoist time. The
 // installed-version probe spawns `<command> --version` and resolves on the
 // child's `exit` event; tests drive a fake ChildProcess via the helpers below.
-const { spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+const { spawnMock, treeKillMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
-  spawnSyncMock: vi.fn(),
+  treeKillMock: vi.fn(),
 }));
 
 vi.mock("child_process", () => ({
   spawn: spawnMock,
-  // Windows tree-kill shells out to `taskkill` via spawnSync; POSIX CI never
-  // hits it, but the mock must export it so the import resolves.
-  spawnSync: spawnSyncMock,
+}));
+
+// The Windows tree kill; POSIX CI only reaches it with a faked platform.
+vi.mock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTreeInBackground: treeKillMock,
 }));
 
 vi.mock("../../../shared/config/agentRegistry.js", () => registryMock);
@@ -142,6 +148,26 @@ describe("AgentVersionService resilience", () => {
   // kept the promise pending and the 10s `timeout` was ineffective (it signals
   // the already-exited foreground PID, never the grandchild). The probe now
   // resolves on `exit` and hard-reaps the tree on a deadline.
+  it("does not parse diagnostic numbers as a version after a failed exit", async () => {
+    registryMock.getEffectiveAgentConfig.mockReturnValue({
+      id: "claude",
+      name: "Claude",
+      command: "claude",
+      version: { args: ["--version"] },
+    });
+    spawnMock.mockImplementation(() => {
+      const child = makeFakeChild();
+      queueMicrotask(() => {
+        child.stderr.emit("data", Buffer.from("launch error 1.2.3"));
+        child.emit("exit", 1, null);
+        child.emit("close", 1, null);
+      });
+      return child;
+    });
+    const { service } = createService(async () => ({ claude: "ready" }));
+    expect((await service.getVersion("claude" as AgentId)).installedVersion).toBeNull();
+  });
+
   describe("installed-version probe hang resistance", () => {
     beforeEach(() => {
       spawnMock.mockReset();
@@ -236,12 +262,12 @@ describe("AgentVersionService resilience", () => {
         expect(result.installedVersion).toBe("4.5.6");
         // The hung tree is reaped: POSIX SIGKILLs the whole process group
         // (negative pid) so a grandchild holding the pipe dies too; Windows has
-        // no group here and shells out to `taskkill /T` to kill the whole tree.
+        // no group here and runs the verified tree kill on the whole tree.
         if (process.platform === "win32") {
-          expect(spawnSyncMock).toHaveBeenCalledWith(
-            "taskkill",
-            ["/T", "/F", "/PID", "4242"],
-            expect.objectContaining({ windowsHide: true })
+          expect(treeKillMock).toHaveBeenCalledWith(
+            expect.objectContaining({ pid: 4242 }),
+            "[AgentVersionService]",
+            { timeoutMs: 3000 }
           );
         } else {
           expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
@@ -286,10 +312,10 @@ describe("AgentVersionService resilience", () => {
 
         expect(result.installedVersion).toBe("1.2.3");
         if (process.platform === "win32") {
-          expect(spawnSyncMock).toHaveBeenCalledWith(
-            "taskkill",
-            ["/T", "/F", "/PID", "4242"],
-            expect.objectContaining({ windowsHide: true })
+          expect(treeKillMock).toHaveBeenCalledWith(
+            expect.objectContaining({ pid: 4242 }),
+            "[AgentVersionService]",
+            { timeoutMs: 3000 }
           );
         } else {
           expect(killSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
@@ -326,9 +352,9 @@ describe("AgentVersionService resilience", () => {
 
       expect(result.installedVersion).toBe("1.2.3");
       // No reap of any kind on the close path — not a group kill, not a direct
-      // kill, not a taskkill — because every fd-holder has already exited.
+      // kill, not a tree kill — because every fd-holder has already exited.
       expect(killSpy).not.toHaveBeenCalled();
-      expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(treeKillMock).not.toHaveBeenCalled();
       killSpy.mockRestore();
     });
 
@@ -407,50 +433,80 @@ describe("AgentVersionService resilience", () => {
     });
 
     // The Windows reap branch is dead code on POSIX CI, so force-exercise it by
-    // faking `process.platform`. Asserts the exit-grace path shells out to
-    // `taskkill /T` (whole tree) and never falls back to a group/foreground kill.
-    it("reaps via taskkill on the exit-grace path when platform is win32", async () => {
-      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
-        id: "claude",
-        name: "Claude",
-        command: "claude",
-        version: { args: ["--version"] },
+    // faking `process.platform`.
+    describe("on Windows", () => {
+      let realPlatform: NodeJS.Platform;
+      let killSpy: ReturnType<typeof vi.spyOn>;
+
+      beforeEach(() => {
+        (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+          id: "claude",
+          name: "Claude",
+          command: "claude",
+          version: { args: ["--version"] },
+        });
+        realPlatform = process.platform;
+        Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+        killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+        // Never settles: the probe must not wait on the kill, which runs on Main.
+        treeKillMock.mockReturnValue(new Promise(() => {}));
+        vi.useFakeTimers();
       });
 
-      const realPlatform = process.platform;
-      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
-      spawnSyncMock.mockReturnValue({ status: 0 });
-      spawnMock.mockImplementation((() => {
-        const child = makeFakeChild();
-        queueMicrotask(() => {
-          child.stdout.emit("data", Buffer.from("1.2.3\n"));
-          child.emit("exit", 0, null);
-          // No `close` — a grandchild holds the pipe.
-        });
-        return child;
-      }) as never);
+      afterEach(() => {
+        vi.useRealTimers();
+        killSpy.mockRestore();
+        Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+      });
 
-      vi.useFakeTimers();
-      try {
+      it("tree-kills a hung root in the background at the deadline", async () => {
+        spawnMock.mockImplementation((() => {
+          const child = makeFakeChild();
+          queueMicrotask(() => child.stdout.emit("data", Buffer.from("4.5.6\n")));
+          return child;
+        }) as never);
+
+        const { service } = createService(async () => ({ claude: "ready" }));
+        const pending = service.getVersion("claude" as AgentId);
+        await vi.advanceTimersByTimeAsync(10000);
+        const result = await pending;
+
+        expect(result.installedVersion).toBe("4.5.6");
+        // The root is alive and ours, so the helper may fall back to its PID —
+        // the child itself goes along, so that is re-checked when the kill runs.
+        expect(treeKillMock).toHaveBeenCalledWith(
+          { pid: 4242, ownChild: expect.objectContaining({ pid: 4242 }) },
+          "[AgentVersionService]",
+          { timeoutMs: 3000 }
+        );
+        // Windows has no process group here — no SIGKILL fallback.
+        expect(killSpy).not.toHaveBeenCalled();
+      });
+
+      it("never tree-kills an exited root's PID, which may already be reused", async () => {
+        spawnMock.mockImplementation((() => {
+          const child = makeFakeChild() as ReturnType<typeof makeFakeChild> & {
+            exitCode: number | null;
+          };
+          queueMicrotask(() => {
+            child.stdout.emit("data", Buffer.from("1.2.3\n"));
+            // Node sets exitCode before `exit`, and has released the handle.
+            child.exitCode = 0;
+            child.emit("exit", 0, null);
+            // No `close` — a grandchild holds the pipe.
+          });
+          return child;
+        }) as never);
+
         const { service } = createService(async () => ({ claude: "ready" }));
         const pending = service.getVersion("claude" as AgentId);
         await vi.advanceTimersByTimeAsync(300);
         const result = await pending;
 
         expect(result.installedVersion).toBe("1.2.3");
-        expect(spawnSyncMock).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/F", "/PID", "4242"],
-          expect.objectContaining({ windowsHide: true, stdio: "ignore", timeout: 3000 })
-        );
-        // Windows has no process group here — no SIGKILL fallback.
+        expect(treeKillMock).not.toHaveBeenCalled();
         expect(killSpy).not.toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-        killSpy.mockRestore();
-        Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
-      }
+      });
     });
 
     // Regression guard for the cleanup ordering: cleanup() destroys the pipes,

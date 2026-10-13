@@ -15,7 +15,11 @@ vi.mock("fs/promises", () => ({
 
 vi.mock("child_process", () => ({
   spawn: vi.fn(),
-  spawnSync: vi.fn(),
+}));
+
+vi.mock("../../utils/windowsTreeKill.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsTreeKill.js")>()),
+  killWindowsProcessTreeInBackground: vi.fn(() => Promise.resolve(null)),
 }));
 
 vi.mock("../../utils/fs.js", () => ({
@@ -38,7 +42,7 @@ describe("WorktreeLifecycleService", () => {
   let mockReadFile: ReturnType<typeof vi.fn>;
   let mockCp: ReturnType<typeof vi.fn>;
   let mockSpawn: ReturnType<typeof vi.fn>;
-  let mockSpawnSync: ReturnType<typeof vi.fn>;
+  let mockTreeKill: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -50,8 +54,8 @@ describe("WorktreeLifecycleService", () => {
 
     const childProcessModule = await import("child_process");
     mockSpawn = vi.mocked(childProcessModule.spawn);
-    mockSpawnSync = vi.mocked(
-      (childProcessModule as unknown as { spawnSync: ReturnType<typeof vi.fn> }).spawnSync
+    mockTreeKill = vi.mocked(
+      (await import("../../utils/windowsTreeKill.js")).killWindowsProcessTreeInBackground
     );
 
     const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
@@ -150,6 +154,20 @@ describe("WorktreeLifecycleService", () => {
 
       const result = await service.loadConfig("/path/to/worktree", "/path/to/project");
       expect(result).toEqual(validConfig);
+    });
+
+    it("reads a config saved with a UTF-8 BOM instead of skipping it", async () => {
+      const projectConfig = { setup: ["npm install"] };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (!n(p).endsWith("/project/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+      // What Windows PowerShell 5.1's `Set-Content -Encoding utf8` writes.
+      mockReadFile.mockResolvedValue("﻿" + JSON.stringify(projectConfig));
+
+      const result = await service.loadConfig("/path/to/worktree", "/path/to/project");
+      expect(result).toEqual(projectConfig);
     });
 
     it("returns config with only setup or only teardown", async () => {
@@ -517,7 +535,7 @@ describe("WorktreeLifecycleService", () => {
       const expectedDetached = process.platform !== "win32";
       expect(mockSpawn).toHaveBeenCalledWith(
         "echo test",
-        expect.objectContaining({ detached: expectedDetached, shell: true })
+        expect.objectContaining({ detached: expectedDetached, shell: true, windowsHide: true })
       );
     });
 
@@ -532,7 +550,7 @@ describe("WorktreeLifecycleService", () => {
         vi.useRealTimers();
       });
 
-      it("uses taskkill on Windows for timeout kill", async () => {
+      it("uses the verified tree kill on Windows for timeout kill", async () => {
         Object.defineProperty(process, "platform", { value: "win32" });
         vi.useFakeTimers();
 
@@ -559,9 +577,10 @@ describe("WorktreeLifecycleService", () => {
         // Advance past the timeout
         vi.advanceTimersByTime(1001);
 
-        expect(mockSpawnSync).toHaveBeenCalledWith("taskkill", ["/F", "/T", "/PID", "12345"], {
-          windowsHide: true,
-        });
+        expect(mockTreeKill).toHaveBeenCalledWith(
+          expect.objectContaining({ pid: 12345 }),
+          "[WorktreeLifecycle]"
+        );
 
         // Emit close to resolve the promise
         listeners["close"]?.forEach((cb) => cb(1));
@@ -599,7 +618,7 @@ describe("WorktreeLifecycleService", () => {
         vi.advanceTimersByTime(1001);
 
         expect(processKillSpy).toHaveBeenCalledWith(-12345, "SIGTERM");
-        expect(mockSpawnSync).not.toHaveBeenCalled();
+        expect(mockTreeKill).not.toHaveBeenCalled();
 
         // Advance 5s for SIGKILL escalation
         vi.advanceTimersByTime(5000);
@@ -659,7 +678,7 @@ describe("WorktreeLifecycleService", () => {
 
         vi.advanceTimersByTime(1001);
 
-        expect(mockSpawnSync).not.toHaveBeenCalled();
+        expect(mockTreeKill).not.toHaveBeenCalled();
         expect(child.kill).toHaveBeenCalled();
 
         listeners["close"]?.forEach((cb) => cb(1));

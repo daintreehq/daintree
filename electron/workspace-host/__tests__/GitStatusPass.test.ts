@@ -482,6 +482,22 @@ describe("GitStatusPass", () => {
     expect(pass.lastActivityTimestamp).toBe(commitTime);
   });
 
+  it("survives a base-divergence failure that lands before it is awaited", async () => {
+    // createGit throws for a worktree removed outside Daintree, and the
+    // divergence is only awaited after the plan-file probes.
+    const compute = vi
+      .spyOn(BaseDivergence.prototype, "compute")
+      .mockRejectedValue(new Error("Cannot use simple-git on a directory that does not exist"));
+    try {
+      mockGetWorktreeChangesWithStats.mockResolvedValue(makeChanges({ changes: [] }));
+      const { pass } = makePass();
+
+      await expect(pass.run(false)).resolves.not.toThrow();
+    } finally {
+      compute.mockRestore();
+    }
+  });
+
   it("passes the monitor's signal to status git and reads a cancelled pass as no result (#12460)", async () => {
     const first = new AbortController();
     let rejectStatus!: (error: unknown) => void;

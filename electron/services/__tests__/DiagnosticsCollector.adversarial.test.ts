@@ -76,6 +76,20 @@ vi.mock("../../utils/findOnPath.js", () => ({
   findOnPath: (command: string, options?: unknown) => shared.findOnPathHandler(command, options),
 }));
 
+const cliSpawn = vi.hoisted(() => ({ target: vi.fn() }));
+const windowsPath = vi.hoisted(() => ({
+  find: vi.fn(async (_tool: string) => null as string | null),
+}));
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsExecutable.js")>()),
+  findWindowsCommand: (tool: string) => windowsPath.find(tool),
+}));
+
+vi.mock("../../utils/windowsCliSpawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsCliSpawn.js")>()),
+  cliSpawnTarget: (command: string, args: string[]) => cliSpawn.target(command, args),
+}));
+
 vi.mock("child_process", () => ({
   execFile: (
     file: string,
@@ -150,19 +164,22 @@ function createDeps(eventBuffer?: { getAll: () => unknown[] }) {
   } as unknown as import("../../ipc/types.js").HandlerDependencies;
 }
 
-function setDefaultExecFile(): void {
+/**
+ * Every tool on PATH, whichever lookup the host platform runs (the in-process
+ * walk on POSIX, the directory scan on Windows), and every version probe
+ * answering. Reset per case: `clearAllMocks` keeps implementations, so a case
+ * that narrowed a lookup would otherwise decide what the next one finds.
+ */
+function setDefaultToolFixtures(): void {
   shared.findOnPathHandler.mockImplementation(async (command: string) => `/usr/bin/${command}`);
+  windowsPath.find.mockImplementation(async (tool: string) => `C:\\tools\\${tool}.exe`);
   shared.execFileHandler.mockImplementation(
     (
       file: string,
-      args: string[],
+      _args: string[],
       _options: Record<string, unknown>,
       callback: (error: Error | null, stdout: string, stderr: string) => void
     ) => {
-      if (file === "where") {
-        callback(null, `C:\\tools\\${args[0]}.exe`, "");
-        return;
-      }
       callback(null, `${file} version\n`, "");
     }
   );
@@ -194,7 +211,12 @@ describe("DiagnosticsCollector adversarial", () => {
       lagPressureActive: false,
     };
     mcp.service = null;
-    setDefaultExecFile();
+    cliSpawn.target.mockImplementation((command: string, args: string[]) => ({
+      command,
+      args: [...args],
+      shell: false,
+    }));
+    setDefaultToolFixtures();
     diagnostics = await import("../DiagnosticsCollector.js");
   });
 
@@ -230,6 +252,77 @@ describe("DiagnosticsCollector adversarial", () => {
       terminals: unknown[];
     };
     expect(payload.terminals).toEqual([]);
+  });
+
+  it("TOOL_PROBES_HIDE_CONSOLE_WINDOWS", async () => {
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      tools: Array<{ tool: string; available: boolean; path: string | null }>;
+    };
+    const calls = shared.execFileHandler.mock.calls as [string, string[], unknown, unknown][];
+    // Every tool the fixture put on PATH had its own version probe (by name on
+    // POSIX, by the file found on Windows), so the check below covers the tool
+    // probes themselves and not only the other sections' spawns.
+    const available = payload.tools.filter((tool) => tool.available);
+    expect(available.length).toBeGreaterThan(0);
+    for (const tool of available) {
+      const probed = calls.some(
+        ([file, args]) => args.includes("--version") && (file === tool.tool || file === tool.path)
+      );
+      expect(probed, `${tool.tool} --version`).toBe(true);
+    }
+    for (const [, , options] of calls) {
+      expect(options).toMatchObject({ windowsHide: true });
+    }
+  });
+
+  it("TOOL_PROBES_LAUNCH_WINDOWS_SHIMS_AND_REPORT_THE_LAUNCHABLE_PATH", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      const npmCli = "C:\\nodejs\\node_modules\\npm\\bin\\npm-cli.js";
+      // PATH holds npm's extensionless sh script and the `.cmd` beside it; only
+      // the `.cmd` is launchable, and its version runs from that very file.
+      windowsPath.find.mockImplementation(async (tool: string) =>
+        tool === "npm" ? "C:\\nodejs\\npm.cmd" : null
+      );
+      cliSpawn.target.mockImplementation((command: string, args: string[]) =>
+        command === "C:\\nodejs\\npm.cmd"
+          ? { command: "C:\\nodejs\\node.exe", args: [npmCli, ...args], shell: false }
+          : { command, args: [...args], shell: false }
+      );
+      shared.execFileHandler.mockImplementation(
+        (
+          file: string,
+          args: string[],
+          _options: Record<string, unknown>,
+          callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
+        ) => {
+          if (file === "C:\\nodejs\\node.exe" && args[0] === npmCli) {
+            callback(null, { stdout: "11.6.0\r\n", stderr: "" });
+          } else {
+            callback(new Error("not found"));
+          }
+        }
+      );
+
+      const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+        tools: Array<{
+          tool: string;
+          available: boolean;
+          path: string | null;
+          version: string | null;
+        }>;
+      };
+
+      expect(payload.tools.find((t) => t.tool === "npm")).toEqual({
+        tool: "npm",
+        available: true,
+        path: "C:\\nodejs\\npm.cmd",
+        version: "11.6.0",
+      });
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("LOG_HISTORY_BOUNDED_TO_100", async () => {

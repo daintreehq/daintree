@@ -221,6 +221,14 @@ Postinstall failures (2):
       );
     });
 
+    it("never retries a failed node-pty conpty.cc patch", () => {
+      const patchFailure =
+        '  node-pty conpty.cc patch: node-pty\'s conpty.cc no longer matches the "exit watcher hand-off" edit\n';
+      expect(classifyFailure(`npm warn fetch failed ECONNRESET\n${patchFailure}`)).toBe(
+        "deterministic"
+      );
+    });
+
     it("keeps a failed binding.gyp patch deterministic beside a node-gyp network timeout", () => {
       const stderr = `
 ConnectTimeoutError: Connect Timeout Error (attempted addresses: 104.18.17.205:443, timeout: 10000ms)

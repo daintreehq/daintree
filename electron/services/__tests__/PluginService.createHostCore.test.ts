@@ -116,6 +116,26 @@ vi.mock("../fileDecorationRegistry.js", () => ({
   scopeMatchesPattern: vi.fn((s: string, p: string) => s === p),
 }));
 
+// The host.process cases are about capability gating and handle shape, not
+// program lookup. On Windows the manager resolves a bare name from PATH before
+// it starts anything, and the host's own PATH (or its lack of `codex`) must not
+// decide whether these spawns reach the spawner, so the lookup answers with a
+// fixed absolute path there.
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/windowsExecutable.js")>();
+  return {
+    ...actual,
+    resolveExecutableForSpawn: (
+      name: string,
+      env?: NodeJS.ProcessEnv,
+      platform: NodeJS.Platform = process.platform
+    ): Promise<string> =>
+      platform !== "win32" || /[\\/:]/.test(name)
+        ? actual.resolveExecutableForSpawn(name, env, platform)
+        : Promise.resolve(`C:\\bin\\${name}.exe`),
+  };
+});
+
 // Mocked so MCP-server activation tests don't try to spawn real subprocesses
 // or exercise the execa dynamic-import. The supervisor's wiring is verified
 // here; PluginMcpSupervisor's own lifecycle is covered by its dedicated test.

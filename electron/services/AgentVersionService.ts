@@ -1,5 +1,10 @@
-import { spawn, spawnSync, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import * as semver from "semver";
+import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
+import {
+  killWindowsProcessTreeInBackground,
+  liveChildTreeTarget,
+} from "../utils/windowsTreeKill.js";
 import {
   getEffectiveAgentConfig,
   getEffectiveAgentIds,
@@ -232,25 +237,28 @@ export class AgentVersionService {
    * `close` land. `exit` does NOT guarantee stdout is flushed, so we never
    * finish on it directly. Every settle that bypasses `close` — the exit-grace
    * timer and the hard wall-clock deadline — reaps the whole process group
-   * (`detached` SIGKILL on POSIX, `taskkill /T` on Windows) so a foreground that
+   * (`detached` SIGKILL on POSIX, a verified tree kill on Windows) so a foreground that
    * exited (or genuinely hangs) leaves no grandchild still holding the pipe,
    * then resolves with whatever was captured (usually the version line, else an
    * empty string → `parseVersion` → null → "indeterminate" → the launch proceeds
    * rather than blocking on an outdated-CLI gate).
    */
-  private runVersionProbe(command: string, args: string[]): Promise<string> {
+  private async runVersionProbe(command: string, args: string[]): Promise<string> {
+    // An npm-installed agent is a `.cmd` shim on Windows (see windowsCliSpawn).
+    const env = buildProbeEnv();
+    const target = await cliSpawnTarget(command, args, process.platform, { env });
     return new Promise<string>((resolve, reject) => {
       // `detached` puts the child in its own process group (POSIX) so the
       // deadline can SIGKILL the entire tree, including a grandchild that
-      // inherited the stdout pipe. Windows has no process groups here, so fall
-      // back to killing just the child.
+      // inherited the stdout pipe. Windows tree-kills while the root lives.
       const useGroup = process.platform !== "win32";
       let child: ChildProcess;
       try {
-        child = spawn(command, args, {
-          shell: false,
+        child = spawn(target.command, target.args, {
+          shell: target.shell,
+          windowsVerbatimArguments: target.windowsVerbatimArguments,
           windowsHide: true,
-          env: buildProbeEnv(),
+          env: { ...env, ...target.env },
           detached: useGroup,
           stdio: ["ignore", "pipe", "pipe"],
         });
@@ -267,6 +275,9 @@ export class AgentVersionService {
       let stdout = "";
       let stderr = "";
       let settled = false;
+      let probeExitCode: number | null | undefined;
+      const capturedVersion = (): string =>
+        probeExitCode === undefined || probeExitCode === 0 ? stdout || stderr : "";
       // Set when `exit` fires before `close`. `exit` does NOT guarantee all
       // stdout has been delivered (Node only guarantees that by `close`), so we
       // don't finish on `exit` directly — we give the pipes a short grace to
@@ -280,30 +291,18 @@ export class AgentVersionService {
         if (typeof pid !== "number") return;
         if (!useGroup) {
           // Windows has no process groups here: `child.kill()` TerminateProcess-es
-          // only the foreground, orphaning the inherited-pipe grandchild. Use
-          // `taskkill /T` to reap the whole tree (repo pattern: ProcessTreeKiller,
-          // PtyClient). `timeout`/`stdio: ignore` keep it from blocking the probe.
-          try {
-            const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-              windowsHide: true,
-              stdio: "ignore",
-              timeout: 3000,
+          // only the foreground, orphaning the inherited-pipe grandchild. Reap
+          // the whole tree with the creation-time-verified kill, never
+          // `taskkill /T`, which can follow a reused parent PID. In the
+          // background: this runs on Main, and the probe settles with what it
+          // captured without waiting on the kill. Only while the root lives:
+          // after its exit the PID is free for reuse, and nothing can walk
+          // from a dead root to the grandchild it left holding the pipe.
+          const target = liveChildTreeTarget(child);
+          if (target) {
+            void killWindowsProcessTreeInBackground(target, "[AgentVersionService]", {
+              timeoutMs: 3000,
             });
-            // spawnSync reports failure in the result, not by throwing: `error`
-            // is set if it couldn't launch / timed out; status 0 = killed and
-            // 128 = no such process (already exited — benign, like ESRCH). Any
-            // other non-zero (e.g. 1 access denied) leaves the tree alive, so
-            // warn rather than swallow.
-            if (result?.error) {
-              console.warn(
-                `[AgentVersionService] taskkill pid=${pid}: ${this.toErrorString(result.error)}`
-              );
-            } else if (result && result.status !== 0 && result.status !== 128) {
-              console.warn(`[AgentVersionService] taskkill pid=${pid} exited ${result.status}`);
-            }
-          } catch (error) {
-            // Defensive: spawnSync normally returns rather than throws.
-            console.warn(`[AgentVersionService] taskkill pid=${pid}: ${this.toErrorString(error)}`);
           }
           return;
         }
@@ -332,7 +331,7 @@ export class AgentVersionService {
         // A genuinely hung foreground (or a grandchild keeping us alive) — reap
         // the tree and resolve with whatever the CLI managed to print first.
         killTree();
-        finish(stdout || stderr);
+        finish(capturedVersion());
       }, this.TIMEOUT_MS);
       // Don't let the deadline timer pin event-loop teardown (the optional call
       // guards Vitest fake-timer objects that lack `unref`).
@@ -373,7 +372,7 @@ export class AgentVersionService {
           // Enough to parse a version line — stop reading and reap so a chatty
           // CLI can't stream past the cap and keep us alive.
           killTree();
-          finish(stdout || stderr);
+          finish(capturedVersion());
         }
       });
       child.stderr?.on("data", (chunk: Buffer) => {
@@ -383,15 +382,17 @@ export class AgentVersionService {
 
       // `close` fires after the process exited AND all stdio reached EOF, so it
       // carries the complete output — the preferred settle in the common case.
-      child.on("close", () => {
-        finish(stdout || stderr);
+      child.on("close", (code) => {
+        probeExitCode = code;
+        finish(capturedVersion());
       });
 
       // `exit` fires when the process terminates but BEFORE stdio is guaranteed
       // flushed/closed. The crux of the hang fix is that we never wait on `close`
       // alone: arm a short grace timer so a daemon grandchild holding the pipe
       // can't keep us pending. `close` (if it comes) clears this via `cleanup`.
-      child.on("exit", () => {
+      child.on("exit", (code) => {
+        probeExitCode = code;
         if (settled || exitGraceTimer) return;
         exitGraceTimer = setTimeout(() => {
           // `close` never came within the grace window, so a grandchild is still
@@ -399,7 +400,7 @@ export class AgentVersionService {
           // the detached process the probe exists to kill leaks. (The `close`
           // path stays kill-free: it fires only once every fd-holder has exited.)
           killTree();
-          finish(stdout || stderr);
+          finish(capturedVersion());
         }, this.EXIT_DRAIN_MS);
         exitGraceTimer.unref?.();
       });

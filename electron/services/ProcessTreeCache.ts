@@ -89,6 +89,13 @@ function executableBasename(comm: string): string {
   return cut >= 0 && cut < comm.length - 1 ? comm.slice(cut + 1) : comm;
 }
 
+function startedAfter(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  const aMs = Date.parse(a);
+  const bMs = Date.parse(b);
+  return Number.isFinite(aMs) && Number.isFinite(bMs) && aMs > bMs;
+}
+
 export class ProcessTreeCache {
   private cache: Map<number, ProcessInfo> = new Map();
   private childrenMap: Map<number, number[]> = new Map();
@@ -558,10 +565,17 @@ export class ProcessTreeCache {
         // can (#8794) — a recycled PID arrives with its own path or with none.
         ...(executablePath ? { executablePath } : {}),
       });
+    }
 
-      const children = newChildrenMap.get(ppid) || [];
-      children.push(pid);
-      newChildrenMap.set(ppid, children);
+    // A Windows ParentProcessId outlives its parent: once that process exits,
+    // its PID can be handed to an unrelated one, which would then appear to own
+    // this process. A "parent" that started after its child is such a reuse.
+    for (const info of newCache.values()) {
+      const parent = newCache.get(info.ppid);
+      if (parent && startedAfter(parent.startTime, info.startTime)) continue;
+      const children = newChildrenMap.get(info.ppid) || [];
+      children.push(info.pid);
+      newChildrenMap.set(info.ppid, children);
     }
 
     // Prune stale snapshot entries for processes that no longer exist

@@ -309,6 +309,22 @@ export function rekeyWindowStateForPath(oldPath: string, newPath: string): void 
   }
 }
 
+const RESTORE_ROUNDING_PX = 16;
+
+function keepRestoredBounds(
+  actual: Electron.Rectangle,
+  restored: Electron.Rectangle | null
+): Electron.Rectangle {
+  if (!restored) return actual;
+  const close = (a: number, b: number) => Math.abs(a - b) <= RESTORE_ROUNDING_PX;
+  return close(actual.x, restored.x) &&
+    close(actual.y, restored.y) &&
+    close(actual.width, restored.width) &&
+    close(actual.height, restored.height)
+    ? restored
+    : actual;
+}
+
 /**
  * What a window needs from its owner to keep its bounds under the right project
  * across project switches, and to stay clear of the other windows.
@@ -464,13 +480,27 @@ export function createWindowWithState(
     return readShownProjectPath() ?? (hasShownProject ? null : (projectPath ?? null));
   };
 
+  // At fractional display scaling on Windows, a window with a hidden title bar
+  // reports bounds a few pixels larger than it was created or set with (1000x700
+  // comes back 1006x705 at 125%), so saving what getNormalBounds() reports grew
+  // the window on every launch. Until the user moves or resizes it past that
+  // rounding, keep saving the bounds it was restored from — only when it opened
+  // at its own saved spot, not one clamped or cascaded from it.
+  const restoredBounds =
+    process.platform === "win32" &&
+    atOwnSavedSpot &&
+    windowState.x !== undefined &&
+    windowState.y !== undefined
+      ? { x: windowState.x, y: windowState.y, width: windowState.width, height: windowState.height }
+      : null;
+
   const saveState = (saveKey: string | null = resolveSaveKey()) => {
     if (win.isDestroyed()) return;
 
     const isMaximized = win.isMaximized() || maximizeOnShow;
     const isFullScreen = win.isFullScreen();
 
-    const normalBounds = win.getNormalBounds();
+    const normalBounds = keepRestoredBounds(win.getNormalBounds(), restoredBounds);
 
     const entry: WindowStateBounds = {
       x: normalBounds.x,

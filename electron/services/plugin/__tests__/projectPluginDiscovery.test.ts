@@ -77,6 +77,16 @@ describe("discoverProjectPlugins", () => {
     expect(result.plugins[0]!.dirName).toBe("dashboard");
   });
 
+  it("parses a manifest saved with a UTF-8 BOM", async () => {
+    const root = await makeProject();
+    await writePlugin(root, "dashboard", "﻿" + manifest("acme.dashboard"));
+
+    const result = await discoverProjectPlugins(root);
+    expect(result.plugins).toHaveLength(1);
+    expect(result.plugins[0]!.error).toBeUndefined();
+    expect(result.plugins[0]!.manifest?.name).toBe("acme.dashboard");
+  });
+
   it("does NOT require the directory name to equal the manifest name", async () => {
     const root = await makeProject();
     // The shipping builtin `plugins/builtin/github` declares `daintree.github`,

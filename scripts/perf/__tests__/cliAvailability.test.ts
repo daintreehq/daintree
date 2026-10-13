@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { AgentConfig } from "../../../shared/config/agentRegistry";
@@ -13,6 +16,7 @@ import {
   foundAgentIds,
   gradeRefresh,
   refreshMisses,
+  startsNpmPrefixLookup,
   type CliArm,
   type CliModules,
 } from "../lib/cliAvailabilityFixture";
@@ -57,7 +61,7 @@ function armFor(plantedIds: string[], viaPrepend = false): CliArm {
     // constant.
     path: "/daintree-perf-nonexistent-a:/daintree-perf-nonexistent-b",
     prepend: viaPrepend ? "/daintree-perf-nonexistent-a" : null,
-    expectedSpawns: expectedSpawnsFor(REGISTRY, plantedIds, viaPrepend),
+    expectedSpawns: expectedSpawnsFor(REGISTRY, plantedIds, true),
     hasDuplicate: false,
   };
 }
@@ -91,21 +95,47 @@ function gradeAgainst(
 }
 
 describe("perf cli-availability spawn arithmetic", () => {
-  // POSIX walks PATH in-process, so a PATH hit or miss starts nothing there;
-  // Windows still starts one `where.exe` per agent, hit or miss.
-  const perPathProbe = process.platform === "win32" ? 1 : 0;
-
-  it("prices each PATH probe at its platform's subprocess cost", () => {
-    // beta declares an npm package, so a refresh in which beta misses also
-    // pays one `npm config get prefix`.
-    expect(expectedSpawnsFor(REGISTRY, [], false)).toBe(3 * perPathProbe + 1);
-    expect(expectedSpawnsFor(REGISTRY, ["alpha"], false)).toBe(3 * perPathProbe + 1);
-    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], false)).toBe(3 * perPathProbe);
+  it("prices a PATH hit or miss at zero starts on every platform", () => {
+    // Every planted, and kiro (the one miss) declares no npm package.
+    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], true)).toBe(0);
+    expect(expectedSpawnsFor(REGISTRY, Object.keys(REGISTRY), true)).toBe(0);
   });
 
-  it("prices a prepended-path hit at zero starts", () => {
-    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], true)).toBe(perPathProbe);
-    expect(expectedSpawnsFor(REGISTRY, Object.keys(REGISTRY), true)).toBe(0);
+  it("adds one npm-prefix start when a missing agent declares an npm package", () => {
+    expect(expectedSpawnsFor(REGISTRY, [], true)).toBe(1);
+    expect(expectedSpawnsFor(REGISTRY, ["alpha"], true)).toBe(1);
+  });
+
+  it("prices the npm-prefix lookup at zero where the arm starts none", () => {
+    expect(expectedSpawnsFor(REGISTRY, [], false)).toBe(0);
+    expect(expectedSpawnsFor(REGISTRY, ["alpha"], false)).toBe(0);
+  });
+
+  it("starts the npm-prefix lookup on POSIX whatever PATH holds", () => {
+    expect(startsNpmPrefixLookup(["/daintree-perf-nonexistent-a"], "linux")).toBe(true);
+    expect(startsNpmPrefixLookup([], "darwin")).toBe(true);
+  });
+
+  it("starts the npm-prefix lookup on Windows only when PATH holds an npm", () => {
+    const withNpm = mkdtempSync(join(tmpdir(), "daintree-perf-npm-"));
+    const withoutNpm = mkdtempSync(join(tmpdir(), "daintree-perf-no-npm-"));
+    try {
+      writeFileSync(join(withNpm, "npm.cmd"), "");
+      // An extensionless sh script is not something Windows can start.
+      writeFileSync(join(withoutNpm, "npm"), "");
+      expect(startsNpmPrefixLookup([withoutNpm], "win32", ".COM;.EXE;.BAT;.CMD")).toBe(false);
+      expect(startsNpmPrefixLookup([withoutNpm, withNpm], "win32", ".COM;.EXE;.BAT;.CMD")).toBe(
+        true
+      );
+      // PATHEXT decides what a bare name starts as, so without .CMD the shim is not npm.
+      expect(startsNpmPrefixLookup([withNpm], "win32", ".COM;.EXE")).toBe(false);
+      // A directory with the name is not a file to start.
+      mkdirSync(join(withoutNpm, "npm.exe"));
+      expect(startsNpmPrefixLookup([withoutNpm], "win32", ".COM;.EXE;.BAT;.CMD")).toBe(false);
+    } finally {
+      rmSync(withNpm, { recursive: true, force: true });
+      rmSync(withoutNpm, { recursive: true, force: true });
+    }
   });
 });
 
@@ -131,8 +161,8 @@ describe("perf cli-availability graders", () => {
     const grade = gradeAgainst(arm, availabilityWhere([]), 0);
     expect(grade.foundSetMisses).toBe(2);
     // Signed: positive means the ladder did LESS work than it is supposed to.
-    // On POSIX a PATH hit is free, so here the found-set term is the one that
-    // catches it.
+    // A PATH hit is free on every platform, so here the found-set term is the
+    // one that catches it.
     expect(grade.spawnCountMisses).toBe(arm.expectedSpawns);
   });
 
@@ -276,7 +306,7 @@ describe("perf cli-availability auth grading", () => {
       plantedIds: ["alpha", "beta"],
       path: "/daintree-perf-nonexistent-a:/daintree-perf-nonexistent-b",
       prepend: null,
-      expectedSpawns: expectedSpawnsFor(AUTH_REGISTRY, ["alpha", "beta"], false),
+      expectedSpawns: expectedSpawnsFor(AUTH_REGISTRY, ["alpha", "beta"], true),
       hasDuplicate: false,
     };
   }

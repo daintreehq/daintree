@@ -42,7 +42,8 @@ afterEach(() => {
 
 // electron-updater's own AppImage install, on files in a temp dir: what it
 // does before the relaunch, and that the relaunch is the spawn we take over.
-describe("AppImageUpdater install", () => {
+// It moves the image with `mv`, which a Windows host doesn't have.
+describe.skipIf(process.platform === "win32")("AppImageUpdater install", () => {
   let dir: string;
   let installDir: string;
   let cacheDir: string;

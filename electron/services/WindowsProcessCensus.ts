@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import { logDebug } from "../utils/logger.js";
+import { windowsSystemTool } from "../utils/windowsExecutable.js";
 
 /**
  * The `Win32_Process` projection the census reads, as a PowerShell pipeline.
@@ -228,7 +229,7 @@ export class WindowsProcessCensus {
     // script needs no shell-level quoting — same reasoning as #12042, applied
     // to a process that is now started once instead of once per poll.
     const child = spawn(
-      "powershell.exe",
+      windowsSystemTool("powershell.exe"),
       ["-NoProfile", "-NonInteractive", "-NoLogo", "-Command", HELPER_SCRIPT],
       { windowsHide: true, shell: false, stdio: ["pipe", "pipe", "pipe"] }
     );

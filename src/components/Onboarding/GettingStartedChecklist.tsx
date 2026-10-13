@@ -174,10 +174,13 @@ export function GettingStartedChecklist({
 
   useEscapeStack(isFocusWithin && !collapsed, handleEscape);
 
+  // Below the modal layer: on the toast layer this persistent card sat above
+  // every dialog's scrim and covered its corner — the recipe editor's
+  // "Create recipe" button included.
   return createPortal(
     <div
       className={cn(
-        "fixed bottom-4 z-[var(--z-toast)] pointer-events-none p-4",
+        "fixed bottom-4 z-[var(--z-toolbar)] pointer-events-none p-4",
         "flex justify-end w-full max-w-[320px]"
       )}
       style={{ right: "calc(var(--right-obstruction-offset, 0px))" }}

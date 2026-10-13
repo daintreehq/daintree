@@ -16,6 +16,7 @@ import {
 } from "../PluginArchive.js";
 import { pluginInstallJobs, isInstallCancellation } from "./PluginInstallJobRegistry.js";
 import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
+import { stripUtf8Bom } from "../../utils/stripUtf8Bom.js";
 import {
   PLUGIN_DOWNLOAD_TIMEOUT_MS,
   acceptedMime,
@@ -419,7 +420,7 @@ export class PluginInstaller {
       }
       let json: unknown;
       try {
-        json = JSON.parse(rawManifest);
+        json = JSON.parse(stripUtf8Bom(rawManifest));
       } catch {
         return fail("manifest_invalid", "plugin.json is not valid JSON");
       }
@@ -696,7 +697,7 @@ export class PluginInstaller {
     if (existing) {
       try {
         const raw: unknown = JSON.parse(
-          await fs.readFile(path.join(finalDir, "plugin.json"), "utf-8")
+          stripUtf8Bom(await fs.readFile(path.join(finalDir, "plugin.json"), "utf-8"))
         );
         const version = (raw as { version?: unknown } | null)?.version;
         if (typeof version === "string") return version;

@@ -726,6 +726,56 @@ describe("TerminalProcess shell-command identity fallback", () => {
     }
   });
 
+  it("keeps a launched agent's identity when a line is typed into it before detection confirms it", async () => {
+    const terminal = createAgentTerminal();
+    const pty = getMockPty(terminal);
+
+    try {
+      terminal.write("claude\r");
+      pty.__emitData("claude\r\n");
+      pty.__emitData("Claude Code ready.\r\n");
+      // Typed into the agent before the commit window: agent input, not a new
+      // shell command that would drop the launch identity.
+      terminal.write("STOP\r");
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      pty.__emitData("\r\ngpriday@macbook daintree-app % ");
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reads the next shell command cleanly after an agent submitted from the input bar exits", async () => {
+    const terminal = createPlainTerminal("t-hybrid-agent-then-npm");
+    const pty = getMockPty(terminal);
+
+    try {
+      terminal.submit("claude");
+      await vi.advanceTimersByTimeAsync(100);
+      pty.__emitData("claude\r\nClaude Code ready.\r\n");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      pty.__emitData("\r\ngpriday@macbook daintree-app % ");
+      await vi.advanceTimersByTimeAsync(600);
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+
+      // The input bar's body must not linger in the capture buffer and prefix
+      // this command ("claudenpm run dev").
+      terminal.write("npm run dev\r");
+      pty.__emitData("npm run dev\r\n> daintree-app@1.0.0 dev\r\n");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedProcessIconId).toBe("npm");
+    } finally {
+      terminal.dispose();
+    }
+  });
+
   it("shows the npm badge for a typed npm run dev command and clears it on prompt return", async () => {
     const terminal = createPlainTerminal("t-fallback-npm");
     const pty = getMockPty(terminal);

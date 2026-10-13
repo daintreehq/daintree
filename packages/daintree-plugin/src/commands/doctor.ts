@@ -6,6 +6,7 @@ import { formatFindingInline, runLint } from "./lint.js";
 import type { LintFinding } from "../lib/lint/index.js";
 import { caretEngineAdvisory } from "../../../../electron/schemas/pluginManifestAdvisories.js";
 import { sendCliRequest, DaintreeUnavailableError } from "../ipc/client.js";
+import { parseJsonText } from "../lib/parseJsonText.js";
 
 /**
  * `doctor` is `validate` and `lint` plus the checks that only make sense
@@ -187,7 +188,7 @@ async function checkEsmModule(
 
 async function readManifest(dir: string): Promise<Record<string, unknown> | null> {
   try {
-    return JSON.parse(await fs.readFile(path.join(dir, "plugin.json"), "utf8")) as Record<
+    return parseJsonText(await fs.readFile(path.join(dir, "plugin.json"), "utf8")) as Record<
       string,
       unknown
     >;

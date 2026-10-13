@@ -60,6 +60,14 @@ describe("spawn census", () => {
     spawn: prototypeSpawn(),
   };
 
+  // Node itself rather than `true`/`echo`/`sh`: those exist on a Windows machine
+  // only when Git's usr/bin happens to be on PATH, as it is on CI runners.
+  const NODE = process.execPath;
+  const NODE_KEY = path.basename(NODE);
+  const NOOP = ["-e", "0"];
+  const SHELL_BUILTIN = process.platform === "win32" ? "ver" : "true";
+  const DEFAULT_SHELL = process.platform === "win32" ? "cmd.exe" : "sh";
+
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "spawn-census-test-"));
   });
@@ -73,16 +81,18 @@ describe("spawn census", () => {
   it("counts async and sync launches by command", async () => {
     expect(installSpawnCensus("main", dir)).toBe(true);
 
-    childProcess.spawnSync("true");
-    childProcess.execSync("true");
-    childProcess.execFileSync("true");
-    namedExecFileSync("true");
-    await promisify(childProcess.execFile)("true");
-    await promisify(childProcess.exec)("true");
-    await new Promise((resolve) => childProcess.spawn("true").on("close", resolve));
+    childProcess.spawnSync(NODE, NOOP);
+    childProcess.execSync(SHELL_BUILTIN);
+    childProcess.execFileSync(NODE, NOOP);
+    namedExecFileSync(NODE, NOOP);
+    await promisify(childProcess.execFile)(NODE, NOOP);
+    await promisify(childProcess.exec)(SHELL_BUILTIN);
+    await new Promise((resolve) => childProcess.spawn(NODE, NOOP).on("close", resolve));
 
-    const defaultShell = process.platform === "win32" ? "cmd.exe" : "sh";
-    expect(totals(readSpawnCensus())).toEqual({ true: 5, [`${defaultShell} -c true`]: 2 });
+    expect(totals(readSpawnCensus())).toEqual({
+      [NODE_KEY]: 5,
+      [`${DEFAULT_SHELL} -c ${SHELL_BUILTIN}`]: 2,
+    });
   });
 
   it("names the shell a sync launch actually ran", () => {
@@ -102,21 +112,23 @@ describe("spawn census", () => {
 
   it("keeps each call's return value and errors", () => {
     installSpawnCensus("main", dir);
-    expect(childProcess.execFileSync("echo", ["hi"], { encoding: "utf8" })).toBe("hi\n");
-    expect(childProcess.spawnSync("sh", ["-c", "exit 3"]).status).toBe(3);
-    expect(() => childProcess.execFileSync("false")).toThrow();
+    expect(
+      childProcess.execFileSync(NODE, ["-e", "process.stdout.write('hi\\n')"], { encoding: "utf8" })
+    ).toBe("hi\n");
+    expect(childProcess.spawnSync(NODE, ["-e", "process.exit(3)"]).status).toBe(3);
+    expect(() => childProcess.execFileSync(NODE, ["-e", "process.exit(1)"])).toThrow();
   });
 
   it("leaves launches inside runUncounted out", () => {
     installSpawnCensus("main", dir);
-    runUncounted(() => childProcess.execFileSync("true"));
-    childProcess.execFileSync("true");
-    expect(totals(readSpawnCensus())).toEqual({ true: 1 });
+    runUncounted(() => childProcess.execFileSync(NODE, NOOP));
+    childProcess.execFileSync(NODE, NOOP);
+    expect(totals(readSpawnCensus())).toEqual({ [NODE_KEY]: 1 });
   });
 
   it("writes an atomic per-process snapshot", () => {
     installSpawnCensus("pty-host", dir);
-    childProcess.execFileSync("true");
+    childProcess.execFileSync(NODE, NOOP);
     flushSpawnCensus(true);
 
     const files = fs.readdirSync(dir);
@@ -124,7 +136,7 @@ describe("spawn census", () => {
     expect(files[0]).toMatch(new RegExp(`^pty-host-${process.pid}-\\d+\\.json$`));
     const file = JSON.parse(fs.readFileSync(path.join(dir, files[0]!), "utf8")) as SpawnCensusFile;
     expect(file).toMatchObject({ version: 1, role: "pty-host", pid: process.pid, exited: true });
-    expect(totals(file)).toEqual({ true: 1 });
+    expect(totals(file)).toEqual({ [NODE_KEY]: 1 });
   });
 
   it("restores Node's functions on uninstall", () => {

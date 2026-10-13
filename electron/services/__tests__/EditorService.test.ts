@@ -5,6 +5,8 @@ const fsMock = vi.hoisted(() => ({
   promises: {
     stat: vi.fn<(path: string) => Promise<{ isFile: () => boolean }>>(),
     access: vi.fn<(path: string, mode?: number) => Promise<void>>(),
+    readdir: vi.fn<(path: string) => Promise<unknown[]>>(),
+    lstat: vi.fn<(path: string) => Promise<{ isSymbolicLink: () => boolean }>>(),
   },
   constants: { X_OK: 1 },
 }));
@@ -38,6 +40,25 @@ vi.mock("electron", () => ({
 vi.mock("execa", () => ({
   execa: execaMock.execa,
 }));
+
+// The Windows PATH search lists directories (`node:fs` is this same mock), so
+// Windows cases describe the disk as directory listings.
+function windowsDisk(files: string[]): void {
+  fsMock.promises.readdir.mockImplementation(async (directory: string) => {
+    const prefix = `${directory.replace(/\\+$/, "").toLowerCase()}\\`;
+    const names = files
+      .filter((file) => file.toLowerCase().startsWith(prefix))
+      .map((file) => file.slice(prefix.length))
+      .filter((name) => !name.includes("\\"));
+    if (names.length === 0) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    return names.map((name) => ({
+      name,
+      isFile: () => true,
+      isDirectory: () => false,
+      isSymbolicLink: () => false,
+    }));
+  });
+}
 
 const originalPlatform = process.platform;
 let originalPATH: string | undefined;
@@ -195,7 +216,7 @@ describe("EditorService.discover", () => {
     process.env.PATH = "C:\\one;C:\\two";
     const originalPATHEXT = process.env.PATHEXT;
     process.env.PATHEXT = ".COM;.EXE;.CMD";
-    mockExistingFiles(["C:\\two\\code.com", "C:\\one\\code.cmd"]);
+    windowsDisk(["C:\\two\\code.com", "C:\\one\\code.cmd"]);
 
     try {
       const discover = await loadDiscover();

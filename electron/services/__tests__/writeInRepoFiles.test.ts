@@ -654,6 +654,41 @@ describe("readInRepoRecipesWithHashes", () => {
     }
   });
 
+  // Windows PowerShell 5.1's `Set-Content -Encoding utf8` prefixes a BOM, which
+  // JSON.parse rejects; the recipe used to be skipped as malformed.
+  it("loads a recipe saved with a UTF-8 BOM and hashes its exact bytes", async () => {
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ id: "r1", name: "Bom Recipe" }));
+    const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "bom-recipe.json");
+    await fs.writeFile(filePath, "﻿" + (await fs.readFile(filePath, "utf-8")), "utf-8");
+
+    const { recipes, hashes } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+
+    expect(recipes.map((r) => r.name)).toEqual(["Bom Recipe"]);
+    // The staleness check compares this against a fresh hash of the file, so
+    // it must cover the bytes as they sit on disk, BOM included.
+    expect(hashes.get("r1")).toBe(
+      await identityFiles.getInRepoRecipeFileHash(tmpDir, "Bom Recipe")
+    );
+  });
+
+  it("still sees forward-incompatible content behind a BOM before an overwrite", async () => {
+    await fs.mkdir(path.join(tmpDir, DAINTREE_RECIPES_DIR), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, DAINTREE_RECIPES_DIR, "future.json"),
+      "﻿" +
+        JSON.stringify({
+          id: "r1",
+          name: "Future",
+          createdAt: 1,
+          terminals: [{ type: "terminal" }, { type: "future-agent" }],
+        }),
+      "utf-8"
+    );
+
+    // Read as unparseable, a BOM file looked lossless to overwrite (#12261).
+    expect(await identityFiles.inspectInRepoRecipeForwardCompat(tmpDir, "Future")).not.toBeNull();
+  });
+
   it("returns empty recipes and hashes and dirExists=false when the directory is missing", async () => {
     const { recipes, hashes, dirExists, scanComplete } =
       await identityFiles.readInRepoRecipesWithHashes(tmpDir);
@@ -1102,6 +1137,19 @@ describe("readInRepoPresets", () => {
     expect(result.claude).toHaveLength(1);
     expect(result.claude?.[0]?.id).toBe("team-opus");
     expect(result.claude?.[0]?.name).toBe("Team Opus");
+  });
+
+  it("loads a preset saved with a UTF-8 BOM", async () => {
+    const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "team.json"),
+      "﻿" + JSON.stringify({ id: "team", name: "Team" }),
+      "utf-8"
+    );
+
+    const result = await identityFiles.readInRepoPresets(tmpDir);
+    expect(result.claude?.map((p) => p.id)).toEqual(["team"]);
   });
 
   it("groups presets by the agent subdirectory they live in", async () => {

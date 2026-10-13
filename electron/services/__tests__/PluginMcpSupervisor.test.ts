@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PassThrough } from "node:stream";
-import { PluginMcpSupervisor, TOOLS_LIST_MAX_PAGES } from "../PluginMcpSupervisor.js";
+import {
+  mcpServerProgram,
+  PluginMcpSupervisor,
+  TOOLS_LIST_MAX_PAGES,
+} from "../PluginMcpSupervisor.js";
 import { PLUGIN_MCP_STDERR_RING_LINES } from "../../../shared/types/ipc/pluginMcp.js";
 import { reapPendingChildTrees } from "../plugin/pluginChildTree.js";
+import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
+
+// Windows-path files for the PATH lookup a Windows server spawn makes.
+vi.mock("node:fs", async (importOriginal) =>
+  (await import("../../utils/__tests__/helpers/virtualWindowsFs.js")).withVirtualWindowsFiles(
+    await importOriginal()
+  )
+);
 
 async function flushMicrotasks(): Promise<void> {
   await new Promise((r) => setImmediate(r));
@@ -378,6 +390,35 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
 
       const [info] = supervisor.list();
       expect(info?.status).toBe("stopped");
+    } finally {
+      vi.useRealTimers();
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
+  it("never tree-kills an exited server's PID on Windows, which may already be reused", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      const fake = makeFakeSubprocess({ pid: 9876 });
+      const killTree = vi.fn();
+      const supervisor = new PluginMcpSupervisor({ spawner: () => fake.handle, killTree });
+      const startPromise = supervisor.start({
+        pluginId: "acme.demo",
+        contributions: [{ id: "linear", name: "Linear", command: "node" }],
+        resolveSettings: async () => "",
+      });
+      await fake.waitForStdinCount(1);
+      fake.answerInitialize();
+      await startPromise;
+      // A real ChildProcess records its exit before anything can react to it.
+      Object.assign(fake.handle.subprocess, { exitCode: 1 });
+
+      vi.useFakeTimers();
+      await supervisor.shutdown({ pluginId: "acme.demo" });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(killTree).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
       if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
@@ -1501,4 +1542,56 @@ describe("PluginMcpSupervisor default spawner environment (issue #12616)", () =>
     expect(env.HTTPS_PROXY).toBe("http://manifest-proxy.test:8080");
     expect(env.NODE_OPTIONS).toBeUndefined();
   }, 20_000);
+});
+
+describe("MCP server program on Windows", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const originalPath = process.env.PATH;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    virtualWindowsFiles.set({
+      "C:\\nodejs\\node.exe": "",
+      "C:\\nodejs\\npx.cmd": "",
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", originalPlatform);
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    virtualWindowsFiles.clear();
+  });
+
+  it("resolves a bare name from the server's PATH alone, .cmd shims included", async () => {
+    // The plugin directory is the working directory; `.` would search it.
+    const env = { PATH: ".;bin;C:\\nodejs" };
+    await expect(mcpServerProgram("node", env)).resolves.toBe("C:\\nodejs\\node.exe");
+    await expect(mcpServerProgram("npx", env)).resolves.toBe("C:\\nodejs\\npx.cmd");
+  });
+
+  it("passes a path through, and every name off Windows", async () => {
+    const env = { PATH: "C:\\nodejs" };
+    for (const command of ["./dist/server.exe", "bin\\server", "C:\\tools\\server.exe"]) {
+      await expect(mcpServerProgram(command, env)).resolves.toBe(command);
+    }
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    await expect(mcpServerProgram("npx", env)).resolves.toBe("npx");
+  });
+
+  it("reports a name PATH does not hold as a spawn error, without starting anything", async () => {
+    process.env.PATH = ".;C:\\empty";
+    const probe = new PluginMcpSupervisor({ killTree: () => {} });
+    await probe.start({
+      pluginId: "acme.missing",
+      contributions: [{ id: "srv", name: "Server", command: "npx", args: ["-y", "server"] }],
+      resolveSettings: async () => "",
+    });
+
+    const [info] = probe.list();
+    expect(info?.status).toBe("crashed");
+    expect(info?.lastError).toContain("spawn npx ENOENT");
+    expect(info?.pid).toBeNull();
+    await probe.shutdown({ pluginId: "acme.missing" });
+  });
 });

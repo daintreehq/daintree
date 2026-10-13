@@ -43,6 +43,10 @@ vi.mock("../pty/index.js", async (importOriginal) => {
       getInfo() {
         return { wasKilled: false, isExited: false };
       }
+      // Windows reads it to hold the tree-kill helper warm while PTYs are live.
+      getPublicState() {
+        return { hasPty: true };
+      }
       isAgentCurrentlyLive() {
         return false;
       }

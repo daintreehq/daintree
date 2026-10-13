@@ -14,18 +14,26 @@ import {
   type SettingsTab,
 } from "../settingsTabRegistry";
 import { GLOBAL_SETTINGS_TAB_IDS, PROJECT_SETTINGS_TAB_IDS } from "../settingsTabIds";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 
 const allEntries: readonly AnySettingsTabEntry[] = SETTINGS_REGISTRY;
+// Settings → Hosts (a lazy global tab) is registered only where this machine
+// can drive other hosts: never on Windows (shared/config/remoteHostsSupport.ts).
+const HOSTS_TABS = isRemoteShellSupported() ? 1 : 0;
 const globalEntries = allEntries.filter((e) => e.scope === "global");
 const projectEntries = allEntries.filter((e) => e.scope === "project");
 
 describe("SETTINGS_REGISTRY", () => {
-  it("has 32 entries (23 global + 9 project)", () => {
-    expect(SETTINGS_REGISTRY).toHaveLength(32);
+  it("has 32 entries (23 global + 9 project), one fewer without Hosts", () => {
+    expect(SETTINGS_REGISTRY).toHaveLength(31 + HOSTS_TABS);
   });
 
-  it("has 23 global entries", () => {
-    expect(globalEntries).toHaveLength(23);
+  it("has 23 global entries, one fewer without Hosts", () => {
+    expect(globalEntries).toHaveLength(22 + HOSTS_TABS);
+  });
+
+  it("lists Hosts exactly where this machine can drive other hosts", () => {
+    expect(globalEntries.some((e) => e.id === "hosts")).toBe(HOSTS_TABS === 1);
   });
 
   it("has 9 project entries", () => {
@@ -78,9 +86,9 @@ describe("SETTINGS_REGISTRY", () => {
     expect(eager[0]!.id).toBe("general");
   });
 
-  it("has 31 lazy entries (22 global + 9 project)", () => {
+  it("has 31 lazy entries (22 global + 9 project), one fewer without Hosts", () => {
     const lazy = SETTINGS_REGISTRY.filter((e) => e.importKind === "lazy");
-    expect(lazy).toHaveLength(31);
+    expect(lazy).toHaveLength(30 + HOSTS_TABS);
   });
 
   it("all global entries belong to known global groups", () => {
@@ -214,10 +222,10 @@ describe("getSettingsNavGroups", () => {
     ]);
   });
 
-  it("all 23 global entries are distributed across global groups", () => {
+  it("all global entries are distributed across global groups", () => {
     const groups = getSettingsNavGroups("global");
     const totalEntries = groups.reduce((sum, g) => sum + g.entries.length, 0);
-    expect(totalEntries).toBe(23);
+    expect(totalEntries).toBe(22 + HOSTS_TABS);
   });
 
   it("global groups contain only global-scoped entries", () => {
@@ -256,7 +264,8 @@ describe("getSettingsNavGroups", () => {
 
 describe("settingsTabIds drift guard", () => {
   it("GLOBAL_SETTINGS_TAB_IDS matches the registry's global entries", () => {
-    expect([...GLOBAL_SETTINGS_TAB_IDS].sort()).toEqual(globalEntries.map((e) => e.id).sort());
+    const registered = GLOBAL_SETTINGS_TAB_IDS.filter((id) => id !== "hosts" || HOSTS_TABS === 1);
+    expect([...registered].sort()).toEqual(globalEntries.map((e) => e.id).sort());
   });
 
   it("PROJECT_SETTINGS_TAB_IDS matches the registry's project entries", () => {
@@ -265,8 +274,8 @@ describe("settingsTabIds drift guard", () => {
 });
 
 describe("SettingsTab type coverage", () => {
-  it("union of registry IDs equals 32", () => {
+  it("union of registry IDs equals 32, one fewer without Hosts", () => {
     const allIds = new Set(SETTINGS_REGISTRY.map((e) => e.id));
-    expect(allIds.size).toBe(32);
+    expect(allIds.size).toBe(31 + HOSTS_TABS);
   });
 });

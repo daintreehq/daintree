@@ -1,16 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mapCreationError } from "../worktreeCreationErrors";
 
+const POSIX_WORKTREES = new Map([
+  ["wt-1", { id: "wt-1", path: "/projects/repo-worktrees/feature-auth" }],
+  ["wt-2", { id: "wt-2", path: "/projects/repo-worktrees/main" }],
+]);
+
+const { viewWorktrees, isWindowsMock } = vi.hoisted(() => ({
+  viewWorktrees: { current: new Map<string, { id: string; path: string }>() },
+  isWindowsMock: vi.fn<() => boolean>(),
+}));
+
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStore: () => ({
-    getState: () => ({
-      worktrees: new Map([
-        ["wt-1", { id: "wt-1", path: "/projects/repo-worktrees/feature-auth" }],
-        ["wt-2", { id: "wt-2", path: "/projects/repo-worktrees/main" }],
-      ]),
-    }),
+    getState: () => ({ worktrees: viewWorktrees.current }),
   }),
 }));
+
+vi.mock("@/hooks/useHostPlatform", () => ({ isHostWindows: isWindowsMock }));
 
 const mockSelectWorktree = vi.fn();
 vi.mock("@/store/worktreeStore", () => ({
@@ -23,6 +30,8 @@ vi.mock("@/store/worktreeStore", () => ({
 
 beforeEach(() => {
   mockSelectWorktree.mockClear();
+  viewWorktrees.current = POSIX_WORKTREES;
+  isWindowsMock.mockReturnValue(false);
 });
 
 describe("mapCreationError", () => {
@@ -56,6 +65,48 @@ describe("mapCreationError", () => {
     const result = mapCreationError(raw, onClose);
 
     result.recovery!.onAction();
+
+    expect(mockSelectWorktree).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("recognises git 2.42+'s 'already used by worktree' wording", () => {
+    const raw =
+      "fatal: 'feature/auth' is already used by worktree at '/projects/repo-worktrees/feature-auth'";
+    const onClose = vi.fn();
+    const result = mapCreationError(raw, onClose);
+
+    expect(result.friendly).toBe("This branch is already open in another worktree.");
+    result.recovery!.onAction();
+    expect(mockSelectWorktree).toHaveBeenCalledWith("wt-1");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("on Windows, matches git's forward-slash path to the stored backslash path in any case", () => {
+    isWindowsMock.mockReturnValue(true);
+    viewWorktrees.current = new Map([
+      ["wt-main", { id: "wt-main", path: "C:\\dev\\projects\\hello-app" }],
+      [
+        "wt-feature",
+        { id: "wt-feature", path: "C:\\dev\\projects\\hello-app-worktrees\\feature-x" },
+      ],
+    ]);
+    const raw =
+      "fatal: 'feature-x' is already used by worktree at 'c:/dev/projects/hello-app-worktrees/Feature-X'";
+    const onClose = vi.fn();
+
+    mapCreationError(raw, onClose).recovery!.onAction();
+
+    expect(mockSelectWorktree).toHaveBeenCalledWith("wt-feature");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("on POSIX, does not treat a case-variant path as the same worktree", () => {
+    const raw =
+      "fatal: 'feature/auth' is already used by worktree at '/projects/repo-worktrees/Feature-Auth'";
+    const onClose = vi.fn();
+
+    mapCreationError(raw, onClose).recovery!.onAction();
 
     expect(mockSelectWorktree).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();

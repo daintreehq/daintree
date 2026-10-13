@@ -2534,7 +2534,13 @@ describe("when-clause context provider", () => {
   it("lets Canopy's key go past it, unconsumed, while Canopy is hidden", () => {
     setPlatform("MacIntel");
     const service = new KeybindingService();
-    const event = createKeyboardEvent({ key: "e", code: "KeyE", metaKey: true });
+    // DEFAULT_KEYBINDINGS is built for the host at import, so on a Windows or
+    // Linux machine Canopy's key is the Ctrl+Shift+O replacement, not Cmd+E.
+    const combo = DEFAULT_KEYBINDINGS.find((b) => b.actionId === "canopy.toggle")?.combo;
+    const event =
+      combo === "Cmd+E"
+        ? createKeyboardEvent({ key: "e", code: "KeyE", metaKey: true })
+        : createKeyboardEvent({ key: "O", code: "KeyO", ctrlKey: true, shiftKey: true });
 
     service.setWhenContextProvider(() => ({ canopyHidden: false }));
     expect(service.resolveKeybinding(event).match?.actionId).toBe("canopy.toggle");

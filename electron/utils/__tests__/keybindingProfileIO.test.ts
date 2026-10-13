@@ -53,6 +53,12 @@ describe("importProfile", () => {
     expect(result.overrides["terminal.new"]).toEqual(["Cmd+T"]);
   });
 
+  it("parses a profile saved with a UTF-8 BOM", () => {
+    const result = importProfile("﻿" + makeProfileJson({ "terminal.new": ["Cmd+T"] }));
+    expect(result.ok).toBe(true);
+    expect(result.overrides["terminal.new"]).toEqual(["Cmd+T"]);
+  });
+
   it("accepts unknown action IDs for plugin extensibility", () => {
     const result = importProfile(
       makeProfileJson({

@@ -206,7 +206,7 @@ describe("getDefaultWslDistro", () => {
 
     expect(execFileMock).toHaveBeenCalledOnce();
     const [file, args, opts] = execFileMock.mock.calls[0];
-    expect(file).toBe("wsl.exe");
+    expect(file).toMatch(/^[A-Za-z]:\\.*\\System32\\wsl\.exe$/i);
     expect(args).toEqual(["--list", "--verbose"]);
     // These options are load-bearing: `encoding: "buffer"` is what lets the
     // UTF-16LE heuristic run; without it Node decodes stdout as UTF-8 and the

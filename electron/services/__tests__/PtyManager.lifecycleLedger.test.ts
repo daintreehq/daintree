@@ -115,6 +115,11 @@ class MockTerminalProcess {
     return this.info;
   }
 
+  // Windows reads it to hold the tree-kill helper warm while PTYs are live.
+  getPublicState() {
+    return { hasPty: !this.info.wasKilled && !this.info.isExited };
+  }
+
   shouldPreserveOnExit(): boolean {
     return false;
   }

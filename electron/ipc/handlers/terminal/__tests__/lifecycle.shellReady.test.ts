@@ -1,3 +1,12 @@
+// Unit IPC fixtures don't install CLIs; real Windows argv coverage lives in utils.
+vi.mock("../../../../utils/windowsCliSpawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../utils/windowsCliSpawn.js")>()),
+  resolveWindowsCliTarget: async () => ({
+    kind: "direct",
+    command: "C:\\test\\agent.exe",
+    args: [],
+  }),
+}));
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 
@@ -27,7 +36,8 @@ vi.mock("../../../../services/ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../../../../services/pty/terminalShell.js", () => ({
+vi.mock("../../../../services/pty/terminalShell.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../services/pty/terminalShell.js")>()),
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 
@@ -224,7 +234,7 @@ describe("agent command launch", () => {
     expect(ptyClient.listenerCount("exit")).toBe(0);
   });
 
-  it("Windows agent terminal carries the command as postSpawnInput, not an inline write", async () => {
+  it("Windows agent startup preserves literal argv and the persisted command", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -239,10 +249,14 @@ describe("agent command launch", () => {
       command: "claude",
     });
 
-    // The command rides postSpawnInput so PtyClient owns the write and re-injects
-    // it on crash replay (#11339); the handler no longer writes it directly.
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.postSpawnInput).toBe("claude\r");
+    expect(spawnArgs.shell).toMatch(/powershell\.exe$/i);
+    expect(spawnArgs.args.slice(0, 3)).toEqual(["-NoLogo", "-NoExit", "-EncodedCommand"]);
+    const script = Buffer.from(spawnArgs.args[3], "base64").toString("utf16le");
+    expect(script).toContain("[System.Diagnostics.Process]::Start($start)");
+    expect(script).toContain("$start.FileName = 'C:\\test\\agent.exe'");
+    expect(spawnArgs.command).toBe("claude");
+    expect(spawnArgs.postSpawnInput).toBeUndefined();
     expect(ptyClient.write).not.toHaveBeenCalled();
   });
 

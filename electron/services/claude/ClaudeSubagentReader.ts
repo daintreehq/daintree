@@ -99,18 +99,21 @@ export function resolveClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): st
 }
 
 /**
- * Claude Code keys a project directory off the cwd. Every observed name is the
- * absolute path with the separators replaced by dashes, and literal dashes in a
- * path segment survive untouched.
+ * Claude Code keys a project directory off the cwd: every character that is not
+ * an ASCII letter or digit becomes a dash. Separators, dots (`.claude` →
+ * `-claude`), spaces, underscores and a Windows drive colon all go the same way,
+ * so `C:\Users\me\app` is `C--Users-me-app`. Replacing only the separators kept
+ * the colon, which named no directory Claude ever writes on Windows, and missed
+ * every path with a dot in it.
  *
- * This is a guess with a good hit rate, not a contract — the algorithm is
- * undocumented, and no sampled path exercised a dot, a space, or a Windows
- * drive letter. So it is only ever the fast path: `findSessionDir` verifies the
- * directory exists and falls back to a search keyed on the session id, which is
- * exact. Nothing downstream depends on this being right.
+ * Still a guess, not a contract — the algorithm is undocumented, and Claude
+ * shortens very long names with a hash this does not reproduce. So it is only
+ * ever the fast path: every caller verifies the directory exists and falls back
+ * to a search keyed on the session id, which is exact. Nothing downstream
+ * depends on this being right.
  */
 export function deriveProjectSlug(cwd: string): string {
-  return cwd.replace(/[\\/]/g, "-");
+  return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
 /**

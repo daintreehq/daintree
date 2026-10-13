@@ -11,6 +11,7 @@ import {
   MCP_EXTERNAL_TIER_TOOLS,
 } from "@shared/config/mcpExternalTierAllowlist";
 import { omitWireSchemaArgs, toWireSchema } from "@shared/utils/mcpWireSchema";
+import { isRemoteShellSupported } from "@/lib/remoteHosts";
 
 /**
  * Measurement of the bytes an MCP client is actually sent, built from the live
@@ -59,7 +60,7 @@ function noopCallbacks(): ActionCallbacks {
   } as unknown as ActionCallbacks;
 }
 
-export async function createActionRegistry(): Promise<ActionRegistry> {
+async function withRendererSelf<T>(load: () => Promise<T>): Promise<T> {
   // `actionDefinitions` reaches for `self` at module scope; the node test
   // environment has no window to supply it. Restored afterwards because vitest
   // reuses fork workers across files, and a leaked global is exactly the kind of
@@ -69,12 +70,53 @@ export async function createActionRegistry(): Promise<ActionRegistry> {
   const previousSelf = globals.self;
   globals.self = globalThis;
   try {
-    const { createActionDefinitions } = await import("../../actionDefinitions");
-    return createActionDefinitions(noopCallbacks(), new Map());
+    return await load();
   } finally {
     if (hadSelf) globals.self = previousSelf;
     else delete globals.self;
   }
+}
+
+export async function createActionRegistry(): Promise<ActionRegistry> {
+  return withRendererSelf(async () => {
+    const { createActionDefinitions } = await import("../../actionDefinitions");
+    return createActionDefinitions(noopCallbacks(), new Map());
+  });
+}
+
+/**
+ * The Remote Hosts actions, which `createActionDefinitions` registers only
+ * where this machine can drive other hosts: never on Windows (see
+ * shared/config/remoteHostsSupport.ts). Registered through the same calls, so
+ * nothing here restates which ids they are.
+ */
+async function registerRemoteShellActions(registry: ActionRegistry): Promise<void> {
+  await withRendererSelf(async () => {
+    const [{ registerHostActions }, { registerPortActions }] = await Promise.all([
+      import("../../definitions/hostActions"),
+      import("../../definitions/portActions"),
+    ]);
+    registerHostActions(registry, noopCallbacks());
+    registerPortActions(registry, noopCallbacks());
+  });
+}
+
+/** The ids this platform's registry leaves out by design: none on macOS and Linux. */
+export async function actionIdsAbsentOnThisPlatform(): Promise<ReadonlySet<string>> {
+  if (isRemoteShellSupported()) return new Set();
+  const remote: ActionRegistry = new Map();
+  await registerRemoteShellActions(remote);
+  return new Set(remote.keys());
+}
+
+/**
+ * The registry as a platform with Remote Hosts builds it, which is what the
+ * checked-in docs describe whichever platform the suite runs on.
+ */
+export async function createActionRegistryWithRemoteHosts(): Promise<ActionRegistry> {
+  const registry = await createActionRegistry();
+  if (!isRemoteShellSupported()) await registerRemoteShellActions(registry);
+  return registry;
 }
 
 /** The exact conversion `ActionService.computeSchemas` performs. */
@@ -171,6 +213,9 @@ const bytes = (value: unknown): number =>
  */
 export async function measureWireSurface(): Promise<WireTool[]> {
   const registry = await createActionRegistry();
+  // A platform without Remote Hosts registers none of its tools, so an MCP
+  // client there is never sent them: nothing to measure, and no broken tier.
+  const absentHere = await actionIdsAbsentOnThisPlatform();
   const external = new Set<string>(MCP_EXTERNAL_TIER_TOOLS);
   const inApp = [...CORE_TIER_TOOLS, ...FULL_TIER_ADDONS];
   const cohort = new Set<string>([
@@ -184,7 +229,7 @@ export async function measureWireSurface(): Promise<WireTool[]> {
   for (const id of [...cohort].sort()) {
     const def = registry.get(id as ActionId)?.();
     if (!def) {
-      missing.push(id);
+      if (!absentHere.has(id)) missing.push(id);
       continue;
     }
 

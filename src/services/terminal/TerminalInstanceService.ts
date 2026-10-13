@@ -1,5 +1,6 @@
 import { Terminal, IBufferRange } from "@xterm/xterm";
 import { isMac } from "@/lib/platform";
+import { isHostWindows } from "@/hooks/useHostPlatform";
 import {
   isProjectViewCached,
   isProjectViewObservable,
@@ -56,6 +57,10 @@ import { TerminalOutputRecovery } from "./TerminalOutputRecovery";
 import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
 import { TerminalBurstController } from "./TerminalBurstController";
+import {
+  RECOVERY_NOTICE_MESSAGE,
+  TerminalRecoveryNoticeController,
+} from "./TerminalRecoveryNoticeController";
 import {
   TerminalResizePassScheduler,
   type BatchResizeOptions,
@@ -222,6 +227,12 @@ class TerminalInstanceService {
   private writeController: TerminalWriteController;
   private settleWaiters: TerminalSettleWaiterRegistry;
   private burstController: TerminalBurstController;
+  private recoveryNotices = new TerminalRecoveryNoticeController({
+    getInstance: (id) => this.instances.get(id),
+    hasUnparsedOutput: (id, managed) =>
+      this.dataBuffer.getQueuedBytes(id) > 0 || (managed.pendingWrites ?? 0) > 0,
+    writeLocal,
+  });
   private resizePassScheduler: TerminalResizePassScheduler;
   private workerIngestController: TerminalWorkerIngestController;
   private revealController: TerminalRevealController;
@@ -907,6 +918,7 @@ class TerminalInstanceService {
     range?: StreamRange,
     ackGeneration?: number
   ): void {
+    this.recoveryNotices.noteOutput(id, data);
     if (ackGeneration !== undefined)
       this.writeController.write(id, data, chunkCount, range, ackGeneration);
     else if (range) this.writeController.write(id, data, chunkCount, range);
@@ -1178,6 +1190,9 @@ class TerminalInstanceService {
    * would be misread in.
    */
   handleBackendCrash(): void {
+    // A notice still waiting on the host that just died would announce a
+    // reconnection that hasn't happened; the next recovery schedules afresh.
+    this.recoveryNotices.cancelAll();
     this.instances.forEach((managed) => this.clearPtyGeometryEcho(managed));
   }
 
@@ -3601,18 +3616,32 @@ class TerminalInstanceService {
   }
 
   handleBackendRecovery(): void {
+    // ConPTY repaints the whole viewport on a new console's first frame, which
+    // would erase a notice written now (W-032). The host's platform, not this
+    // window's, decides whether the respawned PTYs are ConPTY.
+    const deferNotice = isHostWindows();
     this.instances.forEach((managed, id) => {
       // A restarted host numbers its streams from scratch, so a fence from the
       // old one would swallow the new host's first output.
       managed.streamFence = undefined;
       try {
+        // Fine under ConPTY too: Main announces the restart before it replays
+        // the spawns, so this lands ahead of the new console's first frame, and
+        // xterm's soft reset leaves the cursor where it is.
         writeLocal(managed, "\x1b[!p");
 
+        // Ahead of the notice on purpose: under ConPTY the resize this forces
+        // can repaint the console, so it belongs inside the burst the deferred
+        // notice waits out rather than after it.
         this.resizeController.invalidatePtyGrid(id);
         this.resetRenderer(id);
 
         const timestamp = new Date().toLocaleTimeString();
-        writeLocal(managed, `\r\n\x1b[33m[${timestamp}] Terminal backend reconnected\x1b[0m\r\n`);
+        if (deferNotice) {
+          this.recoveryNotices.schedule(id, managed, timestamp);
+        } else {
+          writeLocal(managed, `\r\n\x1b[33m[${timestamp}] ${RECOVERY_NOTICE_MESSAGE}\x1b[0m\r\n`);
+        }
       } catch (error) {
         logError(`Failed to recover terminal ${id}`, error);
       }
@@ -3889,6 +3918,7 @@ class TerminalInstanceService {
     this.restoreController.destroy(id);
     this.burstController.destroy(id);
     this.writeController.forget(id);
+    this.recoveryNotices.cancel(id);
 
     managed.scrollbackRestoreState = "none";
 

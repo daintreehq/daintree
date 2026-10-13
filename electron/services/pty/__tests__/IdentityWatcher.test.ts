@@ -4,6 +4,7 @@ import {
   FOREGROUND_PROBE_KEEPWARM_MS,
   FOREGROUND_PROBE_REFUTATION_MS,
   SHELL_IDENTITY_FALLBACK_POLL_MS,
+  AGENT_INPUT_GRACE_MS,
   IdentityWatcher,
   type IdentityWatcherDelegate,
 } from "../IdentityWatcher.js";
@@ -628,6 +629,37 @@ describe("IdentityWatcher", () => {
       watcher.dispose();
     });
 
+    it("presumes an unconfirmed agent owns the input only for the grace period", async () => {
+      const { delegate } = createFakeDelegate({
+        processDetector: null,
+        visibleLines: ["codex", "loading"],
+        cursorLine: "loading",
+        ptyDescendantCount: 0,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      expect(watcher.agentOwnsInput).toBe(true);
+      await vi.advanceTimersByTimeAsync(AGENT_INPUT_GRACE_MS + 1);
+      expect(watcher.agentOwnsInput).toBe(false);
+      watcher.dispose();
+    });
+
+    it("keeps owning the input past the grace period while the agent has a live child", async () => {
+      const { delegate } = createFakeDelegate({
+        processDetector: null,
+        visibleLines: ["codex", "loading"],
+        cursorLine: "loading",
+        ptyDescendantCount: 2,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(AGENT_INPUT_GRACE_MS + 1);
+      expect(watcher.agentOwnsInput).toBe(true);
+      watcher.dispose();
+    });
+
     it("calls processDetector.clearShellCommandEvidence('prompt-return') on demotion", async () => {
       const inject = vi.fn();
       const clear = vi.fn();
@@ -685,6 +717,97 @@ describe("IdentityWatcher", () => {
 
       expect(clear).toHaveBeenCalledWith("prompt-return");
       expect(state.detectionCalls).toHaveLength(0);
+    });
+
+    it.each([
+      ["a bare cmd.exe prompt", "C:\\dev\\project>"],
+      ["a cmd.exe prompt holding a stray ^C echo", "C:\\dev\\project>^C"],
+    ])(
+      "clears agent evidence when %s returns with the Windows descendant count unavailable",
+      async (_label, prompt) => {
+        const clear = vi.fn();
+        const fakeDetector = {
+          injectShellCommandEvidence: vi.fn(),
+          clearShellCommandEvidence: clear,
+        } as unknown as ProcessDetector;
+        const { delegate, state } = createFakeDelegate({
+          processDetector: fakeDetector,
+          visibleLines: ["C:\\dev\\project>codex", "Welcome to Claude Code"],
+          cursorLine: "Welcome to Claude Code",
+          ptyDescendantCount: undefined,
+          foreground: null,
+        });
+        const watcher = new IdentityWatcher(delegate);
+
+        watcher.onShellSubmit("codex");
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(watcher.isFallbackCommitted).toBe(true);
+
+        state.visibleLines = ["C:\\dev\\project>codex", prompt];
+        state.cursorLine = prompt;
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(clear).toHaveBeenCalledWith("prompt-return");
+        watcher.dispose();
+      }
+    );
+
+    it.each([
+      ["a second colon", "C:\\dev\\a:b>"],
+      ["a control character", "C:\\dev\\\u0007repo>"],
+      ["text after the >", "C:\\dev\\project>npm test"],
+    ])("does not take a cmd-shaped line with %s for a returned prompt", async (_label, line) => {
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: vi.fn(),
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate, state } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["C:\\dev\\project>codex", "Welcome to Claude Code"],
+        cursorLine: "Welcome to Claude Code",
+        ptyDescendantCount: undefined,
+        foreground: null,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.visibleLines = ["Welcome to Claude Code", line];
+      state.cursorLine = line;
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("does not read an echoed cmd.exe command line as a returned prompt", async () => {
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: vi.fn(),
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate, state } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["C:\\dev\\project>codex", "OpenAI Codex"],
+        cursorLine: "OpenAI Codex",
+        ptyDescendantCount: 2,
+      });
+      const watcher = new IdentityWatcher(delegate);
+
+      watcher.onShellSubmit("codex");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+
+      state.visibleLines = ["OpenAI Codex", "C:\\dev\\project>npm test"];
+      state.cursorLine = "C:\\dev\\project>npm test";
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(clear).not.toHaveBeenCalled();
+      expect(watcher.isFallbackCommitted).toBe(true);
+      watcher.dispose();
     });
 
     it("clears shell evidence when a real shell prompt returns after stale agent UI text", async () => {

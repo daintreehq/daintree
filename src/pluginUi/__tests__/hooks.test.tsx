@@ -36,7 +36,7 @@ import { VIEW_STATE_KEY_PREFIX } from "../viewState";
 beforeAll(async () => {
   // useHotkeys reads the host's bindings through the kit, and stays out until it is in.
   await whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(() => {
   cleanup();

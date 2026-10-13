@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
 import { useState } from "react";
 import type { BranchInfo } from "@/types/electron";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -797,6 +798,95 @@ describe("NewWorktreeDialog — pending creation wiring", () => {
       "/test/root-worktrees/feature/test",
       expect.stringContaining("permission denied")
     );
+  });
+
+  describe("on a Windows host", () => {
+    beforeEach(() => {
+      _resetHostPlatformForTests();
+      setHostPlatformInfo({ platform: "win32" });
+    });
+
+    afterEach(() => {
+      _resetHostPlatformForTests();
+    });
+
+    async function submitWithPath(path: string): Promise<void> {
+      mockGetDefaultPath.mockResolvedValue(path);
+      renderDialog();
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.change(screen.getByTestId("branch-name-input"), {
+          target: { value: "feature/test" },
+        });
+      });
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("create-worktree-button"));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    it.each([
+      ["a forward-slash drive path", "C:/dev/projects/app-worktrees/feature-test"],
+      ["a backslash drive path", "C:\\dev\\projects\\app-worktrees\\feature-test"],
+      ["a UNC path", "\\\\server\\share\\app-worktrees\\feature-test"],
+    ])("anchors the Creating… row and its failure on %s", async (_label, path) => {
+      mockDispatch.mockResolvedValue({ ok: false, error: { message: "already exists" } });
+
+      await submitWithPath(path);
+
+      expect(mockAddPendingCreation).toHaveBeenCalledWith(
+        path,
+        expect.objectContaining({ branch: "feature/test" })
+      );
+      expect(mockFailPendingCreation).toHaveBeenCalledWith(
+        path,
+        expect.stringContaining("already exists")
+      );
+      expect(mockNotify).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't create worktree" })
+      );
+    });
+
+    it("falls back to a toast for a drive-relative path the host resolves itself", async () => {
+      mockDispatch.mockResolvedValue({ ok: false, error: { message: "already exists" } });
+
+      await submitWithPath("\\dev\\app-worktrees\\feature-test");
+
+      expect(mockAddPendingCreation).not.toHaveBeenCalled();
+      expect(mockNotify).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't create worktree" })
+      );
+    });
+  });
+
+  it("does not take a drive-letter path as absolute on a POSIX host", async () => {
+    _resetHostPlatformForTests();
+    setHostPlatformInfo({ platform: "linux" });
+    mockGetDefaultPath.mockResolvedValue("C:/dev/app-worktrees/feature-test");
+    mockDispatch.mockResolvedValue({ ok: false, error: { message: "boom" } });
+    try {
+      renderDialog();
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.change(screen.getByTestId("branch-name-input"), {
+          target: { value: "feature/test" },
+        });
+      });
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("create-worktree-button"));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(mockAddPendingCreation).not.toHaveBeenCalled();
+    } finally {
+      _resetHostPlatformForTests();
+    }
   });
 });
 

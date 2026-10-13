@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 import yauzl from "yauzl";
 import { getPluginManifestSchema } from "../schemas/plugin.js";
 import { MAX_DNTR_BYTES } from "../utils/pluginArchiveConstants.js";
+import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import type { PluginManifest } from "../../shared/types/plugin.js";
 
 export const ZIP_EPOCH_DATE = new Date("1980-01-01T00:00:00Z");
@@ -396,7 +397,7 @@ export async function readArchiveManifest(archivePath: string): Promise<PluginMa
           zipfile.close();
           let json: unknown;
           try {
-            json = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+            json = JSON.parse(stripUtf8Bom(Buffer.concat(chunks).toString("utf-8")));
           } catch {
             return reject(new Error("plugin.json is not valid JSON"));
           }
@@ -857,7 +858,7 @@ export async function verifyPluginArchive(archivePath: string): Promise<VerifyRe
           stream.on("end", () => {
             let json: unknown;
             try {
-              json = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+              json = JSON.parse(stripUtf8Bom(Buffer.concat(chunks).toString("utf-8")));
             } catch {
               settled = true;
               zipfile.close();

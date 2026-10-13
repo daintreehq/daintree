@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@shared/types/panel";
 import type { FleetScopeToken } from "@shared/types/worktree";
 import type { Issue, PR } from "@shared/types/forge";
@@ -159,6 +159,7 @@ vi.mock("@/store/panelStore", () => ({
 
 import { useWorktreeSelectionStore } from "../worktreeStore";
 import { setFleetArmedIdsAccessor, setFleetLastArmedIdAccessor } from "../storeAccessors";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 let armedIdsForFleet = new Set<string>();
 setFleetArmedIdsAccessor(() => armedIdsForFleet);
@@ -694,6 +695,73 @@ describe("worktreeStore", () => {
       useWorktreeSelectionStore.getState().addPendingCreation("/abs/b", { branch: "feature/b" });
       useWorktreeSelectionStore.getState().reset();
       expect(useWorktreeSelectionStore.getState().pendingCreations.size).toBe(0);
+    });
+
+    describe("on a Windows host", () => {
+      beforeEach(() => {
+        _resetHostPlatformForTests();
+        setHostPlatformInfo({ platform: "win32" });
+      });
+
+      afterEach(() => {
+        _resetHostPlatformForTests();
+      });
+
+      // The dialog keys the row by the typed path; the host reports the realpath.
+      const typed = "c:/dev/app-worktrees/feature-x";
+      const reported = "C:\\Dev\\app-worktrees\\feature-x";
+
+      it("resolves the row when the host reports backslashes and different case", () => {
+        const store = useWorktreeSelectionStore.getState();
+        store.addPendingCreation(typed, { branch: "feature-x" });
+        store.resolvePendingCreation("C:\\dev\\app-worktrees\\other");
+        expect(useWorktreeSelectionStore.getState().pendingCreations.has(typed)).toBe(true);
+
+        useWorktreeSelectionStore.getState().resolvePendingCreation(reported);
+        expect(useWorktreeSelectionStore.getState().pendingCreations.size).toBe(0);
+      });
+
+      it("fails and dismisses the row by either spelling", () => {
+        const store = useWorktreeSelectionStore.getState();
+        store.addPendingCreation(typed, { branch: "feature-x" });
+        store.failPendingCreation(reported, "already exists");
+        const entry = useWorktreeSelectionStore.getState().pendingCreations.get(typed);
+        expect(entry?.status).toBe("error");
+        expect(entry?.error).toBe("already exists");
+
+        useWorktreeSelectionStore.getState().dismissPendingCreation(reported);
+        expect(useWorktreeSelectionStore.getState().pendingCreations.size).toBe(0);
+      });
+
+      it("a retry spelled differently replaces the failed row instead of adding a second", () => {
+        const store = useWorktreeSelectionStore.getState();
+        store.addPendingCreation(typed, { branch: "feature-x" });
+        store.failPendingCreation(typed, "boom");
+        useWorktreeSelectionStore.getState().addPendingCreation(reported, { branch: "feature-x" });
+
+        const { pendingCreations } = useWorktreeSelectionStore.getState();
+        expect([...pendingCreations.keys()]).toEqual([reported]);
+        expect(pendingCreations.get(reported)?.status).toBe("creating");
+      });
+    });
+
+    it("matches only the exact spelling on a POSIX host", () => {
+      _resetHostPlatformForTests();
+      setHostPlatformInfo({ platform: "linux" });
+      try {
+        const store = useWorktreeSelectionStore.getState();
+        store.addPendingCreation("/home/dev/App-worktrees/x", { branch: "x" });
+        store.resolvePendingCreation("/home/dev/app-worktrees/x");
+        expect(useWorktreeSelectionStore.getState().pendingCreations.size).toBe(1);
+
+        useWorktreeSelectionStore.getState().resolvePendingCreation("/home/dev/App-worktrees/x/");
+        expect(useWorktreeSelectionStore.getState().pendingCreations.size).toBe(1);
+
+        useWorktreeSelectionStore.getState().resolvePendingCreation("/home/dev/App-worktrees/x");
+        expect(useWorktreeSelectionStore.getState().pendingCreations.size).toBe(0);
+      } finally {
+        _resetHostPlatformForTests();
+      }
     });
   });
 

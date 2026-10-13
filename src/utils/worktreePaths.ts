@@ -1,8 +1,13 @@
+import { isHostWindows } from "@/hooks/useHostPlatform";
+
 // Normalizes separators (backslash → forward slash) and trims trailing slashes
 // so cwd and worktree paths compare apples-to-apples on Windows, where node-pty
-// returns backslashes but simple-git returns forward slashes.
-function normalizeForComparison(p: string): string {
-  return p.replace(/\\/g, "/").replace(/\/+$/, "");
+// returns backslashes but simple-git returns forward slashes. A Windows host
+// also compares case-insensitively (`c:\repo` and `C:\Repo` are one directory);
+// elsewhere case is significant.
+function normalizeForComparison(p: string, caseInsensitive: boolean): string {
+  const normalized = p.replace(/\\/g, "/").replace(/\/+$/, "");
+  return caseInsensitive ? normalized.toLowerCase() : normalized;
 }
 
 /**
@@ -16,11 +21,12 @@ export function inferWorktreeIdFromCwd(
   worktrees: ReadonlyArray<{ id: string; path: string }> | undefined
 ): string | undefined {
   if (!cwd || !worktrees || worktrees.length === 0) return undefined;
-  const normalizedCwd = normalizeForComparison(cwd);
+  const caseInsensitive = isHostWindows();
+  const normalizedCwd = normalizeForComparison(cwd, caseInsensitive);
   let best: { id: string; normalizedLength: number } | undefined;
   for (const wt of worktrees) {
     if (!wt.path) continue;
-    const normalizedWtPath = normalizeForComparison(wt.path);
+    const normalizedWtPath = normalizeForComparison(wt.path, caseInsensitive);
     if (normalizedCwd === normalizedWtPath || normalizedCwd.startsWith(normalizedWtPath + "/")) {
       if (!best || normalizedWtPath.length > best.normalizedLength) {
         best = { id: wt.id, normalizedLength: normalizedWtPath.length };

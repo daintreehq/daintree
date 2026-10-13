@@ -467,13 +467,17 @@ describe("markdown-editor main (#12323)", () => {
     it("a wake re-hashes open documents and announces the ones that moved", async () => {
       await fs.writeFile(identity.filePath, "# Plan\n");
       await call(CHANNELS.read, { identity, panelId: "a" });
+      // Waited on the re-hash's own read rather than a clock, which a loaded
+      // machine can outrun: it has to land before the file moves.
+      const reads = vi.spyOn(fake.host.fs, "readFileBytes");
       fake.wake?.();
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(1));
+      await reads.mock.results[0]!.value;
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(fake.pushes).toEqual([]);
       await fs.writeFile(identity.filePath, "# Plan changed\n");
       fake.wake?.();
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(fake.pushes).toHaveLength(1);
+      await vi.waitFor(() => expect(fake.pushes).toHaveLength(1));
     });
   });
 

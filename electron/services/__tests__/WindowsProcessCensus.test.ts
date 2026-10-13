@@ -142,7 +142,8 @@ describe("WindowsProcessCensus", () => {
         string[],
         { windowsHide?: boolean; shell?: boolean },
       ];
-      expect(file.toLowerCase()).toContain("powershell");
+      // By absolute path, so no same-named file in a working directory can stand in.
+      expect(file).toMatch(/^[A-Za-z]:\\.*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i);
       expect(args).toContain("-NoProfile");
       expect(args).toContain("-NonInteractive");
       expect(args).toContain("-Command");

@@ -15,6 +15,17 @@ vi.mock("child_process", () => ({
   execFile: execFileMock,
 }));
 
+/** Where git resolves on a Windows host; the host's real PATH is never searched. */
+const { WINDOWS_GIT } = vi.hoisted(() => ({ WINDOWS_GIT: "C:\\Program Files\\Git\\cmd\\git.exe" }));
+
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsExecutable.js")>()),
+  resolveExecutableForSpawn: vi.fn(
+    async (name: string, _env?: unknown, platform: NodeJS.Platform = process.platform) =>
+      platform === "win32" ? WINDOWS_GIT : name
+  ),
+}));
+
 // WorkspaceService's module initialization pulls in a lot of modules that
 // touch Electron. Stub the heavy dependencies before importing so the probe
 // function can be exercised in isolation.
@@ -49,6 +60,13 @@ vi.mock("../../services/projectStorePaths.js", () => ({
 }));
 
 import { probeGitLfsAvailable } from "../WorkspaceService.js";
+import {
+  resolveExecutableForSpawn,
+  windowsExecutableNotFound,
+} from "../../utils/windowsExecutable.js";
+
+/** What the probe starts: the PATH lookup's absolute path on Windows, bare git elsewhere. */
+const GIT = process.platform === "win32" ? WINDOWS_GIT : "git";
 
 type ExecFileCallback = (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void;
 
@@ -73,7 +91,7 @@ describe("probeGitLfsAvailable", () => {
 
     await expect(probeGitLfsAvailable()).resolves.toBe(true);
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      GIT,
       ["lfs", "version"],
       expect.objectContaining({
         timeout: 3000,
@@ -91,6 +109,26 @@ describe("probeGitLfsAvailable", () => {
     });
 
     await expect(probeGitLfsAvailable()).resolves.toBe(false);
+  });
+
+  it("starts git on Windows by the absolute path its PATH lookup found", async () => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      mockExecFile((cb) => cb(null, "git-lfs/3.4.0 (GitHub; windows amd64; go 1.22.0)\n", ""));
+      await expect(probeGitLfsAvailable()).resolves.toBe(true);
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
+    expect(execFileMock.mock.calls.at(-1)?.slice(0, 2)).toEqual([WINDOWS_GIT, ["lfs", "version"]]);
+  });
+
+  it("returns false without running anything when the Windows PATH lookup finds no git", async () => {
+    vi.mocked(resolveExecutableForSpawn).mockRejectedValueOnce(windowsExecutableNotFound("git"));
+    execFileMock.mockClear();
+
+    await expect(probeGitLfsAvailable()).resolves.toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   it("returns false when `git lfs` subcommand is not installed (non-zero exit)", async () => {

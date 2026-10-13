@@ -34,6 +34,8 @@ import {
   isTerminalClipboardCopyKey,
   isTerminalClipboardPasteKey,
   isTuiReservedKey,
+  isWindowsTerminalCopyKey,
+  isWindowsTerminalPasteKey,
 } from "@/services/terminalReservedKeys";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import {
@@ -552,6 +554,42 @@ export function XtermAdapter({
               }
               return false;
             }
+          }
+
+          // Windows conventions: Ctrl+V pastes and Ctrl+C copies a selection.
+          // Ctrl+V sent to the PTY did nothing visible — bash took it as
+          // "literal next", agent CLIs ignored it. With no text on the
+          // clipboard (an image, say) the PTY still gets ^V, so an agent that
+          // pastes images on Ctrl+V keeps doing so.
+          if (isWindowsTerminalPasteKey(event) && !keybindingService.getPendingChord()) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!managed.isInputLocked) {
+              void navigator.clipboard
+                .readText()
+                .catch(() => "")
+                .then((text) => {
+                  if (managed.isInputLocked) return;
+                  if (text) {
+                    managed.terminal.paste(text);
+                    return;
+                  }
+                  const literalNext = "\x16";
+                  writeTerminalInputOrFleet(terminalId, literalNext);
+                  terminalInstanceService.notifyUserInput(terminalId);
+                  stableOnInput(literalNext);
+                });
+            }
+            return false;
+          }
+          if (isWindowsTerminalCopyKey(event) && managed.terminal.hasSelection()) {
+            event.preventDefault();
+            event.stopPropagation();
+            navigator.clipboard.writeText(managed.terminal.getSelection()).catch((error) => {
+              logError("[XtermClipboard] Copy failed", error);
+            });
+            managed.terminal.clearSelection();
+            return false;
           }
 
           // Allow critical Ctrl+<key> bindings to reach the TUI before checking global shortcuts

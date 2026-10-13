@@ -27,6 +27,9 @@ export const FOREGROUND_PROBE_REFUTATION_MS = 5_000;
 export const SHELL_IDENTITY_FALLBACK_PROMPT_POLLS = 2;
 export const SHELL_IDENTITY_FALLBACK_SCAN_LINES = 4;
 export const SHELL_INPUT_BUFFER_MAX = 4096;
+// How long an agent command is presumed to own the terminal's input before
+// detection or a live child confirms it is running.
+export const AGENT_INPUT_GRACE_MS = 10_000;
 
 const SINGLE_CHAR_SHELL_PROMPT_PATTERN = /^\s*[>›❯⟩$#%]\s*$/;
 const SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN = /^\s*[$#%]\s*$/;
@@ -43,6 +46,12 @@ const DECORATED_SHELL_PROMPT_PATTERN = /^\s*[➜➤➟➔❯›]\s+.*$/;
 const DECORATED_SHELL_PROMPT_PATTERN_NO_AGENT_GLYPHS = /^\s*[➜➤➟➔]\s+.*$/;
 const MAC_BASH_PROMPT_PATTERN = /^\s*\S+:\S+\s+\S+\s*[#$%>]\s*$/;
 const POWERSHELL_PROMPT_PATTERN = /^\s*PS\s+\S.*>\s*$/i;
+// cmd.exe default (`$P$G`) — `C:\repo>`. Only cmd's own `^C` echo may follow
+// the `>` (a Ctrl+C that lands after a TUI agent quit), and the path excludes
+// the characters Windows forbids in one (control characters and a second `:`
+// included), so an echoed batch line (`C:\repo>npm test`) or a redirect in
+// output can't pass for a prompt.
+const CMD_PROMPT_PATTERN = /^\s*[A-Za-z]:\\[^<>:|"*?\p{Cc}]*>(?:\^C)*\s*$/u;
 
 const SHELL_PROMPT_PATTERNS = [
   SINGLE_CHAR_SHELL_PROMPT_PATTERN,
@@ -56,6 +65,7 @@ const SHELL_PROMPT_PATTERNS = [
   MAC_BASH_PROMPT_PATTERN,
   // PowerShell default — `PS C:\repo>` or `PS /home/user>`.
   POWERSHELL_PROMPT_PATTERN,
+  CMD_PROMPT_PATTERN,
 ] as const;
 
 // Same as SHELL_PROMPT_PATTERNS but with the decorated pattern swapped for the
@@ -86,6 +96,7 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
   POSIX_USER_HOST_PROMPT_PATTERN,
   MAC_BASH_PROMPT_PATTERN,
   POWERSHELL_PROMPT_PATTERN,
+  CMD_PROMPT_PATTERN,
 ] as const;
 
 const ACTIVE_AGENT_PROMPT_PATTERN =
@@ -384,6 +395,9 @@ export class IdentityWatcher {
   }
 
   onShellSubmit(commandText?: string, options: { allowWhenAgentDetected?: boolean } = {}): void {
+    // A submission consumes the line typed so far, including a body written by
+    // performSubmit whose Enter is suppressed rather than captured.
+    this.discardCapturedInput();
     if (this.stopped || this.delegate.isExited || this.delegate.wasKilled) {
       return;
     }
@@ -496,6 +510,33 @@ export class IdentityWatcher {
 
   get isFallbackCommitted(): boolean {
     return this.committed;
+  }
+
+  /**
+   * An agent command is running and no shell prompt has ended it, so a typed
+   * line goes to the agent. Detection confirms an agent a second or more after
+   * it starts on Windows (process census); a line typed before then, read as a
+   * new shell command, dropped the agent identity the prompt-return demotion
+   * needs, and the badge outlived the agent.
+   */
+  get agentOwnsInput(): boolean {
+    if (this.stopped || this.submittedAt === null || this.identity?.agentType === undefined) {
+      return false;
+    }
+    // Unconfirmed, it is only presumed for a while: a command that failed or
+    // exited at once under a prompt we don't recognise would otherwise keep
+    // the shell's next commands from ever being read.
+    return (
+      this.delegate.detectedAgentId !== undefined ||
+      (this.delegate.getPtyDescendantCount() ?? 0) > 0 ||
+      Date.now() - this.submittedAt < AGENT_INPUT_GRACE_MS
+    );
+  }
+
+  /** Forget a partly captured line: what was typed went to the agent, not the shell. */
+  discardCapturedInput(): void {
+    this.inputBuffer = "";
+    this.escState = 0;
   }
 
   get seededCommandText(): string | undefined {

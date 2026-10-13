@@ -55,11 +55,17 @@ describe("readCallerLaunchFlags", () => {
 });
 
 describe("appendCallerLaunchFlagsToCommand", () => {
+  it("quotes leading-dash payloads and caller values for PowerShell", () => {
+    expect(
+      appendCallerLaunchFlagsToCommand(
+        "codex",
+        ["--flag=$(Get-Date)", "x’$(Get-Date)‘y", "%HOME%"],
+        "windows"
+      )
+    ).toBe("codex '--flag=$(Get-Date)' 'x’’$(Get-Date)‘‘y' '%HOME%'");
+  });
   it("passes options through and quotes values only when needed", () => {
-    const quotedEffort =
-      process.platform === "win32"
-        ? '"model_reasoning_effort=high"'
-        : "'model_reasoning_effort=high'";
+    const quotedEffort = "'model_reasoning_effort=high'";
     expect(
       appendCallerLaunchFlagsToCommand("codex", ["-c", "model_reasoning_effort=high", "--x"])
     ).toBe(`codex -c ${quotedEffort} --x`);

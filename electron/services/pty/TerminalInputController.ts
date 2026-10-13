@@ -263,8 +263,12 @@ export class TerminalInputController {
     // is still the direct recipient of typed commands, and the next command
     // must still be visible to the fallback detector so a follow-up
     // `pnpm build` can re-identify the badge. #5813
+    const agentOwnsInput = !isSeededLaunchCommandSubmit && identityWatcher.agentOwnsInput;
     const canCaptureShellInput =
-      !bracketedPaste && (terminal.detectedAgentId === undefined || isSeededLaunchCommandSubmit);
+      !bracketedPaste &&
+      !agentOwnsInput &&
+      (terminal.detectedAgentId === undefined || isSeededLaunchCommandSubmit);
+    if (agentOwnsInput) identityWatcher.discardCapturedInput();
     const submittedCommandText = canCaptureShellInput
       ? identityWatcher.captureInput(data)
       : undefined;
@@ -278,6 +282,10 @@ export class TerminalInputController {
     if (!bracketedPaste && /[\r\n]/.test(data)) {
       if (identityWatcher.consumeSuppressSignal()) {
         // Suppression consumed — performSubmit() armed it for its body+enter sequence.
+      } else if (agentOwnsInput) {
+        logIdentityDebug(
+          `[IdentityDebug] shell-submit-skip term=${this.host.id.slice(-8)} reason=agent-running`
+        );
       } else if (isAgentUiPromptResponse) {
         logIdentityDebug(
           `[IdentityDebug] shell-submit-skip term=${this.host.id.slice(-8)} reason=agent-ui-prompt`
@@ -523,7 +531,10 @@ export class TerminalInputController {
     }
 
     identityWatcher.armSuppressSignal();
-    identityWatcher.onShellSubmit(body);
+    // Sent into a running agent, the body is the agent's input, not a new
+    // shell command that would replace the agent's identity.
+    if (identityWatcher.agentOwnsInput) identityWatcher.discardCapturedInput();
+    else identityWatcher.onShellSubmit(body);
     if (this.writeStrict(enterSuffix)) ctx?.markPtyWritten();
   }
 

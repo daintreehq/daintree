@@ -1,4 +1,5 @@
 import { execFile } from "child_process";
+import { windowsSystemTool } from "./windowsExecutable.js";
 
 /**
  * UNC path pattern for both Windows-side mount points exposed by WSL:
@@ -56,7 +57,7 @@ export function getDefaultWslDistro(): Promise<string | null> {
   if (process.platform !== "win32") return Promise.resolve(null);
   return new Promise((resolve) => {
     execFile(
-      "wsl.exe",
+      windowsSystemTool("wsl.exe"),
       ["--list", "--verbose"],
       {
         env: { ...process.env, WSL_UTF8: "1" },

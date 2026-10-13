@@ -111,9 +111,9 @@ export interface AgentCliDetail {
   /** WSL distribution used when `via === "wsl"`. */
   wslDistro?: string;
   /**
-   * All distinct paths the PATH probe found (an in-process walk on POSIX,
-   * `where.exe` on Windows), in PATH order. Populated only when the probe
-   * succeeded via the PATH layer (`via: "which"`). The first
+   * All distinct paths the PATH probe found (an in-process walk on POSIX, an
+   * in-process PATH search on Windows), in PATH order. Populated only when the
+   * probe succeeded via the PATH layer (`via: "which"`). The first
    * entry equals {@link AgentCliDetail.resolvedPath}; additional entries are
    * the duplicate installs that drove the duplicate-detection notification.
    */

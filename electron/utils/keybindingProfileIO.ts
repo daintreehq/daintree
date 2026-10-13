@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { stripUtf8Bom } from "./stripUtf8Bom.js";
 
 const SCHEMA_VERSION = 1;
 const MAX_FILE_SIZE_BYTES = 100 * 1024;
@@ -44,7 +45,7 @@ export function importProfile(json: string): ImportResult {
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(json);
+    parsed = JSON.parse(stripUtf8Bom(json));
   } catch {
     return {
       ok: false,

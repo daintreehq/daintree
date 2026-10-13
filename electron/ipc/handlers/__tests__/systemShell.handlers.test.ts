@@ -118,6 +118,13 @@ vi.mock("../../utils.js", () => ({
   },
 }));
 
+const scanWindowsPathMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsExecutable.js")>()),
+  scanWindowsPath: scanWindowsPathMock,
+}));
+
 import { CHANNELS } from "../../channels.js";
 import { registerSystemShellHandlers } from "../systemShell.js";
 import { SystemShowItemInFolderUnconfinedPayloadSchema } from "../../../schemas/ipc.js";
@@ -889,18 +896,41 @@ describe("system:check-command", () => {
     expect(await handler(fakeEvent, "git;rm")).toBe(false);
     expect(findOnPathMock).not.toHaveBeenCalled();
   });
+});
 
-  it("still asks where.exe on windows", async () => {
+describe("system:check-command on Windows", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    execFileMock.mockImplementation(
-      (_file: string, _args: string[], _options: unknown, callback: (err: Error | null) => void) =>
-        callback(null)
-    );
+    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    cleanup();
+    Object.defineProperty(process, "platform", originalPlatform);
+  });
+
+  it("reports a command available only when PATH holds it", async () => {
     const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
 
-    expect(await handler(fakeEvent, "winget")).toBe(true);
-    expect(execFileMock.mock.calls[0]?.slice(0, 2)).toEqual(["where", ["winget"]]);
-    expect(findOnPathMock).not.toHaveBeenCalled();
+    scanWindowsPathMock.mockResolvedValueOnce({ paths: ["C:\\tools\\gh.exe"], skipped: [] });
+    await expect(handler(fakeEvent, "gh")).resolves.toBe(true);
+    expect(scanWindowsPathMock).toHaveBeenLastCalledWith("gh");
+
+    // Nothing on PATH (a slow entry counts as holding nothing): not available.
+    scanWindowsPathMock.mockResolvedValueOnce({ paths: [], skipped: ["\\\\server\\tools"] });
+    await expect(handler(fakeEvent, "gh")).resolves.toBe(false);
+  });
+
+  it("rejects names that are not plain command names before looking anything up", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(handler(fakeEvent, "..\\gh")).resolves.toBe(false);
+    expect(scanWindowsPathMock).not.toHaveBeenCalled();
   });
 });
 

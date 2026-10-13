@@ -69,5 +69,15 @@
   DeleteRegKey HKCU "Software\Classes\Directory\shell\Daintree"
   DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\Daintree"
 
+  ; The app claims `daintree://` itself at launch (app.setAsDefaultProtocolClient),
+  ; so nothing above wrote it and it outlived an uninstall, leaving links that
+  ; fail to launch a deleted exe. Drop it only while it still launches this
+  ; install, and not during an update: the new build re-registers on launch.
+  ${ifNot} ${isUpdated}
+    ReadRegStr $0 HKCU "Software\Classes\daintree\shell\open\command" ""
+    StrCmp $0 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"' 0 +2
+      DeleteRegKey HKCU "Software\Classes\daintree"
+  ${endIf}
+
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 !macroend

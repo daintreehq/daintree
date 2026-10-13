@@ -3,7 +3,7 @@ import type { AgentState } from "@shared/types/agent";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
-import { escapeShellArgOptional } from "@shared/utils/shellEscape.js";
+import { quoteLaunchArgOptional } from "@shared/utils/shellEscape.js";
 import { hostShellDialect } from "@/hooks/useHostPlatform";
 import {
   formatWithBracketedPaste,
@@ -230,7 +230,7 @@ export function useTerminalFileTransfer(
     const formatPath = (filePath: string, isAgent: boolean): string =>
       isAgent
         ? formatAtFileTokenForCwd(filePath, cwdProviderRef.current?.() ?? "")
-        : escapeShellArgOptional(filePath, hostShellDialect());
+        : quoteLaunchArgOptional(filePath, hostShellDialect());
 
     /**
      * Writes one already-formatted batch as a single insertion, wrapping it in

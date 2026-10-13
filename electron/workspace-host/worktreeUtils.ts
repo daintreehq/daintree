@@ -11,6 +11,7 @@ import {
 } from "path";
 import { getGitDir } from "../utils/gitUtils.js";
 import { getGitLocaleEnv } from "../utils/hardenedGit.js";
+import { resolveExecutableForSpawn } from "../utils/windowsExecutable.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { NOTE_PATH } from "./types.js";
 
@@ -28,7 +29,13 @@ const LFS_PROBE_TIMEOUT_MS = 3000;
  * hardenedGit would strip credential helpers for no reason. Returns `false` on
  * any error, non-matching stdout, or timeout.
  */
-export function probeGitLfsAvailable(): Promise<boolean> {
+export async function probeGitLfsAvailable(): Promise<boolean> {
+  let git: string;
+  try {
+    git = await resolveExecutableForSpawn("git");
+  } catch {
+    return false;
+  }
   return new Promise((resolve) => {
     let settled = false;
     const done = (value: boolean) => {
@@ -38,7 +45,7 @@ export function probeGitLfsAvailable(): Promise<boolean> {
     };
 
     const child = execFile(
-      "git",
+      git,
       ["lfs", "version"],
       {
         timeout: LFS_PROBE_TIMEOUT_MS,

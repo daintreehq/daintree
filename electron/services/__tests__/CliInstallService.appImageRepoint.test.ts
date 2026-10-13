@@ -72,7 +72,8 @@ describe("CliInstallService — following a moved AppImage", () => {
     const wrapper = fs.readFileSync(wrapperPath, "utf8");
     expect(service.appImageOfWrapper(wrapper)).toBe(newImage);
     expect(wrapper).not.toContain(oldImage);
-    expect(fs.statSync(wrapperPath).mode & 0o777).toBe(0o755);
+    // Windows has no Unix mode bits.
+    if (originalPlatform !== "win32") expect(fs.statSync(wrapperPath).mode & 0o777).toBe(0o755);
     // The installed command is a link to the wrapper, so it follows too.
     expect(fs.lstatSync(localBin).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(localBin)).toBe(wrapperPath);
@@ -148,27 +149,32 @@ describe("CliInstallService — following a moved AppImage", () => {
   });
 
   // `daintree --version` on an AppImage install read "--version" as a directory.
-  it("answers the CLI flags like the packaged script, with the version written in", async () => {
-    const service = await load();
-    const wrapper = path.join(root, "daintree-cli.sh");
-    fs.writeFileSync(
-      wrapper,
-      service.generateAppImageWrapper("/nonexistent/Daintree.AppImage", "1.2.3"),
-      {
-        mode: 0o755,
-      }
-    );
-    const run = (...args: string[]) => spawnSync("bash", [wrapper, ...args], { encoding: "utf8" });
+  // Runs the sh wrapper under bash, which a Windows host doesn't have.
+  it.skipIf(process.platform === "win32")(
+    "answers the CLI flags like the packaged script, with the version written in",
+    async () => {
+      const service = await load();
+      const wrapper = path.join(root, "daintree-cli.sh");
+      fs.writeFileSync(
+        wrapper,
+        service.generateAppImageWrapper("/nonexistent/Daintree.AppImage", "1.2.3"),
+        {
+          mode: 0o755,
+        }
+      );
+      const run = (...args: string[]) =>
+        spawnSync("bash", [wrapper, ...args], { encoding: "utf8" });
 
-    expect(run("--version").stdout.trim()).toBe("daintree 1.2.3");
-    expect(run("-v").stdout.trim()).toBe("daintree 1.2.3");
-    expect(run("--help").stdout).toContain("Usage: daintree [directory]");
-    const status = run("--status");
-    expect(["Daintree is running", "Daintree is not running"]).toContain(status.stdout.trim());
-    const notDir = run(path.join(root, "missing"));
-    expect(notDir.status).toBe(1);
-    expect(notDir.stderr).toContain("is not a directory");
-  });
+      expect(run("--version").stdout.trim()).toBe("daintree 1.2.3");
+      expect(run("-v").stdout.trim()).toBe("daintree 1.2.3");
+      expect(run("--help").stdout).toContain("Usage: daintree [directory]");
+      const status = run("--status");
+      expect(["Daintree is running", "Daintree is not running"]).toContain(status.stdout.trim());
+      const notDir = run(path.join(root, "missing"));
+      expect(notDir.status).toBe(1);
+      expect(notDir.stderr).toContain("is not a directory");
+    }
+  );
 
   it.runIf(process.platform === "linux")(
     "answers --status from the app's own binary, not a shell naming the wrapper",

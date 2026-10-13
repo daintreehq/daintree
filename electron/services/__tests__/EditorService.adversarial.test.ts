@@ -5,6 +5,8 @@ const fsMock = vi.hoisted(() => ({
   promises: {
     stat: vi.fn<(path: string) => Promise<{ isFile: () => boolean }>>(),
     access: vi.fn<(path: string, mode?: number) => Promise<void>>(),
+    readdir: vi.fn<(path: string) => Promise<unknown[]>>(),
+    lstat: vi.fn<(path: string) => Promise<{ isSymbolicLink: () => boolean }>>(),
   },
   constants: { X_OK: 1 },
 }));
@@ -26,6 +28,25 @@ vi.mock("../../utils/openPath.js", async () => {
 
 vi.mock("electron", () => ({ shell: shellMock }));
 vi.mock("execa", () => ({ execa: execaMock.execa }));
+
+// The Windows PATH search lists directories (`node:fs` is this same mock), so
+// Windows cases describe the disk as directory listings.
+function windowsDisk(files: string[]): void {
+  fsMock.promises.readdir.mockImplementation(async (directory: string) => {
+    const prefix = `${directory.replace(/\\+$/, "").toLowerCase()}\\`;
+    const names = files
+      .filter((file) => file.toLowerCase().startsWith(prefix))
+      .map((file) => file.slice(prefix.length))
+      .filter((name) => !name.includes("\\"));
+    if (names.length === 0) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    return names.map((name) => ({
+      name,
+      isFile: () => true,
+      isDirectory: () => false,
+      isSymbolicLink: () => false,
+    }));
+  });
+}
 
 const originalPlatform = process.platform;
 let originalPATH: string | undefined;
@@ -285,6 +306,106 @@ describe("EditorService adversarial", () => {
       ["/abs/file.ts"],
       expect.objectContaining({ detached: true })
     );
+  });
+
+  describe("Windows: a configured command is launched from PATH by absolute path", () => {
+    let originalPATHEXT: string | undefined;
+
+    beforeEach(() => {
+      setPlatform("win32");
+      originalPATHEXT = process.env.PATHEXT;
+      process.env.PATHEXT = ".EXE;.CMD";
+      // `.` and `bin` would be resolved against the working directory.
+      process.env.PATH = ".;bin;C:\\tools";
+    });
+
+    afterEach(() => {
+      if (originalPATHEXT === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = originalPATHEXT;
+    });
+
+    it("resolves a bare custom command, never a same-named file outside PATH", async () => {
+      windowsDisk(["C:\\tools\\code.cmd"]);
+      // Same-named files the working directory would offer, never PATH.
+      mockExistingFiles(["code.exe", "bin\\code.exe", ".\\code.exe"]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", undefined, undefined, {
+        id: "custom",
+        customCommand: "code",
+        customTemplate: "{file}",
+      });
+
+      expect(execaMock.execa).toHaveBeenCalledTimes(1);
+      expect(execaMock.execa.mock.calls[0]?.[0]).toBe("C:\\tools\\code.cmd");
+      expect(fsMock.promises.stat).not.toHaveBeenCalled();
+    });
+
+    it("tries $EDITOR's own extension first, and skips a command PATH does not hold", async () => {
+      process.env.VISUAL = "missing-editor --wait";
+      process.env.EDITOR = "notepad++.exe";
+      windowsDisk(["C:\\tools\\notepad++.exe"]);
+      mockExistingFiles(["missing-editor.exe"]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts");
+
+      expect(execaMock.execa.mock.calls.map(([program]) => program)).toEqual([
+        "C:\\tools\\notepad++.exe",
+      ]);
+    });
+
+    it("reaches a wrapper PATHEXT names beyond .exe/.cmd, by bare name or with its extension", async () => {
+      process.env.PATHEXT = ".EXE;.CMD;.VBS";
+      windowsDisk(["C:\\tools\\editor.vbs"]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", undefined, undefined, {
+        id: "custom",
+        customCommand: "editor",
+        customTemplate: "{file}",
+      });
+      process.env.EDITOR = "editor.vbs";
+      await openFile("/abs/file.ts");
+
+      expect(execaMock.execa.mock.calls.map(([program]) => program)).toEqual([
+        "C:\\tools\\editor.vbs",
+        "C:\\tools\\editor.vbs",
+      ]);
+    });
+
+    it("passes a configured path through unchanged", async () => {
+      const editor = "D:\\Apps\\Editor\\editor.exe";
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", undefined, undefined, {
+        id: "custom",
+        customCommand: editor,
+        customTemplate: "{file}",
+      });
+
+      expect(execaMock.execa.mock.calls[0]?.[0]).toBe(editor);
+    });
+
+    it("searches past a PATH entry on a dropped share instead of waiting on it", async () => {
+      process.env.PATH = "\\\\gone\\tools;C:\\tools";
+      windowsDisk(["C:\\tools\\code.cmd"]);
+      const listDirectory = fsMock.promises.readdir.getMockImplementation()!;
+      fsMock.promises.readdir.mockImplementation((directory: string) =>
+        directory.startsWith("\\\\gone") ? new Promise(() => {}) : listDirectory(directory)
+      );
+      const { discover } = await loadModule();
+
+      vi.useFakeTimers();
+      try {
+        const discovering = discover();
+        await vi.advanceTimersByTimeAsync(10_000);
+        const results = await discovering;
+        expect(results.find((e) => e.id === "vscode")?.executablePath).toBe("C:\\tools\\code.cmd");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("VISUAL=nvim.exe on Windows is detected as a terminal editor and skipped", async () => {

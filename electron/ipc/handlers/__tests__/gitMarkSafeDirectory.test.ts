@@ -1,11 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "node:path";
+import {
+  resolveExecutableForSpawn,
+  windowsExecutableNotFound,
+} from "../../../utils/windowsExecutable.js";
 
 // On Windows, `path.resolve("/Users/foo/my repo")` prepends the current
 // drive letter ("C:\Users\foo\my repo") and the handler normalizes
 // backslashes to forward slashes. Deriving the expected value the same way
 // keeps assertions correct on both POSIX and Windows runners.
 const resolvedSlashed = (p: string): string => path.resolve(p).replace(/\\/g, "/");
+
+/** Where git resolves on a Windows host; the host's real PATH is never searched. */
+const { WINDOWS_GIT } = vi.hoisted(() => ({ WINDOWS_GIT: "C:\\Program Files\\Git\\cmd\\git.exe" }));
+
+vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/windowsExecutable.js")>()),
+  resolveExecutableForSpawn: vi.fn(
+    async (name: string, _env?: unknown, platform: NodeJS.Platform = process.platform) =>
+      platform === "win32" ? WINDOWS_GIT : name
+  ),
+}));
+
+// On Windows git is started by the absolute path its PATH lookup found, bare elsewhere.
+const GIT = process.platform === "win32" ? WINDOWS_GIT : "git";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -95,11 +113,22 @@ describe("git:mark-safe-directory handler", () => {
     const handler = getHandler("git:mark-safe-directory");
     await handler(null, "/Users/foo/my repo");
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      GIT,
       ["config", "--global", "--add", "safe.directory", resolvedSlashed("/Users/foo/my repo")],
       expect.objectContaining({ env: expect.objectContaining({ LC_ALL: "C" }) }),
       expect.any(Function)
     );
+  });
+
+  it("hides the console window for both git config calls", async () => {
+    registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+    const handler = getHandler("git:mark-safe-directory");
+    await handler(null, "/Users/foo/my repo");
+    const calls = execFileMock.mock.calls as [string, string[], unknown, unknown][];
+    expect(calls).toHaveLength(2);
+    for (const [, , opts] of calls) {
+      expect(opts).toMatchObject({ windowsHide: true });
+    }
   });
 
   it("canonicalizes symlinked repo paths before writing", async () => {
@@ -108,7 +137,7 @@ describe("git:mark-safe-directory handler", () => {
     const handler = getHandler("git:mark-safe-directory");
     await handler(null, "/Users/foo/link-to-repo");
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      GIT,
       ["config", "--global", "--add", "safe.directory", "/Users/foo/real-repo"],
       expect.any(Object),
       expect.any(Function)
@@ -121,7 +150,7 @@ describe("git:mark-safe-directory handler", () => {
     const handler = getHandler("git:mark-safe-directory");
     await handler(null, "/Users/foo/missing-repo");
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      GIT,
       ["config", "--global", "--add", "safe.directory", resolvedSlashed("/Users/foo/missing-repo")],
       expect.any(Object),
       expect.any(Function)
@@ -138,7 +167,7 @@ describe("git:mark-safe-directory handler", () => {
     // the backslash → forward-slash normalization runs.
     await handler(null, "/tmp/win-style");
     expect(execFileMock).toHaveBeenCalledWith(
-      "git",
+      GIT,
       ["config", "--global", "--add", "safe.directory", "C:/Users/foo/repo"],
       expect.any(Object),
       expect.any(Function)
@@ -159,6 +188,14 @@ describe("git:mark-safe-directory handler", () => {
     registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
     const handler = getHandler("git:mark-safe-directory");
     await expect(handler(null, "/Users/foo/repo")).rejects.toThrow(/git not found/);
+  });
+
+  it("rejects with spawn's ENOENT and runs nothing when the Windows PATH has no git", async () => {
+    vi.mocked(resolveExecutableForSpawn).mockRejectedValueOnce(windowsExecutableNotFound("git"));
+    registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+    const handler = getHandler("git:mark-safe-directory");
+    await expect(handler(null, "/Users/foo/repo")).rejects.toThrow(/spawn git ENOENT/);
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 
   it("skips --add when the canonicalized path is already in safe.directory", async () => {

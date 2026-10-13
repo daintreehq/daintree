@@ -329,8 +329,12 @@ describe("createLeaseTargetResolvers", () => {
     // Git follows the link, so the project it leads into is the one changed.
     await expect(lookup(r, path.join(repoA, "into-b"))).resolves.toEqual(["b"]);
     // ".." after a link climbs from where the link leads, as git's cwd does,
-    // never back into the folder that holds the link.
-    await expect(lookup(r, `${repoA}/into-b-sub/..`)).resolves.toEqual(["b"]);
+    // never back into the folder that holds the link. Windows collapses ".."
+    // before it follows any link, for git's cwd as for the lookup, so there
+    // the same spelling is A itself.
+    await expect(lookup(r, `${repoA}/into-b-sub/..`)).resolves.toEqual(
+      process.platform === "win32" ? ["a"] : ["b"]
+    );
   });
 
   it("traces a worktree of a repository whose git directory is kept elsewhere to its project", async () => {

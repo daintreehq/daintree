@@ -11,7 +11,7 @@ import * as kit from "@daintreehq/plugin-ui";
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();
-});
+}, 60_000);
 
 afterEach(cleanup);
 

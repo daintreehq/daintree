@@ -1,5 +1,4 @@
 import path from "path";
-import { spawnSync } from "child_process";
 import { CHANNELS } from "../../channels.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
@@ -13,6 +12,7 @@ import {
   type OperationHandle,
 } from "../../../services/operations/index.js";
 import { createAuthenticatedGit } from "../../../utils/hardenedGit.js";
+import { killWindowsProcessTree } from "../../../utils/windowsTreeKill.js";
 import {
   getActiveProvider,
   getForgeProviderImpl,
@@ -63,18 +63,15 @@ interface PluginStoreLike {
 /**
  * Kill the git clone process tree on Windows. The orphaned child processes
  * (git-remote-https, index-pack) keep `.git/` files locked, so `fs.rm` of the
- * partial clone fails until they're gone. `taskkill /T /F` tears the whole
- * tree down atomically; it exits non-zero (and may throw) if the process
- * already exited — non-fatal, so swallow it. Mirrors ProcessTreeKiller.ts.
+ * partial clone fails until they're gone. The verified tree kill tears the
+ * tree down without `taskkill /T`, which can follow a reused parent PID into
+ * an unrelated program; a root that already exited leaves nothing to kill.
+ * Awaited rather than blocking: its census is a PowerShell start on Main.
  */
-function killCloneProcessTree(pid: number | undefined): void {
+async function killCloneProcessTree(pid: number | undefined): Promise<void> {
   if (process.platform !== "win32" || pid == null) return;
   try {
-    spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
-      windowsHide: true,
-      stdio: "ignore",
-      timeout: 3000,
-    });
+    await killWindowsProcessTree(pid, { timeoutMs: 3000 });
   } catch {
     // Process already exited — nothing to kill.
   }
@@ -225,7 +222,7 @@ export async function executeClone(options: ExecuteCloneOptions): Promise<void> 
     // owns its own process-tree teardown on abort; the simple-git path needs
     // `killCloneProcessTree(cloneChildPid)` here because simple-git owns the
     // child and only the captured pid is reachable from this scope.
-    killCloneProcessTree(cloneChildPid);
+    await killCloneProcessTree(cloneChildPid);
 
     const partialExists = await fs.promises
       .access(targetPath)

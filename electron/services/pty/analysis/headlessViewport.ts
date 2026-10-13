@@ -8,6 +8,7 @@ import {
 } from "../SustainedChangeTracker.js";
 
 type CursorBufferLine = {
+  isWrapped?: boolean;
   translateToString: (trimRight?: boolean) => string;
   getCell?: (index: number, cell?: IBufferCell) => IBufferCell | undefined;
   _line?: RawBufferLine;
@@ -671,14 +672,37 @@ export class ViewportSnapshotCache {
   }
 }
 
+// A prompt or command wider than the terminal wraps, and the cursor sits on its
+// last row: `PS C:\long\path>` read row by row is just `path>`, which no prompt
+// pattern recognises. That stranded agent badges on Windows, where a returning
+// prompt is the only sign an agent quit. The walk back is bounded: 32 rows hold
+// a 640-character prompt in a 20-column split.
+const MAX_CURSOR_LINE_WRAPPED_ROWS = 32;
+
+/** The logical line under the cursor, rejoined across wrapped rows. */
 export function readCursorLine(terminal: HeadlessTerminal | undefined): string | null {
   if (!terminal) return null;
 
   const buffer = terminal.buffer.active as CursorBuffer;
   if (!buffer || typeof buffer.getLine !== "function") return null;
   const cursorY = buffer.cursorY ?? 0;
-  const line = buffer.getLine(buffer.baseY + cursorY);
-  return line ? line.translateToString(true) : null;
+  let row = buffer.baseY + cursorY;
+  let line = buffer.getLine(row);
+  if (!line) return null;
+  let text = line.translateToString(true);
+  for (
+    let joined = 0;
+    line.isWrapped && row > 0 && joined < MAX_CURSOR_LINE_WRAPPED_ROWS;
+    joined++
+  ) {
+    const previous = buffer.getLine(row - 1);
+    if (!previous) break;
+    // A row that wrapped is full width, so its trailing cells are content.
+    text = previous.translateToString(false) + text;
+    row--;
+    line = previous;
+  }
+  return text;
 }
 
 // All non-empty viewport lines in order (the pre-slice list `readLastNLines`

@@ -6,6 +6,7 @@ import { runValidate } from "./validate.js";
 import { resolveVitePlan, runVitePlanBuild, spawnViteWatch } from "../lib/viteBuild.js";
 import { sendCliRequest } from "../ipc/client.js";
 import { createDevMetricsPoller } from "../lib/devMetrics.js";
+import { parseJsonText } from "../lib/parseJsonText.js";
 
 // Mirrors the (unexported) DEV_MARKER_FILENAME in
 // electron/services/PluginService.ts — its presence at a plugin dir root routes
@@ -165,7 +166,7 @@ export async function runDev(opts: DevOptions = {}): Promise<void> {
     throw new Error(`Manifest validation failed:\n  ${validation.errors.join("\n  ")}`);
   }
 
-  const manifest = JSON.parse(await fs.readFile(path.join(dir, "plugin.json"), "utf8")) as {
+  const manifest = parseJsonText(await fs.readFile(path.join(dir, "plugin.json"), "utf8")) as {
     name: string;
     main?: string;
   };

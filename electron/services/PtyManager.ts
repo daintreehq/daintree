@@ -44,6 +44,7 @@ import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
 import { events } from "./events.js";
+import { keepWindowsTreeKillHelperWarm } from "../utils/windowsTreeKill.js";
 import {
   resolveCaptureBranch,
   trackAgentSessionCapture,
@@ -583,6 +584,7 @@ export class PtyManager extends EventEmitter {
             if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
               this.registry.delete(termId);
             }
+            this.syncTreeKillHelperWarmth();
           },
           onSubmitStatus: (termId, state) => {
             // Same staleness guard as onExit: a submit unwinding after the
@@ -645,6 +647,7 @@ export class PtyManager extends EventEmitter {
     const consumedPendingResize = this.pendingResizes.has(id);
     this.pendingResizes.delete(id);
     this.registry.add(id, terminalProcess);
+    this.syncTreeKillHelperWarmth();
     for (const chunk of constructionOutput.chunks) {
       this.emitData(id, chunk.data, chunk.streamEnd);
     }
@@ -920,6 +923,19 @@ export class PtyManager extends EventEmitter {
         logWarn(`Failed to delete session file for terminal ${id}`, err);
       });
     }
+    this.syncTreeKillHelperWarmth();
+  }
+
+  /**
+   * Windows: hold the tree-kill helper warm while any terminal still has a PTY,
+   * since its close — or the app's quit — is the next kill, and a cold
+   * PowerShell start is most of one. The cost is one idle `powershell.exe`
+   * while terminals are open. The last kill releases the hold; the helper is
+   * retired once that kill and its idle period are over.
+   */
+  private syncTreeKillHelperWarmth(): void {
+    if (process.platform !== "win32") return;
+    keepWindowsTreeKillHelperWarm(this.getLivePtyCount() > 0);
   }
 
   /**

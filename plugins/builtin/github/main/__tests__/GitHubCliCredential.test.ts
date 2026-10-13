@@ -18,6 +18,39 @@ vi.mock("../../../../../electron/setup/environment.js", () => environmentMock);
 const tokenMock = vi.hoisted(() => ({ validateGitHubToken: vi.fn() }));
 vi.mock("../GitHubToken.js", () => tokenMock);
 
+// Windows-path files for the PATH lookup the PATH-miss case makes: an empty
+// disk on every host, so a real `C:\empty` can never answer it.
+vi.mock("node:fs", async (importOriginal) =>
+  (
+    await import("../../../../../electron/utils/__tests__/helpers/virtualWindowsFs.js")
+  ).withVirtualWindowsFiles(await importOriginal())
+);
+
+// Most cases are about what gh's run returns, not where gh is. On a Windows
+// host gh would otherwise be looked up on that host's PATH, and a machine
+// without gh would answer every case `cli-not-found`, so the lookup answers
+// with a fixed absolute path there. The PATH-miss case searches for real.
+const ghLookup = vi.hoisted(() => ({
+  searchPath: false,
+  /** Where gh resolves on a Windows host. */
+  windowsGh: "C:\\Program Files\\GitHub CLI\\gh.exe",
+}));
+vi.mock("../../../../../electron/utils/windowsExecutable.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../../electron/utils/windowsExecutable.js")>();
+  return {
+    ...actual,
+    resolveExecutableForSpawn: (
+      name: string,
+      env?: NodeJS.ProcessEnv,
+      platform: NodeJS.Platform = process.platform
+    ): Promise<string> =>
+      ghLookup.searchPath || platform !== "win32"
+        ? actual.resolveExecutableForSpawn(name, env, platform)
+        : Promise.resolve(ghLookup.windowsGh),
+  };
+});
+
 import {
   GH_TOKEN_TIMEOUT_MS,
   buildGhCredentialEnv,
@@ -135,7 +168,8 @@ describe("readGhToken", () => {
 
     expect(order).toEqual(["refreshPath", "execFile"]);
     const { cmd, args, opts } = lastExec();
-    expect(cmd).toBe("gh");
+    // On Windows gh is spawned by its absolute PATH location.
+    expect(cmd).toBe(process.platform === "win32" ? ghLookup.windowsGh : "gh");
     expect(args).toEqual(["auth", "token", "--hostname", "github.com"]);
     expect(opts.windowsHide).toBe(true);
     expect(opts.maxBuffer).toBeGreaterThan(0);
@@ -186,6 +220,25 @@ describe("readGhToken", () => {
     const result = await readGhToken();
     expect(result).toEqual({ unavailable: true, reason });
     expect(JSON.stringify(result)).not.toContain(TOKEN);
+  });
+
+  it("reports gh not found on Windows when PATH has none, without running a bare gh", async () => {
+    // A bare name would be looked up in the working directory first.
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    vi.stubEnv("PATH", ".;C:\\empty");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    ghLookup.searchPath = true;
+    try {
+      await expect(readGhToken()).resolves.toEqual({
+        unavailable: true,
+        reason: "cli-not-found",
+      });
+      expect(childProcessMock.execFile).not.toHaveBeenCalled();
+    } finally {
+      ghLookup.searchPath = false;
+      Object.defineProperty(process, "platform", original);
+      vi.unstubAllEnvs();
+    }
   });
 
   it("stops waiting on a PATH refresh that hangs once the caller aborts", async () => {

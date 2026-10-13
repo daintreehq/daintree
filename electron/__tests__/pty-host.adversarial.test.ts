@@ -305,6 +305,24 @@ vi.mock("../services/ProcessTreeCache.js", () => ({
   },
 }));
 
+// The Windows exit batch's verdict, when a test needs one the real batch
+// (empty here: PtyManager is mocked) cannot give.
+const exitBatch = vi.hoisted(() => ({
+  outcome: null as null | {
+    unfinished: Array<{ pid: number; startTime: number }>;
+    abandoned: number;
+  },
+}));
+
+vi.mock("../services/pty/ProcessTreeKiller.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/pty/ProcessTreeKiller.js")>();
+  return {
+    ...actual,
+    flushWindowsExitBatchAsync: async () =>
+      exitBatch.outcome ?? (await actual.flushWindowsExitBatchAsync()),
+  };
+});
+
 vi.mock("../services/TerminalLineageLedger.js", () => ({
   TerminalLineageLedger: class {
     hasRoots = vi.fn(() => false);
@@ -312,10 +330,19 @@ vi.mock("../services/TerminalLineageLedger.js", () => ({
     registerRoot = vi.fn();
     markRootClosing = vi.fn();
     getVerifiedOrphanPids = vi.fn(() => []);
+    setRootIdentityListener = vi.fn();
     dispose = vi.fn();
   },
   lineageFilePath: vi.fn(() => "/tmp/pty-lineage.json"),
   beginTeardownProbeWindow: vi.fn(),
+}));
+
+const prewarmWindowsShell = vi.hoisted(() =>
+  vi.fn(async (): Promise<string> => "C:\\Program Files\\PowerShell\\7\\pwsh.exe")
+);
+vi.mock("../services/pty/terminalShell.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/pty/terminalShell.js")>()),
+  prewarmWindowsShell,
 }));
 
 vi.mock("../services/pty/TerminalResourceMonitor.js", () => ({
@@ -742,6 +769,7 @@ describe("pty-host adversarial", () => {
 
   beforeEach(() => {
     exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    exitBatch.outcome = null;
     baselineSigtermListeners = process.listeners("SIGTERM") as Array<(...args: unknown[]) => void>;
     vi.useFakeTimers();
     vi.mocked(getPtyPool).mockClear();
@@ -805,6 +833,9 @@ describe("pty-host adversarial", () => {
   });
 
   it("SIGTERM_RUNS_TEARDOWN_ONCE_AND_EXITS_SIGNALLED (#13167)", async () => {
+    // The POSIX contract: teardown and exit in the signal's own tick. Windows
+    // awaits its exit batch first (WINDOWS_* cases below).
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const parentPort = await loadHost();
     const manager = hostState.currentPtyManager as MiniEmitter & { dispose: TestMock };
     const hostSigterm = process
@@ -822,6 +853,60 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { type: "dispose" });
     await flushMicrotasks();
     expect(manager.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("WINDOWS_UNCONFIRMED_EXIT_KILLS_GO_TO_MAIN_AND_EXIT_UNCLEAN", async () => {
+    // A batch stuck behind a slow run: its helper dies with this host, so the
+    // identified roots go to Main, and the exit does not claim a clean teardown.
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const roots = [{ pid: 7_100_001, startTime: 1_760_256_000_123_456 }];
+    exitBatch.outcome = { unfinished: roots, abandoned: 0 };
+    const parentPort = await loadHost();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    parentPort.emit("message", { type: "dispose" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(parentPort.postMessage).toHaveBeenCalledWith({ type: "tree-kill-handoff", roots });
+    // The message is on its way before the host goes.
+    expect(exitSpy).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalledWith(0);
+    warnSpy.mockRestore();
+  });
+
+  it("WINDOWS_CONFIRMED_EXIT_KILLS_EXIT_CLEAN_WITHOUT_HANDOFF", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    exitBatch.outcome = { unfinished: [], abandoned: 0 };
+    const parentPort = await loadHost();
+
+    parentPort.emit("message", { type: "dispose" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(
+      parentPort.postMessage.mock.calls.some(
+        ([payload]: unknown[]) => (payload as { type?: string })?.type === "tree-kill-handoff"
+      )
+    ).toBe(false);
+  });
+
+  it("WINDOWS_READY_WAITS_FOR_THE_DEFAULT_SHELL", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    let shellFound: (shell: string) => void = () => {};
+    prewarmWindowsShell.mockImplementationOnce(
+      () => new Promise<string>((resolve) => (shellFound = resolve))
+    );
+
+    const parentPort = await loadHost();
+    // Restored terminals spawn on "ready": not before the shell they open in is known.
+    expect(parentPort.postMessage).not.toHaveBeenCalledWith({ type: "ready" });
+
+    shellFound("C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    await flushMicrotasks();
+    await flushMicrotasks();
+    expect(parentPort.postMessage).toHaveBeenCalledWith({ type: "ready" });
   });
 
   it("WINDOWS_STARTUP_SKIPS_PTY_POOL", async () => {
