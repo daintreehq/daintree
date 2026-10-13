@@ -111,12 +111,20 @@ describe("GettingStartedChecklist", () => {
     expect(completedButton).toBeNull();
   });
 
-  it("dispatches project.add when 'Open your project' is clicked", () => {
+  it.each([
+    ["Open your project", "project.add"],
+    ["Launch your first agent", "panel.palette"],
+    ["Start a parallel task", "worktree.createDialog.open"],
+    ["Run two agents in parallel", "panel.palette"],
+  ])("routes '%s' to its next action without marking it complete", (label, actionId) => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(label, "i") }));
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith("project.add", undefined, { source: "user" });
+    expect(dispatchMock).toHaveBeenCalledWith(actionId, undefined, { source: "user" });
+    expect(defaultProps.onMarkItem).not.toHaveBeenCalled();
+    expect(defaultProps.onDismiss).not.toHaveBeenCalled();
+    expect(defaultProps.onToggleCollapse).not.toHaveBeenCalled();
   });
 
   it("renders the endowed n/n counter while the checklist is incomplete", () => {

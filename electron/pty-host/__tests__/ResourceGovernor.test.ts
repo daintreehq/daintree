@@ -1893,6 +1893,41 @@ describe("ResourceGovernor", () => {
 
       governor.dispose();
     });
+
+    it("re-arms the one-shot so a fresh pressure episode trims again (targeted path)", () => {
+      const { coordinator } = createMockCoordinator();
+      // mockMemoryUsage re-mocks the same spy in place, so re-invoking it later
+      // swaps the reading without a fresh spyOn.
+      mockMemoryUsage(450);
+
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 2000, cols: 80 }]),
+        trimBuffersTargeted: vi.fn(),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // First episode: trim fires on the warmup-complete tick (5).
+      vi.advanceTimersByTime(10000);
+      expect(deps.trimBuffersTargeted).toHaveBeenCalledTimes(1);
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+
+      // Pressure clears before pause — the re-arm branch resets the one-shot.
+      mockMemoryUsage(128);
+      vi.advanceTimersByTime(40000);
+
+      // Pressure returns — targeted trim must fire again for the new episode.
+      mockMemoryUsage(450);
+      vi.advanceTimersByTime(40000);
+      expect(deps.trimBuffersTargeted).toHaveBeenCalledTimes(2);
+
+      governor.dispose();
+    });
   });
 
   describe("re-engage cooldown", () => {
@@ -1955,6 +1990,9 @@ describe("ResourceGovernor", () => {
       // First engage + force-resume.
       vi.advanceTimersByTime(ADVANCE_TO_ENGAGE_MS + 12000);
       expect(coordinator.hasToken("resource-governor")).toBe(false);
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "host-throttled", isThrottled: false, forced: true })
+      );
 
       // Wait out the cooldown (30s) plus enough time for trim + pause cycle.
       // After force-resume, trimAttemptedForCurrentPressure resets, so the
@@ -2322,6 +2360,41 @@ describe("ResourceGovernor", () => {
       // first tick past the bound is at 12s of pause.
       vi.advanceTimersByTime(10000);
       expect(raw.resume).toHaveBeenCalled();
+
+      governor.dispose();
+    });
+
+    it("treats worker-isolate critical pressure as immediate critical pressure", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      // Host 50MB; worker heap 500MB → 500/512 = 97.7% raw ≥ 95% critical.
+      // Critical bypasses EMA warmup AND the pre-pause trim — pause engages on
+      // the very first tick.
+      mockMemoryUsage(50);
+      const trimBuffersTargeted = vi.fn();
+      const trimBuffers = vi.fn();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+        getTerminalActivity: vi
+          .fn()
+          .mockReturnValue([
+            { id: "t1", lastOutputTime: 100, lastInputTime: 100, agentState: "idle" },
+          ]),
+        trimBuffers,
+        trimBuffersTargeted,
+        getTerminalBufferSizes: vi
+          .fn()
+          .mockReturnValue([{ id: "t1", scrollbackLines: 10000, cols: 120 }]),
+        getWorkerMemoryAccounting: vi.fn().mockReturnValue([workerSample(500, 0)]),
+      });
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(raw.pause).toHaveBeenCalled();
+      expect(trimBuffers).not.toHaveBeenCalled();
+      expect(trimBuffersTargeted).not.toHaveBeenCalled();
 
       governor.dispose();
     });

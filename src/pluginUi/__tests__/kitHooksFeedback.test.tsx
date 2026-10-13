@@ -436,6 +436,15 @@ describe("ListRow in a multi-select list", () => {
     expect(icons).toHaveLength(0);
   });
 
+  it("toggles from the checkbox without the row's own click", () => {
+    const onToggle = vi.fn();
+    const onClick = vi.fn();
+    const { container } = render(row({ checked: false, onToggle, onClick }));
+    fireEvent.click(container.querySelector("[data-kit-row-checkbox]")!);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
   it("keeps the host lists' ring on the row a context menu is open on", async () => {
     const { ROW_MENU_TARGET_CLASS } = await import("@/components/ui/paletteRowStyles");
     const { container } = render(row({ checked: false, "data-state": "open" }));

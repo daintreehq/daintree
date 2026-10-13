@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAppTheme } from "../../../shared/theme/index.js";
 
 const storeMock = vi.hoisted(() => ({
-  get: vi.fn((key: string) => {
+  get: vi.fn((key: string): unknown => {
     if (key === "appState") return { sidebarWidth: 350, focusMode: false };
     if (key === "appTheme") return { colorSchemeId: "daintree" };
     return undefined;

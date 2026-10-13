@@ -1161,5 +1161,27 @@ describe("McpPaneConfigService", () => {
         })
       ).rejects.toThrow(/should not be called with tier "off"/);
     });
+
+    it("re-preparing the same pane revokes the previous launch's grants", async () => {
+      const first = await service.preparePaneConfig({
+        paneId: "pane-plugin-restart",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
+      });
+      const firstBearer = bearerOf(
+        (await readServers(first!.configPath!))[first!.pluginServerKeys[0]]
+      );
+
+      await service.preparePaneConfig({
+        paneId: "pane-plugin-restart",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
+      });
+
+      expect(grants.authenticate(firstBearer)).toBeNull();
+      expect(grants.listForTerminal("pane-plugin-restart")).toHaveLength(1);
+    });
   });
 });

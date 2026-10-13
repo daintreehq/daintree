@@ -252,26 +252,33 @@ describe("checkForUpdate — guards", () => {
     service.dispose();
   });
 
-  it.each(["http://127.0.0.1/plugin.dntr", "http://[::1]/plugin.dntr"])(
-    "returns fetch-failed (no fetch) for a private/loopback originalUrl %s",
-    async (url) => {
-      const service = new PluginService(pluginsRoot, "0.0.0");
-      await installUrlPlugin(service, { name: "acme.private", version: "1.0.0" }, url);
+  it.each([
+    "http://127.0.0.1/plugin.dntr",
+    "https://169.254.169.254/plugin.dntr",
+    "https://192.168.0.42/plugin.dntr",
+    "http://[::1]/plugin.dntr",
+  ])("returns fetch-failed (no fetch) for a private/loopback originalUrl %s", async (url) => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    await installUrlPlugin(service, { name: "acme.private", version: "1.0.0" }, url);
 
-      const result = await service.checkForUpdate("acme.private");
+    const result = await service.checkForUpdate("acme.private");
 
-      expect(result.status).toBe("fetch-failed");
-      if (result.status === "fetch-failed") {
-        expect(result.message).toContain("private or loopback");
-      }
-      expect(netMock.fetch).not.toHaveBeenCalled();
-      service.dispose();
+    expect(result.status).toBe("fetch-failed");
+    if (result.status === "fetch-failed") {
+      expect(result.message).toContain("private or loopback");
     }
-  );
+    expect(netMock.fetch).not.toHaveBeenCalled();
+    service.dispose();
+  });
 });
 
 describe("checkForUpdate — redirect SSRF guard", () => {
-  it.each(["http://127.0.0.1/plugin.dntr", "http://[::1]/plugin.dntr"])(
+  it.each([
+    "http://127.0.0.1/plugin.dntr",
+    "https://169.254.169.254/plugin.dntr",
+    "https://192.168.0.42/plugin.dntr",
+    "http://[::1]/plugin.dntr",
+  ])(
     "rejects a redirect to a private host %s after a public original URL",
     async (privateTarget) => {
       const service = new PluginService(pluginsRoot, "0.0.0");

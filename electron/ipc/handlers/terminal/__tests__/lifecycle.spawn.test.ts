@@ -974,6 +974,7 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       expect(spawnArgs.postSpawnInput).toBeUndefined();
       // The command is embedded in the shell startup args instead.
       expect(spawnArgs.args?.join(" ")).toContain("claude --resume s-1");
+      expect(ptyClient.write).not.toHaveBeenCalled();
     }
   );
 

@@ -138,6 +138,7 @@ describe("panelKindSerialisers", () => {
         browserExpandedPaths: [
           "src",
           "src/lib",
+          "nested\\..\\..\\escape",
           "/etc",
           "../secrets",
           "a/../../b",

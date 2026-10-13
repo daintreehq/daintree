@@ -53,4 +53,21 @@ describe("fleetBroadcastProgressStore", () => {
     useFleetBroadcastProgressStore.getState().init(5);
     expect(useFleetBroadcastProgressStore.getState().cancelled).toBe(false);
   });
+
+  it("keeps a cancellation active until it settles, then starts a clean run", () => {
+    const progress = () => useFleetBroadcastProgressStore.getState();
+    progress().init(10);
+    progress().advance(3, 1);
+    progress().cancel();
+    expect(progress()).toMatchObject({ isActive: true, cancelled: true, completed: 3 });
+
+    progress().finishCancelled();
+    expect(progress()).toMatchObject({ isActive: false, cancelled: true, completed: 3 });
+
+    progress().init(5);
+    expect(progress()).toMatchObject({ isActive: true, cancelled: false, completed: 0 });
+    progress().advance(5, 0);
+    progress().finish();
+    expect(progress()).toMatchObject({ isActive: false, cancelled: false, completed: 5 });
+  });
 });

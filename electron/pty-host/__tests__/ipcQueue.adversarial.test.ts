@@ -210,31 +210,34 @@ describe("IpcQueueManager adversarial", () => {
     expect(startMetric).toBeUndefined();
   });
 
-  it("emitTerminalStatus throwing after pause releases the token (#7641)", () => {
-    // If a post-pause side-effect (event emit, metric send) throws after
-    // coordinator.pause() succeeded, the catch path must not leave the
-    // coordinator holding the "ipc-queue" token. Otherwise the PTY is
-    // permanently paused with no entry in pausedTerminals — neither
-    // tryResume nor the safety timeout can recover it.
-    vi.mocked(deps.emitTerminalStatus).mockImplementationOnce(() => {
-      throw new Error("DataCloneError");
-    });
-    mgr.addBytes("t1", HIGH_BYTES);
+  it.each(["emitTerminalStatus", "emitReliabilityMetric"] as const)(
+    "%s throwing after pause releases the token (#7641)",
+    (sideEffect) => {
+      // If a post-pause side-effect (event emit, metric send) throws after
+      // coordinator.pause() succeeded, the catch path must not leave the
+      // coordinator holding the "ipc-queue" token. Otherwise the PTY is
+      // permanently paused with no entry in pausedTerminals — neither
+      // tryResume nor the safety timeout can recover it.
+      vi.mocked(deps[sideEffect]).mockImplementationOnce(() => {
+        throw new Error("DataCloneError");
+      });
+      mgr.addBytes("t1", HIGH_BYTES);
 
-    const result = mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+      const result = mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
 
-    expect(result).toBe(false);
-    expect(mgr.isPaused("t1")).toBe(false);
-    expect(coord.pause).toHaveBeenCalledTimes(1);
-    expect(coord.pause).toHaveBeenCalledWith("ipc-queue");
-    expect(coord.resume).toHaveBeenCalledTimes(1);
-    expect(coord.resume).toHaveBeenCalledWith("ipc-queue");
+      expect(result).toBe(false);
+      expect(mgr.isPaused("t1")).toBe(false);
+      expect(coord.pause).toHaveBeenCalledTimes(1);
+      expect(coord.pause).toHaveBeenCalledWith("ipc-queue");
+      expect(coord.resume).toHaveBeenCalledTimes(1);
+      expect(coord.resume).toHaveBeenCalledWith("ipc-queue");
 
-    // No orphaned safety timeout that could fire later and double-resume.
-    coord.resume.mockClear();
-    vi.advanceTimersByTime(IPC_MAX_PAUSE_MS * 2);
-    expect(coord.resume).not.toHaveBeenCalled();
-  });
+      // No orphaned safety timeout that could fire later and double-resume.
+      coord.resume.mockClear();
+      vi.advanceTimersByTime(IPC_MAX_PAUSE_MS * 2);
+      expect(coord.resume).not.toHaveBeenCalled();
+    }
+  );
 
   it("dispose releases held pause tokens and cancels their safety timeouts", () => {
     mgr.addBytes("t1", HIGH_BYTES);

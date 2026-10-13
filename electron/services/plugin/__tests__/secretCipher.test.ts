@@ -228,7 +228,7 @@ describe("safeStorageCipher encrypt", () => {
       }
     );
 
-    it.each(["basic_text"])(
+    it.each(["basic_text", "unknown", "some_future_backend"])(
       "refuses without touching the keyring under the %s backend",
       async (backend) => {
         safeStorageMock.getSelectedStorageBackend.mockReturnValue(backend);

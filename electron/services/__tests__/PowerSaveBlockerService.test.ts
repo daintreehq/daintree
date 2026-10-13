@@ -275,6 +275,23 @@ describe("PowerSaveBlockerService", () => {
       expect(service.isBlocking()).toBe(true);
       expect(service.getActiveCount()).toBe(1);
     });
+
+    it("terminal reuse after exit works correctly", () => {
+      emitStateChanged("term-1", "working", { agentId: "agent-1" });
+
+      events.emit("agent:exited", {
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      expect(service.isBlocking()).toBe(false);
+
+      // Reuse the same terminal with a new agent
+      emitStateChanged("term-1", "working", { agentId: "agent-2" });
+
+      expect(service.isBlocking()).toBe(true);
+      expect(service.getActiveCount()).toBe(1);
+    });
   });
 
   describe("safety timeout", () => {

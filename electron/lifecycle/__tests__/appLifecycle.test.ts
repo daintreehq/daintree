@@ -57,6 +57,10 @@ const enqueueArchiveInstallIntentsMock = vi.hoisted(() =>
 vi.mock("../../setup/archiveInstallIntent.js", () => ({
   enqueueArchiveInstallIntents: enqueueArchiveInstallIntentsMock,
 }));
+const installPluginMock = vi.hoisted(() => vi.fn());
+vi.mock("../../services/PluginService.js", () => ({
+  pluginService: { installPlugin: installPluginMock },
+}));
 // environment.ts registers real `open-file` listeners and calls enableSandbox()
 // at import time; only the external folder-open dispatch is needed here.
 const dispatchOpenDirPathMock = vi.hoisted(() => vi.fn<(dirPath: string) => void>());
@@ -71,6 +75,7 @@ import os from "node:os";
 import nodePath from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AppLifecycleOptions } from "../appLifecycle.js";
+import { broadcastToRenderer } from "../../ipc/utils.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "../shutdownConfig.js";
 
 function makeOpts(overrides?: Partial<AppLifecycleOptions>): AppLifecycleOptions {
@@ -817,6 +822,23 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
 
     expect(appMock.quit).toHaveBeenCalledOnce();
   });
+
+  it("resumes calling app.quit after the recreation flag returns to false", async () => {
+    // Round-trip: a suppressed event during recreation must not leave the
+    // quit path permanently disabled once the recreation settles.
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+    const handler = getWindowAllClosedHandler();
+
+    isWindowRecreatingMock.mockReturnValue(true);
+    handler();
+    expect(appMock.quit).not.toHaveBeenCalled();
+
+    isWindowRecreatingMock.mockReturnValue(false);
+    handler();
+    expect(appMock.quit).toHaveBeenCalledOnce();
+  });
 });
 
 describe("registerAppLifecycleHandlers – activate", () => {
@@ -929,6 +951,36 @@ describe("registerAppLifecycleHandlers – activate", () => {
     appMock.isReady.mockReturnValue(true);
     handle.onLaunchSettled();
 
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("re-evaluates readiness on every activation", async () => {
+    appMock.isReady.mockReturnValue(false);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts({ windowRegistry: makeRegistry(0) });
+    registerAppLifecycleHandlers(opts);
+    const handler = getActivateHandler();
+
+    handler();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+
+    appMock.isReady.mockReturnValue(true);
+    handler();
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("does not touch the registry before the app is ready", async () => {
+    appMock.isReady.mockReturnValue(false);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const registry = {
+      get size(): number {
+        throw new Error("registry accessed pre-ready");
+      },
+    } as AppLifecycleOptions["windowRegistry"];
+    const opts = makeOpts({ windowRegistry: registry });
+    registerAppLifecycleHandlers(opts);
+
+    expect(() => getActivateHandler()()).not.toThrow();
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 });
@@ -1575,5 +1627,25 @@ describe("extractDntrPaths – interaction with folder opens", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("queueDntrPaths", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    enqueueArchiveInstallIntentsMock.mockResolvedValue(undefined);
+  });
+  it("routes archives to the confirmation queue instead of installing them", async () => {
+    const { queueDntrPaths } = await import("../appLifecycle.js");
+
+    await queueDntrPaths(["/tmp/acme.dntr", "/tmp/beta.dntr"]);
+
+    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledExactlyOnceWith([
+      "/tmp/acme.dntr",
+      "/tmp/beta.dntr",
+    ]);
+    expect(installPluginMock).not.toHaveBeenCalled();
+    // No install toast: the renderer owns the outcome once the user approves.
+    expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
 });

@@ -51,11 +51,11 @@ describe("useSoundPlaybackListener", () => {
     delete (window as any).electron;
   });
 
-  it("forwards detune from the trigger payload to playSound", () => {
+  it.each([9, 0])("forwards detune %s from the trigger payload to playSound", (detune) => {
     renderHook(() => useSoundPlaybackListener());
-    triggerCallback!({ soundFile: "pulse.wav", detune: 9 });
+    triggerCallback!({ soundFile: "pulse.wav", detune });
 
-    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", 9);
+    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", detune);
   });
 
   it("calls cancelSound when cancel event fires", () => {

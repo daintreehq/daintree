@@ -868,6 +868,26 @@ describe("terminal pool inspection handlers", () => {
       expect(result).toHaveLength(1);
       expect((result[0] as { id: string }).id).toBe("t-idle");
     });
+
+    it("throws error when ptyClient fails", async () => {
+      const ptyClient = {
+        getAvailableTerminalsAsync: vi.fn(async () => {
+          throw new Error("PTY client error");
+        }),
+      };
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalSnapshotHandlers(deps);
+
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const getAvailableCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_AVAILABLE);
+      const handler = getAvailableCall?.[1] as unknown as () => Promise<unknown[]>;
+
+      await expect(handler()).rejects.toThrow(
+        "Failed to get available terminals: PTY client error"
+      );
+    });
   });
 
   describe("terminal:get-by-state handler", () => {

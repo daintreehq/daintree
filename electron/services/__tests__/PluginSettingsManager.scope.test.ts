@@ -306,6 +306,32 @@ describe("PluginSettingsManager onDidChange failure isolation (#10621)", () => {
     errorSpy.mockRestore();
     warnSpy.mockRestore();
   });
+
+  it("does not quarantine a subscriber that recovers between throws", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const mgr = managerFor([{ id: "token", type: "string", scope: "user" }]);
+    let shouldThrow = true;
+    const cb = vi.fn(() => {
+      if (shouldThrow) throw new Error("intermittent");
+    });
+    mgr.addSubscriber("acme.scope-test", { key: "token", scope: "user", cb });
+
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "a");
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "b");
+    shouldThrow = false;
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "c");
+    shouldThrow = true;
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "d");
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "e");
+
+    // Still subscribed: a final delivery fires.
+    shouldThrow = false;
+    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "f");
+    expect(cb).toHaveBeenCalledTimes(6);
+    expect(cb).toHaveBeenLastCalledWith("f");
+
+    errorSpy.mockRestore();
+  });
 });
 
 describe("PluginSettingsManager local scope", () => {

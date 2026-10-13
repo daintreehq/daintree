@@ -287,4 +287,16 @@ describe("PtyPauseCoordinator", () => {
     expect(pauseTokenFamily("ipc-queue")).toBe("ipc-queue");
     expect(pauseTokenFamily("system-sleep")).toBe("system-sleep");
   });
+
+  it("catches errors from underlying resume", () => {
+    const raw = createMockRaw();
+    raw.resume.mockImplementation(() => {
+      throw new Error("PTY dead");
+    });
+    const coord = new PtyPauseCoordinator(raw);
+
+    coord.pause("backpressure");
+    expect(() => coord.resume("backpressure")).not.toThrow();
+    expect(coord.isPaused).toBe(false);
+  });
 });

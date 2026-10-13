@@ -288,6 +288,32 @@ function makeBaseNode(overrides: Record<string, unknown> = {}): Record<string, u
   };
 }
 
+describe("parsePRNode — repository relationship", () => {
+  it.each([
+    [
+      "different repositories",
+      { nameWithOwner: "fork/repo" },
+      { nameWithOwner: "owner/repo" },
+      true,
+    ],
+    [
+      "the same repository",
+      { nameWithOwner: "owner/repo" },
+      { nameWithOwner: "owner/repo" },
+      false,
+    ],
+    ["a deleted head repository", null, { nameWithOwner: "owner/repo" }, undefined],
+    ["a missing base repository", { nameWithOwner: "fork/repo" }, null, undefined],
+    ["an incomplete head repository", {}, { nameWithOwner: "owner/repo" }, undefined],
+    ["an incomplete base repository", { nameWithOwner: "fork/repo" }, {}, undefined],
+    ["absent repository metadata", undefined, undefined, undefined],
+  ])("keeps fork status accurate for %s", (_label, headRepository, baseRepository, isFork) => {
+    const pr = parsePRNode(makeBaseNode({ headRepository, baseRepository }));
+
+    expect(pr.isFork).toBe(isFork);
+  });
+});
+
 describe("parsePRNode — global CI aggregates", () => {
   it("populates reviewDecision and mergeStateStatus from the node", () => {
     const pr = parsePRNode(

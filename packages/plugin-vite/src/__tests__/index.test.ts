@@ -189,19 +189,34 @@ describe("@daintreehq/plugin-vite — real build honours the unmapped subpath gu
     }
   }
 
-  it("rejects a bundle importing react-dom/server instead of emitting an unresolvable import", async () => {
-    await expect(
-      buildEntry('import { renderToString } from "react-dom/server"; export { renderToString };')
-    ).rejects.toThrow(/react-dom\/server.*import map does not serve/);
-  });
+  it.each(["react-dom/server", "@daintreehq/tour/internal", "@daintreehq/plugin-ui/internal"])(
+    "rejects a bundle importing the unserved subpath %s",
+    async (specifier) => {
+      await expect(
+        buildEntry(`import { internal } from "${specifier}"; export { internal };`)
+      ).rejects.toThrow(new RegExp(`${specifier}.*import map does not serve`));
+    }
+  );
 
-  it("leaves a host-mapped specifier external in the emitted chunk", async () => {
-    const chunks = await buildEntry(
-      'import { createRoot } from "react-dom/client"; export const mount = (el) => createRoot(el);'
-    );
+  it.each([
+    ['import { createRoot } from "react-dom/client"; export { createRoot };', ["react-dom/client"]],
+    [
+      'import { TourPlayer } from "@daintreehq/tour"; import { useCue } from "@daintreehq/tour/react"; import { TourCanvas } from "@daintreehq/tour/kit"; import { MockApp } from "@daintreehq/tour/mock-app"; export { TourPlayer, useCue, TourCanvas, MockApp };',
+      [
+        "@daintreehq/tour",
+        "@daintreehq/tour/kit",
+        "@daintreehq/tour/mock-app",
+        "@daintreehq/tour/react",
+      ],
+    ],
+    [
+      'import { Markdown } from "@daintreehq/plugin-ui"; export { Markdown };',
+      ["@daintreehq/plugin-ui"],
+    ],
+  ] as const)("keeps host imports external when building %s", async (source, imports) => {
+    const chunks = await buildEntry(source);
     expect(chunks).toHaveLength(1);
-    expect(chunks[0]?.imports).toEqual(["react-dom/client"]);
-    expect(chunks[0]?.code).toContain('from "react-dom/client"');
+    expect([...(chunks[0]?.imports ?? [])].sort()).toEqual(imports);
   });
 });
 

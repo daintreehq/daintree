@@ -176,6 +176,15 @@ describe("buildCommandLaunchShell", () => {
       expect(result?.args[0]).toBe("/C");
       expect(result?.args[1]).toBe("chcp 65001 >NUL & npm run dev");
     });
+
+    it("keeps the interactive -i -c form for plain sh", () => {
+      setPlatform("linux");
+
+      const result = buildCommandLaunchShell("npm run dev", "/bin/sh", "exit");
+
+      expect(result?.args.slice(0, 2)).toEqual(["-i", "-c"]);
+      expect(result?.args[2]).toBe("trap : INT\nnpm run dev\nexit");
+    });
   });
 
   describe("common edge cases", () => {

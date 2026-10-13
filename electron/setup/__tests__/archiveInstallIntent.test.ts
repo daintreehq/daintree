@@ -509,4 +509,20 @@ describe("archiveInstallIntent", () => {
     expect(long.endsWith("\u2026")).toBe(true);
     expect(names.at(-1)).not.toContain("\u202E");
   });
+
+  it("starts a fresh worker for an archive queued as the previous drain ends", async () => {
+    // Regression: nulling the worker handle a microtask late left a path queued
+    // with no worker running — it sat unprocessed until an unrelated archive
+    // happened to arrive.
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    const mod = await importFresh();
+
+    await mod.enqueueArchiveInstallIntent(P("first.dntr"));
+    await mod.enqueueArchiveInstallIntent(P("second.dntr"));
+
+    expect(
+      intentsFrom(painted.sent).map((i) => (i as { archivePath: string }).archivePath)
+    ).toEqual([P("first.dntr"), P("second.dntr")]);
+  });
 });

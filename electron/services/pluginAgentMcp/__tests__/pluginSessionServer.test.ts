@@ -326,6 +326,10 @@ describe("createPluginSessionServer", () => {
     it.each([
       ["a missing required property", {}, /must have required property 'id'/],
       ["a wrong type", { id: 7 }, /\/id must be string/],
+      ["a value outside the enum", { id: "a", kind: "refund" }, /\/kind must be equal to one/],
+      ["an over-long string", { id: "a".repeat(9) }, /\/id must NOT have more than 8/],
+      ["an undeclared property", { id: "a", extra: true }, /additional properties \("extra"\)/],
+      ["a numeric string for an integer", { id: "a", count: "2" }, /\/count must be integer/],
     ])(
       "refuses %s as an InvalidParams tool error without dispatching",
       async (_label, args, why) => {

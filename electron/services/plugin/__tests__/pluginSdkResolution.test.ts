@@ -277,7 +277,11 @@ describe("a zero-build plugin importing the SDK", () => {
     expect(JSON.parse(created)).toBe("---\na: 2\n---\n");
   }, 30_000);
 
-  it.each([["nope", /serves only .* to plugin workers\. To use it/]])(
+  it.each([
+    ["react", /is not served because it is for panel views/],
+    ["testing", /is not served because it is a test-time mock host/],
+    ["nope", /serves only .* to plugin workers\. To use it/],
+  ])(
     "fails an import of the %s entry with the reason",
     async (entry, reason) => {
       await expect(

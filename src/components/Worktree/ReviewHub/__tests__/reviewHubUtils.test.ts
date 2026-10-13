@@ -224,7 +224,11 @@ describe("resolveBulkScope", () => {
     // The rule: if ANYTHING is hiding rows, the scope is 'shown'. The bug this
     // pins is a scope that considered only `filterQuery`, so hiding generated
     // files produced an "all" label over a shown-only action.
-    const narrowed = [view({ filterQuery: "src" }), view({ showGenerated: false })];
+    const narrowed = [
+      view({ filterQuery: "src" }),
+      view({ showGenerated: false }),
+      view({ filterQuery: "src", showGenerated: false }),
+    ];
     for (const v of narrowed) {
       expect(resolveBulkScope(v, false)).toBe("shown");
     }

@@ -254,6 +254,9 @@ describe("registry event listeners", () => {
     expect(listener).toHaveBeenCalledTimes(2);
     const calledIds = listener.mock.calls.map((call) => call[0]).sort();
     expect(calledIds).toEqual(["ext-a.one", "ext-a.two"]);
+    expect(getPanelKindConfig("ext-a.one")).toBeUndefined();
+    expect(getPanelKindConfig("ext-a.two")).toBeUndefined();
+    expect(getPanelKindConfig("ext-b.three")).toBeDefined();
   });
 
   it("onPanelKindUnregistered does not fire when no kinds are removed", () => {

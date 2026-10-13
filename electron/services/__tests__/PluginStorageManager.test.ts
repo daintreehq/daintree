@@ -186,6 +186,34 @@ describe("PluginStorageManager subscribers", () => {
     errorSpy.mockRestore();
     warnSpy.mockRestore();
   });
+
+  it("resets the failure counter on a successful notification (no quarantine on intermittent errors)", () => {
+    const mgr = managerFor();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let shouldThrow = true;
+    const cb = vi.fn(() => {
+      if (shouldThrow) throw new Error("intermittent");
+    });
+    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb });
+
+    // Two throws, then a success resets the counter.
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "a");
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "b");
+    shouldThrow = false;
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "c");
+    // Two more throws — still under the consecutive threshold, so not removed.
+    shouldThrow = true;
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "d");
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "e");
+
+    // The subscriber is still live: a final success fires.
+    shouldThrow = false;
+    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "f");
+    expect(cb).toHaveBeenCalledTimes(6);
+    expect(cb).toHaveBeenLastCalledWith("f");
+
+    errorSpy.mockRestore();
+  });
 });
 
 describe("PluginStorageManager evictWorktreeScopedStores", () => {
@@ -216,6 +244,25 @@ describe("PluginStorageManager evictWorktreeScopedStores", () => {
 
     const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
     expect(second).not.toBe(first);
+  });
+
+  it("re-reads the backing file after eviction, dropping a stale in-memory snapshot", async () => {
+    const mgr = managerFor();
+    const filePath = path.join(tmpDir, "wt-stale.json");
+    const first = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(await first.set("k", "old")).toBe(true);
+    expect(await first.get("k")).toBe("old");
+
+    // Simulate the file changing out from under the cached store while the
+    // worktree was inactive (e.g. another window wrote it).
+    await fs.writeFile(filePath, JSON.stringify({ k: "new" }), "utf-8");
+
+    mgr.evictWorktreeScopedStores();
+
+    // A post-eviction store reads the updated value straight from disk.
+    const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
+    expect(second).not.toBe(first);
+    expect(await second.get("k")).toBe("new");
   });
 });
 

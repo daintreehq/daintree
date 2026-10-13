@@ -48,4 +48,4 @@ Each window has one PTY MessagePort, connected to the shard owning the window's 
 
 - `electron/services/__tests__/PtyClient.fabric.test.ts` — placement, port routing/reroute, ready replay, crash isolation (scoped orphan cleanup, per-shard respawn), crash-loop migration, default-shard crash budget, idle retirement, cap overflow, aggregated signals, rollup/flow-control/all-terminals merges, fan-out controls.
 - `electron/services/pty/__tests__/fabricConfig.test.ts` — policy clamps and service-name uniqueness.
-- Singleton parity: the entire pre-existing `PtyClient.*` suite (adversarial, handshake with its multi-port, deferStart, projectId and host-pid specs, lifecycleLedger with its watchdog and Windows PATH specs, ipc.integration) runs unchanged with the flag off.
+- Singleton parity: the retained `PtyClient.*` suites (adversarial, handshake with its multi-port, deferStart, projectId and host-pid specs, lifecycleLedger with its watchdog and Windows PATH specs, ipc.integration) continue to exercise the singleton path with the flag off.

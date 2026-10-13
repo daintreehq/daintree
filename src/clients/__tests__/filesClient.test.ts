@@ -45,6 +45,21 @@ describe("filesClient.search caching", () => {
     expect(mockSearch).toHaveBeenCalledTimes(1);
   });
 
+  it("re-fetches after TTL expires", async () => {
+    const payload = { cwd: "/project", query: "index", limit: 50 };
+
+    await filesClient.search(payload);
+    expect(mockSearch).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(5_001);
+
+    mockSearch.mockResolvedValueOnce({ files: ["c.ts"] });
+    const r2 = await filesClient.search(payload);
+
+    expect(mockSearch).toHaveBeenCalledTimes(2);
+    expect(r2).toEqual({ files: ["c.ts"] });
+  });
+
   it("uses separate cache entries for different cwd", async () => {
     await filesClient.search({ cwd: "/a", query: "q" });
     await filesClient.search({ cwd: "/b", query: "q" });

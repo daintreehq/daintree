@@ -1081,6 +1081,17 @@ describe("startRemoteHosts", () => {
     m.server.listen.mockRejectedValueOnce(new Error("no /run/user/501"));
     await expect(startRemoteHosts({ hostMode: true })).rejects.toThrow("no /run/user/501");
   });
+
+  it("tells the lease when a Shell's link drops and resumes", async () => {
+    await startRemoteHosts({ hostMode: true });
+    for (const l of m.transportListeners) l(["remote:s1:view-11"], false);
+    expect(m.lease.noteEndpointTransport).toHaveBeenCalledWith(["remote:s1:view-11"], false);
+    for (const l of m.transportListeners) l(["remote:s1:view-11"], true);
+    expect(m.lease.noteEndpointTransport).toHaveBeenLastCalledWith(["remote:s1:view-11"], true);
+
+    await stopRemoteHosts();
+    expect(m.transportListeners.size).toBe(0);
+  });
 });
 
 describe("stopRemoteHosts", () => {

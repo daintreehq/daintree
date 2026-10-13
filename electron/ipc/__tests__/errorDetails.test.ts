@@ -38,3 +38,19 @@ describe("AppError details", () => {
     expect("details" in serialized).toBe(false);
   });
 });
+
+describe("AppError details allowlist", () => {
+  it("drops unrecognised shapes and extra fields", () => {
+    const stray = serializeError(
+      Object.assign(new Error("x"), { details: { code: "OTHER", secret: "/Users/greg/.ssh" } })
+    );
+    expect(stray.details).toBeUndefined();
+
+    const extra = serializeError(
+      Object.assign(new Error("x"), {
+        details: { code: "PLUGIN_NOT_ON_HOST", pluginId: "p", hostId: "h", path: "/Users/greg" },
+      })
+    );
+    expect(extra.details).toEqual({ code: "PLUGIN_NOT_ON_HOST", pluginId: "p", hostId: "h" });
+  });
+});

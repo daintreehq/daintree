@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
+import { clearPanelKindRegistry, registerPanelKind } from "../../config/panelKindRegistry.js";
 import {
   isBuiltInPanelKind,
   isBrowserPanel,
@@ -26,6 +27,38 @@ describe("isBuiltInPanelKind", () => {
   it("is case-sensitive", () => {
     expect(isBuiltInPanelKind("Terminal")).toBe(false);
     expect(isBuiltInPanelKind("DEV-PREVIEW")).toBe(false);
+  });
+});
+
+describe("isDockPanel — plugin kinds follow the registry", () => {
+  afterEach(() => clearPanelKindRegistry());
+
+  it("tracks plugin registration and changes to its dockable policy", () => {
+    const panel: TerminalInstance = {
+      id: "plugin-panel",
+      kind: "ext-a.viewer",
+      title: "Viewer",
+      location: "dock",
+      pluginId: "ext-a",
+    };
+    const config = {
+      id: "ext-a.viewer",
+      name: "Viewer",
+      iconId: "puzzle",
+      color: "#123456",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      extensionId: "ext-a",
+    };
+
+    expect(isDockPanel(panel)).toBe(false);
+    registerPanelKind(config);
+    expect(isDockPanel(panel)).toBe(true);
+    registerPanelKind({ ...config, dockable: false });
+    expect(isDockPanel(panel)).toBe(false);
+    clearPanelKindRegistry();
+    expect(isDockPanel(panel)).toBe(false);
   });
 });
 

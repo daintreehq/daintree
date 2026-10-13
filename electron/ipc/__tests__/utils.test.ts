@@ -220,6 +220,7 @@ describe("broadcastToRenderer", () => {
   it("sends to multiple alive windows", () => {
     const send1 = vi.fn();
     const send2 = vi.fn();
+    const deadSend = vi.fn();
     const win1 = {
       isDestroyed: () => false,
       webContents: { isDestroyed: () => false, send: send1 },
@@ -228,13 +229,20 @@ describe("broadcastToRenderer", () => {
       isDestroyed: () => false,
       webContents: { isDestroyed: () => false, send: send2 },
     };
-    browserWindowGetAllWindowsMock.mockReturnValue([win1, win2]);
+    browserWindowGetAllWindowsMock.mockReturnValue([
+      win1,
+      { isDestroyed: () => true, webContents: { isDestroyed: () => false, send: deadSend } },
+      { isDestroyed: () => false, webContents: { isDestroyed: () => true, send: deadSend } },
+      { isDestroyed: () => false },
+      win2,
+    ]);
 
     broadcastToRenderer("channel:test", { payload: true });
     expect(send1).toHaveBeenCalledTimes(1);
     expect(send1).toHaveBeenCalledWith("channel:test", { payload: true });
     expect(send2).toHaveBeenCalledTimes(1);
     expect(send2).toHaveBeenCalledWith("channel:test", { payload: true });
+    expect(deadSend).not.toHaveBeenCalled();
   });
 
   it("does not throw when webContents.send throws", () => {
@@ -440,6 +448,7 @@ describe("sendToRendererContext", () => {
     };
 
     sendToRendererContext(ctx as never, "channel:test", "data");
+    sendToRendererContext({ ...ctx, senderWindow: null } as never, "channel:test", "data");
     expect(send).not.toHaveBeenCalled();
   });
 });

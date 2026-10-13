@@ -699,6 +699,18 @@ describe("terminal event handlers — resize-result forwarding (#11641)", () => 
     expect(resizeEnvelopes()).toHaveLength(0);
     expect(ptyClient.listenerCount("resize-result")).toBe(0);
   });
+
+  it("forwards a result with no confirmed geometry without inventing one", () => {
+    ptyClient.emit(
+      "resize-result",
+      "t1",
+      makeResult({ outcome: "deferred", appliedCols: null, appliedRows: null })
+    );
+
+    const payload = resizeEnvelopes()[0]?.[2]?.payload as [string, TerminalResizeResult];
+    expect(payload[1].appliedCols).toBeNull();
+    expect(payload[1].appliedRows).toBeNull();
+  });
 });
 
 describe("terminal exit forwarding during restart", () => {
@@ -730,6 +742,15 @@ describe("terminal exit forwarding during restart", () => {
     expect(broadcastToRenderer).toHaveBeenCalledExactlyOnceWith(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
       payload: ["t1", 1],
+    });
+  });
+
+  it("continues forwarding ordinary successful exits", () => {
+    ptyClient.emit("exit", "t1", 0);
+
+    expect(broadcastToRenderer).toHaveBeenCalledExactlyOnceWith(CHANNELS.EVENTS_PUSH, {
+      name: "terminal:exit",
+      payload: ["t1", 0],
     });
   });
 });

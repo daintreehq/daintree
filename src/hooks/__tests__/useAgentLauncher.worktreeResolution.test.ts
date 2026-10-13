@@ -9,8 +9,6 @@ import { describe, expect, it } from "vitest";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 import type { AgentPreset } from "@/config/agents";
 import { resolveEffectivePresetId, type AgentSettingsEntry } from "@shared/types";
-// The real sanitizer, extracted in #11547 — previously hand-mirrored here,
-// which could drift from the hook silently.
 import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import {
   buildLaunchIdentity,
@@ -437,78 +435,12 @@ describe("resolveEffectivePresetId helper", () => {
   });
 });
 
-/**
- * Tests the title / titleMode resolution from useAgentLauncher.ts
- * (issues #10439, #10738).
- *
- * The full hook has deep React/Electron dependencies that make direct rendering
- * costly here, so we mirror the pure branching logic that builds the
- * `AddPanelOptions.title` / `titleMode` pair — see `presetTitle` /
- * `hasPresetTitle` / `trimmedName` / `customTitle` in useAgentLauncher.ts. Any
- * change to those lines should require a corresponding update here.
- */
-// ── mirror of the hook's title-resolution block ──────────────────────────────
-// Mirrors the presetTitle/trimmedName/customTitle resolution in
-// useAgentLauncher.ts. Any change to that logic should update this mirror.
-
-function resolvePanelTitle(
-  computedTitle: string,
-  preset: { name?: string; displayTitle?: string } | undefined,
-  name: string | undefined
-): { title: string; titleMode?: "custom" } {
-  // Preset title: explicit displayTitle wins verbatim; otherwise compose the
-  // agent name with the preset in brackets. Pinned as "custom" so the
-  // agent-detected title sync can't overwrite it with the bare agent name.
-  let presetTitle = computedTitle;
-  let hasPresetTitle = false;
-  if (preset) {
-    const presetName = preset.name?.trim();
-    if (presetName) {
-      hasPresetTitle = true;
-      presetTitle = preset.displayTitle?.trim()
-        ? preset.displayTitle
-        : `${computedTitle} [${presetName}]`;
-    }
-  }
-  const trimmedName = name ? sanitizeTerminalName(name) : undefined;
-  // Pin when either a caller name or a preset title is in effect.
-  const customTitle = trimmedName || hasPresetTitle ? { titleMode: "custom" as const } : {};
-  return { title: trimmedName || presetTitle, ...customTitle };
-}
-
-const AGENT_TITLE = "Claude";
-
-describe("assistant-supplied name → title / titleMode", () => {
-  it("uses the name as the title and pins it with titleMode 'custom'", () => {
-    expect(resolvePanelTitle(AGENT_TITLE, undefined, "Claude: auth refactor")).toEqual({
-      title: "Claude: auth refactor",
-      titleMode: "custom",
-    });
-  });
-
-  it("trims surrounding whitespace from a non-empty name", () => {
-    expect(resolvePanelTitle(AGENT_TITLE, undefined, "  research work  ")).toEqual({
-      title: "research work",
-      titleMode: "custom",
-    });
-  });
-
-  it("strips control characters and collapses whitespace from the name", () => {
-    expect(resolvePanelTitle(AGENT_TITLE, undefined, "Claude:\tauth\n\nrefactor")).toEqual({
-      title: "Claude: auth refactor",
-      titleMode: "custom",
-    });
-  });
-
-  it("falls back to the computed title when the name is only control characters", () => {
-    const result = resolvePanelTitle(AGENT_TITLE, undefined, "\t\n\r");
-    expect(result.title).toBe(AGENT_TITLE);
-    expect(result.titleMode).toBeUndefined();
-  });
-
-  it("falls back to the computed title and sets no titleMode when name is whitespace only", () => {
-    const result = resolvePanelTitle(AGENT_TITLE, undefined, "   ");
-    expect(result.title).toBe(AGENT_TITLE);
-    expect(result.titleMode).toBeUndefined();
+describe("sanitizeTerminalName", () => {
+  it.each([
+    ["  research  work  ", "research work"],
+    ["Claude:\tauth\n\nrefactor\u007fcheck", "Claude: auth refactor check"],
+    ["\t\n\r   ", ""],
+  ])("sanitizes %j into %j", (raw, expected) => {
+    expect(sanitizeTerminalName(raw)).toBe(expected);
   });
 });

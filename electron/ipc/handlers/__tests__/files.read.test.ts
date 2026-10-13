@@ -581,6 +581,20 @@ describe("files:read handler", () => {
       expect(fsMock.open).not.toHaveBeenCalled();
     });
   });
+
+  it("opens the file with O_RDONLY | O_NOFOLLOW", async () => {
+    const content = Buffer.from("hi", "utf-8");
+    fsMock.stat.mockResolvedValue({ size: content.length });
+    fsMock.open.mockResolvedValue(makeFileHandle(content));
+    registerFilesHandlers();
+
+    await getReadHandler()({}, { path: file, rootPath: root });
+
+    expect(fsMock.open).toHaveBeenCalledWith(
+      file,
+      fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW | fsMock.constants.O_NONBLOCK
+    );
+  });
 });
 
 describe("files:read HTML preview mint (#11191)", () => {

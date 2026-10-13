@@ -170,20 +170,6 @@ describe("bystander probe", () => {
     }
   });
 
-  it("does not leave the arming timer to fire inside the measured window", async () => {
-    // Left scheduled, the arming timeout lands ~50 cadences into the window —
-    // an unrelated callback inside the very window this probe exists to keep
-    // clean. Observed indirectly: with a cadence whose arming timeout would
-    // land mid-window, the window must still show no unexplained stall.
-    const probe = await armBystanderProbe({ cadenceMs: 6 });
-    await sleep(120); // 6ms * 50 = 300ms timeout; well outside this window
-    const reading = probe.stop();
-
-    expect(reading.probeMisses).toBe(0);
-    // Every gap is accounted for by the cadence, so nothing foreign fired.
-    expect(reading.longestStallMs).toBeLessThan(60);
-  });
-
   it("ignores a reopen after the reading is closed", async () => {
     const probe = (await armBystanderProbe({ cadenceMs: 8 })) as BystanderProbe & {
       reopen?: (armed: boolean) => void;

@@ -1,12 +1,28 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveViteBin, findServerConfig, resolveVitePlan } from "../lib/viteBuild.js";
+import {
+  resolveViteBin,
+  findServerConfig,
+  resolveVitePlan,
+  spawnViteWatch,
+} from "../lib/viteBuild.js";
+
+const watcher = vi.hoisted(() => ({ then: vi.fn(), kill: vi.fn() }));
+vi.mock("execa", () => ({ execa: vi.fn(() => watcher) }));
 
 describe("viteBuild", () => {
   it("resolveViteBin throws a fix-it message when Vite isn't installed", () => {
     expect(() => resolveViteBin("/nonexistent/plugin/dir")).toThrow(/Couldn't find Vite/);
+  });
+
+  it("returns a live watcher without awaiting the long-running process", () => {
+    const child = spawnViteWatch(process.cwd());
+    expect(child).toBe(watcher);
+    expect(watcher.then).not.toHaveBeenCalled();
+    child.kill();
+    expect(watcher.kill).toHaveBeenCalledOnce();
   });
 });
 

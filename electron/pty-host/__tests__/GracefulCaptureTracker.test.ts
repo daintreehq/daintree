@@ -355,4 +355,13 @@ describe("GracefulCaptureTracker", () => {
     const context = captureLogs()[0]!.context as Record<string, unknown>;
     expect(context).toMatchObject({ sleepHeld: true, suppressed: [] });
   });
+
+  it("drops every window on dispose", () => {
+    const { tracker, addTerminal, open } = createHost();
+    addTerminal("t1");
+    const lease = open("t1");
+    tracker.dispose();
+    expect(tracker.isCapturing("t1")).toBe(false);
+    expect(() => lease.close()).not.toThrow();
+  });
 });

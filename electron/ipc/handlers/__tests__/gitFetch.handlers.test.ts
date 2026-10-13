@@ -137,4 +137,10 @@ describe("git:fetch IPC", () => {
 
     await expect(invoke({ cwd: "/repo" })).rejects.toThrow();
   });
+
+  it("sends prune=true for Fetch and prune", async () => {
+    await invoke({ cwd: "/repo", prune: true });
+
+    expect(fetchWorktree).toHaveBeenCalledWith("/repo", true);
+  });
 });

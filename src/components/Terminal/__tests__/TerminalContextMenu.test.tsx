@@ -56,7 +56,9 @@ const {
   reportFileLinkFailure: vi.fn(),
   // `name`/`branch` are carried because the "Move to worktree" submenu labels
   // every entry from them and throws on a bare {id, path}.
-  worktreeList: { current: [] as Array<{ id: string; path: string; name: string }> },
+  worktreeList: {
+    current: [] as Array<{ id: string; path: string; name: string; branch?: string }>,
+  },
   fleetEligible: { current: false },
   snapshotState: {
     current: null as { runs: Array<Record<string, unknown>>; degraded?: boolean } | null,
