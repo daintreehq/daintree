@@ -13,11 +13,13 @@ import { render, screen, act, cleanup, fireEvent } from "@testing-library/react"
 
 import type { CopyTreeHistoryRecord } from "@shared/types";
 import { DropdownMenu, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { primeRadix } from "@/components/ui/radix-loader";
 import {
   CopyTreeMenuContent,
   formatRecentMeta,
   formatRecentTrailing,
+  splitRecentName,
 } from "../CopyTreeRecentsPanel";
 import {
   useCopyTreeHistoryStore,
@@ -27,22 +29,27 @@ import {
 // Hoisted so the mock factory can reference the spy directly rather than
 // through a closure that only resolves at mount time — a later edit to
 // `init: initSpy` would otherwise become a TDZ collection failure.
-const { initSpy } = vi.hoisted(() => ({ initSpy: vi.fn() }));
+const { initSpy, retrySpy } = vi.hoisted(() => ({ initSpy: vi.fn(), retrySpy: vi.fn() }));
 
 vi.mock("@/store/copyTreeHistoryStore", async () => {
   const { create } = await import("zustand");
   const store = create<{
     records: CopyTreeHistoryRecord[];
     loading: boolean;
+    error: boolean;
     init: () => void;
+    retry: () => void;
   }>(() => ({
     records: [],
     loading: true,
+    error: false,
     init: initSpy,
+    retry: retrySpy,
   }));
   return {
     useCopyTreeHistoryStore: store,
-    _resetCopyTreeHistoryStoreForTest: () => store.setState({ records: [], loading: true }),
+    _resetCopyTreeHistoryStoreForTest: () =>
+      store.setState({ records: [], loading: true, error: false }),
   };
 });
 
@@ -83,17 +90,22 @@ const noop = () => {};
  * Mounted open inside a real menu root: the content is a Radix
  * `DropdownMenuContent`, which only exists while its root is open.
  */
-function renderMenu(props: Partial<React.ComponentProps<typeof CopyTreeMenuContent>> = {}) {
+function renderMenu(
+  props: Partial<React.ComponentProps<typeof CopyTreeMenuContent>> = {},
+  onOpenChange?: (open: boolean) => void
+) {
   return render(
-    <DropdownMenu open>
-      <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
-      <CopyTreeMenuContent
-        onCopyFullContext={noop}
-        onRunRecent={noop}
-        onOpenContextSettings={noop}
-        {...props}
-      />
-    </DropdownMenu>
+    <TooltipProvider>
+      <DropdownMenu open onOpenChange={onOpenChange}>
+        <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
+        <CopyTreeMenuContent
+          onCopyFullContext={noop}
+          onRunRecent={noop}
+          onOpenContextSettings={noop}
+          {...props}
+        />
+      </DropdownMenu>
+    </TooltipProvider>
   );
 }
 
@@ -105,6 +117,7 @@ function listedRecents(): HTMLElement[] {
 describe("CopyTreeMenuContent", () => {
   beforeEach(() => {
     initSpy.mockClear();
+    retrySpy.mockClear();
     _resetCopyTreeHistoryStoreForTest();
   });
 
@@ -168,10 +181,44 @@ describe("CopyTreeMenuContent", () => {
     seed([]);
     renderMenu();
     // Empty-state convention: point at what to do, not at what is missing —
-    // and at an action that can actually populate the list.
-    const empty = screen.getByRole("menuitem", { name: /copy a folder to reuse/i });
-    expect(empty.getAttribute("data-disabled")).not.toBeNull();
+    // and at an action that can actually populate the list. It is a sentence
+    // to read, not a switched-off command, so it is no menuitem at all.
+    const empty = screen.getByText(/copy a folder to reuse/i);
+    expect(empty.closest('[role="menuitem"]')).toBeNull();
     expect((empty.textContent ?? "").toLowerCase()).not.toContain("no recent");
+  });
+
+  it("tells a failed history read apart from an empty history, and retries in place", () => {
+    act(() => {
+      useCopyTreeHistoryStore.setState({ records: [], loading: false, error: true });
+    });
+    const onOpenChange = vi.fn();
+    renderMenu({}, onOpenChange);
+    expect(screen.queryByText(/copy a folder to reuse/i)).toBeNull();
+    screen.getByText(/couldn.t load recent copies/i);
+    const retry = screen.getByRole("menuitem", { name: /retry/i });
+    retrySpy.mockImplementationOnce(() => {
+      useCopyTreeHistoryStore.setState({ loading: true, error: false });
+    });
+    act(() => {
+      fireEvent.click(retry);
+    });
+    expect(retrySpy).toHaveBeenCalledTimes(1);
+    // The menu asks to stay open for the answer: a plain select would close it.
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(screen.queryByRole("menuitem", { name: /retry/i })).toBeNull();
+    // Focus goes to the menu, not to a row that no longer exists.
+    expect(document.activeElement?.getAttribute("role")).toBe("menu");
+  });
+
+  it("lists recents under a group named by its label", () => {
+    seed([makeRecord()]);
+    renderMenu();
+    const group = screen.getByRole("group");
+    const labelId = group.getAttribute("aria-labelledby");
+    expect(labelId).toBeTruthy();
+    expect(document.getElementById(labelId!)?.textContent).toBe("Recent");
+    expect(group.querySelector("[data-copy-tree-recent]")).not.toBeNull();
   });
 
   it("surfaces only the five newest runs, in the order Main sent them", () => {
@@ -380,5 +427,39 @@ describe("formatRecentMeta", () => {
     expect(trailing.startsWith(formatBytes(2048))).toBe(true);
     // Everything the slot shows, the full description also says.
     for (const token of trailing.split(" · ")) expect(full).toContain(token);
+  });
+});
+
+describe("splitRecentName", () => {
+  it("pins a path's last segment, slash included, so it survives truncation", () => {
+    expect(splitRecentName("src/components/Layout")).toEqual({
+      head: "src/components",
+      leaf: "/Layout",
+    });
+  });
+
+  it("does not split on a trailing or leading slash alone", () => {
+    expect(splitRecentName("src/")).toEqual({ head: "src/", leaf: "" });
+    expect(splitRecentName("/root")).toEqual({ head: "/root", leaf: "" });
+    expect(splitRecentName("a/b/")).toEqual({ head: "a", leaf: "/b/" });
+  });
+
+  it("leaves names without a path leaf whole", () => {
+    expect(splitRecentName("Changed files only")).toEqual({
+      head: "Changed files only",
+      leaf: "",
+    });
+    expect(splitRecentName("docs")).toEqual({ head: "docs", leaf: "" });
+    expect(splitRecentName("mcp-server + shared/types/ipc as markdown")).toEqual({
+      head: "mcp-server + shared/types/ipc as markdown",
+      leaf: "",
+    });
+  });
+
+  it("joins back into the name it came from", () => {
+    for (const name of ["a/b/c", "src/", "/root", "x y/z", "electron/services/mcp-server"]) {
+      const { head, leaf } = splitRecentName(name);
+      expect(head + leaf).toBe(name);
+    }
   });
 });
