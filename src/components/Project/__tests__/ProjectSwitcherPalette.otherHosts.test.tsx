@@ -293,7 +293,13 @@ const onCloseProject = vi.fn();
 
 // Steps the selection the way useProjectSwitcherPalette does: relative, wrapping,
 // resolved inside the updater so batched steps compose.
-function Harness({ results = RESULTS }: { results?: ProjectSwitcherProjectRow[] }) {
+function Harness({
+  results = RESULTS,
+  query = "",
+}: {
+  results?: ProjectSwitcherProjectRow[];
+  query?: string;
+}) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const step = (delta: number) =>
     setSelectedIndex((from) =>
@@ -303,7 +309,7 @@ function Harness({ results = RESULTS }: { results?: ProjectSwitcherProjectRow[] 
     <ProjectSwitcherPalette
       isOpen
       mode="modal"
-      query=""
+      query={query}
       results={results}
       selectedIndex={selectedIndex}
       onQueryChange={vi.fn()}
@@ -498,6 +504,25 @@ describe("ProjectSwitcherPalette other-host rows", () => {
     expect(active()).toBe(id(API));
     rerender(<Harness results={RESULTS} />);
     expect(active()).toBe("project-option-p1");
+  });
+
+  it("forgets a band pick made under an earlier query once the query is cleared", () => {
+    const { rerender } = render(<Harness />);
+    press("ArrowUp");
+    expect(active()).toBe(id(WEB));
+    hostOptions.value = band([]);
+    rerender(<Harness query="project" />);
+    hostOptions.value = band(OPTIONS);
+    rerender(<Harness />);
+    expect(active()).toBe("project-option-p1");
+  });
+
+  it("keeps an automatic pick the pointer moved onto once local results arrive", () => {
+    const { rerender } = render(<Harness results={[]} />);
+    expect(active()).toBe(id(API));
+    fireEvent.pointerMove(document.getElementById(id(API))!);
+    rerender(<Harness results={RESULTS} />);
+    expect(active()).toBe(id(API));
   });
 
   it("names this host beside a local project another host also has", () => {

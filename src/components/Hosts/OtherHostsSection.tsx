@@ -261,9 +261,7 @@ export function OtherHostsSection({
                     aria-label={optionLabel(option, group.note)}
                     data-host-id={option.hostId}
                     data-option-kind={option.kind}
-                    onPointerMove={
-                      onHoverKey && !isActive ? () => onHoverKey(option.key) : undefined
-                    }
+                    onPointerMove={onHoverKey ? () => onHoverKey(option.key) : undefined}
                     className={cn(
                       PALETTE_ROW_CLASS,
                       "flex w-full min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-sm cursor-pointer",

@@ -291,6 +291,19 @@ describe("HostSwitcherPalette", () => {
     expect(row("h1").getAttribute("aria-selected")).toBe("true");
   });
 
+  it("leaves the cursor where the user put it when hosts arrive after opening", () => {
+    hostList.value = { hosts: [], localSummary: null };
+    const { rerender } = render(<HostSwitcherPalette />);
+    act(() => usePaletteStore.getState().openPalette("host-switcher"));
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    rerender(<HostSwitcherPalette />);
+    expect(row("local").getAttribute("aria-selected")).toBe("true");
+  });
+
   it("starts each opening on its first other host, wherever the last one ended", () => {
     hostList.value = {
       hosts: [

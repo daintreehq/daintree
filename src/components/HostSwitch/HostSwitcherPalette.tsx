@@ -96,6 +96,7 @@ export function HostSwitcherPalette() {
       placedForOpening.current = false;
       return;
     }
+    // Placed already, or the user moved first: a host arriving late must not take the cursor.
     if (placedForOpening.current || query !== "") return;
     // Not settled until another host is listed: opened before the host list
     // arrives, the only row is this one.
@@ -214,11 +215,20 @@ export function HostSwitcherPalette() {
       totalResults={palette.totalResults}
       selectedIndex={selectedIndex}
       onQueryChange={setQuery}
-      onSelectPrevious={palette.selectPrevious}
-      onSelectNext={palette.selectNext}
+      onSelectPrevious={() => {
+        placedForOpening.current = true;
+        palette.selectPrevious();
+      }}
+      onSelectNext={() => {
+        placedForOpening.current = true;
+        palette.selectNext();
+      }}
       onConfirm={handleConfirm}
       onClose={close}
-      onHoverIndex={setSelectedIndex}
+      onHoverIndex={(index) => {
+        placedForOpening.current = true;
+        setSelectedIndex(index);
+      }}
       getItemId={getRowId}
       renderItem={renderItem}
       getFooter={footerFor}

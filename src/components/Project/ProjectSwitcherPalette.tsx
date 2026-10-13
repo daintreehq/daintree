@@ -2545,6 +2545,11 @@ function ProjectPaletteInner({
   // later, with rows drawn above it, can't move what Enter opens.
   const defaultHostKey =
     claimedHostIndex < 0 && defaultHostIndex >= 0 ? hostOptions[defaultHostIndex]!.key : null;
+  // A claim belongs to the query it was made under; left in place it would
+  // come back when the query is cleared, pointing Enter at a row nobody chose.
+  useEffect(() => {
+    setHostCursorState((prev) => (prev !== null && prev.query !== query ? null : prev));
+  }, [query]);
   useEffect(() => {
     if (defaultHostKey !== null) setHostCursorState({ query, key: defaultHostKey, auto: true });
   }, [defaultHostKey, query]);
@@ -2954,7 +2959,14 @@ function ProjectPaletteInner({
           groups={hostGroups}
           activeKey={activeHostOption?.key ?? null}
           onChosen={onClose}
-          onHoverKey={(key) => setHostCursorState({ query, key })}
+          // Also turns an automatic pick under the pointer into a chosen one.
+          onHoverKey={(key) =>
+            setHostCursorState((prev) =>
+              prev !== null && prev.key === key && prev.query === query && !prev.auto
+                ? prev
+                : { query, key }
+            )
+          }
         />
       </AppPaletteDialog.Body>
 
