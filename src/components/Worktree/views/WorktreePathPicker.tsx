@@ -1,15 +1,16 @@
+import { useLayoutEffect, useRef } from "react";
 import { Spinner } from "@/components/ui/Spinner";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { BrowseSlotButton, SlottedInputField } from "@/components/Project/projectDialogFields";
 import { useHostPlatform } from "@/hooks/useHostPlatform";
+import type { ErrorField } from "../hooks/useWorktreeFormErrors";
 
 interface WorktreePathPickerProps {
   value: string;
   onChange: (value: string) => void;
   isPending?: boolean;
   isGeneratingPath: boolean;
-  errorField?: "base-branch" | "new-branch" | "worktree-path" | null;
-  pathWasAutoResolved: boolean;
+  errorField?: ErrorField | null;
   onBrowseClick: () => void;
   disabled?: boolean;
 }
@@ -28,7 +29,6 @@ export function WorktreePathPicker({
   isPending,
   isGeneratingPath,
   errorField,
-  pathWasAutoResolved,
   onBrowseClick,
   disabled,
 }: WorktreePathPickerProps) {
@@ -39,40 +39,56 @@ export function WorktreePathPicker({
   const showGeneratingSpinner = useDohertyGate(isGeneratingPath);
   const hasError = errorField === "worktree-path";
 
+  // A generated path differs from its siblings only in the last segment, which
+  // is exactly what a left-anchored input clips. While the field isn't being
+  // edited, show the tail; the user's own caret wins once they're in it.
+  const inputRef = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input || document.activeElement === input) return;
+    input.scrollLeft = input.scrollWidth;
+  }, [value]);
+
   return (
-    <div className="space-y-1.5">
-      <SlottedInputField
-        id="worktree-path"
-        data-testid="worktree-path-input"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={platform === "win32" ? "C:\\path\\to\\worktree" : "/path/to/worktree"}
-        spellCheck={false}
-        autoComplete="off"
-        autoCorrect="off"
-        autoCapitalize="off"
-        className="font-mono text-xs"
-        disabled={isPending}
-        invalid={hasError}
-        aria-describedby={hasError ? "validation-error" : undefined}
-        trailing={
-          <>
-            {showGeneratingSpinner && (
-              <Spinner size="sm" className="mr-1.5 shrink-0 text-text-secondary" />
-            )}
-            <BrowseSlotButton
-              onBrowse={onBrowseClick}
-              disabled={disabled}
-              label="Browse for a worktree directory"
-            />
-          </>
-        }
-      />
-      {pathWasAutoResolved && (
-        <p className="text-xs text-text-secondary" role="status" aria-live="polite">
-          Renamed to avoid a conflict with an existing directory
-        </p>
-      )}
-    </div>
+    <SlottedInputField
+      ref={inputRef}
+      id="worktree-path"
+      data-testid="worktree-path-input"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={(e) => {
+        e.currentTarget.scrollLeft = e.currentTarget.scrollWidth;
+      }}
+      placeholder={platform === "win32" ? "C:\\path\\to\\worktree" : "/path/to/worktree"}
+      spellCheck={false}
+      autoComplete="off"
+      autoCorrect="off"
+      autoCapitalize="off"
+      className="font-mono text-xs"
+      disabled={isPending}
+      invalid={hasError}
+      aria-describedby={hasError ? "validation-error" : undefined}
+      trailing={
+        <>
+          {showGeneratingSpinner && (
+            <Spinner size="sm" className="mr-1.5 shrink-0 text-text-secondary" />
+          )}
+          <BrowseSlotButton
+            onBrowse={onBrowseClick}
+            disabled={disabled}
+            label="Browse for a worktree directory"
+          />
+        </>
+      }
+    />
+  );
+}
+
+/** Rides the row's hint rail — see `BranchResolvedHint`. */
+export function PathResolvedHint() {
+  return (
+    <p className="text-xs text-text-secondary" role="status" aria-live="polite">
+      Renamed to avoid a conflict with an existing directory
+    </p>
   );
 }

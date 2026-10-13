@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { FIELD_INPUT } from "./WorktreeFormLayout";
 import type { PrefixSuggestion } from "../branchPrefixUtils";
+import type { ErrorField } from "../hooks/useWorktreeFormErrors";
 
 interface NewBranchInputProps {
   value: string;
@@ -13,7 +14,7 @@ interface NewBranchInputProps {
   onBlur: React.FocusEventHandler<HTMLInputElement>;
   isPending?: boolean;
   isCheckingBranch: boolean;
-  errorField?: "base-branch" | "new-branch" | "worktree-path" | null;
+  errorField?: ErrorField | null;
   branchWasAutoResolved: boolean;
   prefixPickerOpen: boolean;
   onPrefixPickerOpenChange: (open: boolean) => void;
@@ -61,7 +62,7 @@ export function NewBranchInput({
   const hasError = errorField === "new-branch";
 
   return (
-    <div className="space-y-1.5">
+    <>
       {/* Anchor, not trigger: this list is opened by typing, never by clicking.
           As a trigger, Radix bound a toggle to the field itself, so clicking
           into your own text to fix a typo dismissed the suggestions. An anchor
@@ -173,16 +174,24 @@ export function NewBranchInput({
           </ScrollShadow>
         </PopoverContent>
       </Popover>
-      {branchWasAutoResolved && (
-        <p
-          id="branch-resolved-hint"
-          className="text-xs text-text-secondary"
-          role="status"
-          aria-live="polite"
-        >
-          Renamed to avoid a conflict with an existing branch
-        </p>
-      )}
-    </div>
+    </>
+  );
+}
+
+/**
+ * Rides the row's hint rail, under the field, rather than inside the control
+ * cell: inside, it grew the cell and pulled the "Name" label off the field's
+ * centre line. Keeps the id the input's `aria-describedby` points at.
+ */
+export function BranchResolvedHint() {
+  return (
+    <p
+      id="branch-resolved-hint"
+      className="text-xs text-text-secondary"
+      role="status"
+      aria-live="polite"
+    >
+      Renamed to avoid a conflict with an existing branch
+    </p>
   );
 }

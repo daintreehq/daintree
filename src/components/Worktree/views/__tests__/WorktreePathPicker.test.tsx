@@ -18,7 +18,6 @@ function renderPicker(): HTMLInputElement {
         value=""
         onChange={() => {}}
         isGeneratingPath={false}
-        pathWasAutoResolved={false}
         onBrowseClick={() => {}}
       />
     </TooltipProvider>

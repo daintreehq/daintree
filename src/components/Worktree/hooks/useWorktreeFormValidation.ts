@@ -35,7 +35,7 @@ export function useWorktreeFormValidation() {
         if (!selectedExistingBranch) {
           return {
             valid: false,
-            error: { message: "Please select a branch", field: null },
+            error: { message: "Please select a branch", field: "existing-branch" },
           };
         }
         if (!worktreePath.trim()) {

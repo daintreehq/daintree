@@ -5,9 +5,9 @@ export { BranchSummary } from "./BranchSummary";
 export { BaseBranchCombobox } from "./BaseBranchCombobox";
 export { ExistingBranchPicker } from "./ExistingBranchPicker";
 export { BranchPickerPanel } from "./BranchPickerPanel";
-export { NewBranchInput } from "./NewBranchInput";
-export { WorktreePathPicker } from "./WorktreePathPicker";
-export { EnvironmentRadioGroup } from "./EnvironmentRadioGroup";
+export { NewBranchInput, BranchResolvedHint } from "./NewBranchInput";
+export { WorktreePathPicker, PathResolvedHint } from "./WorktreePathPicker";
+export { EnvironmentRadioGroup, EnvironmentHint } from "./EnvironmentRadioGroup";
 export { RecipePickerPopover } from "./RecipePickerPopover";
 export { AgentPickerPopover } from "./AgentPickerPopover";
 export {
