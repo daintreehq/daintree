@@ -8,6 +8,8 @@ export interface ReferenceBinding {
   description?: string;
   category?: string;
   effectiveCombo: string;
+  /** Every key the action fires on; a user override can hold several. */
+  effectiveCombos?: readonly string[];
 }
 
 export interface ShortcutAlternative {
@@ -71,17 +73,19 @@ export function buildShortcutEntries(
     if (!entry.actionIds.includes(binding.actionId)) entry.actionIds.push(binding.actionId);
     if (hasOverride(binding.actionId)) entry.isCustom = true;
 
-    const combo = binding.effectiveCombo.trim();
-    if (!combo) continue;
-    const duplicate = entry.alternatives.find(
-      (alt) => alt.combo.toLowerCase() === combo.toLowerCase()
-    );
-    if (duplicate) {
-      // The same key reached through two scopes is effectively unscoped.
-      if (duplicate.scope !== binding.scope) duplicate.scope = "global";
-      continue;
+    for (const raw of binding.effectiveCombos ?? [binding.effectiveCombo]) {
+      const combo = raw.trim();
+      if (!combo) continue;
+      const duplicate = entry.alternatives.find(
+        (alt) => alt.combo.toLowerCase() === combo.toLowerCase()
+      );
+      if (duplicate) {
+        // The same key reached through two scopes is effectively unscoped.
+        if (duplicate.scope !== binding.scope) duplicate.scope = "global";
+        continue;
+      }
+      entry.alternatives.push({ combo, scope: binding.scope });
     }
-    entry.alternatives.push({ combo, scope: binding.scope });
   }
 
   return entries;

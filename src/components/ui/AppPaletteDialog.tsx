@@ -849,6 +849,9 @@ interface AppPaletteInputProps extends Omit<
    * mode-prefix chip (e.g. `> Commands`).
    */
   inputPrefix?: React.ReactNode;
+  /** Shows the field's clear button and makes Escape clear a query before it closes anything. */
+  onClear?: () => void;
+  clearLabel?: string;
 }
 
 /**

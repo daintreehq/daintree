@@ -256,12 +256,38 @@ describe("ShortcutReferenceDialog", () => {
     it("offers a way out of an empty result and returns focus to the search", async () => {
       render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
       type("zzqx");
-      const clear = await screen.findByRole("button", { name: "Clear search" });
-      expect(screen.getByText(/No shortcuts match/, { selector: "p" })).toBeTruthy();
+      // The field's own clear button shares the name; this is the empty state's.
+      await screen.findByText(/No shortcuts match/, { selector: "p" });
+      const clear = screen
+        .getAllByRole("button", { name: "Clear search" })
+        .find((button) => !button.classList.contains("search-field-clear"))!;
       fireEvent.click(clear);
       expect(search().value).toBe("");
       expect(document.activeElement).toBe(search());
       expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("escape", () => {
+    it("clears a query before it closes the dialog", () => {
+      const onClose = vi.fn();
+      render(<ShortcutReferenceDialog isOpen={true} onClose={onClose} />);
+      type("stash");
+      fireEvent.keyDown(search(), { key: "Escape" });
+      expect(search().value).toBe("");
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("clears from the field's clear button too, and hands focus back to the text", () => {
+      const onClose = vi.fn();
+      render(<ShortcutReferenceDialog isOpen={true} onClose={onClose} />);
+      type("stash");
+      const button = document.querySelector<HTMLButtonElement>(".search-field-clear")!;
+      button.focus();
+      fireEvent.keyDown(button, { key: "Escape" });
+      expect(search().value).toBe("");
+      expect(document.activeElement).toBe(search());
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 
