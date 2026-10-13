@@ -19,6 +19,7 @@ const dispatch = vi.fn<(id: string, args?: unknown, opts?: unknown) => void>();
 interface Counts {
   total: number;
   byState: Record<AgentState, number>;
+  unread?: number;
 }
 let counts: Counts = {
   total: 0,
@@ -238,6 +239,16 @@ describe("WorkspaceRootSidebar", () => {
     // renders a permanently-empty row beside live agents.
     expect(useWorktreeTerminals).not.toHaveBeenCalledWith(SCRATCH.id);
     expect(screen.getByRole("img", { name: /3 sessions/ })).toBeTruthy();
+  });
+
+  it("names unread hand-backs in the session summary apart from waiting", () => {
+    counts = {
+      total: 3,
+      byState: { working: 1, waiting: 0, directing: 0, idle: 0, completed: 0, exited: 0 },
+      unread: 2,
+    };
+    render(<WorkspaceRootSidebar workspace={SCRATCH} />);
+    expect(screen.getByRole("img", { name: "3 sessions: 1 working, 2 unread" })).toBeTruthy();
   });
 
   it("shows no session indicators when nothing is running", () => {

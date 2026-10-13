@@ -35,6 +35,7 @@ vi.mock("@/components/icons", () => {
     HollowCircle: stub,
     InteractingCircle: stub,
     ExitedCircle: stub,
+    UnreadCircle: stub,
     NpmIcon: stub,
     YarnIcon: stub,
     PnpmIcon: stub,

@@ -124,3 +124,22 @@ export function AskingCircle({ className, ...props }: CircleProps) {
     </svg>
   );
 }
+
+// The ring with a dot in it: an agent that handed its turn back and the user has
+// not read it yet. Drawn in a neutral, never the waiting hue — it is not asking
+// for anything, and amber is kept for the agents that are.
+export function UnreadCircle({ className, ...props }: CircleProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+      data-agent-state-glyph=""
+      {...props}
+    >
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <circle cx="8" cy="8" r="2.25" fill="currentColor" />
+    </svg>
+  );
+}

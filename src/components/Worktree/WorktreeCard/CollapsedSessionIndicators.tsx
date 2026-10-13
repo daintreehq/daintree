@@ -1,10 +1,10 @@
-import type { AgentState } from "@/types";
+import type { SessionPresentationState } from "@/lib/handBackPresentation";
 import { cn } from "@/lib/utils";
-import { STATE_ICONS, STATE_COLORS } from "../terminalStateConfig";
+import { SESSION_ICONS, SESSION_COLORS } from "../terminalStateConfig";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 
 interface CollapsedSessionIndicatorsProps {
-  visibleStates: { state: AgentState; count: number }[];
+  visibleStates: { state: SessionPresentationState; count: number }[];
   sessionAriaLabel: string;
 }
 
@@ -45,7 +45,7 @@ export function CollapsedSessionIndicators({
           data-testid="collapsed-session-indicators"
         >
           {visibleStates.map(({ state, count }) => {
-            const Icon = STATE_ICONS[state];
+            const Icon = SESSION_ICONS[state];
             return (
               <span
                 key={state}
@@ -53,7 +53,7 @@ export function CollapsedSessionIndicators({
                 data-state={state}
                 className="flex items-center gap-0.5 text-2xs font-medium text-text-secondary"
               >
-                <span className={cn("flex shrink-0", STATE_COLORS[state])}>
+                <span className={cn("flex shrink-0", SESSION_COLORS[state])}>
                   <Icon
                     className={cn(
                       "w-3 h-3",

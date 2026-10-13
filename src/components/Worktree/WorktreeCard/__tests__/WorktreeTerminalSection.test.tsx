@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
@@ -11,6 +11,8 @@ import {
 import type { PtyPanelData } from "@shared/types/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 
 // Each tab and session row owns a TerminalContextMenu, which reads the worktree
 // store; its scoping is pinned in its own suite, so it is a passthrough here.
@@ -77,6 +79,7 @@ function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
 const baseCounts: WorktreeTerminalSectionProps["counts"] = {
   total: 2,
   byState: { idle: 2, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
+  unread: 0,
 };
 
 function renderSection(overrides: Partial<WorktreeTerminalSectionProps> = {}) {
@@ -569,6 +572,67 @@ describe("WorktreeTerminalSection row state icon", () => {
     expect(stateIcon).not.toBeNull();
   });
 
+  describe("hand-backs (#13235)", () => {
+    function setRun(overrides: Partial<FleetRunRow>) {
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [{ runId: "hb-1", workspaceId: "p1", spawnedAt: 0, cwd: "/tmp", ...overrides }],
+          changedAt: 0,
+          degraded: false,
+          lastSuccessfulAt: null,
+        } satisfies FleetSnapshot,
+      });
+    }
+
+    function rowFor(overrides: Partial<PtyPanelData> = {}) {
+      const term = makeTerminal({
+        id: "hb-1",
+        hasPty: true,
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        ...overrides,
+      });
+      const { container } = renderSection({
+        isExpanded: true,
+        terminals: [term],
+        counts: { ...baseCounts, total: 1 },
+      });
+      return container.querySelector('[data-terminal-id="hb-1"]')!;
+    }
+
+    beforeEach(() => useFleetSnapshotStore.setState({ snapshot: null }));
+    afterEach(() => useFleetSnapshotStore.setState({ snapshot: null }));
+
+    it("draws a read hand-back as done while the attribute keeps the observed state", () => {
+      setRun({ agentState: "waiting", handBack: { stoppedAt: 1, seenAt: 2 } });
+      const row = rowFor();
+      expect(row.querySelector('[aria-label="done"]')).not.toBeNull();
+      expect(row.querySelector('[aria-label="waiting"]')).toBeNull();
+      expect(row.getAttribute("data-terminal-agent-state")).toBe("waiting");
+    });
+
+    it("draws an unread hand-back with its own mark", () => {
+      setRun({ agentState: "waiting", handBack: { stoppedAt: 1 } });
+      const row = rowFor();
+      expect(row.querySelector('[aria-label="unread"]')).not.toBeNull();
+    });
+
+    it("keeps a question wait amber", () => {
+      setRun({
+        agentState: "waiting",
+        waitingReason: "question",
+        handBack: { stoppedAt: 1, seenAt: 2 },
+      });
+      const row = rowFor({ waitingReason: "question" });
+      expect(row.querySelector('[aria-label="waiting"]')).not.toBeNull();
+    });
+
+    it("stays waiting before the fleet snapshot arrives", () => {
+      const row = rowFor();
+      expect(row.querySelector('[aria-label="waiting"]')).not.toBeNull();
+    });
+  });
+
   it("renders waiting icon when agentState='idle' and agent chrome is live", () => {
     const term = makeTerminal({
       id: "idle-1",
@@ -680,6 +744,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
       counts: {
         total: 5,
         byState: { idle: 0, working: 2, waiting: 2, directing: 0, completed: 1, exited: 0 },
+        unread: 0,
       },
     });
     const indicators = screen.getByTestId("collapsed-session-indicators");
@@ -694,6 +759,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
       counts: {
         total: 3,
         byState: { idle: 0, working: 3, waiting: 0, directing: 0, completed: 0, exited: 0 },
+        unread: 0,
       },
     });
     const indicators = screen.getByTestId("collapsed-session-indicators");
@@ -708,6 +774,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
       counts: {
         total: 5,
         byState: { idle: 3, working: 2, waiting: 2, directing: 0, completed: 1, exited: 0 },
+        unread: 0,
       },
     });
     const indicators = screen.getByTestId("collapsed-session-indicators");
@@ -721,6 +788,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
       counts: {
         total: 3,
         byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
+        unread: 0,
       },
     });
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
@@ -732,6 +800,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
       counts: {
         total: 2,
         byState: { idle: 2, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
+        unread: 0,
       },
     });
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
@@ -743,6 +812,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
       counts: {
         total: 0,
         byState: { idle: 0, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
+        unread: 0,
       },
     });
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
@@ -779,6 +849,7 @@ describe("WorktreeTerminalSection collapsed trigger name", () => {
       counts: {
         total: 3,
         byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
+        unread: 0,
       },
     });
     const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
