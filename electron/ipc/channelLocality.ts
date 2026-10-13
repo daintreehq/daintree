@@ -243,6 +243,7 @@ export const CHANNEL_LOCALITY = {
   "diff-media:read-file-versions": "host",
   "drive-lease:event": "host",
   "drive-lease:get": "host",
+  "drive-lease:report-navigation": "host",
   "drive-lease:take-over": "host",
   "editor:discover": "shell",
   "editor:get-config": "hybrid",

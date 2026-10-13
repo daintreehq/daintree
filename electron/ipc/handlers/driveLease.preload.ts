@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const DRIVE_LEASE_METHOD_CHANNELS = {
   get: "drive-lease:get",
   takeOver: "drive-lease:take-over",
+  reportNavigation: "drive-lease:report-navigation",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof DRIVE_LEASE_METHOD_CHANNELS;

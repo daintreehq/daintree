@@ -274,6 +274,9 @@ export interface GeneratedElectronAPI {
     get(
       ...args: IpcInvokeMap["drive-lease:get"]["args"]
     ): Promise<IpcInvokeMap["drive-lease:get"]["result"]>;
+    reportNavigation(
+      ...args: IpcInvokeMap["drive-lease:report-navigation"]["args"]
+    ): Promise<IpcInvokeMap["drive-lease:report-navigation"]["result"]>;
     takeOver(
       ...args: IpcInvokeMap["drive-lease:take-over"]["args"]
     ): Promise<IpcInvokeMap["drive-lease:take-over"]["result"]>;

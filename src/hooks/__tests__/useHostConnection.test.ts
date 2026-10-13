@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
 import type {
@@ -8,8 +8,23 @@ import type {
   OperationOutcome,
 } from "@shared/types/remoteHosts";
 
-const { pluginRefresh, updateAgentState, setAgentState, panels, rehydrate } = vi.hoisted(() => ({
+const {
+  pluginRefresh,
+  updateAgentState,
+  setAgentState,
+  panels,
+  rehydrate,
+  applyNavigation,
+  reporters,
+} = vi.hoisted(() => ({
   rehydrate: vi.fn(async (_projectId: string, _options: unknown) => undefined),
+  applyNavigation: vi.fn(async (_navigation: unknown, _isCurrent: () => boolean) => undefined),
+  reporters: [] as Array<{
+    mayReport: () => boolean;
+    send: (navigation: unknown) => void;
+    reportNow: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+  }>,
   pluginRefresh: vi.fn(),
   updateAgentState: vi.fn(),
   setAgentState: vi.fn(),
@@ -42,6 +57,17 @@ const refreshDrafts = vi.hoisted(() =>
 vi.mock("@/store/hostProjectRehydrate", () => ({
   rehydrateHostProjectState: rehydrate,
   refreshHostDrafts: refreshDrafts,
+}));
+vi.mock("@/store/hostDriverNavigation", () => ({
+  applyDriverNavigation: applyNavigation,
+  startDriverNavigationReporter: (options: {
+    mayReport: () => boolean;
+    send: (navigation: unknown) => void;
+  }) => {
+    const reporter = { ...options, reportNow: vi.fn(), dispose: vi.fn() };
+    reporters.push(reporter);
+    return reporter;
+  },
 }));
 // Following the driver loads these lazily. The real module pulls in every IPC
 // client and the agent registry, and a cold load from one test's unawaited
@@ -133,6 +159,7 @@ function installElectron(
     driveLease: {
       get: vi.fn(async (): Promise<unknown> => leaseView(null, true)),
       takeOver: vi.fn(async (): Promise<unknown> => leaseView(null, true)),
+      reportNavigation: vi.fn(async () => undefined),
       onEvent: vi.fn((callback: (event: DriveLeaseEvent) => void) => {
         leaseListener = callback;
         return () => {
@@ -164,11 +191,22 @@ function bindView(hostId: string | null) {
 
 /** The options a rehydrate was asked for. */
 const optionsOf = (call: unknown[]) =>
-  call[1] as { authoritative: boolean; follow?: boolean; isCurrent: () => boolean };
+  call[1] as {
+    authoritative: boolean;
+    follow?: boolean;
+    keepActiveWorktree?: boolean;
+    isCurrent: () => boolean;
+  };
 
 async function flush() {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();
 }
+
+// Adopting a terminal loads this lazily, and cold it can outlast a vi.waitFor
+// in whichever test first reaches it.
+beforeAll(async () => {
+  await import("@/utils/stateHydration/statePatcher");
+});
 
 beforeEach(() => {
   _resetHostConnectionSyncForTesting();
@@ -180,6 +218,8 @@ beforeEach(() => {
   setAgentState.mockClear();
   rehydrate.mockClear();
   refreshDrafts.mockClear();
+  applyNavigation.mockClear();
+  reporters.length = 0;
   for (const key of Object.keys(panels)) delete panels[key];
 });
 
@@ -907,6 +947,7 @@ describe("project state after a fresh session or a takeover", () => {
     electron.terminal.getForProject.mockImplementation(
       () => new Promise<unknown[]>((resolve) => (answer = resolve))
     );
+    electron.terminal.getForProject.mockClear();
 
     await takeOverDrive("proj-1");
     await vi.waitFor(() => expect(electron.terminal.getForProject).toHaveBeenCalledWith("proj-1"));
@@ -936,6 +977,7 @@ describe("project state after a fresh session or a takeover", () => {
     electron.terminal.getForProject.mockImplementation(
       () => new Promise<unknown[]>((resolve) => (answer = resolve))
     );
+    electron.terminal.getForProject.mockClear();
 
     await takeOverDrive("proj-1");
     await vi.waitFor(() => expect(electron.terminal.getForProject).toHaveBeenCalled());
@@ -1131,6 +1173,240 @@ describe("following the driver while watching (#13280)", () => {
     await flush();
 
     expect(followCalls()).toHaveLength(0);
+    stop();
+  });
+});
+
+describe("following the driver's navigation (#13281)", () => {
+  const navigation = (activeWorktreeId: string) => ({
+    activeWorktreeId,
+    focusedPanelId: "t1",
+    maximize: null,
+    focusMode: false,
+  });
+  const followCalls = () => rehydrate.mock.calls.filter((call) => optionsOf(call).follow === true);
+
+  function hostWindow(lease: DriveLeaseView) {
+    const installed = installElectron();
+    Object.assign(installed.electron, {
+      remoteHosts: { ...installed.electron.remoteHosts, isInUse: vi.fn(async () => true) },
+    });
+    installed.electron.driveLease.get.mockResolvedValue(lease);
+    bindView(null);
+    return installed;
+  }
+
+  it("moves to where the driver is once its panels are adopted, and again as it moves", async () => {
+    const { emitLease } = hostWindow({
+      ...leaseView(holder(), false),
+      driverNavigation: navigation("wt-1"),
+    });
+    const stop = startHostConnectionSync();
+
+    await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(1));
+    expect(applyNavigation.mock.calls[0]![0]).toEqual(navigation("wt-1"));
+    // The driver's live worktree wins over the one the host saved, which may predate it.
+    expect(optionsOf(followCalls()[0]!)).toMatchObject({ keepActiveWorktree: true });
+
+    emitLease({ type: "navigation-changed", projectId: "proj-1", navigation: navigation("wt-2") });
+    await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(2));
+    expect(applyNavigation.mock.calls[1]![0]).toEqual(navigation("wt-2"));
+    // Only a move: the panels aren't read again.
+    expect(followCalls()).toHaveLength(1);
+
+    emitLease({ type: "navigation-changed", projectId: "other", navigation: navigation("wt-3") });
+    await flush();
+    expect(applyNavigation).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("keeps the host's saved worktree when the driver hasn't said where it is", async () => {
+    hostWindow(leaseView(holder(), false));
+    const stop = startHostConnectionSync();
+
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    expect(optionsOf(followCalls()[0]!).keepActiveWorktree).toBe(false);
+    await flush();
+    expect(applyNavigation).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("reports nothing while it watches, and its own moves once it drives", async () => {
+    const { electron, emitLease } = hostWindow(leaseView(holder(), false));
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    const reporter = reporters.at(-1)!;
+    expect(reporter.mayReport()).toBe(false);
+
+    emitLease({
+      type: "changed",
+      state: {
+        ...leaseView(holder({ leaseId: 5, isHostLocal: true }), true),
+        isHolderEndpoint: true,
+      },
+    });
+    expect(reporter.mayReport()).toBe(true);
+    expect(reporter.reportNow).toHaveBeenCalled();
+    reporter.send(navigation("wt-1"));
+    expect(electron.driveLease.reportNavigation).toHaveBeenCalledWith({
+      projectId: "proj-1",
+      leaseId: 5,
+      navigation: navigation("wt-1"),
+    });
+
+    // A move the driver made that lands after this view took over is not followed.
+    emitLease({ type: "navigation-changed", projectId: "proj-1", navigation: navigation("wt-9") });
+    await flush();
+    expect(applyNavigation).not.toHaveBeenCalled();
+    stop();
+    expect(reporter.dispose).toHaveBeenCalled();
+  });
+
+  it("starts a takeover from where the driver was, and reports only once it is there", async () => {
+    const { electron, emitLease } = installElectron();
+    // The claim on open is turned down, so only the takeover under test is in flight.
+    electron.driveLease.takeOver.mockResolvedValueOnce(leaseView(holder(), false));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    // Watching meanwhile, it follows the driver once; that pass is done with.
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await flush();
+    rehydrate.mockClear();
+    const reporter = reporters.at(-1)!;
+    const mine = {
+      ...leaseView(holder({ endpointId: "me", leaseId: 7 }), true),
+      isHolderEndpoint: true,
+      driverNavigation: navigation("wt-2"),
+    };
+    electron.driveLease.takeOver.mockResolvedValue(mine);
+    let answer!: (infos: unknown[]) => void;
+    electron.terminal.getForProject.mockImplementation(
+      () => new Promise<unknown[]>((resolve) => (answer = resolve))
+    );
+    electron.terminal.getForProject.mockClear();
+
+    await takeOverDrive("proj-1");
+    await vi.waitFor(() => expect(electron.terminal.getForProject).toHaveBeenCalled());
+    // Its own event about the takeover lands while the project is still being read back.
+    emitLease({ type: "changed", state: mine });
+    await flush();
+    expect(reporter.mayReport()).toBe(false);
+    expect(reporter.reportNow).not.toHaveBeenCalled();
+
+    answer([]);
+    await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(1));
+    expect(applyNavigation.mock.calls[0]![0]).toEqual(navigation("wt-2"));
+    expect(optionsOf(rehydrate.mock.calls[0]!)).toMatchObject({ keepActiveWorktree: true });
+    await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
+    expect(reporter.mayReport()).toBe(true);
+    stop();
+  });
+
+  it("moves to where the driver was before reporting, when it comes to drive without taking over", async () => {
+    const { emitLease } = hostWindow(leaseView(holder(), false));
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    const reporter = reporters.at(-1)!;
+    let arrived!: () => void;
+    applyNavigation.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (arrived = () => resolve(undefined)))
+    );
+
+    // The driver left and this window is next.
+    emitLease({
+      type: "changed",
+      state: {
+        ...leaseView(holder({ leaseId: 8, isHostLocal: true }), true),
+        isHolderEndpoint: true,
+        driverNavigation: navigation("wt-2"),
+      },
+    });
+    expect(applyNavigation.mock.calls.at(-1)![0]).toEqual(navigation("wt-2"));
+    expect(reporter.mayReport()).toBe(false);
+    expect(reporter.reportNow).not.toHaveBeenCalled();
+
+    arrived();
+    await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
+    expect(reporter.mayReport()).toBe(true);
+    stop();
+  });
+
+  it("still moves to where the driver was when the saved state can't be read after taking over", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.takeOver.mockResolvedValueOnce(leaseView(holder(), false));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await flush();
+    const reporter = reporters.at(-1)!;
+    applyNavigation.mockClear();
+    rehydrate.mockRejectedValueOnce(new Error("link down"));
+    electron.driveLease.takeOver.mockResolvedValue({
+      ...leaseView(holder({ endpointId: "me", leaseId: 7 }), true),
+      isHolderEndpoint: true,
+      driverNavigation: navigation("wt-2"),
+    });
+
+    await takeOverDrive("proj-1");
+
+    await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
+    stop();
+  });
+
+  it("reports once its own takeover event has landed, even when the answer is lost", async () => {
+    const { electron, emitLease } = installElectron();
+    electron.driveLease.takeOver.mockResolvedValueOnce(leaseView(holder(), false));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await flush();
+    const reporter = reporters.at(-1)!;
+    let fail!: (error: Error) => void;
+    electron.driveLease.takeOver.mockImplementation(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const mine = {
+      ...leaseView(holder({ endpointId: "me", leaseId: 7 }), true),
+      isHolderEndpoint: true,
+    };
+
+    const taking = takeOverDrive("proj-1");
+    emitLease({ type: "changed", state: mine });
+    expect(reporter.reportNow).not.toHaveBeenCalled();
+    fail(new Error("answer lost"));
+    await expect(taking).rejects.toThrow("answer lost");
+
+    expect(reporter.reportNow).toHaveBeenCalled();
+    expect(reporter.mayReport()).toBe(true);
+    stop();
+  });
+
+  it("still starts from where the driver was when a claim's answer is lost but the host granted it", async () => {
+    const { electron, emitLease } = installElectron();
+    let fail!: (error: Error) => void;
+    // The claim on open, from a view that never watched.
+    electron.driveLease.takeOver.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(electron.driveLease.takeOver).toHaveBeenCalled());
+    const reporter = reporters.at(-1)!;
+    const granted = {
+      ...leaseView(holder({ endpointId: "me", leaseId: 7 }), true),
+      isHolderEndpoint: true,
+      driverNavigation: navigation("wt-2"),
+    };
+    // The lease read again after the failed claim says the same.
+    electron.driveLease.get.mockResolvedValue(granted);
+
+    emitLease({ type: "changed", state: granted });
+    fail(new Error("answer lost"));
+
+    await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(1));
+    expect(applyNavigation.mock.calls[0]![0]).toEqual(navigation("wt-2"));
+    await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
     stop();
   });
 });

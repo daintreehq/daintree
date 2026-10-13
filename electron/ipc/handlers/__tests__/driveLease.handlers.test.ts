@@ -15,7 +15,7 @@ import {
   _resetDriveLeaseServiceForTesting,
 } from "../../../services/DriveLeaseService.js";
 
-const { get, takeOver } = driveLeaseNamespace.ops;
+const { get, takeOver, reportNavigation } = driveLeaseNamespace.ops;
 
 function endpoint(
   endpointId: string,
@@ -99,5 +99,65 @@ describe("driveLease handlers", () => {
     await expect(
       get.handler(ctxOf(laptop), { projectId: 3 } as unknown as { projectId: string })
     ).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+
+  it("keeps a driver's navigation for the views that read the lease", async () => {
+    const hostWindow = endpoint("local:7", "local", "local-view");
+    const laptop = endpoint("s1:e1", "c1", "remote-view");
+    registry.add(hostWindow);
+    registry.add(laptop);
+    const taken = await takeOver.handler(ctxOf(laptop), { projectId: "p" });
+    const navigation = {
+      activeWorktreeId: "wt-1",
+      focusedPanelId: "t1",
+      maximize: { panelId: "t1", target: { type: "group" as const, id: "g1" } },
+      focusMode: true,
+    };
+
+    await reportNavigation.handler(ctxOf(laptop), {
+      projectId: "p",
+      leaseId: taken.holder!.leaseId,
+      navigation,
+    });
+    // A watcher's report is dropped, not refused.
+    await reportNavigation.handler(ctxOf(hostWindow), {
+      projectId: "p",
+      leaseId: taken.holder!.leaseId,
+      navigation: { ...navigation, activeWorktreeId: "wt-2" },
+    });
+
+    await expect(get.handler(ctxOf(hostWindow), { projectId: "p" })).resolves.toMatchObject({
+      driverNavigation: navigation,
+    });
+  });
+
+  it("rejects a malformed navigation report", async () => {
+    const laptop = endpoint("s1:e1", "c1", "remote-view");
+    registry.add(laptop);
+    const valid = {
+      activeWorktreeId: null,
+      focusedPanelId: null,
+      maximize: null,
+      focusMode: false,
+    };
+    const bad = [
+      { projectId: "other", leaseId: null, navigation: valid },
+      { projectId: "p", leaseId: -1, navigation: valid },
+      { projectId: "p", leaseId: null, navigation: { ...valid, focusMode: "yes" } },
+      { projectId: "p", leaseId: null, navigation: { ...valid, activeWorktreeId: 4 } },
+      {
+        projectId: "p",
+        leaseId: null,
+        navigation: { ...valid, maximize: { panelId: "t1", target: { type: "x", id: "t1" } } },
+      },
+    ];
+    for (const payload of bad) {
+      await expect(
+        reportNavigation.handler(
+          ctxOf(laptop),
+          payload as unknown as Parameters<typeof reportNavigation.handler>[1]
+        )
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
   });
 });

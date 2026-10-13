@@ -156,6 +156,8 @@ export const CHANNEL_LEASE_POLICY = {
   "diff-media:read-file-versions": "free",
   "drive-lease:event": "free",
   "drive-lease:get": "free",
+  // A report from a view that doesn't drive is dropped by the lease service.
+  "drive-lease:report-navigation": "handler",
   "drive-lease:take-over": "free",
   "editor:get-config": "free",
   "editor:set-config": "free",

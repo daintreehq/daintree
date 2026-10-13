@@ -17,7 +17,11 @@ import { isLocalViewInActiveUse } from "./hostScreenActivity.js";
 import { createFileReservationStore } from "./driveLeaseReservations.js";
 import type { DriveLeaseHolder, DriveLeaseState } from "../../shared/types/remoteHosts.js";
 import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
-import type { DriveLeaseEvent, DriveLeaseView } from "../../shared/types/ipc/driveLease.js";
+import type {
+  DriveLeaseEvent,
+  DriveLeaseNavigation,
+  DriveLeaseView,
+} from "../../shared/types/ipc/driveLease.js";
 
 /**
  * How long a lease stays reserved for its client after the holder's link drops
@@ -39,6 +43,9 @@ export const PANELS_CHANGED_DELAY_MS = 200;
 
 /** How long saves of a project's composer drafts gather before its watchers are told. */
 export const DRAFTS_CHANGED_DELAY_MS = 200;
+
+/** How long a driver's moves gather before its watchers are told: the latest goes. */
+export const NAVIGATION_CHANGED_DELAY_MS = 50;
 
 type LeaseRegistry = Pick<EndpointRegistry, "get" | "getForProject" | "getRemote" | "onChange">;
 
@@ -133,6 +140,13 @@ export class DriveLeaseService {
   private publishedDriveLeases = "";
   /** Pending watcher notices, keyed by notice type and project. */
   private readonly watcherNoticeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Each project's navigation as its driver last reported it. Held in memory
+   * only, and kept across a change of holder: a view taking over starts from
+   * where the driver it displaced was.
+   */
+  private readonly navigation = new Map<string, DriveLeaseNavigation>();
+  private readonly navigationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposed = false;
 
   constructor(options: DriveLeaseServiceOptions = {}) {
@@ -443,12 +457,50 @@ export class DriveLeaseService {
     this.watcherNoticeTimers.set(key, timer);
   }
 
+  /**
+   * The driver says where it is in the project. Kept, and passed on to the
+   * views that watch it, only from a view that drives the project under the
+   * lease it names: a report sent before a takeover landed is dropped.
+   */
+  reportNavigation(
+    projectId: string,
+    endpoint: ClientEndpoint,
+    leaseId: number | null,
+    navigation: DriveLeaseNavigation
+  ): void {
+    if (this.disposed || endpoint.isClosed() || endpoint.projectId !== projectId) return;
+    if (this.drivingLeaseId(projectId, endpoint) !== leaseId) return;
+    this.navigation.set(projectId, navigation);
+    if (this.navigationTimers.has(projectId)) return;
+    const timer = setTimeout(() => {
+      this.navigationTimers.delete(projectId);
+      if (this.disposed) return;
+      const latest = this.navigation.get(projectId);
+      if (!latest) return;
+      const holder = this.getHolder(projectId);
+      const event: DriveLeaseEvent = { type: "navigation-changed", projectId, navigation: latest };
+      for (const watcher of this.registry.getForProject(projectId)) {
+        if (drives(holder, watcher)) continue;
+        try {
+          watcher.send({ type: "event", channel: CHANNELS.DRIVE_LEASE_EVENT, args: [event] });
+        } catch {
+          // A closing endpoint must not keep the others from hearing about it.
+        }
+      }
+    }, NAVIGATION_CHANGED_DELAY_MS);
+    timer.unref?.();
+    this.navigationTimers.set(projectId, timer);
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.offRegistry();
     for (const timer of this.watcherNoticeTimers.values()) clearTimeout(timer);
     this.watcherNoticeTimers.clear();
+    for (const timer of this.navigationTimers.values()) clearTimeout(timer);
+    this.navigationTimers.clear();
+    this.navigation.clear();
     for (const lease of this.leases.values()) {
       if (lease.releaseTimer) clearTimeout(lease.releaseTimer);
     }
@@ -629,7 +681,9 @@ export class DriveLeaseService {
     endpoint: ClientEndpoint | null | undefined
   ): DriveLeaseView {
     const clientId = endpoint?.clientId ?? LOCAL_CLIENT_ID;
+    const driverNavigation = this.navigation.get(projectId);
     return {
+      ...(driverNavigation ? { driverNavigation } : {}),
       projectId,
       holder,
       drivingHere: drives(holder, { endpointId: endpoint?.endpointId ?? "", clientId }),
