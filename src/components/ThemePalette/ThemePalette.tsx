@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import { PaletteFooterHints, type PaletteFooterHint } from "@/components/ui/AppPaletteDialog";
 import { PaletteStrip } from "@/components/ui/PaletteStrip";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Check } from "lucide-react";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -24,6 +25,12 @@ const filterThemes = (items: AppColorScheme[], query: string): AppColorScheme[] 
 interface ThemePaletteProps {
   isOpen: boolean;
   onClose: () => void;
+}
+
+const SAVED_NAME_MAX = 28;
+
+function clampName(name: string): string {
+  return name.length > SAVED_NAME_MAX ? `${name.slice(0, SAVED_NAME_MAX - 1).trimEnd()}…` : name;
 }
 
 const getThemeSectionLabel = (scheme: AppColorScheme): string => THEME_MODE_LABEL[scheme.type];
@@ -66,16 +73,22 @@ function ThemeListItem({
       )}
     >
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-text-primary truncate">
-          <HighlightedText text={scheme.name} indices={findMatchIndices(matches, "name")} />
-        </div>
-        {scheme.location && (
-          <div className="text-xs text-text-secondary truncate">
-            <HighlightedText
-              text={scheme.location}
-              indices={findMatchIndices(matches, "location")}
-            />
+        {/* Pointer disclosure only: the option is driven by
+            aria-activedescendant, so its text must not become a tab stop. */}
+        <TruncatedTooltip content={scheme.name} focusable={false}>
+          <div className="text-sm font-medium text-text-primary truncate">
+            <HighlightedText text={scheme.name} indices={findMatchIndices(matches, "name")} />
           </div>
+        </TruncatedTooltip>
+        {scheme.location && (
+          <TruncatedTooltip content={scheme.location} focusable={false}>
+            <div className="text-xs text-text-secondary truncate">
+              <HighlightedText
+                text={scheme.location}
+                indices={findMatchIndices(matches, "location")}
+              />
+            </div>
+          </TruncatedTooltip>
         )}
       </div>
       <PaletteStrip scheme={scheme} variant="compact" />
@@ -217,30 +230,30 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
 
   // Two facts, because once the cursor leaves the saved theme they differ:
   // what Enter will do, and what Escape goes back to. The saved row's check
-  // can be scrolled or filtered out of view; the footer can't.
+  // can be scrolled or filtered out of view; the footer can't. While a query
+  // is up, Escape clears it before it closes anything, so the key says that
+  // and the saved theme is named on its own.
   const getThemeFooter = useCallback(
     (scheme: AppColorScheme | null) => {
       if (!scheme) return null;
       const onSaved = scheme.id === savedScheme?.id;
-      return (
-        <div className="flex w-full min-w-0 items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <PaletteFooterHints
-              primaryHint={{
-                keys: ["↵"],
-                label: onSaved ? `to keep ${scheme.name}` : `to apply ${scheme.name}`,
-              }}
-            />
-          </div>
-          {!onSaved && savedScheme && (
-            <span className="min-w-0 max-w-[40%] truncate text-text-secondary">
-              Current: {savedScheme.name}
-            </span>
-          )}
-        </div>
-      );
+      const primaryHint = {
+        keys: ["↵"],
+        label: onSaved ? `to keep ${scheme.name}` : `to switch to ${scheme.name}`,
+      };
+      // Secondary chips never shrink, so an imported theme's long name is
+      // capped here rather than allowed to push the primary hint out.
+      const savedName = savedScheme ? clampName(savedScheme.name) : null;
+      const hints: PaletteFooterHint[] = [];
+      if (query !== "") {
+        hints.push({ keys: ["Esc"], label: "to clear search" });
+        if (!onSaved && savedName) hints.push({ keys: [], label: `Saved: ${savedName}` });
+      } else if (!onSaved && savedName) {
+        hints.push({ keys: ["Esc"], label: `to go back to ${savedName}` });
+      }
+      return <PaletteFooterHints primaryHint={primaryHint} hints={hints} />;
     },
-    [savedScheme]
+    [savedScheme, query]
   );
 
   const handleConfirm = useCallback(() => {
