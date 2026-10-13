@@ -129,9 +129,10 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
       keys: "↵",
       label: "Switch",
     });
+    // A missing project's Enter opens the relocation dialog, and says so.
     expect(getProjectSwitcherEnterHint(projectRow({ isMissing: true }), true, true)).toEqual({
       keys: "↵",
-      label: "Switch",
+      label: "Locate",
     });
     expect(getProjectSwitcherEnterHint(scratchRow, true, true)).toEqual({
       keys: "↵",
