@@ -119,7 +119,39 @@ describe("copyTreeHistoryStore", () => {
       expect(useCopyTreeHistoryStore.getState().loading).toBe(false);
     });
     expect(useCopyTreeHistoryStore.getState().records).toEqual([]);
+    expect(useCopyTreeHistoryStore.getState().error).toBe(true);
     expect(logError).toHaveBeenCalled();
+  });
+
+  it("retries the pull without subscribing twice, and clears the failure on success", async () => {
+    getRecords.mockRejectedValueOnce(new Error("nope"));
+    useCopyTreeHistoryStore.getState().init();
+    await vi.waitFor(() => {
+      expect(useCopyTreeHistoryStore.getState().error).toBe(true);
+    });
+
+    getRecords.mockResolvedValueOnce([makeRecord("a")]);
+    useCopyTreeHistoryStore.getState().retry();
+    expect(useCopyTreeHistoryStore.getState()).toMatchObject({ loading: true, error: false });
+
+    await vi.waitFor(() => {
+      expect(useCopyTreeHistoryStore.getState().loading).toBe(false);
+    });
+    expect(useCopyTreeHistoryStore.getState().error).toBe(false);
+    expect(useCopyTreeHistoryStore.getState().records.map((r) => r.id)).toEqual(["a"]);
+    expect(eventsOn).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a push clear a failed pull", async () => {
+    getRecords.mockRejectedValue(new Error("nope"));
+    useCopyTreeHistoryStore.getState().init();
+    await vi.waitFor(() => {
+      expect(useCopyTreeHistoryStore.getState().error).toBe(true);
+    });
+
+    eventCallback?.({ projectId: "p", records: [makeRecord("b")] });
+    expect(useCopyTreeHistoryStore.getState().error).toBe(false);
+    expect(useCopyTreeHistoryStore.getState().records.map((r) => r.id)).toEqual(["b"]);
   });
 
   it("unsubscribes on reset so a later push cannot reach a stale store", () => {

@@ -1,14 +1,24 @@
-import { useEffect, useMemo } from "react";
-import { FileCode, Folders } from "lucide-react";
+import { useEffect, useId, useMemo } from "react";
+import type { ReactNode } from "react";
+import { FileCode, Folders, RefreshCw } from "lucide-react";
 import {
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuMeta,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
 } from "@/components/ui/dropdown-menu";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import {
+  useDeferredLoading,
+  useDohertyGate,
+  useSkeletonDisplayFloor,
+} from "@/hooks/useDeferredLoading";
+import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { useCopyTreeHistoryStore } from "@/store/copyTreeHistoryStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { formatBytes } from "@/lib/formatBytes";
@@ -17,6 +27,7 @@ import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import type { CopyTreeHistoryRecord } from "@shared/types";
 import { pluralize } from "@/lib/pluralize";
+import { cn } from "@/lib/utils";
 
 /**
  * How many recent runs the menu shows. Main keeps twenty per project so the
@@ -170,7 +181,10 @@ function CopyTreeMenuItems({
 }: Omit<CopyTreeMenuContentProps, "onCloseAutoFocus">) {
   const records = useCopyTreeHistoryStore((s) => s.records);
   const loading = useCopyTreeHistoryStore((s) => s.loading);
+  const error = useCopyTreeHistoryStore((s) => s.error);
   const init = useCopyTreeHistoryStore((s) => s.init);
+  const retry = useCopyTreeHistoryStore((s) => s.retry);
+  const recentLabelId = useId();
 
   // Idempotent at the store: later opens re-run this and return immediately.
   // The subscription deliberately outlives the menu — an MCP or context-menu
@@ -189,8 +203,62 @@ function CopyTreeMenuItems({
 
   // The pinned entry is usable immediately; only the recents wait, and under
   // the Doherty gate they wait silently. A local history read should never
-  // take long enough to show this.
-  const showLoading = useDohertyGate(loading);
+  // take long enough to show this. Once shown, the floor keeps the bones from
+  // flashing for a single frame when the read lands just past the gate.
+  const showLoading = useSkeletonDisplayFloor(useDohertyGate(loading));
+  const stillWorking = useDeferredLoading(loading, UI_STILL_WORKING_MS);
+
+  let recentBody: ReactNode;
+  if (showLoading) {
+    recentBody = (
+      <Skeleton label={stillWorking ? "Still working…" : "Loading recent copies"}>
+        <RecentSkeletonRow nameWidth="w-32" />
+        <RecentSkeletonRow nameWidth="w-20" />
+        {stillWorking ? (
+          <div aria-hidden="true" className="px-2.5 py-1.5 pl-8 text-xs text-text-secondary">
+            Still working…
+          </div>
+        ) : null}
+      </Skeleton>
+    );
+  } else if (loading) {
+    recentBody = null;
+  } else if (error && recents.length === 0) {
+    recentBody = (
+      <>
+        <MenuStatusRow>Couldn't load recent copies</MenuStatusRow>
+        <DropdownMenuItem
+          // Stay open: the answer to a retry is the list, and it lands here.
+          // This row unmounts the moment the pull starts, so focus moves to
+          // the menu itself first — from there the arrow keys reach whatever
+          // the retry brings back, where a removed row would strand them.
+          onSelect={(event) => {
+            event.preventDefault();
+            const { target } = event;
+            if (target instanceof HTMLElement) {
+              target.closest<HTMLElement>('[role="menu"]')?.focus();
+            }
+            retry();
+          }}
+        >
+          <RefreshCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          Retry
+        </DropdownMenuItem>
+      </>
+    );
+  } else if (recents.length === 0) {
+    // Names an action that can actually populate this list. "Copy context"
+    // could not: the entry above records a run with no options, which is the
+    // pinned action itself and is filtered back out, so following that
+    // invitation leaves the list empty and the message standing. Copying a
+    // folder (the file browser's row menu) stores a scope, and a scoped run
+    // does appear here.
+    recentBody = <MenuStatusRow>Copy a folder to reuse it here</MenuStatusRow>;
+  } else {
+    recentBody = recents.map((record) => (
+      <RecentRow key={record.id} record={record} onRunRecent={onRunRecent} />
+    ));
+  }
 
   return (
     <>
@@ -204,34 +272,10 @@ function CopyTreeMenuItems({
       </DropdownMenuItem>
 
       <DropdownMenuSeparator />
-      <DropdownMenuLabel>Recent</DropdownMenuLabel>
-      {loading ? (
-        showLoading ? (
-          <DropdownMenuItem disabled>Loading recent copies…</DropdownMenuItem>
-        ) : null
-      ) : recents.length === 0 ? (
-        // Names an action that can actually populate this list. "Copy
-        // context" could not: the entry above records a run with no options,
-        // which is the pinned action itself and is filtered back out, so
-        // following that invitation leaves the list empty and the message
-        // standing. Copying a folder (the file browser's row menu) stores a
-        // scope, and a scoped run does appear here.
-        <DropdownMenuItem disabled>Copy a folder to reuse it here</DropdownMenuItem>
-      ) : (
-        recents.map((record) => (
-          <DropdownMenuItem
-            key={record.id}
-            data-copy-tree-recent=""
-            onSelect={() => onRunRecent(record)}
-            // The trailing slot is aria-hidden by design; the full description,
-            // file count included, goes into the name instead.
-            aria-label={`${record.name}, ${formatRecentMeta(record)}`}
-          >
-            <span className="min-w-0 truncate">{record.name}</span>
-            <DropdownMenuMeta className="shrink-0">{formatRecentTrailing(record)}</DropdownMenuMeta>
-          </DropdownMenuItem>
-        ))
-      )}
+      <DropdownMenuGroup aria-labelledby={recentLabelId}>
+        <DropdownMenuLabel id={recentLabelId}>Recent</DropdownMenuLabel>
+        {recentBody}
+      </DropdownMenuGroup>
 
       {/* Where the excludes, always-include lists and size budgets that shape
           every copy actually live. Without this the menu is a dead end for
@@ -246,5 +290,93 @@ function CopyTreeMenuItems({
         </>
       ) : null}
     </>
+  );
+}
+
+/**
+ * Where a scope name breaks: before its last path segment, so the leaf
+ * survives a narrow menu. Two recents under the same parent differ only in
+ * that leaf — `src/components/Layout` and `src/components/Settings` — and
+ * end-truncation cut exactly that part off both. The leaf keeps its slash so
+ * the two halves still read as one path across the ellipsis.
+ *
+ * Only a bare segment is a leaf. A name that ends in prose — an MCP caller's
+ * "… shared/types/ipc as markdown" — has no leaf worth pinning, and pinning one
+ * truncates both halves at once.
+ */
+export function splitRecentName(name: string): { head: string; leaf: string } {
+  const slash = name.lastIndexOf("/", name.length - 2);
+  if (slash <= 0) return { head: name, leaf: "" };
+  const leaf = name.slice(slash);
+  if (/\s/.test(leaf)) return { head: name, leaf: "" };
+  return { head: name.slice(0, slash), leaf };
+}
+
+/**
+ * One stored run. The name truncates in the middle: the head gives way first
+ * (its shrink weight dwarfs the leaf's), so the row reads `src/compo…/Layout`
+ * rather than `src/components/Lay…`. The full name is the tooltip, the
+ * accessible name, and the typeahead key — the trailing size and age are not
+ * something anyone types to find a row.
+ */
+function RecentRow({
+  record,
+  onRunRecent,
+}: {
+  record: CopyTreeHistoryRecord;
+  onRunRecent: (record: CopyTreeHistoryRecord) => void;
+}) {
+  const { head, leaf } = splitRecentName(record.name);
+  const { ref: headRef, isTruncated } = useTruncationDetection();
+  return (
+    <DropdownMenuItem
+      data-copy-tree-recent=""
+      textValue={record.name}
+      onSelect={() => onRunRecent(record)}
+      // The trailing slot is aria-hidden by design; the full description,
+      // file count included, goes into the name instead.
+      aria-label={`${record.name}, ${formatRecentMeta(record)}`}
+    >
+      <TruncatedTooltip
+        content={record.name}
+        isTruncated={isTruncated}
+        focusable={false}
+        side="left"
+        contentClassName="max-w-[min(32rem,60vw)] break-all"
+      >
+        <span className="flex min-w-0">
+          <span ref={headRef} className="min-w-0 shrink-[1000] truncate">
+            {head}
+          </span>
+          {leaf ? <span className="min-w-0 truncate">{leaf}</span> : null}
+        </span>
+      </TruncatedTooltip>
+      {/* Native title, as `TimeAgo` does: the exact time one hover away, without
+          a second tooltip trigger nested in the row. */}
+      <DropdownMenuMeta className="shrink-0" title={new Date(record.lastUsedAt).toLocaleString()}>
+        {formatRecentTrailing(record)}
+      </DropdownMenuMeta>
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * A sentence inside the menu that is not a command: the empty and failure
+ * notes. Not a disabled item — a disabled row reads as an action that is
+ * switched off, at half contrast, when it is an instruction the user needs to
+ * read. `pl-8` is the label column the icon gutter rule gives text-only items;
+ * that rule only matches `menuitem`s, so this row states it itself.
+ */
+function MenuStatusRow({ children }: { children: ReactNode }) {
+  return <div className="px-2.5 py-1.5 pl-8 text-xs text-text-secondary">{children}</div>;
+}
+
+/** Bones on the same 28px pitch and columns as a recent row, so the list lands without a jump. */
+function RecentSkeletonRow({ nameWidth }: { nameWidth: string }) {
+  return (
+    <div className="flex h-7 items-center justify-between px-2.5 pl-8">
+      <SkeletonBone immediate className={cn("h-2.5", nameWidth)} />
+      <SkeletonBone immediate className="h-2 w-20" />
+    </div>
   );
 }

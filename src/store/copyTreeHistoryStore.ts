@@ -18,8 +18,16 @@ import type { CopyTreeHistoryRecord } from "@shared/types";
 interface CopyTreeHistoryState {
   records: CopyTreeHistoryRecord[];
   loading: boolean;
+  /**
+   * The snapshot pull failed and no push has landed since. Kept apart from an
+   * empty history so the menu does not tell someone with twenty stored runs to
+   * go and make their first one.
+   */
+  error: boolean;
   /** Idempotent: pulls the current snapshot and subscribes to live updates. */
   init: () => void;
+  /** Pull the snapshot again after a failure. The subscription is untouched. */
+  retry: () => void;
 }
 
 let initialized = false;
@@ -29,27 +37,47 @@ let unsubscribe: (() => void) | null = null;
 // stale snapshot must not overwrite it.
 let receivedPush = false;
 
-export const useCopyTreeHistoryStore = create<CopyTreeHistoryState>((set) => ({
-  records: [],
-  loading: true,
-  init: () => {
-    if (initialized) return;
-    initialized = true;
-
-    unsubscribe = window.electron.events.on("copy-tree-history:update", ({ records }) => {
-      receivedPush = true;
-      set({ records, loading: false });
-    });
-
+export const useCopyTreeHistoryStore = create<CopyTreeHistoryState>((set) => {
+  const pull = () => {
     window.electron.copyTreeHistory
       .getRecords()
-      .then((records) => set(receivedPush ? { loading: false } : { records, loading: false }))
+      .then((records) =>
+        set(
+          receivedPush
+            ? { loading: false, error: false }
+            : { records, loading: false, error: false }
+        )
+      )
       .catch((err) => {
         logError("Failed to load copy-tree history", err);
-        set({ loading: false });
+        // A push that landed first already holds the truth; the failed pull
+        // has nothing to add to it.
+        set(receivedPush ? { loading: false } : { loading: false, error: true });
       });
-  },
-}));
+  };
+
+  return {
+    records: [],
+    loading: true,
+    error: false,
+    init: () => {
+      if (initialized) return;
+      initialized = true;
+
+      unsubscribe = window.electron.events.on("copy-tree-history:update", ({ records }) => {
+        receivedPush = true;
+        set({ records, loading: false, error: false });
+      });
+
+      pull();
+    },
+    retry: () => {
+      if (!initialized) return;
+      set({ loading: true, error: false });
+      pull();
+    },
+  };
+});
 
 /** Test-only: reset the module-level init guard between cases. */
 export function _resetCopyTreeHistoryStoreForTest(): void {
@@ -57,5 +85,5 @@ export function _resetCopyTreeHistoryStoreForTest(): void {
   unsubscribe = null;
   initialized = false;
   receivedPush = false;
-  useCopyTreeHistoryStore.setState({ records: [], loading: true });
+  useCopyTreeHistoryStore.setState({ records: [], loading: true, error: false });
 }
