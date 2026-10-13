@@ -10,6 +10,8 @@ import { getRemoteService, requireRemoteService } from "../remote/runtime.js";
 export interface WindowHostService {
   windowHost(windowId: number): HostId;
   viewHost(webContentsId: number): HostId;
+  /** The name the user knows a host by, or null for one this machine doesn't list. */
+  hostName?(hostId: HostId): string | null;
   switchWindowToLocal(windowId: number, projectId: string): Promise<SwitchWindowHostResult>;
   openHostProjectInNewWindow(hostId: HostId, projectPath: string): Promise<SwitchWindowHostResult>;
 }

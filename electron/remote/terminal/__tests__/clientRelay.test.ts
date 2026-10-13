@@ -185,15 +185,11 @@ describe("ClientTerminalRelay", () => {
     expect(h.resumes[0]!.terminals.every((t) => t.reset === undefined)).toBe(true);
   });
 
-  it("bounds input held while the link is down by messages, bytes and distinct resizes", async () => {
-    const h = await setup({
-      maxPendingInputMessages: 3,
-      maxPendingInputBytes: 10,
-      maxPendingResizes: 2,
-    });
+  it("drops input typed while the link is down and holds only the latest resizes", async () => {
+    const h = await setup({ maxPendingResizes: 2 });
     h.relay.deliverPort();
     const renderer = h.renderer()!;
-    for (let i = 0; i < 5; i++) renderer.post({ type: "write", id: "t1", data: "" });
+    renderer.post({ type: "write", id: "t1", data: "rm -rf build\r" });
     renderer.post({ type: "resize", id: "a", cols: 80, rows: 24 });
     renderer.post({ type: "resize", id: "b", cols: 80, rows: 24 });
     renderer.post({ type: "resize", id: "c", cols: 80, rows: 24 });
@@ -201,25 +197,22 @@ describe("ClientTerminalRelay", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     await h.connect();
-    await waitFor(() => h.inputs.length === 5);
+    await waitFor(() => h.inputs.length === 2);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(h.inputs).toEqual([
       { type: "resize", id: "c", cols: 80, rows: 24 },
       { type: "resize", id: "b", cols: 100, rows: 30 },
-      { type: "write", id: "t1", data: "" },
-      { type: "write", id: "t1", data: "" },
-      { type: "write", id: "t1", data: "" },
     ]);
 
     await dropLink(h);
     h.inputs.length = 0;
     renderer.post({ type: "write", id: "t1", data: "123456" });
-    renderer.post({ type: "write", id: "t1", data: "7890ab" });
     await new Promise((resolve) => setTimeout(resolve, 20));
     await h.connect();
+    renderer.post({ type: "write", id: "t1", data: "typed now" });
     await waitFor(() => h.inputs.length === 1);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(h.inputs).toEqual([{ type: "write", id: "t1", data: "123456" }]);
+    expect(h.inputs).toEqual([{ type: "write", id: "t1", data: "typed now" }]);
   });
 
   it("keeps a bounded set of positions as terminals come and go", async () => {
@@ -272,5 +265,184 @@ describe("ClientTerminalRelay", () => {
     h.relay.attach(client);
     await waitFor(() => !h.relay.resumeInFlight && h.relay.position("t1") === null);
     expect(h.relay.trackedTerminals).toBe(0);
+  });
+});
+
+/** A session whose post can be refused, as a full link queue refuses it. */
+function backpressuredSession() {
+  let refusing = true;
+  let writable: (() => void) | null = null;
+  let closed: (() => void) | null = null;
+  const posted: Array<Record<string, unknown>> = [];
+  const session = {
+    isOpen: true,
+    on: () => () => {},
+    onClose: (listener: () => void) => {
+      closed = listener;
+      return () => {};
+    },
+    onWritable: (listener: () => void) => {
+      writable = listener;
+      return () => {};
+    },
+    post: (frame: { kind: number; body: { message: Record<string, unknown> } }) => {
+      if (frame.kind !== InteractiveKind.TERMINAL_IN) return "queued";
+      if (refusing) return "refused";
+      posted.push(frame.body.message);
+      return "queued";
+    },
+    call: async () => ({ terminals: [] }),
+  } as unknown as LinkSession;
+  return {
+    session,
+    posted,
+    drain() {
+      refusing = false;
+      writable?.();
+    },
+    refuse() {
+      refusing = true;
+    },
+    close() {
+      (session as { isOpen: boolean }).isOpen = false;
+      closed?.();
+    },
+  };
+}
+
+describe("ClientTerminalRelay held input", () => {
+  function relayWithPort() {
+    const peer = new FakePeer();
+    const relay = new ClientTerminalRelay({
+      endpointId: ENDPOINT,
+      openRendererPort: () => peer.port,
+    });
+    cleanups.push(() => {
+      relay.dispose();
+      peer.close();
+    });
+    relay.deliverPort();
+    return { relay, peer };
+  }
+
+  async function settle() {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  it("sends input held for backpressure to the same session once it has room", async () => {
+    const { relay, peer } = relayWithPort();
+    const link = backpressuredSession();
+    relay.attach(link.session);
+    peer.post({ type: "write", id: "t1", data: "ls" });
+    peer.post({ type: "write", id: "t1", data: "\r" });
+    await settle();
+    expect(link.posted).toEqual([]);
+
+    link.drain();
+    expect(link.posted).toEqual([
+      { type: "write", id: "t1", data: "ls" },
+      { type: "write", id: "t1", data: "\r" },
+    ]);
+  });
+
+  it("bounds input held for backpressure by messages, bytes and distinct resizes", async () => {
+    const peer = new FakePeer();
+    const relay = new ClientTerminalRelay({
+      endpointId: ENDPOINT,
+      openRendererPort: () => peer.port,
+      maxPendingInputMessages: 3,
+      maxPendingInputBytes: 10,
+      maxPendingResizes: 2,
+    });
+    cleanups.push(() => {
+      relay.dispose();
+      peer.close();
+    });
+    relay.deliverPort();
+    const link = backpressuredSession();
+    relay.attach(link.session);
+    for (let i = 0; i < 5; i++) peer.post({ type: "write", id: "t1", data: "" });
+    peer.post({ type: "resize", id: "a", cols: 80, rows: 24 });
+    peer.post({ type: "resize", id: "b", cols: 80, rows: 24 });
+    peer.post({ type: "resize", id: "c", cols: 80, rows: 24 });
+    peer.post({ type: "resize", id: "b", cols: 100, rows: 30 });
+    await settle();
+
+    link.drain();
+    expect(link.posted).toEqual([
+      { type: "resize", id: "c", cols: 80, rows: 24 },
+      { type: "resize", id: "b", cols: 100, rows: 30 },
+      { type: "write", id: "t1", data: "" },
+      { type: "write", id: "t1", data: "" },
+      { type: "write", id: "t1", data: "" },
+    ]);
+
+    link.posted.length = 0;
+    link.refuse();
+    peer.post({ type: "write", id: "t1", data: "123456" });
+    peer.post({ type: "write", id: "t1", data: "7890ab" });
+    await settle();
+    link.drain();
+    expect(link.posted).toEqual([{ type: "write", id: "t1", data: "123456" }]);
+  });
+
+  it("never replays input held for one session into the next", async () => {
+    const { relay, peer } = relayWithPort();
+    const first = backpressuredSession();
+    relay.attach(first.session);
+    peer.post({ type: "write", id: "t1", data: "git push --force\r" });
+    await settle();
+    first.close();
+    expect(relay.isAttached).toBe(false);
+
+    const second = backpressuredSession();
+    second.drain();
+    relay.attach(second.session);
+    peer.post({ type: "write", id: "t1", data: "y" });
+    await settle();
+    expect(second.posted).toEqual([{ type: "write", id: "t1", data: "y" }]);
+  });
+
+  it("drops input held for a terminal whose PTY restarted", async () => {
+    const { relay, peer } = relayWithPort();
+    const handlers = new Map<number, (body: unknown) => void>();
+    const link = backpressuredSession();
+    (link.session as unknown as { on: unknown }).on = (
+      _lane: number,
+      kind: number,
+      handler: (body: unknown) => void
+    ) => {
+      handlers.set(kind, handler);
+      return () => {};
+    };
+    relay.attach(link.session);
+    const output = (incarnation: number, seq: number) => {
+      const data = new TextEncoder().encode("x");
+      handlers.get(InteractiveKind.TERMINAL_OUT)!({
+        endpointId: ENDPOINT,
+        terminalId: "t1",
+        incarnation,
+        seq,
+        message: { type: "data", id: "t1", data, bytes: data.byteLength },
+      });
+    };
+    output(1, 1);
+    expect(relay.position("t1")).toEqual({ incarnation: 1, lastSeq: 1 });
+
+    peer.post({ type: "write", id: "t1", data: "old" });
+    // t2 has shown nothing yet, so nothing says which PTY this was typed at.
+    peer.post({ type: "write", id: "t2", data: "unknown" });
+    peer.post({ type: "write", id: "t1", data: "old too" });
+    await settle();
+    output(2, 1);
+    expect(relay.position("t1")).toEqual({ incarnation: 2, lastSeq: 1 });
+    peer.post({ type: "write", id: "t1", data: "new" });
+    await settle();
+
+    link.drain();
+    expect(link.posted).toEqual([
+      { type: "write", id: "t2", data: "unknown" },
+      { type: "write", id: "t1", data: "new" },
+    ]);
   });
 });

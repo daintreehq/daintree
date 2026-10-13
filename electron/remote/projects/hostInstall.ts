@@ -70,7 +70,16 @@ export const defaultProjectsHostAuthority: ProjectsHostAuthority = {
           endpoint.kind === "remote-view" && isSessionEndpoint(sessionId, endpoint.endpointId)
       ),
   isDriving: (projectId, endpoint) => getDriveLeaseService().isDriving(projectId, endpoint),
-  holderEndpointId: (projectId) => getDriveLeaseService().getHolder(projectId)?.endpointId ?? null,
+  // A window already on a project nobody holds counts as holding it, as it
+  // would the moment that lease is granted; reading it grants nothing.
+  holderEndpointId: (projectId) => {
+    const lease = getDriveLeaseService();
+    return (
+      lease.getHolder(projectId)?.endpointId ??
+      lease.nextHolderEndpoint(projectId)?.endpointId ??
+      null
+    );
+  },
 };
 
 const GRANT_TTL_MS = 30 * 60_000;

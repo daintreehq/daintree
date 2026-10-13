@@ -29,6 +29,11 @@ import {
  * output that arrives while the view has no port is replayed later rather
  * than counted as seen. A replaced port (the view reloaded) has lost what the
  * old one painted, so every terminal is reset from a snapshot.
+ *
+ * Input is held only for the session it was typed against, and only for the
+ * PTY incarnation it was typed at: a held keystroke delivered after a
+ * reconnect, or into a restarted PTY, lands somewhere the user never typed.
+ * What is typed with no session attached is dropped.
  */
 
 export interface ClientTerminalRelayOptions {
@@ -40,7 +45,7 @@ export interface ClientTerminalRelayOptions {
    * side's end, or null when the view cannot take one right now.
    */
   openRendererPort(): PortLike | null;
-  /** Input typed while the link is down is held up to this many bytes... */
+  /** Input the live link can't take yet is held up to this many bytes... */
   maxPendingInputBytes?: number;
   /** ...and this many messages, so a flood of empty writes is bounded too. */
   maxPendingInputMessages?: number;
@@ -56,6 +61,13 @@ interface Position {
 }
 
 type WriteMessage = Extract<TerminalInPortMessage, { type: "write" }>;
+
+interface HeldWrite {
+  message: WriteMessage;
+  session: LinkSession;
+  /** The terminal's incarnation when it was typed; unknown before any output arrived. */
+  incarnation: number | undefined;
+}
 type ResizeMessage = Extract<TerminalInPortMessage, { type: "resize" }>;
 
 const DEFAULT_MAX_PENDING_INPUT_BYTES = 64 * 1024;
@@ -77,7 +89,7 @@ export class ClientTerminalRelay {
   /** The renderer lost its screens: the next resume asks for snapshot resets. */
   private resetOwed = false;
   private resumesInFlight = 0;
-  private pendingInput: WriteMessage[] = [];
+  private pendingInput: HeldWrite[] = [];
   private pendingInputBytes = 0;
   private readonly pendingResize = new Map<string, ResizeMessage>();
   private disposed = false;
@@ -172,6 +184,9 @@ export class ClientTerminalRelay {
     if (!this.session) return;
     this.session = null;
     this.resuming.clear();
+    // Typed against the session that just went away: never the next one's.
+    this.pendingInput = [];
+    this.pendingInputBytes = 0;
     for (const cleanup of this.sessionCleanup.splice(0)) cleanup();
   }
 
@@ -205,6 +220,8 @@ export class ClientTerminalRelay {
    */
   private hold(message: TerminalInPortMessage): void {
     if (message.type === "write") {
+      const session = this.session;
+      if (!session) return;
       const size = message.data.length;
       if (
         this.pendingInput.length >=
@@ -214,7 +231,11 @@ export class ClientTerminalRelay {
       ) {
         return;
       }
-      this.pendingInput.push(message);
+      this.pendingInput.push({
+        message,
+        session,
+        incarnation: this.positions.get(message.id)?.incarnation,
+      });
       this.pendingInputBytes += size;
     } else if (message.type === "resize") {
       // Only the latest size per terminal matters; a new terminal past the cap
@@ -254,14 +275,37 @@ export class ClientTerminalRelay {
       this.pendingResize.delete(id);
     }
     while (this.pendingInput.length > 0) {
-      const message = this.pendingInput[0]!;
-      if (!this.sendIn(message)) return;
+      const held = this.pendingInput[0]!;
+      if (this.isCurrent(held) && !this.sendIn(held.message)) return;
       this.pendingInput.shift();
-      this.pendingInputBytes -= message.data.length;
+      this.pendingInputBytes -= held.message.data.length;
     }
   }
 
+  private isCurrent(held: HeldWrite): boolean {
+    return (
+      held.session === this.session &&
+      this.positions.get(held.message.id)?.incarnation === held.incarnation
+    );
+  }
+
+  /**
+   * A terminal's incarnation changed, or became known: what was typed before
+   * then can't be shown to be for the PTY now running, so it goes.
+   */
+  private dropHeldInputFor(id: string, incarnation: number): void {
+    if (!this.pendingInput.some((held) => held.message.id === id)) return;
+    this.pendingInput = this.pendingInput.filter((held) => {
+      const stale = held.message.id === id && held.incarnation !== incarnation;
+      if (stale) this.pendingInputBytes -= held.message.data.length;
+      return !stale;
+    });
+  }
+
   private setPosition(id: string, position: Position): void {
+    if (this.positions.get(id)?.incarnation !== position.incarnation) {
+      this.dropHeldInputFor(id, position.incarnation);
+    }
     // Re-inserted so the map's order runs from least to most recently active.
     this.positions.delete(id);
     this.positions.set(id, position);

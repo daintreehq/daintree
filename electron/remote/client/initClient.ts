@@ -161,6 +161,11 @@ const senders: SenderLookup = {
     const win = wc ? getWindowForWebContents(wc) : null;
     return win && !win.isDestroyed() ? win.id : null;
   },
+  onGone(webContentsId, callback) {
+    const wc = resolveLiveWebContents(webContentsId);
+    if (wc) onWebContentsDestroyed(wc, callback);
+    else queueMicrotask(callback);
+  },
 };
 
 function managerFor(windowId: number) {
@@ -577,7 +582,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     router: remoteRouter,
     senders,
     windows: createWindowControl(hooks),
-    installRouter: (next) => getIpcDispatcher().setRemoteRouter(next),
+    installRouter: (next) => {
+      if (next) remoteRouter.learn(getAllAppWebContents().map((wc) => wc.id));
+      getIpcDispatcher().setRemoteRouter(next);
+    },
     emit: broadcastLocal,
     onFirstUse: hooks.onFirstUse,
     onForget: async (descriptor): Promise<void> => {

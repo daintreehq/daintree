@@ -16,7 +16,10 @@ import {
   runViewlessAction,
 } from "../viewless/index.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
+import { getRemoteService } from "../../remote/runtime.js";
+import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import {
+  getProjectForWebContents,
   getWebContentsForProject,
   getWindowForWebContents,
 } from "../../window/webContentsRegistry.js";
@@ -172,6 +175,25 @@ export class RendererBridgeUnavailableError extends Error {
   constructor() {
     super("MCP renderer bridge unavailable");
     this.name = "RendererBridgeUnavailableError";
+  }
+}
+
+/**
+ * Thrown when an unbound session finds only windows on a remote host. This
+ * machine's MCP server drives this machine's projects: a host's project runs
+ * under that host's own MCP tier and audit, so nothing is routed there.
+ */
+export class RemoteHostWindowOnlyError extends Error {
+  readonly hostId: string;
+
+  constructor(hostId: string, hostName: string) {
+    super(
+      `The Daintree window in focus shows a project on ${hostName}, and this machine's MCP server ` +
+        `only drives projects on this machine. Open a project on this machine, or connect to ` +
+        `${hostName}'s own MCP server to work there. The call was not run.`
+    );
+    this.name = "RemoteHostWindowOnlyError";
+    this.hostId = hostId;
   }
 }
 
@@ -370,32 +392,62 @@ export function createRendererBridge(
     };
   }
 
+  /**
+   * The host a view's calls go to, or null for a view on this machine. A
+   * project view's host is in its key, which outlives Remote Hosts stopping at
+   * quit; a view with no project follows its window.
+   */
+  function remoteHostOf(webContents: Electron.WebContents): string | null {
+    const key = getProjectForWebContents(webContents.id);
+    const hostId =
+      key !== null
+        ? parseHostScopedKey(key).hostId
+        : getRemoteService("windowHosts")?.viewHost(webContents.id);
+    return hostId === undefined || isLocalHostId(hostId) ? null : hostId;
+  }
+
+  /**
+   * The view an unbound session acts on: the most recently focused window's
+   * active view on this machine. A window on a remote host is passed over, so
+   * the session moves to a local window rather than reaching the host's
+   * project; with only remote windows open, the error names the host.
+   */
   function getActiveProjectWebContents(): Electron.WebContents {
+    let remoteHostId: string | null = null;
+    for (const webContents of activeViewCandidates()) {
+      if (webContents.isDestroyed()) continue;
+      const hostId = remoteHostOf(webContents);
+      if (hostId === null) return webContents;
+      remoteHostId ??= hostId;
+    }
+    if (remoteHostId !== null) {
+      const hostName = getRemoteService("windowHosts")?.hostName?.(remoteHostId) ?? remoteHostId;
+      throw new RemoteHostWindowOnlyError(remoteHostId, hostName);
+    }
+    throw new RendererBridgeUnavailableError();
+  }
+
+  /**
+   * Each window's active view, most-recently-focused first, not registration
+   * order (#11536). With `all()` an unpinned external/api-key client drove
+   * whichever window happened to register first, regardless of what the user
+   * was looking at. `focusOrder()` keeps never-focused windows (appended in
+   * registration order) and falls back to registration order before the first
+   * focus event, so single-window and cold-start behaviour is unchanged — only
+   * the multi-window pick moves to the focused window. The module-singleton
+   * manager's active view comes last.
+   */
+  function* activeViewCandidates(): Generator<Electron.WebContents> {
     const registry = getRegistry();
     if (registry) {
-      // Most-recently-focused first, not registration order (#11536). With
-      // `all()` an unpinned external/api-key client drove whichever window
-      // happened to register first, regardless of what the user was looking
-      // at. `focusOrder()` keeps never-focused windows (appended in
-      // registration order) and falls back to registration order before the
-      // first focus event, so single-window and cold-start behaviour is
-      // unchanged — only the multi-window pick moves to the focused window.
       for (const ctx of registry.focusOrder()) {
         if (ctx.browserWindow.isDestroyed()) continue;
-        const view = ctx.services.projectViewManager?.getActiveView();
-        const webContents = view?.webContents;
-        if (webContents && !webContents.isDestroyed()) {
-          return webContents;
-        }
+        const webContents = ctx.services.projectViewManager?.getActiveView()?.webContents;
+        if (webContents) yield webContents;
       }
     }
-
     const fallback = getProjectViewManager()?.getActiveView()?.webContents;
-    if (fallback && !fallback.isDestroyed()) {
-      return fallback;
-    }
-
-    throw new RendererBridgeUnavailableError();
+    if (fallback) yield fallback;
   }
 
   /**
@@ -494,7 +546,9 @@ export function createRendererBridge(
         const active = registry
           ?.getByWindowId(win.id)
           ?.services.projectViewManager?.getActiveView()?.webContents;
-        if (active && !active.isDestroyed()) return active;
+        // A window now showing a host's project would read this machine's
+        // workspace id against the host's projects.
+        if (active && !active.isDestroyed() && remoteHostOf(active) === null) return active;
       }
     }
     return getActiveProjectWebContents();

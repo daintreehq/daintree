@@ -47,6 +47,7 @@ vi.mock("electron", () => ({
 }));
 vi.mock("../../../window/windowRef.js", () => ({ getProjectViewManager: () => null }));
 vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getProjectForWebContents: () => null,
   getWebContentsForProject: () => [],
   getWindowForWebContents: () => null,
 }));

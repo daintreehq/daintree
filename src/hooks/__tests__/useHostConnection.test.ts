@@ -449,6 +449,35 @@ describe("lease and reconnect races", () => {
     stop();
   });
 
+  it("leaves the project with the host's own screen while someone is using it there", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.get.mockResolvedValue({
+      ...leaseView(holder({ isHostLocal: true, clientName: "studio-mbp" }), false),
+      hostScreenInUse: true,
+    });
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    expect(electron.driveLease.takeOver).not.toHaveBeenCalled();
+    // Named the way this machine knows the host, as the window banner names it.
+    expect(getTerminalInputBlock()).toMatchObject({
+      kind: "driven-elsewhere",
+      driverName: "studio-01",
+      driverIsHostScreen: true,
+    });
+    stop();
+  });
+
+  it("doesn't claim a project nobody holds while the host's screen is in use", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.get.mockResolvedValue({ ...leaseView(null, true), hostScreenInUse: true });
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    expect(electron.driveLease.takeOver).not.toHaveBeenCalled();
+    stop();
+  });
+
   it("watches when another Shell claimed the project first, keeping what this view holds", async () => {
     const { electron } = installElectron();
     electron.driveLease.get.mockResolvedValue(leaseView(holder({ isHostLocal: true }), false));

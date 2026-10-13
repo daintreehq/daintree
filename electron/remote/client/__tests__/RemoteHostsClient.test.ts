@@ -168,6 +168,20 @@ describe("RemoteHostsClient", () => {
     expect(installRouter).not.toHaveBeenCalled();
   });
 
+  it("leaves the router installed when it is disposed, so host views fail closed at quit", async () => {
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    expect(installRouter).toHaveBeenCalledWith(router);
+
+    await client.dispose();
+
+    expect(manager.disposeAll).toHaveBeenCalled();
+    expect(installRouter).not.toHaveBeenCalledWith(null);
+  });
+
   it("attaches the window to the host and opens the project at the host's path", async () => {
     await client.switchWindowHost(ctxFor(5, 1), {
       hostId: "studio-01",
