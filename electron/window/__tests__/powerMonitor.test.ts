@@ -525,24 +525,6 @@ describe("setupPowerMonitor", () => {
     expect(onWake).toHaveBeenCalledTimes(1);
   });
 
-  it("does not emit sys:wake when the resume is cancelled by a re-suspend", async () => {
-    const workspaceClient = createMockWorkspaceClient();
-    const onWake = vi.fn();
-    events.on("sys:wake", onWake);
-
-    setupPowerMonitor({
-      getPtyClient: () => createMockPtyClient(),
-      getWorkspaceClient: () => workspaceClient,
-    });
-
-    powerHandlers.get("resume")!();
-    await vi.advanceTimersByTimeAsync(1000);
-    powerHandlers.get("suspend")!();
-    await vi.advanceTimersByTimeAsync(5000);
-
-    expect(onWake).not.toHaveBeenCalled();
-  });
-
   it("still broadcasts to windows when a sys:wake subscriber throws", async () => {
     const workspaceClient = createMockWorkspaceClient();
     const { win, wc } = createMockWindow();

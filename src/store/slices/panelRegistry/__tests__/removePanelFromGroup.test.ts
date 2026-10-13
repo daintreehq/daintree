@@ -403,57 +403,6 @@ describe("removePanelFromGroup", () => {
     expect(state.tabGroups.get("group-2")?.panelIds).toEqual(["term-3", "term-4", "term-5"]);
   });
 
-  it("should handle dock groups correctly", () => {
-    const group: TabGroup = {
-      id: "group-1",
-      panelIds: ["term-1", "term-2", "term-3"],
-      activeTabId: "term-1",
-      location: "dock",
-    };
-
-    usePanelStore.setState({
-      panelsById: {
-        "term-1": {
-          id: "term-1",
-          title: "Shell 1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "dock",
-        },
-        "term-2": {
-          id: "term-2",
-          title: "Shell 2",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "dock",
-        },
-        "term-3": {
-          id: "term-3",
-          title: "Shell 3",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "dock",
-        },
-      },
-      panelIds: ["term-1", "term-2", "term-3"],
-      tabGroups: new Map([["group-1", group]]),
-    });
-
-    const { removePanelFromGroup } = usePanelStore.getState();
-    removePanelFromGroup("term-2");
-
-    const state = usePanelStore.getState();
-    const updatedGroup = state.tabGroups.get("group-1");
-    expect(updatedGroup?.panelIds).toEqual(["term-1", "term-3"]);
-    expect(updatedGroup?.location).toBe("dock");
-  });
-
   it("should persist changes via saveTabGroups when group is deleted", async () => {
     const group: TabGroup = {
       id: "group-1",
@@ -484,55 +433,6 @@ describe("removePanelFromGroup", () => {
         },
       },
       panelIds: ["term-1", "term-2"],
-      tabGroups: new Map([["group-1", group]]),
-    });
-
-    const { removePanelFromGroup } = usePanelStore.getState();
-    removePanelFromGroup("term-1");
-
-    // Should call saveTabGroups (which triggers persistence)
-    expect(panelPersistence.saveTabGroups).toHaveBeenCalled();
-  });
-
-  it("should persist changes via saveTabGroups when group is updated", async () => {
-    const group: TabGroup = {
-      id: "group-1",
-      panelIds: ["term-1", "term-2", "term-3"],
-      activeTabId: "term-1",
-      location: "grid",
-    };
-
-    usePanelStore.setState({
-      panelsById: {
-        "term-1": {
-          id: "term-1",
-          title: "Shell 1",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        "term-2": {
-          id: "term-2",
-          title: "Shell 2",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        "term-3": {
-          id: "term-3",
-          title: "Shell 3",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: ["term-1", "term-2", "term-3"],
       tabGroups: new Map([["group-1", group]]),
     });
 

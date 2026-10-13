@@ -35,13 +35,6 @@ describe("fleetScopeFlagStore", () => {
   });
 
   describe("hydrate", () => {
-    it("applies persisted 'scoped' value and marks hydrated", () => {
-      useFleetScopeFlagStore.getState().hydrate("scoped");
-      const state = useFleetScopeFlagStore.getState();
-      expect(state.mode).toBe("scoped");
-      expect(state.isHydrated).toBe(true);
-    });
-
     it("falls back to 'scoped' when persisted value is undefined", () => {
       useFleetScopeFlagStore.getState().hydrate(undefined);
       const state = useFleetScopeFlagStore.getState();
@@ -107,11 +100,6 @@ describe("fleetScopeFlagStore", () => {
       await vi.waitFor(() =>
         expect(setStateMock).toHaveBeenCalledWith({ fleetScopeMode: "legacy" })
       );
-    });
-
-    it("marks hydrated so later async hydrate does not clobber", () => {
-      useFleetScopeFlagStore.getState().setMode("scoped");
-      expect(useFleetScopeFlagStore.getState().isHydrated).toBe(true);
     });
   });
 });

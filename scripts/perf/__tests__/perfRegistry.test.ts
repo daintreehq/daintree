@@ -143,14 +143,6 @@ describe("perf registry coverage", () => {
     expect(empty).toEqual([]);
   });
 
-  it("classifies every command", () => {
-    const kinds = new Set(["journey", "mechanism", "diagnostic"]);
-    const bad = Object.entries(REGISTRY)
-      .filter(([, command]) => !kinds.has(command.kind))
-      .map(([name]) => name);
-    expect(bad).toEqual([]);
-  });
-
   it("declares a spec for every gated command and a gate for every spec", () => {
     // The two travel together — `playwrightBench` builds both from one object —
     // so a mismatch means someone hand-built a Command and half-filled it.

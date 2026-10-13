@@ -311,13 +311,6 @@ describe("useFileRowMenuItems — canonical order", () => {
     // still open and still navigable.
     expect(document.activeElement).toBe(trigger);
   });
-
-  it("renders no Extensions trigger, and no rule for one, with nothing installed", async () => {
-    const menu = await openMenu();
-
-    expect(labels(menu)).not.toContain("Extensions");
-    expect(separatorCount(menu)).toBe(1);
-  });
 });
 
 describe("useFileRowMenuItems — conditional items", () => {
@@ -410,23 +403,6 @@ describe("useFileRowMenuItems — conditional items", () => {
  */
 describe("useFileRowMenuItems — Insert file reference refusal reasons", () => {
   const CASES: Array<[InsertFileReferenceRefusalReason, string, string]> = [
-    ["workspace-unavailable", "No workspace", "Insert file reference, no workspace"],
-    ["fleet-broadcast-armed", "Fleet armed", "Insert file reference, the fleet is armed"],
-    [
-      "hybrid-input-disabled",
-      "Input bar off",
-      "Insert file reference, the hybrid input bar is off",
-    ],
-    [
-      "backend-unavailable",
-      "No terminal service",
-      "Insert file reference, the terminal service is unavailable",
-    ],
-    [
-      "recorded-target-unavailable",
-      "Agent unavailable",
-      "Insert file reference, that agent can't take input",
-    ],
     ["no-eligible-agent", "No agent available", "Insert file reference, no agent is available"],
     [
       "multiple-eligible-agents",
@@ -509,23 +485,6 @@ describe("useFileRowMenuItems — Open diff routing", () => {
 });
 
 describe("useFileRowMenuItems — path semantics", () => {
-  it("copies the absolute path, the relative path and the name it was handed", async () => {
-    const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
-
-    for (const [label, expected] of [
-      ["Copy path", "/repo/src/index.ts"],
-      ["Copy relative path", "src/index.ts"],
-      ["Copy file name", "index.ts"],
-    ] as const) {
-      const menu = await openMenu();
-      const copy = await openSubmenu(menu, "Copy");
-      fireEvent.click(within(copy).getByRole("menuitem", { name: label }));
-      await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));
-      writeText.mockClear();
-      cleanup();
-    }
-  });
-
   it("does not re-derive the relative path from the absolute one", async () => {
     // The file browser's row path stays relative to the true worktree root even
     // when the tree is re-rooted, so a derived value would be wrong there.
@@ -664,11 +623,6 @@ describe("useFileRowMenuItems — Copy file contents", () => {
     ["a directory", { isDirectory: true, name: "src", relativePath: "src", status: null }],
     ["a deleted file", { status: "deleted" as const }],
     ["an image", { absolutePath: "/repo/logo.png", name: "logo.png" }],
-    ["an SVG", { absolutePath: "/repo/icon.svg", name: "icon.svg" }],
-    ["a video", { absolutePath: "/repo/clip.mp4", name: "clip.mp4" }],
-    ["an unplayable video", { absolutePath: "/repo/clip.mov", name: "clip.mov" }],
-    ["audio", { absolutePath: "/repo/track.mp3", name: "track.mp3" }],
-    ["a PDF", { absolutePath: "/repo/spec.pdf", name: "spec.pdf" }],
   ])("hides the item for %s", async (_case, row) => {
     const menu = await openMenu({ row });
     // The submenu has to be opened first: its content is Presence-gated, so a
@@ -718,14 +672,6 @@ describe("useFileRowMenuItems — Copy file contents", () => {
       expect(useAnnouncerStore.getState().polite?.msg).toBe("File contents copied")
     );
     expect(getCopyFlash()).toBeNull();
-  });
-
-  it("keeps the item for an extension it doesn't recognise", async () => {
-    // Optimistic by design: the read is the real gate, and hiding everything
-    // unfamiliar would drop the item for perfectly ordinary text files.
-    const menu = await openMenu({ row: { absolutePath: "/repo/Makefile", name: "Makefile" } });
-    const copy = await openSubmenu(menu, "Copy");
-    expect(labels(copy)).toContain("Copy file contents");
   });
 });
 

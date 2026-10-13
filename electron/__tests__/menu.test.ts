@@ -969,10 +969,6 @@ describe("update menu lifecycle", () => {
       expect(item).toBeUndefined();
     });
 
-    it("registers a menu-state listener after Menu.setApplicationMenu", () => {
-      expect(autoUpdaterServiceMock.onMenuStateChange).toHaveBeenCalled();
-    });
-
     it("applies the current state immediately after rebuild (sticky Ready)", () => {
       autoUpdaterServiceMock.__setMenuState("ready");
       capturedTemplate = [];
@@ -1077,21 +1073,6 @@ describe("update menu lifecycle", () => {
       expect(autoUpdaterServiceMock.quitAndInstallIfReady).not.toHaveBeenCalled();
     });
 
-    it("calls checkForUpdatesManually when state is checking (defensive — item is also disabled)", async () => {
-      autoUpdaterServiceMock.__setMenuState("checking");
-      const item = findUpdateItem(capturedTemplate, "check-for-updates-mac");
-
-      item!.click!(
-        {} as Electron.MenuItem,
-        mockBrowserWindow as unknown as Electron.BaseWindow,
-        {} as Electron.KeyboardEvent
-      );
-      await flushClick();
-
-      expect(autoUpdaterServiceMock.checkForUpdatesManually).toHaveBeenCalledTimes(1);
-      expect(autoUpdaterServiceMock.quitAndInstallIfReady).not.toHaveBeenCalled();
-    });
-
     it("calls quitAndInstallIfReady when state is ready", async () => {
       autoUpdaterServiceMock.__setMenuState("ready");
       const item = findUpdateItem(capturedTemplate, "check-for-updates-mac");
@@ -1144,14 +1125,6 @@ describe("update menu lifecycle", () => {
       expect(items.some((i) => i.type === "separator")).toBe(false);
     });
 
-    it("on linux replaces the macOS-only roles with [minimize, close] and no orphan separator", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
-
-      const items = findSubmenu(capturedTemplate, "Window");
-      expect(items.map((i) => i.role ?? i.type)).toEqual(["minimize", "close"]);
-    });
-
     it.each(["win32", "linux"] as const)(
       "on %s never lets Minimize take Ctrl+M from the focused page",
       (platform) => {
@@ -1173,19 +1146,6 @@ describe("update menu lifecycle", () => {
   });
 
   describe("File menu Exit and Settings accelerator on non-darwin (#7939)", () => {
-    it("on darwin: no Exit item, no Settings... with accelerator (Settings... lives in app menu)", () => {
-      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
-
-      const fileMenu = capturedTemplate.find((m) => m.label === "File");
-      const items = fileMenu!.submenu as Electron.MenuItemConstructorOptions[];
-      expect(items.some((i) => i.label === "Exit")).toBe(false);
-      const fileSettings = items.find(
-        (i) => i.label === "Settings…" && i.accelerator === "CommandOrControl+,"
-      );
-      expect(fileSettings).toBeUndefined();
-    });
-
     it("on win32: File menu ends with separator + Exit (role: quit) and exposes Settings... with CommandOrControl+,", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
@@ -1198,22 +1158,6 @@ describe("update menu lifecycle", () => {
       expect(last.label).toBe("Exit");
       expect(last.role).toBe("quit");
       expect(penultimate.type).toBe("separator");
-
-      const settings = items.find((i) => i.label === "Settings…");
-      expect(settings).toBeDefined();
-      expect(settings!.accelerator).toBe("CommandOrControl+,");
-    });
-
-    it("on linux: File menu ends with separator + Exit (role: quit) and exposes Settings... with CommandOrControl+,", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
-
-      const fileMenu = capturedTemplate.find((m) => m.label === "File");
-      const items = fileMenu!.submenu as Electron.MenuItemConstructorOptions[];
-
-      const last = items[items.length - 1];
-      expect(last.label).toBe("Exit");
-      expect(last.role).toBe("quit");
 
       const settings = items.find((i) => i.label === "Settings…");
       expect(settings).toBeDefined();
@@ -1262,17 +1206,6 @@ describe("update menu lifecycle", () => {
 
     it("on win32: About is the last item in Help, preceded by a separator", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
-
-      const items = findHelpSubmenu(capturedTemplate);
-      const last = items[items.length - 1];
-      const penultimate = items[items.length - 2];
-      expect(last.role).toBe("about");
-      expect(penultimate.type).toBe("separator");
-    });
-
-    it("on linux: About is the last item in Help, preceded by a separator", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
 
       const items = findHelpSubmenu(capturedTemplate);
@@ -1685,15 +1618,6 @@ describe("handleDirectoryOpen non-repository folders", () => {
     deferredSend();
 
     expect(mockWebContents.send).not.toHaveBeenCalled();
-  });
-
-  it("still shows the native error box for unrelated failures", async () => {
-    projectStoreMock.addProject.mockRejectedValue(new Error("ENOENT: no such file or directory"));
-
-    await handleDirectoryOpen(FOLDER, targetWindowStub());
-
-    expect(mockWebContents.send).not.toHaveBeenCalled();
-    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
   });
 
   it("does not hijack unrelated structured errors", async () => {

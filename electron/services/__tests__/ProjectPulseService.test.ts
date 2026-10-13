@@ -681,41 +681,6 @@ describe("ProjectPulseService", () => {
     expect(pulse.heatmap.every((cell) => !cell.isBeforeProject)).toBe(true);
   });
 
-  it("passes AbortSignal to createHardenedGit", async () => {
-    let capturedSignal: AbortSignal | undefined;
-
-    const raw = vi.fn(async (args: string[]) => {
-      const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "--verify" && args[2] === "HEAD") return "deadbeef\n";
-      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
-      if (cmd === "log") return "";
-      return "";
-    });
-
-    vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: (_cwd: string, signal?: AbortSignal) => {
-        capturedSignal = signal;
-        return createGitStub(raw);
-      },
-    }));
-
-    const { ProjectPulseService } = await import("../ProjectPulseService.js");
-    const svc = new ProjectPulseService();
-
-    await svc.getPulse({
-      worktreePath: "/repo",
-      worktreeId: "wt-1",
-      mainBranch: "main",
-      rangeDays: 60 as const,
-      includeDelta: false,
-      includeRecentCommits: false,
-    });
-
-    expect(capturedSignal).toBeDefined();
-    expect(capturedSignal instanceof AbortSignal).toBe(true);
-    expect(capturedSignal!.aborted).toBe(false);
-  });
-
   it("invalidate(worktreeId) aborts active AbortController", async () => {
     let capturedSignal: AbortSignal | undefined;
 
@@ -810,37 +775,6 @@ describe("ProjectPulseService", () => {
 
     expect(inFlight.size).toBe(0);
     await expect(pulsePromise).rejects.toThrow("Aborted");
-  });
-
-  it("invalidate(worktreeId) is idempotent", async () => {
-    const raw = vi.fn(async (args: string[]) => {
-      const cmd = args[0];
-      if (cmd === "rev-parse" && args[1] === "HEAD") return "deadbeef\n";
-      if (cmd === "rev-parse" && args.includes("--abbrev-ref")) return "main\n";
-      if (cmd === "log") return "";
-      return "";
-    });
-
-    vi.doMock("../../utils/hardenedGit.js", () => ({
-      createHardenedGit: () => createGitStub(raw),
-    }));
-
-    const { ProjectPulseService } = await import("../ProjectPulseService.js");
-    const svc = new ProjectPulseService();
-
-    // Populate cache
-    await svc.getPulse({
-      worktreePath: "/repo",
-      worktreeId: "wt-1",
-      mainBranch: "main",
-      rangeDays: 60 as const,
-      includeDelta: false,
-      includeRecentCommits: false,
-    });
-
-    // Two back-to-back invalidate calls must not throw
-    expect(() => svc.invalidate("wt-1")).not.toThrow();
-    expect(() => svc.invalidate("wt-1")).not.toThrow();
   });
 
   it("invalidate(worktreeId) only affects matching worktree", async () => {

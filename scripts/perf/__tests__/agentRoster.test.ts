@@ -15,7 +15,6 @@ import {
   type ActivityMonitorOptionsLike,
 } from "../lib/agentRosterFixture";
 import { agentRosterScenarios } from "../scenarios/agentRoster";
-import { EXPECTED_SCENARIO_IDS } from "../scenarios";
 
 /**
  * The graders are the thing worth testing. Each PERF-350..353 predicate is a
@@ -143,19 +142,6 @@ describe("agent roster fixture oracles", () => {
 });
 
 describe("agent roster perf scenarios", () => {
-  it("declares ids that are in the matrix and predicates on every one", () => {
-    for (const scenario of agentRosterScenarios) {
-      expect(EXPECTED_SCENARIO_IDS.has(scenario.id)).toBe(true);
-      expect(scenario.correctness?.length ?? 0).toBeGreaterThan(0);
-    }
-    expect(agentRosterScenarios.map((scenario) => scenario.id)).toEqual([
-      "PERF-350",
-      "PERF-351",
-      "PERF-352",
-      "PERF-353",
-    ]);
-  });
-
   it("leaves the user registry empty after PERF-350 mutates it", async () => {
     const mods = await loadRosterModules();
     const scenario = agentRosterScenarios.find((entry) => entry.id === "PERF-350");

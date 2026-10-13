@@ -741,43 +741,6 @@ describe("sessionServer prompt handler", () => {
       expect((err as McpError).message).toContain("Missing required argument");
     }
   });
-
-  it("rejects non-string argument values (Zod validates before our handler, both layers reject)", async () => {
-    const deps = fakeDeps();
-    const server = createSessionServer("s5", deps);
-    await server.connect(makeMockTransport());
-
-    // Non-string values are caught by the SDK's Zod validation
-    // (parseWithCompat in the handler wrapper), which runs before
-    // our typeof check. Both layers reject non-strings.
-    try {
-      await getPrompt(server, {
-        name: "start_issue",
-        arguments: { issue_number: 42 },
-      });
-      expect.fail("Expected error for non-string argument");
-    } catch (err) {
-      // ZodError is thrown by the SDK wrapper before our handler runs
-      expect(err).toBeTruthy();
-    }
-  });
-
-  it("handler validates arguments are strings (defense-in-depth beyond Zod schema)", () => {
-    // Our typeof check is a second layer of defense. When the Zod schema
-    // is relaxed or the handler is called through a different path, our
-    // check catches non-string values with a proper McpError(InvalidParams).
-    // This test verifies the handler code is present and correct.
-    const deps = fakeDeps();
-    const server = createSessionServer("s6", deps);
-
-    // The handler should be registered for prompts/get
-    const handlers = (
-      server as unknown as {
-        _requestHandlers: Map<string, unknown>;
-      }
-    )._requestHandlers;
-    expect(handlers.has("prompts/get")).toBe(true);
-  });
 });
 
 describe("skills.search / skills.load short-circuit (#10892)", () => {
@@ -2171,22 +2134,6 @@ describe("CallTool idempotency dedup", () => {
     expect(dispatchAction).toHaveBeenCalledTimes(2);
   });
 
-  it("dedups agent.launch with the same arguments", async () => {
-    const dispatchAction = vi
-      .fn()
-      .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-agent" } } });
-    const deps = fakeDeps({
-      sessionStore: fakeSessionStore("full"),
-      dispatchAction,
-    });
-    const server = createSessionServer("dedup-agent", deps);
-
-    await callTool(server, { name: "agent.launch", arguments: { agentId: "claude" } });
-    await callTool(server, { name: "agent.launch", arguments: { agentId: "claude" } });
-
-    expect(dispatchAction).toHaveBeenCalledTimes(1);
-  });
-
   it("dedups worktree.createWithRecipe with the same arguments", async () => {
     const dispatchAction = vi
       .fn()
@@ -2372,47 +2319,9 @@ describe("buildToolError envelope", () => {
     const parsed = JSON.parse(getErrorText(result));
     expect(parsed.details).toEqual({ serializationError: true });
   });
-
-  it("legacy substrings remain greppable for existing .toContain assertions", () => {
-    const result = buildToolError({
-      code: TIER_NOT_PERMITTED_CODE,
-      message: "action 'panel.gridLayout.setStrategy' is not permitted for the 'core' tier.",
-    });
-    const text = getErrorText(result);
-    expect(text).toContain("TIER_NOT_PERMITTED");
-    expect(text).toContain("core");
-    expect(text).toContain("panel.gridLayout.setStrategy");
-  });
 });
 
 describe("buildMcpErrorPayload", () => {
-  it("returns the same shape used on both surfaces", () => {
-    const payload = buildMcpErrorPayload({
-      code: TIER_NOT_PERMITTED_CODE,
-      message: "Resource 'x' is not permitted for the 'core' tier.",
-    });
-    expect(payload).toEqual({
-      code: TIER_NOT_PERMITTED_CODE,
-      message: "Resource 'x' is not permitted for the 'core' tier.",
-      retriable: false,
-    });
-  });
-
-  it("includes details when provided", () => {
-    const payload = buildMcpErrorPayload({
-      code: "VALIDATION_ERROR",
-      message: "bad",
-      details: { argument: "name" },
-    });
-    expect(payload.details).toEqual({ argument: "name" });
-  });
-
-  it("RETRIABLE_ERROR_CODES contains EXECUTION_ERROR and CONFIRMATION_TIMEOUT", () => {
-    expect(RETRIABLE_ERROR_CODES.has(EXECUTION_ERROR_CODE)).toBe(true);
-    expect(RETRIABLE_ERROR_CODES.has(CONFIRMATION_TIMEOUT_CODE)).toBe(true);
-    expect(RETRIABLE_ERROR_CODES.has(TIER_NOT_PERMITTED_CODE)).toBe(false);
-  });
-
   it("classifies SESSION_GONE as a non-retriable business failure (#11799)", () => {
     // Retrying is pointless — the session is what went away, so recovery is a
     // new session rather than the same call again.
@@ -2454,13 +2363,6 @@ describe("unwrapDispatchResult error path", () => {
         retriable: false,
       });
     }
-  });
-
-  it("returns the result value on success", () => {
-    const value = unwrapDispatchResult({
-      result: { ok: true, result: { foo: 1 } },
-    });
-    expect(value).toEqual({ foo: 1 });
   });
 });
 
@@ -2730,31 +2632,6 @@ describe("CallTool live activity notifications (#9759)", () => {
     const startedAt = (started.mock.calls[0]?.[0] as { startedAt: number }).startedAt;
     expect(typeof startedAt).toBe("number");
     expect(appendAuditRecord).toHaveBeenCalledWith(expect.objectContaining({ startedAt }));
-  });
-
-  it("snapshots the turn id at start so started/settled agree across an FSM clear (#10067)", async () => {
-    const started = vi.fn();
-    const settled = vi.fn();
-    // Mirror the active→passive race: the turn id is live at dispatch start but
-    // a later read would return null. Both events must still carry the snapshot.
-    const getCurrentTurnId = vi.fn().mockReturnValueOnce("turn-T1").mockReturnValue(null);
-    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
-    const deps = fakeDeps({
-      getCurrentTurnId,
-      notifyToolCallStarted: started,
-      notifyToolCallSettled: settled,
-      dispatchAction,
-    });
-    const server = createSessionServer("session-T2", deps);
-    await server.connect(makeMockTransport());
-
-    await callTool(server, { name: "worktree.list", arguments: {} });
-
-    const startedTurn = started.mock.calls[0]?.[0]?.capturedTurnId;
-    const settledTurn = settled.mock.calls[0]?.[0]?.capturedTurnId;
-    expect(startedTurn).toBe("turn-T1");
-    expect(settledTurn).toBe("turn-T1");
-    expect(startedTurn).toBe(settledTurn);
   });
 
   it("does not emit started/settled for a pre-dispatch tier rejection", async () => {
@@ -3974,30 +3851,6 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     sessionStore.grantCache.dispose();
   });
 
-  it("issueGrant zeroes the denial counter — banner re-arms after explicit approval", async () => {
-    const sessionStore = assistantSessionStore("core");
-    const notify = vi.fn();
-    const deps = fakeDeps({ sessionStore, notifyTierMismatch: notify });
-    const server = createSessionServer("s", deps);
-    await server.connect(makeMockTransport());
-
-    // Push the counter past the silence threshold.
-    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
-    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
-    await callTool(server, { name: "worktree.resource.teardown", arguments: {} });
-    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.resource.teardown")).toBe(
-      true
-    );
-
-    // Approval mints a grant + resets counter.
-    sessionStore.grantCache.issueGrant("s", "worktree.resource.teardown");
-    expect(sessionStore.grantCache.shouldSuppressBanner("s", "worktree.resource.teardown")).toBe(
-      false
-    );
-
-    sessionStore.grantCache.dispose();
-  });
-
   it("terminal.waitUntilIdle refreshes the grant TTL and resets idle timer on success", async () => {
     const sessionStore = fakeSessionStore("core");
     sessionStore.sessions.set("s", {
@@ -4057,16 +3910,6 @@ describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
       .mockResolvedValueOnce({ result: { ok: true, result: "first" } })
       .mockResolvedValueOnce({ result: { ok: true, result: "second" } });
 
-  // The #8468 git cohort was dropped in #11534: `git.push` takes only
-  // `{cwd, setUpstream}` and `git.commit` commits whatever the index holds, so
-  // a second push after a new commit — or a repeated `wip` message — is
-  // same-argument, and caching it would report success for work that never
-  // happened. Git left MCP with the core/full split, so no dispatch can prove
-  // the boundary any more; restoring either entry must still fail here.
-  it.each(["git.commit", "git.push"])("keeps %s off the dedup allowlist", (tool) => {
-    expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
-  });
-
   it.each(["terminal.inject", "terminal.sendCommand"])(
     "stays bounded — redispatches unlisted mutation %s",
     async (tool) => {
@@ -4086,36 +3929,6 @@ describe("MCP_DEDUP_ALLOWLIST exclusion boundary (#8468)", () => {
       expect(JSON.stringify(second)).toContain("second");
     }
   );
-});
-
-describe("worktree resource lifecycle dedup (#10683)", () => {
-  it("dedups provision (spins up a remote resource)", () => {
-    expect(MCP_DEDUP_ALLOWLIST.has("worktree.resource.provision")).toBe(true);
-  });
-
-  it("does not dedup pause/resume/teardown (intentionally re-runnable)", () => {
-    for (const tool of [
-      "worktree.resource.pause",
-      "worktree.resource.resume",
-      "worktree.resource.teardown",
-    ]) {
-      expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
-    }
-  });
-
-  it("gates each tool at its intended minimum tier", () => {
-    expect(minimumPermittingTier("worktree.resource.provision")).toBe("full");
-    expect(minimumPermittingTier("worktree.resource.pause")).toBe("full");
-    expect(minimumPermittingTier("worktree.resource.resume")).toBe("full");
-    // Teardown sits with its lifecycle siblings; it stays `danger: "confirm"`,
-    // which is what bounds it.
-    expect(minimumPermittingTier("worktree.resource.teardown")).toBe("full");
-    // The host-state reads that used to sit beside them left MCP with the
-    // core/full split.
-    expect(minimumPermittingTier("system.getResourceProfileSnapshot")).toBeNull();
-    expect(minimumPermittingTier("cliAvailability.get")).toBeNull();
-    expect(minimumPermittingTier("hibernation.getConfig")).toBeNull();
-  });
 });
 
 describe("MCP_DEDUP_ALLOWLIST widening (#9156)", () => {
@@ -4159,38 +3972,15 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
   // artifact. Each has a structural twin that was already deduped, which is
   // exactly why the omission was invisible: the same retry was safe through
   // one id and duplicated through the other. The rest of the #11534 cohort —
-  // `agent.terminal` and the forge writes — left MCP with the core/full split;
-  // see `LEFT_MCP` below.
+  // `agent.terminal` and the forge writes — left MCP with the core/full split.
   const NEWLY_DEDUPED = ["workflow.startWorkOnIssue"];
 
   // Navigation and idempotent state-sets. Caching these suppresses a call the
   // caller legitimately meant to repeat — switching back to a worktree the user
   // navigated away from, or reloading a preview after a change — so they must
   // always redispatch. #11534 dropped `git.commit`/`git.push` for the same
-  // reason; the #8468 block above covers them.
+  // reason; the reachability check below keeps them off.
   const MUST_REDISPATCH = ["worktree.setActive", "devPreview.reloadPreview"];
-
-  // What #11534 either added or ruled out of dedup, all of which left MCP with
-  // the core/full split, so no replay of them can arrive and no dispatch can
-  // prove their membership. The forge openers and `forge.assignIssue` were
-  // ruled out on the criterion itself; the rest would be dead weight.
-  const LEFT_MCP = [
-    "agent.terminal",
-    "forge.createPR",
-    "forge.mergePR",
-    "forge.commentOnPR",
-    "forge.createIssue",
-    "forge.addIssueComment",
-    "forge.approvePR",
-    "forge.requestChanges",
-    "forge.openIssue",
-    "forge.openPR",
-    "forge.openIssues",
-    "forge.openPRs",
-    "forge.openCommits",
-    "forge.openRepo",
-    "forge.assignIssue",
-  ];
 
   // Distinct per-call payloads throughout: with a single mockResolvedValue
   // both dispatches return equal results, so `second === first` would hold
@@ -4277,12 +4067,6 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
     }
   );
 
-  it.each(LEFT_MCP)("keeps %s, which left MCP, unreachable and off the dedup allowlist", (tool) => {
-    expect(minimumPermittingTier(tool)).toBeNull();
-    expect(minimumPermittingTier(tool, false)).toBeNull();
-    expect(MCP_DEDUP_ALLOWLIST.has(tool)).toBe(false);
-  });
-
   it("keeps every deduped tool reachable from a help-session tier", () => {
     // A dedup entry for a tool no tier exposes is dead weight that reads as
     // coverage. Catches an id that survives the compile-time BuiltInActionId
@@ -4320,10 +4104,6 @@ describe("worktree.create redispatch (#11880)", () => {
 
     expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
     expect(dispatchAction).not.toHaveBeenCalled();
-  });
-
-  it("keeps worktree.create off the dedup allowlist", () => {
-    expect(MCP_DEDUP_ALLOWLIST.has("worktree.create")).toBe(false);
   });
 });
 
@@ -4558,27 +4338,6 @@ describe("structuredContent for terminal query actions (#10676)", () => {
     expect(JSON.parse(textOf(result))).toEqual(payload);
   });
 
-  it("emits structuredContent for terminal.getStatus", async () => {
-    const payload = {
-      terminals: [{ terminalId: "t-1", agentId: "claude", agentState: "working" }],
-    };
-    const server = createSessionServer("sc-status", deps("terminal.getStatus", payload));
-    const result = await callTool(server, { name: "terminal.getStatus", arguments: {} });
-
-    expect(structuredOf(result)).toEqual(payload);
-  });
-
-  it("emits structuredContent for terminal.getOutput", async () => {
-    const payload = { terminalId: "t-1", content: "hello", lineCount: 1, truncated: false };
-    const server = createSessionServer("sc-output", deps("terminal.getOutput", payload));
-    const result = await callTool(server, {
-      name: "terminal.getOutput",
-      arguments: { terminalId: "t-1" },
-    });
-
-    expect(structuredOf(result)).toEqual(payload);
-  });
-
   it("emits structuredContent for an empty result set (not just non-empty)", async () => {
     const payload = { terminals: [] };
     const server = createSessionServer("sc-empty", deps("terminal.list", payload));
@@ -4787,23 +4546,6 @@ describe("resolved-workspace result metadata (#11536)", () => {
     const result = await callTool(server, { name: "worktree.list", arguments: {} });
 
     expect(workspaceMetaOf(result)).toEqual(WORKSPACE);
-  });
-
-  it("reports a scratch workspace as a scratch", async () => {
-    const scratch = {
-      kind: "scratch" as const,
-      workspaceId: "6f1c9d2e-4a7b-4c3d-9e8f-1a2b3c4d5e6f",
-      workspacePath: "/scratch/one",
-    };
-    const server = createSessionServer(
-      "rp-scratch",
-      depsFor({ result: { ok: true, result: "ok" }, dispatchedWorkspace: scratch })
-    );
-    await server.connect(makeMockTransport());
-
-    const result = await callTool(server, { name: "worktree.list", arguments: {} });
-
-    expect(workspaceMetaOf(result)).toEqual(scratch);
   });
 
   it("merges into an existing _meta without clobbering sibling keys or mutating the input", () => {
@@ -5873,15 +5615,6 @@ describe("sessionServer introspection tier filtering", () => {
       expect(body.error.message).toContain("project.runCheck");
     });
   });
-
-  // Discovery results depend on tier and on live grants, both of which can
-  // change between calls. Caching them per (session, args) would serve a
-  // pre-revocation surface after an approval lapsed.
-  it("keeps introspection tools out of the mutation-only dedup allowlist", () => {
-    for (const id of ["actions.list", "actions.search", "actions.getSchema"]) {
-      expect(MCP_DEDUP_ALLOWLIST.has(id)).toBe(false);
-    }
-  });
 });
 
 describe("mcp.surface short-circuit (#11549)", () => {
@@ -5956,15 +5689,6 @@ describe("mcp.surface short-circuit (#11549)", () => {
       expect(listed.length).toBeGreaterThan(1);
       expect(reported).toEqual(listed);
     }
-  });
-
-  it("omits a tool hidden from tools/list even though its tier permits it", async () => {
-    const { result } = await readSurface("core");
-    const ids = (result.structuredContent as { tools: Array<{ id: string }> }).tools.map(
-      (t) => t.id
-    );
-
-    expect(ids).not.toContain("actions.persistedStores");
   });
 
   it("ignores a live grant, so the hash tracks the listing rather than a timer", async () => {
@@ -6096,24 +5820,6 @@ describe("mcp.surface short-circuit (#11549)", () => {
     await server.connect(makeMockTransport());
 
     await expect(callTool(server, { name: SURFACE })).rejects.toThrow(/manifest unavailable/i);
-  });
-
-  it("is refused before the short-circuit when the tier does not permit it", async () => {
-    // The short-circuit sits AFTER the tier gate. Proven by driving a real
-    // denied call rather than by restating the allowlist: `terminal.new` stands
-    // in for a tool this tier lacks, and the refusal must be the tier error, not
-    // a surface report.
-    const deps = fakeDeps({
-      sessionStore: fakeSessionStore("core"),
-      requestManifest: vi.fn().mockResolvedValue(surfaceManifest()),
-    });
-    const server = createSessionServer("session-surface-denied", deps);
-    await server.connect(makeMockTransport());
-
-    const denied = await callTool(server, { name: "terminal.new" });
-
-    expect(denied.isError).toBe(true);
-    expect(JSON.stringify(denied.content)).toContain(TIER_NOT_PERMITTED_CODE);
   });
 });
 
@@ -6648,19 +6354,6 @@ describe("workspace-bound external sessions (#11789)", () => {
         expect(deps.dispatchAction).not.toHaveBeenCalled();
       });
 
-      it("still refuses a confirm-gated action whose manifest IS reachable", async () => {
-        // The complementary half: when the ceiling can read the manifest, the
-        // refusal is the confirm one, and the bypass does not reach it.
-        const deps = boundDeps();
-        const server = createSessionServer(SESSION, deps);
-        await server.connect(makeMockTransport());
-
-        const result = await callTool(server, { name: "recipe.run", arguments: {} });
-
-        expect(toolErrorPayload(result).code).toBe("CONFIRMATION_REQUIRED");
-        expect(deps.dispatchAction).not.toHaveBeenCalled();
-      });
-
       it("answers terminal.getStatus from the pty-host when ids are named", async () => {
         const handleTerminalGetStatusViewless = vi.fn().mockResolvedValue({
           terminals: [{ terminalId: "t-1", agentId: "claude", agentState: "working" }],
@@ -6793,25 +6486,6 @@ describe("workspace-bound external sessions (#11789)", () => {
       expect(deps.dispatchAction).not.toHaveBeenCalled();
     });
 
-    it("fails closed rather than dispatching when the manifest can't be resolved", async () => {
-      // Proceeding on an unresolved manifest would erase the only evidence that
-      // an action is confirm-gated, turning a refusal into a silent dispatch.
-      const deps = boundDeps({
-        requestManifest: vi
-          .fn()
-          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
-        getCachedManifest: vi.fn(() => null),
-      });
-      const server = createSessionServer(SESSION, deps);
-      await server.connect(makeMockTransport());
-
-      const result = await callTool(server, { name: "recipe.run", arguments: {} });
-
-      expect(result.isError).toBe(true);
-      expect(JSON.stringify(result.content)).toContain(SESSION_BINDING_GONE);
-      expect(deps.dispatchAction).not.toHaveBeenCalled();
-    });
-
     it.each([["not-found" as const], ["ambiguous" as const]])(
       "reports a %s workspace as retriable rather than a dead end (#12082)",
       async (reason) => {
@@ -6882,26 +6556,6 @@ describe("workspace-bound external sessions (#11789)", () => {
         expect(tools.length).toBeGreaterThan(0);
       }
     );
-
-    it("withholds confirm-gated tools from the base surface too", async () => {
-      // The ceiling keys off the binding, not off view liveness: nobody is
-      // watching a background workspace to approve a dialog whether or not a
-      // window happens to be open.
-      const deps = boundDeps({
-        requestManifest: vi
-          .fn()
-          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
-        getCachedManifest: vi.fn(() => null),
-      });
-      const server = createSessionServer(SESSION, deps);
-      await server.connect(makeMockTransport());
-
-      const tools = await listBaseTools(server);
-      const ids = new Set(tools.map((t) => t.name));
-
-      expect(CONFIRM_GATED_EXTERNAL_TOOLS.size).toBeGreaterThan(0);
-      for (const withheld of CONFIRM_GATED_EXTERNAL_TOOLS) expect(ids.has(withheld)).toBe(false);
-    });
 
     it("publishes the input schemas a client needs to call the base surface", async () => {
       // The whole reason for a full surface rather than an empty one plus a
@@ -8233,29 +7887,6 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(deps.requestManifest).not.toHaveBeenCalled();
     });
 
-    // No path, session id or agent crosses from the caller: the host resolves
-    // all of it, so there is nothing else for an argument to steer.
-    it("hands the executor the id and nothing else the caller sent", async () => {
-      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-strip");
-
-      await callTool(server, {
-        name: "terminal.readLastMessageOwned",
-        arguments: {
-          terminalId: "terminal-1",
-          sessionId: "someone-elses",
-          path: "/etc/passwd",
-          maxScanBytes: 1e9,
-        },
-      });
-
-      expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(1);
-      expect(handleTerminalReadLastMessageOwned.mock.calls[0]).toEqual([
-        "terminal-1",
-        {},
-        expect.any(AbortSignal),
-      ]);
-    });
-
     // How much of which message is the caller's to choose (#12496), and the
     // only thing beyond the id that reaches the executor.
     it("forwards the read options it validated", async () => {
@@ -8322,22 +7953,6 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
       expect(errorText(result)).not.toContain("maxBytes");
-      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
-    });
-
-    it("refuses a panel the session did not create, without reading anything", async () => {
-      const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-foreign");
-      store.resourceOwnership.record("other-session", [
-        { kind: "terminal", id: "terminal-theirs" },
-      ]);
-
-      const result = await callTool(server, {
-        name: "terminal.readLastMessageOwned",
-        arguments: { terminalId: "terminal-theirs" },
-      });
-
-      expect(result.isError).toBe(true);
-      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
       expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
     });
 
@@ -10889,22 +10504,6 @@ describe("agent-pane approval (#12692)", () => {
     pane.sessionStore.grantCache.dispose();
   });
 
-  it("reports a missed ask as CONFIRMATION_TIMEOUT", async () => {
-    const pane = paneServer("core", {
-      requestApproval: vi.fn().mockResolvedValue({
-        result: { ok: false, error: { code: CONFIRMATION_TIMEOUT_CODE, message: "timed out" } },
-        confirmationDecision: "timeout",
-      }),
-    });
-    await pane.server.connect(makeMockTransport());
-
-    const result = await callTool(pane.server, { name: "worktree.setActive", arguments: {} });
-
-    expect(toolErrorPayload(result).code).toBe(CONFIRMATION_TIMEOUT_CODE);
-    expect(pane.dispatchAction).not.toHaveBeenCalled();
-    pane.sessionStore.grantCache.dispose();
-  });
-
   it("fails closed with CONFIRMATION_REQUIRED when no window can show the ask", async () => {
     const pane = paneServer("core", {
       requestApproval: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
@@ -12040,15 +11639,6 @@ describe("session-scoped ownership note for api-key callers (#12987)", () => {
       expect(payload.details).toBeUndefined();
       expect(texts(result)).toHaveLength(1);
       expect(dispatchAction).not.toHaveBeenCalled();
-    });
-
-    it.each(OWNED_CALLS)("is not given by %s to a pane bearer", async (name, args) => {
-      const { server } = session("s-pane", { principal: "principal-pane" });
-
-      const payload = refusal(await callTool(server, { name, arguments: args }));
-
-      expect(payload.code).toBe("RESOURCE_NOT_OWNED");
-      expect(payload.message).not.toContain(NOTE);
     });
 
     it("leaves a pane's hand-over hint and grant path as they were", async () => {

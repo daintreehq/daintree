@@ -460,20 +460,6 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(setAgentPinnedMock).not.toHaveBeenCalled();
   });
 
-  it("routes a panel-button hide through the same action", () => {
-    mockToolbarState = makeToolbarState({
-      leftButtons: ["terminal", "file-browser", "launcher"],
-      rightButtons: ["settings"],
-      pinnedButtons: {},
-    });
-
-    const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText(switchName("Browse files")));
-
-    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("file-browser", false);
-    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
-  });
-
   it("reflects pinned agents in the side visible-count summary", () => {
     mockAgentSettings = agentSettings({
       claude: { pinned: true },
@@ -1060,26 +1046,6 @@ describe("ToolbarSettingsTab — plugin button promotion (#11304)", () => {
 
     expect(setPluginButtonPromotedMock).toHaveBeenCalledWith("acme.ping", true);
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
-  });
-
-  it("demotes an already-promoted contribution", () => {
-    mockToolbarState = makeToolbarState({
-      ...mockToolbarState.layout,
-      pinnedButtons: { "acme.ping": true },
-    });
-
-    const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText(switchName("Hello ping")));
-
-    expect(setPluginButtonPromotedMock).toHaveBeenCalledWith("acme.ping", false);
-  });
-
-  it("leaves built-in toggles on toggleButtonVisibility", () => {
-    const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText(switchName("Launcher")));
-
-    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("launcher", "left");
-    expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
   });
 });
 

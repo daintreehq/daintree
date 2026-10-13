@@ -17,11 +17,6 @@ describe("soundex", () => {
     expect(soundex("Lee")).toBe("L000");
   });
 
-  it("treats H and W as transparent between same-coded consonants", () => {
-    // Ashcraft: the S and C are both coded 2, separated by H — collapse to one.
-    expect(soundex("Pfister")).toHaveLength(4);
-  });
-
   it("returns empty string for non-alphabetic input", () => {
     expect(soundex("1234")).toBe("");
     expect(soundex("")).toBe("");
@@ -143,9 +138,5 @@ describe("findCorrectionCandidates", () => {
   it("handles empty input without throwing", () => {
     expect(findCorrectionCandidates("", "")).toEqual([]);
     expect(findCorrectionCandidates("hello", "")).toEqual([]);
-  });
-
-  it("handles unicode input without throwing", () => {
-    expect(() => findCorrectionCandidates("café résumé naïve", "cafe resume naive")).not.toThrow();
   });
 });

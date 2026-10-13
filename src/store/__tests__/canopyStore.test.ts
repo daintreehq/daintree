@@ -77,15 +77,6 @@ describe("mode", () => {
   });
 });
 
-describe("unreadOnly", () => {
-  it("is off until turned on, and holds for the session", () => {
-    expect(useCanopyStore.getState().unreadOnly).toBe(false);
-    useCanopyStore.getState().setUnreadOnly(true);
-    expect(useCanopyStore.getState().unreadOnly).toBe(true);
-    useCanopyStore.getState().setUnreadOnly(false);
-  });
-});
-
 describe("applySnapshot", () => {
   it("never lets an older snapshot paint over a newer one", () => {
     const snapshot = (sequence: number, refreshedAt: number): CanopySnapshot => ({

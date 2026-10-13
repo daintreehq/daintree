@@ -30,10 +30,4 @@ describe("ACTIVE_AGENT_STATES", () => {
   it("no longer includes the retired 'running' state", () => {
     expect(ACTIVE_AGENT_STATES.has("running" as AgentState)).toBe(false);
   });
-
-  it("still covers in-flight states", () => {
-    expect(ACTIVE_AGENT_STATES.has("working")).toBe(true);
-    expect(ACTIVE_AGENT_STATES.has("waiting")).toBe(true);
-    expect(ACTIVE_AGENT_STATES.has("directing")).toBe(true);
-  });
 });

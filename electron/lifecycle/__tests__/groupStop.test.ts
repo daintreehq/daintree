@@ -162,7 +162,6 @@ describe("isChromiumChildSignalKill", () => {
       true,
     ],
     ["a GPU crash", { type: "GPU", reason: "crashed", serviceName: "GPU" }, false],
-    ["a GPU clean exit", { type: "GPU", reason: "clean-exit", serviceName: "GPU" }, false],
     ["a Daintree utility process killed by a signal", watchdogKilled, false],
     ["a utility process with no service name", { type: "Utility", reason: "killed" }, false],
   ] as const)("%s → %s", (_label, details, expected) => {

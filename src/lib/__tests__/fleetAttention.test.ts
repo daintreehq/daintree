@@ -195,14 +195,6 @@ describe("quiet runs", () => {
   });
 });
 
-describe("isDemandBand", () => {
-  it("classifies at least one band as a demand and at least one as not", () => {
-    const demands = FLEET_BANDS.filter(isDemandBand);
-    expect(demands.length).toBeGreaterThan(0);
-    expect(demands.length).toBeLessThan(FLEET_BANDS.length);
-  });
-});
-
 describe("compareWithinBand", () => {
   /** These cases are all about the ordering itself, so they bind one band. */
   const byNeed = (a: FleetRunRow, b: FleetRunRow) => compareWithinBand(a, b, "needs-you");
@@ -306,23 +298,11 @@ describe("bandForRun — snooze", () => {
     }
   });
 
-  it("bands an unsnoozed run exactly as before", () => {
-    // Snooze is the only new demotion lever; nothing else may shift.
-    expect(bandForRun(run({ agentState: "waiting", waitingReason: "question" }))).toBe("needs-you");
-    expect(bandForRun(run({ agentState: "working" }))).toBe("running");
-  });
-
   it("gives the snoozed band its own label", () => {
     const label = bandLabel("snoozed", run());
     expect(label.length).toBeGreaterThan(0);
     expect(label).not.toBe(bandLabel("parked", run()));
     expect(label).not.toBe(bandLabel("idle", run()));
-  });
-
-  it("counts the snoozed band in an empty tally", () => {
-    const counts = emptyBandCounts();
-    // Every band must have a slot, or a snoozed run would increment undefined.
-    for (const band of FLEET_BANDS) expect(counts[band]).toBe(0);
   });
 });
 

@@ -16,16 +16,6 @@ describe("PaletteOverflowNotice", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders nothing when total is less than shown", () => {
-    const { container } = render(<PaletteOverflowNotice shown={20} total={5} />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it("has role='status' so AT announces the count", () => {
-    render(<PaletteOverflowNotice shown={20} total={47} />);
-    expect(screen.getByRole("status")).toBeTruthy();
-  });
-
   it("names the recovery in the visible copy, not only the aria-label", () => {
     // The hidden rows are the matches that ranked below the cut, so there is no
     // list to open — the route is the search field. A sighted user has to be

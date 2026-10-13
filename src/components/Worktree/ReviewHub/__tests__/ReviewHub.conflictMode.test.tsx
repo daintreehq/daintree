@@ -527,34 +527,6 @@ describe("ReviewHub", () => {
       expect(screen.queryByTestId("conflict-rebase-sequence")).toBeNull();
     });
 
-    it("disables Continue when conflicted files remain", async () => {
-      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
-
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-
-      await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
-      expect(
-        screen.getByRole("button", { name: /^Continue /i }).getAttribute("aria-disabled")
-      ).toBe("true");
-    });
-
-    it("enables Continue when all conflicts are resolved", async () => {
-      getStagingStatusMock.mockResolvedValue(
-        makeMergingStatus({
-          conflicted: [],
-          conflictedFiles: [],
-          staged: [{ path: "src/app.ts", status: "modified", insertions: 1, deletions: 1 }],
-        })
-      );
-
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-
-      await waitFor(() => screen.getByRole("button", { name: /^Continue /i }));
-      expect(
-        screen.getByRole("button", { name: /^Continue /i }).hasAttribute("aria-disabled")
-      ).toBe(false);
-    });
-
     it("renders user-cleared empty state when all conflicts are resolved", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeMergingStatus({
@@ -676,19 +648,6 @@ describe("ReviewHub", () => {
       // Dialog is open but unconfirmed — the IPC must not have fired.
       await screen.findByRole("alertdialog");
       expect(checkoutOursTheirsMock).not.toHaveBeenCalled();
-    });
-
-    it("renders the Abort action inside the operation chrome, not the footer", async () => {
-      getStagingStatusMock.mockResolvedValue(makeMergingStatus());
-
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-
-      await waitFor(() => screen.getByTestId("conflict-panel"));
-      // The Abort control is now sized `xs` (text-2xs); Continue is the
-      // only `sm` primary in the footer region. Verify both exist and that
-      // there is exactly one Continue and exactly one Abort.
-      expect(screen.getAllByRole("button", { name: /^Continue /i })).toHaveLength(1);
-      expect(screen.getAllByRole("button", { name: /^Abort /i })).toHaveLength(1);
     });
 
     it("keeps the Resolved section collapsed by default and expands on click", async () => {

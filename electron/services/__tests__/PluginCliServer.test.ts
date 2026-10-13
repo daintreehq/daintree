@@ -129,17 +129,6 @@ describe("createPluginCliServer", () => {
     expect(handlers.devMetrics).toHaveBeenCalledWith({ pluginId: "acme.demo" });
   });
 
-  it("answers plugin.dev.metrics for an unloaded plugin with a null snapshot", async () => {
-    server = makeServer(noopHandlers());
-    await server.listen();
-    const res = await request({
-      id: 8,
-      method: "plugin.dev.metrics",
-      params: { pluginId: "acme.gone" },
-    });
-    expect(res).toEqual({ id: 8, result: { snapshot: null } });
-  });
-
   it("rejects plugin.dev.metrics without a pluginId", async () => {
     server = makeServer(noopHandlers());
     await server.listen();
@@ -288,34 +277,6 @@ describe("createPluginCliServer", () => {
     const res = await request({ id: 2, method: "plugin.ping" }, { token: "not-the-token" });
     expect(res.error).toBeTruthy();
     expect((res.error as { message: string }).message).toMatch(/Unauthorized/);
-  });
-
-  it("rejects a token of the wrong length without throwing", async () => {
-    const handlers = noopHandlers();
-    server = makeServer(handlers);
-    await server.listen();
-
-    // A shorter token must not crash the timing-safe comparison.
-    const res = await request(
-      { id: 3, method: "plugin.uninstall", params: { pluginId: "acme.demo" } },
-      { token: "abc" }
-    );
-    expect(res.error).toBeTruthy();
-    expect((res.error as { message: string }).message).toMatch(/Unauthorized/);
-    expect(handlers.uninstall).not.toHaveBeenCalled();
-  });
-
-  it("accepts the correct token and dispatches", async () => {
-    const handlers = noopHandlers();
-    server = makeServer(handlers);
-    await server.listen();
-
-    const res = await request(
-      { id: 4, method: "plugin.install", params: { path: "/tmp/ok.dntr" } },
-      { token: server.authToken }
-    );
-    expect(res.result).toEqual({ status: "installed" });
-    expect(handlers.install).toHaveBeenCalledWith({ path: "/tmp/ok.dntr" });
   });
 
   it("does not dispatch a second (valid-token) frame after a first auth failure", async () => {

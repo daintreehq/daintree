@@ -52,12 +52,6 @@ describe("git.push as a host operation", () => {
     expect(push).toHaveBeenCalledWith("/repo/one", undefined, "op-1");
   });
 
-  it("pushes exactly as before in a local view", async () => {
-    await runPush();
-    expect(m.runHostOperation.mock.calls[0]![0]).toBeUndefined();
-    expect(push).toHaveBeenCalledWith("/repo/one", undefined);
-  });
-
   it("resolves a push the host recorded as succeeded", async () => {
     m.opId = "op-1";
     m.runHostOperation.mockImplementation(

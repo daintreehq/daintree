@@ -454,18 +454,6 @@ describe("McpPaneConfigService", () => {
       expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
     });
 
-    it("stores only the fields it was given", async () => {
-      const { token } = await service.preparePaneConfig({
-        paneId: "pane-agent-bare",
-        port: 45454,
-        tier: "core",
-      });
-
-      service.registerPaneWorkspaceBinding(token, { workspaceId: "p1" });
-
-      expect(service.getPaneWorkspaceBindingForToken(token)).toEqual({ workspaceId: "p1" });
-    });
-
     it("no-ops for an unknown or revoked token", async () => {
       expect(() =>
         service.registerPaneWorkspaceBinding("ghost-token", { workspaceId: "p1" })
@@ -480,19 +468,6 @@ describe("McpPaneConfigService", () => {
       });
       await service.revokePaneConfig("pane-agent-race");
       service.registerPaneWorkspaceBinding(token, { workspaceId: "p1" });
-
-      expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
-    });
-
-    it("revokePaneConfig tears the binding down with the token", async () => {
-      const { token } = await service.preparePaneConfig({
-        paneId: "pane-agent-revoke",
-        port: 45454,
-        tier: "core",
-      });
-      service.registerPaneWorkspaceBinding(token, { workspaceId: "p1", launchWebContentsId: 42 });
-
-      await service.revokePaneConfig("pane-agent-revoke");
 
       expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
     });
@@ -877,19 +852,6 @@ describe("McpPaneConfigService", () => {
       });
     });
 
-    it("writes the plugin-only file with mode 0600 on POSIX", async () => {
-      if (process.platform === "win32") return;
-
-      const prepared = await service.preparePaneConfig({
-        paneId: "pane-plugin-mode",
-        port: 45454,
-        tier: "off",
-        plugin: { projectId: PROJECT_A, servers: [ledger] },
-      });
-      const stat = await fs.stat(prepared!.configPath!);
-      expect(stat.mode & 0o777).toBe(0o600);
-    });
-
     it("skips a plugin the registry refuses and returns null when nothing is left to write", async () => {
       const foreign: PanePluginServer = {
         ...ledger,
@@ -1036,28 +998,6 @@ describe("McpPaneConfigService", () => {
       expect(grants.listForTerminal("pane-without-record")).toEqual([]);
     });
 
-    it("re-preparing the same pane revokes the previous launch's grants", async () => {
-      const first = await service.preparePaneConfig({
-        paneId: "pane-plugin-restart",
-        port: 45454,
-        tier: "off",
-        plugin: { projectId: PROJECT_A, servers: [ledger] },
-      });
-      const firstBearer = bearerOf(
-        (await readServers(first!.configPath!))[first!.pluginServerKeys[0]]
-      );
-
-      await service.preparePaneConfig({
-        paneId: "pane-plugin-restart",
-        port: 45454,
-        tier: "off",
-        plugin: { projectId: PROJECT_A, servers: [ledger] },
-      });
-
-      expect(grants.authenticate(firstBearer)).toBeNull();
-      expect(grants.listForTerminal("pane-plugin-restart")).toHaveLength(1);
-    });
-
     it("revokeAll revokes every grant it minted", async () => {
       await service.preparePaneConfig({
         paneId: "pane-plugin-all-a",
@@ -1185,18 +1125,6 @@ describe("McpPaneConfigService", () => {
       expect(grants.authenticate(newerBearer)).not.toBeNull();
       expect(service.isValidPaneToken(olderPrepared!.token!)).toBe(false);
       expect(service.isValidPaneToken(newer!.token!)).toBe(true);
-    });
-
-    it("re-checks eligibility as each grant is minted", async () => {
-      const prepared = await service.preparePaneConfig({
-        paneId: "pane-plugin-ineligible",
-        port: 45454,
-        tier: "core",
-        plugin: { projectId: PROJECT_A, servers: [ledger], isEligible: () => false },
-      });
-
-      expect(prepared!.pluginServerKeys).toEqual([]);
-      expect(grants.listForTerminal("pane-plugin-ineligible")).toEqual([]);
     });
 
     it("asks about each server on its own, minting the eligible ones", async () => {

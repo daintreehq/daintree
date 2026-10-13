@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentState } from "../../../shared/types/agent.js";
+import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 
 const storeMock = vi.hoisted(() => ({
@@ -99,6 +99,109 @@ function emitStateChange(state: AgentState, previousState: AgentState, terminalI
   });
 }
 
+/** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
+const OWNER = 101;
+
+const BASE_TIME = new Date("2026-01-01T00:00:00.000Z");
+
+const DEFAULT_NOTIFICATION_SETTINGS = {
+  enabled: true,
+  completedEnabled: false,
+  waitingEnabled: false,
+  soundEnabled: false,
+  completedSoundFile: "complete.wav",
+  waitingSoundFile: "waiting.wav",
+  escalationSoundFile: "ping.wav",
+  waitingEscalationEnabled: true,
+  waitingEscalationDelayMs: 180_000,
+  workingPulseEnabled: false,
+  workingPulseSoundFile: "pulse.wav",
+  uiFeedbackSoundEnabled: false,
+};
+
+const DEFAULT_APP_STATE = {
+  activeWorktreeId: "wt-1",
+  terminals: [
+    {
+      id: "term-1",
+      kind: "terminal",
+      agentId: "agent-1",
+      title: "Claude Agent",
+      location: "dock" as const,
+      worktreeId: "wt-1",
+    },
+  ],
+};
+
+interface PendingNotificationInternal {
+  title: string;
+  body: string;
+  worktreeId?: string;
+  terminalId?: string;
+  agentId?: string;
+  triggerSound: boolean;
+  soundFile?: string;
+}
+
+interface AgentNotificationServiceInternal {
+  completionBurstBuffer: PendingNotificationInternal[];
+  completionBurstSoundFile?: string;
+  completionBurstTimer: ReturnType<typeof setTimeout> | null;
+  drainQueue: () => void;
+  notificationQueue: PendingNotificationInternal[];
+  staggerTimer: ReturnType<typeof setTimeout> | null;
+}
+
+function mockStore(
+  notifOverrides: Partial<typeof DEFAULT_NOTIFICATION_SETTINGS> = {},
+  appStateOverrides: Partial<typeof DEFAULT_APP_STATE> = {}
+): void {
+  const notifSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...notifOverrides };
+  const appState = { ...DEFAULT_APP_STATE, ...appStateOverrides };
+  storeMock.get.mockImplementation((key: string) => {
+    if (key === "notificationSettings") return notifSettings;
+    if (key === "appState") return appState;
+    return undefined;
+  });
+  projectStoreMock.getEffectiveNotificationSettings.mockReturnValue(notifSettings);
+}
+
+function makePayload(
+  state: AgentState,
+  previousState: AgentState,
+  overrides: Partial<{
+    worktreeId: string;
+    terminalId: string;
+    agentId: string;
+    waitingReason: WaitingReason;
+  }> = {}
+) {
+  const payload: {
+    state: AgentState;
+    previousState: AgentState;
+    worktreeId: string;
+    terminalId: string;
+    agentId: string;
+    timestamp: number;
+    trigger: "heuristic";
+    confidence: number;
+    waitingReason?: WaitingReason;
+  } = {
+    state,
+    previousState,
+    worktreeId: overrides.worktreeId ?? "wt-1",
+    terminalId: overrides.terminalId ?? "term-1",
+    agentId: overrides.agentId ?? "agent-1",
+    timestamp: Date.now(),
+    trigger: "heuristic" as const,
+    confidence: 1,
+  };
+  if (overrides.waitingReason !== undefined) {
+    payload.waitingReason = overrides.waitingReason;
+  }
+  return payload;
+}
+
 describe("AgentNotificationService – all-clear", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -156,17 +259,6 @@ describe("AgentNotificationService – all-clear", () => {
     });
 
     emitSpy.mockRestore();
-  });
-
-  it("does not fire for single-agent completions", () => {
-    mockTerminals([{ id: "term-1", agentState: "working" }]);
-    emitStateChange("working", "idle", "term-1");
-
-    mockTerminals([{ id: "term-1", agentState: "completed" }]);
-    emitStateChange("completed", "working", "term-1");
-
-    vi.advanceTimersByTime(600);
-    expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
   });
 
   it("does not fire on startup when agents are already completed", () => {
@@ -416,19 +508,6 @@ describe("AgentNotificationService – all-clear", () => {
     emitSpy.mockRestore();
   });
 
-  it("does not fire when no working transition ever occurs (empty session)", () => {
-    // Never emit any working state - only idle/completed states
-    mockTerminals([{ id: "term-1", agentState: "idle" }]);
-    emitStateChange("idle", "idle", "term-1");
-
-    mockTerminals([{ id: "term-1", agentState: "completed" }]);
-    emitStateChange("completed", "idle", "term-1");
-
-    // Advance past debounce - should not fire because hasEverGoneWorking is false
-    vi.advanceTimersByTime(600);
-    expect(soundServiceMock.play).not.toHaveBeenCalledWith("all-clear");
-  });
-
   it("does not fire when peak concurrent never reaches 2 (sequential single-agent sessions)", () => {
     // First agent works and completes (peak = 1)
     mockTerminals([{ id: "term-1", agentState: "working" }]);
@@ -620,21 +699,6 @@ describe("AgentNotificationService – all-clear", () => {
       emitSpy.mockRestore();
     });
 
-    it("plays the sound when the OS Do-Not-Disturb state is unknown", () => {
-      // Windows and Linux have no detection at all and always report
-      // `undefined` — fail open, never gate.
-      osDndServiceMock.getState.mockReturnValue(undefined);
-      const emitSpy = vi.spyOn(events, "emit");
-
-      runTwoAgentSession();
-      vi.advanceTimersByTime(600);
-
-      expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
-      expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
-      expect(allClearShouldFlash(emitSpy.mock.calls)).toBe(true);
-      emitSpy.mockRestore();
-    });
-
     it("never raises an OS notification for the all-clear, suppressed or not", () => {
       osDndServiceMock.getState.mockReturnValue(true);
       runTwoAgentSession();
@@ -705,5 +769,124 @@ describe("AgentNotificationService – all-clear", () => {
       expect(soundServiceMock.play).toHaveBeenCalledTimes(1);
       expect(soundServiceMock.play).toHaveBeenCalledWith("all-clear");
     });
+  });
+});
+
+describe("AgentNotificationService adversarial", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+    vi.clearAllMocks();
+    osDndServiceMock.getState.mockReturnValue(undefined);
+    mockStore();
+    agentNotificationService.initialize();
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+  });
+
+  afterEach(() => {
+    agentNotificationService.dispose();
+    vi.useRealTimers();
+  });
+
+  it("SAME_TARGET_WAITING_BURST_DEDUPES", () => {
+    mockStore({ waitingEnabled: true, soundEnabled: true });
+
+    events.emit("agent:state-changed", makePayload("waiting", "working"));
+    events.emit("agent:state-changed", makePayload("waiting", "working"));
+    vi.advanceTimersByTime(200);
+
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+      "Agent waiting",
+      "agent-1 is waiting for input",
+      expect.objectContaining({ panelId: "term-1" }),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
+    );
+    expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("SAME_TARGET_COMPLETION_DEBOUNCE_FIRES_ONCE", () => {
+    mockStore({ completedEnabled: true, soundEnabled: true });
+
+    events.emit("agent:state-changed", makePayload("completed", "working"));
+    vi.advanceTimersByTime(1000);
+    events.emit("agent:state-changed", makePayload("completed", "directing"));
+    vi.advanceTimersByTime(2001);
+
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+      "Agent finished",
+      "agent-1 finished its task",
+      expect.objectContaining({ panelId: "term-1" }),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
+    );
+    expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("DISPOSE_DURING_STAGGERED_QUEUE_DROPS_PENDING", () => {
+    const internal = agentNotificationService as unknown as AgentNotificationServiceInternal;
+    internal.notificationQueue.push(
+      {
+        title: "Agent finished",
+        body: "agent-1 finished its task",
+        terminalId: "term-1",
+        agentId: "agent-1",
+        worktreeId: "wt-1",
+        triggerSound: true,
+        soundFile: "complete.wav",
+      },
+      {
+        title: "Agent finished",
+        body: "agent-2 finished its task",
+        terminalId: "term-2",
+        agentId: "agent-2",
+        worktreeId: "wt-2",
+        triggerSound: true,
+        soundFile: "complete.wav",
+      }
+    );
+
+    internal.drainQueue();
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
+    expect(internal.staggerTimer).not.toBeNull();
+
+    agentNotificationService.dispose();
+    vi.advanceTimersByTime(500);
+
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("WAITING_AND_COMPLETION_SAME_TARGET_KEEP_ORDER", () => {
+    mockStore({ waitingEnabled: true, completedEnabled: true, soundEnabled: false });
+
+    events.emit("agent:state-changed", makePayload("waiting", "working"));
+    vi.advanceTimersByTime(200);
+
+    events.emit("agent:state-changed", makePayload("completed", "waiting"));
+    vi.advanceTimersByTime(2001);
+
+    expect(notificationServiceMock.showWatchNotification.mock.calls.map((call) => call[0])).toEqual(
+      ["Agent waiting", "Agent finished"]
+    );
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenNthCalledWith(
+      1,
+      "Agent waiting",
+      "agent-1 is waiting for input",
+      expect.objectContaining({ panelId: "term-1" }),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: OWNER, closeWithPanels: ["term-1"], category: "waiting" }
+    );
+    expect(notificationServiceMock.showWatchNotification).toHaveBeenNthCalledWith(
+      2,
+      "Agent finished",
+      "agent-1 finished its task",
+      expect.objectContaining({ panelId: "term-1" }),
+      "notification:watch-navigate",
+      { silent: true, ownerWebContentsId: OWNER, category: "completed" }
+    );
   });
 });

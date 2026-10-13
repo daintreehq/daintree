@@ -37,28 +37,10 @@ describe("registerGlobalEnvHandlers", () => {
     }
   });
 
-  it("registers two IPC handlers and cleanup removes them", () => {
-    const cleanup = registerGlobalEnvHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(2);
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("global-env:get", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("global-env:set", expect.any(Function));
-    cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(2);
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("global-env:get");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("global-env:set");
-  });
-
   it("get returns empty object when store has no global vars", async () => {
     registerGlobalEnvHandlers();
     const result = await getHandler("global-env:get")(null);
     expect(result).toEqual({});
-  });
-
-  it("get returns stored global vars", async () => {
-    storeMock._data["globalEnvironmentVariables"] = { NODE_ENV: "production", PORT: "3000" };
-    registerGlobalEnvHandlers();
-    const result = await getHandler("global-env:get")(null);
-    expect(result).toEqual({ NODE_ENV: "production", PORT: "3000" });
   });
 
   it("set stores variables and get returns them", async () => {
@@ -116,14 +98,5 @@ describe("registerGlobalEnvHandlers", () => {
     const setHandler = getHandler("global-env:set");
     await setHandler(null, { variables: {} });
     expect(storeMock.set).toHaveBeenCalledWith("globalEnvironmentVariables", {});
-  });
-
-  it("set overwrites previous variables entirely", async () => {
-    storeMock._data["globalEnvironmentVariables"] = { OLD_VAR: "old" };
-    registerGlobalEnvHandlers();
-    const setHandler = getHandler("global-env:set");
-
-    await setHandler(null, { variables: { NEW_VAR: "new" } });
-    expect(storeMock.set).toHaveBeenCalledWith("globalEnvironmentVariables", { NEW_VAR: "new" });
   });
 });

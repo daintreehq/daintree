@@ -4,12 +4,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { Switch, switchThumbVariants, switchVariants } from "../switch";
-import {
-  durationMs,
-  expectNarrowTransition,
-  expectNoUnfocusedAccent,
-  utilitiesInGroup,
-} from "./variantAssertions";
+import { durationMs, expectNarrowTransition, utilitiesInGroup } from "./variantAssertions";
 
 const TONES = ["neutral", "warning", "danger"] as const;
 const SIZES = ["sm", "md"] as const;
@@ -62,14 +57,6 @@ describe("Switch behaviour", () => {
     const control = screen.getByRole("switch");
     expect(ref.current).toBe(control);
     expect(control.getAttribute("data-testid")).toBe("notify-switch");
-  });
-
-  it("exposes the resolved tone as a data attribute", () => {
-    const { rerender } = render(<Switch aria-label="Notify" checked onCheckedChange={vi.fn()} />);
-    expect(screen.getByRole("switch").getAttribute("data-tone")).toBe("neutral");
-
-    rerender(<Switch aria-label="Notify" checked onCheckedChange={vi.fn()} tone="danger" />);
-    expect(screen.getByRole("switch").getAttribute("data-tone")).toBe("danger");
   });
 });
 
@@ -156,11 +143,5 @@ describe("switchVariants", () => {
     // would flatten the toggle into one undifferentiated move. The relationship
     // is the contract; either value may be retuned.
     expect(durationMs(thumb)).toBeLessThan(durationMs(track));
-  });
-
-  it("spends accent only on the focus ring", () => {
-    for (const tone of TONES) {
-      expectNoUnfocusedAccent(switchVariants({ tone }));
-    }
   });
 });

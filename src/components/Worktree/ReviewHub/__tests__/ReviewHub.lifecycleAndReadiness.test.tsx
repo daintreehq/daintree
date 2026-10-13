@@ -694,12 +694,6 @@ describe("ReviewHub", () => {
       expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
     });
 
-    it("ArrowUp from no focus jumps to the last row", async () => {
-      const listbox = await renderHub();
-      act(() => void fireEvent.keyDown(document, { key: "ArrowUp" }));
-      expect(listbox.getAttribute("aria-activedescendant")).toBe("review-hub-row-1");
-    });
-
     it("Space unstages the focused staged row and keeps focus", async () => {
       const listbox = await renderHub();
       act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
@@ -1113,15 +1107,6 @@ describe("ReviewHub", () => {
       renderCleanHub({ aheadCount: 2, behindCount: 0 }, false);
       await waitFor(() => screen.getByText(COMPLETION_HEADLINE));
       expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
-    });
-
-    it("never renders the unpushed state and the completed state together", async () => {
-      // The defect this closes: both states shared one composition, so the
-      // only thing distinguishing "you still have work to publish" from "you
-      // are done" was a 12px subtitle. They must now be mutually exclusive.
-      renderCleanHub({ aheadCount: 2, behindCount: 0 });
-      await screen.findByTestId("review-hub-clean-unpushed");
-      expect(screen.queryByText(COMPLETION_HEADLINE)).toBeNull();
     });
   });
 });

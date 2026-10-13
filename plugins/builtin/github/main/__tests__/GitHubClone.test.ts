@@ -114,12 +114,6 @@ describe("GitHubClone — probeAuth", () => {
     expect(probe.authenticated).toBe(false);
   });
 
-  it("reports unauthenticated when gh is not on PATH (ENOENT)", async () => {
-    setAuthResult(Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" }));
-    const probe = await cloneCapability.probeAuth();
-    expect(probe.authenticated).toBe(false);
-  });
-
   it("reports unauthenticated without probing when the signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();

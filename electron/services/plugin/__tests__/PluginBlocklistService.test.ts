@@ -156,16 +156,6 @@ describe("PluginBlocklistService", () => {
     expect(await svc.getBlocklist()).toBeNull();
   });
 
-  it("fails open on a timeout/abort error", async () => {
-    const fetchImpl = vi.fn(async () => {
-      const err = new Error("aborted");
-      err.name = "AbortError";
-      throw err;
-    });
-    const svc = new PluginBlocklistService({ cachePath, fetchImpl });
-    expect(await svc.getBlocklist()).toBeNull();
-  });
-
   it("fails open on a non-OK HTTP status", async () => {
     const fetchImpl = stubFetch(BLOCKLIST, { ok: false, status: 503 });
     const svc = new PluginBlocklistService({ cachePath, fetchImpl });

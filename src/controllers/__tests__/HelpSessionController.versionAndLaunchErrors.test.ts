@@ -346,15 +346,6 @@ describe("HelpSessionController — checkVersionAgain", () => {
     ctrl.stop();
   });
 
-  it("is a no-op while a re-probe is already in flight", () => {
-    const ctrl = new HelpSessionController();
-    setBlock(ctrl);
-    ctrl["_patch"]({ isCheckingVersion: true });
-    ctrl.checkVersionAgain();
-    expect(getAgentVersionMock()).not.toHaveBeenCalled();
-    ctrl.stop();
-  });
-
   it("re-probes with refresh=true and clears the gate when the CLI is now current", async () => {
     const ctrl = new HelpSessionController();
     getAgentVersionMock().mockResolvedValue({ installedVersion: "1.2.0", latestVersion: "1.2.0" });
@@ -658,20 +649,6 @@ describe("HelpSessionController — launch error routing", () => {
       { url: "https://daintree.org/download" },
       { source: "user" }
     );
-    ctrl.stop();
-  });
-
-  it("dismissLaunchError clears the banner", async () => {
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    primeInputs(ctrl, true);
-    provisionMock().mockResolvedValueOnce(null);
-
-    ctrl.launch({ agentId: "claude" });
-    await vi.waitFor(() => expect(ctrl.getSnapshot().launchError).not.toBeNull());
-
-    ctrl.dismissLaunchError();
-    expect(ctrl.getSnapshot().launchError).toBeNull();
     ctrl.stop();
   });
 

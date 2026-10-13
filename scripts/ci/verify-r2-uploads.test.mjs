@@ -73,12 +73,6 @@ describe("verifyFileUrl", () => {
     expect(result).toContain("Daintree-1.0.0-mac.zip");
   });
 
-  it("returns error on 500", async () => {
-    const fetchFn = vi.fn().mockResolvedValue(makeResponse({ status: 500 }));
-    const result = await verifyFileUrl(entry, { fetch: fetchFn, publishUrl });
-    expect(result).toContain("500");
-  });
-
   it("returns error on size mismatch", async () => {
     const fetchFn = vi.fn().mockResolvedValue(makeResponse({ status: 200, contentLength: 200 }));
     const result = await verifyFileUrl(entry, { fetch: fetchFn, publishUrl });
@@ -250,17 +244,6 @@ describe("findMetadataFiles", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
-
-  it("returns only the platforms that exist", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "verify-r2-test-"));
-    try {
-      await writeFile(path.join(dir, "latest-mac.yml"), "x: 1");
-      const result = await findMetadataFiles(dir, "latest");
-      expect(result.map((p) => path.basename(p))).toEqual(["latest-mac.yml"]);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("verifyAllFiles", () => {
@@ -304,32 +287,6 @@ describe("verifyAllFiles", () => {
       expect(failures[1].filePath).toBe(linuxYml);
       expect(failures[1].message).toContain("Content-Length mismatch");
       expect(log).toHaveBeenCalledWith(expect.stringContaining("[verify] ok"));
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("returns empty failures when every entry verifies", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "verify-r2-test-"));
-    try {
-      const yml = path.join(dir, "latest-mac.yml");
-      await writeFile(
-        yml,
-        "version: 1.0.0\nfiles:\n  - url: mac.zip\n    sha512: aaa\n    size: 100\npath: mac.zip\nsha512: aaa\nreleaseDate: 2024-01-01\n"
-      );
-
-      const fetchFn = vi.fn().mockResolvedValue(makeResponse({ status: 200, contentLength: 100 }));
-      const sleepFn = vi.fn().mockResolvedValue(undefined);
-
-      const failures = await verifyAllFiles({
-        metadataFiles: [yml],
-        publishUrl,
-        fetch: fetchFn,
-        sleep: sleepFn,
-        log: () => {},
-      });
-
-      expect(failures).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

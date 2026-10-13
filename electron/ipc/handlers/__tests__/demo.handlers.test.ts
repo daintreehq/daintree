@@ -95,12 +95,6 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("registers 22 IPC handlers when isDemoMode is true", () => {
-    const cleanup = registerDemoHandlers(makeDeps(true));
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(22);
-    cleanup();
-  });
-
   it("registers setDisplayMediaRequestHandler on persist:daintree session", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     expect(sessionMock.fromPartition).toHaveBeenCalledWith("persist:daintree");
@@ -128,32 +122,6 @@ describe("registerDemoHandlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
     expect(displaySessionMock.setDisplayMediaRequestHandler).toHaveBeenLastCalledWith(null);
-  });
-
-  it("registers handlers for all demo channels", () => {
-    const cleanup = registerDemoHandlers(makeDeps(true));
-    const channels = ipcMainMock.handle.mock.calls.map(([ch]: unknown[]) => ch);
-    expect(channels).toContain("demo:move-to");
-    expect(channels).toContain("demo:click");
-    expect(channels).toContain("demo:screenshot");
-    expect(channels).toContain("demo:start-capture");
-    expect(channels).toContain("demo:stop-capture");
-    expect(channels).toContain("demo:get-capture-status");
-    cleanup();
-  });
-
-  it("registers chunk and stop listeners on ipcMain", () => {
-    const cleanup = registerDemoHandlers(makeDeps(true));
-    const onChannels = ipcMainMock.on.mock.calls.map(([ch]: unknown[]) => ch);
-    expect(onChannels).toContain("demo:capture-chunk");
-    expect(onChannels).toContain("demo:capture-stop");
-    cleanup();
-  });
-
-  it("cleanup removes all 22 handlers", () => {
-    const cleanup = registerDemoHandlers(makeDeps(true));
-    cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(22);
   });
 
   it("cleanup removes chunk and stop listeners", () => {

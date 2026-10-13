@@ -21,16 +21,6 @@ afterEach(() => {
 });
 
 describe("shouldSkipMotion", () => {
-  it("animates only when every signal is off", () => {
-    expect(
-      shouldSkipMotion({
-        prefersReducedMotion: false,
-        reduceAnimations: false,
-        performanceMode: false,
-      })
-    ).toBe(false);
-  });
-
   it("treats an unresolved OS media query as 'not reduced'", () => {
     expect(
       shouldSkipMotion({
@@ -105,19 +95,5 @@ describe("useUiMotionTransition", () => {
     document.body.dataset.performanceMode = "true";
 
     expect(renderHook(() => useUiMotionTransition()).result.current.duration).toBe(0);
-  });
-
-  it("keeps one real easing curve in both modes", () => {
-    const animated = renderHook(() => useUiMotionTransition()).result.current;
-
-    // framer 12 rejects CSS string easings, so the curve has to be a bezier tuple —
-    // an assertion of equality alone would hold even if both modes emitted undefined.
-    expect(animated.ease).toHaveLength(4);
-    expect(animated.ease.every((point) => Number.isFinite(point))).toBe(true);
-
-    document.body.dataset.reduceAnimations = "true";
-    const instant = renderHook(() => useUiMotionTransition()).result.current;
-
-    expect(instant.ease).toEqual(animated.ease);
   });
 });

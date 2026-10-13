@@ -4,6 +4,7 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const registryMock = vi.hoisted(() => ({ getPanelKindConfig: vi.fn() }));
+const focusPanelInput = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/diagnosticsStore", () => ({ useDiagnosticsStore: { getState: vi.fn() } }));
@@ -12,6 +13,7 @@ vi.mock("@/store/portalStore", () => ({ usePortalStore: { getState: vi.fn() } })
 vi.mock("@shared/config/panelKindRegistry", () => ({
   getPanelKindConfig: registryMock.getPanelKindConfig,
 }));
+vi.mock("@/components/Panel/panelFocusRegistry", () => ({ focusPanelInput }));
 
 import { registerPanelCoreActions } from "../panelCoreActions";
 
@@ -36,23 +38,23 @@ function setup(args?: unknown) {
   return def.run(args, {} as never);
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  worktrees = [{ id: "wt-active" }, { id: "wt-1" }];
-  addPanel.mockResolvedValue("panel-new");
-  panelStoreMock.getState.mockReturnValue({
-    panelIds: [],
-    panelsById: {},
-    addPanel,
-    activateTerminal,
-  });
-  // Default: a real plugin kind.
-  registryMock.getPanelKindConfig.mockReturnValue({ id: "acme.dash", extensionId: "acme" });
-});
-
-afterEach(() => vi.clearAllMocks());
-
 describe("panel.openPluginPanel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    worktrees = [{ id: "wt-active" }, { id: "wt-1" }];
+    addPanel.mockResolvedValue("panel-new");
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: [],
+      panelsById: {},
+      addPanel,
+      activateTerminal,
+    });
+    // Default: a real plugin kind.
+    registryMock.getPanelKindConfig.mockReturnValue({ id: "acme.dash", extensionId: "acme" });
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
   it("rejects a kind that is not a registered plugin panel kind", async () => {
     registryMock.getPanelKindConfig.mockReturnValue(undefined);
     await expect(setup({ kind: "acme.dash" })).rejects.toThrow(
@@ -160,23 +162,72 @@ describe("panel.openPluginPanel", () => {
     expect(addPanel).toHaveBeenCalledTimes(1);
     expect(addPanel.mock.calls[0]![0].worktreeId).toBe("wt-active");
   });
+});
 
-  it("does not reuse an existing panel that sits in a foreign worktree", async () => {
-    panelStoreMock.getState.mockReturnValue({
-      panelIds: ["p-foreign"],
-      panelsById: {
-        "p-foreign": {
-          id: "p-foreign",
-          kind: "acme.dash",
-          worktreeId: "wt-other",
-          location: "grid",
-        },
-      },
-      addPanel,
-      activateTerminal,
-    });
+function focus(panelId: string) {
+  const actions: ActionRegistry = new Map();
+  registerPanelCoreActions(actions, {} as unknown as ActionCallbacks);
+  const factory = actions.get("panel.focus");
+  if (!factory) throw new Error("panel.focus not registered");
+  return (factory() as AnyActionDefinition).run({ panelId }, {} as never);
+}
 
-    await expect(setup({ kind: "acme.dash", worktreeId: "wt-other" })).rejects.toThrow();
+/** `focusedId` is the SELECTION pointer; DOM focus is tracked separately. */
+function seedPanels(focusedId: string | null) {
+  panelStoreMock.getState.mockReturnValue({
+    panelsById: {
+      "panel-a": { id: "panel-a", location: "grid" },
+      "panel-gone": { id: "panel-gone", location: "trash" },
+    },
+    focusedId,
+    activateTerminal,
+  });
+}
+
+describe("panel.focus", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    focusPanelInput.mockReturnValue(true);
+    seedPanels(null);
+  });
+
+  it("selects the panel and hands it DOM focus", async () => {
+    await focus("panel-a");
+
+    expect(activateTerminal).toHaveBeenCalledWith("panel-a");
+    expect(focusPanelInput).toHaveBeenCalledWith("panel-a");
+  });
+
+  it("still re-focuses a panel that is already the selected one", async () => {
+    // The regression: selection and focus are separate states. Clicking a run
+    // that is already selected but whose keyboard focus has drifted elsewhere
+    // (the worktree list, the sidebar) leaves `activateTerminal` with nothing
+    // to change, so the pane's focus effect never re-runs and the click does
+    // visibly nothing.
+    seedPanels("panel-a");
+
+    await focus("panel-a");
+
+    expect(focusPanelInput).toHaveBeenCalledWith("panel-a");
+  });
+
+  it("rejects a panel that no longer exists rather than focusing nothing", async () => {
+    await expect(focus("panel-missing")).rejects.toThrow();
+    expect(focusPanelInput).not.toHaveBeenCalled();
+  });
+
+  it("rejects a trashed panel", async () => {
+    await expect(focus("panel-gone")).rejects.toThrow();
     expect(activateTerminal).not.toHaveBeenCalled();
+    expect(focusPanelInput).not.toHaveBeenCalled();
+  });
+
+  it("does not fail when the pane cannot take focus yet", async () => {
+    // A pane that is not mounted reports false. That path is covered by its
+    // own mount-time effect, so the action must not treat it as an error.
+    focusPanelInput.mockReturnValue(false);
+
+    await expect(focus("panel-a")).resolves.not.toThrow();
+    expect(activateTerminal).toHaveBeenCalledWith("panel-a");
   });
 });

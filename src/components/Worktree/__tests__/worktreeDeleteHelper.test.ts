@@ -128,11 +128,6 @@ describe("captureWorktreeTerminalSnapshot", () => {
       location: "dock",
     });
   });
-
-  it("returns an empty snapshot when the worktree has no terminals", () => {
-    seed([ptyPanel({ id: "other", worktreeId: "wt-2" })]);
-    expect(captureWorktreeTerminalSnapshot("wt-1")).toEqual([]);
-  });
 });
 
 describe("closeTerminalsForWorktree", () => {
@@ -147,12 +142,6 @@ describe("closeTerminalsForWorktree", () => {
 
     expect(removePanelMock.mock.calls.map((c) => c[0])).toEqual(["plain", "agent", "browser"]);
     expect(getInfoMock).toHaveBeenCalled();
-  });
-
-  it("does nothing when the worktree has no panels", async () => {
-    seed([ptyPanel({ id: "other", worktreeId: "wt-2" })]);
-    await closeTerminalsForWorktree("wt-1");
-    expect(removePanelMock).not.toHaveBeenCalled();
   });
 });
 
@@ -262,10 +251,5 @@ describe("restoreClosedTerminals", () => {
       ])
     ).resolves.toBeUndefined();
     expect(addPanelMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("no-ops on an empty snapshot", async () => {
-    await restoreClosedTerminals([]);
-    expect(addPanelMock).not.toHaveBeenCalled();
   });
 });

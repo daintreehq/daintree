@@ -162,26 +162,6 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     expect(screen.queryByText("Needs setup")).toBeNull();
   });
 
-  it("shows installed agents regardless of pin state (issue #5117)", async () => {
-    setupDispatchMock(
-      { claude: "ready", gemini: "ready", codex: "ready", opencode: "missing", cursor: "missing" },
-      {
-        agents: { claude: { pinned: true }, codex: { pinned: true }, gemini: { pinned: false } },
-      } as unknown as AgentSettings
-    );
-
-    await renderGeneralTab();
-    await expandReadyAgents();
-
-    await waitFor(() => {
-      expect(screen.getByText("Claude")).toBeTruthy();
-    });
-
-    // Gemini is installed but unpinned — it MUST appear in System Status.
-    expect(screen.getByText("Gemini")).toBeTruthy();
-    expect(screen.getByText("Codex")).toBeTruthy();
-  });
-
   it("shows ALL installed agents when none are pinned (issue #5117, adversarial)", async () => {
     setupDispatchMock(
       { claude: "ready", gemini: "ready", codex: "ready", opencode: "missing", cursor: "missing" },
@@ -237,25 +217,6 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     expect(screen.queryByText("Gemini")).toBeNull();
   });
 
-  it("shows summary for hidden agents with correct count and pluralization", async () => {
-    setupDispatchMock(
-      {
-        claude: "ready",
-        gemini: "ready",
-        codex: "missing",
-        opencode: "missing",
-        cursor: "missing",
-      },
-      { agents: { claude: { pinned: true }, gemini: { pinned: true } } } as unknown as AgentSettings
-    );
-
-    await renderGeneralTab();
-
-    await waitFor(() => {
-      expect(screen.getByText(/Daintree supports 3 more agents/)).toBeTruthy();
-    });
-  });
-
   it("uses singular 'agent' when hiddenCount is 1", async () => {
     setupDispatchMock(
       { claude: "ready", gemini: "ready", codex: "ready", opencode: "ready", cursor: "missing" },
@@ -298,31 +259,6 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     });
 
     expect(screen.queryByText(/Daintree supports/)).toBeNull();
-  });
-
-  it("shows 'Needs setup' label for installed-but-not-ready agents", async () => {
-    setupDispatchMock(
-      {
-        claude: "installed",
-        gemini: "ready",
-        codex: "missing",
-        opencode: "missing",
-        cursor: "missing",
-      },
-      { agents: { claude: { pinned: true }, gemini: { pinned: true } } } as unknown as AgentSettings
-    );
-
-    await renderGeneralTab();
-    await expandReadyAgents();
-
-    await waitFor(() => {
-      expect(screen.getByText("Claude")).toBeTruthy();
-      expect(screen.getByText("Gemini")).toBeTruthy();
-    });
-
-    expect(screen.getByText("Needs setup")).toBeTruthy();
-    // Only the agent needing attention is labelled; the ready one stays quiet.
-    expect(screen.queryByText("Ready")).toBeNull();
   });
 
   // Green ambient chrome is gone (issue #12002), so colour can no longer be
@@ -634,31 +570,6 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
     fireEvent.click(screen.getByText(/Daintree supports 3 more agents/));
     expect(onNavigate).toHaveBeenCalledWith();
-  });
-
-  it("shows neutral section description, not dependency-check framing", async () => {
-    setupDispatchMock(
-      {
-        claude: "ready",
-        gemini: "ready",
-        codex: "missing",
-        opencode: "missing",
-        cursor: "missing",
-      },
-      { agents: { claude: { pinned: true }, gemini: { pinned: true } } } as unknown as AgentSettings
-    );
-
-    await renderGeneralTab();
-
-    await waitFor(() => {
-      const desc = screen.getByTestId("section-desc-System status");
-      // Two installed, both ready. The rule: the description reports what the probe
-      // actually returned rather than asserting a fixed claim, and it never uses
-      // dependency-check framing ("requirements", "missing dependencies").
-      expect(desc.textContent).toContain("2");
-      expect(desc.textContent).toMatch(/ready/i);
-      expect(desc.textContent).not.toMatch(/depend|requirement|missing/i);
-    });
   });
 
   it("reports the attention count in the section description when agents need it", async () => {

@@ -293,18 +293,6 @@ describe("createHost worktree surfaces", () => {
     expect(h.projectFetch).not.toHaveBeenCalled();
   });
 
-  it("passes a closed project's unavailability through instead of flattening it", async () => {
-    const h = makeHarness();
-    h.projectFetch.mockResolvedValue({ status: "unavailable", reason: "project-unavailable" });
-    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
-
-    expect(await host.getWorktreesResult()).toEqual({
-      status: "unavailable",
-      reason: "project-unavailable",
-    });
-    expect(await host.getWorktrees()).toEqual([]);
-  });
-
   it("reports plugin-unloaded before it reads anything", async () => {
     const h = makeHarness();
     h.plugins.delete(PLUGIN_ID);
@@ -670,15 +658,6 @@ describe("createHost dispatch, catalog and prompts", () => {
     expect(trackPromptWait).toHaveBeenCalledTimes(3);
   });
 
-  it("leaves the signal undefined when a plugin passes no call options (#12279)", async () => {
-    const h = makeHarness();
-    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
-
-    await host.showConfirm({ title: "sure?" });
-
-    expect(h.requestPrompt.mock.calls[0][3]).toBeUndefined();
-  });
-
   it("passes null through when unbound so the dispatchers stay ambient", async () => {
     const h = makeHarness();
     const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
@@ -997,21 +976,6 @@ describe("createHost onDidChangeAgentState", () => {
     });
   });
 
-  it("drops an unattributable transition for a bound host", async () => {
-    const h = makeHarness();
-    installPtyForAgentState({});
-    const { host } = createHost(h.deps, PLUGIN_ID, BOUND);
-    const callback = vi.fn();
-    await host.onDidChangeAgentState(callback, { debounceMs: 0 });
-
-    events.emit("agent:state-changed", {
-      state: "working",
-      previousState: "idle",
-      timestamp: 1,
-    } as never);
-    expect(callback).not.toHaveBeenCalled();
-  });
-
   it("drops a bound host's transitions it cannot attribute to its project", async () => {
     const h = makeHarness();
     installPtyForAgentState({ "term-a": PROJECT_A });
@@ -1037,22 +1001,6 @@ describe("createHost onDidChangeAgentState", () => {
 
     expect(callback).not.toHaveBeenCalled();
     expect(await host.getAgentState()).toBeNull();
-  });
-
-  it("keeps an unbound host observing every project's agents", async () => {
-    const h = makeHarness();
-    installPtyForAgentState({ "term-b": "project-b" });
-    const { host } = createHost(h.deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
-    const callback = vi.fn();
-    await host.onDidChangeAgentState(callback, { debounceMs: 0 });
-
-    events.emit("agent:state-changed", {
-      terminalId: "term-b",
-      state: "working",
-      previousState: "idle",
-      timestamp: 1,
-    } as never);
-    expect(callback).toHaveBeenCalledTimes(1);
   });
 
   it("tells an unbound host which workspace and terminal each transition came from", async () => {

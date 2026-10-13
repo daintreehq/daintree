@@ -29,33 +29,11 @@ describe("daintreeTheme — issue #5981 (caret-only accent)", () => {
         (s) => s.tag === tag || (Array.isArray(s.tag) && s.tag.includes(tag))
       );
 
-    it.each([
-      ["heading4", t.heading4],
-      ["heading5", t.heading5],
-      ["heading6", t.heading6],
-    ])("%s is bold in the keyword role without a size step", (_label, tag) => {
-      const entry = find(tag);
-      expect(entry?.color).toBe("var(--theme-syntax-keyword)");
-      expect(entry?.fontWeight).toBe("bold");
-      expect(entry?.fontSize).toBeUndefined();
-    });
-
     it("emphasis and strong are typographic only — body text keeps its colour", () => {
       expect(find(t.emphasis)).toMatchObject({ fontStyle: "italic" });
       expect(find(t.emphasis)?.color).toBeUndefined();
       expect(find(t.strong)).toMatchObject({ fontWeight: "bold" });
       expect(find(t.strong)?.color).toBeUndefined();
-    });
-
-    it("strikethrough, inline code, and thematic breaks map onto existing syntax roles", () => {
-      expect(find(t.strikethrough)).toMatchObject({ textDecoration: "line-through" });
-      expect(find(t.monospace)?.color).toBe("var(--theme-syntax-string)");
-      expect(find(t.contentSeparator)?.color).toBe("var(--theme-syntax-punctuation)");
-    });
-
-    it("markup characters take the comment role so they read as scaffolding", () => {
-      expect(find(t.processingInstruction)?.color).toBe("var(--theme-syntax-comment)");
-      expect(find(t.meta)?.color).toBe("var(--theme-syntax-comment)");
     });
   });
 

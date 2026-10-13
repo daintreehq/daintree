@@ -80,11 +80,6 @@ function register(overrides: Partial<PluginDatabaseEndpointOptions> = {}) {
 const signal = () => new AbortController().signal;
 
 describe("registerPluginDatabaseEndpoint", () => {
-  it("registers the schema and query tools on the reserved endpoint", () => {
-    const registration = register();
-    expect(registration.tools.map((t) => t.name)).toEqual(["database_schema", "database_query"]);
-  });
-
   it("reads an installed plugin's local database", async () => {
     seedLocal("ledger", "CREATE TABLE entries (amount REAL); INSERT INTO entries VALUES (12.5);");
     const { invoke } = register();

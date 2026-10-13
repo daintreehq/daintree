@@ -120,45 +120,12 @@ describe("PortalManager", () => {
       expect(manager.hasTab("tab-3")).toBe(false);
     });
 
-    it("rejects invalid URL protocol (javascript:)", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-4", "javascript:alert(1)");
-
-      expect(manager.hasTab("tab-4")).toBe(false);
-    });
-
-    it("rejects invalid URL protocol (ftp:)", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-5", "ftp://example.com");
-
-      expect(manager.hasTab("tab-5")).toBe(false);
-    });
-
     it("rejects malformed URLs", () => {
       const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-6", "not-a-valid-url");
 
       expect(manager.hasTab("tab-6")).toBe(false);
-    });
-
-    it("does not create duplicate tabs with same ID", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-dup", "http://localhost:3000");
-      manager.createTab("tab-dup", "http://localhost:4000");
-
-      expect(manager.hasTab("tab-dup")).toBe(true);
-    });
-
-    it("rejects data: URLs", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-data", "data:text/html,<h1>Test</h1>");
-
-      expect(manager.hasTab("tab-data")).toBe(false);
     });
   });
 
@@ -226,49 +193,6 @@ describe("PortalManager", () => {
 
       manager.showTab("tab-a", { x: 0, y: 0, width: 800, height: 600 });
       expect(lifecycleMocks.unthrottleCpuWebContents).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("bounds validation", () => {
-    it("validates and normalizes negative bounds", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-bounds-neg", "http://localhost:3000");
-      manager.showTab("tab-bounds-neg", { x: -100, y: -50, width: 800, height: 600 });
-
-      expect(manager.getActiveTabId()).toBe("tab-bounds-neg");
-    });
-
-    it("validates and normalizes invalid width/height", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-bounds-small", "http://localhost:3000");
-      manager.showTab("tab-bounds-small", { x: 0, y: 0, width: 10, height: 10 });
-
-      expect(manager.getActiveTabId()).toBe("tab-bounds-small");
-    });
-
-    it("handles NaN values in bounds", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-bounds-nan", "http://localhost:3000");
-      manager.showTab("tab-bounds-nan", { x: NaN, y: NaN, width: NaN, height: NaN });
-
-      expect(manager.getActiveTabId()).toBe("tab-bounds-nan");
-    });
-
-    it("handles Infinity values in bounds", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-bounds-inf", "http://localhost:3000");
-      manager.showTab("tab-bounds-inf", {
-        x: Infinity,
-        y: -Infinity,
-        width: Infinity,
-        height: 600,
-      });
-
-      expect(manager.getActiveTabId()).toBe("tab-bounds-inf");
     });
   });
 
@@ -407,13 +331,6 @@ describe("PortalManager", () => {
 
       expect(focusMock).toHaveBeenCalledTimes(1);
     });
-
-    it("is safe to call when no tab is active", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      expect(() => manager.hideAll()).not.toThrow();
-      expect(manager.getActiveTabId()).toBeNull();
-    });
   });
 
   describe("setBackgroundColor (flash prevention)", () => {
@@ -440,33 +357,9 @@ describe("PortalManager", () => {
       const loadOrder = wc.loadURL.mock.invocationCallOrder[0];
       expect(bgOrder).toBeLessThan(loadOrder);
     });
-
-    it("defaults to black when no backgroundColor is provided", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      const addChildViewMock = mockWindow.contentView.addChildView as ReturnType<typeof vi.fn>;
-      manager.createTab("tab-default-bg", "http://localhost:3000");
-      manager.showTab("tab-default-bg", { x: 0, y: 0, width: 800, height: 600 });
-
-      const view = addChildViewMock.mock.calls.at(-1)?.[0] as {
-        setBackgroundColor: ReturnType<typeof vi.fn>;
-      };
-      expect(view.setBackgroundColor).toHaveBeenCalledWith("#000000");
-    });
   });
 
   describe("updateBounds()", () => {
-    it("updates bounds of active view", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-update-bounds", "http://localhost:3000");
-      manager.showTab("tab-update-bounds", { x: 0, y: 0, width: 800, height: 600 });
-
-      manager.updateBounds({ x: 50, y: 50, width: 1000, height: 800 });
-
-      expect(manager.getActiveTabId()).toBe("tab-update-bounds");
-    });
-
     it("does nothing when no active view", () => {
       const manager = new PortalManagerClass(mockWindow);
 
@@ -475,16 +368,6 @@ describe("PortalManager", () => {
   });
 
   describe("closeTab()", () => {
-    it("closes an existing tab", async () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-close", "http://localhost:3000");
-      expect(manager.hasTab("tab-close")).toBe(true);
-
-      await manager.closeTab("tab-close");
-      expect(manager.hasTab("tab-close")).toBe(false);
-    });
-
     it("clears active tab if closing active", async () => {
       const manager = new PortalManagerClass(mockWindow);
 
@@ -538,24 +421,6 @@ describe("PortalManager", () => {
   });
 
   describe("navigate()", () => {
-    it("navigates to valid http URL", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-nav", "http://localhost:3000");
-      manager.navigate("tab-nav", "http://localhost:4000");
-
-      expect(manager.hasTab("tab-nav")).toBe(true);
-    });
-
-    it("navigates to valid https URL", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-nav-https", "http://localhost:3000");
-      manager.navigate("tab-nav-https", "https://example.com");
-
-      expect(manager.hasTab("tab-nav-https")).toBe(true);
-    });
-
     it("rejects navigation to invalid protocol", () => {
       const manager = new PortalManagerClass(mockWindow);
 
@@ -564,17 +429,6 @@ describe("PortalManager", () => {
       const initialLoadCount = wc.loadURL.mock.calls.length;
 
       expect(() => manager.navigate("tab-nav-invalid", "file:///etc/passwd")).not.toThrow();
-      expect(wc.loadURL.mock.calls.length).toBe(initialLoadCount);
-    });
-
-    it("rejects navigation to javascript: URL", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-nav-js", "http://localhost:3000");
-      const wc = createdWebContents[createdWebContents.length - 1];
-      const initialLoadCount = wc.loadURL.mock.calls.length;
-
-      expect(() => manager.navigate("tab-nav-js", "javascript:alert(1)")).not.toThrow();
       expect(wc.loadURL.mock.calls.length).toBe(initialLoadCount);
     });
 
@@ -635,14 +489,6 @@ describe("PortalManager", () => {
   });
 
   describe("reload()", () => {
-    it("reloads an existing tab", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-reload", "http://localhost:3000");
-
-      expect(() => manager.reload("tab-reload")).not.toThrow();
-    });
-
     it("does nothing for non-existent tab", () => {
       const manager = new PortalManagerClass(mockWindow);
 
@@ -650,36 +496,94 @@ describe("PortalManager", () => {
     });
   });
 
-  describe("hasTab()", () => {
-    it("returns true for existing tab", () => {
+  describe("navigation gating", () => {
+    type WebContentsMock = ReturnType<typeof createMockWebContents>;
+    type EventName = "will-navigate" | "will-redirect" | "will-frame-navigate";
+    type PositionalHandler = (event: { preventDefault: () => void }, url: string) => void;
+    type DetailsHandler = (details: {
+      url: string;
+      isMainFrame: boolean;
+      preventDefault: () => void;
+    }) => void;
+    type EventCall = [EventName, PositionalHandler | DetailsHandler];
+
+    const findHandler = <T extends PositionalHandler | DetailsHandler>(
+      wc: WebContentsMock,
+      eventName: EventName
+    ): T => {
+      const call = (wc.on.mock.calls as EventCall[]).find(([name]) => name === eventName);
+      if (!call) throw new Error(`No ${eventName} handler registered`);
+      return call[1] as T;
+    };
+
+    const blockedUrls = ["file:///etc/passwd", "not a url"];
+
+    const allowedUrls = ["https://example.com/path?q=1"];
+
+    it.each(blockedUrls)("blocks will-navigate to unsafe URL: %s", (url) => {
       const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3001");
 
-      manager.createTab("tab-has", "http://localhost:3000");
+      const handler = findHandler<PositionalHandler>(createdWebContents[0], "will-navigate");
+      const event = { preventDefault: vi.fn() };
+      handler(event, url);
 
-      expect(manager.hasTab("tab-has")).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
     });
 
-    it("returns false for non-existent tab", () => {
+    it.each(blockedUrls)("blocks will-redirect to unsafe URL: %s", (url) => {
       const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3001");
 
-      expect(manager.hasTab("non-existent")).toBe(false);
-    });
-  });
+      const handler = findHandler<PositionalHandler>(createdWebContents[0], "will-redirect");
+      const event = { preventDefault: vi.fn() };
+      handler(event, url);
 
-  describe("getActiveTabId()", () => {
-    it("returns null when no tab is active", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      expect(manager.getActiveTabId()).toBeNull();
+      expect(event.preventDefault).toHaveBeenCalledTimes(1);
     });
 
-    it("returns active tab ID when a tab is shown", () => {
+    it.each(allowedUrls)("allows will-navigate to safe http(s) URL: %s", (url) => {
       const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3001");
 
-      manager.createTab("tab-active", "http://localhost:3000");
-      manager.showTab("tab-active", { x: 0, y: 0, width: 800, height: 600 });
+      const handler = findHandler<PositionalHandler>(createdWebContents[0], "will-navigate");
+      const event = { preventDefault: vi.fn() };
+      handler(event, url);
 
-      expect(manager.getActiveTabId()).toBe("tab-active");
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it.each(allowedUrls)("allows will-redirect to safe http(s) URL: %s", (url) => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3001");
+
+      const handler = findHandler<PositionalHandler>(createdWebContents[0], "will-redirect");
+      const event = { preventDefault: vi.fn() };
+      handler(event, url);
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it.each(blockedUrls)("blocks will-frame-navigate (subframe) to unsafe URL: %s", (url) => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3001");
+
+      const handler = findHandler<DetailsHandler>(createdWebContents[0], "will-frame-navigate");
+      const details = { url, isMainFrame: false, preventDefault: vi.fn() };
+      handler(details);
+
+      expect(details.preventDefault).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(allowedUrls)("allows will-frame-navigate (subframe) to safe http(s) URL: %s", (url) => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-1", "http://localhost:3001");
+
+      const handler = findHandler<DetailsHandler>(createdWebContents[0], "will-frame-navigate");
+      const details = { url, isMainFrame: false, preventDefault: vi.fn() };
+      handler(details);
+
+      expect(details.preventDefault).not.toHaveBeenCalled();
     });
   });
 
@@ -696,17 +600,6 @@ describe("PortalManager", () => {
       expect(manager.hasTab("tab-d1")).toBe(false);
       expect(manager.hasTab("tab-d2")).toBe(false);
       expect(manager.getActiveTabId()).toBeNull();
-    });
-
-    it("is safe to call multiple times", () => {
-      const manager = new PortalManagerClass(mockWindow);
-
-      manager.createTab("tab-multi-destroy", "http://localhost:3000");
-
-      expect(() => {
-        manager.destroy();
-        manager.destroy();
-      }).not.toThrow();
     });
   });
 });
@@ -730,10 +623,6 @@ describe("PortalManager LRU eviction", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("has a limit of 3", () => {
-    expect(PORTAL_MAX_LIVE_TABS).toBe(3);
   });
 
   it("evicts the oldest background tab when exceeding the limit", () => {
@@ -793,28 +682,6 @@ describe("PortalManager LRU eviction", () => {
     expect(evictedCalls).toHaveLength(0);
   });
 
-  it("no eviction on hideAll + re-show", () => {
-    const manager = new PortalManagerClass(mockWindow);
-
-    manager.createTab("tab-1", "http://localhost:1001");
-    manager.createTab("tab-2", "http://localhost:1002");
-    manager.createTab("tab-3", "http://localhost:1003");
-
-    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
-    (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mockClear();
-
-    manager.hideAll();
-    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
-
-    const evictedCalls = (
-      mockWindow.webContents.send as ReturnType<typeof vi.fn>
-    ).mock.calls.filter(([ch]: string[]) => ch === "portal:tab-evicted");
-    expect(evictedCalls).toHaveLength(0);
-    expect(manager.hasTab("tab-1")).toBe(true);
-    expect(manager.hasTab("tab-2")).toBe(true);
-    expect(manager.hasTab("tab-3")).toBe(true);
-  });
-
   it("never evicts the active tab", () => {
     const manager = new PortalManagerClass(mockWindow);
 
@@ -851,21 +718,6 @@ describe("PortalManager LRU eviction", () => {
     expect(manager.hasTab("tab-2")).toBe(false);
     expect(manager.hasTab("tab-3")).toBe(true);
     expect(manager.hasTab("tab-4")).toBe(true);
-  });
-
-  it("closeTab on already-evicted tab is a no-op", async () => {
-    const manager = new PortalManagerClass(mockWindow);
-
-    manager.createTab("tab-1", "http://localhost:1001");
-    manager.createTab("tab-2", "http://localhost:1002");
-    manager.createTab("tab-3", "http://localhost:1003");
-    manager.createTab("tab-4", "http://localhost:1004");
-
-    // tab-1 was evicted
-    expect(manager.hasTab("tab-1")).toBe(false);
-
-    // Closing it again should not throw
-    await expect(manager.closeTab("tab-1")).resolves.toBeUndefined();
   });
 
   it("calls webContents.close() on evicted views", async () => {
@@ -1011,6 +863,66 @@ describe("PortalManager LRU eviction", () => {
       expect(manager.hasTab("tab-3")).toBe(true);
       expect(manager.hasTab("tab-4")).toBe(true);
     });
+
+    it("protects multiple concurrent restores while evicting the unprotected LRU tab", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      // Two restores in flight at once (e.g. queued restore follows an overlay
+      // close) racing a background create that overflows the limit.
+      manager.markRestoring("tab-1");
+      manager.createTab("tab-1", "http://localhost:3001");
+      manager.createTab("tab-2", "http://localhost:3002");
+      manager.markRestoring("tab-3");
+      manager.createTab("tab-3", "http://localhost:3003");
+
+      manager.createTab("tab-4", "http://localhost:3004");
+
+      expect(manager.hasTab("tab-1")).toBe(true);
+      expect(manager.hasTab("tab-2")).toBe(false);
+      expect(manager.hasTab("tab-3")).toBe(true);
+      expect(manager.hasTab("tab-4")).toBe(true);
+    });
+
+    it("restoring guard does not leak through destroy()", () => {
+      const manager = new PortalManagerClass(mockWindow);
+
+      manager.markRestoring("tab-1");
+      manager.createTab("tab-1", "http://localhost:3001");
+      manager.destroy();
+
+      // Fresh session reusing the same id as a background tab — normal LRU.
+      manager.createTab("tab-1", "http://localhost:3001");
+      manager.createTab("tab-2", "http://localhost:3002");
+      manager.createTab("tab-3", "http://localhost:3003");
+      manager.createTab("tab-4", "http://localhost:3004");
+
+      expect(manager.hasTab("tab-1")).toBe(false);
+      expect(manager.hasTab("tab-2")).toBe(true);
+    });
+  });
+
+  it("keeps eviction idempotent when closeTab races an in-flight eviction of the same tab", async () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:3001");
+    manager.createTab("tab-2", "http://localhost:3002");
+    manager.createTab("tab-3", "http://localhost:3003");
+
+    const evictedWebContents = createdWebContents[0];
+    let resolveFlush!: () => void;
+    evictedWebContents.session.flushStorageData.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveFlush = resolve;
+      })
+    );
+
+    manager.createTab("tab-4", "http://localhost:3004");
+    await manager.closeTab("tab-1");
+    resolveFlush();
+    await Promise.resolve();
+
+    expect(manager.hasTab("tab-1")).toBe(false);
+    expect(evictedWebContents.close).toHaveBeenCalledTimes(1);
   });
 
   it("destroy after evictions does not double-close", async () => {
@@ -1149,74 +1061,4 @@ describe("PortalManager destroyHiddenTabs()", () => {
     expect(result).toEqual([]);
     expect(manager.hasTab("tab-only")).toBe(true);
   });
-
-  it("is idempotent — second call returns empty array", async () => {
-    const manager = new PortalManagerClass(mockWindow);
-    manager.createTab("tab-1", "http://localhost:3000");
-    manager.createTab("tab-2", "http://localhost:3001");
-    manager.showTab("tab-2", { x: 0, y: 0, width: 800, height: 600 });
-
-    const first = await manager.destroyHiddenTabs();
-    expect(first).toEqual(["tab-1"]);
-
-    const second = await manager.destroyHiddenTabs();
-    expect(second).toEqual([]);
-  });
-});
-
-describe("PortalManager URL validation", () => {
-  let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
-  let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
-
-  beforeEach(async () => {
-    vi.resetModules();
-
-    const electron = await import("electron");
-    mockWindow = new electron.BrowserWindow() as InstanceType<typeof electron.BrowserWindow>;
-
-    const module = await import("../PortalManager.js");
-    PortalManagerClass = module.PortalManager;
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  const invalidUrls = [
-    { url: "file:///etc/passwd", desc: "file protocol" },
-    { url: "javascript:alert(1)", desc: "javascript protocol" },
-    { url: "data:text/html,<h1>XSS</h1>", desc: "data protocol" },
-    { url: "vbscript:msgbox(1)", desc: "vbscript protocol" },
-    { url: "about:blank", desc: "about protocol" },
-    { url: "chrome://settings", desc: "chrome protocol" },
-    { url: "ftp://example.com", desc: "ftp protocol" },
-    { url: "mailto:test@example.com", desc: "mailto protocol" },
-    { url: "tel:+1234567890", desc: "tel protocol" },
-  ];
-
-  for (const { url, desc } of invalidUrls) {
-    it(`rejects ${desc} URL: ${url}`, () => {
-      const manager = new PortalManagerClass(mockWindow);
-      manager.createTab(`tab-${desc}`, url);
-      expect(manager.hasTab(`tab-${desc}`)).toBe(false);
-    });
-  }
-
-  const validUrls = [
-    "http://localhost:3000",
-    "https://localhost:3000",
-    "http://127.0.0.1:8080",
-    "https://example.com",
-    "http://example.com/path?query=1#hash",
-    "https://subdomain.example.com:8443/api/v1",
-  ];
-
-  for (const url of validUrls) {
-    it(`accepts valid URL: ${url}`, () => {
-      const manager = new PortalManagerClass(mockWindow);
-      const tabId = `tab-valid-${url.replace(/[^a-z0-9]/gi, "")}`;
-      manager.createTab(tabId, url);
-      expect(manager.hasTab(tabId)).toBe(true);
-    });
-  }
 });

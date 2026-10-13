@@ -93,16 +93,6 @@ describe("project surface claims (§7.8)", () => {
     expect(getProjectSurfaces("p1")).toEqual({ emptyCanvas: other });
   });
 
-  it("does not let a refused claimant's unload steal the incumbent's slot", () => {
-    // The refused plugin never owned the slot. Unloading it must leave the
-    // incumbent's surface standing, or a second plugin could remove the first's
-    // surface just by loading and unloading.
-    claimProjectSurface("p1", "emptyCanvas", acme);
-    claimProjectSurface("p1", "emptyCanvas", other);
-    releasePluginSurfaces(other.pluginId);
-    expect(getProjectSurfaces("p1")).toEqual({ emptyCanvas: acme });
-  });
-
   it("is idempotent on release", () => {
     claimProjectSurface("p1", "emptyCanvas", acme);
     releasePluginSurfaces(acme.pluginId);

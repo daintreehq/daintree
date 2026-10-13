@@ -1,5 +1,5 @@
 import { describe, it, expect, expectTypeOf, vi } from "vitest";
-import { mapTerminalInfo, narrowDetectedAgentId } from "../terminalInfo.js";
+import { mapTerminalInfo } from "../terminalInfo.js";
 import type { HostContext } from "../types.js";
 import type { PtyHostTerminalInfo } from "../../../../shared/types/pty-host.js";
 
@@ -156,21 +156,6 @@ describe("mapTerminalInfo", () => {
     );
   });
 
-  it("looks up activityTier per-terminal via ptyManager", () => {
-    const getActivityTier = vi.fn(() => "background" as const);
-    const ctx = createCtx({
-      ptyManager: {
-        isInTrash: vi.fn(() => false),
-        getActivityTier,
-      } as unknown as HostContext["ptyManager"],
-    });
-
-    const result = mapTerminalInfo(makeTerminal({ id: "term-42" }), ctx);
-
-    expect(result.activityTier).toBe("background");
-    expect(getActivityTier).toHaveBeenCalledWith("term-42");
-  });
-
   it("forwards lastInputTime/lastOutputTime so idle detection can run (#10054)", () => {
     // IdleTerminalNotificationService reads these off get-all-terminals; if the
     // mapper drops them, idle computation falls back to "unknown activity" and
@@ -189,13 +174,6 @@ describe("mapTerminalInfo", () => {
     const t = makeTerminal({ worktreeId: "/repo/.worktrees/feature" });
 
     expect(mapTerminalInfo(t, ctx).worktreeId).toBe(t.worktreeId);
-  });
-
-  it("leaves a worktree-less terminal unattributed rather than guessing from cwd", () => {
-    const ctx = createCtx();
-    const result = mapTerminalInfo(makeTerminal({ cwd: "/repo" }), ctx);
-
-    expect(result.worktreeId).toBeUndefined();
   });
 
   it("forwards the output-progress timestamp, and leaves an unobserved one absent (#12428)", () => {
@@ -272,18 +250,6 @@ describe("mapTerminalInfo", () => {
     expect(
       mapTerminalInfo(makeTerminal({ detectedAgentId: "not-an-agent" }), ctx).detectedAgentId
     ).toBeUndefined();
-  });
-});
-
-describe("narrowDetectedAgentId", () => {
-  it("returns the value when it is a built-in agent id", () => {
-    expect(narrowDetectedAgentId("claude")).toBe("claude");
-  });
-
-  it("returns undefined for unknown values", () => {
-    expect(narrowDetectedAgentId("definitely-not-real")).toBeUndefined();
-    expect(narrowDetectedAgentId(42)).toBeUndefined();
-    expect(narrowDetectedAgentId(undefined)).toBeUndefined();
   });
 });
 

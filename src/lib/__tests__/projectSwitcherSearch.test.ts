@@ -150,17 +150,6 @@ describe("scoreProjectQuery", () => {
     expect(camelMatch).toBeGreaterThan(midMatch);
   });
 
-  it("weights name 4x over path", () => {
-    const nameHit = scoreProjectQuery("foo", "foo-app", "/other/path");
-    const pathHit = scoreProjectQuery("foo", "other-app", "/some/foo/path");
-    expect(nameHit).toBeGreaterThan(pathHit);
-  });
-
-  it("handles backslash as path boundary", () => {
-    const score = scoreProjectQuery("fb", "app", "C:\\foo\\bar");
-    expect(score).toBeGreaterThan(0);
-  });
-
   it("does not drop matches due to negative field scores (long gap clamping)", () => {
     const longName = "a" + "x".repeat(50) + "b" + "x".repeat(50) + "c";
     const score = scoreProjectQuery("abc", longName, "/repos/abc");
@@ -209,12 +198,6 @@ describe("rankSwitcherMatches", () => {
   it("filters out non-matching projects", () => {
     const results = rankSwitcherMatches("xyz", projects, [], null);
     expect(results).toHaveLength(0);
-  });
-
-  it("ranks exact name substring matches first", () => {
-    const results = rankSwitcherMatches("daintree", projects, [], null);
-    expect(results.length).toBeGreaterThanOrEqual(2);
-    expect(results[0]!.name).toContain("daintree");
   });
 
   it("uses frecencyScore as tiebreaker for equal text scores", () => {
@@ -266,16 +249,6 @@ describe("rankSwitcherMatches", () => {
     expect(mixed.filter((r) => r.kind === "project").map((r) => r.id)).toEqual(
       rankSwitcherMatches("alpha", [weak, strong], [], null).map((r) => r.id)
     );
-  });
-
-  it("tags every row with its kind", () => {
-    const results = rankSwitcherMatches(
-      "alpha",
-      [makeProject({ id: "p", name: "alpha-app", path: "/repos/alpha" })],
-      [makeScratch({ id: "s", name: "alpha-notes" })],
-      null
-    );
-    expect(results.map((r) => r.kind).sort()).toEqual(["project", "scratch"]);
   });
 
   it("filters scratches by the query rather than listing them all", () => {

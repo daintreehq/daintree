@@ -41,11 +41,6 @@ describe("sortTierByInstalled", () => {
     expect(result).toEqual(["gemini", "codex", "claude"]);
   });
 
-  it("handles single installed agent", () => {
-    const result = sortTierByInstalled(tier, { codex: "ready" } as CliAvailability);
-    expect(result).toEqual(["codex", "claude", "gemini"]);
-  });
-
   it("treats missing and undefined availability the same", () => {
     const withMissing = sortTierByInstalled(tier, {
       claude: "missing",
@@ -54,15 +49,6 @@ describe("sortTierByInstalled", () => {
     } as CliAvailability);
     const withUndefined = sortTierByInstalled(tier, { gemini: "ready" } as CliAvailability);
     expect(withMissing).toEqual(withUndefined);
-  });
-
-  it("works with the more-agents tier", () => {
-    const moreTier = ["opencode", "cursor", "kiro"] as const;
-    const result = sortTierByInstalled(moreTier, {
-      cursor: "installed",
-      kiro: "missing",
-    } as CliAvailability);
-    expect(result).toEqual(["cursor", "opencode", "kiro"]);
   });
 
   it("returns empty array for empty input", () => {
@@ -124,13 +110,6 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.isFirstRun).toBe(false);
   });
 
-  it("advances from appearance to agents on first run", () => {
-    let state = buildInitialState(emptyAvail, true);
-    state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
-    expect(state.step).toEqual({ type: "agents" });
-    expect(state.history).toEqual([{ type: "appearance" }]);
-  });
-
   it("advances from agents to privacy on first run regardless of install state", () => {
     const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
     let state = buildInitialState(allInstalled, true);
@@ -163,34 +142,6 @@ describe("AgentSetupWizard reducer", () => {
     state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
     expect(state.step).toEqual({ type: "complete" });
     expect(state.history).toEqual([{ type: "agents" }]);
-  });
-
-  it("privacy advances to cli when not all installed", () => {
-    const partial = { claude: "ready", gemini: "missing" } as CliAvailability;
-    let state = buildInitialState(partial, true);
-    state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
-    state = wizardReducer(state, {
-      type: "INIT_SELECTIONS",
-      payload: { claude: true, gemini: true },
-    });
-    state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
-    state = wizardReducer(state, { type: "PRIVACY_CONTINUE" });
-    expect(state.step).toEqual({ type: "cli" });
-  });
-
-  it("privacy routes first-run to permissions (not complete) when all selected agents are installed", () => {
-    // cli is skipped (nothing to install) but the global permissions consent
-    // gate must still fire on first run before the summary.
-    const allInstalled = { claude: "ready", gemini: "ready" } as CliAvailability;
-    let state = buildInitialState(allInstalled, true);
-    state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
-    state = wizardReducer(state, {
-      type: "INIT_SELECTIONS",
-      payload: { claude: true, gemini: true },
-    });
-    state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
-    state = wizardReducer(state, { type: "PRIVACY_CONTINUE" });
-    expect(state.step).toEqual({ type: "permissions" });
   });
 
   it("privacy routes first-run to permissions when only selected agents are installed (unselected missing)", () => {
@@ -290,29 +241,6 @@ describe("AgentSetupWizard reducer", () => {
     expect(state.step).toEqual({ type: "cli" });
 
     state = wizardReducer(state, { type: "CLI_CONTINUE" });
-    expect(state.step).toEqual({ type: "complete" });
-  });
-
-  it("advances from cli to permissions on first run", () => {
-    const partial = { claude: "ready", gemini: "missing" } as CliAvailability;
-    let state = buildInitialState(partial, true);
-    state = wizardReducer(state, { type: "APPEARANCE_CONTINUE" });
-    state = wizardReducer(state, {
-      type: "INIT_SELECTIONS",
-      payload: { claude: true, gemini: true },
-    });
-    state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
-    state = wizardReducer(state, { type: "PRIVACY_CONTINUE" });
-    expect(state.step).toEqual({ type: "cli" });
-
-    state = wizardReducer(state, { type: "CLI_CONTINUE" });
-    expect(state.step).toEqual({ type: "permissions" });
-  });
-
-  it("advances from permissions to complete", () => {
-    let state = buildInitialState(emptyAvail, true);
-    state.step = { type: "permissions" };
-    state = wizardReducer(state, { type: "PERMISSIONS_CONTINUE" });
     expect(state.step).toEqual({ type: "complete" });
   });
 

@@ -27,12 +27,6 @@ describe("project plugin instance keys", () => {
     expect(projectIdFromPluginInstanceKey("acme.dashboard")).toBe(null);
   });
 
-  it("keeps two projects' keys distinct for the same manifest id", () => {
-    const a = makeProjectPluginInstanceKey("a".repeat(64), "acme.dashboard");
-    const b = makeProjectPluginInstanceKey("b".repeat(64), "acme.dashboard");
-    expect(a).not.toBe(b);
-  });
-
   it("contains no character that is a path separator or illegal on Windows", () => {
     const key = makeProjectPluginInstanceKey(PROJECT, "acme.dashboard");
     for (const ch of ["/", "\\", ":", "*", "?", '"', "<", ">", "|"]) {

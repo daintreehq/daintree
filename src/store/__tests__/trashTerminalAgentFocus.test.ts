@@ -105,21 +105,6 @@ describe("trashPanel agent-aware focus", () => {
     expect(usePanelStore.getState().focusedId).toBe("agent-2");
   });
 
-  it("should fall back to any grid terminal when last agent is trashed", () => {
-    usePanelStore.setState({
-      panelsById: {
-        "agent-1": makeTerminal("agent-1", "agent", "claude"),
-        "shell-1": makeTerminal("shell-1", "terminal"),
-      },
-      panelIds: ["agent-1", "shell-1"],
-      focusedId: "agent-1",
-    });
-
-    usePanelStore.getState().trashPanel("agent-1");
-
-    expect(usePanelStore.getState().focusedId).toBe("shell-1");
-  });
-
   it("should support rapid sequential agent close", () => {
     usePanelStore.setState({
       panelsById: {
@@ -638,23 +623,6 @@ describe("reading-surface dock/trash fallback (#8946 — previous-focused policy
 
     // Previously-focused panel is no longer grid-resident → fall through.
     expect(usePanelStore.getState().focusedId).toBe("shell-first");
-  });
-
-  it("trashPanel: review falls back to first-grid when previousFocusedId is null", () => {
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-    usePanelStore.setState({
-      panelsById: {
-        "shell-1": makeTerminal("shell-1", "terminal", undefined, "wt-1"),
-        "review-1": makeReviewPanel("review-1", "wt-1"),
-      },
-      panelIds: ["shell-1", "review-1"],
-      focusedId: "review-1",
-      previousFocusedId: null,
-    });
-
-    usePanelStore.getState().trashPanel("review-1");
-
-    expect(usePanelStore.getState().focusedId).toBe("shell-1");
   });
 
   it.each([

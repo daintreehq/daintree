@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // #11116: ReviewPane dropped the grid-supplied `onClose` and handed
@@ -17,11 +17,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // catch that.
 //
 // The pane's other seam with this child — handing it the container as its
-// Escape `keyboardScope` — is covered in ReviewPane.focus.test.tsx.
+// Escape `keyboardScope` — is covered by the focus suites below.
 interface CapturedReviewHubProps {
   isOpen: boolean;
   worktreePath: string;
   onClose: () => void;
+  keyboardScope?: HTMLElement;
 }
 
 const reviewHubContentProps: CapturedReviewHubProps[] = [];
@@ -33,19 +34,27 @@ vi.mock("@/components/Worktree/ReviewHub/ReviewHubContent", () => ({
     // regression that stops opening the pane can't leave these tests green.
     if (!props.isOpen) return null;
     return (
-      <button data-testid="review-hub-close" onClick={props.onClose}>
-        Close
-      </button>
+      <div data-testid="review-hub">
+        <button data-testid="review-hub-close" onClick={props.onClose}>
+          Close
+        </button>
+      </div>
     );
   },
 }));
 
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (state: unknown) => unknown) =>
-    selector({ worktrees: new Map([["wt-1", { path: "/repo/wt-1" }]]) }),
+    selector({
+      worktrees: new Map([
+        ["wt-1", { path: "/repo/wt-1" }],
+        ["w-1", { path: "/tmp/worktree" }],
+      ]),
+    }),
 }));
 
 import { ReviewPane } from "../ReviewPane";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 
 function lastReviewHubContentProps(): CapturedReviewHubProps {
   const props = reviewHubContentProps.at(-1);
@@ -157,5 +166,106 @@ describe("ReviewPane panel DOM contract", () => {
     expect(roots).toHaveLength(1);
     expect(roots[0]?.getAttribute("data-panel-id")).toBe("review-empty");
     expect(roots[0]?.matches(GRID_OR_DOCK)).toBe(true);
+  });
+});
+
+/**
+ * ReviewPane — self-registered focus target (#11109).
+ *
+ * Review is the one built-in kind that renders no ContentPanel, so it does not
+ * inherit ContentPanel's panel-root registration and has to register its own
+ * container. Without this, macro-grid Enter stays dead on review panes even
+ * after every other kind is fixed.
+ */
+describe("ReviewPane focus target (#11109)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("moves focus to its container and confirms the handoff", () => {
+    const { container } = render(<ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} />);
+    const root = container.firstElementChild;
+
+    let accepted = false;
+    act(() => {
+      accepted = focusPanelInput("r-1");
+    });
+
+    expect(accepted).toBe(true);
+    expect(document.activeElement).toBe(root);
+  });
+
+  it("accepts focus in the worktree-unavailable branch too", () => {
+    // Both return branches render a container; only wiring the happy path
+    // would leave Enter dead on a review pane whose worktree went away.
+    const { container } = render(<ReviewPane id="r-1" onClose={vi.fn()} />);
+    const root = container.firstElementChild;
+
+    let accepted = false;
+    act(() => {
+      accepted = focusPanelInput("r-1");
+    });
+
+    expect(accepted).toBe(true);
+    expect(document.activeElement).toBe(root);
+  });
+
+  it("still hands its container to ReviewHubContent as the keyboard scope", () => {
+    // The container doubles as ReviewHubContent's Escape scope; a document-wide
+    // fallback would swallow Escape across the whole app.
+    const { container } = render(<ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} />);
+
+    expect(lastReviewHubContentProps().keyboardScope).toBe(container.firstElementChild);
+  });
+
+  it("releases the registry entry on unmount", () => {
+    const { unmount } = render(<ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} />);
+    unmount();
+
+    expect(focusPanelInput("r-1")).toBe(false);
+  });
+});
+
+/**
+ * Registration alone only answers macro-grid Enter. Arrow navigation, Cmd+1..9
+ * and the rest just write `focusedId`, so the pane has to claim DOM focus when
+ * it becomes focused or the keyboard stays behind (#11133).
+ */
+describe("ReviewPane reactive focus (#11133)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("claims DOM focus when it becomes the focused pane", () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    const { container, rerender } = render(
+      <ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} />
+    );
+    expect(document.activeElement).toBe(outside);
+
+    act(() => {
+      rerender(<ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} isFocused />);
+    });
+
+    expect(document.activeElement).toBe(container.firstElementChild);
+    outside.remove();
+  });
+
+  it("leaves focus alone when it already sits inside the pane", () => {
+    const { container } = render(
+      <ReviewPane id="r-1" worktreeId="w-1" onClose={vi.fn()} isFocused />
+    );
+    const hub = container.querySelector<HTMLElement>('[data-testid="review-hub"]')!;
+    hub.tabIndex = -1;
+    act(() => hub.focus());
+
+    act(() => {
+      expect(focusPanelInput("r-1")).toBe(true);
+    });
+
+    expect(document.activeElement).toBe(hub);
   });
 });

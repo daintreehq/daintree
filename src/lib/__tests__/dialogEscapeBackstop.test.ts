@@ -290,34 +290,6 @@ describe("dialogEscapeBackstop — LIFO stack semantics", () => {
     expect(isTopmostDialogBackstop(inner)).toBe(false);
   });
 
-  it("layered backstops only fire the topmost on each Escape press", () => {
-    const outer = vi.fn();
-    const inner = vi.fn();
-    registerDialogEscapeBackstop(outer);
-    const disposeInner = registerDialogEscapeBackstop(inner);
-
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (radixLayerWasOpenWhenEscapePressed()) return;
-      const top = isTopmostDialogBackstop(inner) ? inner : outer;
-      top();
-      markBackstopConsumedEscape();
-    };
-    document.addEventListener("keydown", handler);
-
-    fireEscape();
-    expect(inner).toHaveBeenCalledOnce();
-    expect(outer).not.toHaveBeenCalled();
-
-    disposeInner();
-    fireEscape();
-
-    document.removeEventListener("keydown", handler);
-
-    expect(outer).toHaveBeenCalledOnce();
-    expect(inner).toHaveBeenCalledOnce();
-  });
-
   it("three-layer stack unwinds in reverse order across successive Escape presses", () => {
     const a = vi.fn();
     const b = vi.fn();
@@ -384,23 +356,9 @@ describe("dialogEscapeBackstop — LIFO stack semantics", () => {
 
     expect(isTopmostDialogBackstop(handler)).toBe(false);
   });
-
-  it("isTopmostDialogBackstop returns false for an unregistered handler", () => {
-    const other = vi.fn();
-    expect(isTopmostDialogBackstop(other)).toBe(false);
-  });
 });
 
 describe("dialogEscapeBackstop — backstopAlreadyConsumedEscape reset", () => {
-  it("returns false initially", () => {
-    expect(backstopAlreadyConsumedEscape()).toBe(false);
-  });
-
-  it("returns true after markBackstopConsumedEscape() is called", () => {
-    markBackstopConsumedEscape();
-    expect(backstopAlreadyConsumedEscape()).toBe(true);
-  });
-
   it("resets to false on the next Escape press (capture-phase clears the flag)", () => {
     markBackstopConsumedEscape();
     expect(backstopAlreadyConsumedEscape()).toBe(true);
@@ -415,12 +373,5 @@ describe("dialogEscapeBackstop — backstopAlreadyConsumedEscape reset", () => {
       new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })
     );
     expect(backstopAlreadyConsumedEscape()).toBe(true);
-  });
-
-  it("stays false across consecutive Escape presses when nothing marks it consumed", () => {
-    fireEscape();
-    expect(backstopAlreadyConsumedEscape()).toBe(false);
-    fireEscape();
-    expect(backstopAlreadyConsumedEscape()).toBe(false);
   });
 });

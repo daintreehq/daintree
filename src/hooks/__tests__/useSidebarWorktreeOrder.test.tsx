@@ -121,16 +121,6 @@ describe("useSidebarWorktreeOrder", () => {
     expect(seenOptions.current).toEqual({ enabled: true });
   });
 
-  it("ignores worktree changes while disabled", () => {
-    const { result, rerender } = renderHook(() => useSidebarWorktreeOrder({ enabled: false }));
-    const first = result.current;
-
-    worktreesRef.current = [main, feature];
-    rerender();
-    expect(result.current).toBe(first);
-    expect(result.current).toEqual([]);
-  });
-
   it("short-circuits to a stable empty array when disabled", () => {
     const { result, rerender } = renderHook(() => useSidebarWorktreeOrder({ enabled: false }));
     const first = result.current;

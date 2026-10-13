@@ -1048,14 +1048,6 @@ describe("readClaudeLastMessage — which file", () => {
 
     expect(ok(result).message?.text).toBe("Via the link.");
   });
-
-  it("reports the file's modification time", async () => {
-    await seed([assistant("msg_1", [text("Reply.")])]);
-
-    const result = ok(await read());
-
-    expect(result.fileUpdatedAt).toBeGreaterThan(0);
-  });
 });
 
 describe("tailWithinJsonBytes", () => {

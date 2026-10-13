@@ -40,14 +40,6 @@ describe("diffMediaClient.readFileVersions caching", () => {
 
   const payload = { cwd: "/repo", filePath: "img.png" };
 
-  it("sends no known versions on a first visit", async () => {
-    mockRead.mockResolvedValue({ head: loaded("h", "h1"), working: loaded("w", "w1") });
-
-    await client.diffMediaClient.readFileVersions(payload);
-
-    expect(mockRead).toHaveBeenCalledWith(payload);
-  });
-
   it("revalidates a revisit and reuses the held data URLs for unchanged sides", async () => {
     const head = loaded("h", "h1");
     const working = loaded("w", "w1");

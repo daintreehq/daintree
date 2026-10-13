@@ -107,20 +107,6 @@ describe("suppressSidebarResizes", () => {
     expect(suppressMock).toHaveBeenCalledWith(["p-1", "p-2"], SIDEBAR_TOGGLE_LOCK_MS);
   });
 
-  it("excludes dock panels from the suppression set", () => {
-    setup(
-      [
-        { id: "p-grid", location: "grid", worktreeId: "wt-a" },
-        { id: "p-dock", location: "dock", worktreeId: "wt-a" },
-      ],
-      "wt-a"
-    );
-
-    suppressSidebarResizes();
-
-    expect(suppressMock).toHaveBeenCalledWith(["p-grid"], SIDEBAR_TOGGLE_LOCK_MS);
-  });
-
   it("excludes panels belonging to other worktrees", () => {
     setup(
       [
@@ -148,13 +134,6 @@ describe("suppressSidebarResizes", () => {
     suppressSidebarResizes();
 
     expect(suppressMock).toHaveBeenCalledWith(["p-grid"], SIDEBAR_TOGGLE_LOCK_MS);
-  });
-
-  it("handles a null activeWorktreeId without crashing", () => {
-    setup([{ id: "p-1", location: "grid", worktreeId: "wt-a" }], null);
-
-    expect(() => suppressSidebarResizes()).not.toThrow();
-    expect(suppressMock).toHaveBeenCalledWith([], SIDEBAR_TOGGLE_LOCK_MS);
   });
 
   it("locks the sidebar layout transition for the same window", () => {

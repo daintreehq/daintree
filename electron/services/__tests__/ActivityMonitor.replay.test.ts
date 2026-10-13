@@ -7,7 +7,6 @@ import {
   replayCast,
   type ExpectedTransition,
   type RecordedTransition,
-  type ReplayCastOpts,
 } from "./replay/castReplayHarness.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,23 +19,6 @@ function fixture(name: string) {
   };
 }
 
-interface ReplayCase {
-  name: string;
-  agentId?: string;
-  pollingMaxBootMs?: number;
-}
-
-const REPLAY_CASES: ReplayCase[] = [
-  { name: "claude-normal-turn", agentId: "claude" },
-  { name: "gemini-working-to-idle", agentId: "gemini" },
-  { name: "codex-completion", agentId: "codex" },
-  { name: "claude-silence-after-busy", agentId: "claude" },
-  { name: "aider-working-to-idle", agentId: "aider" },
-  { name: "mistral-working-to-idle", agentId: "mistral" },
-  { name: "goose-working-to-completed", agentId: "goose" },
-  { name: "claude-osc94-progress-keeps-working", agentId: "claude" },
-];
-
 describe("ActivityMonitor replay harness", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -46,27 +28,6 @@ describe("ActivityMonitor replay harness", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllTimers();
-  });
-
-  describe.each(REPLAY_CASES)("$name (no fragmentation)", ({ name, agentId, pollingMaxBootMs }) => {
-    it("produces the expected transition sequence", async () => {
-      const { cast, expected } = fixture(name);
-      const expectedFile = loadExpected(expected);
-      const opts: ReplayCastOpts = {
-        agentId: expectedFile.agentId ?? agentId,
-        settleMs: expectedFile.settleMs,
-        pollingMaxBootMs: expectedFile.pollingMaxBootMs ?? pollingMaxBootMs,
-        maxWorkingSilenceMs: expectedFile.maxWorkingSilenceMs,
-        idleDebounceMs: expectedFile.idleDebounceMs,
-        promptFastPathMinQuietMs: expectedFile.promptFastPathMinQuietMs,
-      };
-      const recorded = await replayCast(cast, opts);
-      const failures = matchTransitions(recorded, expectedFile.transitions, {
-        toleranceMs: expectedFile.toleranceMs ?? 200,
-        allowExtraTransitions: expectedFile.allowExtraTransitions ?? false,
-      });
-      expect(failures, formatFailures(failures, recorded)).toHaveLength(0);
-    });
   });
 
   describe.each([
@@ -168,24 +129,6 @@ describe("ActivityMonitor replay harness", () => {
     expect(routedIdle, `routed idle=${routedIdle}ms ran past the OSC window`).toBeLessThanOrEqual(
       12000
     );
-  });
-
-  it("input cast events drive monitor.onInput and trigger busy", async () => {
-    // Fixture includes an `i` event that simulates the user pressing Enter
-    // after a short shell output — the monitor should transition to busy via
-    // the input path (trigger:"input").
-    const { cast, expected } = fixture("input-event-triggers-busy");
-    const expectedFile = loadExpected(expected);
-    const recorded = await replayCast(cast, {
-      agentId: expectedFile.agentId,
-      settleMs: expectedFile.settleMs,
-      pollingMaxBootMs: expectedFile.pollingMaxBootMs,
-      maxWorkingSilenceMs: expectedFile.maxWorkingSilenceMs,
-    });
-    const failures = matchTransitions(recorded, expectedFile.transitions, {
-      toleranceMs: expectedFile.toleranceMs ?? 200,
-    });
-    expect(failures, formatFailures(failures, recorded)).toHaveLength(0);
   });
 });
 

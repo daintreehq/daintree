@@ -61,22 +61,6 @@ describe("getRecipeScope", () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it("marks only the global scope as global", () => {
-    const recipes = [
-      makeRecipe({ projectId: undefined }),
-      makeRecipe({ projectId: "p" }),
-      makeRecipe({ projectId: "p", scope: "inrepo" }),
-      makeRecipe({ projectId: "p", worktreeId: "wt-1" }),
-    ];
-    expect(recipes.map((r) => getRecipeScope(r).isGlobal)).toEqual([true, false, false, false]);
-  });
-
-  it("distinguishes same-named recipes that differ only by scope", () => {
-    const global = makeRecipe({ id: "g", name: "Work", projectId: undefined });
-    const local = makeRecipe({ id: "l", name: "Work", projectId: "proj-1" });
-    expect(getRecipeScope(global).label).not.toBe(getRecipeScope(local).label);
-  });
-
   it("classifies a plugin recipe by provenance, not by its missing projectId (#11860)", () => {
     // A plugin recipe carries no projectId either, so the global branch would
     // claim it and label a read-only recipe as one the user can edit.

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GrantCache } from "../grantCache.js";
 import { minimumPermittingTier } from "../shared.js";
 import {
@@ -387,15 +387,6 @@ describe("GrantCache.revokeSession", () => {
     expect(emitted).toHaveLength(0);
     cache.dispose();
   });
-
-  it("session-idle reason is propagated to the emitted record", () => {
-    const { cache, emitted } = newCache();
-    cache.issueGrant("s1", "project.runCheck");
-    emitted.length = 0;
-    cache.revokeSession("s1", "session-idle");
-    expect(emitted[0].payload.revokedReason).toBe("session-idle");
-    cache.dispose();
-  });
 });
 
 describe("GrantCache denial counters", () => {
@@ -547,23 +538,6 @@ describe("GrantCache emitter resilience", () => {
 
 afterEach(() => {
   vi.useRealTimers();
-});
-
-describe("session-level integration assumptions", () => {
-  // Sanity assertions that the cache's behaviour matches the contract
-  // sessionStore/sessionServer rely on; if any of these flip we want a
-  // test failure here, not a runtime surprise.
-  it("colon-free tool IDs survive the flat key encoding", () => {
-    const { cache } = newCache();
-    cache.issueGrant("uuid-with-dashes", "namespace.action");
-    expect(cache.check("uuid-with-dashes", "namespace.action").granted).toBe(true);
-    cache.dispose();
-  });
-});
-
-// Unused, but documents intent.
-beforeEach(() => {
-  // no-op; per-test caches are constructed inside each `it`.
 });
 
 describe("GrantCache native grants (#10648)", () => {

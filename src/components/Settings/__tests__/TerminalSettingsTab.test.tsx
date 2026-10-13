@@ -96,13 +96,6 @@ describe("TerminalSettingsTab", () => {
     useLayoutConfigStore.setState({ layoutConfig: { strategy: "automatic", value: 3 } });
   });
 
-  it("states how agent and shell limits derive from the base", () => {
-    renderSubtab("scrollback");
-    expect(screen.getByText(/agent terminals keep 10× it/)).toBeTruthy();
-    expect(screen.getByText("Agent terminals")).toBeTruthy();
-    expect(screen.getByText("Shells and dev servers")).toBeTruthy();
-  });
-
   it("renders screen reader mode as a segmented choice", () => {
     renderSubtab("accessibility");
     expect(screen.getByRole("radiogroup", { name: "Screen reader mode" })).toBeTruthy();

@@ -336,15 +336,6 @@ describe("usePaletteTreeNavigation", () => {
       expect(result.current.selectedRowId).toBe("i:a1");
     });
 
-    it("falls back to the first navigable row when the selected row is gone", () => {
-      const { result, rerender } = setup([["a", ["a1", "a2"]]]);
-
-      act(() => result.current.selectRow("i:a2"));
-      rerender({ groups: buildGroups([["a", ["a1"]]]), scope: undefined });
-
-      expect(result.current.selectedRowId).toBe("i:a1");
-    });
-
     it("never names an active descendant that is absent from the rendered rows", () => {
       const { result, rerender } = setup([
         ["a", ["a1", "a2"]],

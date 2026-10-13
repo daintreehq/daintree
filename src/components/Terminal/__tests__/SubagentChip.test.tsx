@@ -114,13 +114,6 @@ describe("SubagentChip", () => {
     expect(screen.queryByRole("button", { name: /subagent/i })).toBeNull();
   });
 
-  it("stays invisible when the lookup could not resolve a session", async () => {
-    listSubagents.mockResolvedValue({ status: "unavailable", reason: "no-session" });
-    render(<SubagentChip terminalId="t1" />);
-    await waitFor(() => expect(listSubagents).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: /subagent/i })).toBeNull();
-  });
-
   it("lists the children it found and names each one read-only", async () => {
     listSubagents.mockResolvedValue(
       ok([subagent(), subagent({ id: "child-2", label: "Kant", preview: "Run the tests" })])

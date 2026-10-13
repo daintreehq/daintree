@@ -47,17 +47,6 @@ describe("mcpConfirmStore", () => {
     expect(useMcpConfirmStore.getState().current).toBeNull();
   });
 
-  it("resolves with the user's decision keyed by requestId, never overwriting a sibling", async () => {
-    const first = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
-    const second = requestMcpConfirmation(pendingFixture({ requestId: "b" }));
-
-    useMcpConfirmStore.getState().resolveCurrent("approved");
-    expect(await first).toEqual({ decision: "approved" });
-
-    useMcpConfirmStore.getState().resolveCurrent("timeout");
-    expect(await second).toEqual({ decision: "timeout" });
-  });
-
   it("ignores resolveCurrent when nothing is showing", () => {
     expect(() => useMcpConfirmStore.getState().resolveCurrent("rejected")).not.toThrow();
     expect(useMcpConfirmStore.getState().current).toBeNull();

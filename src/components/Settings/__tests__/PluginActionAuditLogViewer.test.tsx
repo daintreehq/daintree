@@ -46,11 +46,6 @@ describe("PluginActionAuditLogViewer", () => {
     expect(screen.getByText("plugin handler exploded at boundary")).toBeTruthy();
   });
 
-  it("omits the error line when a record carries no errorMessage", () => {
-    renderViewer([record({ result: "restricted", errorMessage: undefined })]);
-    expect(screen.queryByText(/exploded/)).toBeNull();
-  });
-
   it("tags an ipc-invoke record with its record type instead of an empty source", () => {
     renderViewer([
       record({

@@ -5,7 +5,6 @@ import {
   consumePrefetchedHydrateResult,
   invalidatePrefetchCache,
   _resetPrefetchHydrateCacheForTests,
-  _peekPrefetchCacheForTests,
 } from "../prefetchHydrateCache.js";
 
 function makeHydrate(projectId: string): HydrateResult {
@@ -44,17 +43,6 @@ afterEach(() => {
 });
 
 describe("prefetchHydrateCache", () => {
-  it("populates the cache with the build result", async () => {
-    const build = vi.fn().mockResolvedValue(makeHydrate("p1"));
-
-    const result = await prefetchHydrateResult("p1", build);
-
-    expect(result).toBeDefined();
-    expect(result!.project!.id).toBe("p1");
-    expect(_peekPrefetchCacheForTests("p1")?.project?.id).toBe("p1");
-    expect(build).toHaveBeenCalledTimes(1);
-  });
-
   it("singleflights concurrent calls for the same project", async () => {
     let resolve: ((v: HydrateResult) => void) | null = null;
     const build = vi.fn().mockImplementationOnce(

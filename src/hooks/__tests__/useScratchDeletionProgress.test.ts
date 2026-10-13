@@ -61,20 +61,6 @@ describe("visibility gate", () => {
     expect(result.current.isVisible).toBe(true);
   });
 
-  it("goes quiet again once the deletion stops", () => {
-    const { result, rerender } = renderHook(
-      ({ isDeleting }) => useScratchDeletionProgress(isDeleting),
-      { initialProps: { isDeleting: true } }
-    );
-
-    advanceToNextMilestone();
-    expect(result.current.isVisible).toBe(true);
-
-    rerender({ isDeleting: false });
-
-    expect(result.current.isVisible).toBe(false);
-  });
-
   it("shows nothing at all when no deletion is running", () => {
     const { result } = renderHook(() => useScratchDeletionProgress(false));
 

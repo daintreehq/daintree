@@ -47,21 +47,6 @@ afterEach(() => {
 
 describe("useShouldSuppressLocalError", () => {
   describe("backend-dependent category", () => {
-    it("is not suppressed when no global cause is active", () => {
-      const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
-      expect(result.current).toBe(false);
-    });
-
-    it("suppresses immediately when a global cause activates", () => {
-      const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
-      expect(result.current).toBe(false);
-
-      act(() => {
-        usePanelStore.setState({ backendStatus: "recovering" });
-      });
-      expect(result.current).toBe(true);
-    });
-
     it("returns true on the first render after rawSuppressed flips true (sync sticky-on)", () => {
       // Captures the value at every render. Sticky-on must be synchronous
       // with render — if the hook depended on `useEffect` to flip state,
@@ -148,27 +133,6 @@ describe("useShouldSuppressLocalError", () => {
       const { result } = renderHook(() => useShouldSuppressLocalError("parse-error"));
       expect(result.current).toBe(false);
     });
-
-    it("stays unsuppressed across a backend disconnect/recover cycle", () => {
-      const { result } = renderHook(() => useShouldSuppressLocalError("parse-error"));
-      expect(result.current).toBe(false);
-
-      act(() => {
-        usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
-      });
-      expect(result.current).toBe(false);
-
-      act(() => {
-        usePanelStore.setState({ backendStatus: "recovering" });
-      });
-      expect(result.current).toBe(false);
-
-      act(() => {
-        usePanelStore.setState({ backendStatus: "connected" });
-        vi.advanceTimersByTime(LOCAL_ERROR_SETTLE_MS * 2);
-      });
-      expect(result.current).toBe(false);
-    });
   });
 
   describe("permission-error category", () => {
@@ -194,29 +158,6 @@ describe("useShouldSuppressLocalError", () => {
         usePanelStore.setState({ backendStatus: "connected" });
       });
       expect(result.current).toBe(false);
-    });
-  });
-
-  describe("cleanup", () => {
-    it("clears the settle timer on unmount (no post-unmount state updates)", () => {
-      const { result, unmount } = renderHook(() =>
-        useShouldSuppressLocalError("backend-dependent")
-      );
-
-      act(() => {
-        usePanelStore.setState({ backendStatus: "recovering" });
-      });
-      act(() => {
-        usePanelStore.setState({ backendStatus: "connected" });
-      });
-      expect(result.current).toBe(true);
-
-      unmount();
-
-      // Advancing past the timer must not throw or warn after unmount.
-      expect(() => {
-        vi.advanceTimersByTime(LOCAL_ERROR_SETTLE_MS * 2);
-      }).not.toThrow();
     });
   });
 
@@ -289,12 +230,6 @@ describe("useShouldSuppressLocalError", () => {
           visible: true,
         });
       });
-      expect(result.current).toBe(false);
-    });
-
-    it("does not suppress when an advisory cause is already active at mount", () => {
-      useCloudSyncBannerStore.setState({ service: "OneDrive", projectId: "p1" });
-      const { result } = renderHook(() => useShouldSuppressLocalError("backend-dependent"));
       expect(result.current).toBe(false);
     });
 

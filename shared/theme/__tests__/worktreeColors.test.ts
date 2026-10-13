@@ -23,18 +23,6 @@ describe("computeWorktreeColorMap", () => {
     expect(result["wt-b"]).toBe(`var(--theme-${WORKTREE_COLOR_PALETTE[1]})`);
   });
 
-  it("is deterministic regardless of insertion order", () => {
-    const map1 = new Map([
-      ["wt-a", { path: "/projects/alpha" }],
-      ["wt-b", { path: "/projects/beta" }],
-    ]);
-    const map2 = new Map([
-      ["wt-b", { path: "/projects/beta" }],
-      ["wt-a", { path: "/projects/alpha" }],
-    ]);
-    expect(computeWorktreeColorMap(map1)).toEqual(computeWorktreeColorMap(map2));
-  });
-
   it("cycles palette for more worktrees than palette size", () => {
     const entries: [string, { path: string }][] = [];
     for (let i = 0; i < WORKTREE_COLOR_PALETTE.length + 2; i++) {

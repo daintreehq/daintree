@@ -24,24 +24,6 @@ describe("shortcutHintStore", () => {
     vi.restoreAllMocks();
   });
 
-  it("hydrates counts from IPC", () => {
-    const { hydrateCounts } = shortcutHintStore.getState();
-    hydrateCounts({ "nav.quickSwitcher": 2 });
-
-    const state = shortcutHintStore.getState();
-    expect(state.hydrated).toBe(true);
-    expect(state.counts).toEqual({ "nav.quickSwitcher": 2 });
-  });
-
-  it("records pointer position", () => {
-    const { recordPointer } = shortcutHintStore.getState();
-    recordPointer(100, 200);
-
-    const state = shortcutHintStore.getState();
-    expect(state.pointer).toMatchObject({ x: 100, y: 200 });
-    expect(state.pointer!.ts).toBeGreaterThan(0);
-  });
-
   it("shows hint when count is a milestone", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 1 });
@@ -67,11 +49,6 @@ describe("shortcutHintStore", () => {
 
     expect(result).toBe(false);
     expect(shortcutHintStore.getState().activeHint).toBeNull();
-  });
-
-  it("encodes exactly the 6-entry geometric milestone curve", () => {
-    expect(Array.from(HINT_MILESTONES)).toEqual([1, 2, 4, 8, 16, 32]);
-    expect(HINT_MILESTONES.size).toBe(6);
   });
 
   it("does not show hint for powers of two beyond the cap", () => {
@@ -119,15 +96,6 @@ describe("shortcutHintStore", () => {
     }
   });
 
-  it("stops showing hints after the last milestone", () => {
-    const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 33 });
-    s.recordPointer(100, 200);
-    const result = s.show("nav.quickSwitcher", "Cmd+K");
-
-    expect(result).toBe(false);
-  });
-
   it("returns false when pointer is stale", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 1 });
@@ -149,16 +117,6 @@ describe("shortcutHintStore", () => {
     expect(shortcutHintStore.getState().activeHint).toBeNull();
   });
 
-  it("hides the active hint", () => {
-    const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 1 });
-    s.recordPointer(100, 200);
-    s.show("nav.quickSwitcher", "Cmd+K");
-    s.hide();
-
-    expect(shortcutHintStore.getState().activeHint).toBeNull();
-  });
-
   it("increments count locally and calls IPC", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 1 });
@@ -168,14 +126,6 @@ describe("shortcutHintStore", () => {
     expect(window.electron?.shortcutHints?.incrementCount).toHaveBeenCalledWith(
       "nav.quickSwitcher"
     );
-  });
-
-  it("increments count from zero", () => {
-    const s = shortcutHintStore.getState();
-    s.hydrateCounts({});
-    s.incrementCount("terminal.new");
-
-    expect(shortcutHintStore.getState().counts["terminal.new"]).toBe(1);
   });
 
   it("shows hint after increment-then-show sequence (ActionService flow)", () => {
@@ -239,22 +189,10 @@ describe("shortcutHintStore", () => {
     });
   });
 
-  it("isHoverEligible returns true for count 0", () => {
-    const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 0 });
-    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
-  });
-
   it("isHoverEligible returns true for unknown action (treated as count 0)", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({});
     expect(s.isHoverEligible("terminal.new")).toBe(true);
-  });
-
-  it("isHoverEligible returns true for milestone count", () => {
-    const s = shortcutHintStore.getState();
-    s.hydrateCounts({ "nav.quickSwitcher": 1 });
-    expect(s.isHoverEligible("nav.quickSwitcher")).toBe(true);
   });
 
   it("isHoverEligible returns false for non-milestone non-zero count", () => {

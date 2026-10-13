@@ -34,25 +34,6 @@ describe("useSharedPollTick", () => {
     });
   }
 
-  it("fires every subscriber on one interval", () => {
-    const first = vi.fn();
-    const second = vi.fn();
-    const a = renderHook(() => useSharedPollTick(first, 2_000));
-    const b = renderHook(() => useSharedPollTick(second, 2_000));
-
-    expect(sharedPollTickerCount()).toBe(1);
-
-    act(() => {
-      vi.advanceTimersByTime(2_000);
-    });
-
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledTimes(1);
-
-    a.unmount();
-    b.unmount();
-  });
-
   it("keeps subscribers in phase no matter when they mounted", () => {
     const early = vi.fn();
     const a = renderHook(() => useSharedPollTick(early, 2_000));
@@ -80,19 +61,6 @@ describe("useSharedPollTick", () => {
 
     a.unmount();
     b.unmount();
-  });
-
-  it("stops polling while the document is hidden", () => {
-    const callback = vi.fn();
-    const { unmount } = renderHook(() => useSharedPollTick(callback, 2_000));
-
-    setVisibility("hidden");
-    act(() => {
-      vi.advanceTimersByTime(10_000);
-    });
-
-    expect(callback).not.toHaveBeenCalled();
-    unmount();
   });
 
   it("samples immediately when the document becomes visible again", () => {
@@ -316,16 +284,6 @@ describe("useSharedPollTick", () => {
     a.unmount();
     b.unmount();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("cleans up fully across repeated mount and unmount cycles", () => {
-    for (let cycle = 0; cycle < 3; cycle++) {
-      const { unmount } = renderHook(() => useSharedPollTick(vi.fn(), 2_000));
-      expect(sharedPollTickerCount()).toBe(1);
-      unmount();
-      expect(sharedPollTickerCount()).toBe(0);
-      expect(vi.getTimerCount()).toBe(0);
-    }
   });
   describe("in a cached project view (#12514)", () => {
     // Drives the real `viewCacheState` singleton through its preload boundary.

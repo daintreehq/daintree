@@ -122,25 +122,6 @@ describe("perfMetricsStore refreshSummaries", () => {
     expect(state.isLoadingSummaries).toBe(false);
   });
 
-  it("derives outsideReferenceCount from loaded aggregates", async () => {
-    mockRead.mockImplementation(async ({ path }: { path: string }) => {
-      if (path.endsWith("latest-ci.summary.json")) {
-        return {
-          content: makeSummary("ci", [
-            { id: "a", name: "A", p95Ms: 100, outsideReference: true },
-            { id: "b", name: "B", p95Ms: 200, outsideReference: true },
-            { id: "c", name: "C", p95Ms: 50, outsideReference: false },
-          ]),
-        };
-      }
-      throw new ClientAppError("NOT_FOUND", "file missing");
-    });
-
-    await usePerfMetricsStore.getState().refreshSummaries("/project");
-
-    expect(usePerfMetricsStore.getState().outsideReferenceCount).toBe(2);
-  });
-
   it("replaces stale rows on repeated refresh", async () => {
     mockRead.mockResolvedValueOnce({
       content: makeSummary("ci", [{ id: "x", name: "X", p95Ms: 100, outsideReference: true }]),

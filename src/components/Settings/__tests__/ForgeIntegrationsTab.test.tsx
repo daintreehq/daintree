@@ -160,14 +160,6 @@ describe("ForgeIntegrationsTab", () => {
       expect(rowFor("origin").textContent).toContain("In use · auto-detected");
       expect(rowFor("upstream").textContent).not.toContain("In use");
     });
-
-    it("marks exactly one remote", async () => {
-      renderWithBothRemotes("origin");
-
-      await waitFor(() => expect(screen.getByText("In use")).toBeTruthy());
-      expect(screen.getAllByText(/^In use/)).toHaveLength(1);
-      expect(rowFor("origin").textContent).toContain("In use");
-    });
   });
 
   it("renders a routing row per remote with the resolved provider badge", async () => {

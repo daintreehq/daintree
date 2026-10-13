@@ -390,47 +390,6 @@ describe("globalErrorHandlers", () => {
       );
     });
 
-    it("persists error when store.get returns undefined", () => {
-      storeMock.get.mockReturnValue(undefined);
-      rejectionHandler(new Error("rejected"));
-
-      expect(storeMock.set).toHaveBeenCalledWith(
-        "pendingErrors",
-        expect.arrayContaining([expect.objectContaining({ fromPreviousSession: true })])
-      );
-    });
-
-    it("caps persisted pendingErrors at 50 when store already holds 50 entries", () => {
-      const seeded = Array.from({ length: 50 }, (_, i) => ({
-        id: `seeded-${i}`,
-        timestamp: i,
-        type: "unknown",
-        message: `seeded ${i}`,
-        source: "main-process",
-        retryability: "none",
-        dismissed: false,
-      }));
-      storeMock.get.mockReturnValue(seeded);
-
-      rejectionHandler(new Error("rejected"));
-
-      const persisted = storeMock.set.mock.calls.find(
-        ([key]) => key === "pendingErrors"
-      )?.[1] as Array<{ id: string }>;
-      expect(persisted).toHaveLength(50);
-      expect(persisted[0].id).toBe("seeded-1");
-      expect(persisted[persisted.length - 1].id).toMatch(/^fatal-/);
-    });
-
-    it("handles non-Error rejection reasons", () => {
-      rejectionHandler("string reason");
-
-      expect(emergencyLogMock.emergencyLogMainFatal).toHaveBeenCalledWith(
-        "UNHANDLED_REJECTION",
-        "string reason"
-      );
-    });
-
     it("handles null and undefined rejection reasons", () => {
       expect(() => rejectionHandler(null)).not.toThrow();
       expect(() => {

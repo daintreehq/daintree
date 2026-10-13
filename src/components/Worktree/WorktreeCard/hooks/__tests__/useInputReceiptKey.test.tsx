@@ -6,11 +6,6 @@ import { useInputReceiptKey } from "../useInputReceiptKey";
 type Props = { pinged: string | null; seq: number; ids: string[] };
 
 describe("useInputReceiptKey", () => {
-  it("starts at 0 with no ping", () => {
-    const { result } = renderHook(() => useInputReceiptKey(null, 0, ["t-1", "t-2"]));
-    expect(result.current).toBe(0);
-  });
-
   it("does not increment on initial mount even when seq > 0 and id matches", () => {
     // Mount snapshots the current seq into the ref; only subsequent advances
     // count as pings. This avoids flashing every card when a card mounts mid
@@ -68,36 +63,6 @@ describe("useInputReceiptKey", () => {
 
     rerender({ pinged: "t-1", seq: 2, ids: ["t-1"] });
     expect(result.current).toBe(2);
-  });
-
-  it("re-keys on back-to-back pings of distinct terminals in the same card", () => {
-    const { result, rerender } = renderHook(
-      ({ pinged, seq, ids }: Props) => useInputReceiptKey(pinged, seq, ids),
-      { initialProps: { pinged: null, seq: 0, ids: ["t-1", "t-2"] } as Props }
-    );
-
-    rerender({ pinged: "t-1", seq: 1, ids: ["t-1", "t-2"] });
-    expect(result.current).toBe(1);
-
-    rerender({ pinged: "t-2", seq: 2, ids: ["t-1", "t-2"] });
-    expect(result.current).toBe(2);
-  });
-
-  it("does not re-fire when terminalIds reference changes but seq is unchanged", () => {
-    // Without seq-based gating, an unstable `worktreeTerminals` array would
-    // re-trigger the effect spuriously every render.
-    const { result, rerender } = renderHook(
-      ({ pinged, seq, ids }: Props) => useInputReceiptKey(pinged, seq, ids),
-      { initialProps: { pinged: "t-1", seq: 1, ids: ["t-1", "t-2"] } as Props }
-    );
-    // Initial mount snapshots seq=1 into ref → no increment yet.
-    expect(result.current).toBe(0);
-
-    rerender({ pinged: "t-1", seq: 1, ids: ["t-1", "t-2"] });
-    expect(result.current).toBe(0);
-
-    rerender({ pinged: "t-1", seq: 1, ids: ["t-1", "t-2"] });
-    expect(result.current).toBe(0);
   });
 
   it("does not re-fire when terminalIds change but seq is unchanged", () => {

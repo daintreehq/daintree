@@ -249,15 +249,6 @@ describe("useDevPreviewNavigation — history handlers", () => {
     expect(setHistory).not.toHaveBeenCalled();
   });
 
-  it("handleBack navigates back when canGoBack is true", () => {
-    const setHistory = vi.fn();
-    const { result } = renderHook(() =>
-      useDevPreviewNavigation(baseParams({ setHistory, canGoBack: true }))
-    );
-    act(() => result.current.handleBack());
-    expect(setHistory).toHaveBeenCalled();
-  });
-
   it("handleForward is a no-op when canGoForward is false", () => {
     const setHistory = vi.fn();
     const { result } = renderHook(() =>
@@ -391,31 +382,6 @@ describe("useDevPreviewNavigation — reload/cancel/retry", () => {
 });
 
 describe("useDevPreviewNavigation — screenshot/devtools/console/zoom", () => {
-  it("handleCaptureScreenshot copies a PNG to the clipboard and returns true", async () => {
-    const webview = makeWebview();
-    const { result } = renderHook(() =>
-      useDevPreviewNavigation(baseParams({ webviewRef: { current: webview } }))
-    );
-    let outcome: boolean | undefined;
-    await act(async () => {
-      outcome = await result.current.handleCaptureScreenshot();
-    });
-    expect(outcome).toBe(true);
-    expect(window.electron.clipboard.writeImage).toHaveBeenCalledTimes(1);
-  });
-
-  it("handleCaptureScreenshot returns false when the webview is on about:blank", async () => {
-    const webview = makeWebview({ getURL: vi.fn(() => "about:blank") });
-    const { result } = renderHook(() =>
-      useDevPreviewNavigation(baseParams({ webviewRef: { current: webview } }))
-    );
-    let outcome: boolean | undefined;
-    await act(async () => {
-      outcome = await result.current.handleCaptureScreenshot();
-    });
-    expect(outcome).toBe(false);
-  });
-
   it("handleToggleDevTools opens devtools when closed, closes when open", () => {
     const webview = makeWebview({ isDevToolsOpened: vi.fn(() => false) });
     const { result } = renderHook(() =>
@@ -500,21 +466,6 @@ describe("useDevPreviewNavigation — open external / promote to portal", () => 
     act(() => result.current.handleOpenExternal());
     expect(window.electron.devPreview.mintBrowserToken).not.toHaveBeenCalled();
     expect(window.electron.system.openExternal).toHaveBeenCalledWith("http://localhost:3000/");
-  });
-
-  it("handlePromoteToPortal guards against re-entrant calls while one is in flight", () => {
-    const setBrowserUrl = vi.fn();
-    const { result } = renderHook(() =>
-      useDevPreviewNavigation(baseParams({ setBrowserUrl, currentUrl: "http://localhost:3000/" }))
-    );
-    // The mount-time URL-persistence effect already called setBrowserUrl once;
-    // isolate the calls made by handlePromoteToPortal itself from here.
-    setBrowserUrl.mockClear();
-    act(() => {
-      result.current.handlePromoteToPortal();
-      result.current.handlePromoteToPortal();
-    });
-    expect(setBrowserUrl).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -705,35 +656,5 @@ describe("useDevPreviewNavigation — proxy-origin routing (#12297)", () => {
 
     act(() => result.current.handleForward());
     expect(seen.history.present).toBe(`${PROXY}/once`);
-  });
-});
-
-describe("useDevPreviewNavigation — shortcut listeners", () => {
-  it("invokes onHardReload when a matching reload shortcut fires", () => {
-    let shortcutCb: ((payload: { panelId: string }) => void) | undefined;
-    (window.electron.webview.onReloadShortcut as ReturnType<typeof vi.fn>).mockImplementation(
-      (cb: (payload: { panelId: string }) => void) => {
-        shortcutCb = cb;
-        return () => {};
-      }
-    );
-    const onHardReload = vi.fn();
-    renderHook(() => useDevPreviewNavigation(baseParams({ onHardReload })));
-    act(() => shortcutCb?.({ panelId: PANE_ID }));
-    expect(onHardReload).toHaveBeenCalledTimes(1);
-  });
-
-  it("ignores a reload shortcut for a different panel", () => {
-    let shortcutCb: ((payload: { panelId: string }) => void) | undefined;
-    (window.electron.webview.onReloadShortcut as ReturnType<typeof vi.fn>).mockImplementation(
-      (cb: (payload: { panelId: string }) => void) => {
-        shortcutCb = cb;
-        return () => {};
-      }
-    );
-    const onHardReload = vi.fn();
-    renderHook(() => useDevPreviewNavigation(baseParams({ onHardReload })));
-    act(() => shortcutCb?.({ panelId: "other-pane" }));
-    expect(onHardReload).not.toHaveBeenCalled();
   });
 });

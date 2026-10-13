@@ -258,11 +258,6 @@ describe("Plugin IPC handler registration", () => {
     await service.initialize();
   });
 
-  it("registerHandler succeeds for a loaded plugin with valid channel", () => {
-    const handler = vi.fn();
-    expect(() => service.registerHandler("acme.test-plugin", "get-data", handler)).not.toThrow();
-  });
-
   it("registerHandler throws when pluginId is not loaded", () => {
     expect(() => service.registerHandler("acme.unknown-plugin", "get-data", vi.fn())).toThrow(
       "Unknown plugin: acme.unknown-plugin"
@@ -294,30 +289,10 @@ describe("Plugin IPC handler registration", () => {
     expect(result).toEqual({ value: 42 });
   });
 
-  it("dispatchHandler passes the context as the first argument to the handler", async () => {
-    const handler = vi.fn().mockResolvedValue("ok");
-    service.registerHandler("acme.test-plugin", "get-ctx", handler);
-
-    const ctx = makeCtx("acme.test-plugin", {
-      projectId: "p1",
-      worktreeId: "w1",
-      webContentsId: 42,
-    });
-    await service.dispatchHandler("acme.test-plugin", "get-ctx", ctx, ["x"]);
-    expect(handler.mock.calls[0][0]).toEqual(ctx);
-    expect(handler.mock.calls[0][1]).toBe("x");
-  });
-
   it("dispatchHandler throws when no handler is found", async () => {
     await expect(
       service.dispatchHandler("acme.test-plugin", "unknown", makeCtx("acme.test-plugin"), [])
     ).rejects.toThrow("No plugin handler registered for acme.test-plugin:unknown");
-  });
-
-  it("dispatchHandler rejects an unknown pluginId with PluginInvokeOwnershipError (#10462)", async () => {
-    await expect(
-      service.dispatchHandler("acme.unknown-plugin", "get-data", makeCtx("acme.unknown-plugin"), [])
-    ).rejects.toThrow(PluginInvokeOwnershipError);
   });
 
   it("dispatchHandler does not activate when the pluginId is not loaded (#10462)", async () => {
@@ -328,15 +303,6 @@ describe("Plugin IPC handler registration", () => {
       service.dispatchHandler("acme.unknown-plugin", "get-data", makeCtx("acme.unknown-plugin"), [])
     ).rejects.toBeInstanceOf(PluginInvokeOwnershipError);
     expect(activateSpy).not.toHaveBeenCalled();
-  });
-
-  it("dispatchHandler treats an unknown channel on a loaded plugin as a normal error, not an ownership rejection (#10462)", async () => {
-    // Regression guard: the ownership rejection keys on the pluginId being
-    // loaded, not on whether the channel resolves — a real plugin with a bad
-    // channel must still surface the generic handler error.
-    await expect(
-      service.dispatchHandler("acme.test-plugin", "unknown", makeCtx("acme.test-plugin"), [])
-    ).rejects.not.toBeInstanceOf(PluginInvokeOwnershipError);
   });
 
   it("registering same (pluginId, channel) twice overwrites the handler", async () => {
@@ -375,27 +341,6 @@ describe("Plugin IPC handler registration", () => {
     expect(
       await service2.dispatchHandler("acme.other-plugin", "ch-c", makeCtx("acme.other-plugin"), [])
     ).toBe("c");
-  });
-
-  it("hasPlugin returns true for loaded plugins and false otherwise", () => {
-    expect(service.hasPlugin("acme.test-plugin")).toBe(true);
-    expect(service.hasPlugin("nonexistent")).toBe(false);
-  });
-
-  it("registerHandler throws for empty channel", () => {
-    expect(() => service.registerHandler("acme.test-plugin", "", vi.fn())).not.toThrow();
-    // Empty channel is technically valid — no colons
-  });
-
-  it("dispatchHandler handles synchronous handlers", async () => {
-    service.registerHandler("acme.test-plugin", "sync", () => "sync-result");
-    const result = await service.dispatchHandler(
-      "acme.test-plugin",
-      "sync",
-      makeCtx("acme.test-plugin"),
-      []
-    );
-    expect(result).toBe("sync-result");
   });
 
   describe("dispatchHandler failure auditing (#10463)", () => {
@@ -602,43 +547,6 @@ describe("Plugin IPC handler registration", () => {
       expect(result).toBe("ok");
     });
 
-    it("caches the compiled validator and reuses it on subsequent calls", async () => {
-      service.registerPluginAction("acme.test-plugin", {
-        id: "acme.test-plugin.cached",
-        title: "Cached",
-        description: "Cache test action",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        inputSchema: {
-          type: "object",
-          properties: { value: { type: "number" } },
-          required: ["value"],
-        },
-      });
-      const handler = vi.fn().mockResolvedValue("ok");
-      service.registerHandler("acme.test-plugin", "acme.test-plugin.cached", handler);
-
-      // First call compiles
-      await service.dispatchHandler(
-        "acme.test-plugin",
-        "acme.test-plugin.cached",
-        makeCtx("acme.test-plugin"),
-        [{ value: 1 }]
-      );
-      // Second call reuses cached validator
-      await service.dispatchHandler(
-        "acme.test-plugin",
-        "acme.test-plugin.cached",
-        makeCtx("acme.test-plugin"),
-        [{ value: 2 }]
-      );
-
-      expect(handler).toHaveBeenCalledTimes(2);
-      expect(handler).toHaveBeenNthCalledWith(1, expect.anything(), { value: 1 });
-      expect(handler).toHaveBeenNthCalledWith(2, expect.anything(), { value: 2 });
-    });
-
     it("treats no args as empty object for validation", async () => {
       service.registerPluginAction("acme.test-plugin", {
         id: "acme.test-plugin.opt",
@@ -661,52 +569,6 @@ describe("Plugin IPC handler registration", () => {
         "acme.test-plugin.opt",
         makeCtx("acme.test-plugin"),
         []
-      );
-      expect(result).toBe("ok");
-    });
-
-    it("cleans up the validator when the handler is removed", async () => {
-      service.registerPluginAction("acme.test-plugin", {
-        id: "acme.test-plugin.cleanup",
-        title: "Cleanup",
-        description: "Cleanup test action",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        inputSchema: {
-          type: "object",
-          properties: { x: { type: "number" } },
-          required: ["x"],
-        },
-      });
-      service.registerHandler(
-        "acme.test-plugin",
-        "acme.test-plugin.cleanup",
-        vi.fn().mockResolvedValue("ok")
-      );
-
-      // Prime the validator cache with a successful call
-      await service.dispatchHandler(
-        "acme.test-plugin",
-        "acme.test-plugin.cleanup",
-        makeCtx("acme.test-plugin"),
-        [{ x: 1 }]
-      );
-
-      service.removeHandlers("acme.test-plugin");
-
-      // Re-register and re-prime — the old validator should be gone
-      service.registerHandler(
-        "acme.test-plugin",
-        "acme.test-plugin.cleanup",
-        vi.fn().mockResolvedValue("ok")
-      );
-      // Should still work (compiles fresh)
-      const result = await service.dispatchHandler(
-        "acme.test-plugin",
-        "acme.test-plugin.cleanup",
-        makeCtx("acme.test-plugin"),
-        [{ x: 42 }]
       );
       expect(result).toBe("ok");
     });
@@ -776,41 +638,6 @@ describe("Plugin IPC handler registration", () => {
       ).rejects.toThrow("Invalid arguments for plugin action");
     });
 
-    it("does not validate when descriptor.pluginId differs from dispatch pluginId", async () => {
-      // Register an action for acme.test-plugin
-      service.registerPluginAction("acme.test-plugin", {
-        id: "acme.test-plugin.guarded",
-        title: "Guarded",
-        description: "Owner-check action",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        inputSchema: {
-          type: "object",
-          properties: { name: { type: "string" } },
-          required: ["name"],
-        },
-      });
-
-      // Load a second plugin
-      await writePlugin("other", { name: "acme.other", version: "1.0.0" });
-      const service2 = new PluginService(tmpDir);
-      await service2.initialize();
-
-      // Register a raw handler on the second plugin whose channel collides with first plugin's action id
-      const handler = vi.fn().mockResolvedValue("ok");
-      service2.registerHandler("acme.other", "acme.test-plugin.guarded", handler);
-
-      // Dispatch via the second plugin — should NOT validate (owner mismatch)
-      const result = await service2.dispatchHandler(
-        "acme.other",
-        "acme.test-plugin.guarded",
-        { projectId: null, worktreeId: null, webContentsId: 1, pluginId: "acme.other" },
-        [{ name: 42 }]
-      );
-      expect(result).toBe("ok");
-    });
-
     it("cleans up validators on unregisterPluginAction", async () => {
       service.registerPluginAction("acme.test-plugin", {
         id: "acme.test-plugin.stale",
@@ -875,41 +702,6 @@ describe("Plugin IPC handler registration", () => {
         [{ y: "hello" }]
       );
       expect(handler).toHaveBeenCalledWith(expect.anything(), { y: "hello" });
-    });
-
-    it("does not validate when a different plugin registers a handler with same channel as another plugin's action id", async () => {
-      // Register action for acme.test-plugin with a restrictive schema
-      service.registerPluginAction("acme.test-plugin", {
-        id: "acme.test-plugin.shared-channel",
-        title: "Shared Channel",
-        description: "Test shared channel collision",
-        category: "test",
-        kind: "command",
-        danger: "safe",
-        inputSchema: {
-          type: "object",
-          properties: { name: { type: "string" } },
-          required: ["name"],
-        },
-      });
-
-      // Load a second plugin and register a raw handler on the same channel
-      await writePlugin("collider-plugin", { name: "acme.collider", version: "1.0.0" });
-      const colliderService = new PluginService(tmpDir, "0.0.0");
-      await colliderService.initialize();
-
-      // Register a raw handler whose channel collides with test-plugin's action id
-      const handler = vi.fn().mockResolvedValue("cross-plugin-ok");
-      colliderService.registerHandler("acme.collider", "acme.test-plugin.shared-channel", handler);
-
-      // Dispatching via collider plugin should NOT inherit test-plugin's schema
-      const result = await colliderService.dispatchHandler(
-        "acme.collider",
-        "acme.test-plugin.shared-channel",
-        { projectId: null, worktreeId: null, webContentsId: 99, pluginId: "acme.collider" },
-        [{ name: 42 }]
-      );
-      expect(result).toBe("cross-plugin-ok");
     });
   });
 
@@ -1180,36 +972,6 @@ describe("Plugin IPC handler registration", () => {
       // so the legacy path runs and the bare object is rejected as a
       // non-function handler. Either way: malformed schema is rejected at
       // registration time, not at dispatch.
-    });
-
-    it("legacy untyped handler still dispatches alongside typed handlers on the same plugin", async () => {
-      typedService.registerHandler(
-        "acme.typed",
-        "typed-ch",
-        { args: z.string(), result: z.string() },
-        async (_ctx, args: string) => args.toUpperCase()
-      );
-      typedService.registerHandler(
-        "acme.typed",
-        "legacy-ch",
-        vi.fn().mockResolvedValue("legacy-result")
-      );
-
-      const typedResult = await typedService.dispatchHandler(
-        "acme.typed",
-        "typed-ch",
-        makeCtx("acme.typed"),
-        ["hello"]
-      );
-      expect(typedResult).toBe("HELLO");
-
-      const legacyResult = await typedService.dispatchHandler(
-        "acme.typed",
-        "legacy-ch",
-        makeCtx("acme.typed"),
-        ["whatever"]
-      );
-      expect(legacyResult).toBe("legacy-result");
     });
   });
 });

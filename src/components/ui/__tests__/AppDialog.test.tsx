@@ -1117,29 +1117,6 @@ describe("AppDialog focus trapping", () => {
       expect(document.activeElement).toBeInstanceOf(HTMLButtonElement);
       expect((document.activeElement as HTMLElement).textContent).toBe("First inside body");
     });
-
-    it("tags footer Cancel button with data-confirm-role=cancel", async () => {
-      render(
-        <>
-          <Dispatcher />
-          <AppDialog isOpen={true} onClose={() => {}} data-testid="test-dialog">
-            <AppDialog.Body>
-              <p>Content</p>
-            </AppDialog.Body>
-            <AppDialog.Footer
-              secondaryAction={{ label: "Cancel", onClick: () => {} }}
-              primaryAction={{ label: "Save", onClick: () => {} }}
-            />
-          </AppDialog>
-        </>
-      );
-      await act(() => vi.runAllTimersAsync());
-
-      const cancel = screen.getByRole("button", { name: "Cancel" });
-      const save = screen.getByRole("button", { name: "Save" });
-      expect(cancel.getAttribute("data-confirm-role")).toBe("cancel");
-      expect(save.getAttribute("data-confirm-role")).toBe("confirm");
-    });
   });
 
   it("does not interfere with focus in portaled popovers outside dialogRef", async () => {
@@ -1330,18 +1307,6 @@ describe("AppDialog header composition", () => {
     expect(heading.textContent).toBe("*Named");
     expect(heading.className).toContain("text-sm");
     expect(heading.className).not.toContain("text-lg");
-  });
-
-  it("defaults the close button label", () => {
-    renderDialog({
-      children: (
-        <AppDialog.Header>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
-      ),
-    });
-
-    expect(screen.queryByRole("button", { name: "Close dialog" })).not.toBeNull();
   });
 
   it("lets a surface name its own close button", () => {

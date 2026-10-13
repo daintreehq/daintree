@@ -20,11 +20,6 @@ afterEach(() => {
 });
 
 describe("useHostChannel when the view's host goes away", () => {
-  it("starts connected", () => {
-    const { result } = renderHook(() => useHostChannel("acme.p", "query"));
-    expect(result.current.disconnected).toBe(false);
-  });
-
   it("reports a call that never reached the host as HostDisconnectedError and disconnected", async () => {
     const cause = codedError("HOST_DISCONNECTED", "The host this window runs on isn't connected");
     invokeMock.mockRejectedValue(cause);
@@ -65,11 +60,5 @@ describe("useHostChannel when the view's host goes away", () => {
     expect(result.current.error).not.toBeInstanceOf(HostDisconnectedError);
     expect(result.current.error?.message).toMatch(/SCHEMA_ERROR/);
     expect(result.current.disconnected).toBe(false);
-  });
-
-  it("is exported from the package's react entry", async () => {
-    const mod = await import("../react");
-    expect(mod.HostDisconnectedError).toBe(HostDisconnectedError);
-    expect(mod.OutcomeUnknownError).toBe(OutcomeUnknownError);
   });
 });

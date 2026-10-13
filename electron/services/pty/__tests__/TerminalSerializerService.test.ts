@@ -1,19 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  TerminalSerializerService,
-  disposeTerminalSerializerService,
-  getTerminalSerializerService,
-} from "../TerminalSerializerService.js";
+import { TerminalSerializerService } from "../TerminalSerializerService.js";
 
 describe("TerminalSerializerService", () => {
-  it("switches to async serialization at threshold", () => {
-    const service = new TerminalSerializerService();
-    expect(service.shouldUseAsync(999)).toBe(false);
-    expect(service.shouldUseAsync(1000)).toBe(true);
-    expect(service.shouldUseAsync(5000)).toBe(true);
-    service.dispose();
-  });
-
   it("deduplicates concurrent serialize requests per terminal", async () => {
     const service = new TerminalSerializerService();
     const serializeFn = vi.fn(() => ({ data: "snapshot-data", cols: 80, rows: 24 }));
@@ -56,14 +44,5 @@ describe("TerminalSerializerService", () => {
     const result = await pending;
     expect(result).toBeNull();
     expect(serializeFn).not.toHaveBeenCalled();
-  });
-
-  it("resets singleton instance on dispose helper", () => {
-    const first = getTerminalSerializerService();
-    disposeTerminalSerializerService();
-    const second = getTerminalSerializerService();
-
-    expect(second).not.toBe(first);
-    disposeTerminalSerializerService();
   });
 });

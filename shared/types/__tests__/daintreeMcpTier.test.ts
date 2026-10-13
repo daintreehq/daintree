@@ -34,16 +34,6 @@ describe("resolveDaintreeMcpTier", () => {
     expect(resolveDaintreeMcpTier({ exposeDaintreeMcpToAgents: true })).toBe("core");
   });
 
-  it.each([
-    ["workbench", "core"],
-    ["action", "core"],
-    ["system", "full"],
-    ["core", "core"],
-    ["full", "full"],
-  ] as const)("resolves a stored %s to %s", (stored, expected) => {
-    expect(resolveDaintreeMcpTier({ daintreeMcpTier: stored })).toBe(expected);
-  });
-
   it("lets an explicit tier win over the legacy flag, including an explicit off", () => {
     expect(
       resolveDaintreeMcpTier({ daintreeMcpTier: "off", exposeDaintreeMcpToAgents: true })

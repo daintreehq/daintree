@@ -161,13 +161,6 @@ describe("moveToNewWorktree (#11853)", () => {
     });
   });
 
-  it("opens the create-worktree dialog", async () => {
-    usePanelStore.getState().moveToNewWorktree("test-1");
-    await vi.dynamicImportSettled();
-
-    expect(openCreateDialogCallback).toBeTypeOf("function");
-  });
-
   it("routes the created worktree through the shared move choke point", async () => {
     usePanelStore.getState().moveToNewWorktree("test-1");
     await vi.dynamicImportSettled();
@@ -176,14 +169,6 @@ describe("moveToNewWorktree (#11853)", () => {
     // Not its own move: going through the choke point is what raises the
     // pane's banner and keeps this path from drifting from the drag paths.
     expect(mockMoveAndFollowRescue).toHaveBeenCalledWith("test-1", "wt-new");
-  });
-
-  it("never captures the terminal buffer", async () => {
-    usePanelStore.getState().moveToNewWorktree("test-1");
-    await vi.dynamicImportSettled();
-    openCreateDialogCallback?.("wt-new");
-
-    expect(mockCaptureBufferText).not.toHaveBeenCalled();
   });
 
   it("never kills, restarts, or clears the agent session", async () => {

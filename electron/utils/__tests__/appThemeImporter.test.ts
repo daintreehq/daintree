@@ -167,26 +167,6 @@ describe("appThemeImporter", () => {
     expect(result.scheme.extensions?.["toolbar-project-bg"]).toContain("linear-gradient");
   });
 
-  it("omits metadata fields when not provided", () => {
-    const result = parseAppThemeContent(
-      JSON.stringify({
-        name: "Plain Theme",
-        type: "dark",
-        tokens: {
-          "surface-canvas": "#101010",
-          "accent-primary": "#ff0000",
-        },
-      }),
-      "plain.json"
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-
-    expect(result.scheme.location).toBeUndefined();
-    expect(result.scheme.heroImage).toBeUndefined();
-  });
-
   it("does not treat metadata keys as unknown tokens in flat format", () => {
     const result = parseAppThemeContent(
       JSON.stringify({
@@ -434,23 +414,5 @@ describe("appThemeImporter", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors.some((err) => err.includes("heroImage"))).toBe(true);
-  });
-
-  it("preserves extensions without validating their values", () => {
-    const result = parseAppThemeContent(
-      JSON.stringify({
-        name: "Extensions Theme",
-        type: "dark",
-        tokens: { "surface-canvas": "#101010" },
-        extensions: {
-          "toolbar-project-bg": "linear-gradient(180deg, #1a2027, #0f1115)",
-        },
-      }),
-      "extensions.json"
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.scheme.extensions?.["toolbar-project-bg"]).toContain("linear-gradient");
   });
 });

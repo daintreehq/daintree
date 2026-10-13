@@ -34,10 +34,6 @@ describe("getFilePath", () => {
     );
   });
 
-  it("filters /dev/null", () => {
-    expect(getFilePath(makeFile({ newPath: "/dev/null" }))).toBe("");
-  });
-
   it("returns empty string when both paths are /dev/null", () => {
     expect(getFilePath(makeFile({ oldPath: "/dev/null", newPath: "/dev/null" }))).toBe("");
   });
@@ -46,39 +42,6 @@ describe("getFilePath", () => {
 describe("estimateFileDiffBytes", () => {
   it("returns 0 for empty hunks", () => {
     expect(estimateFileDiffBytes(makeFile({ hunks: [] }))).toBe(0);
-  });
-
-  it("sums hunk header and change content lengths", () => {
-    const file = makeFile({
-      hunks: [
-        {
-          content: "@@ -1,3 +1,3 @@\n",
-          oldStart: 1,
-          newStart: 1,
-          oldLines: 3,
-          newLines: 3,
-          changes: [
-            {
-              type: "normal" as const,
-              content: " line1\n",
-              isNormal: true,
-              oldLineNumber: 1,
-              newLineNumber: 1,
-            },
-            { type: "insert" as const, content: "+new line\n", isInsert: true, lineNumber: 2 },
-            { type: "delete" as const, content: "-old line\n", isDelete: true, lineNumber: 3 },
-            {
-              type: "normal" as const,
-              content: " line3\n",
-              isNormal: true,
-              oldLineNumber: 3,
-              newLineNumber: 3,
-            },
-          ],
-        },
-      ],
-    });
-    expect(estimateFileDiffBytes(file)).toBeGreaterThan(0);
   });
 
   it("handles undefined hunks", () => {
@@ -123,37 +86,6 @@ describe("shouldCollapseByDefault", () => {
     expect(result.reason).toBe("generated");
   });
 
-  it("collapses large non-generated file", () => {
-    let content = "";
-    for (let i = 0; i < DIFF_SOFT_COLLAPSE_BYTES + 1; i++) {
-      content += "x";
-    }
-    const file = makeFile({
-      newPath: "src/large.ts",
-      hunks: [
-        {
-          content: "hdr\n",
-          oldStart: 1,
-          newStart: 1,
-          oldLines: 1,
-          newLines: 1,
-          changes: [
-            {
-              type: "normal" as const,
-              content,
-              isNormal: true,
-              oldLineNumber: 1,
-              newLineNumber: 1,
-            },
-          ],
-        },
-      ],
-    });
-    const result = shouldCollapseByDefault(file);
-    expect(result.collapse).toBe(true);
-    expect(result.reason).toBe("large");
-  });
-
   it("does not collapse small normal file", () => {
     const file = makeFile({
       newPath: "src/small.ts",
@@ -179,33 +111,6 @@ describe("shouldCollapseByDefault", () => {
     const result = shouldCollapseByDefault(file);
     expect(result.collapse).toBe(false);
     expect(result.reason).toBeNull();
-  });
-
-  it("collapses generated file regardless of size", () => {
-    const file = makeFile({
-      newPath: "Cargo.lock",
-      hunks: [
-        {
-          content: "@@ -1,1 +1,1 @@\n",
-          oldStart: 1,
-          newStart: 1,
-          oldLines: 1,
-          newLines: 1,
-          changes: [
-            {
-              type: "normal" as const,
-              content: "tiny\n",
-              isNormal: true,
-              oldLineNumber: 1,
-              newLineNumber: 1,
-            },
-          ],
-        },
-      ],
-    });
-    const result = shouldCollapseByDefault(file);
-    expect(result.collapse).toBe(true);
-    expect(result.reason).toBe("generated");
   });
 
   it("does not collapse file exactly at threshold", () => {

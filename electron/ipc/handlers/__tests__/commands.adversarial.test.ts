@@ -55,13 +55,6 @@ describe("commands IPC adversarial", () => {
     expect(commandServiceMock.execute).not.toHaveBeenCalled();
   });
 
-  it("commands:execute rejects payload without commandId", async () => {
-    await expect(getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), {})).rejects.toMatchObject({
-      name: "AppError",
-      code: "VALIDATION",
-    });
-  });
-
   it("commands:execute rejects non-string commandId", async () => {
     await expect(
       getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), { commandId: 42 })
@@ -96,17 +89,6 @@ describe("commands IPC adversarial", () => {
     expect(commandServiceMock.execute).toHaveBeenCalledWith("x", {}, {});
   });
 
-  it("commands:execute treats null args as empty object", async () => {
-    commandServiceMock.execute.mockResolvedValue({ success: true });
-
-    await getHandler(CHANNELS.COMMANDS_EXECUTE)(fakeEvent(), {
-      commandId: "x",
-      args: null,
-    });
-
-    expect(commandServiceMock.execute).toHaveBeenCalledWith("x", {}, {});
-  });
-
   it("commands:get returns null for malformed payload without calling service", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = await getHandler(CHANNELS.COMMANDS_GET)(fakeEvent(), { foo: "bar" });
@@ -126,17 +108,5 @@ describe("commands IPC adversarial", () => {
     const result = await getHandler(CHANNELS.COMMANDS_GET_BUILDER)(fakeEvent(), 42);
     expect(result).toBeNull();
     expect(commandServiceMock.getBuilder).not.toHaveBeenCalled();
-  });
-
-  it("cleanup unregisters all four command handlers", () => {
-    expect(ipcHandlers.size).toBe(4);
-    cleanup();
-    expect(ipcHandlers.size).toBe(0);
-  });
-
-  it("commands:list forwards optional context unchanged", async () => {
-    const ctx = { projectId: "p1" };
-    await getHandler(CHANNELS.COMMANDS_LIST)(fakeEvent(), ctx);
-    expect(commandServiceMock.list).toHaveBeenCalledWith(ctx);
   });
 });

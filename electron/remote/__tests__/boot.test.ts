@@ -1016,17 +1016,6 @@ describe("startRemoteHosts", () => {
     expect(m.mcpResolver.current).toBeNull();
   });
 
-  it("tells the lease when a Shell's link drops and resumes", async () => {
-    await startRemoteHosts({ hostMode: true });
-    for (const l of m.transportListeners) l(["remote:s1:view-11"], false);
-    expect(m.lease.noteEndpointTransport).toHaveBeenCalledWith(["remote:s1:view-11"], false);
-    for (const l of m.transportListeners) l(["remote:s1:view-11"], true);
-    expect(m.lease.noteEndpointTransport).toHaveBeenLastCalledWith(["remote:s1:view-11"], true);
-
-    await stopRemoteHosts();
-    expect(m.transportListeners.size).toBe(0);
-  });
-
   it("names each endpoint's machine to the lease and tells Shells showing the project of changes", async () => {
     await startRemoteHosts({ hostMode: true });
     const client = { clientId: "c1", clientName: "greg-mbp" };

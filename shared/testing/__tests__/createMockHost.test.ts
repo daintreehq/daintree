@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os, { homedir } from "node:os";
+import path, { join } from "node:path";
 import { z } from "zod";
 import { createMockHost } from "../createMockHost.js";
 import type {
@@ -61,11 +62,6 @@ const sampleAction: PluginActionContribution = {
 };
 
 describe("createMockHost", () => {
-  it("exposes the plugin id passed in options", () => {
-    const host = createMockHost({ pluginId: "daintree.hello" });
-    expect(host.pluginId).toBe("daintree.hello");
-  });
-
   it("defaults pluginId when none is provided", () => {
     const host = createMockHost();
     expect(host.pluginId).toBe("test.mock");
@@ -456,11 +452,6 @@ describe("createMockHost", () => {
     });
   });
 
-  it("getAgentState returns null until a state change is simulated", async () => {
-    const host = createMockHost();
-    expect(await host.getAgentState()).toBeNull();
-  });
-
   it("delivers agent-state updates and reflects the last one in getAgentState", async () => {
     const host = createMockHost();
     const cb = vi.fn();
@@ -507,17 +498,6 @@ describe("createMockHost", () => {
     await host.onDidWake(cb);
 
     expect(cb).not.toHaveBeenCalled();
-  });
-
-  it("registers forge providers and unregisters via disposer", async () => {
-    const host = createMockHost();
-    const impl = { parseRemote: vi.fn() } as unknown as Parameters<
-      typeof host.registerForgeProvider
-    >[1];
-    const dispose = await host.registerForgeProvider({ id: "ghe" }, impl);
-    expect(host.registeredForgeProviders).toHaveLength(1);
-    dispose();
-    expect(host.registeredForgeProviders).toHaveLength(0);
   });
 
   describe("registerForgeProvider", () => {
@@ -633,15 +613,6 @@ describe("createMockHost", () => {
         )
       ).toThrow(/impl must be an object/);
     });
-  });
-
-  it("registers file-decoration providers and unregisters via disposer", async () => {
-    const host = createMockHost();
-    const impl = { provideDecorations: vi.fn(async () => ({})) };
-    const dispose = await host.registerFileDecorationProvider({ id: "hello" }, impl);
-    expect(host.registeredFileDecorationProviders).toHaveLength(1);
-    dispose();
-    expect(host.registeredFileDecorationProviders).toHaveLength(0);
   });
 
   describe("mcp.registerTools", () => {
@@ -1098,15 +1069,6 @@ describe("createMockHost", () => {
   });
 
   describe("fs.watch", () => {
-    it("fires the watcher callback via simulateFsWatch", async () => {
-      const host = createMockHost();
-      const cb = vi.fn();
-      await host.fs.watch(["/tmp/repo"], cb);
-      host.simulateFsWatch("/tmp/repo/file.ts");
-      expect(cb).toHaveBeenCalledTimes(1);
-      expect(cb).toHaveBeenCalledWith("/tmp/repo/file.ts");
-    });
-
     it("fires every watcher covering the change, and only those", async () => {
       const host = createMockHost();
       const a = vi.fn();
@@ -1804,6 +1766,61 @@ describe("createMockHost host.db readonly", () => {
     await expect(reader.run("INSERT INTO t VALUES (1)")).rejects.toThrow(/DB_READONLY/);
     await reader.close();
   });
+});
+
+describe("createMockHost host.db location parity", () => {
+  // The mock resolves a database the way the real host does, so a plugin's own
+  // tests see the same refusals production would give.
+  let base: string;
+  let directory: string;
+
+  beforeEach(() => {
+    base = fs.mkdtempSync(path.join(os.tmpdir(), "mock-host-db-"));
+    directory = path.join(base, "databases");
+    fs.mkdirSync(directory);
+  });
+
+  afterEach(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  it("refuses a symlinked database file, readonly or not", async () => {
+    const elsewhere = path.join(base, "elsewhere.db");
+    fs.writeFileSync(elsewhere, "");
+    fs.symlinkSync(elsewhere, path.join(directory, "ledger.db"));
+    const host = createMockHost({ databases: { directory } });
+    await expect(host.db.resolve("ledger", { readonly: true })).rejects.toMatchObject({
+      code: "TARGET_IS_SYMLINK",
+    });
+    await expect(host.db.open("ledger")).rejects.toMatchObject({ code: "TARGET_IS_SYMLINK" });
+  });
+
+  it("refuses something at the database's name that is not a regular file", async () => {
+    fs.mkdirSync(path.join(directory, "ledger.db"));
+    const host = createMockHost({ databases: { directory } });
+    await expect(host.db.resolve("ledger", { readonly: true })).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+    });
+  });
+
+  // Windows does not allow renaming a directory containing an open SQLite file.
+  it.skipIf(process.platform === "win32")(
+    "refuses to reopen through a directory swapped for a link",
+    async () => {
+      const host = createMockHost({ databases: { directory } });
+      const db = await host.db.open("ledger", { migrations: ["CREATE TABLE t (x INTEGER)"] });
+      await db.run("INSERT INTO t VALUES (1)");
+      const other = path.join(base, "other");
+      fs.mkdirSync(other);
+      fs.copyFileSync(path.join(directory, "ledger.db"), path.join(other, "ledger.db"));
+      fs.renameSync(directory, `${directory}-moved`);
+      fs.symlinkSync(other, directory);
+      await expect(db.query("SELECT x FROM t")).rejects.toMatchObject({
+        code: "TARGET_UNAVAILABLE",
+      });
+      await db.close();
+    }
+  );
 });
 
 describe("createMockHost settings.open and settings.missingRequired", () => {

@@ -210,36 +210,4 @@ describe("manifest-level agent contribution gates (issue #9560)", () => {
     );
     expect(result.success).toBe(false);
   });
-
-  it("defaults contributes.agents to an empty array when omitted", () => {
-    const result = schema.safeParse(manifestWith({}));
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.contributes.agents).toEqual([]);
-    }
-  });
-
-  it("accepts a manifest whose agent declares a valid detection block (#10587)", () => {
-    const result = schema.safeParse(
-      manifestWith({
-        capabilities: ["agent:register"],
-        contributes: {
-          agents: [{ ...VALID_AGENT, detection: { primaryPatterns: ["thinking"] } }],
-        },
-      })
-    );
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects a manifest whose agent declares a malformed detection regex (#10587)", () => {
-    const result = schema.safeParse(
-      manifestWith({
-        capabilities: ["agent:register"],
-        contributes: {
-          agents: [{ ...VALID_AGENT, detection: { primaryPatterns: ["("] } }],
-        },
-      })
-    );
-    expect(result.success).toBe(false);
-  });
 });

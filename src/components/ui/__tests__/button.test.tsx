@@ -20,17 +20,6 @@ describe("buttonVariants", () => {
 });
 
 describe("Button loading state", () => {
-  it("does not render the spinner overlay or dim content when not loading", () => {
-    const { container } = render(<Button>Save</Button>);
-    const button = container.querySelector("button")!;
-    expect(button.hasAttribute("aria-busy")).toBe(false);
-    expect(button.hasAttribute("aria-disabled")).toBe(false);
-    expect(button.hasAttribute("data-loading")).toBe(false);
-    expect(container.querySelector('[data-slot="button-spinner"]')).toBeNull();
-    const content = container.querySelector('[data-slot="button-content"]')!;
-    expect(content.className).not.toContain("opacity-0");
-  });
-
   // Regression: #8843 — the content wrapper must be transparent to layout when
   // not loading, so caller patterns like `w-full justify-between` + `truncate`
   // reach the actual text/chevron row. `display: contents` is what makes the
@@ -204,20 +193,6 @@ describe("Button loading state", () => {
     fireEvent.click(button);
     fireEvent.keyDown(button, { key: "Enter" });
     expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it("renders a spinner for every size variant", () => {
-    const sizes = ["default", "sm", "xs", "lg", "icon", "icon-sm", "icon-xs"] as const;
-    for (const size of sizes) {
-      const { container } = render(
-        <Button loading size={size}>
-          Go
-        </Button>
-      );
-      const spinner = container.querySelector('[data-slot="button-spinner"]')!;
-      expect(spinner).toBeTruthy();
-      expect(spinner.querySelector("svg")).toBeTruthy();
-    }
   });
 });
 

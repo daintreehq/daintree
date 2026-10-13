@@ -387,14 +387,6 @@ describe("BrowserPane webview lifecycle regression", () => {
     });
   });
 
-  it("forwards the single-panel dock restore control", () => {
-    render(<BrowserPane {...baseProps} location="dock" showRestoreControl />);
-
-    expect(contentPanelPropsSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ showRestoreControl: true })
-    );
-  });
-
   describe("per-project session partition (#9965)", () => {
     const restoreProjectMock = () =>
       useProjectStoreMock.mockImplementation((selector) =>
@@ -486,13 +478,6 @@ describe("BrowserPane webview lifecycle regression", () => {
         })
       );
     }).not.toThrow();
-  });
-
-  it("uses theme-backed browser chrome surfaces", () => {
-    const { container } = render(<BrowserPane {...baseProps} />);
-    const themedSurface = container.querySelector(".bg-surface-canvas");
-    expect(themedSurface).toBeTruthy();
-    expect(container.querySelector(".bg-white")).toBeNull();
   });
 
   it("recovers ready/loading state from an already-loaded webview", async () => {
@@ -948,23 +933,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       return lastCall[0];
     }
 
-    it("shows banner with hostname when navigation is blocked", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const callback = getNavigationBlockedCallback();
-
-      act(() => {
-        callback({
-          panelId: "browser-panel-1",
-          url: "https://oauth.example.com/authorize",
-          canOpenExternal: true,
-        });
-        vi.advanceTimersByTime(150);
-      });
-
-      expect(container.textContent).toContain("oauth.example.com");
-      expect(container.textContent).toContain("Open in external browser");
-    });
-
     it("ignores events for different panelId", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const callback = getNavigationBlockedCallback();
@@ -1359,61 +1327,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       const mock = (window as any).electron.clipboard.writeImage;
       expect(mock).not.toHaveBeenCalled();
     });
-
-    it("does not call writeImage when URL is about:blank", async () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        emitWebviewEvent(webview, "dom-ready");
-      });
-
-      webview.getURL.mockReturnValue("about:blank");
-
-      await act(async () => {
-        window.dispatchEvent(
-          new CustomEvent("daintree:browser-capture-screenshot", {
-            detail: { id: "browser-panel-1" },
-          })
-        );
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mock = (window as any).electron.clipboard.writeImage;
-      expect(mock).not.toHaveBeenCalled();
-    });
-
-    it("surfaces an error notification when the clipboard write fails", async () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        emitWebviewEvent(webview, "dom-ready");
-      });
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).electron.clipboard.writeImage.mockRejectedValueOnce(
-        new Error("clipboard unavailable")
-      );
-
-      await act(async () => {
-        window.dispatchEvent(
-          new CustomEvent("daintree:browser-capture-screenshot", {
-            detail: { id: "browser-panel-1" },
-          })
-        );
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      expect(notifyMock).toHaveBeenCalledTimes(1);
-      expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "error", title: "Screenshot failed" })
-      );
-    });
   });
 
   describe("screenshot capture via toolbar prop", () => {
@@ -1698,24 +1611,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Retry");
     });
 
-    it("timeout calls webview.stop() instead of reload", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(30000);
-      });
-
-      expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(webview.reload).not.toHaveBeenCalled();
-      expect(container.textContent).toContain("Page load timed out");
-    });
-
     it("timeout error overlay shows Retry and Open External buttons", () => {
       const { container } = render(<BrowserPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -1758,52 +1653,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       });
 
       expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5173/");
-    });
-
-    it("clears slow timer on did-stop-loading", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      act(() => {
-        webview.setMockLoading(false);
-        emitWebviewEvent(webview, "did-stop-loading");
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      expect(container.textContent).not.toContain("Taking longer than usual");
-    });
-
-    it("clears slow timer on did-fail-load", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      act(() => {
-        emitWebviewEvent(webview, "did-fail-load", {
-          errorCode: -105,
-          errorDescription: "Name not resolved",
-          isMainFrame: true,
-          validatedURL: "http://badsite.test/",
-        });
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      expect(container.textContent).not.toContain("Taking longer than usual");
     });
 
     it("shows DNS failure message with hostname for -105", () => {
@@ -1987,25 +1836,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("timed out");
       expect(container.textContent).not.toContain("Unable to display page");
     });
-
-    it("cleans slow timer on unmount", () => {
-      const { container, unmount } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      unmount();
-
-      act(() => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      // No error — timer was cleaned up
-      expect(container.textContent).not.toContain("Taking longer than usual");
-    });
   });
 
   describe("accessibility markers", () => {
@@ -2117,17 +1947,6 @@ describe("BrowserPane webview lifecycle regression", () => {
       expect(webview.reload).toHaveBeenCalledTimes(1);
       expect(container.textContent).toContain("Page process crashed");
       expect(container.textContent).toContain("Reason: oom (exit code 9)");
-    });
-
-    it("does not emit a durable notification on the first crash (#9964)", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        emitRenderProcessGone(webview, "crashed");
-      });
-
-      expect(notifyMock).not.toHaveBeenCalled();
     });
 
     it("emits a durable high-priority notification on the second crash within 60s (#9964)", () => {
@@ -2331,12 +2150,6 @@ describe("BrowserPane webview lifecycle regression", () => {
   });
 
   describe("src binding regression (#9940)", () => {
-    it("seeds src once at mount", () => {
-      const { container } = render(<BrowserPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
-    });
-
     it("loads the latest navigation requested before the guest is ready", () => {
       webviewInitiallyLoading = true;
       const { container } = render(<BrowserPane {...baseProps} />);

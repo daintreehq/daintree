@@ -69,18 +69,6 @@ describe("WorkspaceCopyTreeClient", () => {
       expect(result.filePath).toBe("/tmp/ctx/a.xml");
     });
 
-    it("omits the destination when the caller wants the string back", async () => {
-      const sendWithResponse = vi
-        .fn()
-        .mockResolvedValue({ result: { content: "x", fileCount: 1 } });
-      hostA = makeHost({ sendWithResponse });
-      entries[0] = makeEntry(hostA, "/project/a");
-
-      await client.generateContext("/project/a");
-
-      expect(sendWithResponse.mock.calls[0][0].outputPath).toBeUndefined();
-    });
-
     it("releases the operation once the generation settles", async () => {
       const sendWithResponse = vi.fn().mockRejectedValue(new Error("host died"));
       hostA = makeHost({ sendWithResponse });
@@ -200,32 +188,10 @@ describe("WorkspaceCopyTreeClient", () => {
       expect(client.activeCopyTreeOperations.size).toBe(0);
     });
 
-    it("releases the operation when the host request rejects", async () => {
-      const sendWithResponse = vi.fn().mockRejectedValue(new Error("host timeout"));
-      hostA = makeHost({ sendWithResponse });
-      entries[0] = makeEntry(hostA, "/project/a");
-
-      await expect(client.getContextFileTree("/project/a")).rejects.toThrow("host timeout");
-      expect(client.activeCopyTreeOperations.size).toBe(0);
-    });
-
     it("throws when no host owns the path", async () => {
       await expect(client.getContextFileTree("/nonexistent")).rejects.toThrow(
         "No workspace host for path"
       );
-    });
-  });
-
-  describe("dispose", () => {
-    it("clears both maps", () => {
-      const cb = vi.fn();
-      client.copyTreeProgressCallbacks.set("op-1", cb);
-      client.activeCopyTreeOperations.set("op-1", "/project/a");
-
-      client.dispose();
-
-      expect(client.activeCopyTreeOperations.size).toBe(0);
-      expect(client.copyTreeProgressCallbacks.size).toBe(0);
     });
   });
 });

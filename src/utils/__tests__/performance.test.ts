@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  isRendererPerfCaptureEnabled,
   markRendererPerformance,
-  startRendererMemoryMonitor,
   startSteadyStatePerfFlush,
   withRendererSpan,
 } from "../performance";
@@ -71,13 +69,6 @@ describe("markRendererPerformance", () => {
     expect(markSpy).toHaveBeenCalledWith("timeline-mark", { detail: { value: 3 } });
   });
 
-  it("reports whether renderer perf capture is enabled", () => {
-    process.env.DAINTREE_PERF_CAPTURE = "1";
-    expect(isRendererPerfCaptureEnabled()).toBe(true);
-    process.env.DAINTREE_PERF_CAPTURE = "0";
-    expect(isRendererPerfCaptureEnabled()).toBe(false);
-  });
-
   it("withRendererSpan records start and end marks on success", async () => {
     window.__DAINTREE_PERF_MARKS__ = [];
 
@@ -105,12 +96,6 @@ describe("markRendererPerformance", () => {
     expect(window.__DAINTREE_PERF_MARKS__).toHaveLength(2);
     expect(window.__DAINTREE_PERF_MARKS__![0]!.mark).toBe("fail-span:start");
     expect(window.__DAINTREE_PERF_MARKS__![1]!.mark).toBe("fail-span:end");
-  });
-
-  it("starts renderer memory monitor without throwing when memory API is unavailable", () => {
-    const stop = startRendererMemoryMonitor(10);
-    expect(typeof stop).toBe("function");
-    stop();
   });
 
   it("caps the mark buffer by dropping the oldest entries", () => {

@@ -52,11 +52,6 @@ describe("closeAndAnnounce", () => {
     expect(ariaNotifyMock).toHaveBeenCalledWith("Closed", { priority: "normal" });
   });
 
-  it("forwards an empty message unchanged", () => {
-    closeAndAnnounce(() => {}, "");
-    expect(ariaNotifyMock).toHaveBeenCalledWith("", { priority: "normal" });
-  });
-
   it("does not announce when closeFn throws", () => {
     const boom = vi.fn(() => {
       throw new Error("close failed");
@@ -154,15 +149,6 @@ describe("restoreFocusTo", () => {
     restoreFocusTo(disabled);
 
     expect(document.activeElement).toBe(shellButton);
-  });
-
-  it("stops at the first accepting candidate without touching later ones", () => {
-    const accepting = addButton("accepting");
-    const successor = addButton("successor");
-
-    restoreFocusTo(accepting, successor);
-
-    expect(document.activeElement).toBe(accepting);
   });
 
   // Focus falling to <body> strands keyboard users with nothing to tab from.

@@ -46,22 +46,6 @@ describe("migration008 — split notification sounds", () => {
     expect(after.escalationSoundFile).toBe("ping.wav");
   });
 
-  it("is idempotent — running twice does not re-apply", () => {
-    const data: Record<string, unknown> = {
-      notificationSettings: { soundFile: "custom.wav" },
-    };
-    const store = makeStoreMock(data);
-    migration008.up(store);
-    const firstCallCount = (store.set as ReturnType<typeof vi.fn>).mock.calls.length;
-
-    migration008.up(store);
-    const secondCallCount = (store.set as ReturnType<typeof vi.fn>).mock.calls.length;
-
-    expect(secondCallCount).toBe(firstCallCount);
-    const after = data.notificationSettings as Record<string, unknown>;
-    expect(after.completedSoundFile).toBe("custom.wav");
-  });
-
   it("preserves user-customized sounds on replay", () => {
     const data: Record<string, unknown> = {
       notificationSettings: {

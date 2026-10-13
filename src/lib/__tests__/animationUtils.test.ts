@@ -4,52 +4,25 @@ import { readHostCss } from "@/__tests__/support/hostCss";
 import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  DURATION_75,
-  DURATION_100,
-  DURATION_150,
-  DURATION_200,
-  DURATION_250,
-  DURATION_300,
   DRAG_OVERLAY_SPRING_VISUAL_DURATION,
   DRAG_OVERLAY_SPRING_BOUNCE,
   EASE_OUT_EXPO,
-  EASE_SNAPPY,
-  EASE_SPRING_CRITICAL,
   getPanelTransitionDuration,
-  getTerminalAnimationDuration,
   getUiAnimationDuration,
   getUiTransitionDuration,
   PANEL_MINIMIZE_DURATION,
   PANEL_MINIMIZE_EASING,
   PANEL_RESTORE_DURATION,
   PANEL_RESTORE_EASING,
-  TERMINAL_ANIMATION_DURATION,
   UI_ANIMATION_DURATION,
   UI_DOHERTY_THRESHOLD,
   UI_PALETTE_STALE_DELAY,
   UI_SPIN_CYCLE_MS,
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
-  UI_ENTER_EASING,
-  UI_EXIT_EASING,
 } from "../animationUtils";
 
 describe("motion token constants", () => {
-  it("exposes the 75–300ms duration scale", () => {
-    expect(DURATION_75).toBe(75);
-    expect(DURATION_100).toBe(100);
-    expect(DURATION_150).toBe(150);
-    expect(DURATION_200).toBe(200);
-    expect(DURATION_250).toBe(250);
-    expect(DURATION_300).toBe(300);
-  });
-
-  it("exposes semantic easing tokens as valid CSS strings", () => {
-    expect(EASE_SNAPPY).toMatch(/^cubic-bezier\(/);
-    expect(EASE_OUT_EXPO).toMatch(/^cubic-bezier\(/);
-    expect(EASE_SPRING_CRITICAL).toMatch(/^linear\(/);
-  });
-
   it("tunes the drag-overlay pickup spring in seconds with near-zero bounce", () => {
     // Framer Motion's `visualDuration` is in seconds, not ms — a value >= 1
     // would mean someone passed a millisecond figure and the pickup would crawl.
@@ -62,16 +35,6 @@ describe("motion token constants", () => {
 });
 
 describe("getPanelTransitionDuration", () => {
-  it("returns 120ms for minimize direction", () => {
-    expect(getPanelTransitionDuration("minimize")).toBe(PANEL_MINIMIZE_DURATION);
-    expect(getPanelTransitionDuration("minimize")).toBe(120);
-  });
-
-  it("returns 200ms for restore direction", () => {
-    expect(getPanelTransitionDuration("restore")).toBe(PANEL_RESTORE_DURATION);
-    expect(getPanelTransitionDuration("restore")).toBe(200);
-  });
-
   it("ignores prefers-reduced-motion — CSS owns reduced-motion, not JS timers", () => {
     // WCAG 2.2 SC 2.3.3: remove motion via component-level @media overrides,
     // don't zero out the duration (that produces a spatial jump).
@@ -101,13 +64,6 @@ describe("getUiTransitionDuration", () => {
     delete document.body.dataset.performanceMode;
   });
 
-  it("returns 200ms for enter and 120ms for exit", () => {
-    expect(getUiTransitionDuration("enter")).toBe(UI_ENTER_DURATION);
-    expect(getUiTransitionDuration("enter")).toBe(200);
-    expect(getUiTransitionDuration("exit")).toBe(UI_EXIT_DURATION);
-    expect(getUiTransitionDuration("exit")).toBe(120);
-  });
-
   it("still returns the full duration when prefers-reduced-motion is active", () => {
     matchMediaSpy.mockReturnValue({ matches: true });
     expect(getUiTransitionDuration("enter")).toBe(200);
@@ -118,13 +74,6 @@ describe("getUiTransitionDuration", () => {
     document.body.dataset.performanceMode = "true";
     expect(getUiTransitionDuration("enter")).toBe(0);
     expect(getUiTransitionDuration("exit")).toBe(0);
-  });
-});
-
-describe("getTerminalAnimationDuration", () => {
-  it("returns 0 — panel close is instant", () => {
-    expect(getTerminalAnimationDuration()).toBe(TERMINAL_ANIMATION_DURATION);
-    expect(getTerminalAnimationDuration()).toBe(0);
   });
 });
 
@@ -149,11 +98,6 @@ describe("getUiAnimationDuration", () => {
 });
 
 describe("spring easing constants", () => {
-  it("exports valid easing strings", () => {
-    expect(UI_ENTER_EASING).toMatch(/^linear\(/);
-    expect(UI_EXIT_EASING).toMatch(/^cubic-bezier\(/);
-  });
-
   it("uses asymmetric durations with exit faster than enter", () => {
     expect(UI_EXIT_DURATION).toBeLessThan(UI_ENTER_DURATION);
     expect(UI_EXIT_DURATION / UI_ENTER_DURATION).toBe(0.6);

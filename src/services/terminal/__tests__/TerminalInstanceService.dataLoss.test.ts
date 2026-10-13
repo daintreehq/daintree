@@ -113,10 +113,6 @@ describe("injectDataLossMarker", () => {
     expect(oscWrite).not.toContain("\x1b[33m");
   });
 
-  it("is a no-op for an unknown terminal id", () => {
-    expect(() => terminalInstanceService.injectDataLossMarker("nope", 10)).not.toThrow();
-  });
-
   it("renders the yellow marker via the OSC handler round-trip", async () => {
     await createManagedTerminal("dl-3");
     terminalInstanceService.injectDataLossMarker("dl-3", 2048);

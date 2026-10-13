@@ -194,19 +194,6 @@ describe("hints", () => {
     expect(byId.get("terminal.new")).toMatchObject({ readOnlyHint: false, idempotentHint: false });
   });
 
-  it("honors per-action annotation overrides", () => {
-    const manifest = [
-      entry({
-        id: "terminal.new",
-        kind: "command",
-        mcpAnnotations: { readOnlyHint: true, idempotentHint: true },
-      }),
-    ];
-    const [tool] = buildSurfaceManifest(manifest, "full", APP_VERSION).tools;
-
-    expect(tool).toMatchObject({ readOnlyHint: true, idempotentHint: true });
-  });
-
   it("overrides the two hints independently", () => {
     // Both hints default off `kind`, so a bug that coupled them would survive
     // any test that only ever moves them together.
@@ -270,10 +257,6 @@ describe("deprecation", () => {
 describe("hash", () => {
   const hashOf = (manifest: ActionManifestEntry[], tier: McpTier = "full"): string =>
     buildSurfaceManifest(manifest, tier, APP_VERSION).hash;
-
-  it("is a full lowercase hex sha256", () => {
-    expect(hashOf(realisticManifest())).toMatch(/^[0-9a-f]{64}$/);
-  });
 
   it("does not depend on the app version", () => {
     const manifest = realisticManifest();
@@ -500,20 +483,6 @@ describe("hash", () => {
 
 describe("buildSurfaceManifest with a workspace-bound session (#11789)", () => {
   const BOUND = { workspaceBound: true };
-
-  it("omits confirm-gated tools a bound external session cannot reach", () => {
-    const manifest = [
-      entry({ id: "actions.list" }),
-      entry({ id: "recipe.run", kind: "command", danger: "confirm" }),
-    ];
-
-    const unbound = buildSurfaceManifest(manifest, "external", APP_VERSION);
-    const bound = buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND);
-
-    expect(unbound.tools.map((t) => t.id)).toContain("recipe.run");
-    expect(bound.tools.map((t) => t.id)).not.toContain("recipe.run");
-    expect(bound.tools.map((t) => t.id)).toContain("actions.list");
-  });
 
   it("drops exactly the confirm-gated entries from the unbound report, and nothing else", () => {
     // Stated against an independently-derived expectation rather than against

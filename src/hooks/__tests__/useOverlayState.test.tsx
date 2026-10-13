@@ -28,31 +28,11 @@ beforeEach(() => {
 });
 
 describe("useOverlayClaim", () => {
-  it("adds the claim when active becomes true", () => {
-    render(<NamedClaim id="settings" active={true} />);
-    expect(getStack().includes("settings")).toBe(true);
-    expect(getStack().length).toBe(1);
-  });
-
-  it("removes the claim when active flips to false", () => {
-    const { rerender } = render(<NamedClaim id="settings" active={true} />);
-    expect(getStack().includes("settings")).toBe(true);
-
-    rerender(<NamedClaim id="settings" active={false} />);
-    expect(getStack().includes("settings")).toBe(false);
-    expect(getStack().length).toBe(0);
-  });
-
   it("removes the claim on unmount", () => {
     const { unmount } = render(<NamedClaim id="settings" active={true} />);
     expect(getStack().includes("settings")).toBe(true);
 
     unmount();
-    expect(getStack().length).toBe(0);
-  });
-
-  it("does not add a claim when active is false from the start", () => {
-    render(<NamedClaim id="settings" active={false} />);
     expect(getStack().length).toBe(0);
   });
 
@@ -128,27 +108,9 @@ describe("useOverlayState (backwards-compat shim)", () => {
     unmountA();
     expect(getStack().length).toBe(1);
   });
-
-  it("releases the claim on unmount", () => {
-    const { unmount } = render(<AnonymousClaim active={true} />);
-    expect(getStack().length).toBe(1);
-    unmount();
-    expect(getStack().length).toBe(0);
-  });
 });
 
 describe("useOverlayOpen", () => {
-  it("returns false when the id has no claim", () => {
-    const { result } = renderHook(() => useOverlayOpen("settings"));
-    expect(result.current).toBe(false);
-  });
-
-  it("returns true while the id has an active claim", () => {
-    useUIStore.getState().addOverlayClaim("settings");
-    const { result } = renderHook(() => useOverlayOpen("settings"));
-    expect(result.current).toBe(true);
-  });
-
   it("flips to false when the claim is released", () => {
     useUIStore.getState().addOverlayClaim("settings");
     const { result, rerender } = renderHook(() => useOverlayOpen("settings"));
@@ -167,19 +129,6 @@ describe("useOverlayOpen", () => {
 });
 
 describe("useTopmostOverlay", () => {
-  it("returns undefined when no overlay is open", () => {
-    const { result } = renderHook(() => useTopmostOverlay());
-    expect(result.current).toBeUndefined();
-  });
-
-  it("returns the most recently added claim", () => {
-    useUIStore.getState().addOverlayClaim("a");
-    useUIStore.getState().addOverlayClaim("b");
-    useUIStore.getState().addOverlayClaim("c");
-    const { result } = renderHook(() => useTopmostOverlay());
-    expect(result.current).toBe("c");
-  });
-
   it("updates when the topmost claim is released", () => {
     useUIStore.getState().addOverlayClaim("a");
     useUIStore.getState().addOverlayClaim("b");

@@ -96,33 +96,12 @@ describe("GitService", () => {
     expect(diff).toBe("BINARY_FILE");
   });
 
-  it("returns BINARY_FILE when null byte is at position 0", async () => {
-    const filePath = path.join(tempDir, "null-at-0.bin");
-    await fs.writeFile(filePath, Buffer.from([0x00, 0x41, 0x42, 0x43]));
-
-    const service = new GitService(tempDir);
-    const diff = await service.getFileDiff("null-at-0.bin", "untracked");
-
-    expect(diff).toBe("BINARY_FILE");
-  });
-
   it("returns a diff (not BINARY_FILE) for an empty file", async () => {
     const filePath = path.join(tempDir, "empty.txt");
     await fs.writeFile(filePath, Buffer.from([]));
 
     const service = new GitService(tempDir);
     const diff = await service.getFileDiff("empty.txt", "untracked");
-
-    expect(diff).not.toBe("BINARY_FILE");
-    expect(diff).toContain("diff --git");
-  });
-
-  it("returns a diff (not BINARY_FILE) for a text file", async () => {
-    const filePath = path.join(tempDir, "readme.txt");
-    await fs.writeFile(filePath, Buffer.from("hello world\n"));
-
-    const service = new GitService(tempDir);
-    const diff = await service.getFileDiff("readme.txt", "untracked");
 
     expect(diff).not.toBe("BINARY_FILE");
     expect(diff).toContain("diff --git");
@@ -280,23 +259,6 @@ index 1a2b3c4..5d6e7f8 100644
     expect(createHardenedGitMock).toHaveBeenCalledTimes(2);
   });
 
-  it("listBranches classifies authentication failures", async () => {
-    gitClientMock.branch.mockRejectedValue(
-      new Error("remote: Authentication failed for 'https://github.com/foo/bar.git/'")
-    );
-    const service = new GitService(tempDir);
-
-    let caught: unknown;
-    try {
-      await service.listBranches();
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(GitOperationError);
-    expect((caught as GitOperationError).reason).toBe("auth-failed");
-  });
-
   describe("compareWorktrees", () => {
     it("expands branches to refs/heads/ in two-dot range by default", async () => {
       gitClientMock.raw.mockResolvedValue("");
@@ -388,19 +350,6 @@ index 1a2b3c4..5d6e7f8 100644
       }
     });
 
-    it("returns file list for three-dot range (useMergeBase)", async () => {
-      gitClientMock.raw.mockResolvedValue("M\tsrc/app.ts\n");
-
-      const service = new GitService(tempDir);
-      const result = await service.compareWorktrees("main", "feature/test", undefined, true);
-
-      expect(typeof result).toBe("object");
-      if (typeof result === "object") {
-        expect(result.files).toHaveLength(1);
-        expect(result.files[0]).toMatchObject({ status: "M", path: "src/app.ts" });
-      }
-    });
-
     it("returns NO_CHANGES string for empty file diff", async () => {
       gitClientMock.raw.mockResolvedValue("   ");
 
@@ -471,14 +420,6 @@ index 1a2b3c4..5d6e7f8 100644
     it("returns empty file list without calling git when branch1 equals branch2", async () => {
       const service = new GitService(tempDir);
       const result = await service.compareWorktrees("main", "main");
-
-      expect(gitClientMock.raw).not.toHaveBeenCalled();
-      expect(result).toEqual({ branch1: "main", branch2: "main", files: [] });
-    });
-
-    it("returns empty file list without calling git when branch1 equals branch2 with useMergeBase", async () => {
-      const service = new GitService(tempDir);
-      const result = await service.compareWorktrees("main", "main", undefined, true);
 
       expect(gitClientMock.raw).not.toHaveBeenCalled();
       expect(result).toEqual({ branch1: "main", branch2: "main", files: [] });

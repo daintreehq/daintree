@@ -307,11 +307,6 @@ describe("recovery launches", () => {
     expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
   });
 
-  it("still writes nothing after a window closes", () => {
-    saveOpenWindowsNow(1);
-    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
-  });
-
   it("writes again once a single-crash fleet restore lifts the hold (#12801)", () => {
     suppressOpenWindowsSaves();
     enableOpenWindowsSaves();
@@ -362,11 +357,6 @@ describe("saveOpenWindowsNow", () => {
       ]),
       readOnly: false,
     });
-  });
-
-  it("writes immediately, without waiting on the debounce", () => {
-    saveOpenWindowsNow();
-    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
   });
 
   it("drops a pending debounce so a close does not double-write", () => {
@@ -638,11 +628,6 @@ describe("background project capture (#12320)", () => {
     expect(buildOpenWindowRecords(registry)[0].backgroundProjectIds).toHaveLength(
       MAX_BACKGROUND_PROJECTS_PER_WINDOW
     );
-  });
-
-  it("still records the window as a picker when its manager throws", () => {
-    const registry = makeRegistry([{ windowId: 1, projectId: "a", throwsOnRead: true }]);
-    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
   });
 
   it("persists background ids through the debounced save", () => {

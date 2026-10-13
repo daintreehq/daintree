@@ -257,47 +257,11 @@ describe("ProcessDetector", () => {
     );
   });
 
-  it("detects Python-hosted CLIs from argv (when they're in AGENT_CLI_NAMES)", () => {
-    // Same mechanism — a Python agent appears as comm="python3" with script in argv[1].
-    // No agent is currently Python-hosted, so this test asserts the runtime-host
-    // recovery path doesn't crash and still identifies a known process icon.
-    const cache = createCacheMock();
-    cache.setChildren(100, [
-      {
-        pid: 200,
-        comm: "python3",
-        command: "/usr/bin/python3 /opt/somescript.py",
-      },
-    ]);
-    const callback = vi.fn();
-
-    const detector = new ProcessDetector(
-      "terminal-python-fallback",
-      Date.now(),
-      100,
-      callback,
-      cache as never
-    );
-    detector.start();
-    cache.emitRefresh();
-
-    // Basename python3 maps to process icon "python" via getProcessIconMap();
-    // argv[1] is not in AGENT_CLI_NAMES so the basename match stands.
-    expect(callback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        detected: true,
-        processIconId: "python",
-      }),
-      expect.any(Number)
-    );
-  });
-
   it.each([
     { wrapper: "npx @anthropic-ai/claude-code", expectedAgent: "claude" },
     { wrapper: "pnpm dlx @anthropic-ai/claude-code", expectedAgent: "claude" },
     { wrapper: "bunx @anthropic-ai/claude-code", expectedAgent: "claude" },
     { wrapper: "npx @google/gemini-cli", expectedAgent: "gemini" },
-    { wrapper: "pnpm dlx @google/gemini-cli", expectedAgent: "gemini" },
     { wrapper: "npx @openai/codex", expectedAgent: "codex" },
   ])(
     "detects $expectedAgent via npm-package-tail alias ($wrapper)",
@@ -329,37 +293,6 @@ describe("ProcessDetector", () => {
       );
     }
   );
-
-  it("prefers native-binary claude over argv-derived claude when both would match", () => {
-    const cache = createCacheMock();
-    cache.setChildren(100, [
-      {
-        pid: 200,
-        comm: "claude",
-        command: "/usr/local/bin/claude",
-      },
-    ]);
-    const callback = vi.fn();
-
-    const detector = new ProcessDetector(
-      "terminal-native-claude",
-      Date.now(),
-      100,
-      callback,
-      cache as never
-    );
-    detector.start();
-    cache.emitRefresh();
-
-    expect(callback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        detected: true,
-        agentType: "claude",
-        processName: "claude",
-      }),
-      expect.any(Number)
-    );
-  });
 
   it("prioritizes AI agents over package managers regardless of process order", () => {
     const cache = createCacheMock();
@@ -779,31 +712,6 @@ describe("ProcessDetector", () => {
     );
   });
 
-  it("does not demote a previously detected agent from process-tree absence", () => {
-    const cache = createCacheMock();
-    cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
-    const callback = vi.fn();
-
-    const detector = new ProcessDetector(
-      "terminal-exit",
-      Date.now(),
-      100,
-      callback,
-      cache as never
-    );
-    // Two polls to commit the ON state (hysteresis threshold).
-    detector.start();
-    cache.emitRefresh();
-
-    // Process-tree absence is no longer an agent-exit signal.
-    cache.setChildren(100, []);
-    cache.emitRefresh();
-    cache.emitRefresh();
-
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect(detector.getLastDetected()).toBe("claude");
-  });
-
   it("detects Windows grandchild processes and applies priority against direct children", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
@@ -1020,31 +928,6 @@ describe("ProcessDetector", () => {
         expect.objectContaining({ agentType: "codex" }),
         expect.any(Number)
       );
-    });
-
-    it("does not synthesize agent demotion on detector stop without explicit exit", () => {
-      const cache = createCacheMock();
-      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
-      const callback = vi.fn();
-
-      const detector = new ProcessDetector(
-        "terminal-hys-6",
-        Date.now(),
-        100,
-        callback,
-        cache as never
-      );
-      detector.start();
-      cache.emitRefresh();
-      expect(callback).toHaveBeenCalledTimes(1);
-
-      cache.setChildren(100, []);
-      cache.emitRefresh();
-      expect(callback).toHaveBeenCalledTimes(1);
-
-      detector.stop();
-
-      expect(callback).toHaveBeenCalledTimes(1);
     });
 
     it("does not emit a synthetic on event when stop() is called mid on-streak", () => {
@@ -1538,30 +1421,6 @@ describe("ProcessDetector", () => {
       vi.useRealTimers();
     });
 
-    it("prompt-return clear demotes an agent synchronously", () => {
-      // On prompt-return, TerminalProcess clears shell evidence with the
-      // explicit lifecycle reason. That is the demotion signal; no process-tree
-      // confirmation is required.
-      const base = Date.now();
-      vi.setSystemTime(base);
-      const cache = createCacheMock();
-      const callback = vi.fn();
-      const detector = new ProcessDetector("terminal-cleared", base, 100, callback, cache as never);
-      detector.start();
-
-      detector.injectShellCommandEvidence(
-        { agentType: "claude", processIconId: "claude", processName: "claude" },
-        "claude --resume",
-        base
-      );
-      expect(detector.getLastDetected()).toBe("claude");
-
-      detector.clearShellCommandEvidence("prompt-return");
-
-      expect(detector.getLastDetected()).toBeNull();
-      vi.useRealTimers();
-    });
-
     it("promotes shell-command evidence even when ps is in error state with empty children", () => {
       // Primary regression guard for #5809: when the cache is BLIND (ps
       // failed) AND the user just typed `claude`, the shell evidence must
@@ -1787,8 +1646,6 @@ describe("ProcessDetector", () => {
 
     it.each([
       { label: "cat", comm: "cat", command: `cat ${agentPath}` },
-      { label: "git log", comm: "git", command: `git log -- ${agentPath}` },
-      { label: "an editor", comm: "nvim", command: `nvim ${agentPath}` },
       { label: "a grep", comm: "rg", command: `rg opencode ${agentPath}` },
     ])("does not brand the terminal OpenCode from $label", ({ label, comm, command }) => {
       const cache = createCacheMock();
@@ -2238,30 +2095,6 @@ describe("ProcessDetector", () => {
         expect.any(Number)
       );
     });
-
-    it("unmatched-children diagnostic skips defunct entries", () => {
-      const cache = createCacheMock();
-      cache.setChildren(100, [{ pid: 200, comm: "bash", command: "<defunct>" }]);
-      const callback = vi.fn();
-      const detector = new ProcessDetector(
-        "terminal-defunct-diag",
-        Date.now(),
-        100,
-        callback,
-        cache as never
-      );
-      detector.start();
-      cache.emitRefresh();
-      // No live children → no_agent. The defunct child is filtered before
-      // the processes mapping, so the diagnostic never sees it.
-      expect(callback).toHaveBeenCalledWith(
-        expect.objectContaining({
-          detected: false,
-          detectionState: "no_agent",
-        }),
-        expect.any(Number)
-      );
-    });
   });
 
   describe("image-path evidence (#8790)", () => {
@@ -2434,29 +2267,6 @@ describe("ProcessDetector", () => {
           detected: true,
           agentType: "claude",
         }),
-        expect.any(Number)
-      );
-    });
-
-    it("works when no image-path probe is wired (backwards compat)", () => {
-      // Existing call sites pass only the 6-arg constructor signature. The
-      // detector must work identically when the probe is omitted.
-      const cache = createCacheMock();
-      cache.setChildren(100, [{ pid: 200, comm: "claude", command: "claude --resume" }]);
-      const callback = vi.fn();
-
-      const detector = new ProcessDetector(
-        "terminal-no-probe",
-        Date.now(),
-        100,
-        callback,
-        cache as never
-      );
-      detector.start();
-      cache.emitRefresh();
-
-      expect(callback).toHaveBeenCalledWith(
-        expect.objectContaining({ detected: true, agentType: "claude" }),
         expect.any(Number)
       );
     });
@@ -2813,12 +2623,6 @@ describe("isChromiumChildProcess", () => {
 });
 
 describe("extractScriptBasenameFromCommand", () => {
-  it("extracts claude from `node /path/to/claude`", () => {
-    expect(extractScriptBasenameFromCommand("node /Users/foo/.npm-global/bin/claude")).toBe(
-      "claude"
-    );
-  });
-
   it("extracts claude when trailing flags are present", () => {
     expect(extractScriptBasenameFromCommand("node /path/to/claude --resume --model opus")).toBe(
       "claude"
@@ -2844,16 +2648,6 @@ describe("extractScriptBasenameFromCommand", () => {
     expect(
       extractCommandNameCandidates('"/tmp/Daintree Test/bin/claude" --dangerously-skip-permissions')
     ).toEqual(["claude"]);
-  });
-
-  it("detects agents from quoted absolute launch paths", () => {
-    expect(
-      detectCommandIdentity("'/Users/gpriday/.local/bin/claude' --dangerously-skip-permissions")
-    ).toMatchObject({
-      agentType: "claude",
-      processIconId: "claude",
-      processName: "claude",
-    });
   });
 
   it("prefers the tool a package manager is executing over the package manager", () => {

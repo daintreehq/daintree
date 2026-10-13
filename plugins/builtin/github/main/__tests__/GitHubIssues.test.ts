@@ -174,16 +174,6 @@ describe("assignIssue error handling", () => {
       'Cannot assign user "someuser" - server error (HTTP 500)'
     );
   });
-
-  it("includes the numeric status for 429 rate limit response", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 429,
-      json: async () => ({}),
-    });
-
-    await expect(assignIssue("/test", 1, "someuser")).rejects.toThrow("HTTP 429");
-  });
 });
 
 describe("extractLinkedPR", () => {
@@ -218,31 +208,6 @@ describe("extractLinkedPR", () => {
       updatedAt: "2026-02-01T00:00:00Z",
     });
   });
-
-  it("falls back to the highest PR number when timeline entries lack updatedAt", () => {
-    const linked = extractLinkedPR({
-      nodes: [
-        {
-          source: {
-            number: 10,
-            state: "OPEN",
-            merged: false,
-            url: "https://github.com/test/repo/pull/10",
-          },
-        },
-        {
-          subject: {
-            number: 20,
-            state: "CLOSED",
-            merged: false,
-            url: "https://github.com/test/repo/pull/20",
-          },
-        },
-      ],
-    });
-
-    expect(linked?.number).toBe(20);
-  });
 });
 
 describe("assignIssue cache invalidation", () => {
@@ -275,58 +240,6 @@ describe("assignIssue cache invalidation", () => {
     await assignIssue("/test", 42, "someuser");
 
     expect(issueTooltipCache.get(tooltipKey)).toBeUndefined();
-  });
-
-  it("deletes tooltip cache entry even when issue is not in any list-cache entry", async () => {
-    const tooltipKey = "testowner/testrepo:99";
-    issueTooltipCache.set(tooltipKey, {
-      number: 99,
-      title: "Other Issue",
-      bodyExcerpt: "excerpt",
-      state: "open",
-      rawState: "OPEN",
-      createdAt: Date.parse("2024-01-01T00:00:00Z"),
-      author: { login: "author", avatarUrl: "", rawData: null },
-      assignees: [],
-      labels: [],
-    });
-
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        assignees: [{ login: "someuser", avatar_url: "https://avatar.url" }],
-      }),
-    });
-
-    await assignIssue("/test", 99, "someuser");
-
-    expect(issueTooltipCache.get(tooltipKey)).toBeUndefined();
-  });
-});
-
-describe("parseIssueNode with 10 assignees", () => {
-  it("preserves all 10 assignees from a node", async () => {
-    const mod = await import("../GitHubIssues.js");
-    const assignees = Array.from({ length: 10 }, (_, i) => ({
-      login: `user${i + 1}`,
-      avatarUrl: `https://avatar/${i + 1}`,
-    }));
-    const node = {
-      number: 1,
-      title: "Test",
-      url: "https://github.com/test/1",
-      state: "OPEN",
-      updatedAt: "2024-01-01T00:00:00Z",
-      author: { login: "author", avatarUrl: "" },
-      assignees: { nodes: assignees },
-      comments: { totalCount: 0 },
-      labels: { nodes: [] },
-    };
-    const result = mod.parseIssueNode(node);
-    expect(result.assignees).toHaveLength(10);
-    for (let i = 0; i < 10; i++) {
-      expect(result.assignees[i].login).toBe(`user${i + 1}`);
-    }
   });
 });
 

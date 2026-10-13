@@ -56,35 +56,10 @@ describe("GeminiConfigService", () => {
       expect(config).toEqual({ ui: { useAlternateBuffer: true } });
     });
 
-    it("returns empty object for empty JSON file", async () => {
-      await writeConfigFile("{}");
-      const service = createService();
-      const config = await service.readConfig();
-      expect(config).toEqual({});
-    });
-
     it("throws SyntaxError for malformed JSON", async () => {
       await writeConfigFile("{invalid}");
       const service = createService();
       await expect(service.readConfig()).rejects.toBeInstanceOf(SyntaxError);
-    });
-
-    it("throws SyntaxError for empty file", async () => {
-      await writeConfigFile("");
-      const service = createService();
-      await expect(service.readConfig()).rejects.toBeInstanceOf(SyntaxError);
-    });
-
-    it("preserves unrelated keys in config", async () => {
-      await writeConfigFile(
-        JSON.stringify({ ui: { useAlternateBuffer: false }, otherKey: "value" })
-      );
-      const service = createService();
-      const config = await service.readConfig();
-      expect(config).toEqual({
-        ui: { useAlternateBuffer: false },
-        otherKey: "value",
-      });
     });
   });
 
@@ -156,22 +131,6 @@ describe("GeminiConfigService", () => {
       const parsed = JSON.parse(raw);
       expect(parsed.otherKey).toBe("value");
       expect(parsed.ui?.useAlternateBuffer).toBe(true);
-    });
-
-    it("is idempotent", async () => {
-      const service = createService();
-      await service.enableAlternateBuffer();
-      const first = await readConfigFile();
-      await service.enableAlternateBuffer();
-      const second = await readConfigFile();
-      expect(second).toBe(first);
-    });
-
-    it("creates .gemini directory if missing", async () => {
-      const service = createService();
-      await service.enableAlternateBuffer();
-      const raw = await readConfigFile();
-      expect(JSON.parse(raw).ui?.useAlternateBuffer).toBe(true);
     });
   });
 

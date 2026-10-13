@@ -619,23 +619,4 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     expect(grant).toMatchObject({ scope: READ_WRITE_SCOPE, launchAgentIdHint: "codex" });
     expect(pluginMcpGrantRegistry.authenticate(bearer)).toBe(grant);
   });
-
-  it("mints nothing for an agent with no launch mechanism", async () => {
-    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
-
-    await spawn({ id: "term-cursor", command: "cursor-agent", launchAgentId: "cursor" });
-
-    expect(ptyClient.spawn.mock.calls[0][1].command).toBe("cursor-agent");
-    expect(pluginMcpGrantRegistry.listForTerminal("term-cursor")).toEqual([]);
-  });
-
-  it("mints nothing for a Claude help-session launch", async () => {
-    setProjectAgentMcpAccess(PROJECT_A, "acme.ledger", "read-write");
-    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
-
-    await spawn({ id: "term-help", env: { DAINTREE_MCP_TOKEN: "help-token" } });
-
-    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
-    expect(pluginMcpGrantRegistry.listForTerminal("term-help")).toEqual([]);
-  });
 });

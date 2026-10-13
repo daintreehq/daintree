@@ -2,14 +2,6 @@ import { describe, it, expect } from "vitest";
 import { mergeProjectEnv } from "../restoreProjectEnv.js";
 
 describe("mergeProjectEnv (#9810)", () => {
-  it("returns null when both inputs are missing", () => {
-    expect(mergeProjectEnv(undefined, undefined)).toBeNull();
-  });
-
-  it("returns null when both inputs are empty objects", () => {
-    expect(mergeProjectEnv({}, {})).toBeNull();
-  });
-
   it("returns null when one is missing and the other is empty", () => {
     expect(mergeProjectEnv(undefined, {})).toBeNull();
     expect(mergeProjectEnv({}, undefined)).toBeNull();

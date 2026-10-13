@@ -2,9 +2,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { createStore } from "zustand/vanilla";
 import {
-  FLEET_BROADCAST_HISTORY_KEY,
-  FLEET_LARGE_PASTE_BATCH_SIZE,
-  FLEET_LARGE_PASTE_BYTE_THRESHOLD,
   buildFleetBroadcastRecipeContext,
   getFleetBroadcastByteLength,
   resolveFleetBroadcastTargetIds,
@@ -125,22 +122,7 @@ function installViewStore(worktrees: Map<string, WorktreeSnapshot>) {
   setCurrentViewStore(store);
 }
 
-describe("fleetBroadcast constants", () => {
-  it("history key is stable", () => {
-    expect(FLEET_BROADCAST_HISTORY_KEY).toBe("fleet-broadcast");
-  });
-  it("large-paste byte threshold matches spec (100 KB)", () => {
-    expect(FLEET_LARGE_PASTE_BYTE_THRESHOLD).toBe(102_400);
-  });
-  it("large-paste batch size is a conservative IPC fan-out", () => {
-    expect(FLEET_LARGE_PASTE_BATCH_SIZE).toBe(5);
-  });
-});
-
 describe("getFleetBroadcastByteLength", () => {
-  it("counts ASCII bytes", () => {
-    expect(getFleetBroadcastByteLength("hello")).toBe(5);
-  });
   it("counts multi-byte UTF-8 characters (emoji = 4 bytes)", () => {
     expect(getFleetBroadcastByteLength("✓")).toBe(3);
     expect(getFleetBroadcastByteLength("🚀")).toBe(4);

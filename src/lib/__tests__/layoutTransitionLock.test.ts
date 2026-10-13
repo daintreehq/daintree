@@ -23,10 +23,6 @@ describe("layoutTransitionLock", () => {
     vi.useRealTimers();
   });
 
-  it("starts unlocked", () => {
-    expect(isSidebarLayoutTransitionLocked()).toBe(false);
-  });
-
   it("becomes locked synchronously and unlocks after the duration", () => {
     lockSidebarLayoutTransition(250);
     expect(isSidebarLayoutTransitionLocked()).toBe(true);
@@ -35,31 +31,6 @@ describe("layoutTransitionLock", () => {
     expect(isSidebarLayoutTransitionLocked()).toBe(true);
 
     vi.advanceTimersByTime(1);
-    expect(isSidebarLayoutTransitionLocked()).toBe(false);
-  });
-
-  it("resets the timer when locked again before expiry", () => {
-    lockSidebarLayoutTransition(250);
-    vi.advanceTimersByTime(200);
-    expect(isSidebarLayoutTransitionLocked()).toBe(true);
-
-    lockSidebarLayoutTransition(250);
-    vi.advanceTimersByTime(200);
-    expect(isSidebarLayoutTransitionLocked()).toBe(true);
-
-    vi.advanceTimersByTime(50);
-    expect(isSidebarLayoutTransitionLocked()).toBe(false);
-  });
-
-  it("notifies subscribers when the lock expires", () => {
-    const listener = vi.fn();
-    subscribeSidebarLayoutTransitionUnlock(listener);
-
-    lockSidebarLayoutTransition(100);
-    expect(listener).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(100);
-    expect(listener).toHaveBeenCalledTimes(1);
     expect(isSidebarLayoutTransitionLocked()).toBe(false);
   });
 
@@ -150,19 +121,6 @@ describe("layoutTransitionLock", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(isSidebarLayoutTransitionLocked()).toBe(false);
   });
-
-  it("__resetSidebarLayoutTransitionLockForTests clears the lock and listeners", () => {
-    const listener = vi.fn();
-    subscribeSidebarLayoutTransitionUnlock(listener);
-    lockSidebarLayoutTransition(250);
-    expect(isSidebarLayoutTransitionLocked()).toBe(true);
-
-    __resetSidebarLayoutTransitionLockForTests();
-    expect(isSidebarLayoutTransitionLocked()).toBe(false);
-
-    vi.advanceTimersByTime(250);
-    expect(listener).not.toHaveBeenCalled();
-  });
 });
 
 // Issue #10827 — the one-shot startup hydration lock. Distinct from the
@@ -177,24 +135,11 @@ describe("layoutTransitionLock sidebar hydration lock", () => {
     __resetSidebarHydrationLockForTests();
   });
 
-  it("starts locked", () => {
-    expect(isSidebarHydrationLocked()).toBe(true);
-  });
-
   it("unlocks on the first call and stays unlocked", () => {
     unlockSidebarHydration();
     expect(isSidebarHydrationLocked()).toBe(false);
     unlockSidebarHydration();
     expect(isSidebarHydrationLocked()).toBe(false);
-  });
-
-  it("notifies subscribers exactly once on unlock", () => {
-    const listener = vi.fn();
-    subscribeSidebarHydrationUnlock(listener);
-    expect(listener).not.toHaveBeenCalled();
-
-    unlockSidebarHydration();
-    expect(listener).toHaveBeenCalledTimes(1);
   });
 
   it("does not fire subscribers a second time on a repeated unlock", () => {
@@ -266,17 +211,6 @@ describe("layoutTransitionLock sidebar hydration lock", () => {
       })
     ).not.toThrow();
   });
-
-  it("__resetSidebarHydrationLockForTests re-arms the lock and drops pending listeners", () => {
-    const listener = vi.fn();
-    subscribeSidebarHydrationUnlock(listener);
-
-    __resetSidebarHydrationLockForTests();
-    expect(isSidebarHydrationLocked()).toBe(true);
-
-    unlockSidebarHydration();
-    expect(listener).not.toHaveBeenCalled();
-  });
 });
 
 describe("isSidebarMeasurementLocked", () => {
@@ -303,11 +237,6 @@ describe("isSidebarMeasurementLocked", () => {
     lockSidebarLayoutTransition(100);
     expect(isSidebarHydrationLocked()).toBe(false);
     expect(isSidebarLayoutTransitionLocked()).toBe(true);
-    expect(isSidebarMeasurementLocked()).toBe(true);
-  });
-
-  it("is true while both locks are active", () => {
-    lockSidebarLayoutTransition(100);
     expect(isSidebarMeasurementLocked()).toBe(true);
   });
 

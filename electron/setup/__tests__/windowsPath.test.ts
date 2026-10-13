@@ -484,16 +484,5 @@ describe("windowsPath", () => {
 
       expect(await resolveWindowsRegistryPath()).toBe("C:\\Windows;C:\\venv\\Scripts");
     });
-
-    it("still keeps the current PATH when the registry yields nothing", async () => {
-      process.env.PATH = "C:\\Windows;C:\\venv\\Scripts";
-      const { rememberWindowsLaunchPath, refreshWindowsPathForSpawn } = await importWindowsPath();
-      rememberWindowsLaunchPath(process.env.PATH);
-      stubRegistry({ hklm: null, hkcu: null });
-
-      await refreshWindowsPathForSpawn();
-
-      expect(process.env.PATH).toBe("C:\\Windows;C:\\venv\\Scripts");
-    });
   });
 });

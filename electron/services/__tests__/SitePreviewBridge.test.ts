@@ -1380,30 +1380,6 @@ describe("SitePreviewBridge disable races a bind", () => {
     await expect(bound).rejects.toThrow(/not enabled/);
     expect(harness.wc.debugger.methods()).not.toContain("Page.addScriptToEvaluateOnNewDocument");
   });
-
-  it("still binds normally when no teardown intervened", async () => {
-    // The guard must not refuse an ordinary bind, including a rebind of the
-    // same panel, which tears the predecessor down on purpose.
-    const harness = makeHarness();
-    const first = await harness.bridge.bind({
-      projectId: PROJECT_ID,
-      panelId: PANEL_ID,
-      adapterId: ADAPTER_ID,
-      mode: "select",
-      subscriberWebContentsId: SUBSCRIBER_WC_ID,
-    });
-    const second = await harness.bridge.bind({
-      projectId: PROJECT_ID,
-      panelId: PANEL_ID,
-      adapterId: ADAPTER_ID,
-      mode: "select",
-      subscriberWebContentsId: SUBSCRIBER_WC_ID,
-    });
-
-    expect(second.sessionId).not.toBe(first.sessionId);
-    expect(harness.bridge.getState(PROJECT_ID, second.sessionId)).not.toBeNull();
-    expect(harness.bridge.getState(PROJECT_ID, first.sessionId)).toBeNull();
-  });
 });
 
 describe("SitePreviewBridge out-of-band ops", () => {

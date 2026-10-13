@@ -12,11 +12,21 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
   createPluginStyleRuntime,
   type PluginStyleRuntime,
 } from "@/services/plugin/tailwind/pluginStyleRuntime";
+import { tokenizePluginSource } from "@/services/plugin/tailwind/candidateTokenizer";
 import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "@shared/types/plugin";
+
+const FIXTURE = path.resolve(
+  import.meta.dirname,
+  "../../../../../plugins/fixtures/project-local/.daintree/plugins/acme.project-hello/dist/panel.js"
+);
+
+const fixtureSource = readFileSync(FIXTURE, "utf-8");
 
 let runtime: PluginStyleRuntime;
 
@@ -258,5 +268,88 @@ describe("pluginStyleRuntime — diagnostics", () => {
 
     expect(report.generated).toEqual(["p-4"]);
     expect(report.notGenerated).toEqual([]);
+  });
+});
+
+// The definition of done from #12220, driven against the committed raw-plugin
+// fixture rather than a hand-written class list. Reading the fixture's real
+// source exercises both halves of candidate discovery on the same bytes the app
+// loads, so a change to the fixture that quietly stops covering the contract
+// fails here rather than passing while proving nothing.
+describe("plugin styling contract — the raw project-plugin fixture", () => {
+  it("still exercises the contract", () => {
+    // Guards the fixture itself. Every class below is load-bearing for one of
+    // the assertions in this file.
+    const tokens = new Set(tokenizePluginSource(fixtureSource));
+    for (const required of [
+      "bg-surface-panel",
+      "text-text-muted",
+      "hover:bg-surface-hover",
+      "gap-2",
+      "p-4",
+      "rounded-md",
+      "w-[327px]",
+      "bg-red-500",
+    ]) {
+      expect(tokens, `fixture no longer uses ${required}`).toContain(required);
+    }
+  });
+
+  it("compiles every contract class from source text alone, before the view mounts", () => {
+    // The source pass is what makes the FIRST paint styled — the observer only
+    // gets a turn once the DOM exists.
+    runtime.addSourceText(fixtureSource);
+    const css = installedCss();
+
+    expect(css).toContain("var(--theme-surface-panel)");
+    expect(css).toContain("var(--theme-text-muted)");
+    expect(css).toContain("var(--theme-surface-hover)");
+    expect(css).toContain("width: 327px");
+    expect(css).toMatch(/\.gap-2\s*\{/);
+    expect(css).toMatch(/\.p-4\s*\{/);
+    expect(css).toMatch(/\.rounded-md\s*\{/);
+  });
+
+  it("generates no rule for the stock-palette class and reports it", async () => {
+    runtime.addSourceText(fixtureSource);
+
+    const root = document.createElement("div");
+    root.setAttribute(PLUGIN_STYLE_ROOT_ATTRIBUTE, "");
+    root.innerHTML = `<span class="bg-red-500 bg-surface-panel"></span>`;
+    document.body.appendChild(root);
+    runtime.registerRoot(root);
+
+    expect(installedCss()).not.toContain("bg-red-500");
+
+    const report = await runtime.getReport();
+    expect(report.notGenerated).toContain("bg-red-500");
+    expect(report.generated).toContain("bg-surface-panel");
+  });
+
+  it("keeps styling across hot-reload generations", async () => {
+    // Each `__dtv-N` generation re-registers a fresh root with the same runtime.
+    // Styling has to survive that, and the sheet must still describe what is on
+    // screen rather than accumulating every generation's leftovers forever.
+    const mountGeneration = (classes: string): (() => void) => {
+      const root = document.createElement("div");
+      root.setAttribute(PLUGIN_STYLE_ROOT_ATTRIBUTE, "");
+      root.innerHTML = `<span class="${classes}"></span>`;
+      document.body.appendChild(root);
+      const unregister = runtime.registerRoot(root);
+      return () => {
+        unregister();
+        root.remove();
+      };
+    };
+
+    let teardown = mountGeneration("p-4 bg-surface-panel");
+    for (const classes of ["gap-2 rounded-md", "px-3 text-text-muted"]) {
+      teardown();
+      teardown = mountGeneration(classes);
+    }
+
+    expect(installedCss()).toMatch(/\.px-3\s*\{/);
+    expect(installedCss()).toContain("var(--theme-text-muted)");
+    teardown();
   });
 });

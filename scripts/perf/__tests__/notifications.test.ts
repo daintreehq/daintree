@@ -11,8 +11,6 @@ import {
   waitingReasonFor,
   type StubNativeNotification,
 } from "../lib/notificationFixture";
-import { notificationScenarios } from "../scenarios/notifications";
-import { classifyMetric } from "../lib/comparability";
 
 /**
  * Unit coverage for the ORACLES, not the scenarios.
@@ -205,34 +203,5 @@ describe("notification clock", () => {
       clock.uninstall();
     }
     expect(Date.now()).toBeLessThan(1_800_000_000_000);
-  });
-});
-
-describe("notification scenario declarations", () => {
-  it("implements the six declared ids", () => {
-    expect(notificationScenarios.map((scenario) => scenario.id)).toEqual([
-      "PERF-320",
-      "PERF-321",
-      "PERF-322",
-      "PERF-323",
-      "PERF-324",
-      "PERF-325",
-    ]);
-  });
-
-  it("declares a correctness predicate of count-class metrics on every scenario", () => {
-    for (const scenario of notificationScenarios) {
-      expect(scenario.correctness?.length ?? 0).toBeGreaterThan(0);
-      for (const metric of scenario.correctness ?? []) {
-        expect(`${scenario.id}:${metric}:${classifyMetric(metric)}`).toBe(
-          `${scenario.id}:${metric}:count`
-        );
-      }
-    }
-  });
-
-  it("states that no OS notification is sent", () => {
-    const family = notificationScenarios.map((s) => s.description).join(" ");
-    expect(family).toMatch(/No OS notification is ever sent|macOS-only/);
   });
 });

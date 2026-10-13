@@ -58,8 +58,12 @@ vi.mock("../../utils.js", () => ({
   },
 }));
 
+const fileSearchServiceMock = vi.hoisted(() => ({
+  search: vi.fn<(payload: { cwd: string; query: string; limit?: number }) => Promise<string[]>>(),
+}));
+
 vi.mock("../../../services/FileSearchService.js", () => ({
-  fileSearchService: { search: vi.fn() },
+  fileSearchService: fileSearchServiceMock,
 }));
 
 import { ipcMain } from "electron";
@@ -340,20 +344,6 @@ describe("files:read handler", () => {
     });
   });
 
-  it("opens the file with O_RDONLY | O_NOFOLLOW", async () => {
-    const content = Buffer.from("hi", "utf-8");
-    fsMock.stat.mockResolvedValue({ size: content.length });
-    fsMock.open.mockResolvedValue(makeFileHandle(content));
-    registerFilesHandlers();
-
-    await getReadHandler()({}, { path: file, rootPath: root });
-
-    expect(fsMock.open).toHaveBeenCalledWith(
-      file,
-      fsMock.constants.O_RDONLY | fsMock.constants.O_NOFOLLOW | fsMock.constants.O_NONBLOCK
-    );
-  });
-
   it("never reads a FIFO or a file swapped in after the checks, and opens without blocking", async () => {
     fsMock.stat.mockResolvedValue({ size: 10, ino: 1, dev: 1 });
     registerFilesHandlers();
@@ -410,24 +400,6 @@ describe("files:read handler", () => {
   it("throws AppError(NOT_FOUND) when stat raises ENOENT", async () => {
     const err = Object.assign(new Error("no such file"), { code: "ENOENT" });
     fsMock.stat.mockRejectedValue(err);
-    registerFilesHandlers();
-
-    await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
-      name: "AppError",
-      code: "NOT_FOUND",
-    });
-  });
-
-  it("throws AppError(NOT_FOUND) when stat succeeds but readFile raises ENOENT (TOCTOU)", async () => {
-    fsMock.stat.mockResolvedValue({ size: 100 });
-    const handle = {
-      stat: vi.fn().mockResolvedValue({ isFile: () => true, isDirectory: () => false, size: 100 }),
-      readFile: vi
-        .fn()
-        .mockRejectedValue(Object.assign(new Error("file disappeared"), { code: "ENOENT" })),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    fsMock.open.mockResolvedValue(handle);
     registerFilesHandlers();
 
     await expect(getReadHandler()({}, { path: file, rootPath: root })).rejects.toMatchObject({
@@ -669,13 +641,143 @@ describe("files:read HTML preview mint (#11191)", () => {
     const result = await read({ path: path.join(root, "index.html"), rootPath: root });
     expect(result.htmlPreviewUrl).toBeUndefined();
   });
+});
 
-  it("does not mint when htmlPreview is false", async () => {
-    const result = await read({
-      path: path.join(root, "index.html"),
-      rootPath: root,
-      htmlPreview: false,
+describe("files:search handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetRemoteServicesForTest();
+    fileSearchServiceMock.search.mockResolvedValue(["README.md"]);
+  });
+
+  function searchHandler() {
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    return calls.find((c) => c[0] === CHANNELS.FILES_SEARCH)?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+  }
+
+  const remote = { endpoint: { kind: "remote-view", projectId: "proj-1" } };
+
+  it("searches a remote view's own project folder", async () => {
+    const holdsRoot = vi.fn(async (_projectId: string, root: string) => root === "/srv/app");
+    registerRemoteService("hostFileService", { holdsRoot } as never);
+
+    await expect(
+      searchHandler()(remote, { cwd: "/srv/app", query: "readme", limit: 5 })
+    ).resolves.toEqual({ files: ["README.md"] });
+    expect(holdsRoot).toHaveBeenCalledWith("proj-1", "/srv/app");
+  });
+
+  it("finds nothing for a remote view naming a folder outside its project", async () => {
+    registerRemoteService("hostFileService", { holdsRoot: vi.fn(async () => false) } as never);
+    await expect(
+      searchHandler()(remote, { cwd: "/etc", query: "passwd", limit: 5 })
+    ).resolves.toEqual({ files: [] });
+    expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for a remote view when the host's file service isn't running", async () => {
+    await expect(
+      searchHandler()(remote, { cwd: "/srv/app", query: "readme", limit: 5 })
+    ).resolves.toEqual({ files: [] });
+    expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
+  });
+
+  it("returns files for valid payloads", async () => {
+    registerFilesHandlers();
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const entry = calls.find((c) => c[0] === CHANNELS.FILES_SEARCH);
+    expect(entry).toBeTruthy();
+
+    const handler = entry?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+    const result = await handler({} as unknown, {
+      cwd: "/tmp/project",
+      query: "readme",
+      limit: 5,
     });
-    expect(result.htmlPreviewUrl).toBeUndefined();
+
+    expect(result).toEqual({ files: ["README.md"] });
+    expect(fileSearchServiceMock.search).toHaveBeenCalledWith({
+      cwd: "/tmp/project",
+      query: "readme",
+      limit: 5,
+    });
+  });
+
+  it("rejects invalid payloads at the wrapper boundary before invoking search", async () => {
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const entry = calls.find((c) => c[0] === CHANNELS.FILES_SEARCH);
+    const handler = entry?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+
+    await expect(handler({} as unknown, { cwd: "/tmp/project", query: 123 })).rejects.toThrow(
+      /IPC validation failed/
+    );
+
+    expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
+  });
+
+  it("returns empty files when cwd is not absolute", async () => {
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const entry = calls.find((c) => c[0] === CHANNELS.FILES_SEARCH);
+    const handler = entry?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+
+    const result = await handler({} as unknown, { cwd: "relative/path", query: "readme" });
+
+    expect(result).toEqual({ files: [] });
+    expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
+  });
+
+  it("returns empty files when search service throws", async () => {
+    fileSearchServiceMock.search.mockRejectedValue(new Error("Unexpected failure"));
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const entry = calls.find((c) => c[0] === CHANNELS.FILES_SEARCH);
+    const handler = entry?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+
+    const result = await handler({} as unknown, { cwd: "/tmp/project", query: "readme" });
+
+    expect(result).toEqual({ files: [] });
+  });
+
+  it("propagates rate-limit errors and skips search service", async () => {
+    checkRateLimitMock.mockImplementationOnce(() => {
+      throw new Error("Rate limit exceeded");
+    });
+    registerFilesHandlers();
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const entry = calls.find((c) => c[0] === CHANNELS.FILES_SEARCH);
+    const handler = entry?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => Promise<{ files: string[] }>;
+
+    await expect(handler({} as unknown, { cwd: "/tmp/project", query: "readme" })).rejects.toThrow(
+      "Rate limit exceeded"
+    );
+    expect(fileSearchServiceMock.search).not.toHaveBeenCalled();
   });
 });

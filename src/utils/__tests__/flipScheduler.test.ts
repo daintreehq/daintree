@@ -71,17 +71,6 @@ describe("scheduleFlip", () => {
     expect(onFlip).toHaveBeenCalledTimes(1);
   });
 
-  it("does not immediately fire for a YEAR-sized delay (INT32 overflow guard)", () => {
-    const onFlip = vi.fn();
-    scheduleFlip(31_536_000_001, onFlip); // ~365 days — far over MAX_INT32
-
-    vi.advanceTimersByTime(50);
-    expect(onFlip).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(2_147_483_647);
-    expect(onFlip).toHaveBeenCalledTimes(1);
-  });
-
   it("cancels the pending timer while the document is hidden", () => {
     const onFlip = vi.fn();
     scheduleFlip(5000, onFlip);

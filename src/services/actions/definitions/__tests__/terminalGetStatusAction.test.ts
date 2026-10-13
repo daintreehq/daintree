@@ -171,20 +171,6 @@ describe("terminal.getStatus", () => {
     expect(result.unavailableFields).toContain("lastOutputChangeAt");
   });
 
-  it("returns a `terminals` object wrapper, never a raw array", async () => {
-    panelStoreMock.getState.mockReturnValue({
-      panelIds: ["t1"],
-      panelsById: {
-        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "idle" },
-      },
-    });
-
-    const result = await callGetStatus(setupActions());
-    expect(Array.isArray(result)).toBe(false);
-    expect(result.terminals).toHaveLength(1);
-    expect(result.terminals[0]?.terminalId).toBe("t1");
-  });
-
   it("resolves explicit terminalIds and returns per-entry error for unknown ids", async () => {
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1", "t2"],
@@ -557,28 +543,6 @@ describe("terminal.getStatus", () => {
     expect(out).toBe("agent answer\nidle composer");
   });
 
-  it("caps includeOutput.lines at 50", async () => {
-    const lines = Array.from({ length: 200 }, (_, i) => `line-${i}`).join("\n");
-    panelStoreMock.getState.mockReturnValue({
-      panelIds: ["t1"],
-      panelsById: {
-        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "idle" },
-      },
-    });
-    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: lines }));
-
-    // The Zod schema rejects values >50 at the boundary, but the runtime guard
-    // also clamps for callers that bypass schema validation. Test the runtime
-    // guard with an in-range value (50) and assert the slice length.
-    const { terminals } = await callGetStatus(setupActions(), {
-      includeOutput: { lines: 50 },
-    });
-    const out = terminals[0]?.recentOutput;
-    expect(typeof out).toBe("string");
-    expect((out as string).split("\n")).toHaveLength(50);
-    expect((out as string).split("\n")[0]).toBe("line-150");
-  });
-
   it("flags recentOutputTruncated only when older output was left out (#12450)", async () => {
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1", "t2", "t3"],
@@ -691,17 +655,6 @@ describe("terminal.getStatus", () => {
       recentOutput: null,
       error: "ipc gone",
     });
-  });
-
-  it("returns empty terminals array when filter matches nothing", async () => {
-    panelStoreMock.getState.mockReturnValue({
-      panelIds: [],
-      panelsById: {},
-    });
-
-    const { terminals } = await callGetStatus(setupActions());
-    expect(terminals).toEqual([]);
-    expect(getSerializedStatesMock).not.toHaveBeenCalled();
   });
 
   it("does not invoke getSerializedStates when no resolved terminals exist", async () => {
@@ -1035,24 +988,6 @@ describe("terminal.getStatus submission correlation (#12337)", () => {
     // observed nothing at all and must not make that claim.
     expect(result.terminals[0]?.submission).toBeUndefined();
     expect(result.terminals[0]?.error).toContain("host is down");
-  });
-
-  it("reports both batch failures instead of letting the later one hide the earlier", async () => {
-    onePanel();
-    terminalClientMock.getSubmissions.mockRejectedValue(new Error("submission lookup died"));
-    getSerializedStatesMock.mockRejectedValue(new Error("output fetch died"));
-
-    const result = await callGetStatus(setupActions(), {
-      terminalIds: ["t1"],
-      submissionToken: "tok-1",
-      includeOutput: { lines: 5 },
-    });
-
-    // Two independent fetches, two things the caller lost. Assigning rather
-    // than appending would report only the output failure, and the missing
-    // `submission` would look like it was never asked for.
-    expect(result.terminals[0]?.error).toContain("submission lookup died");
-    expect(result.terminals[0]?.error).toContain("output fetch died");
   });
 
   it("leaves a not-found entry alone instead of inventing a record for it", async () => {

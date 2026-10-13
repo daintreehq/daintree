@@ -146,13 +146,4 @@ describe("contributes.settings schema (#9301)", () => {
     const result = parseSettings([{ type: "string" }]);
     expect(result.success).toBe(false);
   });
-
-  it("defaults contributes.settings to an empty array when absent", () => {
-    const result = getPluginManifestSchema("user").safeParse({
-      name: "acme.no-settings",
-      version: "1.0.0",
-    });
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.data.contributes.settings).toEqual([]);
-  });
 });

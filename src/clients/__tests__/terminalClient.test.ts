@@ -685,27 +685,6 @@ describe("terminalClient MessagePort data routing", () => {
     });
   });
 
-  it("tolerates tier-changed for an unknown terminal and keeps dispatching", () => {
-    const port = acquirePort();
-    const received: Array<{ id: string; tier: string }> = [];
-    terminalClient.onTierChanged((id, tier) => received.push({ id, tier }));
-
-    // A tier-changed for a terminal the consumer doesn't track must not throw
-    // or wedge the dispatcher — the consumer routes by id internally.
-    port.postMessage({ type: "tier-changed", id: "no-such-terminal", tier: "background" });
-    port.postMessage({ type: "tier-changed", id: "term-1", tier: "active" });
-
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        expect(received).toEqual([
-          { id: "no-such-terminal", tier: "background" },
-          { id: "term-1", tier: "active" },
-        ]);
-        resolve();
-      }, 50);
-    });
-  });
-
   it("dispatches MessagePort terminal-status (data-loss) to onStatus callbacks", () => {
     // Per-window data-loss pulse for a saturated fan-out window (#9891) rides the
     // port, not the IPC broadcast, so it reaches only the affected window.

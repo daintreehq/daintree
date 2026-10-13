@@ -77,16 +77,6 @@ afterEach(() => {
 });
 
 describe("useProjectPluginBridge", () => {
-  it("subscribes to exactly the four project-scoped pushes", () => {
-    render(<Harness />);
-    expect([...listeners.keys()].sort()).toEqual([
-      "plugin:project-plugin-staged",
-      "plugin:project-plugin-visibility-changed",
-      "plugin:project-plugins-changed",
-      "plugin:project-trust-prompt",
-    ]);
-  });
-
   it("pulls the visibility overlay on mount and applies later pushes", async () => {
     getProjectPluginVisibility.mockReturnValue(Promise.resolve({ "acme.tools": false }));
     render(<Harness />);

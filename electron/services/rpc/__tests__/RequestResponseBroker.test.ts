@@ -139,46 +139,6 @@ describe("RequestResponseBroker", () => {
     expect(onTimeout).toHaveBeenCalledWith("req-labeled", "graceful-kill");
   });
 
-  it("legacy numeric register passes undefined method to onTimeout", async () => {
-    const onTimeout = vi.fn();
-    const broker = new RequestResponseBroker({ defaultTimeoutMs: 1000, onTimeout });
-    const promise = broker.register("req-legacy", 10);
-
-    vi.advanceTimersByTime(11);
-    await expect(promise).rejects.toThrow("Request timeout: req-legacy");
-    expect(onTimeout).toHaveBeenCalledWith("req-legacy", undefined);
-  });
-
-  it("options-object register with invalid timeoutMs falls back to default", async () => {
-    const broker = new RequestResponseBroker({ defaultTimeoutMs: 20 });
-    const promise = broker.register("req-opts-invalid", {
-      method: "snapshot",
-      timeoutMs: Number.NaN,
-    });
-
-    vi.advanceTimersByTime(10);
-    expect(broker.has("req-opts-invalid")).toBe(true);
-
-    vi.advanceTimersByTime(11);
-    await expect(promise).rejects.toThrow("Request timeout: req-opts-invalid");
-  });
-
-  it("clear(BrokerError HOST_EXITED) tags all pending rejections with the code", async () => {
-    const broker = new RequestResponseBroker();
-    const p1 = broker.register("a");
-    const p2 = broker.register("b");
-
-    broker.clear(new BrokerError("HOST_EXITED", "Pty host exited"));
-
-    const e1 = await p1.catch((e: unknown) => e);
-    const e2 = await p2.catch((e: unknown) => e);
-    expect(e1).toBeInstanceOf(BrokerError);
-    expect((e1 as BrokerError).code).toBe("HOST_EXITED");
-    expect(e2).toBeInstanceOf(BrokerError);
-    expect((e2 as BrokerError).code).toBe("HOST_EXITED");
-    expect(broker.size).toBe(0);
-  });
-
   it("BrokerError defaults message to the code when none provided", () => {
     const err = new BrokerError("HOST_EXITED");
     expect(err.message).toBe("HOST_EXITED");

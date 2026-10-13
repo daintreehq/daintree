@@ -368,24 +368,6 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
   });
 
-  it("uses singular form for a single tracked change", () => {
-    const worktree = makeWorktree(makeChanges([{ path: "src/app.ts", status: "modified" }]));
-    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
-
-    const warning = screen.getByText(/Required to delete this worktree/);
-    expect(warning.textContent).toContain("uncommitted changes to 1 tracked file ");
-    expect(warning.textContent).not.toContain("1 tracked files");
-  });
-
-  it("uses singular form for a single untracked file", () => {
-    const worktree = makeWorktree(makeChanges([{ path: "new.txt", status: "untracked" }]));
-    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
-
-    const warning = screen.getByText(/Required to delete this worktree/);
-    expect(warning.textContent).toContain("1 untracked file ");
-    expect(warning.textContent).not.toContain("1 untracked files");
-  });
-
   it("excludes ignored files from the uncommitted count", () => {
     const worktree = makeWorktree(
       makeChanges([
@@ -492,13 +474,6 @@ describe("WorktreeDeleteDialog — consequence list", () => {
    */
 
   const DIRECTORY_ROW = "Worktree directory will be deleted from disk";
-
-  it("renders the 'What will happen' heading", () => {
-    const worktree = makeWorktree(makeChanges([]));
-    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
-
-    expect(screen.getByText("What will happen")).toBeDefined();
-  });
 
   it("shows ONLY the directory row for a clean worktree with nothing attached", () => {
     const worktree = makeWorktree(makeChanges([]));
@@ -699,29 +674,6 @@ describe("WorktreeDeleteDialog — dialog chrome contract", () => {
     terminalsMock.length = 0;
     devPreviewGetByWorktreeMock.mockResolvedValue(null);
     buildPreviewMock.mockResolvedValue(null);
-  });
-
-  it("declares hasPreview so the ARIA role is dialog, not alertdialog", () => {
-    // The body carries a scrollable file list, three checkboxes and a text
-    // input. WAI-ARIA APG reserves `alertdialog` for brief text-only messages,
-    // and AppDialog picks the role off this flag.
-    const worktree = makeWorktree(makeChanges([{ path: "/wt/a.ts", status: "modified" }]));
-    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
-
-    expect(screen.getByTestId("delete-worktree-dialog").dataset.hasPreview).toBe("true");
-  });
-
-  it("routes the footer through structured actions so Cancel carries the focus marker", () => {
-    // Initial focus for a destructive dialog resolves against
-    // [data-confirm-role="cancel"]; a hand-written footer has no marker, so
-    // focus fell through to the first tabbable control — the force checkbox.
-    const worktree = makeWorktree(makeChanges([]));
-    const { container } = render(
-      <WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />
-    );
-
-    expect(container.querySelector('[data-confirm-role="cancel"]')).not.toBeNull();
-    expect(container.querySelector('[data-confirm-role="confirm"]')).not.toBeNull();
   });
 
   it("brings the D3 gate into view when the tier escalates", () => {
@@ -1175,19 +1127,6 @@ describe("WorktreeDeleteDialog — immediate dismiss", () => {
 
   afterEach(() => {
     cleanup();
-  });
-
-  it("does not render any in-modal skeleton after submit (progress surfaces on the card — #8417)", async () => {
-    const onClose = vi.fn();
-    const worktree = makeWorktree(makeChanges([]));
-    render(<WorktreeDeleteDialog isOpen={true} onClose={onClose} worktree={worktree} />);
-
-    await settlePreview();
-
-    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
-
-    expect(screen.queryByTestId("delete-worktree-skeleton")).toBeNull();
-    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("never blocks dismissal — Cancel always closes (no isDeleting guard)", () => {

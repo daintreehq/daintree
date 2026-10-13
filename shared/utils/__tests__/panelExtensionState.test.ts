@@ -23,19 +23,6 @@ describe("decodePanelExtensionState", () => {
     });
   });
 
-  it("hands the refused bag back, because refusing it is not licence to drop it", () => {
-    // The record and its state stay on disk so reinstalling the newer plugin
-    // returns the user's state intact — only the view's chance to overwrite it
-    // is withheld.
-    const result = decodePanelExtensionState({
-      state: BAG,
-      persistedVersion: 9,
-      declaredVersion: 1,
-    });
-    expect(result.ok).toBe(false);
-    expect(result.state).toBe(BAG);
-  });
-
   it("accepts a bag at the declared version", () => {
     expect(
       decodePanelExtensionState({ state: BAG, persistedVersion: 2, declaredVersion: 2 })

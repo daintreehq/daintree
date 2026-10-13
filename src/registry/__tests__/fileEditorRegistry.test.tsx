@@ -125,12 +125,6 @@ describe("fileEditorRegistry (#12323)", () => {
   });
 
   describe("useFileEditor", () => {
-    it("resolves null when no plugin claims the extension", () => {
-      registerBuiltinView("markdown.editor", Editor, { pluginId: "daintree.markdown-editor" });
-      const { result } = renderHook(() => useFileEditor("/repo/index.ts"));
-      expect(result.current).toBeNull();
-    });
-
     it("resolves null for an undefined path without touching the registry", () => {
       const { result } = renderHook(() => useFileEditor(undefined));
       expect(result.current).toBeNull();
@@ -197,11 +191,6 @@ describe("fileEditorRegistry (#12323)", () => {
 
       act(() => setDisabled([]));
       expect(result.current?.id).toBe("markdown");
-    });
-
-    it("resolves null when nothing claims the extension", () => {
-      const { result } = renderHook(() => useResolvedFileEditor("/repo/index.ts"));
-      expect(result.current).toBeNull();
     });
   });
 

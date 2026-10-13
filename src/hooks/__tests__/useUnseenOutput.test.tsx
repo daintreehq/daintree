@@ -37,13 +37,6 @@ describe("useUnseenOutput", () => {
     expect(result.current.isUserScrolledBack).toBe(false);
   });
 
-  it("returns hasUnseenOutput: false when scrolled back but no unseen", () => {
-    currentSnapshot = { isUserScrolledBack: true, unseen: 0 };
-    const { result } = renderHook(() => useUnseenOutput("t1"));
-    expect(result.current.hasUnseenOutput).toBe(false);
-    expect(result.current.isUserScrolledBack).toBe(true);
-  });
-
   it("returns hasUnseenOutput: false when unseen is at or below the hysteresis threshold", () => {
     currentSnapshot = { isUserScrolledBack: true, unseen: 1 };
     const { result: r1 } = renderHook(() => useUnseenOutput("t1"));

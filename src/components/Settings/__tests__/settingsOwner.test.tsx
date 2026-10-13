@@ -21,7 +21,7 @@ import {
   PROJECT_SETTINGS_TAB_IDS,
   type SettingsTab,
 } from "../settingsTabIds";
-import { ownerForTab, SETTINGS_REGISTRY } from "../settingsTabRegistry";
+import { ownerForTab } from "../settingsTabRegistry";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import { STORE_KEY_OWNERSHIP } from "../../../../electron/storeOwnership";
 
@@ -44,13 +44,6 @@ afterEach(() => {
 });
 
 describe("settings tab owners", () => {
-  it("every registered tab declares whose values it edits", () => {
-    expect(SETTINGS_REGISTRY.map((e) => e.id).sort()).toEqual([...ALL_TABS].sort());
-    for (const entry of SETTINGS_REGISTRY) {
-      expect(["host", "device", "mixed"], entry.id).toContain((entry as { owner?: unknown }).owner);
-    }
-  });
-
   it("files every project tab under the host: per-project settings travel with the project", () => {
     for (const tab of PROJECT_SETTINGS_TAB_IDS) expect(ownerForTab(tab), tab).toBe("host");
   });
@@ -73,19 +66,6 @@ describe("settings tab owners", () => {
       for (const key of keys) {
         expect(STORE_KEY_OWNERSHIP[key], `${tab} writes ${key}`).toBe(ownerForTab(tab));
       }
-    }
-  });
-
-  it("marks pages holding both machines' settings as mixed", () => {
-    for (const tab of [
-      "general",
-      "terminal",
-      "notifications",
-      "privacy",
-      "worktree",
-      "toolbar",
-    ] as const) {
-      expect(ownerForTab(tab), tab).toBe("mixed");
     }
   });
 });

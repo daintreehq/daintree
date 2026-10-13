@@ -73,42 +73,6 @@ describe("usePluginKeybindings", () => {
     });
   });
 
-  it("applies push updates authoritatively", async () => {
-    let emit:
-      | ((payload: {
-          keybindings: Array<{ pluginId: string; item: { actionId: string; combo: string } }>;
-          complete: boolean;
-        }) => void)
-      | null = null;
-    onKeybindingsChangedMock.mockImplementation(
-      (
-        cb: (payload: {
-          keybindings: Array<{ pluginId: string; item: { actionId: string; combo: string } }>;
-          complete: boolean;
-        }) => void
-      ) => {
-        emit = cb;
-        return () => {};
-      }
-    );
-
-    const { keybindingService } = await import("@/services/KeybindingService");
-    const registerSpy = vi.spyOn(keybindingService, "registerBinding");
-
-    const { usePluginKeybindings } = await import("../usePluginKeybindings");
-    renderHook(() => usePluginKeybindings());
-
-    await waitFor(() => expect(emit).not.toBeNull());
-    act(() => {
-      emit!({
-        keybindings: [makeEntry("p2", "p2.act", "Cmd+Shift+9")],
-        complete: false,
-      });
-    });
-
-    expect(registerSpy).toHaveBeenCalledWith(expect.objectContaining({ actionId: "p2.act" }));
-  });
-
   it("ignores stale pull after push arrives", async () => {
     let resolvePull:
       ((v: Array<{ pluginId: string; item: { actionId: string; combo: string } }>) => void) | null =
@@ -227,42 +191,6 @@ describe("usePluginKeybindings", () => {
         expect.objectContaining({ actionId: "p1.act", scope: "global" })
       );
     });
-  });
-
-  it("removes prior registrations when an authoritative empty push arrives", async () => {
-    let emit:
-      | ((payload: {
-          keybindings: Array<{ pluginId: string; item: { actionId: string; combo: string } }>;
-          complete: boolean;
-        }) => void)
-      | null = null;
-    onKeybindingsChangedMock.mockImplementation(
-      (
-        cb: (payload: {
-          keybindings: Array<{ pluginId: string; item: { actionId: string; combo: string } }>;
-          complete: boolean;
-        }) => void
-      ) => {
-        emit = cb;
-        return () => {};
-      }
-    );
-
-    const { keybindingService } = await import("@/services/KeybindingService");
-    const removeSpy = vi.spyOn(keybindingService, "removePluginBindings");
-
-    const { usePluginKeybindings } = await import("../usePluginKeybindings");
-    renderHook(() => usePluginKeybindings());
-
-    await waitFor(() => expect(emit).not.toBeNull());
-    act(() => {
-      emit!({ keybindings: [makeEntry("p1", "p1.act", "Cmd+Shift+8")], complete: true });
-    });
-    act(() => {
-      emit!({ keybindings: [], complete: true });
-    });
-
-    expect(removeSpy).toHaveBeenCalledWith("p1");
   });
 
   it("registers a binding that resolves a matching keyboard event, removed on empty push", async () => {

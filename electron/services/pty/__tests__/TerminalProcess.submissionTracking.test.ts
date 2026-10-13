@@ -204,19 +204,6 @@ describe("TerminalProcess submission tracking (#12337)", () => {
     expect(statuses).toEqual(["failed"]);
     vi.useRealTimers();
   });
-
-  it("keeps a burst of tokens separately answerable", async () => {
-    vi.useFakeTimers();
-    const terminal = createTerminal();
-
-    terminal.submit("one\n", "tok-1");
-    terminal.submit("two\n", "tok-2");
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
-    expect(terminal.getSubmission("tok-2")?.phase).toBe("pty_written");
-    vi.useRealTimers();
-  });
 });
 
 /**

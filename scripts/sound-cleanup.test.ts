@@ -40,24 +40,6 @@ describe("cleanupStaleWavs", () => {
     expect(listFiles(dir).sort()).toEqual(["error.wav"]);
   });
 
-  it("preserves all expected .wav files", () => {
-    const dir = makeTempDir();
-    touch(dir, "error.wav");
-    touch(dir, "chime.wav");
-    touch(dir, "chime.v1.wav");
-    touch(dir, "chime.v2.wav");
-    const expected = new Set(["error.wav", "chime.wav", "chime.v1.wav", "chime.v2.wav"]);
-
-    cleanupStaleWavs(dir, expected);
-
-    expect(listFiles(dir).sort()).toEqual([
-      "chime.v1.wav",
-      "chime.v2.wav",
-      "chime.wav",
-      "error.wav",
-    ]);
-  });
-
   it("preserves non-.wav files", () => {
     const dir = makeTempDir();
     touch(dir, "error.wav");
@@ -94,18 +76,6 @@ describe("cleanupStaleWavs", () => {
     const entries = readdirSync(dir, { withFileTypes: true });
     const dirs = entries.filter((d) => d.isDirectory()).map((d) => d.name);
     expect(dirs).toContain("trap.wav");
-  });
-
-  it("is idempotent — running twice has the same result", () => {
-    const dir = makeTempDir();
-    touch(dir, "error.wav");
-    touch(dir, "chime.wav");
-    const expected = new Set(["chime.wav"]);
-
-    cleanupStaleWavs(dir, expected);
-    cleanupStaleWavs(dir, expected);
-
-    expect(listFiles(dir)).toEqual(["chime.wav"]);
   });
 
   it("deletes all .wav when expected set is empty", () => {

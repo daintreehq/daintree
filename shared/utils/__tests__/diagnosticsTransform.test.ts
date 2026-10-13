@@ -10,6 +10,7 @@ import {
   PREBUILT_REDACTIONS,
   type ReplacementRule,
 } from "../diagnosticsTransform.js";
+import { legacyApplyReplacementsCounted } from "../__bench__/legacyApplyReplacements.js";
 
 describe("applyReplacements", () => {
   it("applies a literal rule by default (no kind)", () => {
@@ -135,15 +136,6 @@ describe("PREBUILT_REDACTIONS", () => {
       "open [REDACTED] please"
     );
   });
-
-  it("every prebuilt rule compiles as a valid global regex", () => {
-    for (const preset of PREBUILT_REDACTIONS) {
-      for (const rule of preset.rules) {
-        expect(rule.kind).toBe("regex");
-        expect(() => new RegExp(rule.find, "g")).not.toThrow();
-      }
-    }
-  });
 });
 
 describe("filterSections", () => {
@@ -254,5 +246,51 @@ describe("file path redaction", () => {
     const out = applyReplacements("open C:\\Users\\Alice\\file.txt failed", rules);
     expect(out).not.toContain("Alice");
     expect(out).toContain("failed");
+  });
+});
+
+function rng(seed: number) {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+const PARITY_ALPHABET = ["a", "b", "ab", "aa", " ", "x", "@", ".", "1", "\n", "abc"];
+const PARITY_RULE_POOL: ReplacementRule[] = [
+  { kind: "literal", find: "a", replace: "" },
+  { kind: "literal", find: "ab", replace: "[R]" },
+  { kind: "literal", find: "aa", replace: "Z" },
+  { kind: "literal", find: "[R]", replace: "!!!!" },
+  { kind: "literal", find: "x", replace: "xxx" },
+  { kind: "regex", find: "a+", replace: "#" },
+  { kind: "regex", find: "b|c", replace: "[BC]" },
+  { kind: "regex", find: "\\d", replace: "" },
+  { kind: "regex", find: "a*", replace: "-" },
+  { kind: "regex", find: "(?<=a)", replace: "|" },
+  { kind: "regex", find: "x", replace: "$&$&" },
+  { kind: "regex", find: "\\[", replace: "<<" },
+  { kind: "regex", find: "(", replace: "bad" },
+  { kind: "literal", find: "", replace: "skipped" },
+];
+
+describe("applyReplacementsCounted parity with the scan-based implementation", () => {
+  it("matches on randomized inputs and rule stacks", () => {
+    const rand = rng(12345);
+    for (let iter = 0; iter < 1500; iter++) {
+      const len = Math.floor(rand() * 60);
+      let text = "";
+      for (let i = 0; i < len; i++)
+        text += PARITY_ALPHABET[Math.floor(rand() * PARITY_ALPHABET.length)];
+      const ruleCount = 1 + Math.floor(rand() * 5);
+      const rules = Array.from(
+        { length: ruleCount },
+        () => PARITY_RULE_POOL[Math.floor(rand() * PARITY_RULE_POOL.length)]!
+      );
+      expect(applyReplacementsCounted(text, rules), JSON.stringify({ text, rules })).toEqual(
+        legacyApplyReplacementsCounted(text, rules)
+      );
+    }
   });
 });

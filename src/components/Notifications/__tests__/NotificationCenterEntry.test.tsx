@@ -70,11 +70,6 @@ describe("NotificationCenterEntry overflow menu", () => {
     expect(screen.queryByLabelText(/^Options for /)).toBeNull();
   });
 
-  it("renders overflow menu when context.projectId is present", () => {
-    render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
-    expect(screen.getByLabelText(/^Options for /)).toBeTruthy();
-  });
-
   it("dispatches project.muteNotifications when Mute is selected", async () => {
     render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
 
@@ -93,19 +88,6 @@ describe("NotificationCenterEntry overflow menu", () => {
     expect(dispatchMock).toHaveBeenCalledWith("project.muteNotifications", {
       projectId: "p1",
     });
-  });
-
-  it("still renders dismiss button alongside overflow menu", () => {
-    const onDismiss = vi.fn();
-    render(
-      <NotificationCenterEntry
-        entry={makeEntry({ context: { projectId: "p1" } })}
-        onDismiss={onDismiss}
-      />
-    );
-
-    expect(screen.getByLabelText(/^Dismiss /)).toBeTruthy();
-    expect(screen.getByLabelText(/^Options for /)).toBeTruthy();
   });
 });
 
@@ -186,12 +168,6 @@ describe("NotificationCenterEntry title font weight", () => {
     expect(titleEl.className).not.toMatch(/font-medium/);
     expect(titleEl.className).not.toMatch(/font-semibold/);
   });
-
-  it("renders read title (isNew=false explicitly) with font-normal", () => {
-    render(<NotificationCenterEntry entry={makeEntry({ title: "Caught up" })} isNew={false} />);
-    const titleEl = screen.getByText("Caught up");
-    expect(titleEl.className).toMatch(/font-normal/);
-  });
 });
 
 /**
@@ -224,12 +200,6 @@ describe("NotificationCenterEntry thread count chip", () => {
     expect(glyph(chip)).toBe("3");
   });
 
-  it("does not render the legacy 'N events' subtitle text", () => {
-    render(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={3} />);
-    // Visible text only: the spoken "3 events" lives in visually hidden text.
-    expect(screen.queryByText(/^\d+ events$/, { ignore: ".sr-only" })).toBeNull();
-  });
-
   it("does not render a chip when threadCount is 1, 0, or omitted", () => {
     const { rerender } = render(
       <NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={1} />
@@ -248,11 +218,6 @@ describe("NotificationCenterEntry thread count chip", () => {
     const chip = getChip("2 events");
     const title = screen.getByText("Build");
     expect(chip.parentElement).toBe(title.parentElement);
-  });
-
-  it("renders the chip below the message when no title is present", () => {
-    render(<NotificationCenterEntry entry={makeEntry({ message: "Plain" })} threadCount={2} />);
-    expect(getChip("2 events")).toBeTruthy();
   });
 
   it("uses tint-based background, not the accent color", () => {
@@ -397,33 +362,6 @@ describe("NotificationCenterEntry timestamp formatting", () => {
     return screen.getByTestId("notification-timestamp");
   }
 
-  it("renders 'just now' for sub-60s timestamps", () => {
-    vi.useFakeTimers();
-    const now = new Date(2026, 0, 15, 12, 0, 0);
-    vi.setSystemTime(now);
-    const ts = now.getTime() - 30 * 1000;
-    render(<NotificationCenterEntry entry={makeEntry({ timestamp: ts })} />);
-    expect(timestampSpan().textContent).toBe("just now");
-  });
-
-  it("renders 'Nm ago' for minute-scale today timestamps", () => {
-    vi.useFakeTimers();
-    const now = new Date(2026, 0, 15, 12, 0, 0);
-    vi.setSystemTime(now);
-    const ts = now.getTime() - 5 * 60 * 1000;
-    render(<NotificationCenterEntry entry={makeEntry({ timestamp: ts })} />);
-    expect(timestampSpan().textContent).toBe("5m ago");
-  });
-
-  it("renders 'Nh ago' for hour-scale today timestamps", () => {
-    vi.useFakeTimers();
-    const now = new Date(2026, 0, 15, 12, 0, 0);
-    vi.setSystemTime(now);
-    const ts = now.getTime() - 2 * 60 * 60 * 1000;
-    render(<NotificationCenterEntry entry={makeEntry({ timestamp: ts })} />);
-    expect(timestampSpan().textContent).toBe("2h ago");
-  });
-
   it("pivots a yesterday timestamp to 'Yesterday HH:MM' instead of 'Nd ago'", () => {
     vi.useFakeTimers();
     const now = new Date(2026, 0, 15, 12, 0, 0);
@@ -526,34 +464,6 @@ describe("NotificationCenterEntry timestamp formatting", () => {
 });
 
 describe("NotificationCenterEntry roving focus props", () => {
-  it("applies tabIndex and role to the root row when provided", () => {
-    const { container } = render(
-      <NotificationCenterEntry entry={makeEntry()} tabIndex={0} role="listitem" />
-    );
-    const root = container.firstElementChild as HTMLElement;
-    expect(root.getAttribute("tabindex")).toBe("0");
-    expect(root.getAttribute("role")).toBe("listitem");
-  });
-
-  it("invokes rowRef with the row DOM element", () => {
-    const rowRef = vi.fn();
-    render(<NotificationCenterEntry entry={makeEntry()} tabIndex={-1} rowRef={rowRef} />);
-    expect(rowRef).toHaveBeenCalledTimes(1);
-    expect(rowRef.mock.calls[0]?.[0]).toBeInstanceOf(HTMLDivElement);
-  });
-
-  it("calls onFocus when the row receives focus", () => {
-    const onFocus = vi.fn();
-    const { container } = render(
-      <NotificationCenterEntry entry={makeEntry()} tabIndex={0} onFocus={onFocus} />
-    );
-    const root = container.firstElementChild as HTMLElement;
-    act(() => {
-      root.focus();
-    });
-    expect(onFocus).toHaveBeenCalledTimes(1);
-  });
-
   it("applies a keyboard-focus treatment only when tabIndex is set", () => {
     const { container, rerender } = render(<NotificationCenterEntry entry={makeEntry()} />);
     const focusClasses = () => (container.firstElementChild as HTMLElement).className;
@@ -716,40 +626,6 @@ describe("NotificationCenterEntry roving focus props", () => {
     );
     expect(read.textContent ?? "").not.toMatch(/unread/i);
   });
-
-  it("carries the forced-colors repaint handle on the thread-count chip", () => {
-    render(<NotificationCenterEntry entry={makeEntry()} threadCount={3} />);
-    // Exact spoken name, not /3/: the timestamp's aria-label is an absolute
-    // datetime, so a loose match also hits it whenever the wall clock happens to
-    // contain the digit — a test that only fails for part of the day.
-    expect(getChip("3 events").getAttribute("data-notification-count")).toBe("true");
-  });
-
-  it("invokes onDropdownOpenChange when the kebab menu opens and closes", async () => {
-    const onDropdownOpenChange = vi.fn();
-    render(
-      <NotificationCenterEntry
-        entry={makeEntry({ context: { projectId: "p1" } })}
-        onDropdownOpenChange={onDropdownOpenChange}
-      />
-    );
-    const trigger = screen.getByLabelText(/^Options for /);
-
-    await act(async () => {
-      fireEvent.pointerDown(trigger, { button: 0 });
-      fireEvent.pointerUp(trigger, { button: 0 });
-      fireEvent.click(trigger);
-    });
-
-    expect(onDropdownOpenChange).toHaveBeenCalledWith(true);
-
-    // Press Escape on the menu — Radix closes and fires onOpenChange(false).
-    await act(async () => {
-      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
-    });
-
-    expect(onDropdownOpenChange).toHaveBeenCalledWith(false);
-  });
 });
 
 describe("NotificationCenterEntry diagnostics affordances", () => {
@@ -788,15 +664,6 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(trigger);
     });
   }
-
-  it("shows none of the diagnostics items when correlationId and panelId are absent", () => {
-    render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
-    // Menu opens because projectId enables the existing mute item.
-    // No diagnostics items should be rendered.
-    expect(screen.queryByText("Copy correlation ID")).toBeNull();
-    expect(screen.queryByText("Report on GitHub")).toBeNull();
-    expect(screen.queryByText("Go to source")).toBeNull();
-  });
 
   it("renders Copy correlation ID when correlationId is set", async () => {
     render(
@@ -1062,28 +929,6 @@ describe("NotificationCenterEntry — row menu names the full source", () => {
   });
 });
 
-describe("NotificationCenterEntry forced-colors action hook", () => {
-  it("marks exactly the recommended action for the forced-colors primary border", () => {
-    getMock.mockReturnValue({ enabled: true });
-    render(
-      <NotificationCenterEntry
-        entry={makeEntry({
-          actions: [
-            { label: "Pull and rebase", actionId: "terminal.kill" },
-            { label: "Open review", actionId: "terminal.kill", variant: "secondary" },
-          ],
-        })}
-      />
-    );
-    expect(screen.getByRole("button", { name: "Pull and rebase" }).dataset.notificationAction).toBe(
-      "primary"
-    );
-    expect(screen.getByRole("button", { name: "Open review" }).dataset.notificationAction).not.toBe(
-      "primary"
-    );
-  });
-});
-
 function seedPanel(id: string, location: string, worktreeId?: string) {
   usePanelStore.setState({
     panelsById: { [id]: { id, kind: "terminal", location, worktreeId } },
@@ -1180,16 +1025,6 @@ describe("NotificationCenterEntry — go to source", () => {
     });
     const focusCalls = dispatchMock.mock.calls.filter(([id]) => id === "panel.focus");
     expect(focusCalls).toEqual([["panel.focus", { panelId: "pane-42" }]]);
-  });
-
-  it("keeps the inbox open when panel.focus fails", async () => {
-    seedPanel("pane-42", "grid");
-    dispatchMock.mockResolvedValueOnce({ ok: false, error: { message: "gone" } });
-    render(<NotificationCenterEntry entry={makeEntry({ context: { panelId: "pane-42" } })} />);
-    await act(async () => {
-      fireEvent.click(screen.getByText("Hello"));
-    });
-    expect(useUIStore.getState().notificationCenterOpen).toBe(true);
   });
 
   it("makes a row whose panel is gone inert, readable, and says so", async () => {

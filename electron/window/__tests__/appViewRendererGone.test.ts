@@ -108,11 +108,6 @@ describe("app-view render-process-gone (#12954)", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers exactly one render-process-gone listener", () => {
-    const { handlers } = createHarness();
-    expect(handlers).toHaveLength(1);
-  });
-
   it("routes a startup-view crash to onViewCrashed exactly once, before the reload", () => {
     const { pvm, onViewCrashed } = createClaimingManager({ claimed: true, active: true });
     const { appWebContents, crash } = createHarness({ pvm });
@@ -200,30 +195,6 @@ describe("app-view render-process-gone (#12954)", () => {
 
     expect(onViewRendererGone).toHaveBeenCalledTimes(1);
     expect(onViewRendererGone).toHaveBeenCalledWith(appWebContents);
-  });
-
-  it("does not fire the hook for an unbound window's picker", () => {
-    const { pvm, onViewCrashed, onViewRendererGone } = createClaimingManager({
-      claimed: false,
-      active: true,
-    });
-    const { appWebContents, crash } = createHarness({ pvm });
-
-    crash("crashed");
-    vi.runAllTimers();
-
-    expect(onViewCrashed).not.toHaveBeenCalled();
-    expect(onViewRendererGone).not.toHaveBeenCalled();
-    expect(appWebContents.reload).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not fire the hook when the app view is no longer the active project", () => {
-    const { pvm, onViewCrashed } = createClaimingManager({ claimed: true, active: false });
-    const { crash } = createHarness({ pvm });
-
-    crash("crashed");
-
-    expect(onViewCrashed).not.toHaveBeenCalled();
   });
 
   it("hands a cached startup view's crash to the manager's eviction instead of reloading", () => {

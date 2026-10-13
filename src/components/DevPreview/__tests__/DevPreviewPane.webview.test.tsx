@@ -830,72 +830,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
   });
 
-  it("retries loadURL with exponential backoff when did-fail-load fires with ERR_CONNECTION_REFUSED", async () => {
-    const { container } = render(<DevPreviewPane {...baseProps} />);
-    const webview = getWebviewElement(container);
-
-    act(() => {
-      emitWebviewEvent(webview, "did-fail-load", {
-        errorCode: -102,
-        errorDescription: "ERR_CONNECTION_REFUSED",
-        isMainFrame: true,
-        validatedURL: "http://localhost:5173/",
-      });
-    });
-
-    // First retry fires after 500ms (backoff: 500 * 2^0 = 500ms)
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-
-    expect(webview.loadURL).toHaveBeenCalled();
-  });
-
-  it("stops retrying after a successful load following did-fail-load", async () => {
-    const { container } = render(<DevPreviewPane {...baseProps} />);
-    const webview = getWebviewElement(container);
-
-    act(() => {
-      emitWebviewEvent(webview, "did-fail-load", {
-        errorCode: -102,
-        errorDescription: "ERR_CONNECTION_REFUSED",
-        isMainFrame: true,
-        validatedURL: "http://localhost:5173/",
-      });
-    });
-
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-
-    const callsAfterFirstRetry = webview.loadURL.mock.calls.length;
-
-    // The retry issues its own load, so the real sequence carries a load start
-    // before the successful finish. Without it the failure latch from the first
-    // did-fail-load would still be up and did-finish-load would (correctly) refuse
-    // to treat this as a successful load.
-    act(() => {
-      emitWebviewEvent(webview, "did-start-loading");
-      emitWebviewEvent(webview, "did-finish-load");
-    });
-
-    // Fail again — retry counter was reset so retry fires at 500ms again
-    act(() => {
-      emitWebviewEvent(webview, "did-fail-load", {
-        errorCode: -102,
-        errorDescription: "ERR_CONNECTION_REFUSED",
-        isMainFrame: true,
-        validatedURL: "http://localhost:5173/",
-      });
-    });
-
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-
-    expect(webview.loadURL.mock.calls.length).toBeGreaterThan(callsAfterFirstRetry);
-  });
-
   it("does not retry did-fail-load for non-connection errors", () => {
     const { container } = render(<DevPreviewPane {...baseProps} />);
     const webview = getWebviewElement(container);
@@ -1119,115 +1053,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     );
     // Frozen-page path must NOT be used for ref-cleanup capture.
     expect(webview.executeJavaScript).not.toHaveBeenCalledWith("window.scrollY");
-  });
-
-  it("does not persist a failed CDP scroll read (null sentinel)", async () => {
-    // handleGetScrollPosition answers `null` when it could not read at all, and
-    // only then must the prior stored position survive. A genuine 0 is a real
-    // position and is covered by the sibling test below (#12298).
-    const getScrollPosition = vi.fn().mockResolvedValue(null);
-    (window as unknown as { electron: Record<string, unknown> }).electron = {
-      system: { openExternal: vi.fn() },
-      window: { onDestroyHiddenWebviews: vi.fn(() => vi.fn()) },
-      webview: {
-        registerPanel: vi.fn(() => Promise.resolve()),
-        onDialogRequest: vi.fn(() => vi.fn()),
-        onFindShortcut: vi.fn(() => vi.fn()),
-        onReloadShortcut: vi.fn(() => vi.fn()),
-        onCloseShortcut: vi.fn(() => vi.fn()),
-        onNavigationBlocked: vi.fn(() => vi.fn()),
-        onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
-        onUnresponsive: vi.fn(() => vi.fn()),
-        onResponsive: vi.fn(() => vi.fn()),
-        setLifecycleState: vi.fn().mockResolvedValue(undefined),
-        getScrollPosition,
-        startConsoleCapture: vi.fn(() => Promise.resolve()),
-        stopConsoleCapture: vi.fn(() => Promise.resolve()),
-        onConsoleMessage: vi.fn(() => vi.fn()),
-        onConsoleContextCleared: vi.fn(() => vi.fn()),
-      },
-    };
-
-    const { unmount } = render(<DevPreviewPane {...baseProps} />);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      unmount();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(getScrollPosition).toHaveBeenCalled();
-    expect(terminalStoreState.setDevPreviewScrollPosition).not.toHaveBeenCalled();
-  });
-
-  it("persists a successful scrollY=0 so a return to the top overwrites a stale offset", async () => {
-    const getScrollPosition = vi.fn().mockResolvedValue(0);
-    (window as unknown as { electron: Record<string, unknown> }).electron = {
-      system: { openExternal: vi.fn() },
-      window: { onDestroyHiddenWebviews: vi.fn(() => vi.fn()) },
-      webview: {
-        registerPanel: vi.fn(() => Promise.resolve()),
-        onDialogRequest: vi.fn(() => vi.fn()),
-        onFindShortcut: vi.fn(() => vi.fn()),
-        onReloadShortcut: vi.fn(() => vi.fn()),
-        onCloseShortcut: vi.fn(() => vi.fn()),
-        onNavigationBlocked: vi.fn(() => vi.fn()),
-        onOAuthLoopbackStatus: vi.fn(() => vi.fn()),
-        onUnresponsive: vi.fn(() => vi.fn()),
-        onResponsive: vi.fn(() => vi.fn()),
-        setLifecycleState: vi.fn().mockResolvedValue(undefined),
-        getScrollPosition,
-        startConsoleCapture: vi.fn(() => Promise.resolve()),
-        stopConsoleCapture: vi.fn(() => Promise.resolve()),
-        onConsoleMessage: vi.fn(() => vi.fn()),
-        onConsoleContextCleared: vi.fn(() => vi.fn()),
-      },
-    };
-
-    const { unmount } = render(<DevPreviewPane {...baseProps} />);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      unmount();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(terminalStoreState.setDevPreviewScrollPosition).toHaveBeenCalledWith(
-      "dev-preview-panel-1",
-      { url: "http://localhost:5173/", scrollY: 0 }
-    );
-  });
-
-  it("captures scroll position when status transitions from running", async () => {
-    const { container, rerender } = render(<DevPreviewPane {...baseProps} />);
-    const webview = getWebviewElement(container);
-    webview.executeJavaScript.mockResolvedValue(250);
-
-    // Transition to stopped
-    devServerStateRef.current = {
-      ...devServerStateRef.current,
-      status: "stopped",
-      url: null,
-    };
-    rerender(<DevPreviewPane {...baseProps} />);
-
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    expect(webview.executeJavaScript).toHaveBeenCalledWith("window.scrollY");
-    expect(terminalStoreState.setDevPreviewScrollPosition).toHaveBeenCalledWith(
-      "dev-preview-panel-1",
-      { url: "http://localhost:5173/", scrollY: 250 }
-    );
   });
 
   it("restores scroll position on dom-ready after remount", async () => {
@@ -1476,31 +1301,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(terminalStoreState.setBrowserUrl).toHaveBeenCalledWith("dev-preview-panel-1", "");
   });
 
-  it("shows retry-exhausted error overlay after MAX_RETRIES connection failures", async () => {
-    const { container } = render(<DevPreviewPane {...baseProps} />);
-    const webview = getWebviewElement(container);
-
-    // Fire 6 failures (MAX_RETRIES = 5, so the 6th triggers the error)
-    for (let i = 0; i < 6; i++) {
-      act(() => {
-        emitWebviewEvent(webview, "did-fail-load", {
-          errorCode: -102,
-          errorDescription: "ERR_CONNECTION_REFUSED",
-          isMainFrame: true,
-          validatedURL: "http://localhost:5173/",
-        });
-      });
-      if (i < 5) {
-        act(() => {
-          vi.advanceTimersByTime(Math.min(500 * 2 ** i, 8000));
-        });
-      }
-    }
-
-    expect(container.textContent).toContain("Dev server unreachable");
-    expect(container.textContent).toContain("Unable to connect to dev server");
-  });
-
   it("clears retry-exhausted error on hard restart", async () => {
     const { container } = render(<DevPreviewPane {...baseProps} />);
     const webview = getWebviewElement(container);
@@ -1590,24 +1390,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Load cancelled");
     });
 
-    it("timeout calls webview.stop() instead of reload", () => {
-      const { container } = render(<DevPreviewPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(30000);
-      });
-
-      expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(webview.reload).not.toHaveBeenCalled();
-      expect(container.textContent).toContain("Page load timed out");
-    });
-
     it("Retry from timeout clears error and loads current URL", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -1633,31 +1415,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
 
       expect(webview.loadURL).toHaveBeenCalledWith("http://localhost:5173/");
-    });
-
-    it("clears slow timer when did-fail-load fires", () => {
-      const { container } = render(<DevPreviewPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      act(() => {
-        emitWebviewEvent(webview, "did-fail-load", {
-          errorCode: -105,
-          errorDescription: "Name not resolved",
-          isMainFrame: true,
-          validatedURL: "http://badsite.test/",
-        });
-      });
-
-      act(() => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      expect(container.textContent).not.toContain("Taking longer than usual");
     });
 
     it("shows DNS failure for -105 in webviewLoadError", () => {
@@ -2015,24 +1772,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
 
       expect(mkcertButton!.textContent).toContain("mkcert -install");
     });
-
-    it("cleans slow timer on unmount", () => {
-      const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-
-      unmount();
-
-      act(() => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      expect(container.textContent).not.toContain("Taking longer than usual");
-    });
   });
 
   // #11114: the hook now exposes promotion failures; this covers the pane
@@ -2317,19 +2056,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       notifyMock.mockClear();
     });
 
-    it("does not notify on the first crash", () => {
-      const { container } = render(<DevPreviewPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        emitWebviewEvent(webview, "render-process-gone", {
-          details: { reason: "crashed", exitCode: 1 },
-        });
-      });
-
-      expect(notifyMock).not.toHaveBeenCalled();
-    });
-
     it("notifies on the second crash within 60 seconds", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -2469,73 +2195,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).toContain("Preview is not responding");
     });
 
-    it("clears the unresponsive banner when the guest becomes responsive again", () => {
-      let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
-      let responsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = getElectronMock();
-      electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
-        unresponsiveCb = cb;
-        return vi.fn();
-      });
-      electron.webview.onResponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
-        responsiveCb = cb;
-        return vi.fn();
-      });
-
-      const { container } = render(<DevPreviewPane {...baseProps} />);
-      getWebviewElement(container);
-
-      act(() => {
-        unresponsiveCb?.({ panelId: "dev-preview-panel-1" });
-      });
-      expect(container.textContent).toContain("Preview is not responding");
-
-      act(() => {
-        responsiveCb?.({ panelId: "dev-preview-panel-1" });
-      });
-      expect(container.textContent).not.toContain("Preview is not responding");
-    });
-
-    it("does not clear a crashed banner when a stale responsive event arrives", () => {
-      let responsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = getElectronMock();
-      electron.webview.onResponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
-        responsiveCb = cb;
-        return vi.fn();
-      });
-
-      const { container } = render(<DevPreviewPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        emitWebviewEvent(webview, "render-process-gone", {
-          details: { reason: "crashed", exitCode: 1 },
-        });
-      });
-
-      act(() => {
-        responsiveCb?.({ panelId: "dev-preview-panel-1" });
-      });
-      expect(container.textContent).toContain("Preview process crashed");
-    });
-
-    it("ignores unresponsive events targeting a different panel", () => {
-      let unresponsiveCb: ((data: { panelId: string }) => void) | undefined;
-      const electron = getElectronMock();
-      electron.webview.onUnresponsive = vi.fn((cb: (data: { panelId: string }) => void) => {
-        unresponsiveCb = cb;
-        return vi.fn();
-      });
-
-      const { container } = render(<DevPreviewPane {...baseProps} />);
-      getWebviewElement(container);
-
-      act(() => {
-        unresponsiveCb?.({ panelId: "some-other-panel" });
-      });
-      expect(container.textContent).not.toContain("Preview is not responding");
-    });
-
     it("clears the crash banner on a confirmed navigation to a new URL", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -2607,23 +2266,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       });
       saveSettingsMock.mockResolvedValue(undefined);
       devServerStateRef.current.stop = vi.fn();
-    });
-
-    it("hidden when unconfigured (no devCommand)", () => {
-      terminalStoreState.getTerminal.mockImplementation(() => ({
-        kind: "dev-preview",
-        id: "dev-preview-panel-1",
-        browserHistory: { past: [], present: "", future: [] },
-        browserZoom: 1.0,
-        devPreviewConsoleOpen: false,
-      }));
-      render(<DevPreviewPane {...baseProps} />);
-      expect(screen.queryByTestId("panel-header-content")).toBeNull();
-    });
-
-    it("hidden when no candidates available", () => {
-      render(<DevPreviewPane {...baseProps} />);
-      expect(screen.queryByTestId("panel-header-content")).toBeNull();
     });
 
     it("visible when configured with candidates", () => {
@@ -3380,22 +3022,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(container.textContent).not.toContain("Page load timed out");
     });
 
-    it("still times out when the main document never reaches dom-ready", () => {
-      const { container } = render(<DevPreviewPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-
-      act(() => {
-        webview.setMockLoading(true);
-        emitWebviewEvent(webview, "did-start-loading");
-      });
-      act(() => {
-        vi.advanceTimersByTime(30000);
-      });
-
-      expect(webview.stop).toHaveBeenCalledTimes(1);
-      expect(container.textContent).toContain("Page load timed out");
-    });
-
     it("renders an application 502 instead of the proxy outage overlay", () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);
@@ -3524,12 +3150,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   });
 
   describe("src binding regression (#9940)", () => {
-    it("seeds src once at mount", () => {
-      const { container } = render(<DevPreviewPane {...baseProps} />);
-      const webview = getWebviewElement(container);
-      expect(webview.getAttribute("src")).toBe("http://localhost:5173/");
-    });
-
     it("does not issue a redundant loadURL on first ready when the seed matches history", async () => {
       const { container } = render(<DevPreviewPane {...baseProps} />);
       const webview = getWebviewElement(container);

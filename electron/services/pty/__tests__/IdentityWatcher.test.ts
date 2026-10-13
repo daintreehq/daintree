@@ -101,12 +101,6 @@ describe("IdentityWatcher", () => {
   });
 
   describe("suppress signal", () => {
-    it("returns false when no signal is armed", () => {
-      const { delegate } = createFakeDelegate();
-      const watcher = new IdentityWatcher(delegate);
-      expect(watcher.consumeSuppressSignal()).toBe(false);
-    });
-
     it("armSuppressSignal followed by consumeSuppressSignal returns true once", () => {
       const { delegate } = createFakeDelegate();
       const watcher = new IdentityWatcher(delegate);

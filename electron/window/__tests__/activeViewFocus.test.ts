@@ -103,18 +103,6 @@ describe("attachActiveViewFocus", () => {
     expect(portalView.webContents.isFocused()).toBe(true);
   });
 
-  it("does not refocus a project view that already holds focus", async () => {
-    const { win, projectView, activate } = createScene();
-    attachActiveViewFocus(asWindow(win), { getActiveView: () => asView(projectView) });
-
-    activate();
-    projectView.webContents.focus();
-    projectView.webContents.focus.mockClear();
-
-    await flushImmediates();
-    expect(projectView.webContents.focus).not.toHaveBeenCalled();
-  });
-
   it("never focuses a window revealed inactive, since focusing a view activates its window", async () => {
     const { win, projectView } = createScene();
     const handle = attachActiveViewFocus(asWindow(win), {

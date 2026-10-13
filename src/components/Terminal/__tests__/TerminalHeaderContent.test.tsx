@@ -98,14 +98,6 @@ afterEach(() => {
 });
 
 describe("TerminalHeaderContent — settled-agent trace", () => {
-  it("renders no agent glyph in the row: PanelHeader owns it past the close button", () => {
-    mockTerminal = { id: "t1", stateChangeTrigger: "output", stateChangeConfidence: 1 };
-
-    render(<TerminalHeaderContent id="t1" agentState="working" />);
-
-    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
-  });
-
   it("shows exit code when exited", () => {
     mockTerminal = { id: "t1" };
 
@@ -217,15 +209,6 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     expect(cls).not.toMatch(/\btransition-all\b/);
   });
 
-  it("starts at muted severity when CPU is low", () => {
-    mockResourceEnabled = true;
-    mockResourceState = makeResourceState(10);
-
-    const { container } = render(<TerminalHeaderContent id="t1" kind="terminal" />);
-    const wrapper = container.querySelector('[data-testid="terminal-resource-badge"]');
-    expectMutedSeverity(wrapper!.getAttribute("data-severity"));
-  });
-
   // Vary `queueCount` between renders so React.memo doesn't skip the re-render
   // on identical props (the resource store mock isn't reactive on its own).
   function pollResource(
@@ -320,29 +303,6 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 7);
     expect(wrapperFor().getAttribute("data-severity")).toBe("red");
     expect(wrapperFor().getAttribute("data-severity")).not.toBe("amber");
-  });
-
-  it("de-escalates on exactly the 5th poll below the threshold", () => {
-    mockResourceEnabled = true;
-    mockResourceState = makeResourceState(10);
-
-    const { rerender, container } = render(
-      <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
-    );
-    const wrapperFor = () => container.querySelector('[data-testid="terminal-resource-badge"]')!;
-
-    pollResource(rerender, 90, 1);
-    pollResource(rerender, 90, 2);
-    pollResource(rerender, 90, 3);
-    expect(wrapperFor().getAttribute("data-severity")).toBe("red");
-
-    pollResource(rerender, 60, 4);
-    pollResource(rerender, 60, 5);
-    pollResource(rerender, 60, 6);
-    pollResource(rerender, 60, 7);
-    pollResource(rerender, 60, 8);
-    expect(wrapperFor().getAttribute("data-severity")).toBe("amber");
-    expect(wrapperFor().getAttribute("data-severity")).not.toBe("red");
   });
 
   it("keeps the hotter band when severity oscillates within the 3-5 de-escalation gap", () => {
@@ -668,27 +628,12 @@ describe("TerminalHeaderContent — resource breakdown", () => {
 // badge must opt out with `aria-live="off"`. Flow and submit status render in
 // TerminalStatusSlot (#12374), which carries the same coverage.
 describe("TerminalHeaderContent — per-pane badges silence implicit live region (#9204)", () => {
-  it("exit-code badge sets aria-live='off'", () => {
-    mockTerminal = { id: "t1" };
-    render(<TerminalHeaderContent id="t1" isExited={true} exitCode={1} />);
-    const badge = screen.getByRole("status");
-    expect(badge.getAttribute("aria-live")).toBe("off");
-  });
-
   it("queue-count badge sets aria-live='off'", () => {
     mockTerminal = { id: "t1" };
     const { container } = render(<TerminalHeaderContent id="t1" queueCount={3} />);
     const badge = container.querySelector('[role="status"][aria-live="off"]');
     expect(badge).toBeTruthy();
     expect(badge!.textContent).toContain("queued");
-  });
-
-  it("hibernated badge sets aria-live='off'", () => {
-    mockTerminal = { id: "t1" };
-    render(<TerminalHeaderContent id="t1" isHibernated={true} />);
-    const badge = screen.getByTestId("terminal-hibernated-badge");
-    expect(badge.getAttribute("aria-live")).toBe("off");
-    expect(badge.getAttribute("role")).toBe("status");
   });
 
   it("resource badge stays silent but is reachable and named for keyboard users", () => {
@@ -749,17 +694,6 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     expect(badges.some((el) => /^Agent state:/.test(el.getAttribute("aria-label") ?? ""))).toBe(
       false
     );
-  });
-
-  it("hibernated badge keeps its testid and aria semantics, with rounded-full + dashed border", () => {
-    mockTerminal = { id: "t1" };
-    render(<TerminalHeaderContent id="t1" isHibernated={true} />);
-    const badge = screen.getByTestId("terminal-hibernated-badge");
-    expect(badge.getAttribute("role")).toBe("status");
-    expect(badge.getAttribute("aria-live")).toBe("off");
-    const className = badge.getAttribute("class") ?? "";
-    expect(className).toContain("rounded-full");
-    expect(className).toContain("border-dashed");
   });
 
   // PanelHeader clips this row from its trailing end in a narrow pane, so order

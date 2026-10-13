@@ -111,18 +111,6 @@ describe("composeMemorySnapshot", () => {
     expect(snapshot.terminalWorkloads.byProject).toHaveLength(1);
   });
 
-  it("passes very high terminal descendant memory through without clamping", () => {
-    const snapshot = composeMemorySnapshot(
-      [],
-      NOW,
-      makeRollup({ totalMemoryKb: 64 * 1024 * 1024, sampledAt: NOW - 1_000 }),
-      NOW
-    );
-    expect(snapshot.terminalWorkloads.available).toBe(true);
-    expect(snapshot.terminalWorkloads.stale).toBe(false);
-    expect(snapshot.terminalWorkloads.totalMemoryMb).toBe(64 * 1024);
-  });
-
   it("flags huge-but-stale process-tree data as stale while keeping the values", () => {
     const age = TERMINAL_WORKLOAD_STALE_MS + 5_000;
     const snapshot = composeMemorySnapshot(

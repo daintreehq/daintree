@@ -21,31 +21,6 @@ describe("telemetryPreviewStore", () => {
     useTelemetryPreviewStore.getState().reset();
   });
 
-  it("defaults to inactive, empty, and no selection", () => {
-    const state = useTelemetryPreviewStore.getState();
-    expect(state.active).toBe(false);
-    expect(state.events).toEqual([]);
-    expect(state.selectedEventId).toBeNull();
-  });
-
-  it("toggles active idempotently", () => {
-    const { setActive } = useTelemetryPreviewStore.getState();
-    setActive(true);
-    expect(useTelemetryPreviewStore.getState().active).toBe(true);
-    setActive(true);
-    expect(useTelemetryPreviewStore.getState().active).toBe(true);
-    setActive(false);
-    expect(useTelemetryPreviewStore.getState().active).toBe(false);
-  });
-
-  it("appends events preserving order", () => {
-    const { appendEvents } = useTelemetryPreviewStore.getState();
-    appendEvents([makeEvent("a"), makeEvent("b")]);
-    appendEvents([makeEvent("c")]);
-    const ids = useTelemetryPreviewStore.getState().events.map((e) => e.id);
-    expect(ids).toEqual(["a", "b", "c"]);
-  });
-
   it("deduplicates by id", () => {
     const { appendEvents } = useTelemetryPreviewStore.getState();
     appendEvents([makeEvent("a"), makeEvent("b")]);

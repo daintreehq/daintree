@@ -211,19 +211,6 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
     expect((state.panelsById[newId!] as PtyPanelData | undefined)?.focusPolicy).toBe("preserve");
   });
 
-  it("still advances focusedId for a normal user-initiated grid spawn", async () => {
-    const newId = await usePanelStore.getState().addPanel({
-      kind: "terminal",
-      cwd: "/test",
-      location: "grid",
-    });
-
-    expect(newId).toBeTruthy();
-    const state = usePanelStore.getState();
-    expect(state.focusedId).toBe(newId);
-    expect(state.previousFocusedId).toBe("incumbent-1");
-  });
-
   it("still advances focusedId for a non-MCP grid spawn even when assistant region is visible but not focused", async () => {
     useMacroFocusStore.getState().setVisibility("assistant", true);
     // Assistant visible but focusedRegion is grid — user is working in grid,

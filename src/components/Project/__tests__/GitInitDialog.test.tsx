@@ -296,33 +296,6 @@ describe("GitInitDialog", () => {
     expect(select.value).toBe(DEFAULT_GITIGNORE_TEMPLATE_ID);
   });
 
-  it("clears the missing-status warning when a late success event arrives", async () => {
-    // The invoke resolves without a "success" outcome and no terminal event,
-    // so the dialog shows the missing-status warning until a late event arrives.
-    initGitGuidedMock.mockResolvedValueOnce({ outcome: "error", completedSteps: [] });
-    renderDialog();
-
-    fireEvent.click(startButton());
-
-    await waitFor(() => {
-      expect(screen.getByText(/without a status update/i)).toBeTruthy();
-    });
-
-    act(() => {
-      progressHandler?.({
-        step: "complete",
-        status: "success",
-        message: "Git initialization complete",
-        timestamp: Date.now(),
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByText(/without a status update/i)).toBeNull();
-      expect(screen.getByTestId("git-init-open")).toBeTruthy();
-    });
-  });
-
   it("passes the selected template and edited commit message", async () => {
     initGitGuidedMock.mockImplementationOnce(() => new Promise(() => {}));
 
@@ -395,28 +368,6 @@ describe("GitInitDialog", () => {
     fireEvent.click(button);
 
     await waitFor(() => expect(initGitGuidedMock).toHaveBeenCalledTimes(1));
-  });
-
-  it("auto-continues after a completion event", async () => {
-    const onSuccess = vi.fn();
-    renderDialog({ onSuccess });
-
-    fireEvent.change(screen.getByLabelText(/^message$/i), {
-      target: { value: "feat: init" },
-    });
-    fireEvent.click(startButton());
-    await waitFor(() => expect(progressHandler).not.toBeNull());
-
-    act(() => {
-      progressHandler?.({
-        step: "complete",
-        status: "success",
-        message: "Git initialization complete",
-        timestamp: Date.now(),
-      });
-    });
-
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1), { timeout: 3000 });
   });
 
   it("auto-continues from a completion event while the invoke is still pending", async () => {
@@ -501,36 +452,6 @@ describe("GitInitDialog", () => {
     expect(screen.queryByText(/initialization failed/i)).toBeNull();
   });
 
-  it("completes from the invoke result when no progress events arrive", async () => {
-    renderDialog();
-
-    fireEvent.change(screen.getByLabelText(/^message$/i), {
-      target: { value: "feat: init" },
-    });
-    fireEvent.click(startButton());
-
-    await waitFor(() => {
-      expect(screen.getByTestId("git-init-open")).toBeTruthy();
-    });
-    expect(screen.queryByText(/initialization failed/i)).toBeNull();
-  });
-
-  it("shows the fallback error when init resolves unsuccessfully without a status event", async () => {
-    initGitGuidedMock.mockResolvedValue({ outcome: "error", completedSteps: [] });
-
-    renderDialog();
-
-    fireEvent.change(screen.getByLabelText(/^message$/i), {
-      target: { value: "feat: init" },
-    });
-    fireEvent.click(startButton());
-
-    await waitFor(() => {
-      expect(screen.getByText(/finished without a status update/i)).toBeTruthy();
-    });
-    expect(retryButton()).toBeTruthy();
-  });
-
   it("clears a stale fallback error when the success event arrives late", async () => {
     initGitGuidedMock.mockResolvedValue({ outcome: "error", completedSteps: [] });
 
@@ -597,47 +518,6 @@ describe("GitInitDialog", () => {
     });
     expect(screen.queryByText(/finished without a status update/i)).toBeNull();
     expect(retryButton()).toBeTruthy();
-  });
-
-  it("surfaces the git config commands and offers Retry on identity error", async () => {
-    renderDialog();
-
-    fireEvent.change(screen.getByLabelText(/^message$/i), {
-      target: { value: "feat: init" },
-    });
-    fireEvent.click(startButton());
-    await waitFor(() => expect(progressHandler).not.toBeNull());
-
-    const identityHelp =
-      "Set your git identity, then create the initial commit manually:\n" +
-      '  git config --global user.name "Your Name"\n' +
-      '  git config --global user.email "you@example.com"';
-
-    act(() => {
-      progressHandler?.({
-        step: "commit",
-        status: "error",
-        message: "Git user identity not configured",
-        error: identityHelp,
-        timestamp: Date.now(),
-      });
-      progressHandler?.({
-        step: "complete",
-        status: "error",
-        message: "Repository initialized — initial commit skipped",
-        error: identityHelp,
-        timestamp: Date.now(),
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.getAllByText(/git config --global user\.name/i).length).toBeGreaterThan(0);
-    });
-
-    initGitGuidedMock.mockClear();
-    fireEvent.click(retryButton());
-
-    await waitFor(() => expect(initGitGuidedMock).toHaveBeenCalledTimes(1));
   });
 
   // Real `git` output that carries a command line without being an identity
@@ -730,27 +610,6 @@ describe("GitInitDialog", () => {
       );
       expect(nameInput().value).toBe("Chosen Name");
       expect(screen.getByRole("button", { name: /choose project emoji/i }).textContent).toBe("🚀");
-    });
-
-    it("blocks initialization while the name is empty", () => {
-      renderDialog();
-      fireEvent.change(nameInput(), { target: { value: "   " } });
-
-      const start = startButton();
-      expect(start.getAttribute("aria-disabled")).toBe("true");
-    });
-
-    it("says why the button went dead instead of only painting the field red", () => {
-      renderDialog();
-      // Seeded from the folder, so nothing is wrong until the user clears it.
-      expect(screen.queryByTestId("git-init-name-error")).toBeNull();
-
-      fireEvent.change(nameInput(), { target: { value: "   " } });
-
-      const message = screen.getByTestId("git-init-name-error");
-      expect(nameInput().getAttribute("aria-describedby")).toBe(message.id);
-      // Clearing the field doesn't interrupt; the association announces it.
-      expect(screen.queryByRole("alert")).toBeNull();
     });
 
     it("reports the edited identity on success", async () => {

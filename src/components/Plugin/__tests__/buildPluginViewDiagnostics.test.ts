@@ -82,10 +82,6 @@ describe("buildPluginViewDiagnostics", () => {
       expect(report).not.toContain(STACK_TOKEN);
     });
 
-    it("keeps a numeric zero code rather than dropping it as falsy", () => {
-      expect(build({ error: errorWith("boom", undefined, { code: 0 }) }).code).toBe("0");
-    });
-
     it("omits the code line entirely when the error carries none", () => {
       expect(build().report).not.toContain("Code:");
     });

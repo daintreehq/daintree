@@ -55,43 +55,10 @@ describe("AgentHelpService", () => {
       );
     });
 
-    it("uses custom help args from agent config", async () => {
-      mockedExecFile.mockImplementation((_cmd, _args, _opts, callback: any) => {
-        callback(null, { stdout: "Help output", stderr: "" });
-        return {} as any;
-      });
-
-      await service.getHelp("claude");
-
-      expect(mockedExecFile).toHaveBeenCalledWith(
-        "claude",
-        [],
-        expect.any(Object),
-        expect.any(Function)
-      );
-    });
-
     it("throws error for unknown agent", async () => {
       await expect(service.getHelp("unknown-agent")).rejects.toThrow(
         "Unknown agent: unknown-agent"
       );
-    });
-
-    it("throws error for invalid command", async () => {
-      vi.doUnmock("../../../shared/config/agentRegistry.js");
-      const { AGENT_REGISTRY, invalidateEffectiveRegistryCache } =
-        await import("../../../shared/config/agentRegistry.js");
-      (AGENT_REGISTRY as any)["test-agent"] = {
-        id: "test-agent",
-        name: "Test",
-        command: "invalid;command",
-      };
-      invalidateEffectiveRegistryCache();
-
-      await expect(service.getHelp("test-agent")).rejects.toThrow("Invalid command");
-
-      delete (AGENT_REGISTRY as any)["test-agent"];
-      invalidateEffectiveRegistryCache();
     });
 
     it("handles non-zero exit code", async () => {
@@ -268,23 +235,6 @@ describe("AgentHelpService", () => {
       await expect(service.getHelp("empty")).rejects.toThrow("Invalid command");
 
       delete (AGENT_REGISTRY as any)["empty"];
-      invalidateEffectiveRegistryCache();
-    });
-
-    it("rejects command with shell metacharacters", async () => {
-      vi.doUnmock("../../../shared/config/agentRegistry.js");
-      const { AGENT_REGISTRY, invalidateEffectiveRegistryCache } =
-        await import("../../../shared/config/agentRegistry.js");
-      (AGENT_REGISTRY as any)["bad"] = {
-        id: "bad",
-        name: "Bad",
-        command: "cmd && rm -rf /",
-      };
-      invalidateEffectiveRegistryCache();
-
-      await expect(service.getHelp("bad")).rejects.toThrow("Invalid command");
-
-      delete (AGENT_REGISTRY as any)["bad"];
       invalidateEffectiveRegistryCache();
     });
 

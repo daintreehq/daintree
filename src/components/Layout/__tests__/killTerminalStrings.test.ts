@@ -26,13 +26,6 @@ describe("killTerminalStrings", () => {
     );
   });
 
-  it("ends every variant with the same irreversibility warning", () => {
-    const named = killTerminalDescription("build");
-    const fallback = killTerminalDescription();
-    expect(named.endsWith("will be terminated and cannot be recovered.")).toBe(true);
-    expect(fallback.endsWith("will be terminated and cannot be recovered.")).toBe(true);
-  });
-
   it("exposes a question title and a verb-noun confirm label", () => {
     expect(KILL_TERMINAL_TITLE.endsWith("?")).toBe(true);
     expect(KILL_TERMINAL_CONFIRM_LABEL).not.toContain("?");

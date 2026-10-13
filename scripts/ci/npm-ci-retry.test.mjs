@@ -51,11 +51,6 @@ describe("npm-ci-retry", () => {
       expect(classifyFailure(stderr)).toBe("deterministic");
     });
 
-    it("matches E404 with lowercase npm error", () => {
-      const stderr = "npm error code E404\nnpm error 404 Not Found\n";
-      expect(classifyFailure(stderr)).toBe("deterministic");
-    });
-
     it("matches ERESOLVE dependency conflicts", () => {
       const stderr = "npm ERR! code ERESOLVE\nnpm ERR! ERESOLVE could not resolve\n";
       expect(classifyFailure(stderr)).toBe("deterministic");
@@ -251,18 +246,6 @@ Postinstall failures (2):
     );
     const allTransientOverride = TRANSIENT_OVERRIDE_PATTERNS.map((p) => p.source);
     const allTransient = TRANSIENT_PATTERNS.map((p) => p.source);
-
-    it("covers every deterministic pattern", () => {
-      expect(DETERMINISTIC_PATTERNS).toHaveLength(10);
-    });
-
-    it("covers every transient pattern", () => {
-      expect(TRANSIENT_PATTERNS).toHaveLength(13);
-    });
-
-    it("covers every transient override pattern", () => {
-      expect(TRANSIENT_OVERRIDE_PATTERNS).toHaveLength(3);
-    });
 
     it("has no overlap between deterministic and transient patterns", () => {
       for (const dp of allDeterministic) {

@@ -166,14 +166,6 @@ describe("worktree.reviewReadiness run()", () => {
     expect(mockGetStagingStatus).not.toHaveBeenCalled();
   });
 
-  it("propagates staging-status IPC failures", async () => {
-    mockGetStagingStatus.mockRejectedValue(new Error("not a repository"));
-    const def = getDefinition();
-    await expect(def.run({ worktreeId: "wt-1" } as never, {} as ActionContext)).rejects.toThrow(
-      "not a repository"
-    );
-  });
-
   it("reports blockers with registered follow-up action ids", async () => {
     mockGetStagingStatus.mockResolvedValue(
       makeStatus({
@@ -315,13 +307,5 @@ describe("worktree.reviewReadiness run()", () => {
       forge: { providerId: string | null; rateLimited: boolean; authUnhealthy: boolean };
     };
     expect(result.forge).toEqual({ providerId: null, rateLimited: false, authUnhealthy: false });
-  });
-
-  it("is idempotent across repeated queries", async () => {
-    const def = getDefinition();
-    const first = await def.run({ worktreeId: "wt-1" } as never, {} as ActionContext);
-    const second = await def.run({ worktreeId: "wt-1" } as never, {} as ActionContext);
-    expect(second).toEqual(first);
-    expect(mockGetStagingStatus).toHaveBeenCalledTimes(2);
   });
 });

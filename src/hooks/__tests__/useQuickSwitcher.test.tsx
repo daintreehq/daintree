@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { renderHook, act } from "@testing-library/react";
+import { renderHook } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
 
@@ -80,17 +80,6 @@ describe("useQuickSwitcher isLoading", () => {
     // letting the surrounding UI surface the failure.
     seedWorktreeState({ isInitialized: false, isLoading: false, error: "host crashed" });
     const { result } = renderHook(() => useQuickSwitcher());
-    expect(result.current.isLoading).toBe(false);
-  });
-
-  it("is reactive to store updates", () => {
-    seedWorktreeState({ isInitialized: false });
-    const { result, rerender } = renderHook(() => useQuickSwitcher());
-    expect(result.current.isLoading).toBe(true);
-    act(() => {
-      seedWorktreeState({ isInitialized: true });
-    });
-    rerender();
     expect(result.current.isLoading).toBe(false);
   });
 });

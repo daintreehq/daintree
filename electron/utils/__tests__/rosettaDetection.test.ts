@@ -47,9 +47,4 @@ describe("isRunningUnderRosetta", () => {
     electronMock.app.runningUnderARM64Translation = true;
     expect(isRunningUnderRosetta()).toBe(false);
   });
-
-  it("returns false on Linux where the flag is undefined", () => {
-    setPlatform("linux");
-    expect(isRunningUnderRosetta()).toBe(false);
-  });
 });

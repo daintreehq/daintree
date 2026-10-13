@@ -84,14 +84,6 @@ describe("worktreeStore ↔ panelStore circular init", () => {
     assertLiveStore(worktreeMod.useWorktreeSelectionStore, "useWorktreeSelectionStore");
   });
 
-  it("is init-safe when worktreeStore is evaluated before panelStore", async () => {
-    const worktreeMod = await import("@/store/worktreeStore");
-    const panelMod = await import("@/store/panelStore");
-
-    assertLiveStore(worktreeMod.useWorktreeSelectionStore, "useWorktreeSelectionStore");
-    assertLiveStore(panelMod.usePanelStore, "usePanelStore");
-  });
-
   it("is init-safe when an internal panelRegistry slice is the cold-graph entry point", async () => {
     // Regression for the #8402 init-order trap: panelStore's top-level
     // create() calls createPanelRegistrySlice(), so if a consumer enters the

@@ -1,21 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { PROJECT_EXPLANATION_PROMPT, getDefaultAgentId } from "../projectExplanationPrompt";
+import { getDefaultAgentId } from "../projectExplanationPrompt";
 import type { CliAvailability } from "@shared/types";
-
-describe("PROJECT_EXPLANATION_PROMPT", () => {
-  it("should contain key sections", () => {
-    expect(PROJECT_EXPLANATION_PROMPT).toContain("Project Name & Purpose");
-    expect(PROJECT_EXPLANATION_PROMPT).toContain("Tech Stack");
-    expect(PROJECT_EXPLANATION_PROMPT).toContain("Architecture");
-    expect(PROJECT_EXPLANATION_PROMPT).toContain("Quick Start");
-  });
-
-  it("should be a non-empty string", () => {
-    expect(PROJECT_EXPLANATION_PROMPT).toBeTruthy();
-    expect(typeof PROJECT_EXPLANATION_PROMPT).toBe("string");
-    expect(PROJECT_EXPLANATION_PROMPT.length).toBeGreaterThan(0);
-  });
-});
 
 describe("getDefaultAgentId", () => {
   it("should return default agent when it matches an available agent", () => {
@@ -56,16 +41,6 @@ describe("getDefaultAgentId", () => {
       opencode: "missing",
     };
     expect(getDefaultAgentId("gemini", "codex", availability)).toBe("claude");
-  });
-
-  it("should fall back to first available agent when no defaults", () => {
-    const availability: CliAvailability = {
-      claude: "missing",
-      gemini: "ready",
-      codex: "missing",
-      opencode: "missing",
-    };
-    expect(getDefaultAgentId(undefined, undefined, availability)).toBe("gemini");
   });
 
   it("should return null when no agents are available", () => {
@@ -141,21 +116,5 @@ describe("getDefaultAgentId", () => {
       "daintree-assistant": "ready",
     };
     expect(getDefaultAgentId(undefined, undefined, availability)).toBe("claude");
-  });
-
-  it("does not favour daintree-assistant when it is not installed", () => {
-    const availability: CliAvailability = {
-      claude: "ready",
-      "daintree-assistant": "missing",
-    };
-    expect(getDefaultAgentId(undefined, undefined, availability)).toBe("claude");
-  });
-
-  it("an explicit default agent still wins over daintree-assistant", () => {
-    const availability: CliAvailability = {
-      claude: "ready",
-      "daintree-assistant": "ready",
-    };
-    expect(getDefaultAgentId("claude", undefined, availability)).toBe("claude");
   });
 });

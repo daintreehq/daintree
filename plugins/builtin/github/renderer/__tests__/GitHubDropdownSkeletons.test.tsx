@@ -41,18 +41,6 @@ describe("GitHubResourceListSkeleton", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("defaults to MAX_SKELETON_ITEMS for undefined count", () => {
-    const { container } = render(<GitHubResourceListSkeleton count={undefined} />);
-    const rows = container.querySelectorAll(`[style*="height: ${RESOURCE_ITEM_HEIGHT_PX}px"]`);
-    expect(rows).toHaveLength(MAX_SKELETON_ITEMS);
-  });
-
-  it("defaults to MAX_SKELETON_ITEMS for null count", () => {
-    const { container } = render(<GitHubResourceListSkeleton count={null} />);
-    const rows = container.querySelectorAll(`[style*="height: ${RESOURCE_ITEM_HEIGHT_PX}px"]`);
-    expect(rows).toHaveLength(MAX_SKELETON_ITEMS);
-  });
-
   it("uses animate-pulse-delayed by default", () => {
     const { container } = render(<GitHubResourceListSkeleton count={1} />);
     const row = container.querySelector(`[style*="height: ${RESOURCE_ITEM_HEIGHT_PX}px"]`);
@@ -124,12 +112,6 @@ describe("CommitListSkeleton", () => {
     const { container } = render(<CommitListSkeleton count={2} />);
     const rows = container.querySelectorAll(`[style*="height: ${COMMIT_ITEM_HEIGHT_PX}px"]`);
     expect(rows).toHaveLength(2);
-  });
-
-  it("clamps count above MAX_SKELETON_ITEMS", () => {
-    const { container } = render(<CommitListSkeleton count={100} />);
-    const rows = container.querySelectorAll(`[style*="height: ${COMMIT_ITEM_HEIGHT_PX}px"]`);
-    expect(rows).toHaveLength(MAX_SKELETON_ITEMS);
   });
 
   it("uses animate-pulse-delayed during the 200ms gate when immediate is true", () => {

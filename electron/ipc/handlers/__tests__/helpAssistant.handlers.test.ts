@@ -129,17 +129,6 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toMatchObject({ tier: "full", bypassPermissions: true });
   });
 
-  it("migrates legacy skipPermissions=false to tier='core' + bypassPermissions=false", async () => {
-    storeMock.get.mockReturnValue({
-      skipPermissions: false,
-    } as unknown as Partial<HelpAssistantSettings>);
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
-
-    const result = await handler(null);
-    expect(result).toMatchObject({ tier: "core", bypassPermissions: false });
-  });
-
   it("prefers new fields over legacy skipPermissions when both are present", async () => {
     storeMock.get.mockReturnValue({
       skipPermissions: true,
@@ -490,15 +479,6 @@ describe("registerHelpAssistantHandlers", () => {
 
     const result = await handler(null);
     expect(result).toMatchObject({ idleHibernateMinutes: 60 });
-  });
-
-  it("loads a stored 5-minute idleHibernateMinutes (newest option) from the store", async () => {
-    storeMock.get.mockReturnValue({ idleHibernateMinutes: 5 });
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
-
-    const result = await handler(null);
-    expect(result).toMatchObject({ idleHibernateMinutes: 5 });
   });
 
   it("rejects an out-of-range stored idleHibernateMinutes and falls back to default", async () => {

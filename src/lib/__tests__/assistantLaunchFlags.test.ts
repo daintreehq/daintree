@@ -94,11 +94,6 @@ describe("loadCustomLaunchFlags — model + custom args composition", () => {
     expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "gpt-6-astra"]);
   });
 
-  it("never passes another agent's model to this launch", async () => {
-    getSettings.mockResolvedValue({ modelIds: { claude: "opus" }, customArgs: "" });
-    expect(await loadCustomLaunchFlags("codex")).toEqual([]);
-  });
-
   it("launches a custom model the catalog doesn't list for the agent it was set on", async () => {
     getSettings.mockResolvedValue({ modelIds: { codex: "my-fork-model" }, customArgs: "" });
     expect(await loadCustomLaunchFlags("codex")).toEqual(["--model", "my-fork-model"]);

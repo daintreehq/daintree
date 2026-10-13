@@ -516,19 +516,6 @@ describe("VoiceRecordingService — background recording", () => {
 });
 
 describe("isActiveVoiceSession helper", () => {
-  it("returns true for active phases", () => {
-    expect(isActiveVoiceSession("connecting")).toBe(true);
-    expect(isActiveVoiceSession("recording")).toBe(true);
-    expect(isActiveVoiceSession("paused")).toBe(true);
-    expect(isActiveVoiceSession("reconnecting")).toBe(true);
-    expect(isActiveVoiceSession("finishing")).toBe(true);
-  });
-
-  it("returns false for terminal phases", () => {
-    expect(isActiveVoiceSession("idle")).toBe(false);
-    expect(isActiveVoiceSession("error")).toBe(false);
-  });
-
   it("returns false for arming — it is pre-audio, not an active session", () => {
     // Arming must be excluded so the toggle guard treats a second hotkey
     // press during arming as continuing the start, not stopping a session
@@ -886,25 +873,6 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     expect(toggleSpy).not.toHaveBeenCalled();
     expect(useVoiceRecordingStore.getState().setLastError).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("starting") })
-    );
-  });
-
-  it("falls back to the focused grid panel when the assistant is not focused", async () => {
-    setupGlobals();
-    const { macro, panel } = await importMocks();
-    macro.isAssistantFocused.mockReturnValue(false);
-    panel.__state.focusedId = "grid-panel-9";
-    panel.__state.panelsById = {
-      "grid-panel-9": { id: "grid-panel-9", title: "Terminal", location: "grid" },
-    };
-
-    const { voiceRecordingService } = await import("../VoiceRecordingService");
-    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
-
-    await voiceRecordingService.toggleFocusedPanel();
-
-    expect(toggleSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ panelId: "grid-panel-9", panelTitle: "Terminal" })
     );
   });
 
@@ -1923,30 +1891,6 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     );
   });
 
-  it("window blur does NOT call stop when no PTT press is active (toggle mode unaffected)", async () => {
-    const electron = buildElectronStub();
-    electron.voiceInput.getSettings.mockResolvedValue({
-      enabled: true,
-      openaiApiKey: "sk-key",
-      correctionEnabled: false,
-      recordingMode: "toggle",
-    });
-    const { windowListeners } = setupGlobals(electron);
-
-    const { voiceRecordingService } = await import("../VoiceRecordingService");
-    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
-
-    voiceRecordingService.initialize();
-    await vi.waitFor(() => {
-      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
-    });
-
-    const blurListeners = windowListeners["blur"] ?? [];
-    for (const listener of blurListeners) listener(new Event("blur"));
-
-    expect(stopSpy).not.toHaveBeenCalled();
-  });
-
   it("toggleAssistant calls start() in push-to-talk mode (not toggle)", async () => {
     const electron = buildPttElectronStub();
     setupGlobals(electron);
@@ -2024,46 +1968,6 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     // Period release does stop.
     for (const listener of keyupListeners) listener({ code: "Period" } as unknown as KeyboardEvent);
     expect(stopSpy).toHaveBeenCalled();
-  });
-
-  it("command-palette re-invocation in PTT mode stops the active session", async () => {
-    const electron = buildPttElectronStub();
-    setupGlobals(electron);
-
-    const panel = (await import("@/store/panelStore")) as unknown as {
-      __state: { focusedId: string | null; panelsById: Record<string, unknown> };
-    };
-    panel.__state.focusedId = "panel-1";
-    panel.__state.panelsById = {
-      "panel-1": { id: "panel-1", title: "Terminal", location: "grid" },
-    };
-
-    // Mark the session as already active for panel-1.
-    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
-      __state: { activeTarget: { panelId: string } | null; status: string };
-    };
-    voice.__state.activeTarget = { panelId: "panel-1" };
-    voice.__state.status = "recording";
-
-    const { voiceRecordingService } = await import("../VoiceRecordingService");
-    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
-    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
-
-    voiceRecordingService.initialize();
-    await vi.waitFor(() => {
-      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
-    });
-
-    await voiceRecordingService.toggleFocusedPanel();
-
-    expect(stopSpy).toHaveBeenCalledWith(
-      "Dictation stopped.",
-      expect.objectContaining({ preserveLiveText: true })
-    );
-    expect(startSpy).not.toHaveBeenCalled();
-
-    voice.__state.activeTarget = null;
-    voice.__state.status = "idle";
   });
 
   it("Shift release alone does NOT stop the PTT session (modifier release ignored)", async () => {

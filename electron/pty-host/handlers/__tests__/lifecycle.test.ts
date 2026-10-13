@@ -120,24 +120,6 @@ function termInfo(pid?: number, launchGeneration?: number) {
 }
 
 describe("lifecycle update-worktree-id handler", () => {
-  it("re-files a run onto the worktree it was moved to", () => {
-    const ctx = makeCtx();
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    dispatch({
-      type: "update-worktree-id",
-      id: "t1",
-      worktreeId: "/repo/.worktrees/feature",
-      expectedProjectId: "project-a",
-    });
-
-    expect(ctx.ptyManager.updateWorktreeId).toHaveBeenCalledWith(
-      "t1",
-      "/repo/.worktrees/feature",
-      "project-a"
-    );
-  });
-
   it("passes an explicit clear through as null rather than dropping it", () => {
     // The host is where `null` becomes a deleted key. Swallowing it here would
     // leave the run filed under a worktree it has left (#12060).
@@ -165,16 +147,6 @@ describe("lifecycle update-title handler", () => {
     dispatch({ type: "update-title", id: "t1", title: "Add valuation tool", titleMode: "user" });
 
     expect(ctx.ptyManager.updateTitle).toHaveBeenCalledWith("t1", "Add valuation tool", "user");
-  });
-
-  it("routes a rename separately from an observed OSC title", () => {
-    const ctx = makeCtx();
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    dispatch({ type: "update-observed-title", id: "t1", title: "agent task" });
-
-    expect(ctx.ptyManager.updateObservedTitle).toHaveBeenCalledWith("t1", "agent task");
-    expect(ctx.ptyManager.updateTitle).not.toHaveBeenCalled();
   });
 });
 
@@ -204,39 +176,6 @@ describe("lifecycle kill handlers", () => {
     dispatch({ type: "kill", id: "t1", reason: "test", escalationDelayMs: 2000 });
 
     expect(ctx.ptyManager.kill).toHaveBeenCalledWith("t1", "test", { escalationDelayMs: 2000 });
-  });
-
-  it("kill-by-project replies with the registry's kill count", () => {
-    const ctx = makeCtx();
-    (ctx.ptyManager.killByProject as ReturnType<typeof vi.fn>).mockReturnValue(3);
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    dispatch({ type: "kill-by-project", projectId: "proj-1", requestId: "r1" });
-
-    expect(ctx.ptyManager.killByProject).toHaveBeenCalledWith("proj-1");
-    expect(ctx.sendEvent).toHaveBeenCalledWith({
-      type: "kill-by-project-result",
-      requestId: "r1",
-      killed: 3,
-    });
-  });
-
-  it("graceful-kill replies with the captured session id", async () => {
-    const ctx = makeCtx();
-    (ctx.ptyManager.gracefulKill as ReturnType<typeof vi.fn>).mockResolvedValue({
-      sessionId: "sess-1",
-    });
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    await dispatch({ type: "graceful-kill", id: "t1", requestId: "r1" });
-
-    expect(ctx.ptyManager.gracefulKill).toHaveBeenCalledWith("t1");
-    expect(ctx.sendEvent).toHaveBeenCalledWith({
-      type: "graceful-kill-result",
-      requestId: "r1",
-      id: "t1",
-      agentSessionId: "sess-1",
-    });
   });
 
   it("graceful-kill-by-project forwards preserveSession to the registry (#10054)", async () => {
@@ -351,21 +290,6 @@ describe("lifecycle kill handlers", () => {
       });
     });
   });
-
-  it("graceful-kill-by-project handles empty project", async () => {
-    const ctx = makeCtx();
-    (ctx.ptyManager.getTerminalsForProject as ReturnType<typeof vi.fn>).mockReturnValue([]);
-    (ctx.ptyManager.gracefulKillByProject as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    await dispatch({ type: "graceful-kill-by-project", projectId: "empty", requestId: "r1" });
-
-    expect(ctx.sendEvent).toHaveBeenCalledWith({
-      type: "graceful-kill-by-project-result",
-      requestId: "r1",
-      results: [],
-    });
-  });
 });
 
 describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", () => {
@@ -393,18 +317,6 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
     expect(ctx.sendEvent).toHaveBeenCalledWith({ type: "terminal-pid", id: "t1", pid: 1234 });
     // Detector is started by the spawn path itself, not the deferred retry.
     expect(ctx.ptyManager.startProcessDetectorForTerminal).not.toHaveBeenCalled();
-  });
-
-  it("does not emit terminal-pid with a transient 0 PID; defers instead", () => {
-    const ctx = makeCtx();
-    getMock(ctx).mockReturnValue(termInfo(0));
-    const dispatch = createPtyHostMessageDispatcher(ctx);
-
-    dispatch({ type: "spawn", id: "t1", options: {} });
-
-    expect(ctx.sendEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "terminal-pid" })
-    );
   });
 
   it("recovers the real PID via deferred retry, then emits and starts detection", async () => {

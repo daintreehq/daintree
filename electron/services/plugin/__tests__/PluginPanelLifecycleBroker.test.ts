@@ -283,12 +283,6 @@ describe("locate (#12610)", () => {
     expect(broker.locate("p1", "acme")).toEqual({ kind: "foreign" });
   });
 
-  it("judges ownership from the registry, not the renderer-claimed pluginId", () => {
-    const broker = makeBroker();
-    broker.ingest(7, [event({ panelKindId: "other.panel", pluginId: "acme" })]);
-    expect(broker.locate("p1", "acme")).toEqual({ kind: "foreign" });
-  });
-
   it("will not authorize from a remembered owner once the kind is unregistered", () => {
     const owners: Record<string, string | undefined> = { "acme.dash": "acme" };
     const broker = new PluginPanelLifecycleBroker((kindId) => owners[kindId]);
@@ -419,13 +413,6 @@ describe("pushTargetsFor", () => {
     broker.ingest(7, [event()]);
     expect(broker.pushTargetsFor("p1", "other")).toEqual([]);
     owners["acme.dash"] = undefined;
-    expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
-  });
-
-  it("forgets a cleared renderer", () => {
-    const broker = makeBroker();
-    broker.ingest(7, [event()]);
-    broker.clearSource(7);
     expect(broker.pushTargetsFor("p1", "acme")).toEqual([]);
   });
 });

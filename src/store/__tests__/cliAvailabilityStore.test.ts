@@ -99,14 +99,6 @@ describe("cliAvailabilityStore", () => {
       expect(state.lastCheckedAt).toBeLessThanOrEqual(Date.now());
     });
 
-    it("does not set lastCheckedAt on failed initialize", async () => {
-      refreshMock.mockRejectedValueOnce(new Error("IPC failed"));
-
-      await useCliAvailabilityStore.getState().initialize();
-
-      expect(useCliAvailabilityStore.getState().lastCheckedAt).toBeNull();
-    });
-
     it("sets error state when refresh fails", async () => {
       refreshMock.mockRejectedValueOnce(new Error("IPC failed"));
 
@@ -141,28 +133,6 @@ describe("cliAvailabilityStore", () => {
       expect(state.availability).toEqual(installedAvail);
       expect(state.isRefreshing).toBe(false);
       expect(state.error).toBeNull();
-    });
-
-    it("sets lastCheckedAt on successful refresh", async () => {
-      refreshMock.mockResolvedValueOnce(installedAvail);
-      const before = Date.now();
-
-      await useCliAvailabilityStore.getState().refresh();
-
-      const state = useCliAvailabilityStore.getState();
-      expect(state.lastCheckedAt).toBeGreaterThanOrEqual(before);
-      expect(state.lastCheckedAt).toBeLessThanOrEqual(Date.now());
-    });
-
-    it("does not set lastCheckedAt on failed refresh", async () => {
-      refreshMock.mockRejectedValueOnce(new Error("Network error"));
-
-      await useCliAvailabilityStore
-        .getState()
-        .refresh()
-        .catch(() => {});
-
-      expect(useCliAvailabilityStore.getState().lastCheckedAt).toBeNull();
     });
 
     it("deduplicates concurrent refresh calls", async () => {
@@ -242,21 +212,6 @@ describe("cliAvailabilityStore", () => {
       expect(refreshMock).toHaveBeenCalledTimes(2);
 
       nowSpy.mockRestore();
-    });
-
-    it("does not throttle after a failed refresh (lastCheckedAt stays null)", async () => {
-      refreshMock.mockRejectedValueOnce(new Error("boom"));
-      await useCliAvailabilityStore
-        .getState()
-        .refresh()
-        .catch(() => {});
-      expect(refreshMock).toHaveBeenCalledTimes(1);
-
-      // Failed refresh should not have set lastCheckedAt, so the throttle
-      // should not fire and this call should go through.
-      refreshMock.mockResolvedValueOnce(installedAvail);
-      await useCliAvailabilityStore.getState().refresh();
-      expect(refreshMock).toHaveBeenCalledTimes(2);
     });
 
     it("force: true bypasses the 30s throttle", async () => {

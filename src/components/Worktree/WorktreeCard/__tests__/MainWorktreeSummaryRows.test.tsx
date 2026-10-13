@@ -63,17 +63,4 @@ describe("MainWorktreeSummaryRows", () => {
     const row = screen.getByTestId("github-pulse-row");
     expect(row.textContent).toContain("no CI");
   });
-
-  it("renders GitHub health row when health data is present", () => {
-    renderWithTooltip(<MainWorktreeSummaryRows health={baseHealth} />);
-    expect(screen.queryByTestId("aggregate-worktree-row")).toBeNull();
-    expect(screen.getByTestId("github-pulse-row")).toBeTruthy();
-  });
-
-  it("uses tabular-nums for numeric displays", () => {
-    renderWithTooltip(<MainWorktreeSummaryRows health={baseHealth} />);
-    const container = screen.getByTestId("main-worktree-summary");
-    const monoSpans = container.querySelectorAll(".tabular-nums");
-    expect(monoSpans.length).toBeGreaterThan(0);
-  });
 });

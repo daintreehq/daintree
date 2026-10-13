@@ -119,14 +119,6 @@ describe("project:add options", () => {
     handler = getHandler(CHANNELS.PROJECT_ADD);
   });
 
-  it("carries gitBacked:false through to the store on its own", async () => {
-    await handler(EVENT, "/tmp/plain-folder", { gitBacked: false });
-
-    expect(addProjectMock).toHaveBeenCalledTimes(1);
-    expect(addProjectMock.mock.calls[0]![0]).toBe("/tmp/plain-folder");
-    expect(forwardedOptions()).toMatchObject({ gitBacked: false });
-  });
-
   it("keeps gitBacked:false when no identity accompanies it", async () => {
     // The identity half being absent must not take the mode half down with it.
     await handler(EVENT, "/tmp/plain-folder", { gitBacked: false });

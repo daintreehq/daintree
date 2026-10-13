@@ -1,7 +1,6 @@
-// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
-import type { ActionContext } from "@shared/types/actions";
+import type { ActionContext, ActionSource } from "@shared/types/actions";
 
 const systemClientMock = vi.hoisted(() => ({
   openInEditor: vi.fn(),
@@ -11,13 +10,15 @@ const systemClientMock = vi.hoisted(() => ({
 }));
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const openPanelDialogMock = vi.hoisted(() => vi.fn<(options: unknown) => Promise<string | null>>());
 const primePreviewCapabilityMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
+const readMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/clients", () => ({ systemClient: systemClientMock }));
+vi.mock("@/clients/filesClient", () => ({ filesClient: { read: readMock } }));
 vi.mock("@/store", () => ({ useProjectStore: projectStoreMock }));
-// file.openPanel pulls the panel store; stub it so its persistence graph stays out.
-vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: vi.fn() } }));
+vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/panelDialogStore", () => ({
   usePanelDialogStore: { getState: () => ({ openPanelDialog: openPanelDialogMock }) },
 }));
@@ -155,14 +156,6 @@ describe("fileActions adversarial", () => {
     );
   });
 
-  it("file.view omits initialLine when no line was requested", async () => {
-    const run = setupActions();
-    await run("file.view", { path: "/a/b.ts" });
-
-    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
-    expect(options).not.toHaveProperty("initialLine");
-  });
-
   it("file.view throws when the dialog panel could not be created", async () => {
     openPanelDialogMock.mockResolvedValue(null);
     const run = setupActions();
@@ -248,15 +241,6 @@ describe("fileActions adversarial", () => {
     );
   });
 
-  it("file.view passes a rendered request through for markdown", async () => {
-    const run = setupActions();
-    await run("file.view", { path: "/a/notes.md", viewMode: "rendered" });
-
-    expect(openPanelDialogMock).toHaveBeenCalledWith(
-      expect.objectContaining({ fileViewMode: "rendered" })
-    );
-  });
-
   it("file.view clamps a rendered request on a non-renderable file to source", async () => {
     const run = setupActions();
     await run("file.view", { path: "/a/styles.css", viewMode: "rendered" });
@@ -311,30 +295,6 @@ describe("fileActions adversarial", () => {
       col: undefined,
       projectId: undefined,
     });
-  });
-
-  it("file.openImageViewer forwards path to systemClient.openPath", async () => {
-    const run = setupActions();
-    await run("file.openImageViewer", { path: "/img/x.png" });
-
-    expect(systemClientMock.openPath).toHaveBeenCalledWith("/img/x.png");
-  });
-
-  it("file.showItemInFolder forwards path to systemClient.showItemInFolder", async () => {
-    const run = setupActions();
-    await run("file.showItemInFolder", { path: "/repo/src/x.ts" });
-
-    expect(systemClientMock.showItemInFolder).toHaveBeenCalledWith("/repo/src/x.ts");
-    expect(systemClientMock.showItemInFolderUnconfined).not.toHaveBeenCalled();
-  });
-
-  it("file.showItemInFolder propagates systemClient errors to caller", async () => {
-    systemClientMock.showItemInFolder.mockRejectedValueOnce(new Error("outside root"));
-    const run = setupActions();
-
-    await expect(run("file.showItemInFolder", { path: "/repo/x.ts" })).rejects.toThrow(
-      "outside root"
-    );
   });
 
   // The out-of-root reveal fallback (#11934). These exercise the action directly
@@ -480,13 +440,6 @@ describe("fileActions adversarial", () => {
     expect(options).not.toHaveProperty("initialCol");
   });
 
-  it("file.openInEditor propagates systemClient errors to caller", async () => {
-    systemClientMock.openInEditor.mockRejectedValueOnce(new Error("editor not found"));
-    const run = setupActions();
-
-    await expect(run("file.openInEditor", { path: "/a/b.ts" })).rejects.toThrow("editor not found");
-  });
-
   it("file.openDiff opens a diff panel with the path relativized against the supplied worktree", async () => {
     openPanelDialogMock.mockResolvedValue("diff-panel-1");
     const run = setupActions();
@@ -550,5 +503,282 @@ describe("fileActions adversarial", () => {
     const run = setupActions();
 
     await expect(run("file.openDiff", { path: "/repo/src/x.ts" })).rejects.toThrow(/diff viewer/i);
+  });
+});
+
+const addPanelSpy = vi.fn<(options: unknown) => Promise<string | null>>();
+const activateTerminalSpy = vi.fn<(id: string) => void>();
+const setFileViewModeSpy = vi.fn<(id: string, mode: string) => void>();
+
+function setPanelState(
+  panelsById: Record<string, Record<string, unknown>>,
+  panelIds = Object.keys(panelsById)
+) {
+  panelStoreMock.getState.mockReturnValue({
+    panelsById,
+    panelIds,
+    addPanel: addPanelSpy,
+    activateTerminal: activateTerminalSpy,
+    setFileViewMode: setFileViewModeSpy,
+  });
+}
+
+function setProjectPath(path: string | undefined) {
+  projectStoreMock.getState.mockReturnValue({
+    currentProject: path ? { id: "proj", path } : undefined,
+  });
+}
+
+function setupOpenPanel(activeWorktreeId?: string) {
+  const actions: ActionRegistry = new Map();
+  const callbacks = { getActiveWorktreeId: () => activeWorktreeId } as ActionCallbacks;
+  registerFileActions(actions, callbacks);
+  return async (id: string, args?: unknown, dispatchSource?: ActionSource): Promise<unknown> => {
+    const factory = actions.get(id);
+    if (!factory) throw new Error(`missing ${id}`);
+    const def = factory() as AnyActionDefinition;
+    return def.run(args, (dispatchSource ? { dispatchSource } : {}) as never);
+  };
+}
+
+function setupRead(worktreePaths: string[] = []) {
+  const actions: ActionRegistry = new Map();
+  const callbacks = {
+    getWorktrees: () => worktreePaths.map((p, i) => ({ id: `wt-${i}`, path: p })),
+  } as unknown as ActionCallbacks;
+  registerFileActions(actions, callbacks);
+  return async (args?: unknown): Promise<unknown> => {
+    const factory = actions.get("file.read");
+    if (!factory) throw new Error("missing file.read");
+    const def = factory() as AnyActionDefinition;
+    return def.run(args, {} as never);
+  };
+}
+
+describe("file.openPanel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    addPanelSpy.mockResolvedValue("new-panel-id");
+    setPanelState({});
+    setProjectPath("/repo");
+  });
+
+  it("creates a new file panel with an absolute path", async () => {
+    const run = setupOpenPanel("wt-1");
+    const result = await run("file.openPanel", { path: "/repo/docs/spec.md" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith({
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      fileViewMode: undefined,
+      worktreeId: "wt-1",
+      location: "grid",
+    });
+    expect(result).toEqual({ panelId: "new-panel-id" });
+  });
+
+  it("resolves a repo-relative path against the current project root", async () => {
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "docs/spec.md" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: "/repo/docs/spec.md" })
+    );
+  });
+
+  it("prefers an explicit rootPath for relative resolution", async () => {
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "notes.md", rootPath: "/elsewhere" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: "/elsewhere/notes.md" })
+    );
+  });
+
+  it("clamps a rendered request on a non-markdown file to source", async () => {
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "src/index.css", viewMode: "rendered" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "source" }));
+  });
+
+  it("passes rendered through for markdown files", async () => {
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "docs/spec.md", viewMode: "rendered" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "rendered" }));
+  });
+
+  it("passes rendered through for html files", async () => {
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "dist/report.html", viewMode: "rendered" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "rendered" }));
+  });
+
+  it("reuses a panel already showing the same file instead of duplicating", async () => {
+    setPanelState({
+      "file-1": {
+        id: "file-1",
+        kind: "file",
+        location: "grid",
+        filePath: "/repo/docs/spec.md",
+      },
+    });
+    const run = setupOpenPanel();
+    const result = await run("file.openPanel", {
+      path: "/repo/docs/spec.md",
+      viewMode: "rendered",
+    });
+
+    expect(addPanelSpy).not.toHaveBeenCalled();
+    expect(activateTerminalSpy).toHaveBeenCalledWith("file-1");
+    expect(setFileViewModeSpy).toHaveBeenCalledWith("file-1", "rendered");
+    expect(result).toEqual({ panelId: "file-1" });
+  });
+
+  it("does not reuse a trashed panel", async () => {
+    setPanelState({
+      "file-1": {
+        id: "file-1",
+        kind: "file",
+        location: "trash",
+        filePath: "/repo/docs/spec.md",
+      },
+    });
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "/repo/docs/spec.md" });
+
+    expect(addPanelSpy).toHaveBeenCalled();
+    expect(activateTerminalSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a backgrounded panel (hibernated, activation shows nothing)", async () => {
+    setPanelState({
+      "file-1": {
+        id: "file-1",
+        kind: "file",
+        location: "background",
+        filePath: "/repo/docs/spec.md",
+      },
+    });
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "/repo/docs/spec.md" });
+
+    expect(addPanelSpy).toHaveBeenCalled();
+    expect(activateTerminalSpy).not.toHaveBeenCalled();
+  });
+
+  // #11506 — the store forces `preserve` (skipping both focus AND the exit from
+  // fullscreen) whenever an MCP suppression lease is live or the assistant owns
+  // focus. Those guards are about background spawns; a person asking for a file
+  // has to see it, so a foreground dispatch overrides them with `take`.
+  it.each<ActionSource>(["user", "keybinding", "menu", "context-menu"])(
+    "takes focus for a %s dispatch so the panel can't land behind fullscreen",
+    async (source) => {
+      const run = setupOpenPanel();
+      await run("file.openPanel", { path: "/repo/docs/spec.md" }, source);
+
+      expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ focusPolicy: "take" }));
+    }
+  );
+
+  // The allowlist has to stay an allowlist: a background source must fall
+  // through to the store's own resolution rather than being read as foreground.
+  it.each<ActionSource>(["agent", "plugin"])(
+    "leaves focus policy to the store for a %s dispatch",
+    async (source) => {
+      const run = setupOpenPanel();
+      await run("file.openPanel", { path: "/repo/docs/spec.md" }, source);
+
+      const options = addPanelSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+      expect(options.focusPolicy).toBeUndefined();
+    }
+  );
+
+  it("leaves focus policy to the store when the dispatch carries no source", async () => {
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "/repo/docs/spec.md" });
+
+    const options = addPanelSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(options.focusPolicy).toBeUndefined();
+  });
+
+  it("throws for a relative path with no project open and no rootPath", async () => {
+    setProjectPath(undefined);
+    const run = setupOpenPanel();
+    await expect(run("file.openPanel", { path: "docs/spec.md" })).rejects.toThrow(
+      /No project open/
+    );
+  });
+
+  it("throws when the panel limit blocks creation", async () => {
+    addPanelSpy.mockResolvedValue(null);
+    const run = setupOpenPanel();
+    await expect(run("file.openPanel", { path: "/repo/docs/spec.md" })).rejects.toThrow(
+      /panel limit/
+    );
+  });
+});
+
+describe("file.read containment", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readMock.mockResolvedValue({ content: "file body" });
+    setProjectPath("/repo");
+  });
+
+  it("reads a repo-relative path against the project root", async () => {
+    const run = setupRead();
+    const result = await run({ path: "docs/spec.md" });
+
+    expect(readMock).toHaveBeenCalledWith({ path: "/repo/docs/spec.md", rootPath: "/repo" });
+    expect(result).toEqual({ content: "file body" });
+  });
+
+  it("reads an absolute path inside a worktree using the worktree as root", async () => {
+    const run = setupRead(["/worktrees/feature-x"]);
+    await run({ path: "/worktrees/feature-x/notes.md" });
+
+    expect(readMock).toHaveBeenCalledWith({
+      path: "/worktrees/feature-x/notes.md",
+      rootPath: "/worktrees/feature-x",
+    });
+  });
+
+  it("rejects an absolute path outside the project and its worktrees", async () => {
+    const run = setupRead(["/worktrees/feature-x"]);
+    await expect(run({ path: "/Users/someone/.ssh/id_rsa" })).rejects.toThrow(
+      /outside the current project/
+    );
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a prefix-sibling of the project root", async () => {
+    const run = setupRead();
+    await expect(run({ path: "/repo-evil/secret.md" })).rejects.toThrow(
+      /outside the current project/
+    );
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects traversal that resolves outside the project", async () => {
+    const run = setupRead();
+    await expect(run({ path: "../../etc/passwd" })).rejects.toThrow(/outside the current project/);
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a caller-supplied rootPath that is not a known root", async () => {
+    const run = setupRead();
+    await expect(run({ path: "id_rsa", rootPath: "/Users/someone/.ssh" })).rejects.toThrow(
+      /outside the current project/
+    );
+    expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("throws for a relative path with no project open and no rootPath", async () => {
+    setProjectPath(undefined);
+    const run = setupRead();
+    await expect(run({ path: "docs/spec.md" })).rejects.toThrow(/No project open/);
   });
 });

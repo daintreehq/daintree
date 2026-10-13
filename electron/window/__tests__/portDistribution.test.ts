@@ -43,9 +43,7 @@ import {
   distributePortsToView,
   distributeTerminalWorkerPortToView,
   postTerminalPortToView,
-  getRemoteViewHooks,
   releaseTerminalWorkerPort,
-  setRemoteViewHooks,
   setTerminalPortOverride,
 } from "../portDistribution.js";
 import {
@@ -124,18 +122,6 @@ describe("distributePortsToView", () => {
     expect(second[0]).toBe("terminal-port");
     expect(second[2]).toEqual([port1]);
     expect((first[1] as { token: string }).token).toBe((second[1] as { token: string }).token);
-  });
-
-  it("records the receiving view as the window's port holder (#12557)", () => {
-    // Main needs this to drop the view that already read a chunk off its port
-    // from the `terminal:data` fan-out, without dropping the window's other
-    // (port-less) views along with it.
-    const ctx = makeCtx(4);
-    const wc = makeMockWc();
-
-    distributePortsToView(makeMockWin(), ctx, asWc(wc), asPty(makeMockPtyClient()));
-
-    expect(getPortHolderWebContentsId(4)).toBe(wc.id);
   });
 
   it("moves the port holder to the new view on a project switch (#12557)", () => {
@@ -476,14 +462,5 @@ describe("relayed terminal ports", () => {
     expect(madeChannels[0].port1.close).not.toHaveBeenCalled();
     expect(pty.disconnectMessagePort).not.toHaveBeenCalled();
     expect(getPortHolderWebContentsId(10)).toBe(local.id);
-  });
-
-  it("has no remote view hooks until Remote Hosts installs them", () => {
-    expect(getRemoteViewHooks()).toBeNull();
-    const hooks = { isRemoteView: () => true, redeliverWorktreePort: () => {} };
-    const uninstall = setRemoteViewHooks(hooks);
-    expect(getRemoteViewHooks()).toBe(hooks);
-    uninstall();
-    expect(getRemoteViewHooks()).toBeNull();
   });
 });

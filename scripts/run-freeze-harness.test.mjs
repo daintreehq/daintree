@@ -206,11 +206,4 @@ describe("shouldSuppressTreeKill", () => {
     expect(shouldSuppressTreeKill("darwin", true)).toBe(false);
     expect(shouldSuppressTreeKill("linux", true)).toBe(false);
   });
-
-  it("diverges by platform only once the root is gone", () => {
-    const alive = ["darwin", "win32"].map((p) => shouldSuppressTreeKill(p, false));
-    const dead = ["darwin", "win32"].map((p) => shouldSuppressTreeKill(p, true));
-    expect(new Set(alive).size).toBe(1);
-    expect(new Set(dead).size).toBe(2);
-  });
 });

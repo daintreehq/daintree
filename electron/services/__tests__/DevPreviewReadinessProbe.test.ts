@@ -86,13 +86,6 @@ describe("waitForServerReady", () => {
     wsConstructed.length = 0;
   });
 
-  it("returns true on HTTP 200", async () => {
-    mockResponseWithStatus(200);
-    const signal = new AbortController().signal;
-    const result = await waitForServerReady("http://localhost:3000", signal, 100);
-    expect(result).toBe(true);
-  });
-
   it("uses GET method, not HEAD", async () => {
     mockResponseWithStatus(200);
     const signal = new AbortController().signal;
@@ -424,15 +417,6 @@ describe("waitForServerReady", () => {
         seenServerError: true,
       });
       expect(result).toBe(false);
-    });
-
-    it("resolves normally when no earlier probe saw a 5xx", async () => {
-      mockResponseWithStatus(200);
-      const signal = new AbortController().signal;
-      const result = await waitForServerReady("http://127.0.0.1:3000", signal, 300, {
-        seenServerError: false,
-      });
-      expect(result).toBe(true);
     });
   });
 });

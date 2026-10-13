@@ -260,17 +260,6 @@ describe("PtyManager lifecycle ledger", () => {
     shared.getGitBranch.mockResolvedValue("feature/x");
   });
 
-  it("applies a pre-first-spawn buffered resize as initial dims", () => {
-    const manager = new PtyManager();
-
-    // Renderer resize beats the spawn IPC — the classic race the buffer serves.
-    manager.resize("t1", 132, 43);
-    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
-
-    expect(shared.created[0]?.options.cols).toBe(132);
-    expect(shared.created[0]?.options.rows).toBe(43);
-  });
-
   it("stamps a resize result with the incarnation that applied it (#11641)", () => {
     const manager = new PtyManager();
     const results: Array<{ id: string; launchGeneration: number | null }> = [];

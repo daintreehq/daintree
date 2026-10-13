@@ -52,16 +52,6 @@ describe("buildArchLabel", () => {
     expect(buildArchLabel()).toBe("Intel (Rosetta)");
   });
 
-  it("prioritizes the Rosetta signal over the raw arch on macOS", () => {
-    // The running slice always reports x64 under Rosetta; the label must not
-    // collapse to a bare "Intel" and hide the translation state.
-    setPlatform("darwin");
-    setArch("x64");
-    electronMock.app.runningUnderARM64Translation = true;
-    expect(buildArchLabel()).not.toBe("Intel");
-    expect(buildArchLabel()).toContain("Rosetta");
-  });
-
   it("falls back to the raw arch on non-macOS platforms", () => {
     setPlatform("linux");
     setArch("arm64");

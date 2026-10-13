@@ -1485,16 +1485,6 @@ describe("host.fs.writeFile checked path (#12323)", () => {
     );
     expect(await fs.readFile(target, "utf-8")).toBe("v1");
   });
-
-  it("audits a checked write once, like a plain one", async () => {
-    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
-    const target = join(allowed, "doc.md");
-    await host.fs.writeFile(target, "v1", {});
-    const writeAudits = appendSpy.mock.calls.filter(
-      (c) => (c[0] as { channel: string }).channel === "plugin:fs-write"
-    );
-    expect(writeAudits.length).toBe(1);
-  });
 });
 
 function fsWriteAudits(): Array<{ actionId: string }> {

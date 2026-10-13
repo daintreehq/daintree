@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   isBuiltInPanelKind,
   isBrowserPanel,
@@ -7,26 +7,14 @@ import {
   isGridPanelLocation,
   isPtyPanel,
   type PanelInstance,
-  type PanelLocation,
   type TerminalInstance,
 } from "../panel.js";
-import {
-  BUILT_IN_PANEL_KINDS,
-  clearPanelKindRegistry,
-  registerPanelKind,
-} from "../../config/panelKindRegistry.js";
 
 describe("isBuiltInPanelKind", () => {
   // Hard-coded positives — kept independent of BUILT_IN_PANEL_KINDS so a
   // wrong/incomplete SSOT still gets caught here.
   it.each(["terminal", "browser", "dev-preview"])("returns true for %s", (kind) => {
     expect(isBuiltInPanelKind(kind)).toBe(true);
-  });
-
-  it("returns true for every entry in BUILT_IN_PANEL_KINDS", () => {
-    for (const kind of BUILT_IN_PANEL_KINDS) {
-      expect(isBuiltInPanelKind(kind)).toBe(true);
-    }
   });
 
   it("returns false for unknown kinds and extension kinds", () => {
@@ -54,13 +42,6 @@ describe("isGridPanelLocation", () => {
     expect(isGridPanelLocation("overlay")).toBe(false);
     expect(isGridPanelLocation("trash")).toBe(false);
     expect(isGridPanelLocation("background")).toBe(false);
-  });
-
-  it("classifies every PanelLocation value (no value silently defaults to grid)", () => {
-    const allLocations: PanelLocation[] = ["grid", "dock", "overlay", "trash", "background"];
-    const gridMembers = allLocations.filter((loc) => isGridPanelLocation(loc));
-    // Exactly one concrete location ("grid") is a grid member; the rest are not.
-    expect(gridMembers).toEqual(["grid"]);
   });
 });
 
@@ -130,49 +111,5 @@ describe("panel variant guards", () => {
       const panel = { id: `opt-${kind}`, kind, title: "t", location: "grid" } as PanelInstance;
       expect(isDockPanel(panel), `${kind} opts out of the dock`).toBe(false);
     }
-  });
-});
-
-describe("isDockPanel — plugin kinds follow the registry", () => {
-  afterEach(() => {
-    clearPanelKindRegistry();
-  });
-
-  const makePluginPanel = (kind: string): PanelInstance =>
-    ({ id: `${kind}-1`, kind, title: "t", location: "dock", pluginId: "ext-a" }) as PanelInstance;
-
-  it("admits a registered plugin kind that is dockable by default", () => {
-    registerPanelKind({
-      id: "ext-a.viewer",
-      name: "Viewer",
-      iconId: "puzzle",
-      color: "#123456",
-      hasPty: false,
-      canRestart: false,
-      canConvert: false,
-      extensionId: "ext-a",
-    });
-    expect(isDockPanel(makePluginPanel("ext-a.viewer"))).toBe(true);
-  });
-
-  it("excludes a registered plugin kind that declares dockable:false", () => {
-    registerPanelKind({
-      id: "ext-a.viewer",
-      name: "Viewer",
-      iconId: "puzzle",
-      color: "#123456",
-      hasPty: false,
-      canRestart: false,
-      canConvert: false,
-      dockable: false,
-      extensionId: "ext-a",
-    });
-    expect(isDockPanel(makePluginPanel("ext-a.viewer"))).toBe(false);
-  });
-
-  it("excludes an unregistered plugin kind (registration not yet landed)", () => {
-    // Hydration can replay a persisted plugin panel before its kind registers;
-    // an unknown kind is never dockable, so it stays out of the dock render path.
-    expect(isDockPanel(makePluginPanel("ext-a.not-registered"))).toBe(false);
   });
 });

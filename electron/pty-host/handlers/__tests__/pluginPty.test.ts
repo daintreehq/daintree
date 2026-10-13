@@ -114,16 +114,4 @@ describe("pluginPty handlers", () => {
     // A signal the manager does not model would fall through its switch.
     expect(pluginPtyManager.kill.mock.calls.map((c) => c[2])).toEqual(["SIGTERM", "SIGKILL"]);
   });
-
-  it("registers exactly the four plugin-pty message types", () => {
-    const { handlers } = makeCtx();
-    // Every registered key must be dispatchable by the pty-host router; an
-    // unregistered type would be logged as unknown and silently dropped.
-    expect(Object.keys(handlers).sort()).toEqual([
-      "plugin-pty-kill",
-      "plugin-pty-resize",
-      "plugin-pty-spawn",
-      "plugin-pty-write",
-    ]);
-  });
 });

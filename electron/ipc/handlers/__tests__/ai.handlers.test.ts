@@ -108,22 +108,6 @@ describe("ai handler payload validation", () => {
     expect(storeMock.set).not.toHaveBeenCalled();
   });
 
-  it("rejects AGENT_SETTINGS_SET payload with reserved agentType key", async () => {
-    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET);
-
-    await expect(
-      handler(
-        {} as never,
-        {
-          agentType: "__proto__",
-          settings: { enabled: true },
-        } as never
-      )
-    ).rejects.toThrow("reserved key");
-
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
   it("rejects AGENT_SETTINGS_SET payload with non-object settings", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_SET);
 

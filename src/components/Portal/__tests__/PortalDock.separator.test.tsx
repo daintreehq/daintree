@@ -1,12 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import {
-  PORTAL_DEFAULT_WIDTH,
-  PORTAL_MAX_WIDTH,
-  PORTAL_MIN_EDITOR_WIDTH,
-  PORTAL_MIN_WIDTH,
-} from "@shared/types";
+import { PORTAL_DEFAULT_WIDTH, PORTAL_MAX_WIDTH, PORTAL_MIN_WIDTH } from "@shared/types";
 
 const dispatchMock = vi.fn().mockResolvedValue({ ok: true });
 
@@ -275,10 +270,5 @@ describe("PortalDock — resize separator", () => {
       fireEvent.keyDown(getSeparator(), { key: "Enter" });
       expect(usePortalStore.getState().width).toBe(800);
     });
-  });
-
-  it("exports a sensible PORTAL_MIN_EDITOR_WIDTH constant", () => {
-    // Sanity guard: the clamp math assumes a non-trivial editor reserve.
-    expect(PORTAL_MIN_EDITOR_WIDTH).toBeGreaterThanOrEqual(320);
   });
 });

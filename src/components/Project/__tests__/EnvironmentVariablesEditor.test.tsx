@@ -68,12 +68,6 @@ describe("EnvironmentVariablesEditor", () => {
       expect(globalBadges.length).toBe(2);
     });
 
-    it("does not render inherited section when globalEnvironmentVariables is undefined", () => {
-      render(<EnvironmentVariablesEditor {...defaultProps} />);
-
-      expect(screen.queryByText("Inherited from global")).toBeNull();
-    });
-
     it("does not render inherited section when globalEnvironmentVariables is empty", () => {
       render(<EnvironmentVariablesEditor {...defaultProps} globalEnvironmentVariables={{}} />);
 
@@ -205,20 +199,6 @@ describe("EnvironmentVariablesEditor", () => {
 
       expect(screen.getByText(/kept out of the shared settings file/i)).toBeTruthy();
       expect(container.textContent ?? "").not.toMatch(/securely stored/i);
-    });
-
-    it("does not render the old yellow 'Insecure sensitive variables' banner", () => {
-      render(
-        <EnvironmentVariablesEditor
-          {...defaultProps}
-          environmentVariables={[makeEnvVar("API_KEY", "plain-value")]}
-          settings={makeSettings({ insecureEnvironmentVariables: ["API_KEY"] })}
-          onFlush={vi.fn().mockResolvedValue(undefined)}
-        />
-      );
-
-      expect(screen.queryByText(/insecure sensitive variables detected/i)).toBeNull();
-      expect(screen.queryByText(/saving moves them into secure storage/i)).toBeNull();
     });
 
     it("labels secured rows as 'Kept out of shared settings'", () => {

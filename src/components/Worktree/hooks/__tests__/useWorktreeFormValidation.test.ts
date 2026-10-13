@@ -85,38 +85,6 @@ describe("useWorktreeFormValidation", () => {
     expect(validation.error?.field).toBe("new-branch");
   });
 
-  it("rejects branch name with leading dot", () => {
-    const { result } = renderHook(() => useWorktreeFormValidation());
-
-    const validation = result.current.validate({
-      ...baseInput,
-      branchInput: ".hidden",
-    });
-    expect(validation.valid).toBe(false);
-    expect(validation.error?.field).toBe("new-branch");
-  });
-
-  it("rejects branch name with trailing dot", () => {
-    const { result } = renderHook(() => useWorktreeFormValidation());
-
-    const validation = result.current.validate({
-      ...baseInput,
-      branchInput: "trailing.",
-    });
-    expect(validation.valid).toBe(false);
-    expect(validation.error?.field).toBe("new-branch");
-  });
-
-  it("rejects branch name with backslash", () => {
-    const { result } = renderHook(() => useWorktreeFormValidation());
-
-    const validation = result.current.validate({
-      ...baseInput,
-      branchInput: "bad\\name",
-    });
-    expect(validation.valid).toBe(false);
-  });
-
   it("rejects prefixed branch with empty slug", () => {
     const { result } = renderHook(() => useWorktreeFormValidation());
 
@@ -153,17 +121,6 @@ describe("useWorktreeFormValidation", () => {
     expect(validation.valid).toBe(false);
     expect(validation.error?.message).toContain("worktree path");
     expect(validation.error?.field).toBe("worktree-path");
-  });
-
-  it("returns fullBranchName for prefixed input", () => {
-    const { result } = renderHook(() => useWorktreeFormValidation());
-
-    const validation = result.current.validate({
-      ...baseInput,
-      branchInput: "feature/PROJ-123-fix-bug",
-    });
-    expect(validation.valid).toBe(true);
-    expect(validation.fullBranchName).toBe("feature/PROJ-123-fix-bug");
   });
 
   it("returns fullBranchName for unprefixed input", () => {

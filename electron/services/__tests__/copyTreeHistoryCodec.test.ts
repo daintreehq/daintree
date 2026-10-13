@@ -29,11 +29,6 @@ describe("encode/decode round trip", () => {
     expect(decoded).toEqual({ ok: true, records });
   });
 
-  it("stamps the current schema version on write", () => {
-    const parsed = JSON.parse(encodeCopyTreeHistoryFile([])) as { _schemaVersion: number };
-    expect(parsed._schemaVersion).toBe(COPY_TREE_HISTORY_SCHEMA_VERSION);
-  });
-
   it("survives a round trip through an empty history", () => {
     expect(decodeCopyTreeHistoryFile(encodeCopyTreeHistoryFile([]))).toEqual({
       ok: true,

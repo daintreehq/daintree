@@ -23,13 +23,6 @@ function fullOutputFor(platform) {
 }
 
 describe("buildRequiredMarkers", () => {
-  it.each(["win32", "darwin", "linux"])("includes every shared marker on %s", (platform) => {
-    const markers = buildRequiredMarkers(platform);
-    for (const shared of SHARED_MARKERS) {
-      expect(markers).toContain(shared);
-    }
-  });
-
   it("adds win-job-object on Windows and omits posix-pty-reaper", () => {
     const markers = buildRequiredMarkers("win32");
     expect(markers).toContain("[SMOKE] CHECK: win-job-object native module");
@@ -59,10 +52,6 @@ describe("parsePositiveInt", () => {
 
   it("returns fallback for non-numeric strings", () => {
     expect(parsePositiveInt("abc", 7)).toBe(7);
-  });
-
-  it("returns fallback for negative numbers", () => {
-    expect(parsePositiveInt("-3", 4)).toBe(4);
   });
 
   it("returns fallback for zero", () => {

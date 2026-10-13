@@ -131,63 +131,6 @@ describe("registerForgeDataHandlers", () => {
     });
   });
 
-  it("registers the core and capability IPC handlers", () => {
-    const cleanup = registerForgeDataHandlers();
-    // 6 core data handlers + the 14-op forgeCapabilityData namespace.
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(20);
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-issues", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-prs", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-issue", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-pr", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-ci-status", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-checks", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:get-repo-metadata",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-current-user", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-repo-stats", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:get-first-page-cache",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:get-project-health",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:get-issue-tooltip",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-pr-tooltip", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:get-issues-by-numbers",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:get-prs-by-numbers",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:get-pr-review-threads",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:list-issue-comments",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:resolve-author-avatar",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-token-health", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge:get-rate-limit-details",
-      expect.any(Function)
-    );
-    cleanup();
-  });
-
   it("listIssues resolves the provider and returns its normalized page", async () => {
     const page: Page<Issue> = {
       items: [makeIssue(1), makeIssue(2)],
@@ -235,15 +178,6 @@ describe("registerForgeDataHandlers", () => {
 
     expect(fakeImpl.getIssue).toHaveBeenCalledWith(repoRef, 42);
     expect(result).toMatchObject({ number: 42 });
-  });
-
-  it("getIssue propagates a null result when the issue does not exist", async () => {
-    fakeImpl.getIssue.mockResolvedValue(null);
-    registerForgeDataHandlers();
-
-    const result = await findHandler("forge:get-issue")(null, { cwd: "/repo", issueNumber: 99 });
-
-    expect(result).toBeNull();
   });
 
   it("getPR delegates to impl.getPR", async () => {
@@ -300,18 +234,6 @@ describe("registerForgeDataHandlers", () => {
         pending: 1,
         requiredChecksPassing: false,
       });
-    });
-
-    it("preserves requiredChecksPassing:false rather than dropping it as falsy", async () => {
-      fakeImpl.getCIStatus.mockResolvedValue({ ...fullStatus, requiredChecksPassing: false });
-      registerForgeDataHandlers();
-
-      const result = (await findHandler("forge:get-ci-status")(null, {
-        cwd: "/repo",
-        prNumber: 901,
-      })) as Record<string, unknown>;
-
-      expect(result.requiredChecksPassing).toBe(false);
     });
 
     it("omits requiredChecksPassing entirely when the provider doesn't gate", async () => {

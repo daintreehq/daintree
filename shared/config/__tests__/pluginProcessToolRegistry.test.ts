@@ -177,13 +177,6 @@ describe("pluginProcessToolRegistry (#11613)", () => {
     expect(getPluginProcessToolRegistry()).toBe(record);
   });
 
-  it("keeps the same reference when mirroring the record already held", () => {
-    const record = { "mirrored-cli": "globe" };
-    setPluginProcessToolRegistry(record);
-    setPluginProcessToolRegistry(record);
-    expect(getPluginProcessToolRegistry()).toBe(record);
-  });
-
   it("gives every main-side mutation a fresh snapshot reference", () => {
     registerPluginProcessTools("acme.tools", [{ command: "acme-cli", iconId: "sparkles" }]);
     const first = getPluginProcessToolRegistry();

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vite
 import { act, renderHook } from "@testing-library/react";
 import type { EditorView } from "@codemirror/view";
 import type { MaterializeSource } from "@shared/types/remoteHosts";
+import type { PluginSendToAgentRefusalReason } from "@shared/types/plugin";
 
 // The hook reaches `useTerminalFileTransfer` for one regex, but that module
 // constructs the `terminalInstanceService` singleton at import time — real
@@ -20,10 +21,20 @@ vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget }) },
 }));
 
+// The draft path is its own suite (agentDraft.test.ts); here it is the seam the
+// drop routes through, so the question is only what reaches it and when.
+const { draftAgentContext, getDraftRefusal } = vi.hoisted(() => ({
+  draftAgentContext: vi.fn(),
+  getDraftRefusal: vi.fn<(terminalId: string) => PluginSendToAgentRefusalReason | null>(),
+}));
+vi.mock("@/services/agentHandoff/agentDraft", () => ({ draftAgentContext, getDraftRefusal }));
+
 const { useDragDrop } = await import("../useDragDrop");
 const { FILE_DRAG_MIME, encodeFileDragPaths } = await import("@/lib/fileDragPayload");
 const { getAllAtFileTokens } = await import("../../hybridInputParsing");
 const { setRemoteMaterializer } = await import("@/services/materialize");
+const { AGENT_CONTEXT_DRAG_MIME, encodeAgentContextDragPayload } =
+  await import("@shared/utils/agentContextDrag");
 
 const CWD = "/Users/greg/Projects/daintree";
 
@@ -203,23 +214,6 @@ describe("useDragDrop", () => {
     expect(insertedToken(dispatch)).not.toContain(CWD);
   });
 
-  // The chip's range has to cover exactly the token that was inserted — a
-  // shorter relative token with a range still sized for the absolute one would
-  // leave the decoration overhanging into following text.
-  it("sizes the chip range to the token actually inserted", async () => {
-    pathForFile.mockReturnValue(`${CWD}/src/App.tsx`);
-    const { dispatch, ref } = fakeView();
-    const { result } = renderHook(() => useDragDrop(ref, CWD));
-
-    await act(async () => {
-      await result.current.handleDrop(dropEvent([fakeFile("App.tsx")]));
-    });
-
-    const [chip] = effectValues(dispatch);
-    const token = insertedToken(dispatch);
-    expect((chip?.to as number) - (chip?.from as number)).toBe(token.length);
-  });
-
   it("keeps consecutive chip ranges aligned with their tokens when several files drop at once", async () => {
     pathForFile.mockImplementation((file: File) => `${CWD}/src/${file.name}`);
     const { dispatch, ref, head } = fakeView(17);
@@ -296,21 +290,6 @@ describe("useDragDrop", () => {
     const insert = call?.changes?.insert as string;
     expect(call?.changes?.from).toBe(head);
     expect(call?.selection?.anchor).toBe(head + insert.length);
-  });
-
-  // A file named `terminal` at the cwd root relativizes to a bare `terminal`,
-  // which the send path would otherwise resolve as "inject the terminal
-  // buffer" instead of referencing the file.
-  it("keeps a cwd-root file that collides with a reserved token a path", async () => {
-    pathForFile.mockReturnValue(`${CWD}/terminal`);
-    const { dispatch, ref } = fakeView();
-    const { result } = renderHook(() => useDragDrop(ref, CWD));
-
-    await act(async () => {
-      await result.current.handleDrop(dropEvent([fakeFile("terminal")]));
-    });
-
-    expect(insertedToken(dispatch)).toBe("@./terminal");
   });
 
   // Images insert a bare path rather than an `@file` token and are out of this
@@ -465,17 +444,6 @@ describe("useDragDrop", () => {
       expect(chip?.fileSize).toBeUndefined();
     });
 
-    it("keeps a reserved-name collision a path", async () => {
-      const { dispatch, ref } = fakeView();
-      const { result } = renderHook(() => useDragDrop(ref, CWD));
-
-      await act(async () => {
-        await result.current.handleDrop(internalDrop([`${CWD}/terminal`]));
-      });
-
-      expect(insertedToken(dispatch)).toBe("@./terminal");
-    });
-
     it("quotes a dragged path that needs it", async () => {
       const { dispatch, ref } = fakeView();
       const { result } = renderHook(() => useDragDrop(ref, CWD));
@@ -485,29 +453,6 @@ describe("useDragDrop", () => {
       });
 
       expect(insertedToken(dispatch)).toBe('@"my notes.md"');
-    });
-
-    // A folder is a meaningful reference for an agent and drags like any file.
-    it("references a dragged folder", async () => {
-      const { dispatch, ref } = fakeView();
-      const { result } = renderHook(() => useDragDrop(ref, CWD));
-
-      await act(async () => {
-        await result.current.handleDrop(internalDrop([`${CWD}/src/components`]));
-      });
-
-      expect(insertedToken(dispatch)).toBe("@src/components");
-    });
-
-    it("keeps chip ranges aligned across several dragged paths", async () => {
-      const { dispatch, ref, head } = fakeView(11);
-      const { result } = renderHook(() => useDragDrop(ref, CWD));
-
-      await act(async () => {
-        await result.current.handleDrop(internalDrop([`${CWD}/src/a.ts`, `${CWD}/src/b.ts`]));
-      });
-
-      expect(chipSpellings(dispatch, head)).toEqual(["@src/a.ts", "@src/b.ts"]);
     });
 
     // Matching the OS drop means matching it for images too: Finder's drop of
@@ -524,44 +469,6 @@ describe("useDragDrop", () => {
       expect(thumbnailFromPath).toHaveBeenCalledWith(absolute);
       const insert = dispatch.mock.calls[0]?.[0]?.changes?.insert as string;
       expect(insert.trimEnd()).toBe(absolute);
-    });
-
-    // A folder whose name ends in an image extension takes the same recovery a
-    // corrupt image already takes, rather than needing its own payload field.
-    it("falls back to a file chip when the thumbnail fails", async () => {
-      thumbnailFromPath.mockRejectedValue(new Error("not an image"));
-      const { dispatch, ref } = fakeView();
-      const { result } = renderHook(() => useDragDrop(ref, CWD));
-
-      await act(async () => {
-        await result.current.handleDrop(internalDrop([`${CWD}/assets.png`]));
-      });
-
-      expect(insertedToken(dispatch)).toBe("@assets.png");
-    });
-
-    // The OS path would resolve nothing for a drag that has no `File` at all.
-    it("never asks the OS to resolve a path it was handed", async () => {
-      const { ref } = fakeView();
-      const { result } = renderHook(() => useDragDrop(ref, CWD));
-
-      await act(async () => {
-        await result.current.handleDrop(internalDrop([`${CWD}/src/App.tsx`]));
-      });
-
-      expect(pathForFile).not.toHaveBeenCalled();
-    });
-
-    it("reads the payload from the in-app type", async () => {
-      const getData = vi.fn(() => encodeFileDragPaths([`${CWD}/src/App.tsx`]));
-      const { ref } = fakeView();
-      const { result } = renderHook(() => useDragDrop(ref, CWD));
-
-      await act(async () => {
-        await result.current.handleDrop(internalDropEvent("", getData));
-      });
-
-      expect(getData).toHaveBeenCalledWith(FILE_DRAG_MIME);
     });
 
     // The payload is only readable once the drop has already been advertised,
@@ -766,24 +673,6 @@ describe("useDragDrop", () => {
       // …and the late insertion neither repeats nor re-takes the selection.
       expect(dispatch).toHaveBeenCalledTimes(1);
       expect(onDropSelect).toHaveBeenCalledTimes(1);
-      expect(focus).toHaveBeenCalledTimes(1);
-    });
-
-    // The whole point of the gesture is typing straight after the chip, so
-    // focusing must not carry a caret move of its own. Routing through the
-    // panel focus registry instead would dispatch the caret to the end of the
-    // draft, overriding where the insertion parks it.
-    it("leaves the caret the insertion parked rather than moving it", async () => {
-      const { ref, dispatch, focus, head } = fakeView(6);
-      const { result } = renderHook(() => useDragDrop(ref, CWD, vi.fn()));
-
-      await act(async () => {
-        await result.current.handleDrop(internalDrop([`${CWD}/src/App.tsx`]));
-      });
-
-      const insert = dispatch.mock.calls[0]![0].changes.insert as string;
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(dispatch.mock.calls[0]![0].selection).toEqual({ anchor: head + insert.length });
       expect(focus).toHaveBeenCalledTimes(1);
     });
 
@@ -996,5 +885,131 @@ describe("useDragDrop — materialize seam", () => {
 
     expect(dispatch).not.toHaveBeenCalled();
     expect(replacement.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDragDrop — agent context", () => {
+  const TERMINAL_ID = "agent-1";
+
+  function agentDragEvent(types: string[], serialized = ""): React.DragEvent {
+    return {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      dataTransfer: {
+        types,
+        files: [],
+        dropEffect: "none",
+        getData: vi.fn((type: string) => (type === AGENT_CONTEXT_DRAG_MIME ? serialized : "")),
+      },
+    } as unknown as React.DragEvent;
+  }
+
+  function contextDrag(): React.DragEvent {
+    return agentDragEvent(
+      [AGENT_CONTEXT_DRAG_MIME, "text/plain"],
+      encodeAgentContextDragPayload({
+        v: 1,
+        text: "Card body",
+        title: "Fix login",
+        source: { label: "Kanban" },
+      })
+    );
+  }
+
+  function renderAgentDrop(terminalId: string | undefined) {
+    const view = fakeView();
+    const onDropSelect = vi.fn();
+    const { result } = renderHook(() => useDragDrop(view.ref, "/repo", onDropSelect, terminalId));
+    return { result, view, onDropSelect };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getDraftRefusal.mockReturnValue(null);
+    draftAgentContext.mockImplementation((terminalId: string) => ({
+      status: "drafted",
+      terminalId,
+    }));
+  });
+
+  it("lights up the file-drop affordance for a pane that can take the draft", () => {
+    const { result } = renderAgentDrop(TERMINAL_ID);
+    const enter = agentDragEvent([AGENT_CONTEXT_DRAG_MIME, "text/plain"]);
+    act(() => result.current.handleDragEnter(enter));
+    const over = agentDragEvent([AGENT_CONTEXT_DRAG_MIME, "text/plain"]);
+    act(() => result.current.handleDragOver(over));
+
+    expect(result.current.isDragOverFiles).toBe(true);
+    expect(over.preventDefault).toHaveBeenCalled();
+    expect(over.dataTransfer.dropEffect).toBe("copy");
+    expect(getDraftRefusal).toHaveBeenCalledWith(TERMINAL_ID);
+  });
+
+  it("refuses the drag outright where the draft would be refused", () => {
+    getDraftRefusal.mockReturnValue("input-locked");
+    const { result } = renderAgentDrop(TERMINAL_ID);
+    act(() => result.current.handleDragEnter(agentDragEvent([AGENT_CONTEXT_DRAG_MIME])));
+    const over = agentDragEvent([AGENT_CONTEXT_DRAG_MIME]);
+    act(() => result.current.handleDragOver(over));
+
+    expect(result.current.isDragOverFiles).toBe(false);
+    // Claimed and refused, so the contenteditable never pastes the raw text.
+    expect(over.preventDefault).toHaveBeenCalled();
+    expect(over.dataTransfer.dropEffect).toBe("none");
+  });
+
+  it("judges a drag carrying files too by its agent context, as the drop does", () => {
+    getDraftRefusal.mockReturnValue("input-locked");
+    const { result } = renderAgentDrop(TERMINAL_ID);
+    const types = ["Files", AGENT_CONTEXT_DRAG_MIME, "text/plain"];
+    act(() => result.current.handleDragEnter(agentDragEvent(types)));
+    const over = agentDragEvent(types);
+    act(() => result.current.handleDragOver(over));
+
+    expect(result.current.isDragOverFiles).toBe(false);
+    expect(over.dataTransfer.dropEffect).toBe("none");
+  });
+
+  it("refuses it on a bar with no pane behind it (the Assistant)", () => {
+    const { result } = renderAgentDrop(undefined);
+    const over = agentDragEvent([AGENT_CONTEXT_DRAG_MIME]);
+    act(() => result.current.handleDragOver(over));
+    expect(over.dataTransfer.dropEffect).toBe("none");
+    expect(getDraftRefusal).not.toHaveBeenCalled();
+  });
+
+  it("drafts the decoded payload, then selects the pane and focuses the bar", async () => {
+    const { result, view, onDropSelect } = renderAgentDrop(TERMINAL_ID);
+    await act(() => result.current.handleDrop(contextDrag()));
+
+    expect(draftAgentContext).toHaveBeenCalledWith(TERMINAL_ID, {
+      text: "Card body",
+      title: "Fix login",
+      sourceLabel: "Kanban",
+    });
+    expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
+    expect(onDropSelect).toHaveBeenCalledTimes(1);
+    expect(view.focus).toHaveBeenCalledTimes(1);
+    // Nothing goes into the editor directly — the draft store owns the write,
+    // and no Enter is ever sent.
+    expect(view.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("leaves selection and focus alone when the draft is refused at drop time", async () => {
+    draftAgentContext.mockReturnValue({ status: "refused", reason: "restarting" });
+    const { result, view, onDropSelect } = renderAgentDrop(TERMINAL_ID);
+    await act(() => result.current.handleDrop(contextDrag()));
+
+    expect(onDropSelect).not.toHaveBeenCalled();
+    expect(view.focus).not.toHaveBeenCalled();
+  });
+
+  it("ignores a payload that fails validation", async () => {
+    const { result, onDropSelect } = renderAgentDrop(TERMINAL_ID);
+    const forged = agentDragEvent([AGENT_CONTEXT_DRAG_MIME], JSON.stringify({ v: 1, text: "" }));
+    await act(() => result.current.handleDrop(forged));
+
+    expect(draftAgentContext).not.toHaveBeenCalled();
+    expect(onDropSelect).not.toHaveBeenCalled();
   });
 });

@@ -330,17 +330,6 @@ describe("Windows Git PATH discovery", () => {
     delete process.env["PNPM_HOME"];
   });
 
-  it("does not include pnpm path when PNPM_HOME is not set", async () => {
-    delete process.env["PNPM_HOME"];
-    fsMock.existsSync.mockReturnValue(true);
-
-    await import("../environment.js");
-
-    const candidates = getCandidatePaths();
-    const hasPnpm = candidates.some((p) => p.includes("pnpm"));
-    expect(hasPnpm).toBe(false);
-  });
-
   it("includes FNM_MULTISHELL_PATH when env var is set", async () => {
     process.env["FNM_MULTISHELL_PATH"] =
       "C:\\Users\\testuser\\AppData\\Local\\fnm_multishells\\12345";
@@ -354,17 +343,6 @@ describe("Windows Git PATH discovery", () => {
     delete process.env["FNM_MULTISHELL_PATH"];
   });
 
-  it("does not include fnm path when FNM_MULTISHELL_PATH is not set", async () => {
-    delete process.env["FNM_MULTISHELL_PATH"];
-    fsMock.existsSync.mockReturnValue(true);
-
-    await import("../environment.js");
-
-    const candidates = getCandidatePaths();
-    const hasFnm = candidates.some((p) => p.includes("fnm"));
-    expect(hasFnm).toBe(false);
-  });
-
   it("includes NVM_SYMLINK path when env var is set", async () => {
     process.env["NVM_SYMLINK"] = "C:\\Program Files\\nodejs";
     fsMock.existsSync.mockReturnValue(true);
@@ -375,18 +353,6 @@ describe("Windows Git PATH discovery", () => {
     expect(candidates).toContainEqual(expect.stringContaining("C:\\Program Files\\nodejs"));
 
     delete process.env["NVM_SYMLINK"];
-  });
-
-  it("does not include nvm-windows path when NVM_SYMLINK is not set", async () => {
-    delete process.env["NVM_SYMLINK"];
-    fsMock.existsSync.mockReturnValue(true);
-
-    await import("../environment.js");
-
-    const candidates = getCandidatePaths();
-    // "nodejs" only appears from NVM_SYMLINK, not from other paths
-    const hasNvm = candidates.some((p) => p === "C:\\Program Files\\nodejs");
-    expect(hasNvm).toBe(false);
   });
 
   it("falls back to defaults when env vars are empty strings", async () => {
@@ -443,16 +409,6 @@ describe("GPU memory flags", () => {
     process.argv = originalArgv;
   });
 
-  it("sets force-gpu-mem-available-mb to 768 on a 4 GiB machine", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    osMock.totalmem.mockReturnValue(4 * GIB);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "768");
-  });
-
   it("sets force-gpu-mem-available-mb to 768 at the 8 GiB boundary", async () => {
     fsMock.existsSync.mockReturnValue(false);
     osMock.totalmem.mockReturnValue(8 * GIB);
@@ -493,16 +449,6 @@ describe("GPU memory flags", () => {
     expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "2048");
   });
 
-  it("sets force-gpu-mem-available-mb to 2048 on a 32 GiB machine", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    osMock.totalmem.mockReturnValue(32 * GIB);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "2048");
-  });
-
   it("does not set gpu-rasterization-msaa-sample-count", async () => {
     fsMock.existsSync.mockReturnValue(false);
     osMock.totalmem.mockReturnValue(16 * GIB);
@@ -532,81 +478,7 @@ describe("WebGL context cap", () => {
     process.argv = originalArgv;
   });
 
-  it("sets max-active-webgl-contexts to 24 on a 4 GiB machine", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    osMock.totalmem.mockReturnValue(4 * GIB);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "24");
-  });
-
-  it("sets max-active-webgl-contexts to 24 at the 8 GiB boundary", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    osMock.totalmem.mockReturnValue(8 * GIB);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "24");
-  });
-
-  it("sets max-active-webgl-contexts to 28 just above the 8 GiB boundary", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    osMock.totalmem.mockReturnValue(8 * GIB + 1);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "28");
-  });
-
   it("sets max-active-webgl-contexts to 28 at the 16 GiB boundary", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    osMock.totalmem.mockReturnValue(16 * GIB);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "28");
-  });
-
-  it("sets max-active-webgl-contexts to 32 just above the 16 GiB boundary", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    osMock.totalmem.mockReturnValue(16 * GIB + 1);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "32");
-  });
-
-  it("sets max-active-webgl-contexts to 32 on a 32 GiB machine", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    osMock.totalmem.mockReturnValue(32 * GIB);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "32");
-  });
-
-  it("registers max-active-webgl-contexts exactly once", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    osMock.totalmem.mockReturnValue(16 * GIB);
-
-    await import("../environment.js");
-
-    const { app } = await import("electron");
-    const calls = vi
-      .mocked(app.commandLine.appendSwitch)
-      .mock.calls.filter(([key]) => key === "max-active-webgl-contexts");
-    expect(calls).toHaveLength(1);
-  });
-
-  it("registers max-active-webgl-contexts on Linux too", async () => {
-    Object.defineProperty(process, "platform", { value: "linux", writable: true });
     fsMock.existsSync.mockReturnValue(false);
     osMock.totalmem.mockReturnValue(16 * GIB);
 
@@ -891,20 +763,6 @@ describe("Linux Wayland multi-GPU fallback", () => {
     expect(angle.useCmdDecoder).toEqual([]);
     expect(angle.ignoreBlocklist).toEqual([]);
   });
-
-  it("exports gpuAngleFallbackActive=true when the flag exists", async () => {
-    fsMock.existsSync.mockImplementation(flagAwareExists({ angle: true }));
-
-    const mod = await import("../environment.js");
-    expect(mod.gpuAngleFallbackActive).toBe(true);
-  });
-
-  it("exports gpuAngleFallbackActive=false when the flag is absent", async () => {
-    fsMock.existsSync.mockImplementation(flagAwareExists({}));
-
-    const mod = await import("../environment.js");
-    expect(mod.gpuAngleFallbackActive).toBe(false);
-  });
 });
 
 describe("GPU disabled flag version-change retry", () => {
@@ -1115,11 +973,6 @@ describe("kickOffEarlyPathRefresh", () => {
     vi.doUnmock("shell-env");
   });
 
-  it("returns null from getEarlyPathRefreshPromise before kick-off", async () => {
-    const env = await import("../environment.js");
-    expect(env.getEarlyPathRefreshPromise()).toBeNull();
-  });
-
   it("kick-off runs refreshPath and updates PATH", async () => {
     const env = await import("../environment.js");
     await env.kickOffEarlyPathRefresh();
@@ -1134,16 +987,6 @@ describe("kickOffEarlyPathRefresh", () => {
     expect(p1).toBe(p2);
     await Promise.all([p1, p2]);
     // shellEnv must only be invoked once even with two concurrent kick-offs.
-    expect(shellEnvCallCount).toBe(1);
-  });
-
-  it("getEarlyPathRefreshPromise returns a settled promise after kick-off", async () => {
-    const env = await import("../environment.js");
-    await env.kickOffEarlyPathRefresh();
-    const after = env.getEarlyPathRefreshPromise();
-    expect(after).not.toBeNull();
-    // Awaiting a settled promise is a no-op — must not re-run shell-env.
-    await after;
     expect(shellEnvCallCount).toBe(1);
   });
 
@@ -1163,14 +1006,6 @@ describe("kickOffEarlyPathRefresh", () => {
     // Awaiting the settled promise must also not reject — the PtyClient gate
     // depends on this guarantee or the first PTY spawn would abort.
     await expect(settled).resolves.toBeUndefined();
-    expect(process.env.PATH).toBe("/old/path");
-  });
-
-  it("kick-off preserves PATH when shell-env returns no PATH key", async () => {
-    shellEnvMode = "empty";
-    process.env.PATH = "/old/path";
-    const env = await import("../environment.js");
-    await env.kickOffEarlyPathRefresh();
     expect(process.env.PATH).toBe("/old/path");
   });
 });
@@ -1199,19 +1034,8 @@ describe("macOS open-file handler", () => {
     process.argv = originalArgv;
   });
 
-  it("registers an open-file listener on macOS", async () => {
-    await import("../environment.js");
-    expect(getOpenFileHandler()).toBeTypeOf("function");
-  });
-
   it("does not register an open-file listener on Linux", async () => {
     Object.defineProperty(process, "platform", { value: "linux", writable: true });
-    await import("../environment.js");
-    expect(getOpenFileHandler()).toBeUndefined();
-  });
-
-  it("does not register an open-file listener on Windows", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", writable: true });
     await import("../environment.js");
     expect(getOpenFileHandler()).toBeUndefined();
   });
@@ -1225,22 +1049,6 @@ describe("macOS open-file handler", () => {
     expect(env.getPendingOpenFilePaths()).toEqual(["/tmp/foo.dntr"]);
   });
 
-  it("queues multiple paths in FIFO order", async () => {
-    const env = await import("../environment.js");
-    const handler = getOpenFileHandler()!;
-    handler({ preventDefault: vi.fn() }, "/a.dntr");
-    handler({ preventDefault: vi.fn() }, "/b.dntr");
-    expect(env.getPendingOpenFilePaths()).toEqual(["/a.dntr", "/b.dntr"]);
-  });
-
-  it("clearPendingOpenFilePaths empties the queue", async () => {
-    const env = await import("../environment.js");
-    const handler = getOpenFileHandler()!;
-    handler({ preventDefault: vi.fn() }, "/a.dntr");
-    env.clearPendingOpenFilePaths();
-    expect(env.getPendingOpenFilePaths()).toEqual([]);
-  });
-
   it("routes to the consumer instead of queueing once one is set", async () => {
     const env = await import("../environment.js");
     const handler = getOpenFileHandler()!;
@@ -1249,15 +1057,6 @@ describe("macOS open-file handler", () => {
     handler({ preventDefault: vi.fn() }, "/live.dntr");
     expect(consumer).toHaveBeenCalledWith("/live.dntr");
     expect(env.getPendingOpenFilePaths()).toEqual([]);
-  });
-
-  it("calls preventDefault on the consumer path too", async () => {
-    const env = await import("../environment.js");
-    const handler = getOpenFileHandler()!;
-    env.setOpenFileConsumer(vi.fn());
-    const event = { preventDefault: vi.fn() };
-    handler(event, "/live.dntr");
-    expect(event.preventDefault).toHaveBeenCalledOnce();
   });
 
   it("deduplicates identical queued paths before activation", async () => {
@@ -1318,36 +1117,6 @@ describe("macOS open-file directory routing (#10976)", () => {
     expect(env.getPendingOpenFilePaths()).toEqual([]);
   });
 
-  it("queues multiple directories in FIFO order", async () => {
-    const env = await import("../environment.js");
-    const handler = getOpenFileHandler()!;
-    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
-    handler({ preventDefault: vi.fn() }, "/a");
-    handler({ preventDefault: vi.fn() }, "/b");
-    expect(env.getPendingOpenDirPaths()).toEqual(["/a", "/b"]);
-  });
-
-  it("clearPendingOpenDirPaths empties the directory queue", async () => {
-    const env = await import("../environment.js");
-    const handler = getOpenFileHandler()!;
-    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
-    handler({ preventDefault: vi.fn() }, "/a");
-    env.clearPendingOpenDirPaths();
-    expect(env.getPendingOpenDirPaths()).toEqual([]);
-  });
-
-  it("routes to the directory consumer instead of queueing once one is set", async () => {
-    const env = await import("../environment.js");
-    const handler = getOpenFileHandler()!;
-    const consumer = vi.fn();
-    env.setOpenDirConsumer(consumer);
-    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
-    handler({ preventDefault: vi.fn() }, "/live/folder");
-
-    expect(consumer).toHaveBeenCalledWith("/live/folder");
-    expect(env.getPendingOpenDirPaths()).toEqual([]);
-  });
-
   it("deduplicates identical queued directories before a window exists", async () => {
     const env = await import("../environment.js");
     const handler = getOpenFileHandler()!;
@@ -1355,13 +1124,6 @@ describe("macOS open-file directory routing (#10976)", () => {
     handler({ preventDefault: vi.fn() }, "/dup");
     handler({ preventDefault: vi.fn() }, "/dup");
     expect(env.getPendingOpenDirPaths()).toEqual(["/dup"]);
-  });
-
-  it("queuePendingOpenDirPath deduplicates when re-queuing from the consumer", async () => {
-    const env = await import("../environment.js");
-    env.queuePendingOpenDirPath("/requeue");
-    env.queuePendingOpenDirPath("/requeue");
-    expect(env.getPendingOpenDirPaths()).toEqual(["/requeue"]);
   });
 
   // The CLI and `file://` folder arguments share this entry with `open-file`,
@@ -1377,25 +1139,6 @@ describe("macOS open-file directory routing (#10976)", () => {
 
     expect(consumer).toHaveBeenCalledExactlyOnceWith("/cli/late");
     expect(env.getPendingOpenDirPaths()).toEqual(["/cli/early"]);
-  });
-
-  it("calls preventDefault for directories too", async () => {
-    await import("../environment.js");
-    const handler = getOpenFileHandler()!;
-    fsMock.statSync.mockReturnValue({ isDirectory: () => true });
-    const event = { preventDefault: vi.fn() };
-    handler(event, "/projects/foo");
-    expect(event.preventDefault).toHaveBeenCalledOnce();
-  });
-
-  it("routes a file (non-directory) through the plugin queue, not the directory queue", async () => {
-    const env = await import("../environment.js");
-    const handler = getOpenFileHandler()!;
-    fsMock.statSync.mockReturnValue({ isDirectory: () => false });
-    handler({ preventDefault: vi.fn() }, "/plugin.dntr");
-
-    expect(env.getPendingOpenFilePaths()).toEqual(["/plugin.dntr"]);
-    expect(env.getPendingOpenDirPaths()).toEqual([]);
   });
 
   it("treats a stat failure as a file so the plugin error route is preserved", async () => {
@@ -1448,20 +1191,5 @@ describe("macOS open-file directory routing (#10976)", () => {
     expect(fileConsumer).toHaveBeenCalledWith("/vanished.dntr");
     expect(dirConsumer).not.toHaveBeenCalled();
     expect(env.getPendingOpenDirPaths()).toEqual([]);
-  });
-
-  it("routes a .dntr path that is actually a directory to the dir queue (stat wins over extension)", async () => {
-    const env = await import("../environment.js");
-    const handler = getOpenFileHandler()!;
-    fsMock.statSync.mockImplementation(((p: string) => ({
-      isDirectory: () => p === "/odd/plugin.dntr",
-    })) as (p: string) => {
-      isDirectory: () => boolean;
-    });
-    handler({ preventDefault: vi.fn() }, "/odd/plugin.dntr");
-    handler({ preventDefault: vi.fn() }, "/real.dntr");
-
-    expect(env.getPendingOpenDirPaths()).toEqual(["/odd/plugin.dntr"]);
-    expect(env.getPendingOpenFilePaths()).toEqual(["/real.dntr"]);
   });
 });

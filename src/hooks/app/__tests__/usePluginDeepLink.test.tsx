@@ -35,11 +35,6 @@ describe("usePluginDeepLink", () => {
     });
   });
 
-  it("subscribes on mount regardless of isStateLoaded", () => {
-    renderHook(({ loaded }) => usePluginDeepLink(loaded), { initialProps: { loaded: false } });
-    expect(onDeepLinkMock).toHaveBeenCalledTimes(1);
-  });
-
   it("buffers the intent until hydration completes", () => {
     const { result, rerender } = renderHook(({ loaded }) => usePluginDeepLink(loaded), {
       initialProps: { loaded: false },

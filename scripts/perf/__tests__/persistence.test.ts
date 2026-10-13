@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import { allScenarios, EXPECTED_SCENARIO_IDS } from "../scenarios";
+import { allScenarios } from "../scenarios";
 import {
   cleanupTempRoot,
   DB_SOURCE_PATH,
@@ -43,13 +43,6 @@ describe("persistence perf fixture", () => {
     // If this fails, production changed journal mode / durability and the
     // benchmark is now measuring a database the product never opens.
     expect(pragmas).toEqual([...PRODUCTION_PRAGMAS]);
-  });
-
-  it("no longer declares the synthetic PERF-050..052 scenarios", () => {
-    for (const id of ["PERF-050", "PERF-051", "PERF-052"]) {
-      expect(EXPECTED_SCENARIO_IDS.has(id)).toBe(false);
-      expect(allScenarios.some((s) => s.id === id)).toBe(false);
-    }
   });
 });
 

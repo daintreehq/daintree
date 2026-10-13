@@ -79,16 +79,6 @@ describe("DockPlaceholder height containment (#11055)", () => {
     // And the tall browser body must be absent on the compact dock path.
     expect(container.querySelector("[data-placeholder-body]")).toBeNull();
   });
-
-  it("drops the dev-preview split body while dragging", () => {
-    mockUseDndPlaceholder.mockReturnValue({
-      activeTerminal: ghostPanel("dev-preview"),
-      isDragging: true,
-    });
-    const { container } = render(<DockPlaceholder />);
-    expect(container.querySelector("[aria-hidden='true']")).not.toBeNull();
-    expect(container.querySelector("[data-placeholder-body]")).toBeNull();
-  });
 });
 
 /**

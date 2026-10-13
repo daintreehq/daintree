@@ -30,6 +30,7 @@ vi.mock("../PluginActionAuditService.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { packPluginArchive } from "../PluginArchive.js";
+import { getPluginManifestSchema } from "../../schemas/plugin.js";
 import type { PluginBlocklistService } from "../plugin/PluginBlocklistService.js";
 import type { PluginManifest, PluginInstallResult } from "../../../shared/types/plugin.js";
 
@@ -212,5 +213,63 @@ describe("typed errors for a window on another machine", () => {
     await expect(
       svc.activatePluginForView("acme.gone.view", false, { remoteFrontend: true })
     ).resolves.toEqual({ ok: true });
+  });
+});
+
+describe('manifest "remote": "unsupported"', () => {
+  function registerGraph(remote?: "supported" | "unsupported"): void {
+    (
+      svc as unknown as {
+        _registerFakePluginForTests(p: {
+          manifest: PluginManifest;
+          dir: string;
+          loadedAt: number;
+          isBuiltin: boolean;
+        }): void;
+      }
+    )._registerFakePluginForTests({
+      manifest: {
+        name: "acme.graph",
+        version: "1.0.0",
+        ...(remote ? { remote } : {}),
+        capabilities: [],
+        contributes: {
+          panels: [{ id: "view", name: "Graph" }],
+          views: [],
+          fileDecorationProviders: [],
+          forgeProviders: [],
+        },
+      } as unknown as PluginManifest,
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: false,
+    });
+  }
+
+  it("is accepted by the manifest schema, and anything else is not", () => {
+    const base = { name: "acme.graph", version: "1.0.0" };
+    expect(
+      getPluginManifestSchema("user").safeParse({ ...base, remote: "unsupported" }).success
+    ).toBe(true);
+    expect(
+      getPluginManifestSchema("user").safeParse({ ...base, remote: "sometimes" }).success
+    ).toBe(false);
+  });
+
+  it("is never activated for a window on another machine", async () => {
+    registerGraph("unsupported");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(svc.isRemoteUnsupported("acme.graph")).toBe(true);
+    const result = await svc.activatePluginForView("acme.graph.view", false, {
+      remoteFrontend: true,
+    });
+    expect(result).toMatchObject({ ok: false, remoteUnsupported: { pluginId: "acme.graph" } });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('"remote": "unsupported"'));
+    warn.mockRestore();
+  });
+
+  it("defaults to supported", () => {
+    registerGraph();
+    expect(svc.isRemoteUnsupported("acme.graph")).toBe(false);
   });
 });

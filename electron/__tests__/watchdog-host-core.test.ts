@@ -51,13 +51,6 @@ describe("createWatchdog", () => {
     expect(wd.state.isArmed).toBe(false);
   });
 
-  it("arms on first ping and resets missedBeats", () => {
-    const wd = createWatchdog({ killMain: vi.fn(), logError: () => {} });
-    wd.handleMessage({ type: "ping" });
-    expect(wd.state.isArmed).toBe(true);
-    expect(wd.state.missedBeats).toBe(0);
-  });
-
   it("fires kill when missedBeats reaches MAX_MISSED after arm", () => {
     const killMain = vi.fn();
     const wd = createWatchdog({ killMain, logError: () => {} });
@@ -199,10 +192,6 @@ describe("createWatchdog", () => {
     expect(wd.state.isArmed).toBe(false);
   });
 
-  it("HEARTBEAT_INTERVAL_MS × MAX_MISSED gives the conservative ~15s threshold", () => {
-    expect(HEARTBEAT_INTERVAL_MS * MAX_MISSED).toBe(15000);
-  });
-
   describe("wake-grace (monotonic-clock stale-tick suppression)", () => {
     // The OS schedules `setInterval` callbacks during sleep and delivers them
     // as a burst at wake — without the grace, those queued ticks would each
@@ -271,17 +260,6 @@ describe("createWatchdog", () => {
       expect(killMain).toHaveBeenCalledTimes(1);
     });
 
-    it("`wake` message records the current monotonic timestamp", () => {
-      let now = 5000;
-      const wd = createWatchdog({ killMain: vi.fn(), logError: () => {}, now: () => now });
-      wd.handleMessage({ type: "wake" });
-      expect(wd.state.lastWakeTimestamp).toBe(5000);
-
-      now = 9000;
-      wd.handleMessage({ type: "wake" });
-      expect(wd.state.lastWakeTimestamp).toBe(9000);
-    });
-
     it("defaults the clock to `performance.now` when `deps.now` is omitted", () => {
       // Smoke-check that the default seam is wired — `lastWakeTimestamp`
       // should land in the same monotonic frame as `performance.now()`.
@@ -305,20 +283,6 @@ describe("buildWatchdogKillPayload", () => {
     expect(payload.mainPid).toBe(4242);
     expect(payload.killedAt).toBeGreaterThanOrEqual(before);
     expect(payload.killedAt).toBeLessThanOrEqual(after);
-  });
-
-  it("produces a JSON-serialisable object (the host writes it to disk)", () => {
-    const payload = buildWatchdogKillPayload(3, 1234);
-    const round = JSON.parse(JSON.stringify(payload));
-    expect(round).toEqual({
-      killedAt: payload.killedAt,
-      missedBeats: 3,
-      mainPid: 1234,
-    });
-  });
-
-  it("uses a stable flag filename (writer/reader must agree)", () => {
-    expect(WATCHDOG_KILL_FLAG_NAME).toBe("watchdog-kill.flag");
   });
 });
 

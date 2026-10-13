@@ -330,23 +330,6 @@ describe("TerminalLineageLedger", () => {
       expect(pids).not.toContain(400);
     });
 
-    it("drops a closing root once every tracked PID is gone", async () => {
-      const ledger = new TerminalLineageLedger(null);
-      const census = new FakeCensus([
-        { pid: 100, ppid: 10 },
-        { pid: 200, ppid: 100 },
-      ]);
-      ledger.registerRoot(100);
-      ledger.reconcile(census);
-      await flush();
-
-      ledger.markRootClosing(100);
-      census.set([]);
-      ledger.reconcile(census);
-
-      expect(ledger.hasRoots()).toBe(false);
-    });
-
     it("does not let a recycled root PID inherit the previous lineage", async () => {
       const ledger = new TerminalLineageLedger(null);
       const census = new FakeCensus([

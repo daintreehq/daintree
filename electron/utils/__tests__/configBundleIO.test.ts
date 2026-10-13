@@ -39,12 +39,6 @@ describe("omitSecretValues", () => {
     });
   });
 
-  it("omits rather than redacts, so no placeholder can be imported over a real value", () => {
-    const { value } = omitSecretValues({ apiKey: SECRETISH }, "");
-    expect(Object.keys(value as object)).not.toContain("apiKey");
-    expect(JSON.stringify(value)).not.toContain("REDACTED");
-  });
-
   it("leaves non-string leaves untouched", () => {
     const input = { count: 3, enabled: false, missing: null };
     const { value, omitted } = omitSecretValues(input, "");

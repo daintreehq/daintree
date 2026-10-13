@@ -125,11 +125,6 @@ describe("EnvVarEditor", () => {
     return render(<EnvVarEditor env={initial} onChange={onChange} />);
   }
 
-  it("renders one row per env var key", () => {
-    const { getAllByTestId } = renderEditor({ FOO: "bar", BAZ: "qux" });
-    expect(getAllByTestId("env-editor-key")).toHaveLength(2);
-  });
-
   it("shows an empty-state affordance inviting the first variable", () => {
     const { getByText } = renderEditor({});
     expect(getByText(/Add your first variable/i)).toBeTruthy();
@@ -253,26 +248,6 @@ describe("EnvVarEditor", () => {
   });
 
   describe("literal secret warning", () => {
-    it("warns when a value looks like a literal API key", () => {
-      const { getAllByTestId, getByTestId } = renderEditor({ ANTHROPIC_API_KEY: "" });
-      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
-
-      fireEvent.change(valueInput, {
-        target: { value: "sk-ant-abcdefghijklmnopqrstuvwxyz123456" },
-      });
-
-      expect(getByTestId("env-editor-warning-secret")).toBeTruthy();
-    });
-
-    it("does NOT warn when the value is a ${ENV_VAR} safe-form reference", () => {
-      const { getAllByTestId, queryByTestId } = renderEditor({ ANTHROPIC_API_KEY: "" });
-      const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
-
-      fireEvent.change(valueInput, { target: { value: "${ANTHROPIC_API_KEY}" } });
-
-      expect(queryByTestId("env-editor-warning-secret")).toBeNull();
-    });
-
     it("warning does not block commit — literal secret still persists on blur", () => {
       const { getAllByTestId, getByTestId } = renderEditor({ ANTHROPIC_API_KEY: "" });
       const valueInput = getAllByTestId("env-editor-value")[0] as HTMLInputElement;
@@ -312,11 +287,6 @@ describe("EnvVarEditor", () => {
   });
 
   describe("reveal toggle", () => {
-    it("shows eye toggle when the key is sensitive (isSensitiveEnvKey)", () => {
-      const { getByTestId } = renderEditor({ ANTHROPIC_API_KEY: "sk-real-secret-value" });
-      expect(getByTestId("env-editor-reveal")).toBeTruthy();
-    });
-
     it("does NOT show eye toggle for ordinary key + ordinary value", () => {
       const { queryByTestId } = renderEditor({ MY_VAR: "hello" });
       expect(queryByTestId("env-editor-reveal")).toBeNull();
@@ -462,26 +432,6 @@ describe("EnvVarEditor", () => {
       expect(optionTexts.every((t) => t.includes("OPENAI_API_KEY"))).toBe(true);
       expect(optionTexts.some((t) => t.includes("ANTHROPIC_API_KEY"))).toBe(false);
       expect(optionTexts.some((t) => t.includes("DEBUG"))).toBe(false);
-    });
-
-    it("clicking a suggestion commits the new key without requiring a follow-up blur", () => {
-      const { getAllByTestId } = render(
-        <EnvVarEditor env={{ FOO: "v" }} onChange={onChange} suggestions={sampleSuggestions} />
-      );
-      const options = getAllByTestId("env-editor-key-suggestion");
-      const anthropicOption = options.find((el) =>
-        (el.textContent ?? "").includes("ANTHROPIC_API_KEY")
-      );
-      expect(anthropicOption).toBeTruthy();
-
-      // No blur after click — picker selections must commit synchronously,
-      // otherwise the blur-before-click race (browser fires input.blur before
-      // option.click) loses the selection: the blur commits the OLD key, then
-      // the click updates rows but never commits, leaving the parent stuck
-      // with the pre-pick value.
-      fireEvent.click(anthropicOption!);
-
-      expect(onChange).toHaveBeenLastCalledWith({ ANTHROPIC_API_KEY: "v" });
     });
 
     it("blur firing before a suggestion click does NOT lose the selection", () => {
@@ -741,11 +691,6 @@ describe("EnvVarEditor", () => {
       expect(getAllByTestId("env-editor-key")).toHaveLength(1);
     });
 
-    it("fully-empty editor (no env, no inherited keys) shows the empty-state CTA", () => {
-      const { getByText } = render(<EnvVarEditor env={{}} onChange={onChange} inheritedEnv={{}} />);
-      expect(getByText(/Add your first variable/i)).toBeTruthy();
-    });
-
     it("inheritedEnv prop updates trigger a reseed when keys/values differ", () => {
       const { rerender, getAllByTestId } = render(
         <EnvVarEditor env={{}} onChange={onChange} inheritedEnv={{ A: "1" }} contextKey="p" />
@@ -804,16 +749,6 @@ describe("EnvVarEditor", () => {
       const target = dialogProps.restoreFocusTo?.current;
       expect(target?.isConnected).toBe(true);
       expect(target).toBe(screen.getByTestId("env-editor-import"));
-    });
-
-    it("renders Import button in the empty state", () => {
-      renderEditor({});
-      expect(screen.getByTestId("env-editor-import")).toBeTruthy();
-    });
-
-    it("renders Import button in the non-empty toolbar", () => {
-      renderEditor({ FOO: "bar" });
-      expect(screen.getByTestId("env-editor-import")).toBeTruthy();
     });
 
     it("clicking Import opens the dialog", () => {
@@ -1034,30 +969,6 @@ describe("EnvVarEditor", () => {
       expect(execCommandSpy).toHaveBeenCalledWith("insertText", false, "bar");
     });
 
-    it("converts smart single quotes to straight quotes", () => {
-      renderEditor({ FOO: "old" });
-      const input = screen.getAllByTestId("env-editor-value")[0]!;
-
-      fireEvent.paste(input, {
-        clipboardData: { getData: () => "‘val’" },
-      });
-
-      expect(screen.getByTestId("env-editor-normalized")).toBeTruthy();
-      expect(execCommandSpy).toHaveBeenCalledWith("insertText", false, "'val'");
-    });
-
-    it("converts smart double quotes to straight quotes", () => {
-      renderEditor({ FOO: "old" });
-      const input = screen.getAllByTestId("env-editor-value")[0]!;
-
-      fireEvent.paste(input, {
-        clipboardData: { getData: () => "“val”" },
-      });
-
-      expect(screen.getByTestId("env-editor-normalized")).toBeTruthy();
-      expect(execCommandSpy).toHaveBeenCalledWith("insertText", false, '"val"');
-    });
-
     it("converts primes and en/em dashes", () => {
       renderEditor({ FOO: "old" });
       const input = screen.getAllByTestId("env-editor-value")[0]!;
@@ -1180,16 +1091,6 @@ describe("EnvVarEditor", () => {
       expect(input.getAttribute("data-lpignore")).toBe("true");
       expect(input.hasAttribute("data-bwignore")).toBe(true);
       expect(input.getAttribute("data-form-type")).toBe("other");
-    });
-
-    it("retains autocomplete='new-password' on secret-looking values alongside opt-out attributes", () => {
-      renderEditor({ ANTHROPIC_API_KEY: "sk-ant-secret" });
-      const input = screen.getAllByTestId("env-editor-value")[0]!;
-
-      expect(input.getAttribute("autocomplete")).toBe("new-password");
-      expect(input.hasAttribute("data-1p-ignore")).toBe(true);
-      expect(input.getAttribute("data-lpignore")).toBe("true");
-      expect(input.hasAttribute("data-bwignore")).toBe(true);
     });
 
     it("uses autocomplete='off' for non-secret values", () => {

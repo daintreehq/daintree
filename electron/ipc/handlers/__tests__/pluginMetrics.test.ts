@@ -561,24 +561,4 @@ describe("a local view bound to a remote host (Shell side)", () => {
       off();
     }
   });
-
-  it("relays an explicit unsubscribe to its host", () => {
-    const view = makeSender();
-    const channels: string[] = [];
-    const off = setHostSendRelay((id, channel) => {
-      if (id !== view.id) return false;
-      channels.push(channel);
-      return true;
-    });
-    try {
-      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
-      emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE, view);
-      expect(channels).toEqual([
-        CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE,
-        CHANNELS.PLUGIN_PERF_SNAPSHOTS_UNSUBSCRIBE,
-      ]);
-    } finally {
-      off();
-    }
-  });
 });

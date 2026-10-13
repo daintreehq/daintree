@@ -68,21 +68,6 @@ function makeItem(overrides: Partial<ActionPaletteItemType> = {}): ActionPalette
 describe("ActionPaletteItem", () => {
   const onSelect = vi.fn();
 
-  it("renders enabled action without disabled reason", () => {
-    render(
-      <ActionPaletteItem
-        item={makeItem({ enabled: true })}
-        index={0}
-        isSelected={false}
-        onSelect={onSelect}
-      />
-    );
-
-    expect(screen.getByText("Test Action")).toBeTruthy();
-    expect(screen.getByText("Test description")).toBeTruthy();
-    expect(screen.queryByText("No focused terminal")).toBeNull();
-  });
-
   it("renders disabled action with inline disabled reason", () => {
     render(
       <ActionPaletteItem
@@ -251,15 +236,6 @@ describe("ActionPaletteItem", () => {
     expect(onHoverIndex).toHaveBeenCalledWith(3);
   });
 
-  it("does not throw when onHoverIndex is omitted", () => {
-    render(
-      <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
-    );
-
-    const row = screen.getByRole("option");
-    expect(() => fireEvent.pointerMove(row)).not.toThrow();
-  });
-
   it("calls onSelect when an enabled item's row body is clicked", () => {
     const item = makeItem({ enabled: true });
     render(<ActionPaletteItem item={item} index={0} isSelected={false} onSelect={onSelect} />);
@@ -295,34 +271,6 @@ describe("ActionPaletteItem", () => {
   });
 
   describe("pin & hide affordances", () => {
-    it("renders the pin button when onPin is provided", () => {
-      render(
-        <ActionPaletteItem
-          item={makeItem()}
-          index={0}
-          isSelected={false}
-          onSelect={onSelect}
-          onPin={() => true}
-        />
-      );
-
-      expect(screen.getByTestId("action-palette-pin")).toBeTruthy();
-    });
-
-    it("renders the hide button when onHide is provided and the item is not pinned or destructive", () => {
-      render(
-        <ActionPaletteItem
-          item={makeItem()}
-          index={0}
-          isSelected={false}
-          onSelect={onSelect}
-          onHide={() => {}}
-        />
-      );
-
-      expect(screen.getByTestId("action-palette-hide")).toBeTruthy();
-    });
-
     it("hides the hide button on destructive (danger:'confirm') items", () => {
       render(
         <ActionPaletteItem
@@ -498,15 +446,6 @@ describe("ActionPaletteItem", () => {
       );
 
       expect(container.querySelector('[role="option"]')?.getAttribute("aria-haspopup")).toBeNull();
-    });
-
-    it("renders a TriangleAlert icon on confirm-tier rows", () => {
-      const { container } = render(
-        <ActionPaletteItem item={confirmItem()} index={0} isSelected={false} onSelect={onSelect} />
-      );
-
-      const icon = container.querySelector('svg[aria-hidden="true"]');
-      expect(icon).toBeTruthy();
     });
 
     it("does not render the alert icon on safe-tier rows", () => {

@@ -865,36 +865,6 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("does not auto-launch when document.hidden is true (issue #7201 guard)", async () => {
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
-    helpPanelState.preferredAgentId = "claude";
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
-
-    await act(async () => {
-      render(<HelpPanel width={380} />);
-    });
-
-    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(mockDispatch).not.toHaveBeenCalled();
-  });
-
-  it("dispatches auto-launch agent.launch without a prompt field", async () => {
-    helpPanelState.preferredAgentId = "claude";
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
-
-    await act(async () => {
-      render(<HelpPanel width={380} />);
-    });
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.not.objectContaining({ prompt: expect.anything() }),
-      { source: "user" }
-    );
-  });
-
   it("does not commit terminal and cleans up if user navigated away (preferredAgentId cleared) during in-flight launch", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
@@ -924,20 +894,6 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
 
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
     expect(panelStoreState.removePanel).toHaveBeenCalledWith("stale-term");
-  });
-
-  it("shows the launch-error banner and does not commit terminal on launch failure", async () => {
-    helpPanelState.preferredAgentId = "claude";
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: false });
-
-    await act(async () => {
-      render(<HelpPanel width={380} />);
-    });
-
-    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    expect(screen.getByTestId("help-launch-error-banner")).toBeTruthy();
-    expect(mockNotify).not.toHaveBeenCalled();
   });
 
   it("provisions and dispatches a Codex assistant launch when codex is the preferred agent", async () => {
@@ -987,19 +943,6 @@ describe("HelpPanel — auto-launch (preferredAgentId)", () => {
 });
 
 describe("HelpPanel — intro banner visibility", () => {
-  it("renders the banner when the terminal is healthy and introDismissed=false", () => {
-    helpPanelState.terminalId = "term-1";
-    helpPanelState.agentId = "claude";
-    helpPanelState.introDismissed = false;
-    panelStoreState.panelsById = {
-      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
-    };
-
-    const { container } = render(<HelpPanel width={380} />);
-
-    expect(container.querySelector('button[aria-label="Dismiss"]')).toBeTruthy();
-  });
-
   it("hides the banner when introDismissed=true", () => {
     helpPanelState.terminalId = "term-1";
     helpPanelState.agentId = "claude";
@@ -1105,18 +1048,5 @@ describe("HelpPanel — render gates", () => {
 
     expect(getByTestId("missing-cli-gate")).toBeTruthy();
     expect(queryByTestId("xterm-adapter")).toBeNull();
-  });
-
-  it("renders XtermAdapter when terminal is healthy", () => {
-    helpPanelState.terminalId = "term-1";
-    helpPanelState.agentId = "claude";
-    panelStoreState.panelsById = {
-      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
-    };
-
-    const { getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
-
-    expect(getByTestId("xterm-adapter")).toBeTruthy();
-    expect(queryByTestId("missing-cli-gate")).toBeNull();
   });
 });

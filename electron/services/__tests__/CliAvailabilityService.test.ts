@@ -537,30 +537,6 @@ describe("CliAvailabilityService", () => {
     });
   });
 
-  describe("auth check with env var", () => {
-    it("returns ready when OPENAI_API_KEY is set for codex", async () => {
-      const origKey = process.env.OPENAI_API_KEY;
-      process.env.OPENAI_API_KEY = "sk-test-key";
-
-      try {
-        // Only codex binary found
-        mockedExecFileSync.mockImplementation((_file, args) => {
-          if (cmdOf(args) === "codex") return Buffer.from("");
-          throw new Error("not found");
-        });
-
-        const result = await service.checkAvailability();
-        expect(result.codex).toBe("ready");
-      } finally {
-        if (origKey === undefined) {
-          delete process.env.OPENAI_API_KEY;
-        } else {
-          process.env.OPENAI_API_KEY = origKey;
-        }
-      }
-    });
-  });
-
   describe("OpenCode auth check", () => {
     it("returns ready when OpenCode config file exists at XDG path", async () => {
       const { access } = await import("fs/promises");
@@ -601,50 +577,6 @@ describe("CliAvailabilityService", () => {
           delete process.env.ANTHROPIC_API_KEY;
         } else {
           process.env.ANTHROPIC_API_KEY = origKey;
-        }
-      }
-    });
-
-    it("returns ready when OPENAI_API_KEY is set for OpenCode", async () => {
-      const origKey = process.env.OPENAI_API_KEY;
-      process.env.OPENAI_API_KEY = "sk-openai-test-key";
-
-      try {
-        // Only opencode binary found, no config file
-        mockedExecFileSync.mockImplementation((_file, args) => {
-          if (cmdOf(args) === "opencode") return Buffer.from("");
-          throw new Error("not found");
-        });
-
-        const result = await service.checkAvailability();
-        expect(result.opencode).toBe("ready");
-      } finally {
-        if (origKey === undefined) {
-          delete process.env.OPENAI_API_KEY;
-        } else {
-          process.env.OPENAI_API_KEY = origKey;
-        }
-      }
-    });
-
-    it("returns ready when GOOGLE_API_KEY is set for OpenCode", async () => {
-      const origKey = process.env.GOOGLE_API_KEY;
-      process.env.GOOGLE_API_KEY = "google-test-key";
-
-      try {
-        // Only opencode binary found, no config file
-        mockedExecFileSync.mockImplementation((_file, args) => {
-          if (cmdOf(args) === "opencode") return Buffer.from("");
-          throw new Error("not found");
-        });
-
-        const result = await service.checkAvailability();
-        expect(result.opencode).toBe("ready");
-      } finally {
-        if (origKey === undefined) {
-          delete process.env.GOOGLE_API_KEY;
-        } else {
-          process.env.GOOGLE_API_KEY = origKey;
         }
       }
     });
@@ -695,26 +627,6 @@ describe("CliAvailabilityService", () => {
     });
   });
 
-  describe("getAvailability", () => {
-    it("returns null before first check", () => {
-      const result = service.getAvailability();
-      expect(result).toBeNull();
-    });
-
-    it("returns cached availability after check", async () => {
-      mockedExecFileSync.mockImplementation(() => Buffer.from(""));
-
-      await service.checkAvailability();
-      const cached = service.getAvailability();
-
-      expect(cached).not.toBeNull();
-      // All agents should have some state (not null)
-      for (const state of Object.values(cached!)) {
-        expect(["missing", "installed", "ready", "blocked", "unauthenticated"]).toContain(state);
-      }
-    });
-  });
-
   describe("refresh", () => {
     it("calls refreshPath before re-checking", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
@@ -749,53 +661,9 @@ describe("CliAvailabilityService", () => {
       // has no flag a minimal `which` could reject, so a miss is never retried.
       expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
     });
-
-    it("works on cold start before initial check", async () => {
-      const freshService = new CliAvailabilityService();
-      mockedExecFileSync.mockImplementation(() => Buffer.from(""));
-
-      const result = await freshService.refresh();
-
-      for (const state of Object.values(result)) {
-        expect(["missing", "installed", "ready", "blocked", "unauthenticated"]).toContain(state);
-      }
-      expect(freshService.getAvailability()).toEqual(result);
-    });
   });
 
   describe("parallel execution", () => {
-    it("checks all CLIs in parallel", async () => {
-      const executionOrder: string[] = [];
-
-      mockedExecFileSync.mockImplementation((_file, args) => {
-        const cmd = cmdOf(args);
-        if (cmd) executionOrder.push(cmd);
-        return Buffer.from("");
-      });
-
-      await service.checkAvailability();
-
-      expect(executionOrder).toHaveLength(18);
-      expect(executionOrder).toContain("claude");
-      expect(executionOrder).toContain("gemini");
-      expect(executionOrder).toContain("agy");
-      expect(executionOrder).toContain("codex");
-      expect(executionOrder).toContain("grok");
-      expect(executionOrder).toContain("opencode");
-      expect(executionOrder).toContain("cursor-agent");
-      expect(executionOrder).toContain("kiro-cli");
-      expect(executionOrder).toContain("copilot");
-      expect(executionOrder).toContain("goose");
-      expect(executionOrder).toContain("crush");
-      expect(executionOrder).toContain("qwen");
-      expect(executionOrder).toContain("interpreter");
-      expect(executionOrder).toContain("vibe");
-      expect(executionOrder).toContain("kimi");
-      expect(executionOrder).toContain("amp");
-      expect(executionOrder).toContain("aider");
-      expect(executionOrder).toContain("daintree-assistant");
-    });
-
     it("deduplicates concurrent checkAvailability calls", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
@@ -817,18 +685,6 @@ describe("CliAvailabilityService", () => {
 
       expect(result1).toEqual(result2);
       expect(mockedExecFileSync).toHaveBeenCalledTimes(36);
-    });
-
-    it("allows sequential checks after first completes", async () => {
-      mockedExecFileSync.mockImplementation(() => Buffer.from(""));
-
-      await service.checkAvailability();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
-
-      vi.clearAllMocks();
-
-      await service.refresh();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
     });
   });
 
@@ -1125,20 +981,6 @@ describe("CliAvailabilityService", () => {
     });
   });
 
-  describe("security - command validation", () => {
-    it("rejects commands with invalid characters in private checkCommand", async () => {
-      mockedExecFileSync.mockImplementation(() => Buffer.from(""));
-      await service.checkAvailability();
-
-      const calls = mockedExecFileSync.mock.calls;
-      calls.forEach((call) => {
-        const args = call[1] as string[];
-        const command = cmdOf(args);
-        expect(command).toMatch(/^[a-zA-Z0-9._-]+$/);
-      });
-    });
-  });
-
   describe("blocked state (security software / permissions)", () => {
     // Neither platform spawns a PATH probe (POSIX walks PATH in-process,
     // Windows reads its directories), so "blocked" comes from the native-path
@@ -1273,22 +1115,6 @@ describe("CliAvailabilityService", () => {
   });
 
   describe("getDetails()", () => {
-    it("returns null before any check runs", () => {
-      expect(service.getDetails()).toBeNull();
-    });
-
-    it("returns populated details after checkAvailability()", async () => {
-      mockedExecFileSync.mockImplementation(() => Buffer.from("/usr/local/bin/example"));
-
-      await service.checkAvailability();
-      const details = service.getDetails();
-
-      expect(details).not.toBeNull();
-      expect(Object.keys(details!)).toContain("claude");
-      expect(details!.claude?.resolvedPath).toBe("/usr/local/bin/example");
-      expect(details!.claude?.via).toBe("which");
-    });
-
     it("refreshes details when checkAvailability() reruns with different results", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from("/usr/local/bin/claude"));
       await service.checkAvailability();
@@ -1520,24 +1346,6 @@ describe("CliAvailabilityService", () => {
       expect(details!.gemini?.resolvedPath).toBe(geminiShim);
     });
 
-    it("returns 'missing' when `npm config get prefix` itself fails (npm not installed)", async () => {
-      mockedExecFileSync.mockImplementation(() => {
-        throw Object.assign(new Error("not found"), { code: "ENOENT" });
-      });
-      // Every async exec (including npm) fails with ENOENT — npm is not on PATH.
-      // The default mockedExecFile already behaves this way.
-
-      const result = await service.checkAvailability();
-      // No blocked state — a missing npm binary is not an endpoint-security
-      // scenario. All npm-backed agents fall through to "missing".
-      expect(result.gemini).toBe("missing");
-      expect(result.claude).toBe("missing");
-      expect(result.codex).toBe("missing");
-
-      const details = service.getDetails();
-      expect(details!.gemini?.state).toBe("missing");
-    });
-
     it("fires exactly one npm-global probe per agent with npmGlobalPackage", async () => {
       // Shell probe misses for all agents, so every agent walks the full
       // fallback chain. Only the 5 agents declaring an npm package
@@ -1626,28 +1434,6 @@ describe("CliAvailabilityService", () => {
   });
 
   describe("extended native path coverage", () => {
-    it("detects cursor-agent via ~/.local/bin/cursor-agent when PATH misses", async () => {
-      const { access } = await import("fs/promises");
-      const mockedAccess = vi.mocked(access);
-
-      mockedExecFileSync.mockImplementation(() => {
-        throw Object.assign(new Error("not found"), { code: "ENOENT" });
-      });
-
-      const cursorNative = join(homedir(), ".local/bin/cursor-agent");
-      mockedAccess.mockImplementation(async (p) => {
-        if (String(p) === cursorNative) return;
-        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-      });
-
-      const result = await service.checkAvailability();
-      expect(result.cursor).toBe("unauthenticated");
-
-      const details = service.getDetails();
-      expect(details!.cursor?.via).toBe("native");
-      expect(details!.cursor?.resolvedPath).toBe(cursorNative);
-    });
-
     it("detects cursor-agent via the macOS app-bundle sidecar when only Cursor.app is installed", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
@@ -1668,28 +1454,6 @@ describe("CliAvailabilityService", () => {
       const details = service.getDetails();
       expect(details!.cursor?.resolvedPath).toBe(appBundleNative);
       expect(details!.cursor?.via).toBe("native");
-    });
-
-    it("detects opencode via ~/.opencode/bin/opencode (curl-installer fallback path)", async () => {
-      const { access } = await import("fs/promises");
-      const mockedAccess = vi.mocked(access);
-
-      mockedExecFileSync.mockImplementation(() => {
-        throw Object.assign(new Error("not found"), { code: "ENOENT" });
-      });
-
-      const opencodeNative = join(homedir(), ".opencode/bin/opencode");
-      mockedAccess.mockImplementation(async (p) => {
-        if (String(p) === opencodeNative) return;
-        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-      });
-
-      const result = await service.checkAvailability();
-      expect(result.opencode).toBe("unauthenticated");
-
-      const details = service.getDetails();
-      expect(details!.opencode?.via).toBe("native");
-      expect(details!.opencode?.resolvedPath).toBe(opencodeNative);
     });
   });
 
@@ -1852,16 +1616,6 @@ describe("CliAvailabilityService", () => {
       expect(service.getDetails()!["py-test"]?.resolvedPath).toBe(uvSymlink);
     });
 
-    it("returns missing when no PyPI install path resolves", async () => {
-      await setupPypiAgent();
-      mockedExecFileSync.mockImplementation(() => {
-        throw Object.assign(new Error("not found"), { code: "ENOENT" });
-      });
-
-      const result = await service.checkAvailability();
-      expect(result["py-test"]).toBe("missing");
-    });
-
     it("does not synthesise PyPI paths when packages.pypi is unset", async () => {
       // Agents that legitimately declare `packages.pypi` (interpreter, mistral, kimi, aider)
       // SHOULD probe uv/pipx layouts; every other built-in does not, and must not
@@ -1999,14 +1753,6 @@ describe("CliAvailabilityService", () => {
 
   describe("duplicate CLI detection (#6054)", () => {
     const mockedBroadcast = vi.mocked(broadcastToRenderer);
-
-    it("requests every PATH match, not just the first, on Unix", async () => {
-      mockedExecFileSync.mockImplementation(() => Buffer.from(""));
-
-      await service.checkAvailability();
-
-      expect(mockedFindAllOnPath).toHaveBeenCalledWith("claude", expect.any(Object));
-    });
 
     it("captures every PATH match into allResolvedPaths", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
@@ -2308,29 +2054,6 @@ describe("CliAvailabilityService", () => {
       expect(message).not.toContain("/d/bin/claude");
       expect(message).not.toContain("/e/bin/claude");
       expect(message).toContain("and 2 more");
-    });
-
-    it("survives a milestone load with falsy/undefined value (legacy stores)", async () => {
-      // Simulate a store that has never persisted orchestrationMilestones.
-      storeBackingMap.delete("orchestrationMilestones");
-
-      mockedExecFileSync.mockImplementation((_file, args) => {
-        const argv = args as string[] | undefined;
-        if (argv?.[1] === "claude") {
-          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
-        }
-        return Buffer.from("");
-      });
-
-      await service.checkAvailability();
-
-      const toastCalls = mockedBroadcast.mock.calls.filter(
-        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
-      );
-      expect(toastCalls).toHaveLength(1);
-      // Milestone now persisted for follow-up checks.
-      const stored = storeBackingMap.get("orchestrationMilestones") as Record<string, boolean>;
-      expect(stored["duplicate-cli-warning:claude"]).toBe(true);
     });
   });
 

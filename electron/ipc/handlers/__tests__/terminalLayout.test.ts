@@ -300,21 +300,6 @@ describe("setTerminals merge (#11350)", () => {
     expect(ids(saved()?.terminals)).toEqual(["1", "3"]);
   });
 
-  it("preserves a disjoint move by a sibling window", async () => {
-    // Sibling moved panel 1 to the dock (disk); this stale writer still has it
-    // in the grid and only added panel 2.
-    const saved = onDisk(baseState([term("1", "dock")]));
-    await setTerminals({
-      projectId: "p1",
-      terminals: [term("1", "grid"), term("2")],
-      changedIds: ["2"],
-      removedIds: [],
-    });
-    const merged = saved()?.terminals ?? [];
-    expect(merged.find((t) => t.id === "1")?.location).toBe("dock");
-    expect(ids(merged)).toContain("2");
-  });
-
   it("full-replaces when no delta metadata is supplied (legacy path)", async () => {
     const saved = onDisk(baseState([term("1"), term("2"), term("3")]));
     await setTerminals({ projectId: "p1", terminals: [term("1")] });

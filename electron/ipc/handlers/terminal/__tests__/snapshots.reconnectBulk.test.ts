@@ -17,7 +17,7 @@
  * These specs drive the real `defineIpcNamespace` → `typedHandleWithContext`
  * chain so the context is built by production code, not by the fixture.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -57,10 +57,14 @@ vi.mock("../../../../services/AgentAvailabilityStore.js", () => ({
   }),
 }));
 
+import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalSnapshotHandlers } from "../snapshots.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../../ipcGuard.js";
 import type { HandlerDependencies } from "../../../types.js";
+import { getIpcDispatcher } from "../../../dispatcher.js";
+import type { ClientEndpoint, ClientRef } from "../../../endpoint.js";
+import type { SerializedTerminalSnapshot } from "../../../../../shared/types/terminal.js";
 
 const SENDER_A = 101;
 const SENDER_B = 202;
@@ -502,5 +506,714 @@ describe("terminal:reconnect-bulk handler", () => {
 
     await expect(reconnectBulk(senderEvent(SENDER_A), [])).resolves.toEqual({});
     expect(ptyClient.getTerminalAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("terminal:get-for-project handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("excludes dev-preview PTYs from getForProject results", async () => {
+    const ptyClient = {
+      getTerminalsForProjectAsync: vi.fn(async () => ["t-visible", "t-dev-preview"]),
+      getTerminalAsync: vi.fn(async (id: string) => {
+        if (id === "t-visible") {
+          return {
+            id,
+            kind: "terminal",
+            type: "terminal",
+            cwd: "/tmp",
+            spawnedAt: Date.now(),
+          };
+        }
+        if (id === "t-dev-preview") {
+          return {
+            id,
+            kind: "dev-preview",
+            type: "terminal",
+            cwd: "/tmp",
+            spawnedAt: Date.now(),
+          };
+        }
+        return null;
+      }),
+    };
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalSnapshotHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const getForProjectCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT);
+    expect(getForProjectCall).toBeTruthy();
+
+    const handler = getForProjectCall?.[1] as unknown as (
+      event: unknown,
+      projectId: string
+    ) => Promise<unknown[]>;
+
+    const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-1");
+
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toHaveLength(1);
+    expect((result[0] as { id: string }).id).toBe("t-visible");
+    expect(ptyClient.getTerminalsForProjectAsync).toHaveBeenCalledWith("project-1");
+    expect(ptyClient.getTerminalAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes through trash metadata when present", async () => {
+    const now = Date.now();
+    const expiresAt = now + 120000;
+
+    const ptyClient = {
+      getTerminalsForProjectAsync: vi.fn(async () => ["t-active", "t-will-expire"]),
+      getTerminalAsync: vi.fn(async (id: string) => {
+        if (id === "t-active") {
+          return {
+            id,
+            kind: "terminal",
+            type: "terminal",
+            cwd: "/tmp",
+            spawnedAt: now,
+            isTrashed: false,
+          };
+        }
+        if (id === "t-will-expire") {
+          return {
+            id,
+            kind: "terminal",
+            type: "terminal",
+            cwd: "/tmp",
+            spawnedAt: now,
+            isTrashed: false,
+            trashExpiresAt: expiresAt,
+          };
+        }
+        return null;
+      }),
+    };
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalSnapshotHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const getForProjectCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT);
+    expect(getForProjectCall).toBeTruthy();
+
+    const handler = getForProjectCall?.[1] as unknown as (
+      event: unknown,
+      projectId: string
+    ) => Promise<unknown[]>;
+
+    const result = (await handler(
+      { senderFrame: { url: "http://localhost:5173" } },
+      "project-1"
+    )) as Array<{ id: string }>;
+
+    expect(Array.isArray(result)).toBe(true);
+    expect(result).toHaveLength(2);
+
+    const active = result.find((t: { id: string }) => t.id === "t-active") as {
+      id: string;
+      isTrashed?: boolean;
+      trashExpiresAt?: number;
+    };
+    const willExpire = result.find((t: { id: string }) => t.id === "t-will-expire") as {
+      id: string;
+      isTrashed?: boolean;
+      trashExpiresAt?: number;
+    };
+
+    expect(active.isTrashed).toBe(false);
+    expect(active.trashExpiresAt).toBeUndefined();
+
+    expect(willExpire.isTrashed).toBe(false);
+    expect(willExpire.trashExpiresAt).toBe(expiresAt);
+  });
+
+  it("excludes help-marked terminals from getForProject results", async () => {
+    mockIsHelpTerminal.mockImplementation((id: string) => id === "t-help");
+
+    const ptyClient = {
+      getTerminalsForProjectAsync: vi.fn(async () => ["t-visible", "t-help", "t-dev-preview"]),
+      getTerminalAsync: vi.fn(async (id: string) => ({
+        id,
+        kind: id === "t-dev-preview" ? "dev-preview" : "agent",
+        type: "terminal",
+        cwd: "/tmp",
+        spawnedAt: Date.now(),
+      })),
+    };
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalSnapshotHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const getForProjectCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT);
+    expect(getForProjectCall).toBeTruthy();
+
+    const handler = getForProjectCall?.[1] as unknown as (
+      event: unknown,
+      projectId: string
+    ) => Promise<unknown[]>;
+
+    const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-1");
+
+    expect(result).toHaveLength(1);
+    expect((result[0] as { id: string }).id).toBe("t-visible");
+
+    mockIsHelpTerminal.mockImplementation(() => false);
+  });
+
+  it("forwards the live PTY grid so restore can build the xterm on it (#11718)", async () => {
+    // Main is a pure relay here, and dropping these two fields is invisible:
+    // the pty-host mapper still reports them and hydration still prefers them,
+    // so every other suite stays green while the fix goes inert and restored
+    // panes silently fall back to 80×24.
+    const ptyClient = {
+      getTerminalsForProjectAsync: vi.fn(async () => ["t-sized", "t-unknown"]),
+      getTerminalAsync: vi.fn(async (id: string) => ({
+        id,
+        kind: "terminal",
+        type: "terminal",
+        cwd: "/tmp",
+        spawnedAt: Date.now(),
+        ...(id === "t-sized" ? { ptyCols: 203, ptyRows: 51 } : {}),
+      })),
+    };
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalSnapshotHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const handler = calls.find(
+      (c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT
+    )?.[1] as unknown as (
+      event: unknown,
+      projectId: string
+    ) => Promise<{ id: string; ptyCols?: number; ptyRows?: number }[]>;
+
+    const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-1");
+
+    const sized = result.find((t) => t.id === "t-sized");
+    expect(sized?.ptyCols).toBe(203);
+    expect(sized?.ptyRows).toBe(51);
+    // A host that reports no grid must stay "unknown" rather than acquire one.
+    const unknown = result.find((t) => t.id === "t-unknown");
+    expect(unknown?.ptyCols).toBeUndefined();
+  });
+
+  it("strips backend worktree attribution, which is renderer-owned (#5176)", async () => {
+    // Hydration's primary path. The pty-host mapper only began reporting
+    // worktreeId in #12078, so this projection had never seen a populated
+    // value — a refactor to a spread would now let the backend win a placement
+    // decision that belongs to the renderer's saved layout state alone.
+    const ptyClient = {
+      getTerminalsForProjectAsync: vi.fn(async () => ["t-worktreed"]),
+      getTerminalAsync: vi.fn(async (id: string) => ({
+        id,
+        kind: "terminal",
+        type: "terminal",
+        cwd: "/repo/.worktrees/backend",
+        spawnedAt: Date.now(),
+        worktreeId: "/repo/.worktrees/backend",
+      })),
+    };
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalSnapshotHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const handler = calls.find(
+      (c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT
+    )?.[1] as unknown as (event: unknown, projectId: string) => Promise<unknown[]>;
+
+    const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-1");
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty("worktreeId");
+  });
+});
+
+describe("terminal:get-serialized-states handler", () => {
+  function snapshot(data: string): SerializedTerminalSnapshot {
+    return { data, cols: 80, rows: 24 };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function getHandler(): (
+    event: unknown,
+    terminalIds: string[]
+  ) => Promise<Record<string, SerializedTerminalSnapshot | null>> {
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const handlerCall = calls.find((call) => call[0] === CHANNELS.TERMINAL_GET_SERIALIZED_STATES);
+    expect(handlerCall).toBeTruthy();
+    return handlerCall?.[1] as (
+      event: unknown,
+      terminalIds: string[]
+    ) => Promise<Record<string, SerializedTerminalSnapshot | null>>;
+  }
+
+  it("returns serialized state map for unique terminal IDs", async () => {
+    const ptyClient = {
+      getSerializedStateAsync: vi.fn(async (terminalId: string) => {
+        if (terminalId === "t-1") return snapshot("state-1");
+        if (terminalId === "t-2") return null;
+        return snapshot("unknown");
+      }),
+    };
+
+    registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getHandler();
+
+    const result = await handler({}, ["t-1", "t-1", "t-2"]);
+
+    // The batch must forward the capture grid per entry, not just the payload:
+    // it is what each replay sizes itself to (#11552).
+    expect(result).toEqual({
+      "t-1": snapshot("state-1"),
+      "t-2": null,
+    });
+    expect(ptyClient.getSerializedStateAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns null for terminals that fail to serialize without failing whole batch", async () => {
+    const ptyClient = {
+      getSerializedStateAsync: vi.fn(async (terminalId: string) => {
+        if (terminalId === "t-fail") {
+          throw new Error("boom");
+        }
+        return snapshot("ok");
+      }),
+    };
+
+    registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getHandler();
+
+    const result = await handler({}, ["t-ok", "t-fail"]);
+
+    expect(result).toEqual({
+      "t-ok": snapshot("ok"),
+      "t-fail": null,
+    });
+  });
+
+  it("rejects invalid payloads", async () => {
+    const ptyClient = {
+      getSerializedStateAsync: vi.fn(async () => snapshot("state")),
+    };
+
+    registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getHandler();
+
+    await expect(handler({}, null as unknown as string[])).rejects.toThrow(
+      "Invalid terminal IDs: must be an array"
+    );
+    await expect(handler({}, ["" as unknown as string])).rejects.toThrow(
+      "Invalid terminal ID in batch payload"
+    );
+    await expect(handler({}, new Array(257).fill("id"))).rejects.toThrow(
+      "Invalid terminal IDs: maximum 256 IDs allowed"
+    );
+  });
+});
+
+describe("terminal pool inspection handlers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe("terminal:get-available handler", () => {
+    it("excludes dev-preview PTYs from available results", async () => {
+      const ptyClient = {
+        getAvailableTerminalsAsync: vi.fn(async () => [
+          {
+            id: "t-idle",
+            kind: "terminal",
+            type: "claude",
+            cwd: "/tmp",
+            agentState: "idle",
+            spawnedAt: Date.now(),
+          },
+          {
+            id: "t-dev-preview",
+            kind: "dev-preview",
+            type: "terminal",
+            cwd: "/tmp",
+            agentState: "idle",
+            spawnedAt: Date.now(),
+          },
+        ]),
+      };
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalSnapshotHandlers(deps);
+
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const getAvailableCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_AVAILABLE);
+      const handler = getAvailableCall?.[1] as unknown as () => Promise<unknown[]>;
+
+      const result = await handler();
+
+      expect(result).toHaveLength(1);
+      expect((result[0] as { id: string }).id).toBe("t-idle");
+    });
+  });
+
+  describe("terminal:get-by-state handler", () => {
+    it("returns terminals filtered by state", async () => {
+      const ptyClient = {
+        getTerminalsByStateAsync: vi.fn(async () => [
+          {
+            id: "t-working-1",
+            kind: "terminal",
+            type: "claude",
+            cwd: "/tmp",
+            agentState: "working",
+            spawnedAt: Date.now(),
+          },
+          {
+            id: "t-working-2",
+            kind: "terminal",
+            type: "codex",
+            cwd: "/tmp",
+            agentState: "working",
+            spawnedAt: Date.now(),
+          },
+        ]),
+      };
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalSnapshotHandlers(deps);
+
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const getByStateCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_BY_STATE);
+      expect(getByStateCall).toBeTruthy();
+
+      const handler = getByStateCall?.[1] as unknown as (
+        event: unknown,
+        state: string
+      ) => Promise<unknown[]>;
+
+      const result = await handler({}, "working");
+
+      expect(Array.isArray(result)).toBe(true);
+      expect(result).toHaveLength(2);
+      expect(ptyClient.getTerminalsByStateAsync).toHaveBeenCalledWith("working");
+    });
+
+    it("excludes dev-preview PTYs from state results", async () => {
+      const ptyClient = {
+        getTerminalsByStateAsync: vi.fn(async () => [
+          {
+            id: "t-working",
+            kind: "terminal",
+            type: "claude",
+            cwd: "/tmp",
+            agentState: "working",
+            spawnedAt: Date.now(),
+          },
+          {
+            id: "t-dev-preview",
+            kind: "dev-preview",
+            type: "terminal",
+            cwd: "/tmp",
+            agentState: "working",
+            spawnedAt: Date.now(),
+          },
+        ]),
+      };
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalSnapshotHandlers(deps);
+
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const getByStateCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_BY_STATE);
+      const handler = getByStateCall?.[1] as unknown as (
+        event: unknown,
+        state: string
+      ) => Promise<unknown[]>;
+
+      const result = await handler({}, "working");
+
+      expect(result).toHaveLength(1);
+      expect((result[0] as { id: string }).id).toBe("t-working");
+    });
+
+    it("throws error for empty state parameter", async () => {
+      const ptyClient = {
+        getTerminalsByStateAsync: vi.fn(async () => []),
+      };
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalSnapshotHandlers(deps);
+
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const getByStateCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_BY_STATE);
+      const handler = getByStateCall?.[1] as unknown as (
+        event: unknown,
+        state: string
+      ) => Promise<unknown[]>;
+
+      await expect(handler({}, "")).rejects.toThrow("Invalid state");
+      expect(ptyClient.getTerminalsByStateAsync).not.toHaveBeenCalled();
+    });
+
+    it("throws error for invalid state value", async () => {
+      const ptyClient = {
+        getTerminalsByStateAsync: vi.fn(async () => []),
+      };
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalSnapshotHandlers(deps);
+
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const getByStateCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_BY_STATE);
+      const handler = getByStateCall?.[1] as unknown as (
+        event: unknown,
+        state: string
+      ) => Promise<unknown[]>;
+
+      await expect(handler({}, "invalid")).rejects.toThrow(
+        "Failed to get terminals by state: Invalid state: must be one of idle, working, waiting, directing, completed, exited"
+      );
+      expect(ptyClient.getTerminalsByStateAsync).not.toHaveBeenCalled();
+    });
+
+    it("includes all metadata fields for returned terminals", async () => {
+      const now = Date.now();
+      const ptyClient = {
+        getTerminalsByStateAsync: vi.fn(async () => [
+          {
+            id: "t-full",
+            projectId: "proj-1",
+            kind: "terminal",
+            launchAgentId: "claude",
+            title: "Claude Agent",
+            cwd: "/tmp",
+            worktreeId: "wt-1",
+            agentState: "working",
+            lastStateChange: now - 1000,
+            spawnedAt: now,
+            isTrashed: false,
+            trashExpiresAt: undefined,
+            activityTier: "active",
+            hasPty: true,
+          },
+        ]),
+      };
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalSnapshotHandlers(deps);
+
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const getByStateCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_BY_STATE);
+      const handler = getByStateCall?.[1] as unknown as (
+        event: unknown,
+        state: string
+      ) => Promise<unknown[]>;
+
+      const result = (await handler({}, "working")) as Array<{
+        id: string;
+        projectId?: string;
+        worktreeId?: string;
+        launchAgentId?: string;
+        lastStateChange?: number;
+        activityTier?: string;
+        hasPty?: boolean;
+      }>;
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("t-full");
+      expect(result[0].projectId).toBe("proj-1");
+      expect(result[0].worktreeId).toBe("wt-1");
+      expect(result[0].launchAgentId).toBe("claude");
+      expect(result[0].lastStateChange).toBe(now - 1000);
+      expect(result[0].activityTier).toBe("active");
+      expect(result[0].hasPty).toBe(true);
+    });
+  });
+
+  describe("terminal:get-all handler", () => {
+    it("excludes dev-preview PTYs from all results", async () => {
+      const ptyClient = {
+        getAllTerminalsAsync: vi.fn(async () => [
+          {
+            id: "t-terminal",
+            kind: "terminal",
+            type: "terminal",
+            cwd: "/tmp",
+            agentState: "idle",
+            spawnedAt: Date.now(),
+          },
+          {
+            id: "t-dev-preview",
+            kind: "dev-preview",
+            type: "terminal",
+            cwd: "/tmp",
+            agentState: "idle",
+            spawnedAt: Date.now(),
+          },
+        ]),
+      };
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalSnapshotHandlers(deps);
+
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const getAllCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_ALL);
+      const handler = getAllCall?.[1] as unknown as () => Promise<unknown[]>;
+
+      const result = await handler();
+
+      expect(result).toHaveLength(1);
+      expect((result[0] as { id: string }).id).toBe("t-terminal");
+    });
+
+    it("includes hasPty and activityTier fields", async () => {
+      const ptyClient = {
+        getAllTerminalsAsync: vi.fn(async () => [
+          {
+            id: "t-active",
+            kind: "terminal",
+            type: "claude",
+            cwd: "/tmp",
+            agentState: "working",
+            spawnedAt: Date.now(),
+            activityTier: "active",
+            hasPty: true,
+          },
+          {
+            id: "t-background",
+            kind: "terminal",
+            type: "codex",
+            cwd: "/tmp",
+            agentState: "idle",
+            spawnedAt: Date.now(),
+            activityTier: "background",
+            hasPty: false,
+          },
+        ]),
+      };
+
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalSnapshotHandlers(deps);
+
+      const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } })
+        .mock.calls;
+      const getAllCall = calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_ALL);
+      const handler = getAllCall?.[1] as unknown as () => Promise<
+        Array<{ activityTier?: string; hasPty?: boolean }>
+      >;
+
+      const result = await handler();
+
+      expect(result).toHaveLength(2);
+      expect(result[0].activityTier).toBe("active");
+      expect(result[0].hasPty).toBe(true);
+      expect(result[1].activityTier).toBe("background");
+      expect(result[1].hasPty).toBe(false);
+    });
+  });
+});
+
+describe("terminal:search-semantic-buffers", () => {
+  const matches = [
+    { terminalId: "mine", line: "token here", matchStart: 0, matchEnd: 5 },
+    { terminalId: "theirs", line: "token there", matchStart: 0, matchEnd: 5 },
+    { terminalId: "nobodys", line: "token", matchStart: 0, matchEnd: 5 },
+  ];
+  const owners: Record<string, string | null> = { mine: "proj-1", theirs: "proj-2", nobodys: null };
+
+  function remoteView(projectId: string | null): ClientEndpoint {
+    return {
+      endpointId: "remote:s:v",
+      clientId: "shell",
+      projectId,
+      kind: "remote-view",
+      handle: -3,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    } as unknown as ClientEndpoint;
+  }
+  const client: ClientRef = {
+    clientId: "shell",
+    clientName: "s",
+    platform: "darwin",
+    kind: "remote",
+  };
+
+  const ptyClient = {
+    searchSemanticBuffersAsync: vi.fn(async () => matches),
+    getTerminalProjectId: (id: string) => owners[id] ?? null,
+  };
+  let dispose: (() => void) | undefined;
+
+  beforeEach(() => {
+    dispose = registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+    // The plain envelope, as security setup installs it for real.
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, run) => {
+      try {
+        return { ok: true, data: await run() } as never;
+      } catch (error) {
+        return { ok: false, error } as never;
+      }
+    });
+  });
+
+  afterEach(() => {
+    dispose?.();
+    getIpcDispatcher().setInvokeEnveloper(null);
+  });
+
+  it("finds only the remote view's own project's terminals", async () => {
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    expect(envelope.data).toEqual([matches[0]]);
+    const none = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView(null), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    expect(none.ok && none.data).toEqual([]);
+  });
+
+  it("finds every terminal for this machine's own window", async () => {
+    const call = (
+      ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }
+    ).mock.calls.find((c) => c[0] === CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS);
+    const handler = call?.[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+    const result = await handler(
+      { sender: { id: 7 }, senderFrame: { url: "app://daintree" } },
+      "token",
+      false
+    );
+    const data =
+      (result as { ok?: boolean; data?: unknown }).ok !== undefined
+        ? (result as { data: unknown }).data
+        : result;
+    expect(data).toEqual(matches);
   });
 });

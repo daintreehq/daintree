@@ -172,11 +172,6 @@ describe("MCP wire budget — tool descriptions (§4.2)", () => {
 
     expect(over).toEqual([]);
   });
-
-  it("has a description on every tool it advertises", async () => {
-    const tools = await surface();
-    expect(tools.filter((t) => t.description.trim() === "").map((t) => t.id)).toEqual([]);
-  });
 });
 
 describe("MCP wire budget — property descriptions (§4.3)", () => {

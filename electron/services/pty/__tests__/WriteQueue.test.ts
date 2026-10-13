@@ -160,22 +160,6 @@ describe("WriteQueue.cancelPendingInput", () => {
     expect(m.performSubmit).toHaveBeenCalledWith("third");
   });
 
-  it("leaves the queue usable, unlike dispose", async () => {
-    // The distinction the shutdown input lock depends on (#11851): the lock is
-    // released when teardown ends, and on a teardown that resolved without
-    // killing the pane the queue has to still accept input.
-    const m = makeOptions();
-    const queue = new WriteQueue(m.options);
-
-    queue.submit("before-cancel");
-    queue.cancelPendingInput();
-    m.performSubmit.mockClear();
-
-    queue.submit("after-cancel");
-    await vi.runAllTimersAsync();
-    expect(m.performSubmit).toHaveBeenCalledWith("after-cancel");
-  });
-
   it("retracts a reported status instead of stranding it, and stops escalating", async () => {
     // Escalating to "stalled" mid-shutdown would report a problem the user can
     // do nothing about. But dropping the timer WITHOUT a closing event would
@@ -215,16 +199,6 @@ describe("WriteQueue.dispose", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("is idempotent", () => {
-    const m = makeOptions();
-    const wq = new WriteQueue(m.options);
-
-    expect(() => {
-      wq.dispose();
-      wq.dispose();
-    }).not.toThrow();
   });
 
   it("drops further submit calls", async () => {

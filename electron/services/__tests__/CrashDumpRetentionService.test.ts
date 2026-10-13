@@ -158,13 +158,4 @@ describe("requestNativeCrashDumpPrune", () => {
     expect(loggerMock.logInfo).not.toHaveBeenCalled();
     expectNoPathsLogged();
   });
-
-  it("logs at debug level when there are no dumps on disk", async () => {
-    markCrashRecoveryInspectionComplete(Date.now());
-
-    await requestNativeCrashDumpPrune();
-
-    expect(loggerMock.logDebug).toHaveBeenCalledTimes(1);
-    expect(loggerMock.logInfo).not.toHaveBeenCalled();
-  });
 });

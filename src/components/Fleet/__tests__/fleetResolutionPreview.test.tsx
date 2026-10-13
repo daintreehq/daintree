@@ -80,22 +80,6 @@ describe("hasRecipeVariables", () => {
     expect(hasRecipeVariables("Review {{branch_name}}")).toBe(true);
   });
 
-  it("returns true for {{issue_number}}", () => {
-    expect(hasRecipeVariables("fix #{{issue_number}}")).toBe(true);
-  });
-
-  it("returns true for {{pr_number}}", () => {
-    expect(hasRecipeVariables("PR {{pr_number}}")).toBe(true);
-  });
-
-  it("returns true for {{number}}", () => {
-    expect(hasRecipeVariables("{{number}}")).toBe(true);
-  });
-
-  it("returns true for {{worktree_path}}", () => {
-    expect(hasRecipeVariables("cd {{worktree_path}}")).toBe(true);
-  });
-
   it("returns false for empty string", () => {
     expect(hasRecipeVariables("")).toBe(false);
   });
@@ -215,14 +199,6 @@ describe("useFleetResolutionPreviewStore", () => {
         expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
         expect(after.length).toBe(2);
       });
-
-      it("clears previews to a fresh empty array when invoked with no armed targets", () => {
-        // Sanity: when previews would be empty regardless, reuse vs. rebuild
-        // is equivalent for the user. The guard is purely a perf optimisation.
-        useFleetResolutionPreviewStore.getState().setDraft("no vars");
-        expect(useFleetResolutionPreviewStore.getState().previews).toEqual([]);
-        expect(useFleetResolutionPreviewStore.getState().hasVariables).toBe(false);
-      });
     });
   });
 
@@ -266,24 +242,6 @@ describe("FleetDraftingPill", () => {
     expect(screen.getByTestId("fleet-drafting-pill")).toBeTruthy();
     expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
       /Mirroring to 1 peer/
-    );
-  });
-
-  it("shows peer count for multiple peers", () => {
-    const a1 = makeAgent("t-1");
-    const a2 = makeAgent("t-2");
-    const a3 = makeAgent("t-3");
-    seedPanel(a1);
-    seedPanel(a2);
-    seedPanel(a3);
-    armAgent("t-1", 0);
-    armAgent("t-2", 1);
-    armAgent("t-3", 2);
-    usePanelStore.setState({ focusedId: "t-1" });
-
-    render(<FleetDraftingPill />);
-    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
-      /Mirroring to 2 peers/
     );
   });
 

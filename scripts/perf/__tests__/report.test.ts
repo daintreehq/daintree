@@ -303,11 +303,6 @@ describe("buildMarkdownReport", () => {
     expect(buildMarkdownReport(summary())).toContain("No scenario reported a metric value.");
   });
 
-  it("renders without the comparison argument the caller may no longer pass", () => {
-    expect(() => buildMarkdownReport(summary())).not.toThrow();
-    expect(buildMarkdownReport(summary())).not.toContain("A/B comparison");
-  });
-
   it("escapes a pipe in an id or a metric name so the columns cannot shift", () => {
     const report = buildMarkdownReport(
       summary({

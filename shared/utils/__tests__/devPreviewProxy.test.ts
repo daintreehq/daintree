@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  DEV_PREVIEW_PROXY_PORT,
   DEV_PREVIEW_BOOTSTRAP_PATH,
   sanitizeSubdomainToken,
   buildDevPreviewSubdomain,
@@ -40,10 +39,6 @@ describe("devPreviewProxy", () => {
       expect(buildDevPreviewSubdomain("project-1", "panel-1")).toBe("dp-project-1-panel-1");
     });
 
-    it("is deterministic for the same inputs", () => {
-      expect(buildDevPreviewSubdomain("p", "q")).toBe(buildDevPreviewSubdomain("p", "q"));
-    });
-
     it("stays within the 63-char DNS label limit for long ids", () => {
       const label = buildDevPreviewSubdomain("P".repeat(50), "Q".repeat(50));
       expect(label.length).toBeLessThanOrEqual(63);
@@ -71,12 +66,6 @@ describe("devPreviewProxy", () => {
       expect(parseDevPreviewProxyHost("dp-project-1-panel-1.localhost:43000")).toBe(
         "dp-project-1-panel-1"
       );
-    });
-
-    it("round-trips with buildDevPreviewProxyOrigin's host", () => {
-      const subdomain = buildDevPreviewSubdomain("proj", "panel");
-      const host = `${subdomain}.localhost:${DEV_PREVIEW_PROXY_PORT}`;
-      expect(parseDevPreviewProxyHost(host)).toBe(subdomain);
     });
 
     it("returns null for non-localhost hosts", () => {

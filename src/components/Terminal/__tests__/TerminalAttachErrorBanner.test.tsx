@@ -69,13 +69,6 @@ describe("TerminalAttachErrorBanner", () => {
     expect(screen.getByRole("alert").textContent).toContain("boom-specific-detail");
   });
 
-  it("renders without an error detail when the message is empty", () => {
-    renderBanner({ error: "" });
-
-    expect(screen.getByRole("alert").textContent).toMatch(/process is still running/i);
-    expect(screen.getByRole("button", { name: "Retry terminal display" })).toBeTruthy();
-  });
-
   it("strips terminal escape sequences out of the error text", () => {
     // The message can originate from terminal output, so it is untrusted.
     const esc = String.fromCharCode(27);

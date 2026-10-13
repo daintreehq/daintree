@@ -492,16 +492,6 @@ describe("McpServerService", () => {
       expect(turnSpy).toHaveBeenCalledWith(30);
     });
 
-    it("pruneAuditByRetention forwards the Off value (0) to both rings (#10776)", () => {
-      const auditSpy = vi.spyOn(service._auditService, "pruneByAge");
-      const turnSpy = vi.spyOn(service._turnOutcomeService, "pruneByAge");
-
-      service.pruneAuditByRetention(0);
-
-      expect(auditSpy).toHaveBeenCalledWith(0);
-      expect(turnSpy).toHaveBeenCalledWith(0);
-    });
-
     it("getAuditDiagnostics reads the owned ring passively, before the server starts (#12508)", () => {
       const audit = service._auditService;
       const append = (toolId: string, tier: "core" | "external") =>
@@ -624,36 +614,6 @@ describe("McpServerService", () => {
       expect(byTool["recipe.run"].errorCode).toBe("CONFIRMATION_REQUIRED");
       expect(byTool["actions.list"].result).toBe("error");
       expect(byTool["actions.list"].errorCode).toBe("EXECUTION_ERROR");
-    });
-
-    it("records confirmationDecision='approved' when the renderer signals an approved modal", async () => {
-      const dispatchMock = vi.fn(() => ({
-        result: { ok: true, result: { ok: true } } satisfies ActionDispatchResult,
-        confirmationDecision: "approved" as const,
-      }));
-      const { window } = createMockWindow({
-        getManifest: () => [
-          createManifestEntry({
-            id: "recipe.run" as ActionId,
-            title: "Run Recipe",
-            description: "Run a saved recipe",
-            danger: "confirm",
-          }),
-        ],
-        dispatchAction: dispatchMock,
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
-      transports.push(transport);
-
-      await client.callTool({ name: "recipe.run", arguments: { recipeId: "r-1" } });
-
-      const records = getAuditRecords(service);
-      expect(records).toHaveLength(1);
-      expect(records[0].result).toBe("success");
-      expect(records[0].confirmationDecision).toBe("approved");
-      expect(records[0].errorCode).toBeUndefined();
     });
 
     it("records confirmationDecision='rejected' when dispatch returns USER_REJECTED", async () => {

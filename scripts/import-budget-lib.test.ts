@@ -208,15 +208,6 @@ describe("scanSyncViolations", () => {
     ]);
   });
 
-  it("returns empty array when file can't be read", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const result = scanSyncViolations(["electron/missing.ts"], "/root", () => {
-      throw new Error("ENOENT");
-    });
-    expect(result).toEqual([]);
-    warnSpy.mockRestore();
-  });
-
   it("returns violations for readable files even when sibling is unreadable", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const files = {

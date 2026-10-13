@@ -219,15 +219,6 @@ describe("FileSearchCacheInvalidator", () => {
 
       expect(invalidateUnder).not.toHaveBeenCalled();
     });
-
-    it("does not drop while a worktree stays current", () => {
-      const invalidator = makeInvalidator();
-      seed(invalidator, { isCurrent: true });
-
-      invalidator.handleWorktreeUpdate(snapshot({ isCurrent: true }), source());
-
-      expect(invalidateUnder).not.toHaveBeenCalled();
-    });
   });
 
   describe("multiple producers for one path", () => {

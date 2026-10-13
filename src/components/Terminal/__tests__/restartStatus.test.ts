@@ -23,15 +23,6 @@ describe("getRestartBannerVariant", () => {
     expect(result).toEqual({ type: "auto-restarting" });
   });
 
-  it("returns auto-restarting over exit-error when both could apply", () => {
-    const result = getRestartBannerVariant({
-      ...base,
-      isAutoRestarting: true,
-      exitBehavior: "keep",
-    });
-    expect(result).toEqual({ type: "auto-restarting" });
-  });
-
   it("returns none when not exited", () => {
     const result = getRestartBannerVariant({ ...base, isExited: false });
     expect(result).toEqual({ type: "none" });
@@ -134,21 +125,6 @@ describe("getRestartBannerVariant", () => {
     expect(result).toEqual({ type: "exit-error", exitCode: 1 });
   });
 
-  it("preserves the exit code in the exit-error variant", () => {
-    const result = getRestartBannerVariant({ ...base, exitCode: 137 });
-    expect(result).toEqual({ type: "exit-error", exitCode: 137 });
-  });
-
-  it("returns auto-restarting when isAutoRestarting is true and no other errors are present", () => {
-    const result = getRestartBannerVariant({
-      ...base,
-      isAutoRestarting: true,
-      reconnectError: undefined,
-      spawnError: undefined,
-    });
-    expect(result).toEqual({ type: "auto-restarting" });
-  });
-
   it("returns none when isAutoRestarting is true but reconnectError is present", () => {
     const result = getRestartBannerVariant({
       ...base,
@@ -228,15 +204,6 @@ describe("getRestartBannerVariant", () => {
       ...base,
       isAutoRestarting: true,
       backendStatus: "disconnected",
-    });
-    expect(result).toEqual({ type: "auto-restarting" });
-  });
-
-  it("returns auto-restarting when backendStatus is recovering and auto-restart conditions are met", () => {
-    const result = getRestartBannerVariant({
-      ...base,
-      isAutoRestarting: true,
-      backendStatus: "recovering",
     });
     expect(result).toEqual({ type: "auto-restarting" });
   });

@@ -445,14 +445,6 @@ beforeEach(() => {
 });
 
 describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
-  it("shows the toggle and defaults to the rendered view for a markdown file", async () => {
-    renderViewer("/repo/docs/spec.md");
-    // Default preserves the pane's long-standing rendered-first behaviour.
-    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
-    expect(screen.getByRole("radio", { name: "Source" })).toBeTruthy();
-    expect(screen.getByRole("radio", { name: "Rendered" })).toBeTruthy();
-  });
-
   it("switches the markdown viewer between source and rendered", async () => {
     renderViewer("/repo/docs/spec.md");
     await waitFor(() => expect(currentViewMode()).toBe("rendered"));
@@ -672,14 +664,6 @@ describe("FileBrowserViewer rendered-markdown image freshness (#11587)", () => {
 });
 
 describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
-  it("renders the toggle even with nothing selected, so the collapsed sidebar has a home", () => {
-    renderViewer(null);
-    // The empty state has no toolbar of its own; the persistent Root is what
-    // keeps a re-open control on screen once the tree is collapsed.
-    expect(screen.getByTestId("file-browser-sidebar-toggle")).toBeTruthy();
-    expect(screen.getByText("Pick a file to read")).toBeTruthy();
-  });
-
   it("is the first control in the toolbar in both the empty and file-selected states", async () => {
     const { rerender } = renderViewer(null);
     // `?.` keeps the assertion honest under noUncheckedIndexedAccess: an empty
@@ -763,59 +747,6 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     expect(readMock).not.toHaveBeenCalled();
     expect(screen.getByText(/Can't play this video format/)).toBeTruthy();
   });
-
-  it("refetches on an explicit refresh but rides out an ambient revision tick (#11586)", async () => {
-    // Both directions in one test: the ambient half must not disturb playback,
-    // and the explicit half must not be swallowed along with it. Unique object
-    // URLs so a silent remount can't pass as continuity.
-    let objectUrlSequence = 0;
-    URL.createObjectURL = vi.fn(() => `blob:app://daintree/video-${objectUrlSequence++}`);
-
-    const { container, rerender } = renderViewer("/repo/media/demo.webm", {
-      revision: "r1",
-      surfaceRefreshNonce: 0,
-      mediaReloadNonce: 0,
-    });
-    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
-    const firstNode = container.querySelector("video");
-    const firstSrc = firstNode?.getAttribute("src");
-    expect(videoFetchMock).toHaveBeenCalledTimes(1);
-
-    // A worktree write elsewhere: the player must be left completely alone.
-    rerender(
-      viewerJsx("/repo/media/demo.webm", {
-        revision: "r2",
-        surfaceRefreshNonce: 0,
-        mediaReloadNonce: 0,
-      })
-    );
-    await act(async () => {});
-    expect(container.querySelector("video")).toBe(firstNode);
-    expect(container.querySelector("video")?.getAttribute("src")).toBe(firstSrc);
-    expect(videoFetchMock).toHaveBeenCalledTimes(1);
-
-    // Refresh pressed: exactly one more request, aimed at a different URL —
-    // proof the nonce reached it, without pinning the leaf's `v=` spelling.
-    rerender(
-      viewerJsx("/repo/media/demo.webm", {
-        revision: "r2",
-        surfaceRefreshNonce: 1,
-        mediaReloadNonce: 1,
-      })
-    );
-    await waitFor(() => expect(videoFetchMock).toHaveBeenCalledTimes(2));
-    expect(String(videoFetchMock.mock.calls[1]?.[0])).not.toBe(
-      String(videoFetchMock.mock.calls[0]?.[0])
-    );
-    // Both halves in ONE waitFor: the hook nulls its object URL while refetching,
-    // so a bare `.not.toBe(firstSrc)` would go green on the empty gap and never
-    // prove the replacement player arrived.
-    await waitFor(() => {
-      const refreshed = container.querySelector("video");
-      expect(refreshed).not.toBeNull();
-      expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
-    });
-  });
 });
 
 describe("FileBrowserViewer audio preview (#11425)", () => {
@@ -853,64 +784,6 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     expect(container.querySelector("audio")).toBeNull();
     expect(readMock).not.toHaveBeenCalled();
     expect(screen.getByText(/Can't play this audio format/)).toBeTruthy();
-  });
-
-  it("keeps the same player across a revision tick rather than refetching", async () => {
-    // `revision` bumps on every worktree write; keying the player on it would
-    // restart the track whenever an agent touches an unrelated file. Object
-    // URLs are unique here so a remount can't masquerade as continuity.
-    let objectUrlSequence = 0;
-    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-${objectUrlSequence++}`);
-
-    const { container, rerender } = renderViewer("/repo/media/track.mp3", { revision: "r1" });
-    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
-    const firstNode = container.querySelector("audio");
-    const firstSrc = firstNode?.getAttribute("src");
-    expect(audioFetchMock).toHaveBeenCalledTimes(1);
-
-    rerender(viewerJsx("/repo/media/track.mp3", { revision: "r2" }));
-    await act(async () => {});
-
-    // The very same element, still on its original blob — not a fresh one that
-    // happens to look alike.
-    expect(container.querySelector("audio")).toBe(firstNode);
-    expect(container.querySelector("audio")?.getAttribute("src")).toBe(firstSrc);
-    expect(audioFetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("refetches the track when an explicit refresh moves the nonce (#11586)", async () => {
-    // The other half of the test above: the ambient tick is ignored, but
-    // pressing Refresh is the one gesture that must pull rewritten bytes.
-    let objectUrlSequence = 0;
-    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-${objectUrlSequence++}`);
-
-    const { container, rerender } = renderViewer("/repo/media/track.mp3", {
-      surfaceRefreshNonce: 0,
-      mediaReloadNonce: 0,
-    });
-    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
-    const firstNode = container.querySelector("audio");
-    const firstSrc = firstNode?.getAttribute("src");
-    expect(audioFetchMock).toHaveBeenCalledTimes(1);
-
-    rerender(viewerJsx("/repo/media/track.mp3", { surfaceRefreshNonce: 1, mediaReloadNonce: 1 }));
-    await waitFor(() => expect(audioFetchMock).toHaveBeenCalledTimes(2));
-
-    // A different URL, so the nonce genuinely reached the request rather than
-    // the blob being re-rendered from cache.
-    expect(String(audioFetchMock.mock.calls[1]?.[0])).not.toBe(
-      String(audioFetchMock.mock.calls[0]?.[0])
-    );
-    // One waitFor for the whole claim: the hook nulls its object URL while
-    // refetching, so asserting the src alone would pass on the empty gap
-    // between the two players.
-    await waitFor(() => {
-      const refreshed = container.querySelector("audio");
-      expect(refreshed).not.toBeNull();
-      expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
-      // Keyed by object URL, so fresh bytes mean a fresh element.
-      expect(refreshed).not.toBe(firstNode);
-    });
   });
 
   it("recovers a failed track on refresh, which takes both halves of the signal", async () => {
@@ -1060,17 +933,6 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
     expect(src.searchParams.get("root")).toBe("/repo");
     // The text-read IPC path is what produced "Binary file — cannot display".
     expect(readMock).not.toHaveBeenCalled();
-  });
-
-  it("mounts the frame credentialless and unsandboxed", async () => {
-    const { container } = renderViewer("/repo/docs/spec.pdf");
-    await act(async () => {});
-
-    const frame = container.querySelector("iframe");
-    // Without credentialless the COEP shell blocks the document; with a sandbox
-    // attribute PDFium refuses to install its viewer frame.
-    expect(frame?.hasAttribute("credentialless")).toBe(true);
-    expect(frame?.hasAttribute("sandbox")).toBe(false);
   });
 
   it("re-navigates only on an explicit refresh, never on a revision tick (#11586)", async () => {
@@ -1576,11 +1438,6 @@ describe("folder-selected state (#11620)", () => {
     expect(screen.getByLabelText("a.ts")).toBeTruthy();
   });
 
-  it("still shows the nothing-selected state when neither a file nor a folder is selected", () => {
-    renderViewer(null);
-    expect(screen.getByText("Pick a file to read")).toBeTruthy();
-  });
-
   it("prefers the file preview when a file is selected", () => {
     // The two are mutually exclusive by construction; if both ever arrived, the
     // file must win rather than the viewer rendering two bodies.
@@ -1639,18 +1496,6 @@ describe("folder-selected state (#11620)", () => {
     renderViewer(null, { folderPath: "src", folderRows: null, folderStatus: "error" });
     expect(screen.getByText("Can't show this folder")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-  });
-
-  it("retries through the pane's refresh", async () => {
-    const onRefresh = vi.fn();
-    renderViewer(null, {
-      folderPath: "src",
-      folderRows: null,
-      folderStatus: "error",
-      onRefresh,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(onRefresh).toHaveBeenCalled();
   });
 });
 

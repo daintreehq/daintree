@@ -50,11 +50,11 @@ const baseMenu = {
   onSelectWorkingAgents: noop,
 };
 
-function renderToolbar() {
+function renderToolbar(isCollapsed = false) {
   return render(
-    <TooltipProvider>
+    <TooltipProvider delayDuration={0}>
       <WorktreeActionsToolbar
-        isCollapsed={false}
+        isCollapsed={isCollapsed}
         isActive={false}
         onCleanupWorktree={noop}
         canCollapse={true}
@@ -71,6 +71,10 @@ function renderToolbar() {
 function toolbarButtons(): HTMLButtonElement[] {
   const toolbar = screen.getByRole("toolbar");
   return Array.from(toolbar.querySelectorAll<HTMLButtonElement>("button:not([disabled])"));
+}
+
+function allToolbarButtons(): HTMLButtonElement[] {
+  return Array.from(screen.getByRole("toolbar").querySelectorAll<HTMLButtonElement>("button"));
 }
 
 describe("WorktreeActionsToolbar keyboard navigation", () => {
@@ -168,5 +172,40 @@ describe("WorktreeActionsToolbar keyboard navigation", () => {
     fireEvent.keyDown(toolbar, { key: "ArrowRight" });
     expect(document.activeElement).not.toBe(buttons[0]);
     expect(outerKeyDown).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("WorktreeActionsToolbar button chrome", () => {
+  it("gives every toolbar button the same corner radius, so hover and focus shapes match", () => {
+    renderToolbar(false);
+    const radii = allToolbarButtons().map((button) =>
+      Array.from(button.classList)
+        .filter((cls) => /^rounded(-|$)/.test(cls))
+        .join(" ")
+    );
+
+    expect(radii.length).toBe(3);
+    expect(radii[0]).not.toBe("");
+    expect(new Set(radii).size).toBe(1);
+  });
+
+  it("never lets a toolbar button act as a submit button", () => {
+    renderToolbar(false);
+
+    for (const button of allToolbarButtons()) {
+      expect(button.getAttribute("type")).toBe("button");
+    }
+  });
+
+  it.each([
+    [false, "Collapse card"],
+    [true, "Expand card"],
+  ])("names the chevron's action in a tooltip (collapsed=%s)", async (isCollapsed, label) => {
+    renderToolbar(isCollapsed);
+    const chevron = screen.getByRole("button", { name: label });
+
+    fireEvent.focus(chevron);
+
+    expect((await screen.findByRole("tooltip")).textContent).toContain(label);
   });
 });

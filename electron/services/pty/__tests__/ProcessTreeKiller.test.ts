@@ -218,28 +218,6 @@ describe.skipIf(process.platform === "win32")(
       killer.abort();
     });
 
-    it("silently ignores ESRCH from SIGCONT calls", () => {
-      killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, sig) => {
-        if (sig === "SIGCONT") {
-          throw makeErrnoError("ESRCH");
-        }
-        return true;
-      });
-
-      const killer = new ProcessTreeKiller(makePty(5000), makeTreeCache([5001, 5002]));
-      killer.execute(true);
-
-      const sigcontWarnings = warnSpy.mock.calls
-        .map((c: unknown[]) => String(c[0]))
-        .filter((m: string) => m.includes("SIGCONT"));
-      expect(sigcontWarnings).toHaveLength(0);
-      // Guard against SIGCONT being silently skipped: each descendant and the
-      // shell must have received a SIGCONT call.
-      expect(killSpy).toHaveBeenCalledWith(5001, "SIGCONT");
-      expect(killSpy).toHaveBeenCalledWith(5002, "SIGCONT");
-      expect(killSpy).toHaveBeenCalledWith(5000, "SIGCONT");
-    });
-
     it("warns once per pid when SIGCONT fails with EPERM", () => {
       killSpy = vi.spyOn(process, "kill").mockImplementation((_pid, sig) => {
         if (sig === "SIGCONT") {

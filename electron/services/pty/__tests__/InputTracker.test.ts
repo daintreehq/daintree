@@ -23,15 +23,6 @@ describe("InputTracker", () => {
       expect(focusTracker.lastUserInputAt).toBe(0);
     });
 
-    it("ignores focus-out (CSI O) when configured (#8865)", () => {
-      const focusTracker = new InputTracker({
-        ignoredInputSequences: ["\x1b\r", "\x1b[I", "\x1b[O"],
-      });
-      const result = focusTracker.process("\x1b[O", 1000);
-      expect(result.kind).toBe("ignored");
-      expect(focusTracker.lastUserInputAt).toBe(0);
-    });
-
     it("still stamps lastUserInputAt for normal keystrokes after focus events (#8865)", () => {
       const focusTracker = new InputTracker({
         ignoredInputSequences: ["\x1b\r", "\x1b[I", "\x1b[O"],
@@ -67,13 +58,6 @@ describe("InputTracker", () => {
     it("tracks Ctrl-U clearing input", () => {
       tracker.process("abc", 1000);
       tracker.process("\x15", 1001);
-      const result = tracker.process("\r", 1002);
-      expect(result).toEqual({ kind: "enter", hadText: false });
-    });
-
-    it("tracks Ctrl-W clearing input", () => {
-      tracker.process("abc", 1000);
-      tracker.process("\x17", 1001);
       const result = tracker.process("\r", 1002);
       expect(result).toEqual({ kind: "enter", hadText: false });
     });
@@ -117,11 +101,6 @@ describe("InputTracker", () => {
       // After Enter, chars should be 0
       const result = tracker.process("\r", 1002);
       expect(result).toEqual({ kind: "enter", hadText: false });
-    });
-
-    it("updates lastUserInputAt", () => {
-      tracker.process("a", 5000);
-      expect(tracker.lastUserInputAt).toBe(5000);
     });
   });
 

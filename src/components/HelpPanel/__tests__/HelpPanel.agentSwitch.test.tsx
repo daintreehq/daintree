@@ -1,55 +1,58 @@
 // @vitest-environment jsdom
 import { render, fireEvent, act } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Captures the live controller instance's spies so tests can assert on the
 // switch path. HelpPanel instantiates exactly one controller per mount.
-const { controllerSpies, helpPanelState, panelStoreState } = vi.hoisted(() => ({
-  controllerSpies: {
-    selectAgent: vi.fn(),
-    newSession: vi.fn(),
-  },
-  helpPanelState: {
-    clearDroppedPreferredAgent: vi.fn(),
-    setAutoLaunchEnabled: vi.fn(),
-    requestFocus: vi.fn(),
-    setActiveFigureNumber: vi.fn(),
-    addFigure: vi.fn(),
-    setActiveSlot: vi.fn(),
-    closeSlot: vi.fn(),
-    openSlot: vi.fn(),
-    // #12108: the panel reads its lane pointer; the mocked selectors
-    // above project this same flat object as that lane.
-    activeSlot: 0,
-    sessions: {} as Record<number, unknown>,
-    isOpen: true,
-    width: 380,
-    terminalId: null as string | null,
-    agentId: null as string | null,
-    preferredAgentId: null as string | null,
-    sessionId: null as string | null,
-    introDismissed: true,
-    conversationTouched: false,
-    hibernateSessions: {} as Record<string, unknown>,
-    focusRequest: 0,
-    figures: [] as unknown[],
-    markConversationStarted: vi.fn(),
-    setWidth: vi.fn(),
-    setOpen: vi.fn(),
-    clearTerminal: vi.fn(),
-    setPreferredAgent: vi.fn(),
-    setTerminal: vi.fn(),
-    dismissIntro: vi.fn(),
-    setHibernateSession: vi.fn(),
-    clearHibernateSession: vi.fn(),
-  },
-  panelStoreState: {
-    panelIds: [] as string[],
-    panelsById: {} as Record<string, { agentState?: string; cwd?: string }>,
-    removePanel: vi.fn(),
-    addPanel: vi.fn().mockResolvedValue(""),
-  },
-}));
+const { controllerSpies, handleAgentExitedMock, helpPanelState, panelStoreState } = vi.hoisted(
+  () => ({
+    controllerSpies: {
+      selectAgent: vi.fn(),
+      newSession: vi.fn(),
+    },
+    handleAgentExitedMock: vi.fn(),
+    helpPanelState: {
+      clearDroppedPreferredAgent: vi.fn(),
+      setAutoLaunchEnabled: vi.fn(),
+      requestFocus: vi.fn(),
+      setActiveFigureNumber: vi.fn(),
+      addFigure: vi.fn(),
+      setActiveSlot: vi.fn(),
+      closeSlot: vi.fn(),
+      openSlot: vi.fn(),
+      // #12108: the panel reads its lane pointer; the mocked selectors
+      // above project this same flat object as that lane.
+      activeSlot: 0,
+      sessions: {} as Record<number, unknown>,
+      isOpen: true,
+      width: 380,
+      terminalId: null as string | null,
+      agentId: null as string | null,
+      preferredAgentId: null as string | null,
+      sessionId: null as string | null,
+      introDismissed: true,
+      conversationTouched: false,
+      hibernateSessions: {} as Record<string, unknown>,
+      focusRequest: 0,
+      figures: [] as unknown[],
+      markConversationStarted: vi.fn(),
+      setWidth: vi.fn(),
+      setOpen: vi.fn(),
+      clearTerminal: vi.fn(),
+      setPreferredAgent: vi.fn(),
+      setTerminal: vi.fn(),
+      dismissIntro: vi.fn(),
+      setHibernateSession: vi.fn(),
+      clearHibernateSession: vi.fn(),
+    },
+    panelStoreState: {
+      panelIds: [] as string[],
+      panelsById: {} as Record<string, { agentState?: string; cwd?: string; spawnStatus?: string }>,
+      removePanel: vi.fn(),
+      addPanel: vi.fn().mockResolvedValue(""),
+    },
+  })
+);
 
 const snapshot = {
   showResumeBanner: false,
@@ -110,7 +113,7 @@ vi.mock("@/controllers/HelpSessionController", () => ({
     getSnapshot = () => snapshot;
     syncInputs = vi.fn();
     handleTerminalPanelMissing = vi.fn();
-    handleAgentExited = vi.fn();
+    handleAgentExited = (...args: unknown[]) => handleAgentExitedMock(...args);
     selectAgent = (...args: unknown[]) => controllerSpies.selectAgent(...args);
     newSession = (...args: unknown[]) => controllerSpies.newSession(...args);
     runAnyway = vi.fn();
@@ -483,5 +486,104 @@ describe("HelpPanel agent switch (#8353)", () => {
 
     expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
     expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+  });
+});
+
+// The /exit self-stop (#10989): when the assistant's agent CLI exits inside a
+// surviving shell PTY, `agentState` settles on "exited" and HelpPanel calls
+// `controller.handleAgentExited(terminalId)` after a debounce so a transient
+// mis-detection flap (#10911) that bounces back via `respawn` can't tear down
+// a live session. These tests cover the DEBOUNCE itself — fire on settle,
+// cancel on flap, cancel on unmount — which the controller tests can't see.
+describe("HelpPanel — agent self-exit debounce (/exit, #10989)", () => {
+  function setAgentState(state: string): void {
+    panelStoreState.panelsById = {
+      "t-1": { ...panelStoreState.panelsById["t-1"], agentState: state },
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    handleAgentExitedMock.mockClear();
+
+    helpPanelState.isOpen = true;
+    helpPanelState.terminalId = "t-1";
+    helpPanelState.agentId = "claude";
+    helpPanelState.preferredAgentId = null;
+    helpPanelState.conversationTouched = false;
+    panelStoreState.panelIds = ["t-1"];
+    panelStoreState.panelsById = {
+      "t-1": { agentState: "working", cwd: "/repo", spawnStatus: "ready" },
+    };
+
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
+          app: { onViewRevealed: () => () => {} },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("calls handleAgentExited once agentState stays 'exited' past the settle window", () => {
+    setAgentState("exited");
+    render(<HelpPanel width={380} />);
+
+    act(() => {
+      vi.advanceTimersByTime(749);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(handleAgentExitedMock).toHaveBeenCalledTimes(1);
+    expect(handleAgentExitedMock).toHaveBeenCalledWith("t-1");
+  });
+
+  it("never fires when a detection flap bounces back to a live state within the window", () => {
+    setAgentState("exited");
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    // Respawn/mis-detection recovery: the FSM leaves "exited" before settle.
+    setAgentState("working");
+    rerender(<HelpPanel width={380} />);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending stop when the panel unmounts mid-debounce", () => {
+    setAgentState("exited");
+    const { unmount } = render(<HelpPanel width={380} />);
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
+  });
+
+  it("arms no timer while the agent is live", () => {
+    render(<HelpPanel width={380} />);
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(handleAgentExitedMock).not.toHaveBeenCalled();
   });
 });

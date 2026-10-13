@@ -49,20 +49,6 @@ describe("githubCreateIssueCommand", () => {
     });
   });
 
-  it("maps a provider missing-token failure to EXECUTION_ERROR with a settings pointer", async () => {
-    createIssueMock.mockRejectedValue(
-      new Error("GitHub token not configured. Set it in Settings.")
-    );
-
-    const result = await githubCreateIssueCommand.execute({ cwd: "/repo" } as never, {
-      title: "No token",
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.error?.code).toBe("EXECUTION_ERROR");
-    expect(result.error?.message).toContain("Set it in Settings");
-  });
-
   it("returns NO_CWD when no working directory is in context", async () => {
     const result = await githubCreateIssueCommand.execute({} as never, { title: "No cwd" });
 

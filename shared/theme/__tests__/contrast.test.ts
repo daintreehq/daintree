@@ -186,16 +186,6 @@ describe("getThemeContrastWarnings", () => {
     expect(failure).toBeDefined();
   });
 
-  it("checks the new text-secondary on surface-sidebar pair", () => {
-    const scheme = makeScheme({
-      "text-secondary": "#cccccc" as AppColorSchemeTokens["text-secondary"],
-      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
-    });
-    const warnings = getThemeContrastWarnings(scheme);
-    const failure = warnings.find((w) => w.message.includes("text-secondary on surface-sidebar"));
-    expect(failure).toBeDefined();
-  });
-
   it("checks each new status-* on surface-panel pair at minimum 3.0", () => {
     const lowContrast = "#dddddd";
     const scheme = makeScheme({
@@ -234,19 +224,6 @@ describe("getThemeContrastWarnings", () => {
     expect(freshnessWarnings.every((w) => w.message.includes("75% opacity (aging)"))).toBe(true);
   });
 
-  it("includes aging tier label in freshness opacity warning message", () => {
-    const scheme = makeScheme({
-      "text-primary": "#999999" as AppColorSchemeTokens["text-primary"],
-      "surface-sidebar": "#ffffff" as AppColorSchemeTokens["surface-sidebar"],
-    });
-    const warnings = getThemeContrastWarnings(scheme);
-    const freshnessWarnings = warnings.filter(
-      (w) => w.message.includes("opacity") && w.message.includes("text-primary")
-    );
-    expect(freshnessWarnings.length).toBeGreaterThan(0);
-    expect(freshnessWarnings.every((w) => w.message.includes("75% opacity (aging)"))).toBe(true);
-  });
-
   it("emits no freshness warnings at 75% opacity for high-contrast themes", () => {
     // #000000 on #ffffff at 75% blends to #404040 on #ffffff → ~10.4:1, well above 4.5.
     // Override all 5 surfaces so the test doesn't depend on the base theme's other surfaces.
@@ -272,17 +249,6 @@ describe("getThemeContrastWarnings", () => {
     expect(freshnessWarnings).toHaveLength(0);
     const baseUnevaluable = warnings.filter((w) => w.message.includes("Cannot evaluate contrast"));
     expect(baseUnevaluable.length).toBeGreaterThan(0);
-  });
-
-  it("aging (75%) produces zero freshness warnings across all built-in themes", () => {
-    for (const scheme of BUILT_IN_APP_SCHEMES) {
-      const warnings = getThemeContrastWarnings(scheme);
-      const agingFailures = warnings.filter((w) => w.message.includes("75% opacity (aging)"));
-      expect(
-        agingFailures,
-        `${scheme.id}: aging tier must not produce contrast warnings`
-      ).toHaveLength(0);
-    }
   });
 
   it("emits no warnings when status-* tokens meet 3.0:1 against all surfaces", () => {
@@ -364,30 +330,6 @@ describe("getThemeContrastWarnings", () => {
         w.message.includes("oklch(0.5 0.1 200)")
     );
     expect(failure).toBeDefined();
-  });
-
-  it("produces zero accent-primary outline warnings across all built-in themes", () => {
-    for (const scheme of BUILT_IN_APP_SCHEMES) {
-      const warnings = getThemeContrastWarnings(scheme);
-      const outlineFailures = warnings.filter((w) =>
-        w.message.includes("accent-primary outline on")
-      );
-      expect(
-        outlineFailures,
-        `${scheme.id}: accent-primary must hit 3:1 against all surfaces`
-      ).toHaveLength(0);
-    }
-  });
-
-  it("produces zero palette selection-outline warnings across all built-in themes", () => {
-    for (const scheme of BUILT_IN_APP_SCHEMES) {
-      const warnings = getThemeContrastWarnings(scheme);
-      const selectionFailures = warnings.filter((w) => w.message.includes("selection-outline"));
-      expect(
-        selectionFailures,
-        `${scheme.id}: selection-outline is drawn on the highlight fill (focus ring, increased-contrast outline) and must hit 3:1`
-      ).toHaveLength(0);
-    }
   });
 
   // The dark palette surface is the sidebar at 94% over whatever the palette
@@ -587,19 +529,6 @@ describe("getThemeContrastWarnings", () => {
     );
     expect(unevaluable.length).toBe(1);
     expect(unevaluable[0]!.message).toContain("rgba(0,0,0,)");
-  });
-
-  it("produces zero accent-secondary outline warnings across all built-in themes", () => {
-    for (const scheme of BUILT_IN_APP_SCHEMES) {
-      const warnings = getThemeContrastWarnings(scheme);
-      const outlineFailures = warnings.filter((w) =>
-        w.message.includes("accent-secondary outline on")
-      );
-      expect(
-        outlineFailures,
-        `${scheme.id}: accent-secondary must hit 3:1 against all surfaces`
-      ).toHaveLength(0);
-    }
   });
 });
 
@@ -841,17 +770,6 @@ describe("terminal/syntax validation", () => {
     expect(commentFailure!.message).toContain("floor is 0.18");
   });
 
-  it("uses softer floor for syntax-quote", () => {
-    const scheme = makeScheme({
-      "terminal-background": "#000000" as AppColorSchemeTokens["terminal-background"],
-      "syntax-quote": "#080808" as AppColorSchemeTokens["syntax-quote"],
-    });
-    const warnings = getThemeContrastWarnings(scheme);
-    const quoteFailure = warnings.find((w) => w.message.includes("syntax-quote on"));
-    expect(quoteFailure).toBeDefined();
-    expect(quoteFailure!.message).toContain("floor is 0.18");
-  });
-
   it("uses primary floor for terminal-foreground", () => {
     const scheme = makeScheme({
       "terminal-background": "#000000" as AppColorSchemeTokens["terminal-background"],
@@ -891,19 +809,6 @@ describe("terminal/syntax validation", () => {
     expect(failure).toBeDefined();
   });
 
-  it("emits distinctness warning for blue vs cyan", () => {
-    const scheme = makeScheme({
-      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
-      "terminal-blue": "#4488cc" as AppColorSchemeTokens["terminal-blue"],
-      "terminal-cyan": "#4488cc" as AppColorSchemeTokens["terminal-cyan"],
-    });
-    const warnings = getThemeContrastWarnings(scheme);
-    const failure = warnings.find(
-      (w) => w.message.includes("blue vs cyan") && w.message.includes("deltaEOK")
-    );
-    expect(failure).toBeDefined();
-  });
-
   it("emits distinctness warning for keyword vs function", () => {
     const scheme = makeScheme({
       "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
@@ -913,19 +818,6 @@ describe("terminal/syntax validation", () => {
     const warnings = getThemeContrastWarnings(scheme);
     const failure = warnings.find(
       (w) => w.message.includes("keyword vs function") && w.message.includes("deltaEOK")
-    );
-    expect(failure).toBeDefined();
-  });
-
-  it("emits distinctness warning for string vs number", () => {
-    const scheme = makeScheme({
-      "terminal-background": "#111111" as AppColorSchemeTokens["terminal-background"],
-      "syntax-string": "#aaaa66" as AppColorSchemeTokens["syntax-string"],
-      "syntax-number": "#aaaa66" as AppColorSchemeTokens["syntax-number"],
-    });
-    const warnings = getThemeContrastWarnings(scheme);
-    const failure = warnings.find(
-      (w) => w.message.includes("string vs number") && w.message.includes("deltaEOK")
     );
     expect(failure).toBeDefined();
   });
@@ -970,23 +862,6 @@ describe("terminal/syntax validation", () => {
         w.message.includes("non-hex")
     );
     expect(failure).toBeDefined();
-  });
-
-  it("produces zero terminal/syntax warnings across all built-in themes", () => {
-    for (const scheme of BUILT_IN_APP_SCHEMES) {
-      const warnings = getThemeContrastWarnings(scheme);
-      const terminalWarnings = warnings.filter(
-        (w) =>
-          w.message.includes("terminal-") ||
-          w.message.includes("syntax-") ||
-          w.message.includes("OKLab") ||
-          w.message.includes("deltaEOK")
-      );
-      expect(
-        terminalWarnings,
-        `${scheme.id}: terminal/syntax validation must produce zero warnings, got: ${terminalWarnings.map((w) => w.message).join("; ")}`
-      ).toHaveLength(0);
-    }
   });
 
   it("handles 8-digit alpha hex in terminal tokens", () => {

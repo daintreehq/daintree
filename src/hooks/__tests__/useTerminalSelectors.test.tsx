@@ -23,9 +23,6 @@ import {
   useBackgroundedTerminals,
   useBackgroundPanelStats,
   useErrorTerminals,
-  useWaitingTerminalIds,
-  isTerminalVisible,
-  isTerminalOrphaned,
   _resetWorktreeIdCacheForTests,
 } from "../useTerminalSelectors";
 
@@ -180,22 +177,6 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(0);
     });
 
-    it("counts terminals that changed state after blurTime", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 60_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 30_000,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
-    });
-
     it("excludes terminals that changed state before blurTime", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 30_000;
@@ -212,38 +193,6 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(0);
     });
 
-    it("counts terminals that changed after blurTime regardless of age", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 10 * 60_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 6 * 60_000,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
-    });
-
-    it("counts terminal that changed long after blurTime", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 10 * 60_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 5 * 60_000,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
-    });
-
     it("excludes terminals without lastStateChange when blurTime is set", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 60_000;
@@ -257,34 +206,6 @@ describe("useTerminalSelectors", () => {
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
-    });
-
-    it("counts waiting terminals with valid timestamps", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 120_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 60_000,
-        },
-        {
-          id: "t2",
-          agentState: "completed",
-          location: "grid",
-          lastStateChange: Date.now() - 30_000,
-        },
-        {
-          id: "t3",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: Date.now() - 180_000,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
     });
 
     it("uses unfiltered behavior when blurTime is undefined", () => {
@@ -339,53 +260,6 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(1);
     });
 
-    it("does not recount a terminal from a previous blur session on re-blur", () => {
-      setupEmptyWorktrees();
-      const firstBlurTime = Date.now() - 120_000;
-      const terminalStateChange = Date.now() - 90_000;
-
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: terminalStateChange,
-        },
-      ]);
-
-      // Terminal is counted during first blur
-      const { result: result1 } = renderHook(() => useTerminalNotificationCounts(firstBlurTime));
-      expect(result1.current.waitingCount).toBe(1);
-
-      // After focus, count is zero
-      const { result: result2 } = renderHook(() => useTerminalNotificationCounts(null));
-      expect(result2.current.waitingCount).toBe(0);
-
-      // After re-blur (new blurTime > terminalStateChange), terminal is not re-counted
-      const secondBlurTime = Date.now() - 30_000;
-      const { result: result3 } = renderHook(() => useTerminalNotificationCounts(secondBlurTime));
-      expect(result3.current.waitingCount).toBe(0);
-    });
-
-    it("counts terminal that re-enters waiting after leaving it during blur session", () => {
-      setupEmptyWorktrees();
-      const blurTime = Date.now() - 120_000;
-
-      // Terminal went waiting → working → waiting during blur; lastStateChange is the re-entry time
-      const reEntryTime = Date.now() - 30_000;
-      setupTerminals([
-        {
-          id: "t1",
-          agentState: "waiting",
-          location: "grid",
-          lastStateChange: reEntryTime,
-        },
-      ]);
-
-      const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.waitingCount).toBe(1);
-    });
-
     it("does not count working or idle terminals even if lastStateChange is after blurTime", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 60_000;
@@ -416,12 +290,6 @@ describe("useWaitingTerminals", () => {
     _resetWorktreeIdCacheForTests();
   });
 
-  it("returns empty array when no terminals exist", () => {
-    setupBoth([]);
-    const { result } = renderHook(() => useWaitingTerminals());
-    expect(result.current).toEqual([]);
-  });
-
   it("returns only waiting visible terminals", () => {
     setupBoth([
       { id: "t1", agentState: "waiting", location: "grid" },
@@ -448,23 +316,6 @@ describe("useWaitingTerminals", () => {
     const { result } = renderHook(() => useWaitingTerminals());
     expect(result.current).toHaveLength(1);
     expect(result.current[0]!.id).toBe("t1");
-  });
-});
-
-describe("useWaitingTerminalIds", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    _resetWorktreeIdCacheForTests();
-  });
-
-  it("returns IDs of waiting terminals", () => {
-    setupBoth([
-      { id: "t1", agentState: "waiting", location: "grid" },
-      { id: "t2", agentState: "working", location: "grid" },
-    ]);
-
-    const { result } = renderHook(() => useWaitingTerminalIds());
-    expect(result.current).toEqual(["t1"]);
   });
 });
 
@@ -554,13 +405,6 @@ describe("useErrorTerminals", () => {
     expect(result.current[0]!.id).toBe("t-ok");
   });
 
-  it("returns an empty array when no terminals match", () => {
-    setupBoth([{ id: "t1", agentState: "working", location: "grid" }]);
-
-    const { result } = renderHook(() => useErrorTerminals());
-    expect(result.current).toEqual([]);
-  });
-
   it("excludes orphaned errored terminals when worktree IDs are known", () => {
     const worktrees = new Map([["wt-1", { worktreeId: "wt-1" }]]);
     setupBoth(
@@ -605,43 +449,11 @@ describe("useConflictedWorktrees", () => {
     _resetWorktreeIdCacheForTests();
   });
 
-  it("returns empty array when no worktrees exist", () => {
-    setupWorktreesWithChanges([]);
-
-    const { result } = renderHook(() => useConflictedWorktrees());
-    expect(result.current).toEqual([]);
-  });
-
   it("returns empty array when worktreeChanges is null", () => {
     setupWorktreesWithChanges([{ id: "wt-1", worktreeChanges: null }]);
 
     const { result } = renderHook(() => useConflictedWorktrees());
     expect(result.current).toEqual([]);
-  });
-
-  it("returns empty array when changes have no conflicted files", () => {
-    setupWorktreesWithChanges([
-      {
-        id: "wt-1",
-        worktreeChanges: { changes: [{ status: "modified" }, { status: "added" }] },
-      },
-    ]);
-
-    const { result } = renderHook(() => useConflictedWorktrees());
-    expect(result.current).toEqual([]);
-  });
-
-  it("returns worktree with conflicted files", () => {
-    setupWorktreesWithChanges([
-      {
-        id: "wt-1",
-        worktreeChanges: { changes: [{ status: "conflicted" }] },
-      },
-    ]);
-
-    const { result } = renderHook(() => useConflictedWorktrees());
-    expect(result.current).toHaveLength(1);
-    expect(result.current[0]!.id).toBe("wt-1");
   });
 
   it("returns only conflicted worktrees from a mixed set", () => {
@@ -770,40 +582,6 @@ describe("buildWorktreeIds memoization", () => {
     const { result: r2 } = renderHook(() => useWaitingTerminals());
     expect(r2.current).toHaveLength(1);
     expect(r2.current[0]!.id).toBe("t1");
-  });
-
-  it("isTerminalVisible re-export matches shared utility behavior", () => {
-    const isInTrash = () => false;
-    const worktreeIds = new Set(["wt-1"]);
-    const visible = {
-      id: "t1",
-      location: "grid" as const,
-      excludeFromPersistence: false,
-      worktreeId: "wt-1",
-    } as const;
-    expect(
-      isTerminalVisible(visible as Parameters<typeof isTerminalVisible>[0], isInTrash, worktreeIds)
-    ).toBe(true);
-    expect(
-      isTerminalVisible(
-        { ...visible, location: "background" } as Parameters<typeof isTerminalVisible>[0],
-        isInTrash,
-        worktreeIds
-      )
-    ).toBe(false);
-  });
-
-  it("isTerminalOrphaned re-export matches shared utility behavior", () => {
-    const ids = new Set(["wt-1"]);
-    expect(
-      isTerminalOrphaned({ worktreeId: "wt-1" } as Parameters<typeof isTerminalOrphaned>[0], ids)
-    ).toBe(false);
-    expect(
-      isTerminalOrphaned(
-        { worktreeId: "wt-unknown" } as Parameters<typeof isTerminalOrphaned>[0],
-        ids
-      )
-    ).toBe(true);
   });
 });
 

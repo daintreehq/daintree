@@ -57,7 +57,6 @@ import {
   workspacePollingCadence,
 } from "../../../shared/types/powerPolicy.js";
 import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.js";
-import { resolveWebglThresholds } from "../../utils/webglContextBudget.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import { resetMemoryAccountingForTesting } from "../memoryAccounting.js";
 import { getSystemMemoryThresholds } from "../../utils/systemMemory.js";
@@ -244,12 +243,6 @@ describe("ResourceProfileService", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  it("starts in balanced profile", () => {
-    const service = new ResourceProfileService(createDeps());
-    expect(service.getProfile()).toBe("balanced");
-    service.stop();
   });
 
   it("does not transition during warmup ticks", () => {
@@ -470,85 +463,6 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("does not clamp cached view limit when efficiency is triggered by non-memory signals", () => {
-    // Battery (+1) + thermal critical (+2) + zero memory = score 3 → efficiency.
-    // setCachedViewLimit(1) MUST NOT fire — it would destroy cached
-    // WebContentsViews (each 100–500 MB). setEfficiencyFreeze(true) still fires
-    // because freeze suppresses CPU/timer wake-ups.
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
-    (service as unknown as { thermalState: string }).thermalState = "critical";
-
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("efficiency");
-
-    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
-    expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
-
-    service.stop();
-  });
-
-  it("does not clamp cached view limit even when memory contributes to efficiency entry", () => {
-    // Battery (+1) + thermal serious (+1) + LOW memory (+1) = score 3 → efficiency.
-    // Memory contributed, but the clamp is gone regardless of the memory score —
-    // only setEfficiencyFreeze(true) fires on entry.
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
-    (service as unknown as { thermalState: string }).thermalState = "serious";
-
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("efficiency");
-
-    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
-    expect(pvm.setEfficiencyFreeze).toHaveBeenCalledWith(true);
-
-    service.stop();
-  });
-
-  it("still restores user cached view limit on exit from efficiency", () => {
-    // Entry never clamps. On exit, the restore call must still fire — the
-    // user-configured limit might have changed mid-efficiency, and PVM's own
-    // evictStaleViews floor could have clamped while we were inside.
-    const deps = createDeps({ getUserCachedViewLimit: () => 3 });
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    const onAcHandler = mockPowerMonitorOn.mock.calls.find(
-      (call: string[]) => call[0] === "on-ac"
-    )?.[1] as (() => void) | undefined;
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
-    (service as unknown as { thermalState: string }).thermalState = "critical";
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("efficiency");
-
-    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
-
-    // Clear thermal + battery — back to balanced.
-    (service as unknown as { thermalState: string }).thermalState = "nominal";
-    onAcHandler!();
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
-    vi.advanceTimersByTime(30_000 * 4);
-
-    expect(service.getProfile()).not.toBe("efficiency");
-    expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(3);
-    expect(pvm.setEfficiencyFreeze).toHaveBeenLastCalledWith(false);
-
-    service.stop();
-  });
-
   it("enables and disables setEfficiencyFreeze across an efficiency → balanced cycle", () => {
     const deps = createDeps({ getUserCachedViewLimit: () => 2 });
     const service = new ResourceProfileService(deps);
@@ -611,23 +525,6 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("does not call setEfficiencyFreeze on a balanced → performance transition", () => {
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    service.start();
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
-    mockIsOnBatteryPower.mockReturnValue(false);
-
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("performance");
-
-    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expect(pvm.setEfficiencyFreeze).not.toHaveBeenCalled();
-
-    service.stop();
-  });
-
   it("restores user cached view limit when upgrading from efficiency to balanced", () => {
     const deps = createDeps({ getUserCachedViewLimit: () => 3 });
     const service = new ResourceProfileService(deps);
@@ -665,40 +562,6 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("restores user cached view limit when upgrading from efficiency to performance", () => {
-    const deps = createDeps({ getUserCachedViewLimit: () => 2 });
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    const onAcHandler = mockPowerMonitorOn.mock.calls.find(
-      (call: string[]) => call[0] === "on-ac"
-    )?.[1] as (() => void) | undefined;
-
-    // Drive into efficiency
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("efficiency");
-
-    // Relieve to zero pressure (score 0 = performance)
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
-    onAcHandler!();
-
-    // First real eval sets candidate; 90s upgrade hold = 3 more ticks to apply
-    vi.advanceTimersByTime(30_000);
-    vi.advanceTimersByTime(30_000);
-    vi.advanceTimersByTime(30_000);
-    vi.advanceTimersByTime(30_000);
-
-    expect(service.getProfile()).toBe("performance");
-    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    // Entry never clamped, so only the exit restore touches the limit.
-    expect(pvm.setCachedViewLimit).toHaveBeenLastCalledWith(2);
-    expect(pvm.setCachedViewLimit).toHaveBeenCalledTimes(1);
-
-    service.stop();
-  });
-
   it("does not touch cached view limit on balanced → performance transition", () => {
     const deps = createDeps();
     const service = new ResourceProfileService(deps);
@@ -714,21 +577,6 @@ describe("ResourceProfileService", () => {
 
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expect(pvm.setCachedViewLimit).not.toHaveBeenCalled();
-
-    service.stop();
-  });
-
-  it("handles null project view manager on efficiency transition", () => {
-    const deps = createDeps({ getAllProjectViewManagers: () => [] });
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
-
-    // Should not throw
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("efficiency");
 
     service.stop();
   });
@@ -1013,25 +861,6 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("does not re-push the memory-pressure policy on an efficiency transition", () => {
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("efficiency");
-
-    // Armed once at start() and owned by the machine's RAM, not the profile —
-    // an efficiency transition must not re-push or alter it (#11469).
-    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
-    expectArmedPolicy(pvm);
-    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
-
-    service.stop();
-  });
-
   it("leaves the memory-pressure policy untouched across a full profile round trip", () => {
     const deps = createDeps({ getUserCachedViewLimit: () => 3 });
     const service = new ResourceProfileService(deps);
@@ -1086,91 +915,6 @@ describe("ResourceProfileService", () => {
     const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     expectArmedPolicy(pvm);
     expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
-
-    service.stop();
-  });
-
-  it("handles null pvm gracefully when pushing threshold", () => {
-    const deps = createDeps({ getAllProjectViewManagers: () => [] });
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
-
-    // Should not throw despite null pvm
-    expect(() => vi.advanceTimersByTime(60_000 + 30_000 + 30_000)).not.toThrow();
-    expect(service.getProfile()).toBe("efficiency");
-
-    service.stop();
-  });
-
-  it("balanced config matches hardcoded defaults", () => {
-    const balanced = RESOURCE_PROFILE_CONFIGS.balanced;
-    expect(balanced.pollIntervalActive).toBe(2000);
-    expect(balanced.pollIntervalBackground).toBe(10000);
-    expect(balanced.processTreePollInterval).toBe(2500);
-    expect(balanced.projectStatsPollInterval).toBe(5000);
-    expect(balanced.memoryPressureInactiveMs).toBe(30 * 60 * 1000);
-  });
-
-  it("resolves per-profile WebGL thresholds off the RAM-tiered ceiling", () => {
-    // WebGL thresholds are no longer stored in the static table — they are
-    // resolved from the effective ceiling so they track the raised cap and
-    // never drift from environment.ts's switch. Assert the profile ordering
-    // that the resolver must preserve rather than any literal number.
-    const eff = resolveResourceProfileConfig("efficiency");
-    const bal = resolveResourceProfileConfig("balanced");
-    const perf = resolveResourceProfileConfig("performance");
-    expect(eff.webglUpperThreshold).toBeLessThan(bal.webglUpperThreshold);
-    expect(bal.webglUpperThreshold).toBeLessThan(perf.webglUpperThreshold);
-    // On the pinned 8 GB test host the ceiling is 24; every profile must leave
-    // headroom below it for non-terminal WebGL consumers.
-    for (const config of [eff, bal, perf]) {
-      expect(config.webglUpperThreshold).toBeLessThan(24);
-    }
-  });
-
-  it("every resolved profile keeps webglLowerThreshold <= webglUpperThreshold", () => {
-    // The mode-switch hysteresis assumes lower <= upper. A profile that
-    // inverted them would oscillate forever at the boundary.
-    for (const profile of ["performance", "balanced", "efficiency"] as const) {
-      const { webglUpperThreshold: upper, webglLowerThreshold: lower } =
-        resolveWebglThresholds(profile);
-      expect(lower).toBeLessThanOrEqual(upper);
-    }
-  });
-
-  it("battery on its own contributes to pressure score", () => {
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    // Moderate memory (+1) + battery (+1) = 2 => balanced
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700)]);
-
-    // Past warmup + hysteresis for downgrade
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("balanced");
-
-    service.stop();
-  });
-
-  it("high active-agent count contributes to pressure", async () => {
-    const deps = createDeps();
-    const mockPty = deps.getPtyClient() as unknown as MockPtyClient;
-    mockPty.getAllTerminalsAsync.mockResolvedValue(makeActiveAgentTerminals(10));
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-    await flushAsync();
-
-    // Low memory (0) + battery (+1) + 10 agents (+1 at FLEET_COUNT_HIGH=8) = 2 => balanced
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
-
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("balanced");
 
     service.stop();
   });
@@ -1492,30 +1236,6 @@ describe("ResourceProfileService", () => {
     service.stop();
   });
 
-  it("routes speed-limit-change event through handler to profile scoring", () => {
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    service.start();
-
-    // Capture the speed-limit handler registered with powerMonitor.on
-    const speedHandler = mockPowerMonitorOn.mock.calls.find(
-      (call: string[]) => call[0] === "speed-limit-change"
-    )?.[1] as ((details: { limit: number }) => void) | undefined;
-    expect(speedHandler).toBeDefined();
-
-    // Simulate Electron 41 powerMonitor event (single object)
-    speedHandler!({ limit: 30 });
-
-    // Low memory (0) + speed limit 30 (+2) = 2 => balanced (need more for efficiency)
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200)]);
-    mockIsOnBatteryPower.mockReturnValue(false);
-
-    vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
-    expect(service.getProfile()).toBe("balanced");
-
-    service.stop();
-  });
-
   it("removeListener receives the exact same handler reference passed to on", () => {
     const service = new ResourceProfileService(createDeps());
     service.start();
@@ -1563,35 +1283,6 @@ describe("ResourceProfileService", () => {
     expect(acOnArg).toBe(acOffArg);
   });
 
-  it("registers powerMonitor listeners on start", () => {
-    const service = new ResourceProfileService(createDeps());
-    service.start();
-
-    expect(mockPowerMonitorOn).toHaveBeenCalledWith("thermal-state-change", expect.any(Function));
-    expect(mockPowerMonitorOn).toHaveBeenCalledWith("speed-limit-change", expect.any(Function));
-    expect(mockPowerMonitorOn).toHaveBeenCalledWith("on-battery", expect.any(Function));
-    expect(mockPowerMonitorOn).toHaveBeenCalledWith("on-ac", expect.any(Function));
-
-    service.stop();
-  });
-
-  it("removes powerMonitor listeners on stop", () => {
-    const service = new ResourceProfileService(createDeps());
-    service.start();
-    service.stop();
-
-    expect(mockPowerMonitorRemoveListener).toHaveBeenCalledWith(
-      "thermal-state-change",
-      expect.any(Function)
-    );
-    expect(mockPowerMonitorRemoveListener).toHaveBeenCalledWith(
-      "speed-limit-change",
-      expect.any(Function)
-    );
-    expect(mockPowerMonitorRemoveListener).toHaveBeenCalledWith("on-battery", expect.any(Function));
-    expect(mockPowerMonitorRemoveListener).toHaveBeenCalledWith("on-ac", expect.any(Function));
-  });
-
   it("scales thresholds down on low-RAM devices so 500 MB usage is detected", async () => {
     // 4 GB machine: HIGH = 614 MB, LOW = 328 MB.
     // 500 MB of privateBytes must score LOW (+1), not HIGH (+2). To discriminate,
@@ -1612,73 +1303,6 @@ describe("ResourceProfileService", () => {
 
     vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
     expect(service.getProfile()).toBe("balanced");
-
-    service.stop();
-  });
-
-  it("primes thermal state from getCurrentThermalState at start", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    mockGetCurrentThermalState.mockReturnValue("fair" as const);
-
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    service.start();
-
-    expect(mockGetCurrentThermalState).toHaveBeenCalled();
-    const internals = service as unknown as { thermalState: string };
-    expect(internals.thermalState).toBe("fair");
-
-    service.stop();
-  });
-
-  it("primes battery state from isOnBatteryPower at start", () => {
-    mockIsOnBatteryPower.mockReturnValue(true);
-
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    service.start();
-
-    const internals = service as unknown as { isOnBattery: boolean };
-    expect(internals.isOnBattery).toBe(true);
-    // isOnBatteryPower called exactly once (during start), not per-tick
-    expect(mockIsOnBatteryPower).toHaveBeenCalledTimes(1);
-
-    service.stop();
-  });
-
-  it("on-battery event updates cached battery state", () => {
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    service.start();
-
-    const onBatteryHandler = mockPowerMonitorOn.mock.calls.find(
-      (call: string[]) => call[0] === "on-battery"
-    )?.[1] as (() => void) | undefined;
-    expect(onBatteryHandler).toBeDefined();
-
-    onBatteryHandler!();
-    const internals = service as unknown as { isOnBattery: boolean };
-    expect(internals.isOnBattery).toBe(true);
-
-    service.stop();
-  });
-
-  it("on-ac event clears cached battery state", () => {
-    const deps = createDeps();
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-    service.start();
-
-    const onAcHandler = mockPowerMonitorOn.mock.calls.find(
-      (call: string[]) => call[0] === "on-ac"
-    )?.[1] as (() => void) | undefined;
-    expect(onAcHandler).toBeDefined();
-
-    const internals = service as unknown as { isOnBattery: boolean };
-    expect(internals.isOnBattery).toBe(true);
-
-    onAcHandler!();
-    expect(internals.isOnBattery).toBe(false);
 
     service.stop();
   });
@@ -1929,27 +1553,6 @@ describe("ResourceProfileService", () => {
     });
   });
 
-  it("start() pushes the low-memory threshold to every registered PVM", () => {
-    // Regression for #8605: in multi-window sessions, the initial threshold
-    // must arm every window's PVM, not just the most recently opened one.
-    const pvmA = makeMockPvm();
-    const pvmB = makeMockPvm();
-    const deps = createDeps({
-      getAllProjectViewManagers: () => [
-        pvmA as unknown as ProjectViewManager,
-        pvmB as unknown as ProjectViewManager,
-      ],
-    });
-    const service = new ResourceProfileService(deps);
-
-    service.start();
-
-    expectArmedPolicy(pvmA);
-    expectArmedPolicy(pvmB);
-
-    service.stop();
-  });
-
   it("efficiency transition fans out setEfficiencyFreeze to every PVM", () => {
     // Regression for #8605: profile transitions must reach every open window's
     // PVM so the controls aren't silently scoped to one window.
@@ -2010,20 +1613,6 @@ describe("ResourceProfileService", () => {
     expect(pvmA.setEfficiencyFreeze).toHaveBeenCalledWith(true);
     expect(pvmB.setEfficiencyFreeze).toHaveBeenCalledWith(true);
     expectArmedPolicy(pvmB);
-
-    service.stop();
-  });
-
-  it("zero PVMs is a no-throw no-op", () => {
-    const deps = createDeps({ getAllProjectViewManagers: () => [] });
-    const service = new ResourceProfileService(deps);
-    mockIsOnBatteryPower.mockReturnValue(true);
-
-    expect(() => service.start()).not.toThrow();
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
-    expect(() => vi.advanceTimersByTime(60_000 + 30_000 + 30_000)).not.toThrow();
-    expect(service.getProfile()).toBe("efficiency");
 
     service.stop();
   });

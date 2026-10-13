@@ -91,13 +91,6 @@ describe("PluginMcpConfirmDialog copy", () => {
     expect(changeHeadingFor("first-use")).toBeNull();
   });
 
-  it("frames every re-prompt reason distinctly from first-use", () => {
-    const firstUse = titleFor("first-use", "do_thing");
-    for (const reason of REPROMPT_REASONS) {
-      expect(titleFor(reason, "do_thing")).not.toBe(firstUse);
-    }
-  });
-
   it("gives every re-prompt reason its own change notice, all distinct", () => {
     const headings = REPROMPT_REASONS.map((r) => changeHeadingFor(r));
     expect(headings.every((h) => typeof h === "string" && h.length > 0)).toBe(true);

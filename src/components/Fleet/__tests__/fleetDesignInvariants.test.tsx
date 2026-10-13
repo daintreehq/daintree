@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, screen, act } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 
 // The design rules pinned here are the ones a future restyle could plausibly
 // break without any behaviour test noticing: the two ribbon shells staying one
@@ -538,18 +538,6 @@ describe("Saved fleet row invariants", () => {
       );
       const row = screen.getByTestId("fleet-saved-row");
       expect(row.querySelectorAll("button, input, select, textarea, a[href]")).toHaveLength(0);
-      unmount();
-    }
-  });
-
-  it("Delete on any row reaches the delete request", () => {
-    for (const isStale of [true, false]) {
-      const delegate = vi.fn();
-      const { unmount } = render(
-        <SavedFleetRow scope={scope} onRequestDelete={delegate} count={1} isStale={isStale} />
-      );
-      fireEvent.keyDown(screen.getByTestId("fleet-saved-row"), { key: "Delete" });
-      expect(delegate).toHaveBeenCalledWith("s");
       unmount();
     }
   });

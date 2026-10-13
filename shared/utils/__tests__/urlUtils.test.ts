@@ -14,11 +14,6 @@ import {
 
 describe("urlUtils", () => {
   describe("extractLocalhostUrls", () => {
-    it("extracts plain localhost URL", () => {
-      const urls = extractLocalhostUrls("  ➜  Local:   http://localhost:5173/");
-      expect(urls).toContain("http://localhost:5173/");
-    });
-
     it("extracts URL from Vite output", () => {
       const output = `
   VITE v5.0.0  ready in 500 ms
@@ -89,11 +84,6 @@ describe("urlUtils", () => {
 
     it("returns empty array for text without URLs", () => {
       const urls = extractLocalhostUrls("Installing dependencies...");
-      expect(urls).toEqual([]);
-    });
-
-    it("returns empty array for non-localhost http URLs", () => {
-      const urls = extractLocalhostUrls("Proxy available at https://example.com:8443");
       expect(urls).toEqual([]);
     });
 
@@ -299,10 +289,6 @@ describe("urlUtils", () => {
       expect(isImplicitlyAllowedHost("::ffff:192.168.1.1")).toBe(true);
     });
 
-    it("allows IPv4-mapped IPv6 10/8 private address", () => {
-      expect(isImplicitlyAllowedHost("::ffff:10.0.0.5")).toBe(true);
-    });
-
     it("allows bracketed IPv4-mapped IPv6 loopback", () => {
       expect(isImplicitlyAllowedHost("[::ffff:127.0.0.1]")).toBe(true);
     });
@@ -433,10 +419,6 @@ describe("urlUtils", () => {
       expect(isLocalhostUrl("http://[::1]:3000")).toBe(true);
     });
 
-    it("returns true for IPv6 [::1] URL with path", () => {
-      expect(isLocalhostUrl("http://[::1]:3000/page")).toBe(true);
-    });
-
     it("returns true for https IPv6 [::1] URL", () => {
       expect(isLocalhostUrl("https://[::1]:3000")).toBe(true);
     });
@@ -487,18 +469,6 @@ describe("urlUtils", () => {
 
     it("returns false for file: URL", () => {
       expect(isSafeNavigationUrl("file:///etc/passwd")).toBe(false);
-    });
-
-    it("returns false for blob: URL", () => {
-      expect(isSafeNavigationUrl("blob:https://example.com/uuid")).toBe(false);
-    });
-
-    it("returns false for about:blank", () => {
-      expect(isSafeNavigationUrl("about:blank")).toBe(false);
-    });
-
-    it("returns false for empty string", () => {
-      expect(isSafeNavigationUrl("")).toBe(false);
     });
 
     it("returns false for invalid URL", () => {

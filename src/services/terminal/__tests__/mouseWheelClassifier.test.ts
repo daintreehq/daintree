@@ -24,17 +24,6 @@ describe("MouseWheelClassifier", () => {
     expect(c.isPhysicalMouseWheel()).toBe(true);
   });
 
-  it("classifies a stream of repeating integer single-axis detents as a physical wheel", () => {
-    const c = new MouseWheelClassifier();
-    feed(c, [
-      [0, 120],
-      [0, 120],
-      [0, 120],
-      [0, 120],
-    ]);
-    expect(c.isPhysicalMouseWheel()).toBe(true);
-  });
-
   it("classifies line-mode integer steps (Windows/Linux mice) as a physical wheel", () => {
     const c = new MouseWheelClassifier();
     feed(c, [

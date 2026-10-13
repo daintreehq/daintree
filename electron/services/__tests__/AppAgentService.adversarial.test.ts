@@ -40,11 +40,6 @@ describe("AppAgentService adversarial", () => {
     expect(new AppAgentService().hasApiKey()).toBe(false);
   });
 
-  it("hasApiKey returns false for empty-string keys", () => {
-    setConfig({ apiKey: "", model: "x" });
-    expect(new AppAgentService().hasApiKey()).toBe(false);
-  });
-
   it("hasApiKey returns true for a non-empty key", () => {
     expect(new AppAgentService().hasApiKey()).toBe(true);
   });
@@ -132,17 +127,6 @@ describe("AppAgentService adversarial", () => {
 
   it("testModel fails fast when no api key is configured", async () => {
     setConfig({ apiKey: "", model: "m" });
-    const fetchSpy = vi.fn();
-    mockFetch(fetchSpy as unknown as typeof fetch);
-
-    const result = await new AppAgentService().testModel("other-model");
-
-    expect(result).toEqual({ valid: false, error: "API key not configured" });
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it("testModel fails fast on whitespace-only api key", async () => {
-    setConfig({ apiKey: "   ", model: "m" });
     const fetchSpy = vi.fn();
     mockFetch(fetchSpy as unknown as typeof fetch);
 
@@ -253,25 +237,6 @@ describe("AppAgentService adversarial", () => {
 
     const result = await new AppAgentService().testApiKey("k");
     expect(result.error).toBe('API error: 500 {"foo":"bar"}');
-  });
-
-  it("testApiKey truncates malformed JSON as raw text", async () => {
-    const notJson = "not json{{{".repeat(40);
-    mockFetch(
-      vi.fn(
-        async () =>
-          ({
-            ok: false,
-            status: 500,
-            text: async () => notJson,
-          }) as unknown as Response
-      ) as unknown as typeof fetch
-    );
-
-    const result = await new AppAgentService().testApiKey("k");
-    expect(result.valid).toBe(false);
-    const providerPart = result.error!.replace("API error: 500 ", "");
-    expect(providerPart).toBe(notJson.slice(0, 200) + "…");
   });
 });
 

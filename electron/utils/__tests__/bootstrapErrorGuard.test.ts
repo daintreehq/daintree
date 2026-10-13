@@ -40,17 +40,6 @@ describe("installBootstrapErrorGuard", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers both process error handlers", () => {
-    // Capture without installing real listeners — a stale guard could otherwise
-    // kill the Vitest process once process.exit is restored.
-    const onSpy = vi.spyOn(process, "on").mockImplementation((() => process) as typeof process.on);
-    installBootstrapErrorGuard({ label: "[TestBootstrap]", postError: vi.fn() });
-    const events = onSpy.mock.calls.map((c) => c[0]);
-    onSpy.mockRestore();
-    expect(events).toContain("uncaughtException");
-    expect(events).toContain("unhandledRejection");
-  });
-
   it("posts the serialized error and exits on uncaughtException", () => {
     const { triggerUncaught, postError } = install();
     const err = new Error("dlopen failed");

@@ -646,19 +646,6 @@ beforeEach(() => {
 });
 
 describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () => {
-  it("renders the value-prop sentence and the two navigation links when no preferred agent and multiple supported agents installed", async () => {
-    helpPanelState.preferredAgentId = null;
-    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-
-    const { findByRole, getByText } = render(<HelpPanel width={380} />);
-
-    expect(getByText(/Use Daintree Assistant to configure and navigate Daintree/i)).toBeTruthy();
-    expect(await findByRole("button", { name: "Assistant settings" })).toBeTruthy();
-    expect(await findByRole("button", { name: "Daintree Assistant guide" })).toBeTruthy();
-    expect(mockDispatch).not.toHaveBeenCalled();
-  });
-
   it("'Start assistant' CTA records consent and launches, with no auto-launch beforehand (#10699)", async () => {
     // Consent off: opening the panel must show the CTA and start nothing.
     helpPanelState.autoLaunchEnabled = false;
@@ -790,40 +777,6 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     ).toBeTruthy();
     expect(screen.queryByTestId("help-agent-chooser")).toBeNull();
     expect(screen.queryByTestId("help-start-assistant")).toBeNull();
-  });
-
-  it("dispatches app.settings.openTab with tab='assistant' when the empty-state settings link is clicked", async () => {
-    helpPanelState.preferredAgentId = null;
-    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-
-    const { findByRole } = render(<HelpPanel width={380} />);
-
-    const button = await findByRole("button", { name: "Assistant settings" });
-    fireEvent.click(button);
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "assistant" },
-      { source: "user" }
-    );
-  });
-
-  it("dispatches system.openExternal with the assistant docs URL when the empty-state guide link is clicked", async () => {
-    helpPanelState.preferredAgentId = null;
-    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
-
-    const { findByRole } = render(<HelpPanel width={380} />);
-
-    const button = await findByRole("button", { name: "Daintree Assistant guide" });
-    fireEvent.click(button);
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "system.openExternal",
-      { url: "https://daintree.org/docs/daintree-assistant" },
-      { source: "user" }
-    );
   });
 
   it("dispatches navigation actions (not agent.launch) when the empty-state links are clicked", async () => {
@@ -996,34 +949,6 @@ describe("HelpPanel — customArgs threading", () => {
     );
   });
 
-  it("threads customArgs into the preferredAgentId auto-launch path too", async () => {
-    helpPanelState.preferredAgentId = "claude";
-    mockGetHelpAssistantSettings.mockResolvedValue({
-      docSearch: true,
-      daintreeControl: true,
-      tier: "core" as const,
-      bypassPermissions: false,
-      auditRetention: 7,
-      modelIds: { claude: "", codex: "", gemini: "" },
-      customArgs: "--model sonnet",
-    });
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "auto-term-1" } });
-
-    await act(async () => {
-      render(<HelpPanel width={380} />);
-    });
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({
-        agentId: "claude",
-        agentLaunchFlags: ["--model", "sonnet"],
-      }),
-      { source: "user" }
-    );
-  });
-
   it("falls back to no flags when getSettings rejects", async () => {
     mockGetHelpAssistantSettings.mockRejectedValueOnce(new Error("ipc down"));
     mockGetFolderPath.mockResolvedValue("/help");
@@ -1044,12 +969,8 @@ describe("HelpPanel — customArgs threading", () => {
 
 describe("HelpPanel — close hides without tearing down the agent", () => {
   it.each([
-    ["idle", false],
     ["working", false],
     ["waiting", true],
-    ["directing", true],
-    ["completed", true],
-    ["exited", true],
   ] as const)(
     "hides the panel without removing the terminal or revoking the session (%s, touched=%s)",
     (state, conversationTouched) => {

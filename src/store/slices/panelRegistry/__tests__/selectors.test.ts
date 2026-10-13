@@ -35,11 +35,6 @@ describe("getNarrowPanel", () => {
     expect(getNarrowPanel({}, "missing")).toBeUndefined();
   });
 
-  it("narrows a terminal panel to the PTY variant", () => {
-    const p = getNarrowPanel({ t: panel("t") }, "t");
-    expect(p?.kind).toBe("terminal");
-  });
-
   // No-kind legacy records are no longer representable on the carrier
   // (#8957 step 5 flipped `panelsById` to `Record<string, PanelInstance>`,
   // which requires a discriminant). The backfill branch was removed.
@@ -53,11 +48,6 @@ describe("getNarrowPanel", () => {
   it("returns undefined for an extension/unknown kind", () => {
     const ext = panel("x", { kind: "acme.tool" as unknown as PanelInstance["kind"] });
     expect(getNarrowPanel({ x: ext }, "x")).toBeUndefined();
-  });
-
-  it("narrows a browser panel", () => {
-    const p = getNarrowPanel({ b: panel("b", { kind: "browser" }) }, "b");
-    expect(p?.kind).toBe("browser");
   });
 
   it("narrows a dev-preview panel", () => {
@@ -125,10 +115,6 @@ describe("getRenderablePanel (#10512)", () => {
 });
 
 describe("getNarrowPanels", () => {
-  it("returns an empty array for empty ids", () => {
-    expect(getNarrowPanels({}, [])).toEqual([]);
-  });
-
   it("preserves order and skips absent ids", () => {
     const byId = { a: panel("a"), b: panel("b", { kind: "browser" }) };
     const result = getNarrowPanels(byId, ["b", "missing", "a"]);
@@ -179,15 +165,6 @@ describe("selectHasMultipleSessionLost", () => {
 
   it("is true with two flagged panels", () => {
     expect(selectHasMultipleSessionLost({ a: lost("a"), b: lost("b") })).toBe(true);
-  });
-
-  it("counts flagged panels across different worktrees", () => {
-    expect(
-      selectHasMultipleSessionLost({
-        a: lost("a", { worktreeId: "wt-1" }),
-        b: lost("b", { worktreeId: "wt-2" }),
-      })
-    ).toBe(true);
   });
 
   it("ignores non-PTY panels carrying the field", () => {

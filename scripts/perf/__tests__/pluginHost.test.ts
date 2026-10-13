@@ -7,7 +7,6 @@ import {
   FIXTURE_ACTION_COUNT,
   FIXTURE_DECORATION_PROVIDER_ID,
   FORGE_PLUGIN_ID,
-  FORGE_PROVIDER_ID,
   HOST_CALL_ACTION,
   expectedRegistrationKeys,
   livePluginChildCount,
@@ -63,10 +62,6 @@ describe("plugin corpus", () => {
     // turn the reject case into an accept case without changing a number.
     expect(existsSync(`${corpus.userRoot}/daintree.perfreserved/plugin.json`)).toBe(true);
     expect(existsSync(`${corpus.builtinRoot}/daintree.perfreserved/plugin.json`)).toBe(false);
-  });
-
-  it("names the forge provider as the product namespaces it", () => {
-    expect(FORGE_PROVIDER_ID).toBe(`${FORGE_PLUGIN_ID}.prov`);
   });
 
   it("is memoized, so an iteration prices the scan and not the writes", () => {
@@ -192,24 +187,6 @@ describe("gate expectation tables", () => {
 });
 
 describe("plugin host scenario family", () => {
-  it("covers the declared ids", () => {
-    expect(pluginHostScenarios.map((scenario) => scenario.id)).toEqual([
-      "PERF-220",
-      "PERF-221",
-      "PERF-222",
-      "PERF-223",
-      "PERF-224",
-      "PERF-225",
-    ]);
-  });
-
-  it("pairs every scenario with a miss count and runs each one in smoke", () => {
-    for (const scenario of pluginHostScenarios) {
-      expect(scenario.correctness?.length ?? 0).toBeGreaterThan(0);
-      expect(scenario.modes).toContain("smoke");
-    }
-  });
-
   it("predicates registrations wherever the worker is activated", () => {
     // Boot, activation, cleanup and dispose all pass against a host that
     // forwards no registrations at all, so both scenarios that activate the

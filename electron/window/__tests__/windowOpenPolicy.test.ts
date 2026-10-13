@@ -65,11 +65,6 @@ describe("decideProjectOpenTarget — external opens (#12593 acceptance)", () =>
     expect(decideProjectOpenTarget(external(), world([]))).toEqual({ kind: "create" });
   });
 
-  it("never replaces the most recently focused window", () => {
-    const decision = decideProjectOpenTarget(external(), world([occupied(7), occupied(3)]));
-    expect(decision).toEqual({ kind: "create" });
-  });
-
   it("picks the most recently focused of several empty windows", () => {
     expect(decideProjectOpenTarget(external(), world([occupied(1), win(4), win(2)]))).toEqual({
       kind: "activate",

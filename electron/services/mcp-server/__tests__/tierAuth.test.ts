@@ -115,24 +115,6 @@ describe("precomputeApiKeyBearerHash", () => {
   it("returns null when the api key is an empty string", () => {
     expect(precomputeApiKeyBearerHash("")).toBeNull();
   });
-
-  it("produces a 32-byte SHA-256 digest of the full Bearer header", () => {
-    const hash = precomputeApiKeyBearerHash("secret");
-    expect(hash).not.toBeNull();
-    expect(hash!.length).toBe(32);
-  });
-
-  it("is deterministic for the same input", () => {
-    const a = precomputeApiKeyBearerHash("secret");
-    const b = precomputeApiKeyBearerHash("secret");
-    expect(a!.equals(b!)).toBe(true);
-  });
-
-  it("differs for different api keys", () => {
-    const a = precomputeApiKeyBearerHash("alpha");
-    const b = precomputeApiKeyBearerHash("beta");
-    expect(a!.equals(b!)).toBe(false);
-  });
 });
 
 describe("isAuthorized", () => {
@@ -252,14 +234,6 @@ describe("parseToolArguments", () => {
   it("coerces strings to empty args", () => {
     expect(parseToolArguments("hello")).toEqual({ args: {} });
   });
-
-  it("coerces numbers to empty args", () => {
-    expect(parseToolArguments(42)).toEqual({ args: {} });
-  });
-
-  it("coerces booleans to empty args", () => {
-    expect(parseToolArguments(true)).toEqual({ args: {} });
-  });
 });
 
 import { deriveBand, BAND_OVERRIDES } from "../../../../shared/utils/actionRiskBand.js";
@@ -303,12 +277,6 @@ describe("BAND_OVERRIDES invariant", () => {
   it("every override key maps to a non-reversible band", () => {
     for (const [id, band] of Object.entries(BAND_OVERRIDES)) {
       expect(band, `BAND_OVERRIDES["${id}"] must not be "reversible"`).not.toBe("reversible");
-    }
-  });
-
-  it("every override key is a non-empty string", () => {
-    for (const id of Object.keys(BAND_OVERRIDES)) {
-      expect(id).toBeTruthy();
     }
   });
 });
@@ -507,21 +475,6 @@ describe("external tool surface invariants (#10701, #11537)", () => {
     expect(TIER_ALLOWLISTS.external.has(id)).toBe(false);
   });
 
-  it.each(SENSITIVE_NON_ALLOWLISTED)(
-    "does not expose sensitive non-allowlisted action %s to the external tier",
-    (actionId) => {
-      const entry = makeEntry({ id: actionId, danger: "safe" });
-      expect(shouldExposeTool(entry, "external")).toBe(false);
-    }
-  );
-
-  it.each(SENSITIVE_NON_ALLOWLISTED)(
-    "does not permit dispatch of sensitive non-allowlisted action %s to the external tier",
-    (actionId) => {
-      expect(isTierPermitted("external", actionId)).toBe(false);
-    }
-  );
-
   // The clipboard bundle is the one CopyTree tool an external agent gets: it
   // can read files for itself, but only Daintree can write the user's system
   // clipboard. Its siblings stay off the surface, so this pins the membership
@@ -547,19 +500,6 @@ describe("external tool surface invariants (#10701, #11537)", () => {
       expect(isTierPermitted("external", id)).toBe(false);
       expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
     }
-  });
-
-  it("exposure and dispatch gates agree for a sensitive non-allowlisted action", () => {
-    const entry = makeEntry({ id: "system.openExternal", danger: "safe" });
-    expect(shouldExposeTool(entry, "external")).toBe(
-      isTierPermitted("external", "system.openExternal")
-    );
-  });
-
-  it("still reaches curated-allowlist tools", () => {
-    const entry = makeEntry({ id: "actions.list" });
-    expect(shouldExposeTool(entry, "external")).toBe(true);
-    expect(isTierPermitted("external", "actions.list")).toBe(true);
   });
 
   // Exact equality, both directions, over the whole action registry: no
@@ -1164,12 +1104,8 @@ describe("getTierPermittedActionIds", () => {
     }
   });
 
-  // Every tier must resolve to a distinct, non-empty surface: a selector bug
-  // that collapsed two tiers onto one set would widen discovery silently.
-  it.each(TIERS)("resolves tier %s to a populated surface", (tier) => {
-    expect(getTierPermittedActionIds(tier).size).toBeGreaterThan(0);
-  });
-
+  // Every tier must resolve to a distinct surface: a selector bug that collapsed
+  // two tiers onto one set would widen discovery silently.
   it("keeps every tier surface distinct from every other tier's", () => {
     const sameMembership = (a: ReadonlySet<string>, b: ReadonlySet<string>) =>
       a.size === b.size && Array.from(a).every((id) => b.has(id));

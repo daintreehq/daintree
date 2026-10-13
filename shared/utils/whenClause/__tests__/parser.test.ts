@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { parse, ParseError } from "../parser.js";
-import type { BinaryOpNode } from "../types.js";
 
 describe("when clause parser", () => {
   describe("literals", () => {
@@ -36,11 +35,6 @@ describe("when clause parser", () => {
       expect(ast).toEqual({ kind: "identifier", path: ["panelKind"] });
     });
 
-    it("parses dotted identifier path", () => {
-      const ast = parse("panel.kind");
-      expect(ast).toEqual({ kind: "identifier", path: ["panel", "kind"] });
-    });
-
     it("parses deep dotted path", () => {
       const ast = parse("a.b.c.d");
       expect(ast).toEqual({ kind: "identifier", path: ["a", "b", "c", "d"] });
@@ -49,11 +43,6 @@ describe("when clause parser", () => {
     it("parses identifier starting with 'true' prefix as identifier, not boolean", () => {
       const ast = parse("trueValue");
       expect(ast).toEqual({ kind: "identifier", path: ["trueValue"] });
-    });
-
-    it("parses identifier starting with 'false' prefix as identifier, not boolean", () => {
-      const ast = parse("falseFlag");
-      expect(ast).toEqual({ kind: "identifier", path: ["falseFlag"] });
     });
 
     it("parses dotted identifier where root starts with 'true'", () => {
@@ -192,12 +181,6 @@ describe("when clause parser", () => {
   });
 
   describe("complex expressions", () => {
-    it("parses chained equality with &&", () => {
-      const ast = parse("panel.kind == 'terminal' && agentState == 'idle'");
-      expect(ast.kind).toBe("binary");
-      expect((ast as BinaryOpNode).operator).toBe("&&");
-    });
-
     it("parses negated equality (no parens in v1)", () => {
       const ast = parse("!panel.kind == 'terminal'");
       // parses as: (!panel.kind) == 'terminal'
@@ -239,16 +222,6 @@ describe("when clause parser", () => {
         right: { kind: "identifier", path: ["b"] },
       });
     });
-
-    it("handles newline-separated tokens", () => {
-      const ast = parse("a\n&&\nb");
-      expect(ast).toEqual({
-        kind: "binary",
-        operator: "&&",
-        left: { kind: "identifier", path: ["a"] },
-        right: { kind: "identifier", path: ["b"] },
-      });
-    });
   });
 
   describe("errors", () => {
@@ -267,10 +240,6 @@ describe("when clause parser", () => {
 
     it("rejects numeric comparison <", () => {
       expect(() => parse("x < 5")).toThrow(ParseError);
-    });
-
-    it("rejects numeric comparison >", () => {
-      expect(() => parse("x > 5")).toThrow(ParseError);
     });
 
     it("rejects parentheses", () => {

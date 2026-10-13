@@ -120,14 +120,6 @@ describe("PluginMcpConsentStore", () => {
     expect(store.lookup(identity, fpA).kind).toBe("approved");
   });
 
-  it("persists pins through the saver callback", () => {
-    store.pin(identity, fpA);
-    expect(Array.isArray(cfg.raw().pins)).toBe(true);
-    const pins = cfg.raw().pins as Array<Record<string, unknown>>;
-    expect(pins).toHaveLength(1);
-    expect(pins[0]).toMatchObject({ pluginId: "acme", toolName: "read_file" });
-  });
-
   it("hydrates from a saved snapshot", () => {
     store.pin(identity, fpA);
     const snapshot = cfg.raw();

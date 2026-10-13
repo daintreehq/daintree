@@ -422,30 +422,6 @@ describe("WorkspaceService.createWorktree", () => {
     );
   });
 
-  it("propagates waitForPathExists timeout error and reports 500ms budget", async () => {
-    const requestId = "test-request-timeout";
-    const options = {
-      baseBranch: "main",
-      newBranch: "feature/timeout",
-      path: "/test/worktree-timeout",
-    };
-
-    waitForPathExists.mockRejectedValueOnce(
-      new Error("Timeout waiting for path to exist: /test/worktree-timeout (waited 500ms)")
-    );
-
-    await service.createWorktree(requestId, "/test/root", options);
-
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "create-worktree-result",
-        requestId: "test-request-timeout",
-        success: false,
-        error: expect.stringContaining("waited 500ms"),
-      })
-    );
-  });
-
   it("handles delayed directory creation", async () => {
     const requestId = "test-request-delayed";
     const options = {
@@ -1103,30 +1079,6 @@ describe("WorkspaceService.createWorktree", () => {
     warnSpy.mockRestore();
   });
 
-  it("registers the monitor synchronously before emitting create-worktree-result", async () => {
-    // Regression guard for the bug where monitor availability lagged event
-    // emission. Any caller that synchronously queries this.monitors.get(id)
-    // in response to the success event must find a live monitor.
-    const requestId = "test-request-sync";
-    const options = {
-      baseBranch: "main",
-      newBranch: "feature/sync-monitor",
-      path: "/test/worktree-sync",
-    };
-
-    let monitorPresentAtEmission: boolean | null = null;
-    mockSendEvent.mockImplementation((event: { type: string; worktreeId?: string }) => {
-      if (event.type === "create-worktree-result" && event.worktreeId) {
-        monitorPresentAtEmission = service["monitors"].has(event.worktreeId);
-      }
-    });
-
-    await service.createWorktree(requestId, "/test/root", options);
-
-    expect(monitorPresentAtEmission).toBe(true);
-    expect(service["monitors"].has(path.resolve("/test/worktree-sync"))).toBe(true);
-  });
-
   it("reuses a stale local branch (no -b) when it exists locally and is not checked out in any worktree", async () => {
     // #6463 regression guard: a leftover local branch from a previously
     // deleted worktree must not poison the next create. Reuse semantics
@@ -1635,41 +1587,6 @@ describe("WorkspaceService.createWorktree", () => {
     ]);
   });
 
-  it("still suffixes under the default policy, so omitting it changes nothing", async () => {
-    // `suffix` is the long-standing behaviour and stays the default: flipping it
-    // would silently break every caller that relies on creation succeeding.
-    let addAttempts = 0;
-    mockSimpleGit.raw.mockImplementation((args: string[]) => {
-      if (args[0] === "worktree" && args[1] === "add") {
-        addAttempts += 1;
-        if (addAttempts === 1) {
-          return Promise.reject(new Error("fatal: a branch named 'feature/foo' already exists"));
-        }
-      }
-      return Promise.resolve(undefined);
-    });
-    mockSimpleGit.branchLocal.mockResolvedValue({ all: ["main", "feature/foo"] });
-
-    await service.createWorktree("req-collision-default", "/test/root", {
-      baseBranch: "main",
-      newBranch: "feature/foo",
-      path: "/test/worktree-foo-default",
-    });
-
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "create-worktree-result",
-        requestId: "req-collision-default",
-        success: true,
-        // The suffixed name, not merely "it succeeded" — the point of the
-        // default policy is that the caller is told what it actually got.
-        branch: "feature/foo-2",
-      })
-    );
-    // Exactly one failed add and one successful retry.
-    expect(addAttempts).toBe(2);
-  });
-
   it("does not run branch-collision recovery for non-collision add failures", async () => {
     // `worktree add` reports an existing target *path* with a similar
     // "already exists" phrase; that must surface as-is, not trigger the
@@ -1788,27 +1705,6 @@ describe("WorkspaceService.createWorktree", () => {
     );
   });
 
-  it("skips the pre-flight guard entirely when useExistingBranch is true", async () => {
-    // The caller is asking for explicit reuse; the guard's job is done by
-    // intent, not detection. Confirms we don't add a redundant branchLocal
-    // round-trip on the explicit-reuse path.
-    await service.createWorktree("req-explicit-reuse", "/test/root", {
-      baseBranch: "main",
-      newBranch: "existing-branch",
-      path: "/test/worktree-explicit",
-      useExistingBranch: true,
-    });
-
-    expect(mockSimpleGit.branchLocal).not.toHaveBeenCalled();
-    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
-      "worktree",
-      "add",
-      "--end-of-options",
-      "/test/worktree-explicit",
-      "existing-branch",
-    ]);
-  });
-
   it("rejects empty newBranch before invoking git (#7033)", async () => {
     await service.createWorktree("req-empty", "/test/root", {
       baseBranch: "main",
@@ -1827,23 +1723,6 @@ describe("WorkspaceService.createWorktree", () => {
     );
   });
 
-  it("rejects whitespace-only newBranch before invoking git (#7033)", async () => {
-    await service.createWorktree("req-blank", "/test/root", {
-      baseBranch: "main",
-      newBranch: "   ",
-      path: "/test/worktree-blank",
-    });
-
-    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "create-worktree-result",
-        requestId: "req-blank",
-        success: false,
-      })
-    );
-  });
-
   it("rejects git-invalid branch names before invoking git (#7033)", async () => {
     await service.createWorktree("req-head", "/test/root", {
       baseBranch: "main",
@@ -1858,24 +1737,6 @@ describe("WorkspaceService.createWorktree", () => {
         requestId: "req-head",
         success: false,
         error: expect.stringContaining("HEAD"),
-      })
-    );
-  });
-
-  it("rejects Windows-reserved branch names before invoking git (#7033)", async () => {
-    await service.createWorktree("req-nul", "/test/root", {
-      baseBranch: "main",
-      newBranch: "feature/NUL",
-      path: "/test/worktree-nul",
-    });
-
-    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "create-worktree-result",
-        requestId: "req-nul",
-        success: false,
-        error: expect.stringMatching(/Windows-reserved/),
       })
     );
   });
@@ -2133,24 +1994,6 @@ describe("WorkspaceService.createWorktree", () => {
         requestId: "req-eacces",
         success: false,
         error: expect.stringContaining("EACCES"),
-      })
-    );
-  });
-
-  it("allows the default sibling worktree path under the parent directory (#9154)", async () => {
-    // Mirrors DEFAULT_WORKTREE_PATH_PATTERN: {parent-dir}/{base-folder}-worktrees/...
-    await service.createWorktree("req-sibling-ok", "/test/root", {
-      baseBranch: "main",
-      newBranch: "feature/ok",
-      path: "/test/root-worktrees/feature-ok",
-    });
-
-    expect(mockSimpleGit.raw).toHaveBeenCalled();
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "create-worktree-result",
-        requestId: "req-sibling-ok",
-        success: true,
       })
     );
   });

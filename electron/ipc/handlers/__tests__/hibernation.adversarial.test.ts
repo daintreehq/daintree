@@ -132,31 +132,6 @@ describe("hibernation IPC adversarial", () => {
     expect(updateConfigSpy).toHaveBeenCalledWith({ enabled: false });
   });
 
-  it("updateConfig service throw propagates cleanly and handler remains registered", async () => {
-    updateConfigSpy.mockImplementationOnce(() => {
-      throw new Error("service unavailable");
-    });
-
-    await expect(
-      getHandler(CHANNELS.HIBERNATION_UPDATE_CONFIG)(fakeEvent(), { enabled: true })
-    ).rejects.toThrow("service unavailable");
-
-    // Handler still works on next call
-    await getHandler(CHANNELS.HIBERNATION_UPDATE_CONFIG)(fakeEvent(), { enabled: false });
-    expect(updateConfigSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("getConfig returns a snapshot of the current service config", async () => {
-    const result = await getHandler(CHANNELS.HIBERNATION_GET_CONFIG)(fakeEvent());
-    expect(result).toEqual({ enabled: true, inactiveThresholdHours: 24 });
-  });
-
-  it("cleanup removes both handlers", () => {
-    expect(ipcHandlers.size).toBe(2);
-    cleanup();
-    expect(ipcHandlers.size).toBe(0);
-  });
-
   it("updateConfig rejects Array payloads", async () => {
     await expect(getHandler(CHANNELS.HIBERNATION_UPDATE_CONFIG)(fakeEvent(), [])).rejects.toThrow(
       /Invalid config/

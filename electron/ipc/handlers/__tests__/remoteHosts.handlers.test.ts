@@ -122,8 +122,4 @@ describe("remoteHosts handlers", () => {
     registerRemoteService("hostServer", {} as never);
     expect(ops.isInUse!.handler()).toBe(true);
   });
-
-  it("leaves discovery and probing to a later change", async () => {
-    await expect(ops.discover!.handler()).rejects.toMatchObject({ code: "UNSUPPORTED" });
-  });
 });

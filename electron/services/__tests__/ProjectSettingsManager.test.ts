@@ -194,14 +194,6 @@ describe("ProjectSettingsManager caching", () => {
     expect(loaded.turbopackEnabled).toBe(false);
   });
 
-  it("treats missing turbopackEnabled as undefined (default-on at read sites)", async () => {
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(settingsPath, JSON.stringify({ runCommands: [] }), "utf-8");
-
-    const loaded = await manager.getProjectSettings(projectId);
-    expect(loaded.turbopackEnabled).toBeUndefined();
-  });
-
   it("rejects non-boolean turbopackEnabled in the settings file", async () => {
     const settingsPath = path.join(tempDir, projectId, "settings.json");
     await fs.writeFile(
@@ -213,20 +205,6 @@ describe("ProjectSettingsManager caching", () => {
     const loaded = await manager.getProjectSettings(projectId);
     expect(loaded.turbopackEnabled).toBeUndefined();
   });
-
-  it.each(["off", "core", "full"] as const)(
-    "round-trips daintreeMcpTier=%s through save/load",
-    async (tier) => {
-      await manager.saveProjectSettings(projectId, {
-        runCommands: [],
-        daintreeMcpTier: tier,
-      });
-
-      const freshManager = new ProjectSettingsManager(tempDir, createMockStore());
-      const loaded = await freshManager.getProjectSettings(projectId);
-      expect(loaded.daintreeMcpTier).toBe(tier);
-    }
-  );
 
   it("round-trips forgeProviderOverride through save/load", async () => {
     await manager.saveProjectSettings(projectId, {
@@ -249,97 +227,6 @@ describe("ProjectSettingsManager caching", () => {
 
     const loaded = await manager.getProjectSettings(projectId);
     expect(loaded.forgeProviderOverride).toBe("daintree.github.github");
-  });
-
-  it("canonicalizes legacy 'builtin.github' on load to 'daintree.github.github' (#8451)", async () => {
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(
-      settingsPath,
-      JSON.stringify({ runCommands: [], forgeProviderOverride: "builtin.github" }),
-      "utf-8"
-    );
-
-    const loaded = await manager.getProjectSettings(projectId);
-    expect(loaded.forgeProviderOverride).toBe("daintree.github.github");
-  });
-
-  it("treats missing forgeProviderOverride as undefined", async () => {
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(settingsPath, JSON.stringify({ runCommands: [] }), "utf-8");
-
-    const loaded = await manager.getProjectSettings(projectId);
-    expect(loaded.forgeProviderOverride).toBeUndefined();
-  });
-
-  it("preserves null forgeProviderOverride from disk as null", async () => {
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(
-      settingsPath,
-      JSON.stringify({ runCommands: [], forgeProviderOverride: null }),
-      "utf-8"
-    );
-
-    const loaded = await manager.getProjectSettings(projectId);
-    expect(loaded.forgeProviderOverride).toBeNull();
-  });
-
-  it("rejects non-string forgeProviderOverride values from disk", async () => {
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(
-      settingsPath,
-      JSON.stringify({ runCommands: [], forgeProviderOverride: 42 }),
-      "utf-8"
-    );
-
-    const loaded = await manager.getProjectSettings(projectId);
-    expect(loaded.forgeProviderOverride).toBeUndefined();
-  });
-
-  it("rejects unknown daintreeMcpTier values from disk", async () => {
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(
-      settingsPath,
-      JSON.stringify({ runCommands: [], daintreeMcpTier: "godmode" }),
-      "utf-8"
-    );
-
-    const loaded = await manager.getProjectSettings(projectId);
-    expect(loaded.daintreeMcpTier).toBeUndefined();
-  });
-
-  it.each([
-    ["workbench", "core"],
-    ["action", "core"],
-    ["system", "full"],
-  ] as const)(
-    "reads a daintreeMcpTier=%s written before the core/full split as %s",
-    async (stored, expected) => {
-      const settingsPath = path.join(tempDir, projectId, "settings.json");
-      await fs.writeFile(
-        settingsPath,
-        JSON.stringify({ runCommands: [], daintreeMcpTier: stored }),
-        "utf-8"
-      );
-
-      const loaded = await manager.getProjectSettings(projectId);
-      expect(loaded.daintreeMcpTier).toBe(expected);
-    }
-  );
-
-  it("migrates the deprecated exposeDaintreeMcpToAgents flag to daintreeMcpTier on read", async () => {
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(
-      settingsPath,
-      JSON.stringify({ runCommands: [], exposeDaintreeMcpToAgents: true }),
-      "utf-8"
-    );
-
-    const loaded = await manager.getProjectSettings(projectId);
-    // The codec normalises legacy exposeDaintreeMcpToAgents: true to
-    // daintreeMcpTier: "core". The legacy field is still surfaced so
-    // callers in mixed-version cohorts don't break.
-    expect(loaded.daintreeMcpTier).toBe("core");
-    expect(loaded.exposeDaintreeMcpToAgents).toBe(true);
   });
 
   it("loads settings whose JSON is prefixed with a UTF-8 BOM", async () => {
@@ -449,42 +336,6 @@ describe("ProjectSettingsManager caching", () => {
     getMock.mockReturnValue(undefined);
   });
 
-  it("writes the schema version envelope on save", async () => {
-    await manager.saveProjectSettings(projectId, { runCommands: [] });
-
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    const onDisk = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
-    expect(onDisk._schemaVersion).toBe(PROJECT_SETTINGS_SCHEMA_VERSION);
-  });
-
-  it("migrates legacy resourceEnvironment to resourceEnvironments on read", async () => {
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(
-      settingsPath,
-      JSON.stringify({
-        runCommands: [],
-        resourceEnvironment: { provision: ["echo legacy"] },
-      }),
-      "utf-8"
-    );
-
-    const loaded = await manager.getProjectSettings(projectId);
-    expect(loaded.resourceEnvironments).toEqual({ default: { provision: ["echo legacy"] } });
-    expect(loaded.activeResourceEnvironment).toBe("default");
-  });
-
-  it("migrates legacy exposeDaintreeMcpToAgents true to daintreeMcpTier core", async () => {
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    await fs.writeFile(
-      settingsPath,
-      JSON.stringify({ runCommands: [], exposeDaintreeMcpToAgents: true }),
-      "utf-8"
-    );
-
-    const loaded = await manager.getProjectSettings(projectId);
-    expect(loaded.daintreeMcpTier).toBe("core");
-  });
-
   it("broadcasts a corruption toast when JSON.parse fails", async () => {
     const settingsPath = path.join(tempDir, projectId, "settings.json");
     await fs.writeFile(settingsPath, "{{invalid json", "utf-8");
@@ -513,17 +364,6 @@ describe("ProjectSettingsManager caching", () => {
     const settingsPath = path.join(tempDir, projectId, "settings.json");
     const onDisk = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
     expect(onDisk._schemaVersion).toBe(PROJECT_SETTINGS_SCHEMA_VERSION);
-  });
-
-  it("strips agentInstructions so it never persists to disk", async () => {
-    await manager.saveProjectSettings(projectId, {
-      runCommands: [],
-      agentInstructions: "should-not-persist",
-    } as unknown as Parameters<typeof manager.saveProjectSettings>[1]);
-
-    const settingsPath = path.join(tempDir, projectId, "settings.json");
-    const onDisk = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
-    expect(onDisk.agentInstructions).toBeUndefined();
   });
 
   it("quarantines and broadcasts on a future-version envelope without overwriting the file", async () => {

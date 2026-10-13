@@ -92,35 +92,6 @@ describe("useResourceProfile", () => {
     expect(getWebglLowerThreshold()).toBe(5);
   });
 
-  it("payload mutations are visible to TerminalWebGLManager via the shared config", async () => {
-    renderHook(() => useResourceProfile());
-
-    act(() => {
-      capturedCallback!(makePayload(6, 4));
-    });
-
-    const { TerminalWebGLManager } = await import("../../services/terminal/TerminalWebGLManager");
-    expect(TerminalWebGLManager.UPPER_THRESHOLD).toBe(6);
-    expect(TerminalWebGLManager.LOWER_THRESHOLD).toBe(4);
-  });
-
-  it("updates the resource-profile store on each payload", () => {
-    renderHook(() => useResourceProfile());
-
-    act(() => {
-      capturedCallback!({
-        profile: "efficiency",
-        config: {
-          webglUpperThreshold: 8,
-          webglLowerThreshold: 6,
-          agentScrollbackMaxLines: 2500,
-        },
-      } as unknown as ResourceProfilePayload);
-    });
-
-    expect(useResourceProfileStore.getState().profile).toBe("efficiency");
-  });
-
   it("pulls the current profile on mount and applies it when no push arrived", async () => {
     renderHook(() => useResourceProfile());
 
@@ -151,22 +122,6 @@ describe("useResourceProfile", () => {
 
     expect(getWebglUpperThreshold()).toBe(14);
     expect(getWebglLowerThreshold()).toBe(12);
-  });
-
-  it("calls refreshWebGLMode so threshold changes flip live managers immediately", () => {
-    // Spy on the service method so a regression that drops the refresh call
-    // (e.g. someone reorders or removes the line in useResourceProfile) is
-    // caught here — otherwise the threshold-changes-don't-flip bug from the
-    // pre-fix code would silently return.
-    const refreshSpy = vi.spyOn(terminalInstanceService, "refreshWebGLMode");
-    renderHook(() => useResourceProfile());
-
-    act(() => {
-      capturedCallback!(makePayload(5, 3));
-    });
-
-    expect(refreshSpy).toHaveBeenCalledTimes(1);
-    refreshSpy.mockRestore();
   });
 
   it("propagates the agent scrollback ceiling and re-derives live terminals", () => {

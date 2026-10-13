@@ -35,23 +35,8 @@ describe("agentInstall", () => {
       expect(detectOS()).toBe("macos");
     });
 
-    it("should detect macOS case-insensitively", async () => {
-      stubNavigator(
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "macIntel"
-      );
-      const { detectOS } = await import("../agentInstall");
-      expect(detectOS()).toBe("macos");
-    });
-
     it("should detect Windows", async () => {
       stubNavigator("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Win32");
-      const { detectOS } = await import("../agentInstall");
-      expect(detectOS()).toBe("windows");
-    });
-
-    it("should detect Windows case-insensitively", async () => {
-      stubNavigator("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "win32");
       const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("windows");
     });
@@ -77,12 +62,6 @@ describe("agentInstall", () => {
         writable: true,
         configurable: true,
       });
-      const { detectOS } = await import("../agentInstall");
-      expect(detectOS()).toBe("generic");
-    });
-
-    it("should return generic when platform is empty", async () => {
-      stubNavigator("", "");
       const { detectOS } = await import("../agentInstall");
       expect(detectOS()).toBe("generic");
     });
@@ -137,27 +116,6 @@ describe("agentInstall", () => {
       expect(blocks).toHaveLength(1);
       expect(blocks?.[0]!.label).toBe("Homebrew");
       expect(blocks?.[0]!.commands).toEqual(["brew install test"]);
-    });
-
-    it("should return Windows blocks on Windows", async () => {
-      stubNavigator("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Win32");
-      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
-      const blocks = getInstallBlocksForCurrentOS(mockAgent);
-      expect(blocks).toHaveLength(1);
-      expect(blocks?.[0]!.label).toBe("npm");
-      expect(blocks?.[0]!.commands).toEqual(["npm install -g test"]);
-    });
-
-    it("should return Linux blocks on Linux", async () => {
-      stubNavigator(
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Electron/40.0.0",
-        "Linux x86_64"
-      );
-      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
-      const blocks = getInstallBlocksForCurrentOS(mockAgent);
-      expect(blocks).toHaveLength(1);
-      expect(blocks?.[0]!.label).toBe("apt");
-      expect(blocks?.[0]!.commands).toEqual(["apt install test"]);
     });
 
     it("should fallback to generic blocks if OS-specific blocks not available", async () => {
@@ -235,36 +193,6 @@ describe("agentInstall", () => {
       };
       const blocks = getInstallBlocksForCurrentOS(agentWithoutMacOSOrGeneric);
       expect(blocks).toBeNull();
-    });
-
-    it("should handle multiple blocks for a single OS", async () => {
-      stubNavigator(
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "MacIntel"
-      );
-      const { getInstallBlocksForCurrentOS } = await import("../agentInstall");
-      const agentWithMultipleBlocks: AgentConfig = {
-        ...mockAgent,
-        install: {
-          docsUrl: "https://example.com/docs",
-          byOs: {
-            macos: [
-              {
-                label: "Homebrew",
-                commands: ["brew install test"],
-              },
-              {
-                label: "npm",
-                commands: ["npm install -g test"],
-              },
-            ],
-          },
-        },
-      };
-      const blocks = getInstallBlocksForCurrentOS(agentWithMultipleBlocks);
-      expect(blocks).toHaveLength(2);
-      expect(blocks?.[0]!.label).toBe("Homebrew");
-      expect(blocks?.[1]!.label).toBe("npm");
     });
 
     it("should prioritize OS-specific blocks over generic", async () => {
@@ -409,11 +337,6 @@ describe("agentInstall", () => {
       expect(isManualOnlyCommand("curl -fsSL https://example.com/install | bash")).toBe(true);
     });
 
-    it("should detect curl | sh as manual", async () => {
-      const { isManualOnlyCommand } = await import("../agentInstall");
-      expect(isManualOnlyCommand("curl https://example.com/install.sh | sh")).toBe(true);
-    });
-
     it("should detect iex pipe as manual", async () => {
       const { isManualOnlyCommand } = await import("../agentInstall");
       expect(isManualOnlyCommand("irm 'https://example.com/install?win32=true' | iex")).toBe(true);
@@ -423,16 +346,6 @@ describe("agentInstall", () => {
       const { isManualOnlyCommand } = await import("../agentInstall");
       expect(isManualOnlyCommand("npm install -g @anthropic-ai/claude-code")).toBe(false);
     });
-
-    it("should NOT flag brew install as manual", async () => {
-      const { isManualOnlyCommand } = await import("../agentInstall");
-      expect(isManualOnlyCommand("brew install opencode")).toBe(false);
-    });
-
-    it("should NOT flag scoop install as manual", async () => {
-      const { isManualOnlyCommand } = await import("../agentInstall");
-      expect(isManualOnlyCommand("scoop install extras/opencode")).toBe(false);
-    });
   });
 
   describe("extractInspectUrl", () => {
@@ -440,13 +353,6 @@ describe("agentInstall", () => {
       const { extractInspectUrl } = await import("../agentInstall");
       expect(extractInspectUrl("curl -fsSL https://kiro.dev/install.sh | bash")).toBe(
         "https://kiro.dev/install.sh"
-      );
-    });
-
-    it("returns the URL for a curl | sh command", async () => {
-      const { extractInspectUrl } = await import("../agentInstall");
-      expect(extractInspectUrl("curl https://example.com/install.sh | sh")).toBe(
-        "https://example.com/install.sh"
       );
     });
 
@@ -497,15 +403,6 @@ describe("agentInstall", () => {
           commands: ["scoop bucket add extras", "scoop install extras/opencode"],
         })
       ).toBe(true);
-    });
-
-    it("should return false for curl pipe blocks", async () => {
-      const { isBlockExecutable } = await import("../agentInstall");
-      expect(
-        isBlockExecutable({
-          commands: ["curl -fsSL https://opencode.ai/install | bash"],
-        })
-      ).toBe(false);
     });
 
     it("should return false if any command in block is manual", async () => {

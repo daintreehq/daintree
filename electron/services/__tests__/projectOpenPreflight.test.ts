@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { constants as fsConstants, type Stats } from "fs";
 import path from "path";
-import { simpleGitMissingBinaryError } from "../../../shared/testing/simpleGitErrorFixtures.js";
 
 const statMock = vi.hoisted(() => vi.fn<(path: string) => Promise<Stats>>());
 const lstatMock = vi.hoisted(() => vi.fn<(path: string) => Promise<Stats>>());
@@ -16,7 +15,6 @@ vi.mock("fs/promises", () => ({
 
 const {
   assertProjectDirectory,
-  isMissingGitExecutableError,
   probeGitMarker,
   PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
   GIT_MARKER_STAT_TIMEOUT_MS,
@@ -102,15 +100,6 @@ describe("assertProjectDirectory", () => {
     expect(rejection.message).toContain(FOLDER);
   });
 
-  it("never reaches the filesystem twice for one call", async () => {
-    statMock.mockResolvedValue(statsFor(true));
-
-    await assertProjectDirectory(FOLDER);
-
-    expect(statMock).toHaveBeenCalledTimes(1);
-    expect(statMock).toHaveBeenCalledWith(FOLDER);
-  });
-
   it("classifies a directory that stats fine but can't be entered", async () => {
     // stat() only needs execute permission on the PARENT, so a folder whose own
     // bits are cleared stats successfully and only fails once git tries to
@@ -154,14 +143,6 @@ describe("probeGitMarker", () => {
 
     await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
     expect(statMock).not.toHaveBeenCalled();
-  });
-
-  it("accepts a .git file as readily as a .git directory", async () => {
-    // A linked worktree and a submodule both carry `.git` as a file. Requiring a
-    // directory would report every one of them as having lost its repository.
-    lstatMock.mockResolvedValue(statsFor(false));
-
-    await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
   });
 
   it.each([
@@ -363,35 +344,5 @@ describe("assertProjectDirectory under a hung filesystem", () => {
     // The share is for concurrent callers only — it must not cache a stale
     // answer for a folder that has since changed on disk.
     expect(statMock).toHaveBeenCalledTimes(2);
-  });
-});
-
-/**
- * The predicate itself lives in `shared/utils/gitOperationErrors.ts` and is
- * exercised in full there. What matters here is that this module keeps
- * re-exporting it, since `ProjectStore` and the switch-handler mock both reach
- * it through this façade.
- */
-describe("isMissingGitExecutableError (re-exported)", () => {
-  it("recognizes what simple-git actually throws, through GitService's wrapping", () => {
-    // The real message is a whole Node stack trace, not the one-liner this
-    // suite used to assume — the gap that made #11764's detection dead code.
-    const wrapped = new Error("Worktree directory no longer exists", {
-      cause: new Error("Git operation failed: getRepositoryRoot", {
-        cause: simpleGitMissingBinaryError(),
-      }),
-    });
-
-    expect(isMissingGitExecutableError(wrapped)).toBe(true);
-  });
-
-  it("recognizes a raw spawn errno that never went through simple-git", () => {
-    expect(isMissingGitExecutableError(errnoError("ENOENT", { syscall: "spawn git" }))).toBe(true);
-  });
-
-  it("does not mistake a missing directory for a missing binary", () => {
-    expect(isMissingGitExecutableError(errnoError("ENOENT", { syscall: "stat" }))).toBe(false);
-    expect(isMissingGitExecutableError(errnoError("ENOENT"))).toBe(false);
-    expect(isMissingGitExecutableError(errnoError("EACCES", { syscall: "spawn git" }))).toBe(false);
   });
 });

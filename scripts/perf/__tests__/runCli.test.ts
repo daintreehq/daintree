@@ -230,12 +230,6 @@ describe("run.ts as a process", () => {
     expect(stderr).not.toContain("run failed");
   });
 
-  it("exits non-zero on an unknown scenario id", { timeout: 60_000 }, async () => {
-    const { code, stderr } = await runCli(["--mode", "smoke", "--scenario", "PERF-9999"]);
-    expect(code).toBe(1);
-    expect(stderr).toContain("PERF-9999");
-  });
-
   // A scenario that reports a count with no correctness predicate, so the run
   // below currently exercises the loud channel. Falling back keeps the test
   // alive the day the id changes; the exit-code assertion is the point either

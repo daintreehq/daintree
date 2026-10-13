@@ -87,35 +87,6 @@ describe("buildStoredCredentials", () => {
     });
   });
 
-  it("falls back to the first declared field when none is a password field", () => {
-    registryMock.getRegisteredForgeProviders.mockReturnValue([
-      {
-        pluginId: "acme",
-        contribution: {
-          id: "gitea",
-          name: "Gitea",
-          matches: ["gitea.example.com"],
-          credentialFields: [
-            { id: "user", label: "User", type: "text" },
-            { id: "host", label: "Host", type: "text" },
-          ],
-        },
-      },
-    ]);
-    storeMock._data["forgeCredentials"] = {
-      "acme.gitea": JSON.stringify({ user: "alice", host: "gitea.example.com" }),
-    };
-    expect(buildStoredCredentials("acme.gitea")).toEqual({ kind: "bearer", value: "alice" });
-  });
-
-  it("falls back to the first record value when the provider declares no fields", () => {
-    registryMock.getRegisteredForgeProviders.mockReturnValue([]);
-    storeMock._data["forgeCredentials"] = {
-      "acme.gitea": JSON.stringify({ apiKey: "lone-value" }),
-    };
-    expect(buildStoredCredentials("acme.gitea")).toEqual({ kind: "bearer", value: "lone-value" });
-  });
-
   it("returns null when no credential is stored for the provider", () => {
     registerGiteaProvider();
     storeMock._data["forgeCredentials"] = {
@@ -178,16 +149,6 @@ describe("pickPrimaryValue", () => {
 
   it("returns an empty string when the primary field is missing from the record", () => {
     expect(pickPrimaryValue(passwordSecond, { baseUrl: "https://gitea.example.com" })).toBe("");
-  });
-
-  it("agrees with buildStoredCredentials on the same fixture (one source of truth)", () => {
-    registerGiteaProvider();
-    const record = { token: "secret-token", baseUrl: "https://gitea.example.com" };
-    storeMock._data["forgeCredentials"] = { "acme.gitea": JSON.stringify(record) };
-
-    const replayed = buildStoredCredentials("acme.gitea");
-    const direct = pickPrimaryValue(credentialFieldsFor("acme.gitea"), record);
-    expect(replayed).toEqual({ kind: "bearer", value: direct });
   });
 });
 

@@ -382,3 +382,341 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     terminal.dispose();
   });
 });
+
+describe("TerminalProcess agent:output coalescing", () => {
+  let received: Array<{ agentId: string; data: string; terminalId?: string }>;
+  let unsubscribe: () => void;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    received = [];
+    unsubscribe = events.on("agent:output", (payload) => {
+      received.push(payload);
+    });
+  });
+
+  afterEach(() => {
+    unsubscribe();
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  it("coalesces multiple chunks into one emit on the flush timer", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    expect(ptyOnDataCallback).not.toBeNull();
+
+    ptyOnDataCallback!("chunk-a");
+    ptyOnDataCallback!("chunk-b");
+    expect(received).toHaveLength(0);
+
+    vi.advanceTimersByTime(50);
+    expect(received).toHaveLength(1);
+    expect(received[0].agentId).toBe("claude");
+    expect(received[0].data).toBe("chunk-achunk-b");
+    expect(received[0].terminalId).toBe("t1");
+
+    terminal.dispose();
+  });
+
+  it("flushes immediately when pending output reaches the size cap", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const big = "x".repeat(2500);
+
+    ptyOnDataCallback!(big);
+    expect(received).toHaveLength(1);
+    expect(received[0].data).toBe(big);
+
+    terminal.dispose();
+  });
+
+  it("emits nothing for plain terminals", () => {
+    const terminal = createTerminal();
+
+    ptyOnDataCallback!("plain shell output");
+    vi.advanceTimersByTime(100);
+    expect(received).toHaveLength(0);
+
+    terminal.dispose();
+  });
+
+  it("flushes pending output before the kill transition", () => {
+    const order: string[] = [];
+    const offOrder = events.on("agent:output", () => {
+      order.push("output");
+    });
+    const terminal = createTerminal({ launchAgentId: "claude" }, undefined, {
+      updateAgentState: () => {
+        order.push("state");
+      },
+    } as never);
+
+    ptyOnDataCallback!("tail-data");
+    expect(received).toHaveLength(0);
+
+    terminal.kill("user requested");
+
+    expect(received).toHaveLength(1);
+    expect(received[0].data).toBe("tail-data");
+    expect(order).toEqual(["output", "state"]);
+
+    offOrder();
+    terminal.dispose();
+  });
+
+  it("flushes pending output on dispose without waiting for the timer", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!("last-words");
+    expect(received).toHaveLength(0);
+
+    terminal.dispose();
+    expect(received).toHaveLength(1);
+    expect(received[0].data).toBe("last-words");
+  });
+});
+
+// The OSC 9;4 tap runs per-chunk so the agent-state heartbeat never lags
+// (#8753). The parser is a private collaborator; spy on its `feed`.
+function osc94FeedSpy(terminal: TerminalProcess) {
+  const internal = terminal as unknown as { osc94Parser: { feed: (d: string, n: number) => void } };
+  return vi.spyOn(internal.osc94Parser, "feed");
+}
+
+// Hibernation removal: PTY output streams LIVE through the parse pipeline for
+// every activity tier — the background-coalescing queue/drain machinery is gone.
+// The activity tier now only adjusts the headless agent-state poll cadence.
+describe("TerminalProcess background output streaming", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  it("runs the parse pipeline per chunk for foreground terminals", () => {
+    const emitData = vi.fn();
+    const terminal = createTerminal(undefined, { emitData });
+
+    ptyOnDataCallback!("alpha");
+    ptyOnDataCallback!("beta");
+
+    expect(emitData).toHaveBeenCalledTimes(2);
+    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "alpha", 5);
+    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "beta", 9);
+
+    terminal.dispose();
+  });
+
+  it("streams output live per chunk for backgrounded terminals (no coalescing)", () => {
+    const emitData = vi.fn();
+    const terminal = createTerminal(undefined, { emitData });
+    const feed = osc94FeedSpy(terminal);
+
+    terminal.setActivityMonitorTier("background", 500);
+
+    ptyOnDataCallback!("chunk-a");
+    ptyOnDataCallback!("chunk-b");
+
+    // No deferral: each background chunk reaches the renderer fan-out immediately,
+    // exactly like a foreground chunk. The OSC 9;4 heartbeat also stays per-chunk.
+    expect(emitData).toHaveBeenCalledTimes(2);
+    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "chunk-a", 7);
+    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "chunk-b", 14);
+    expect(feed).toHaveBeenCalledTimes(2);
+
+    // Advancing timers must NOT fan out any additional (coalesced) batch — there
+    // is no queue to drain.
+    vi.advanceTimersByTime(2000);
+    expect(emitData).toHaveBeenCalledTimes(2);
+
+    terminal.dispose();
+  });
+});
+
+// A throwing pty surfaces a write error on every keystroke, exercising
+// logWriteError's 5s throttle + suppression-summary path. On Windows the
+// triggering errno differs (NTSTATUS vs EPIPE/EIO), but the throttle is
+// error-code-agnostic, so the platform is irrelevant to this behavior.
+describe("TerminalProcess write-error throttle", () => {
+  interface MockPtyHandles {
+    pty: IPty;
+    writeMock: ReturnType<typeof vi.fn<(data: string) => void>>;
+  }
+
+  function createMockPty(writeOverride?: (data: string) => void): MockPtyHandles {
+    const writeMock = vi.fn<(data: string) => void>();
+
+    const pty: Partial<IPty> = {
+      pid: 123,
+      cols: 80,
+      rows: 24,
+      write: (data: string) => {
+        writeMock(data);
+        if (writeOverride) writeOverride(data);
+      },
+      resize: () => {},
+      kill: vi.fn(),
+      pause: () => {},
+      resume: () => {},
+      onData: () => ({ dispose: () => {} }),
+      onExit: () => ({ dispose: () => {} }),
+    };
+
+    return { pty: pty as IPty, writeMock };
+  }
+
+  function createTerminal(handles: MockPtyHandles): TerminalProcess {
+    const opts: TerminalProcessOptions = {
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+      kind: "terminal",
+    };
+    return new TerminalProcess(
+      "t1",
+      opts,
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: {
+          handleActivityState: () => {},
+          updateAgentState: () => {},
+          emitAgentKilled: () => {},
+        } as never,
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      defaultSpawnContext(),
+      handles.pty
+    );
+  }
+
+  const THROTTLE_MS = 5000;
+
+  let errSpy: ReturnType<typeof vi.spyOn>;
+  let base: number;
+
+  function errorLogs(): string[] {
+    return errSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    base = Date.now();
+    vi.setSystemTime(base);
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("logs the first write error immediately", () => {
+    const handles = createMockPty(() => {
+      throw new Error("EBADF");
+    });
+    const terminal = createTerminal(handles);
+
+    terminal.write("a");
+
+    const logs = errorLogs();
+    expect(logs).toHaveLength(1);
+    // Was "write(fast-path)" while a separate chunked lane existed for >512-byte
+    // payloads. Both lanes are now one direct write, so there is one label (#11875).
+    expect(logs[0]).toContain("PTY write(direct) failed for t1");
+    // The error object is forwarded as the second arg.
+    expect(errSpy.mock.calls[0]?.[1]).toBeInstanceOf(Error);
+  });
+
+  it("suppresses subsequent errors within the 5000ms window", () => {
+    const handles = createMockPty(() => {
+      throw new Error("EBADF");
+    });
+    const terminal = createTerminal(handles);
+
+    terminal.write("a"); // logs
+    vi.setSystemTime(base + 1000);
+    terminal.write("b"); // suppressed
+    vi.setSystemTime(base + 2000);
+    terminal.write("c"); // suppressed
+
+    expect(errorLogs()).toHaveLength(1);
+  });
+
+  it("logs a suppression summary once the window elapses", () => {
+    const handles = createMockPty(() => {
+      throw new Error("EBADF");
+    });
+    const terminal = createTerminal(handles);
+
+    terminal.write("a"); // logs
+    vi.setSystemTime(base + 1000);
+    terminal.write("b"); // suppressed (1)
+    vi.setSystemTime(base + 2000);
+    terminal.write("c"); // suppressed (2)
+    vi.setSystemTime(base + 3000);
+    terminal.write("d"); // suppressed (3)
+
+    vi.setSystemTime(base + THROTTLE_MS + 1);
+    terminal.write("e"); // logs again + emits suppression summary
+
+    const summary = errorLogs().find((m) => m.includes("Suppressed"));
+    expect(summary).toBeDefined();
+    expect(summary).toContain("Suppressed 3 additional PTY write errors for t1");
+    expect(summary).toContain(`${THROTTLE_MS}ms`);
+  });
+
+  it("resets the suppression counter after reporting it", () => {
+    const handles = createMockPty(() => {
+      throw new Error("EBADF");
+    });
+    const terminal = createTerminal(handles);
+
+    terminal.write("a"); // logs
+    vi.setSystemTime(base + 1000);
+    terminal.write("b"); // suppressed (1)
+
+    vi.setSystemTime(base + THROTTLE_MS + 1);
+    terminal.write("c"); // logs + "Suppressed 1" summary
+
+    // Advance another full window with NO intervening suppressed errors, then
+    // trigger one more error: the counter was reset to 0, so no stale summary.
+    vi.setSystemTime(base + 2 * THROTTLE_MS + 2);
+    errSpy.mockClear();
+    terminal.write("d"); // logs, but must NOT emit a "Suppressed" line
+
+    const logs = errorLogs();
+    expect(logs).toHaveLength(1);
+    expect(logs.some((m) => m.includes("Suppressed"))).toBe(false);
+  });
+
+  it("includes traceId in the error log when provided", () => {
+    const handles = createMockPty(() => {
+      throw new Error("EBADF");
+    });
+    const terminal = createTerminal(handles);
+
+    terminal.write("a", "trace-42");
+
+    expect(errorLogs()[0]).toContain("traceId=trace-42");
+  });
+
+  // #11875. Payloads over 512 bytes used to be re-split into 50-byte chunks and
+  // dripped through a 5ms interval timer. node-pty owns write queueing now, so
+  // they go straight through — one call, whole payload, no timers involved.
+  it("passes an oversized write to the PTY once, whole and unchunked", () => {
+    const handles = createMockPty();
+    const terminal = createTerminal(handles);
+    const big = "x".repeat(4096);
+
+    terminal.write(big);
+
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+    expect(handles.writeMock).toHaveBeenCalledWith(big);
+    expect(errorLogs()).toHaveLength(0);
+  });
+});

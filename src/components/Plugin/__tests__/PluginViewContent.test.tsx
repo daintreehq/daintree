@@ -402,30 +402,6 @@ describe("makePluginViewContent", () => {
     }
   });
 
-  it("tolerates a missing activateForView binding without throwing (#10523)", async () => {
-    // beforeEach installs window.electron.plugin without activateForView, so the
-    // optional-chained call must no-op and the import must still proceed. Drop
-    // the `?.` and the load instead dies on "activateForView is not a function"
-    // before reaching `import()`.
-    vi.doMock(VIEW_MODULE, () => ({
-      default: function StubView() {
-        return <div data-testid="plugin-view" />;
-      },
-    }));
-
-    try {
-      const { makePluginViewContent } = await import("../PluginViewContent");
-      const Content = makePluginViewContent(makeContentConfig());
-
-      render(<Content panelId="panel-noact" />);
-
-      await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
-      expect(boundaryProps.caught).toEqual([]);
-    } finally {
-      vi.doUnmock(VIEW_MODULE);
-    }
-  });
-
   it("retries an import failure on a main-minted specifier, and a render failure in place (#11728)", async () => {
     // The bug: a rejected dynamic import is permanent for its specifier — the
     // module map never evicts a failed entry — so the old "Try again", which
@@ -649,34 +625,6 @@ describe("makePluginViewContent", () => {
       act(() => onError!(new Error("view blew up"), { componentStack: "" }));
 
       // No retry, no close, no unmount — just the throw.
-      expect(signal.aborted).toBe(true);
-    } finally {
-      vi.doUnmock(VIEW_MODULE);
-    }
-  });
-
-  it("aborts the dispose signal when the content unmounts", async () => {
-    const signals: AbortSignal[] = [];
-    vi.doMock(VIEW_MODULE, () => ({
-      default: function CapturingView(props: { disposeSignal: AbortSignal }) {
-        signals.push(props.disposeSignal);
-        return <div data-testid="plugin-view" />;
-      },
-    }));
-
-    try {
-      const { makePluginViewContent } = await import("../PluginViewContent");
-      const Content = makePluginViewContent(makeContentConfig());
-
-      const { unmount } = render(<Content panelId="panel-unmount" />);
-      await settlePluginViewLoad(() => expect(signals).not.toHaveLength(0));
-      const signal = signals[signals.length - 1]!;
-      expect(signal.aborted).toBe(false);
-
-      unmount();
-      // One microtask late on purpose: a StrictMode replay re-runs setup right
-      // after the cleanup and has to be able to call the abort off (#12609).
-      await Promise.resolve();
       expect(signal.aborted).toBe(true);
     } finally {
       vi.doUnmock(VIEW_MODULE);

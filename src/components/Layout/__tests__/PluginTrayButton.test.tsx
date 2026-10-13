@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import type { ToolbarButtonConfig } from "@shared/config/toolbarButtonRegistry";
 import type { PluginToolbarButtonId, ToolbarButtonPriority } from "@shared/types/toolbar";
+import { PLUGIN_ICON_COMPONENTS } from "@/components/icons/pluginIconRegistry";
 
 const dispatchMock = vi.fn();
 const setPluginButtonPromotedMock = vi.fn();
@@ -341,5 +342,47 @@ describe("PluginToolbarButton (promoted contribution)", () => {
     fireEvent.click(button);
 
     expect(dispatchMock).toHaveBeenCalledWith("acme.greet", undefined, { source: "user" });
+  });
+});
+
+describe("PluginToolbarButton icon", () => {
+  function renderButton(iconId: string): string {
+    const { container } = render(
+      <PluginToolbarButton
+        pluginId={"acme.plan" as PluginToolbarButtonId}
+        config={config({
+          id: "acme.plan",
+          label: "Plan",
+          iconId,
+          actionId: "acme.plan-from-issue",
+        })}
+      />
+    );
+    return container.querySelector("svg")!.innerHTML;
+  }
+
+  function registryGlyph(id: keyof typeof PLUGIN_ICON_COMPONENTS): string {
+    const Icon = PLUGIN_ICON_COMPONENTS[id];
+    return render(<Icon />).container.querySelector("svg")!.innerHTML;
+  }
+
+  it("renders the icon the manifest declared", () => {
+    // Before #11298 every plugin toolbar button rendered McpServerIcon and
+    // config.iconId was never read.
+    expect(renderButton("list")).toBe(registryGlyph("list"));
+  });
+
+  it("varies the glyph with iconId, holding every other field fixed", () => {
+    expect(renderButton("list")).not.toBe(renderButton("gauge"));
+    expect(renderButton("gauge")).toBe(registryGlyph("gauge"));
+  });
+
+  it("falls back to the generic plugin glyph for an unrecognized id", () => {
+    expect(renderButton("no-such-icon")).toBe(registryGlyph("puzzle"));
+  });
+
+  it("does not resolve agent brand ids on the toolbar", () => {
+    // The toolbar has no brand-icon path, which is why the CLI warns here.
+    expect(renderButton("claude")).toBe(registryGlyph("puzzle"));
   });
 });

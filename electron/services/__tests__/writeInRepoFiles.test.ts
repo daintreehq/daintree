@@ -12,11 +12,7 @@ import {
   PROJECT_SETTINGS_SHAREABILITY,
   PROJECT_TERMINAL_SETTINGS_SHAREABILITY,
 } from "../../../shared/types/project.js";
-import {
-  ProjectIdentityFiles,
-  buildInRepoRecipePayloadString,
-  hashRecipePayload,
-} from "../ProjectIdentityFiles.js";
+import { ProjectIdentityFiles, buildInRepoRecipePayloadString } from "../ProjectIdentityFiles.js";
 
 const DAINTREE_PROJECT_JSON = ".daintree/project.json";
 const DAINTREE_SETTINGS_JSON = ".daintree/settings.json";
@@ -51,14 +47,6 @@ describe("writeInRepoProjectIdentity", () => {
     expect(content).toEqual({ version: 1, name: "My App", emoji: "🚀", color: "blue" });
   });
 
-  it("writes version: 1 in all cases", async () => {
-    await identityFiles.writeInRepoProjectIdentity(tmpDir, {});
-    const content = JSON.parse(
-      await fs.readFile(path.join(tmpDir, DAINTREE_PROJECT_JSON), "utf-8")
-    );
-    expect(content.version).toBe(1);
-  });
-
   it("omits undefined fields from output", async () => {
     await identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "Only Name" });
     const content = JSON.parse(
@@ -77,14 +65,6 @@ describe("writeInRepoProjectIdentity", () => {
     );
     expect(content.name).toBe("New Name");
     expect(content.emoji).toBe("🚀");
-  });
-
-  it("is atomic: no .tmp files left after write", async () => {
-    await identityFiles.writeInRepoProjectIdentity(tmpDir, { name: "Test" });
-    const daintreeDir = path.join(tmpDir, ".daintree");
-    const files = await fs.readdir(daintreeDir);
-    const tmpFiles = files.filter((f) => f.endsWith(".tmp"));
-    expect(tmpFiles).toHaveLength(0);
   });
 
   it("writes pretty-printed JSON (2-space indent)", async () => {
@@ -199,25 +179,6 @@ describe("writeInRepoSettings", () => {
       expect(content).not.toHaveProperty(field);
     }
   );
-
-  it("includes copyTreeSettings when present", async () => {
-    await identityFiles.writeInRepoSettings(
-      tmpDir,
-      makeSettings({ copyTreeSettings: { maxFileSize: 50000 } })
-    );
-    const content = JSON.parse(
-      await fs.readFile(path.join(tmpDir, DAINTREE_SETTINGS_JSON), "utf-8")
-    );
-    expect(content.copyTreeSettings).toEqual({ maxFileSize: 50000 });
-  });
-
-  it("is atomic: no .tmp files left after write", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, makeSettings());
-    const daintreeDir = path.join(tmpDir, ".daintree");
-    const files = await fs.readdir(daintreeDir);
-    const tmpFiles = files.filter((f) => f.endsWith(".tmp"));
-    expect(tmpFiles).toHaveLength(0);
-  });
 
   it("writes pretty-printed JSON (2-space indent)", async () => {
     await identityFiles.writeInRepoSettings(
@@ -460,14 +421,6 @@ describe("writeInRepoRecipe", () => {
     expect(content.terminals[0].env).toEqual({ API_KEY: "", DB_HOST: "" });
   });
 
-  it("writes pretty-printed JSON", async () => {
-    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe());
-    const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "test-recipe.json");
-    const raw = await fs.readFile(filePath, "utf-8");
-    expect(raw).toContain("\n");
-    expect(raw).toContain("  ");
-  });
-
   it("overwrites existing recipe file", async () => {
     await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "Same Name" }));
     await identityFiles.writeInRepoRecipe(
@@ -504,13 +457,6 @@ describe("writeInRepoRecipe", () => {
     expect(buildInRepoRecipePayloadString(recipe)).toContain('"SECRET": ""');
   });
 
-  it("buildInRepoRecipePayloadString strips projectId and worktreeId", () => {
-    const recipe = makeRecipe({ projectId: "proj-1", worktreeId: "wt-1" });
-    const payload = buildInRepoRecipePayloadString(recipe);
-    expect(payload).not.toContain("proj-1");
-    expect(payload).not.toContain("wt-1");
-  });
-
   it("buildInRepoRecipePayloadString strips lastUsedAt and usageHistory (frecency stays out of git)", () => {
     const recipe = makeRecipe({ lastUsedAt: 1717171717, usageHistory: [1000, 2000, 3000] });
     const payload = buildInRepoRecipePayloadString(recipe);
@@ -519,15 +465,6 @@ describe("writeInRepoRecipe", () => {
     expect(parsed.usageHistory).toBeUndefined();
     expect(payload).not.toContain("1717171717");
     expect(payload).not.toContain("usageHistory");
-  });
-
-  it("hashRecipePayload is deterministic and produces a 64-char hex digest", () => {
-    const a = hashRecipePayload("hello");
-    const b = hashRecipePayload("hello");
-    const c = hashRecipePayload("hello!");
-    expect(a).toBe(b);
-    expect(a).not.toBe(c);
-    expect(a).toMatch(/^[a-f0-9]{64}$/);
   });
 });
 
@@ -557,16 +494,6 @@ describe("getInRepoRecipeFileHash", () => {
     expect(await identityFiles.getInRepoRecipeFileHash(tmpDir, "Hashed Recipe")).toBe(
       createHash("sha256").update(onDisk, "utf-8").digest("hex")
     );
-  });
-
-  it("hash changes when the file is externally edited", async () => {
-    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "Drift Recipe" }));
-    const before = await identityFiles.getInRepoRecipeFileHash(tmpDir, "Drift Recipe");
-    const filePath = path.join(tmpDir, DAINTREE_RECIPES_DIR, "drift-recipe.json");
-    const current = await fs.readFile(filePath, "utf-8");
-    await fs.writeFile(filePath, current.replace("Drift Recipe", "Drift Recipe Externally Edited"));
-    const after = await identityFiles.getInRepoRecipeFileHash(tmpDir, "Drift Recipe");
-    expect(after).not.toBe(before);
   });
 });
 

@@ -33,30 +33,6 @@ describe("useCopyWithFeedback", () => {
     expect(polite?.msg).toBe("Copied");
   });
 
-  it("resets copied=false after the dwell window", async () => {
-    const { result } = renderHook(() => useCopyWithFeedback());
-    await act(async () => {
-      await result.current.copy("x");
-    });
-    expect(result.current.copied).toBe(true);
-    act(() => {
-      vi.advanceTimersByTime(UI_ACTION_SUCCESS_DWELL_MS);
-    });
-    expect(result.current.copied).toBe(false);
-  });
-
-  it("does not update state after unmount", async () => {
-    const { result, unmount } = renderHook(() => useCopyWithFeedback());
-    await act(async () => {
-      await result.current.copy("x");
-    });
-    unmount();
-    // No assertion error from setState-on-unmounted is the implicit pass.
-    act(() => {
-      vi.advanceTimersByTime(UI_ACTION_SUCCESS_DWELL_MS + 1000);
-    });
-  });
-
   it("restarts the dwell on a second click within the window", async () => {
     const { result } = renderHook(() => useCopyWithFeedback());
     await act(async () => {

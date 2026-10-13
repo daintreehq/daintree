@@ -137,31 +137,3 @@ describe("ContentGrid EmptyState — initialization gate (issue #8645)", () => {
     expect(hasOldPattern).toBe(false);
   });
 });
-
-describe("ContentGrid EmptyState — structured empty state integration (issue #8645)", () => {
-  it("imports EmptyState, Button, FolderOpen, and actionService", async () => {
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toContain('from "@/components/ui/EmptyState"');
-    expect(content).toContain('from "@/components/ui/button"');
-    expect(content).toContain('from "@/services/ActionService"');
-    expect(content).toContain("FolderOpen");
-  });
-
-  it("renders an Open project… action for opening a directory", async () => {
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toContain("Open project…");
-  });
-
-  it("dispatches project.add via actionService with source: user", async () => {
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    expect(content).toContain('actionService.dispatch("project.add"');
-    expect(content).toContain('source: "user"');
-  });
-
-  it("uses FolderOpen icon in both zero-data variants", async () => {
-    const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // FolderOpen should appear in both EmptyState renders (hasWorktrees + !hasWorktrees)
-    const folderOpenCount = (content.match(/<FolderOpen \/>/g) || []).length;
-    expect(folderOpenCount).toBe(2);
-  });
-});

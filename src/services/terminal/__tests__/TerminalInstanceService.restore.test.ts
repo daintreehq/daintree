@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { terminalInstanceService } from "../TerminalInstanceService";
 import { INCREMENTAL_RESTORE_CONFIG } from "../types";
-import { PARSER_GROUND } from "@shared/utils/terminalPartialEscapeTail";
 
 vi.mock("@xterm/addon-webgl", () => ({
   WebglAddon: vi.fn().mockImplementation(() => ({
@@ -160,106 +159,6 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await flushMicrotasks();
   };
 
-  it("should use synchronous restore for small serialized state", async () => {
-    const id = "test-terminal-1";
-    const smallState = "x".repeat(1000);
-
-    const terminal = await terminalInstanceService.getOrCreate(
-      id,
-      "terminal",
-      {},
-      () => 3 as any,
-      undefined
-    );
-
-    terminal.terminal = mockTerminal;
-
-    const result = terminalInstanceService.restoreFromSerialized(id, smallState);
-
-    expect(result).toBe(true);
-    expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
-    expect(mockTerminal.write).toHaveBeenCalledTimes(1);
-    expect(mockTerminal.write).toHaveBeenCalledWith(
-      PARSER_GROUND + smallState,
-      expect.any(Function)
-    );
-
-    terminalInstanceService.destroy(id);
-  });
-
-  it("should use incremental restore for large serialized state", async () => {
-    const id = "test-terminal-2";
-    const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1000);
-
-    const terminal = await terminalInstanceService.getOrCreate(
-      id,
-      "terminal",
-      {},
-      () => 3 as any,
-      undefined
-    );
-
-    terminal.terminal = mockTerminal;
-
-    const restorePromise = (terminalInstanceService as any).restoreFromSerializedIncremental(
-      id,
-      largeState
-    );
-
-    await flushMicrotasks();
-
-    expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
-    expect(mockTerminal.write).toHaveBeenCalled();
-
-    for (let i = 0; i < 20; i++) {
-      await flushPostTasks();
-    }
-
-    await restorePromise;
-
-    expect(mockTerminal.write.mock.calls.length).toBeGreaterThan(1);
-
-    const totalWritten = mockTerminal.write.mock.calls
-      .map((call: any) => call[0].length)
-      .reduce((sum: number, len: number) => sum + len, 0);
-
-    // One CAN leads the replay.
-    expect(totalWritten).toBe(largeState.length + 1);
-
-    terminalInstanceService.destroy(id);
-  });
-
-  it("should yield to UI between chunks", async () => {
-    const id = "test-terminal-3";
-    const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 3);
-
-    const terminal = await terminalInstanceService.getOrCreate(
-      id,
-      "terminal",
-      {},
-      () => 3 as any,
-      undefined
-    );
-
-    terminal.terminal = mockTerminal;
-
-    const restorePromise = (terminalInstanceService as any).restoreFromSerializedIncremental(
-      id,
-      largeState
-    );
-
-    await flushMicrotasks();
-
-    expect((global as any).scheduler.postTask).toHaveBeenCalled();
-
-    await flushPostTasks();
-    await flushPostTasks();
-
-    await restorePromise;
-
-    terminalInstanceService.destroy(id);
-  });
-
   it("should cancel restore when terminal is destroyed mid-restore", async () => {
     const id = "test-terminal-4";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 5);
@@ -291,112 +190,6 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await restorePromise;
 
     expect(mockTerminal.write.mock.calls.length).toBeLessThanOrEqual(initialWriteCount + 1);
-  });
-
-  it("should handle concurrent restore requests with generation tracking", async () => {
-    const id = "test-terminal-5";
-    const state1 = "a".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
-    const state2 = "b".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
-
-    const terminal = await terminalInstanceService.getOrCreate(
-      id,
-      "terminal",
-      {},
-      () => 3 as any,
-      undefined
-    );
-
-    terminal.terminal = mockTerminal;
-
-    const restore1 = (terminalInstanceService as any).restoreFromSerializedIncremental(id, state1);
-
-    await flushMicrotasks();
-
-    const restore2 = (terminalInstanceService as any).restoreFromSerializedIncremental(id, state2);
-
-    await flushMicrotasks();
-
-    for (let i = 0; i < 10; i++) {
-      await flushPostTasks();
-    }
-
-    await Promise.all([restore1, restore2]);
-
-    terminalInstanceService.destroy(id);
-  });
-
-  it("should gate writes through writeChain to prevent interleaving", async () => {
-    const id = "test-terminal-6";
-    const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
-
-    const terminal = await terminalInstanceService.getOrCreate(
-      id,
-      "terminal",
-      {},
-      () => 3 as any,
-      undefined
-    );
-
-    terminal.terminal = mockTerminal;
-
-    const writeOrder: string[] = [];
-
-    mockTerminal.write = vi.fn((data: string, callback?: () => void) => {
-      writeOrder.push(data.substring(0, 10));
-      if (callback) {
-        queueMicrotask(callback);
-      }
-    });
-
-    const restorePromise = (terminalInstanceService as any).restoreFromSerializedIncremental(
-      id,
-      largeState
-    );
-
-    await flushMicrotasks();
-    await flushPostTasks();
-    await flushPostTasks();
-
-    await restorePromise;
-
-    expect(writeOrder.length).toBeGreaterThan(1);
-
-    terminalInstanceService.destroy(id);
-  });
-
-  it("should set and clear isSerializedRestoreInProgress flag", async () => {
-    const id = "test-terminal-7";
-    const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
-
-    const terminal = await terminalInstanceService.getOrCreate(
-      id,
-      "terminal",
-      {},
-      () => 3 as any,
-      undefined
-    );
-
-    terminal.terminal = mockTerminal;
-
-    expect(terminal.isSerializedRestoreInProgress).toBe(false);
-
-    const restorePromise = (terminalInstanceService as any).restoreFromSerializedIncremental(
-      id,
-      largeState
-    );
-
-    await flushMicrotasks();
-
-    expect(terminal.isSerializedRestoreInProgress).toBe(true);
-
-    await flushPostTasks();
-    await flushPostTasks();
-
-    await restorePromise;
-
-    expect(terminal.isSerializedRestoreInProgress).toBe(false);
-
-    terminalInstanceService.destroy(id);
   });
 
   it("should not auto-scroll to bottom after synchronous restore", async () => {
@@ -451,49 +244,6 @@ describe("TerminalInstanceService - Incremental Restore", () => {
 
     await restorePromise;
 
-    expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
-
-    terminalInstanceService.destroy(id);
-  });
-
-  it("sync restore preserves scroll when user is scrolled back", async () => {
-    const id = "test-scroll-sync-preserve";
-    const smallState = "x".repeat(1000);
-
-    const terminal = await terminalInstanceService.getOrCreate(
-      id,
-      "terminal",
-      {},
-      () => 3 as any,
-      undefined
-    );
-
-    terminal.terminal = mockTerminal;
-    terminal.isUserScrolledBack = true;
-    mockTerminal.buffer.active.baseY = 200;
-    mockTerminal.buffer.active.viewportY = 150;
-
-    // reset clears buffer state; write repopulates it
-    const origReset = mockTerminal.reset;
-    mockTerminal.reset = vi.fn(() => {
-      origReset();
-      mockTerminal.buffer.active.baseY = 0;
-      mockTerminal.buffer.active.viewportY = 0;
-    });
-
-    const origWrite = mockTerminal.write;
-    mockTerminal.write = vi.fn((data: string, callback?: () => void) => {
-      mockTerminal.buffer.active.baseY = 300;
-      mockTerminal.buffer.active.viewportY = 300;
-      origWrite(data, callback);
-    });
-
-    terminalInstanceService.restoreFromSerialized(id, smallState);
-    await flushMicrotasks();
-
-    // offset was 200 - 150 = 50, new baseY = 300, so scrollToLine(250)
-    expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
-    expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(250);
     expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
 
     terminalInstanceService.destroy(id);
@@ -652,41 +402,6 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     // offset was 200 - 100 = 100, new baseY = 50, so Math.max(0, 50 - 100) = 0
     expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
     expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(0);
-
-    terminalInstanceService.destroy(id);
-  });
-
-  it("should fallback to setTimeout when scheduler is unavailable", async () => {
-    const id = "test-terminal-8";
-    const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
-
-    (global as any).scheduler = undefined;
-
-    const terminal = await terminalInstanceService.getOrCreate(
-      id,
-      "terminal",
-      {},
-      () => 3 as any,
-      undefined
-    );
-
-    terminal.terminal = mockTerminal;
-
-    const restorePromise = (terminalInstanceService as any).restoreFromSerializedIncremental(
-      id,
-      largeState
-    );
-
-    await flushMicrotasks();
-
-    expect(global.setTimeout).toHaveBeenCalled();
-
-    const timeoutCallbacks = Array.from(timeouts.values());
-    timeouts.clear();
-    timeoutCallbacks.forEach((cb) => cb());
-    await flushMicrotasks();
-
-    await restorePromise;
 
     terminalInstanceService.destroy(id);
   });

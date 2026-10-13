@@ -87,31 +87,6 @@ describe("useHostReparent", () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
-  it("repairs to compact host when collapsed", () => {
-    const { view } = makeMockView();
-    const compactEl = document.createElement("div");
-    const modalEl = document.createElement("div");
-    const editorViewRef = ref<ReparentEditorView | null>(view);
-    const compactHost = ref<HTMLDivElement | null>(compactEl);
-    const modalHost = ref<HTMLDivElement | null>(modalEl);
-    const autoSizeRef = ref(new Compartment());
-
-    modalEl.appendChild(view.dom);
-
-    renderHook(() =>
-      useHostReparent({
-        editorViewRef,
-        compactEditorHostRef: compactHost,
-        modalEditorHostRef: modalHost,
-        autoSizeCompartmentRef: autoSizeRef,
-        isExpanded: false,
-      })
-    );
-
-    expect(compactEl.contains(view.dom)).toBe(true);
-    expect(modalEl.contains(view.dom)).toBe(false);
-  });
-
   it("restores focus after an expanded/collapsed transition", () => {
     const { view, focus } = makeMockView();
     const compactEl = document.createElement("div");

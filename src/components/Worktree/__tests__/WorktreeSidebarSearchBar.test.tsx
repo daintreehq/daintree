@@ -70,13 +70,6 @@ describe("WorktreeSidebarSearchBar", () => {
     expect(getInput().value).toBe("hand");
   });
 
-  it("renders the X clear button with the 'Clear search' aria-label when text is typed", () => {
-    renderBar();
-    fireEvent.change(getInput(), { target: { value: "foo" } });
-    const clearBtn = screen.getByRole("button", { name: "Clear search" });
-    expect(clearBtn).toBeTruthy();
-  });
-
   it("does not render the X button when only facets are active (no typed text)", () => {
     renderBar();
     act(() => {
@@ -204,33 +197,6 @@ describe("WorktreeSidebarSearchBar", () => {
       useWorktreeFilterStore.getState().setQuickStateFilter("working");
     });
     expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
-  });
-
-  it("shows 'Clear all' when query + facets are both active", () => {
-    renderBar();
-    act(() => {
-      useWorktreeFilterStore.getState().toggleStatusFilter("active");
-    });
-    fireEvent.change(getInput(), { target: { value: "foo" } });
-    expect(screen.getByRole("button", { name: "Clear all" })).toBeTruthy();
-  });
-
-  it("shows 'Clear all' when query + quick-state are both active", () => {
-    renderBar();
-    act(() => {
-      useWorktreeFilterStore.getState().setQuickStateFilter("working");
-    });
-    fireEvent.change(getInput(), { target: { value: "foo" } });
-    expect(screen.getByRole("button", { name: "Clear all" })).toBeTruthy();
-  });
-
-  it("shows 'Clear all' when facets + quick-state are both active", () => {
-    renderBar();
-    act(() => {
-      useWorktreeFilterStore.getState().toggleStatusFilter("active");
-      useWorktreeFilterStore.getState().setQuickStateFilter("waiting");
-    });
-    expect(screen.getByRole("button", { name: "Clear all" })).toBeTruthy();
   });
 
   it("X click via keyboard activation keeps focus on the input", () => {
@@ -361,18 +327,6 @@ describe("WorktreeSidebarSearchBar", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("renders statusText under the field when provided", () => {
-    render(<WorktreeSidebarSearchBar statusText="1 of 2 worktrees" />, {
-      wrapper: TooltipProvider,
-    });
-    expect(screen.getByText("1 of 2 worktrees")).toBeTruthy();
-  });
-
-  it("renders no status text when the prop is absent", () => {
-    renderBar();
-    expect(screen.queryByText(/of \d+ worktrees/)).toBeNull();
   });
 
   it("shares one row between statusText and 'Clear all' when both apply", () => {

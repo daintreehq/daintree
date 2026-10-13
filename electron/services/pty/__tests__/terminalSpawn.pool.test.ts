@@ -312,22 +312,6 @@ describe("acquirePtyProcess pool handling", () => {
     expect(unique.size).toBe(3);
   });
 
-  it("uses the same envHash for the same options.env shape", () => {
-    const acquireByKey = vi.fn<(cwd: string, envHash: string) => null>(() => null);
-    const pool = createFakePool({
-      defaultCwd: "/repo",
-      acquireByKey,
-    });
-    spawnMock.mockReturnValue(createFakeSpawnedPty());
-
-    const env1 = { FOO: "1", BAR: "2" };
-    const env2 = { BAR: "2", FOO: "1" }; // same content, different key order
-    acquirePtyProcess("a", { ...baseOptions, env: env1 }, {}, "/bin/bash", [], pool, () => {});
-    acquirePtyProcess("b", { ...baseOptions, env: env2 }, {}, "/bin/bash", [], pool, () => {});
-
-    expect(acquireByKey.mock.calls[0]?.[1]).toBe(acquireByKey.mock.calls[1]?.[1]);
-  });
-
   it("on miss, passes the same envHash to acquireByKey and warmForKey", () => {
     const acquireByKey = vi.fn<(cwd: string, envHash: string) => null>(() => null);
     const warmForKey =

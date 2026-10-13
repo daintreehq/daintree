@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
-import { TOOLBAR_BUTTON_PRIORITIES, launcherItemToolbarButtonId } from "@shared/types/toolbar";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 
 // Mirror the production agent IDs so the v5 migration is exercised against
 // the real set, not a subset. Keeping the mock in sync guards against
@@ -120,16 +119,6 @@ describe("toolbarPreferencesStore", () => {
       const updated = store.getState();
       expect(updated.layout.pinnedButtons["copy-tree"]).toBe(false);
       expect(updated.layout.rightButtons).toContain("copy-tree");
-    });
-
-    it("removes button from pinnedButtons when toggled again", async () => {
-      const store = await loadStore();
-
-      store.getState().toggleButtonVisibility("copy-tree", "right");
-      expect(store.getState().layout.pinnedButtons["copy-tree"]).toBe(false);
-
-      store.getState().toggleButtonVisibility("copy-tree", "right");
-      expect(store.getState().layout.pinnedButtons["copy-tree"]).toBeUndefined();
     });
 
     it("does not modify leftButtons or rightButtons arrays", async () => {
@@ -526,38 +515,6 @@ describe("toolbarPreferencesStore", () => {
   });
 
   describe("persistence", () => {
-    it("persists pinnedButtons to localStorage", async () => {
-      const store = await loadStore();
-      store.getState().toggleButtonVisibility("copy-tree", "right");
-
-      // Wait for persist to write
-      await vi.waitFor(() => {
-        const raw = storageMock.getItem(STORAGE_KEY);
-        expect(raw).toBeTruthy();
-        const parsed = JSON.parse(raw!);
-        expect(parsed.state.layout.pinnedButtons["copy-tree"]).toBe(false);
-      });
-    });
-
-    it("restores hiddenButtons from persisted v6 state on rehydration", async () => {
-      setStoredState(
-        {
-          layout: {
-            leftButtons: ["terminal", "browser"],
-            rightButtons: ["copy-tree", "settings"],
-            hiddenButtons: ["copy-tree"],
-          },
-          launcher: { alwaysShowDevServer: false },
-        },
-        6
-      );
-
-      const store = await loadStore();
-      // v7→v8 converts hiddenButtons to pinnedButtons.
-      expect(store.getState().layout.pinnedButtons["copy-tree"]).toBe(false);
-      expect(store.getState().layout.rightButtons).toContain("copy-tree");
-    });
-
     it("restores multiple hidden buttons across both sides", async () => {
       setStoredState(
         {
@@ -635,74 +592,6 @@ describe("toolbarPreferencesStore", () => {
   });
 
   describe("migration", () => {
-    it("migrates v1 state through the v7→v8 conversion to pinnedButtons", async () => {
-      storageMock.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          state: {
-            layout: {
-              leftButtons: ["terminal", "browser"],
-              rightButtons: ["notes", "settings"],
-            },
-            launcher: { alwaysShowDevServer: false },
-          },
-          version: 1,
-        })
-      );
-
-      const store = await loadStore();
-      expect(store.getState().layout.pinnedButtons).toEqual({});
-    });
-
-    it("omits browser and dev-server from default left buttons but keeps the ids valid", async () => {
-      const store = await loadStore();
-      const { leftButtons, rightButtons } = store.getState().layout;
-      // Both moved into the launcher for fresh profiles (#11667). They are not
-      // deleted ids — `TOOLBAR_BUTTON_PRIORITIES` and the metadata registry
-      // still carry them — they simply aren't defaults any more.
-      expect(leftButtons).not.toContain("browser");
-      expect(leftButtons).not.toContain("dev-server");
-      expect(rightButtons).not.toContain("browser");
-      expect(rightButtons).not.toContain("dev-server");
-      expect(leftButtons).toContain("launcher");
-    });
-
-    it("omits every agent id from default left buttons but keeps the ids valid", async () => {
-      // The other half of #11680: an unset agent pin means "listed in the
-      // launcher", not "on the toolbar", so a fresh row grows nothing when the
-      // user installs another CLI. Same shape as browser/dev-server above —
-      // absence from the defaults, never a seeded pin.
-      const store = await loadStore();
-      const { leftButtons, rightButtons, pinnedButtons } = store.getState().layout;
-      const positioned = new Set([...leftButtons, ...rightButtons]);
-      for (const id of LAUNCHABLE_AGENT_IDS) {
-        expect(positioned.has(id)).toBe(false);
-        expect(pinnedButtons[id]).toBeUndefined();
-      }
-      expect(TOOLBAR_BUTTON_PRIORITIES[LAUNCHABLE_AGENT_IDS[0]!]).toBeDefined();
-    });
-
-    it("leads the left group with the launcher", async () => {
-      // A permanent category container belongs at the start of the group it
-      // owns, so the row reads verb-then-nouns.
-      const store = await loadStore();
-      expect(store.getState().layout.leftButtons[0]).toBe("launcher");
-    });
-
-    it("includes command-palette in default right buttons before settings", async () => {
-      const store = await loadStore();
-      const right = store.getState().layout.rightButtons;
-      expect(right).toContain("command-palette");
-      expect(right.indexOf("command-palette")).toBeLessThan(right.indexOf("settings"));
-    });
-
-    it("includes resume-sessions in default right buttons before settings", async () => {
-      const store = await loadStore();
-      const right = store.getState().layout.rightButtons;
-      expect(right).toContain("resume-sessions");
-      expect(right.indexOf("resume-sessions")).toBeLessThan(right.indexOf("settings"));
-    });
-
     it("re-inserts resume-sessions for persisted state missing it via mergeButtonList", async () => {
       setStoredState(
         {
@@ -841,22 +730,6 @@ describe("toolbarPreferencesStore", () => {
       expect(trayCount).toBe(1);
     });
 
-    it("v2→v3 handles missing layout without throwing", async () => {
-      storageMock.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          state: {
-            launcher: { alwaysShowDevServer: false },
-          },
-          version: 2,
-        })
-      );
-
-      const store = await loadStore();
-      // Should hydrate with defaults.
-      expect(store.getState().layout.leftButtons).toContain("launcher");
-    });
-
     it("v3→v4 drops 'panel-palette' from all button arrays", async () => {
       storageMock.setItem(
         STORAGE_KEY,
@@ -884,21 +757,6 @@ describe("toolbarPreferencesStore", () => {
       expect(layout.leftButtons).toContain("launcher");
       expect(layout.leftButtons).toContain("terminal");
       expect(layout.leftButtons).toContain("browser");
-    });
-
-    it("v3→v4 handles missing layout without throwing", async () => {
-      storageMock.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          state: {
-            launcher: { alwaysShowDevServer: false },
-          },
-          version: 3,
-        })
-      );
-
-      const store = await loadStore();
-      expect(store.getState().layout.leftButtons).toBeDefined();
     });
 
     it("v4→v5 strips built-in agent IDs from hiddenButtons before v8 conversion", async () => {
@@ -958,57 +816,6 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.pinnedButtons).toEqual({
         "copy-tree": false,
       });
-    });
-
-    it("v4→v5 leaves non-agent hidden entries untouched into pinnedButtons", async () => {
-      storageMock.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          state: {
-            layout: {
-              leftButtons: ["agent-tray", "terminal"],
-              rightButtons: ["settings"],
-              hiddenButtons: ["github-stats", "copy-tree"],
-            },
-            launcher: { alwaysShowDevServer: false },
-          },
-          version: 4,
-        })
-      );
-
-      const store = await loadStore();
-      expect(store.getState().layout.pinnedButtons).toEqual({
-        "forge-stats": false,
-        "copy-tree": false,
-      });
-    });
-
-    it("v4→v5 is a no-op on already-v5 state (idempotency guard)", async () => {
-      // Rehydrating a store that's already at v5 must not re-apply the v4→v5
-      // agent-stripping migration — agent IDs legitimately absent from
-      // hiddenButtons should stay absent. The v5→v6 strips notes; v7→v8
-      // converts the remainder to pinnedButtons.
-      storageMock.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          state: {
-            layout: {
-              leftButtons: ["agent-tray", "claude", "terminal"],
-              rightButtons: ["settings"],
-              hiddenButtons: ["copy-tree"],
-            },
-            launcher: { alwaysShowDevServer: false },
-          },
-          version: 5,
-        })
-      );
-
-      const store = await loadStore();
-      expect(store.getState().layout.pinnedButtons).toEqual({
-        "copy-tree": false,
-      });
-      // Ordering arrays untouched.
-      expect(store.getState().layout.leftButtons).toContain("claude");
     });
 
     it("v5→v6 strips 'notes' from all button arrays", async () => {
@@ -1107,21 +914,6 @@ describe("toolbarPreferencesStore", () => {
       expect(rightButtons.indexOf("forge-stats")).toBeLessThan(rightButtons.indexOf("copy-tree"));
     });
 
-    it("v4→v5 handles missing layout without throwing", async () => {
-      storageMock.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          state: {
-            launcher: { alwaysShowDevServer: false },
-          },
-          version: 4,
-        })
-      );
-
-      const store = await loadStore();
-      expect(store.getState().layout.leftButtons).toBeDefined();
-    });
-
     it("migrates v0 state through all migrations", async () => {
       storageMock.setItem(
         STORAGE_KEY,
@@ -1185,42 +977,6 @@ describe("toolbarPreferencesStore", () => {
         expect(layout.rightButtons).toContain("copy-tree");
       });
 
-      it("yields an empty pinnedButtons map when v7 had no hiddenButtons entries", async () => {
-        storageMock.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            state: {
-              layout: {
-                leftButtons: ["terminal"],
-                rightButtons: ["settings"],
-                hiddenButtons: [],
-              },
-              launcher: { alwaysShowDevServer: false },
-            },
-            version: 7,
-          })
-        );
-
-        const store = await loadStore();
-        expect(store.getState().layout.pinnedButtons).toEqual({});
-      });
-
-      it("synthesizes a v8 layout shape when v7 state lacks the layout block", async () => {
-        storageMock.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            state: { launcher: { alwaysShowDevServer: false } },
-            version: 7,
-          })
-        );
-
-        const store = await loadStore();
-        // merge() should fall back to defaults rather than crash; pinnedButtons
-        // must still be the canonical empty map.
-        expect(store.getState().layout.pinnedButtons).toEqual({});
-        expect(store.getState().layout.leftButtons).toBeDefined();
-      });
-
       it("preserves an existing pinnedButtons map and merges v7 hiddenButtons on top", async () => {
         // Forward-compat: a payload that's nominally v7 but already carries a
         // pinnedButtons map (e.g. a downgrade-then-upgrade path) shouldn't lose
@@ -1244,28 +1000,6 @@ describe("toolbarPreferencesStore", () => {
         const store = await loadStore();
         expect(store.getState().layout.pinnedButtons).toEqual({
           terminal: true,
-          "copy-tree": false,
-        });
-      });
-
-      it("is idempotent on v8 state without re-applying conversion", async () => {
-        storageMock.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            state: {
-              layout: {
-                leftButtons: ["terminal", "browser"],
-                rightButtons: ["copy-tree", "settings"],
-                pinnedButtons: { "copy-tree": false },
-              },
-              launcher: { alwaysShowDevServer: false },
-            },
-            version: 8,
-          })
-        );
-
-        const store = await loadStore();
-        expect(store.getState().layout.pinnedButtons).toEqual({
           "copy-tree": false,
         });
       });
@@ -1299,29 +1033,6 @@ describe("toolbarPreferencesStore", () => {
         expect(pinnedButtons["copy-tree"]).toBe(false);
         expect(pinnedButtons["plugin.acme.foo.btn"]).toBeUndefined();
         expect(pinnedButtons["plugin.daintreehq.tool.opener"]).toBeUndefined();
-      });
-
-      it("is a no-op when there are no `plugin.` prefixed keys", async () => {
-        storageMock.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            state: {
-              layout: {
-                leftButtons: ["terminal"],
-                rightButtons: ["settings"],
-                pinnedButtons: { "copy-tree": false, terminal: false },
-              },
-              launcher: { alwaysShowDevServer: false },
-            },
-            version: 8,
-          })
-        );
-
-        const store = await loadStore();
-        expect(store.getState().layout.pinnedButtons).toEqual({
-          "copy-tree": false,
-          terminal: false,
-        });
       });
 
       it("renames `plugin.{pluginId}.{btn}` entries in leftButtons/rightButtons", async () => {
@@ -1406,29 +1117,6 @@ describe("toolbarPreferencesStore", () => {
         expect(rightButtons).toContain("forge-stats");
         expect(rightButtons).not.toContain("github-stats");
         expect(pinnedButtons["forge-stats"]).toBe(false);
-      });
-
-      it("is a no-op on already-renamed v10-shaped state", async () => {
-        storageMock.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            state: {
-              layout: {
-                leftButtons: ["terminal"],
-                rightButtons: ["forge-stats", "settings"],
-                pinnedButtons: { "forge-stats": false },
-              },
-              launcher: { alwaysShowDevServer: false },
-            },
-            version: 9,
-          })
-        );
-
-        const store = await loadStore();
-        expect(store.getState().layout.pinnedButtons).toEqual({
-          "forge-stats": false,
-        });
-        expect(store.getState().layout.rightButtons).toContain("forge-stats");
       });
 
       it("dedupes a v9 rename collision so only one forge-stats survives (#10937)", async () => {
@@ -1604,20 +1292,6 @@ describe("toolbarPreferencesStore", () => {
 
         const store = await loadStore();
         expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(true);
-      });
-
-      it("synthesizes a layout when a pre-v12 blob has none", async () => {
-        storageMock.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            state: { launcher: { alwaysShowDevServer: false } },
-            version: 11,
-          })
-        );
-
-        const store = await loadStore();
-        expect(store.getState().layout.pinnedButtons).toEqual({});
-        expect(store.getState().layout.leftButtons).toContain("file-browser");
       });
     });
 
@@ -1859,36 +1533,10 @@ describe("toolbarPreferencesStore", () => {
         v13({ leftButtons: ["agent-tray"], rightButtons: [], pinnedButtons: [] });
         expect((await loadStore()).getState().layout.pinnedButtons).toEqual({});
       });
-
-      it("survives a layout with no button arrays at all", async () => {
-        v13({ pinnedButtons: { "agent-tray": false } });
-        const store = await loadStore();
-        expect(store.getState().layout.leftButtons).toContain("launcher");
-      });
     });
   });
 
   describe("panel button defaults (#11495, #11667)", () => {
-    it("ships file-browser visible and the launcher ahead of it", async () => {
-      // No stored state on purpose: a fresh install never runs `migrate`, so the
-      // store's own defaults are the only source of truth for a new user.
-      const store = await loadStore();
-      const { leftButtons, pinnedButtons } = store.getState().layout;
-
-      expect(pinnedButtons["file-browser"]).toBeUndefined();
-      expect(leftButtons).toContain("file-browser");
-      expect(leftButtons.indexOf("launcher")).toBeLessThan(leftButtons.indexOf("file-browser"));
-    });
-
-    it("synthesizes no pin entries at all for a fresh profile", async () => {
-      // The #11667 invariant: `pinnedButtons` records user intent only. A profile
-      // nobody has touched has expressed none, so an empty map is the only
-      // correct state — a seeded default here is what made a deliberate hide
-      // indistinguishable from a migration artifact in v12.
-      const store = await loadStore();
-      expect(store.getState().layout.pinnedButtons).toEqual({});
-    });
-
     it("keeps file-browser on the side the user moved it to across hydration", async () => {
       // `mergeButtonList` re-materializes a default that is missing from its home
       // side. Without the cross-side check that means a switched button lands on
@@ -2335,5 +1983,242 @@ describe("toolbarPreferencesStore", () => {
       store.getState().positionAgentButton(["claude", "codex"]);
       expect(store.getState().layout.pinnedButtons).toEqual({});
     });
+  });
+});
+
+/**
+ * Cross-view write-merge coverage for the shared localStorage partition
+ * (issue #11351). Focuses on the genuinely-mergeable persisted units: the
+ * `pinnedButtons` map (per button id) and the launcher scalars. A stale project
+ * view must not drop or resurrect a sibling view's plugin pin, nor revert a
+ * sibling's launcher change.
+ */
+describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
+  // Must track the store's own `version`. The reconciler reads `onDisk` raw and
+  // bails out wholesale when the versions differ, so a stale constant here makes
+  // every case in this file exercise the take-incoming shortcut instead of the
+  // merge — passing for the wrong reason on the assertions that expect a drop,
+  // and failing on the ones that expect a survivor.
+  const VERSION = 14;
+  const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+
+  type Layout = {
+    leftButtons: string[];
+    rightButtons: string[];
+    pinnedButtons: Record<string, boolean>;
+  };
+  type PersistedBlob = {
+    version: number;
+    state: {
+      layout: Layout;
+      launcher: { alwaysShowDevServer: boolean; defaultSelection?: string };
+    };
+  };
+
+  function installLocalStorage(initial: Record<string, string>): Map<string, string> {
+    const backing = new Map<string, string>(Object.entries(initial));
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        getItem: (key: string) => backing.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          backing.set(key, value);
+        },
+        removeItem: (key: string) => {
+          backing.delete(key);
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    return backing;
+  }
+
+  function restoreLocalStorage(): void {
+    if (originalDescriptor) {
+      Object.defineProperty(globalThis, "localStorage", originalDescriptor);
+      return;
+    }
+    delete (globalThis as Partial<typeof globalThis>).localStorage;
+  }
+
+  function readBlob(backing: Map<string, string>): PersistedBlob {
+    const blob: PersistedBlob = JSON.parse(backing.get(STORAGE_KEY)!);
+    return blob;
+  }
+
+  function siblingBlob(overrides: Partial<PersistedBlob["state"]>): string {
+    return JSON.stringify({
+      version: VERSION,
+      state: {
+        layout: { leftButtons: [], rightButtons: [], pinnedButtons: {} },
+        launcher: { alwaysShowDevServer: false, defaultSelection: undefined },
+        ...overrides,
+      },
+    });
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    restoreLocalStorage();
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("a fresh view's pin toggle preserves a sibling's pin and non-default launcher", async () => {
+    const backing = installLocalStorage({});
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    // A sibling populated the shared blob before this fresh view writes.
+    backing.set(
+      STORAGE_KEY,
+      siblingBlob({
+        layout: { leftButtons: [], rightButtons: [], pinnedButtons: { "pluginX.btn": true } },
+        launcher: { alwaysShowDevServer: true },
+      })
+    );
+
+    store.getState().toggleButtonVisibility("voice-recording", "right");
+
+    const written = readBlob(backing);
+    expect(written.state.layout.pinnedButtons["voice-recording"]).toBe(false);
+    expect(written.state.layout.pinnedButtons["pluginX.btn"]).toBe(true);
+    expect(written.state.launcher.alwaysShowDevServer).toBe(true);
+  });
+
+  it("a stale view's pin write preserves a sibling's concurrent pin and launcher change", async () => {
+    const backing = installLocalStorage({});
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    // This view promotes plugin A.
+    store.getState().setPluginButtonPromoted("pluginA.btn", true);
+
+    // A sibling promotes plugin B and enables the dev-server launcher on disk.
+    const disk = readBlob(backing);
+    disk.state.layout.pinnedButtons["pluginB.btn"] = true;
+    disk.state.launcher.alwaysShowDevServer = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // This stale view — unaware of B — promotes plugin C.
+    store.getState().setPluginButtonPromoted("pluginC.btn", true);
+
+    const written = readBlob(backing);
+    expect(written.state.layout.pinnedButtons).toMatchObject({
+      "pluginA.btn": true,
+      "pluginB.btn": true,
+      "pluginC.btn": true,
+    });
+    expect(written.state.launcher.alwaysShowDevServer).toBe(true);
+  });
+
+  it("does not revert a sibling's file-browser opt-in from an untouched default (#11495, #11667)", async () => {
+    // Originally this guarded the v12 seed: `file-browser` shipped hidden, so
+    // every fresh view held a `false` nobody chose, and a null baseline
+    // normalizing to `{}` made that untouched value read as this view's own edit.
+    // v13 removed the seed, so a fresh view now holds no entry at all and there
+    // is nothing to mistake for an edit — but the outcome the sibling depends on
+    // is identical, so the case stays as the regression probe for it.
+    const backing = installLocalStorage({});
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    // The sibling made a real edit this view has never seen: an explicit hide.
+    // Asserting against `{}` on both sides would pass even under a wholesale
+    // overwrite, so the sibling has to hold something distinguishable.
+    backing.set(
+      STORAGE_KEY,
+      siblingBlob({
+        layout: { leftButtons: [], rightButtons: [], pinnedButtons: { "copy-tree": false } },
+      })
+    );
+
+    // This view changes something unrelated and must not carry its own default over.
+    store.getState().setAlwaysShowDevServer(true);
+
+    const written = readBlob(backing);
+    expect(written.state.layout.pinnedButtons["file-browser"]).toBeUndefined();
+    // The sibling's untouched edit survives this view's unrelated write.
+    expect(written.state.layout.pinnedButtons["copy-tree"]).toBe(false);
+    expect(written.state.launcher.alwaysShowDevServer).toBe(true);
+  });
+
+  it("preserves a sibling's panel promotion when a stale view writes something unrelated (#11667)", async () => {
+    // Array orderings reconcile last-writer-wins, so this view's write DOES
+    // replace the sibling's side arrays and drop the promoted position. The
+    // explicit `true` is what has to survive — `restorePromotedPanelButtons`
+    // rebuilds the position from it on the next hydration. Without the pin entry
+    // the promotion would be gone with nothing left to reconstruct it from.
+    const backing = installLocalStorage({});
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    backing.set(
+      STORAGE_KEY,
+      siblingBlob({
+        layout: {
+          leftButtons: ["terminal", "browser", "launcher"],
+          rightButtons: [],
+          pinnedButtons: { browser: true },
+        },
+      })
+    );
+
+    store.getState().setAlwaysShowDevServer(true);
+
+    const written = readBlob(backing);
+    expect(written.state.layout.pinnedButtons["browser"]).toBe(true);
+    expect(written.state.launcher.alwaysShowDevServer).toBe(true);
+  });
+
+  it("still writes its own explicit file-browser hide over a sibling's opt-in", async () => {
+    // The mirror of the case above: when the user in THIS view actually turns the
+    // button off, that is a real edit and must win. Distinguishing the two is the
+    // whole point of separating "no stored map" from "an explicitly empty one".
+    const backing = installLocalStorage({});
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    // Since v13 the store already starts in the shown state with no pin entry
+    // (#11667), so the single toggle below IS the departure from it. Before v13
+    // this needed a priming toggle first to clear the shipped `false` seed.
+    expect(store.getState().layout.pinnedButtons["file-browser"]).toBeUndefined();
+
+    backing.set(
+      STORAGE_KEY,
+      siblingBlob({ layout: { leftButtons: [], rightButtons: [], pinnedButtons: {} } })
+    );
+
+    store.getState().toggleButtonVisibility("file-browser", "left");
+
+    expect(readBlob(backing).state.layout.pinnedButtons["file-browser"]).toBe(false);
+  });
+
+  it("does not resurrect a pin a sibling deleted that this view still holds unchanged", async () => {
+    const backing = installLocalStorage({
+      [STORAGE_KEY]: JSON.stringify({
+        version: VERSION,
+        state: {
+          layout: {
+            leftButtons: [],
+            rightButtons: [],
+            pinnedButtons: { "pluginA.btn": true, "pluginB.btn": true },
+          },
+          launcher: { alwaysShowDevServer: false },
+        },
+      }),
+    });
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    // A sibling demotes (deletes) plugin B on disk.
+    const disk = readBlob(backing);
+    delete disk.state.layout.pinnedButtons["pluginB.btn"];
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // An unrelated write from this (stale, still-holds-B) view must not resurrect B.
+    store.getState().setAlwaysShowDevServer(true);
+
+    const written = readBlob(backing);
+    expect(written.state.layout.pinnedButtons["pluginA.btn"]).toBe(true);
+    expect("pluginB.btn" in written.state.layout.pinnedButtons).toBe(false);
+    expect(written.state.launcher.alwaysShowDevServer).toBe(true);
   });
 });

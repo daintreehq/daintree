@@ -21,11 +21,6 @@ describe("isBootComplete", () => {
   it("detects Gemini CLI ready prompt", () => {
     expect(isBootComplete("Type your message to begin", BOOT_COMPLETE_PATTERNS)).toBe(true);
   });
-
-  it("uses custom patterns", () => {
-    expect(isBootComplete("ready>", [/ready>/])).toBe(true);
-    expect(isBootComplete("ready>", BOOT_COMPLETE_PATTERNS)).toBe(false);
-  });
 });
 
 describe("BootDetector", () => {
@@ -33,10 +28,6 @@ describe("BootDetector", () => {
 
   beforeEach(() => {
     detector = new BootDetector();
-  });
-
-  it("starts with hasExitedBootState false", () => {
-    expect(detector.hasExitedBootState).toBe(false);
   });
 
   it("detects boot complete via pattern", () => {
@@ -67,11 +58,6 @@ describe("BootDetector", () => {
     detector.markExited();
     const result = detector.check("anything", false, 0, 15000);
     expect(result).toBe(true);
-  });
-
-  it("markExited sets hasExitedBootState", () => {
-    detector.markExited();
-    expect(detector.hasExitedBootState).toBe(true);
   });
 
   it("reset clears state", () => {

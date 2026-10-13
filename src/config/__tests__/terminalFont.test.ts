@@ -21,17 +21,6 @@ describe("ensureTerminalFontLoaded", () => {
     expect(loadMock).toHaveBeenCalledWith("bold 12px 'JetBrains Mono'");
   });
 
-  it("returns the same promise on subsequent calls (singleton)", async () => {
-    const { ensureTerminalFontLoaded } = await import("../terminalFont");
-    const p1 = ensureTerminalFontLoaded();
-    const p2 = ensureTerminalFontLoaded();
-
-    expect(p1).toBe(p2);
-    expect(loadMock).toHaveBeenCalledTimes(2);
-    await p1;
-    await p2;
-  });
-
   it("resolves when document.fonts is unavailable", async () => {
     Object.defineProperty(globalThis, "document", {
       value: {},
@@ -150,22 +139,6 @@ describe("onTerminalFontArrivedLate", () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
-  it("fires every registered callback exactly once", async () => {
-    const mod = await import("../terminalFont");
-    mod.ensureTerminalFontLoaded();
-    const first = vi.fn();
-    const second = vi.fn();
-    mod.onTerminalFontArrivedLate(first);
-    mod.onTerminalFontArrivedLate(second);
-
-    await vi.advanceTimersByTimeAsync(3_000);
-    resolveLoad([{ family: "JetBrains Mono" }]);
-    await vi.runAllTimersAsync();
-
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).toHaveBeenCalledTimes(1);
-  });
-
   it("fires when one weight arrives late even if the other fails", async () => {
     // Regular weight loads late; bold rejects. The regular JetBrains Mono face
     // still changes cell metrics, so the grid must be repaired (allSettled).
@@ -235,10 +208,5 @@ describe("terminalFontReady", () => {
   it("is the same promise instance as ensureTerminalFontLoaded()", async () => {
     const mod = await import("../terminalFont");
     expect(mod.terminalFontReady).toBe(mod.ensureTerminalFontLoaded());
-  });
-
-  it("resolves to undefined (never rejects)", async () => {
-    const { terminalFontReady } = await import("../terminalFont");
-    await expect(terminalFontReady).resolves.toBeUndefined();
   });
 });

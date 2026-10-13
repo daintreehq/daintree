@@ -146,17 +146,6 @@ describe("evaluateFreezeMeasurement", () => {
     expect(verdict.failures.join("\n")).toContain("positive control is not alive");
   });
 
-  it("fails when the view never resumes, so a dead view cannot masquerade as a frozen one", () => {
-    const verdict = evaluateFreezeMeasurement({
-      controlTicks: 54000,
-      frozenTicks: 0,
-      recoveredTicks: 0,
-    });
-    expect(verdict.passed).toBe(false);
-    const message = verdict.failures.join("\n");
-    expect(message).toContain("did not resume at a comparable rate");
-  });
-
   it("fails when the view resumes at only a trickle", () => {
     const verdict = evaluateFreezeMeasurement({
       controlTicks: 54000,

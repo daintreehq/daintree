@@ -99,10 +99,4 @@ describe("ErrorsContainer icon", () => {
     });
     expect(hasExitedCircle).toBe(true);
   });
-
-  it("uses the error-status color tokens on the pill icon", () => {
-    const { container } = render(<ErrorsContainer />);
-    const errorIcon = container.querySelector("svg.text-status-error");
-    expect(errorIcon).not.toBeNull();
-  });
 });

@@ -7,7 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { usePulseStore } from "@/store/pulseStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore, recordSidebarWorktreeOrder } from "@/store/worktreeStore";
-import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
+import type { ProjectPulse, WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { Project } from "@shared/types/project";
 
 const TEST_EPOCH = "test-epoch";
@@ -63,6 +63,38 @@ function setPanels(entries: Array<{ id: string; worktreeId: string; location?: s
     panelsById: panelsById as never,
     panelIdsByWorktreeId,
   });
+}
+
+// Seed every worktree-keyed map `invalidate` touches so a regression that
+// stops clearing any one of the seven is caught. `timer` lets a test plant a
+// real retry timer to verify it gets cancelled on prune.
+function seedPulse(worktreeId: string, timer?: ReturnType<typeof setTimeout>): void {
+  usePulseStore.setState((prev) => ({
+    pulses: new Map(prev.pulses).set(worktreeId, { commits: [] } as unknown as ProjectPulse),
+    loading: new Map(prev.loading).set(worktreeId, true),
+    errors: new Map(prev.errors).set(worktreeId, "boom"),
+    requestIds: new Map(prev.requestIds).set(worktreeId, 123),
+    retryCount: new Map(prev.retryCount).set(worktreeId, 2),
+    lastRetryTimestamp: new Map(prev.lastRetryTimestamp).set(worktreeId, 456),
+    ...(timer ? { retryTimers: new Map(prev.retryTimers).set(worktreeId, timer) } : {}),
+  }));
+}
+
+const PULSE_MAP_KEYS = [
+  "pulses",
+  "loading",
+  "errors",
+  "requestIds",
+  "retryCount",
+  "lastRetryTimestamp",
+  "retryTimers",
+] as const;
+
+function expectFullyPruned(worktreeId: string): void {
+  const state = usePulseStore.getState();
+  for (const key of PULSE_MAP_KEYS) {
+    expect(state[key].has(worktreeId)).toBe(false);
+  }
 }
 
 function setCurrentProject(path: string | null): void {
@@ -259,22 +291,6 @@ describe("WorktreeStoreProvider — surviving terminals on worktree removal", ()
 
     // The active id is a ghost row with survivors — the echo must not win.
     expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
-  });
-
-  it("still follows the host's switch when the deletion left no surviving terminals", async () => {
-    const { store } = await renderProvider();
-    act(() => {
-      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("main")], nextV());
-    });
-    setPanels([]);
-    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
-
-    act(() => {
-      emit("worktree-removed", removeEvent("wt-1"));
-      emit("worktree-activated", { type: "worktree-activated", worktreeId: "main", ...nextV() });
-    });
-
-    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("main");
   });
 
   it("keeps the ghost selection through a duplicate removal event", async () => {
@@ -852,5 +868,109 @@ describe("WorktreeStoreProvider — same-path re-creation (#11994)", () => {
     expect(useWorktreeSelectionStore.getState().pendingCreations.has("wt-1")).toBe(true);
     expect(useWorktreeSelectionStore.getState().pendingWorktreeId).toBe("wt-1");
     expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(true);
+  });
+});
+
+describe("WorktreeStoreProvider — pulse-cache snapshot pruning", () => {
+  it("invalidates pulse entries for worktrees dropped by applySnapshot", async () => {
+    const { store } = await renderProvider();
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+    seedPulse("wt-1");
+    seedPulse("wt-2");
+    expect(usePulseStore.getState().pulses.has("wt-1")).toBe(true);
+    expect(usePulseStore.getState().pulses.has("wt-2")).toBe(true);
+
+    // Host restart delivers a smaller authoritative snapshot — wt-2 is gone but
+    // no per-id `worktree-removed` event fires.
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+
+    expect(usePulseStore.getState().pulses.has("wt-1")).toBe(true);
+    // All seven worktree-keyed maps must be cleared for the dropped worktree.
+    expectFullyPruned("wt-2");
+  });
+
+  it("cancels the pending retry timer for a worktree dropped by applySnapshot", async () => {
+    const { store } = await renderProvider();
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const timer = setTimeout(() => {}, 60_000);
+    seedPulse("wt-2", timer);
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(timer);
+    expect(usePulseStore.getState().retryTimers.has("wt-2")).toBe(false);
+  });
+
+  it("does not invalidate when an unrelated slice changes (worktrees ref stable)", async () => {
+    const { store } = await renderProvider();
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+    seedPulse("wt-1");
+
+    const invalidateSpy = vi.spyOn(usePulseStore.getState(), "invalidate");
+
+    act(() => {
+      store.getState().setWatcherDegraded(true);
+    });
+
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(usePulseStore.getState().pulses.has("wt-1")).toBe(true);
+  });
+
+  it("invalidates every worktree when the snapshot empties the set", async () => {
+    const { store } = await renderProvider();
+
+    act(() => {
+      store
+        .getState()
+        .applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2"), makeWorktree("wt-3")], nextV());
+    });
+    seedPulse("wt-1");
+    seedPulse("wt-2");
+    seedPulse("wt-3");
+
+    act(() => {
+      store.getState().applySnapshot([], nextV());
+    });
+
+    expect(usePulseStore.getState().pulses.has("wt-1")).toBe(false);
+    expect(usePulseStore.getState().pulses.has("wt-2")).toBe(false);
+    expect(usePulseStore.getState().pulses.has("wt-3")).toBe(false);
+  });
+
+  it("stops pruning after the provider unmounts", async () => {
+    const { store, unmount } = await renderProvider();
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+    seedPulse("wt-2");
+
+    // Tear down inside act() so the effect cleanup (which removes the
+    // subscription) flushes synchronously before the next snapshot.
+    act(() => {
+      unmount();
+    });
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+
+    // Entry remains because the subscription was torn down on unmount.
+    expect(usePulseStore.getState().pulses.has("wt-2")).toBe(true);
   });
 });

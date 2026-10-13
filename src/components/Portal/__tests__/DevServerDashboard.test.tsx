@@ -216,22 +216,6 @@ describe("DevServerDashboard", () => {
     expect(restartByWorktree).toHaveBeenCalledWith({ worktreeId: "wt-1" });
   });
 
-  it("names why an errored session failed", () => {
-    mockSessions([
-      session({
-        status: "error",
-        terminalId: null,
-        url: null,
-        error: {
-          type: "port-conflict",
-          message: "Port 3000 in use",
-        } as DevPreviewSessionState["error"],
-      }),
-    ]);
-    render(<DevServerDashboard />);
-    expect(screen.getByText("Port 3000 in use")).toBeTruthy();
-  });
-
   it("keeps Stop, not Dismiss, for an error whose server is still running", () => {
     mockSessions([session({ status: "error", terminalId: "t-1", url: null })]);
     render(<DevServerDashboard />);

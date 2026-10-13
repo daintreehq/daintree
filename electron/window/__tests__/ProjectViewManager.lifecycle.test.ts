@@ -1747,3 +1747,313 @@ describe("ProjectViewManager — startup view crash hook (#12954)", () => {
     });
   });
 });
+
+function getResizeHandler(win: ReturnType<typeof createMockWindow>): (() => void) | undefined {
+  const call = (win.on as ReturnType<typeof vi.fn>).mock.calls.find(
+    ([event]) => event === "resize"
+  );
+  return call?.[1] as (() => void) | undefined;
+}
+
+describe("ProjectViewManager adversarial", () => {
+  beforeEach(() => {
+    nextWebContentsId = 300;
+    wcQueue.length = 0;
+    // Switch-ordering suite, not paint-gate policy: release every gate with a
+    // signal so the zero-length gate can't read as the hard timeout that now
+    // abandons a cold switch (#11635).
+    vi.spyOn(ProjectViewManager.prototype, "waitForPaint").mockResolvedValue("signal");
+  });
+
+  afterEach(() => {
+    wcQueue.length = 0;
+  });
+
+  it("serializes rapid A→B→A→B switches within one tick without duplicating views", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const initialWc = createMockWebContents();
+    manager.registerInitialView(
+      { webContents: initialWc, setBounds: vi.fn() } as never,
+      "proj-a",
+      "/a"
+    );
+
+    wcQueue.push(createMockWebContents(), createMockWebContents());
+
+    const first = manager.switchTo("proj-b", "/b");
+    const second = manager.switchTo("proj-a", "/a");
+    const third = manager.switchTo("proj-b", "/b");
+
+    await Promise.all([first, second, third]);
+
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+    expect(
+      manager
+        .getAllViews()
+        .map((view) => view.projectId)
+        .sort()
+    ).toEqual(["proj-a", "proj-b"]);
+  });
+
+  it("requests GC immediately on deactivation, even when the view is evicted by a later switch", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+
+    const initialWc = createMockWebContents();
+    manager.registerInitialView(
+      { webContents: initialWc, setBounds: vi.fn() } as never,
+      "proj-a",
+      "/a"
+    );
+
+    wcQueue.push(createMockWebContents(), createMockWebContents());
+
+    // Switch to B — deactivates A, GC requested immediately
+    await manager.switchTo("proj-b", "/b");
+    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
+      expect.stringContaining("requestIdleCallback")
+    );
+
+    // Switch to C — evicts A (LRU, cache limit 2)
+    await manager.switchTo("proj-c", "/c");
+    await flushImmediates();
+
+    expect(initialWc.close).toHaveBeenCalledTimes(1);
+    // executeJavaScript was already called during deactivation — not called again on eviction
+    expect(initialWc.executeJavaScript).toHaveBeenCalledTimes(1);
+    expect(manager.getActiveProjectId()).toBe("proj-c");
+  });
+
+  it("creates a fresh view when switching to a project whose cached renderer was already destroyed", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const initialWc = createMockWebContents();
+    manager.registerInitialView(
+      { webContents: initialWc, setBounds: vi.fn() } as never,
+      "proj-a",
+      "/a"
+    );
+
+    const projBWc = createMockWebContents();
+    wcQueue.push(projBWc);
+    await manager.switchTo("proj-b", "/b");
+    await manager.switchTo("proj-a", "/a");
+
+    projBWc.isDestroyed.mockReturnValue(true);
+
+    const replacementWc = createMockWebContents();
+    wcQueue.push(replacementWc);
+    const result = await manager.switchTo("proj-b", "/b");
+
+    expect(result.isNew).toBe(true);
+    expect(result.view.webContents).toBe(replacementWc);
+    expect(manager.getActiveProjectId()).toBe("proj-b");
+  });
+
+  it("sets background color on cold-start view before loadURL to prevent white flash (#9573)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const initialWc = createMockWebContents({ autoFinishLoad: false });
+    const mockView = { webContents: initialWc, setBounds: vi.fn(), setBackgroundColor: vi.fn() };
+    manager.registerInitialView(mockView as never, "proj-a", "/a");
+
+    const projBWc = createMockWebContents();
+    wcQueue.push(projBWc);
+    await manager.switchTo("proj-b", "/b");
+
+    // The newly-created WebContentsView for proj-b must have had setBackgroundColor
+    // called with the resolved canvas color before loadURL fired.
+    const projBView = manager.getAllViews().find((v) => v.projectId === "proj-b")?.view as
+      | {
+          setBackgroundColor: ReturnType<typeof vi.fn>;
+          webContents: { loadURL: ReturnType<typeof vi.fn> };
+        }
+      | undefined;
+
+    expect(projBView?.setBackgroundColor).toHaveBeenCalledWith("#1f1b16");
+    const setColorOrder = projBView?.setBackgroundColor.mock.invocationCallOrder[0] ?? 0;
+    const loadUrlOrder = projBView?.webContents.loadURL.mock.invocationCallOrder[0] ?? Infinity;
+    const addChildOrder =
+      (win.contentView.addChildView as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ??
+      Infinity;
+    expect(setColorOrder).toBeLessThan(loadUrlOrder);
+    expect(setColorOrder).toBeLessThan(addChildOrder);
+  });
+
+  // #10806 — Under rapid switching + backgrounding, a cancelled paint gate or a
+  // destroyView race (HibernationService runs outside switchChain) can skip
+  // deactivateEntry(previousEntry), leaving an outgoing view attached behind the
+  // active one. Two renderers composite at once → the forge toolbar renders
+  // twice. pruneOrphanedChildren on each switch's success path sweeps the leak.
+
+  it("detaches an orphaned outgoing view left attached behind the active view (#10806)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const aWc = createMockWebContents();
+    const aView = { webContents: aWc, setBounds: vi.fn(), setVisible: vi.fn() };
+    win.contentView.addChildView(aView);
+    manager.registerInitialView(aView as never, "proj-a", "/a");
+
+    // A→B deactivates A (cached) and detaches it from contentView.
+    wcQueue.push(createMockWebContents());
+    await manager.switchTo("proj-b", "/b");
+    expect(win.contentView.children).not.toContain(aView);
+
+    // Reproduce the leaked state: the cached A view is attached behind the
+    // active B view, as a cancelled gate / destroyView race would leave it.
+    win.contentView.addChildView(aView);
+    expect(win.contentView.children).toContain(aView);
+
+    // The next switch must sweep the orphan so only the active view remains.
+    wcQueue.push(createMockWebContents());
+    const result = await manager.switchTo("proj-c", "/c");
+
+    expect(win.contentView.children).not.toContain(aView);
+    expect(win.contentView.children).toEqual([result.view]);
+    expect(manager.getActiveProjectId()).toBe("proj-c");
+  });
+
+  it("parks a still-active orphaned view as cached rather than evicting it (#10806)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const aWc = createMockWebContents();
+    const aView = { webContents: aWc, setBounds: vi.fn(), setVisible: vi.fn() };
+    win.contentView.addChildView(aView);
+    manager.registerInitialView(aView as never, "proj-a", "/a");
+
+    wcQueue.push(createMockWebContents());
+    await manager.switchTo("proj-b", "/b");
+
+    // Reproduce the precise race: deactivateEntry(A) was skipped, so A is still
+    // marked active and still attached behind the active B view.
+    const aEntry = manager.getAllViews().find((entry) => entry.projectId === "proj-a");
+    expect(aEntry).toBeDefined();
+    aEntry!.state = "active";
+    win.contentView.addChildView(aView);
+
+    wcQueue.push(createMockWebContents());
+    await manager.switchTo("proj-c", "/c");
+
+    // Orphan detached and parked as cached (setVisible(false)) — never evicted,
+    // so its reusable cached renderer and cleanup handlers survive (#6085).
+    expect(win.contentView.children).not.toContain(aView);
+    expect(aView.setVisible).toHaveBeenCalledWith(false);
+    expect(
+      manager
+        .getAllViews()
+        .map((entry) => entry.projectId)
+        .sort()
+    ).toEqual(["proj-a", "proj-b", "proj-c"]);
+  });
+
+  it("resizes orphaned attached views so a stray duplicate overlaps the active view (#10806)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const aWc = createMockWebContents();
+    const aView = { webContents: aWc, setBounds: vi.fn(), setVisible: vi.fn() };
+    win.contentView.addChildView(aView);
+    manager.registerInitialView(aView as never, "proj-a", "/a");
+
+    wcQueue.push(createMockWebContents());
+    await manager.switchTo("proj-b", "/b");
+
+    // Orphan A attached behind active B with no in-flight paint gate.
+    win.contentView.addChildView(aView);
+
+    const resize = getResizeHandler(win);
+    expect(resize).toBeTypeOf("function");
+    aView.setBounds.mockClear();
+    resize!();
+
+    // The orphan gets the full window bounds, so it overlaps the active view
+    // exactly instead of drifting to a stale x-offset (side-by-side toolbars).
+    expect(aView.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 800, height: 600 });
+  });
+
+  it("does not resize non-project children such as parked portal views (#10806)", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const aView = { webContents: createMockWebContents(), setBounds: vi.fn(), setVisible: vi.fn() };
+    win.contentView.addChildView(aView);
+    manager.registerInitialView(aView as never, "proj-a", "/a");
+
+    // A hidden portal tab: attached to contentView but never registered as a
+    // project view, parked far offscreen by PortalManager.
+    const portalView = { webContents: createMockWebContents(), setBounds: vi.fn() };
+    win.contentView.addChildView(portalView);
+
+    const resize = getResizeHandler(win);
+    expect(resize).toBeTypeOf("function");
+    portalView.setBounds.mockClear();
+    resize!();
+
+    // The portal view must keep its own (offscreen) bounds — yanking it to the
+    // full window would surface a hidden tab over the active project view.
+    expect(portalView.setBounds).not.toHaveBeenCalled();
+  });
+});

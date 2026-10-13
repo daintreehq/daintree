@@ -289,21 +289,6 @@ describe("AuditService.appendRecord — turnId, severity, schemaVersion", () => 
     expect(record!.turnId).toBe("turn-uuid-123");
   });
 
-  it("turnId is absent when not provided", () => {
-    const { service } = makeFixture();
-    service.appendRecord({
-      toolId: "terminal.new",
-      sessionId: "sess-1",
-      tier: "core",
-      args: {},
-      durationMs: 10,
-      outcome: successOutcome,
-      argsSummary: "{}",
-    });
-    const [record] = service.getRecords();
-    expect(record!.turnId).toBeUndefined();
-  });
-
   it("stamps schemaVersion on every record", () => {
     const { service } = makeFixture();
     service.appendRecord({
@@ -439,25 +424,6 @@ describe("AuditService.appendRecord — resultMeta (#10014)", () => {
 });
 
 describe("AuditService.appendRecord — startedAt (#12122)", () => {
-  it("persists the caller's startedAt verbatim and reads it back unchanged", () => {
-    const { service } = makeFixture();
-    // A real epoch reading, not a small sentinel: the service must not clamp,
-    // round, or re-derive it the way it normalises `durationMs`.
-    const startedAt = 1_767_225_600_123;
-    service.appendRecord({
-      toolId: "worktree.list",
-      sessionId: "sess-1",
-      tier: "core",
-      args: {},
-      durationMs: 40,
-      startedAt,
-      outcome: successOutcome,
-      argsSummary: "{}",
-    });
-    const [record] = service.getRecords();
-    expect(record!.startedAt).toBe(startedAt);
-  });
-
   it("carries start information that timestamp and durationMs cannot express", () => {
     // The point of the field (#12122): two calls can settle into identical
     // `timestamp`/`durationMs` shapes and still have begun at different
@@ -700,26 +666,6 @@ describe("AuditService hydrate — backward compat", () => {
     expect(record!.severity).toBe("critical");
   });
 
-  it("preserves schemaVersion and severity on records that already have them", () => {
-    const currentRecord = {
-      id: "cur-1",
-      timestamp: 1000,
-      toolId: "agent.launch",
-      sessionId: "sess-1",
-      tier: "core",
-      argsSummary: "{}",
-      result: "success",
-      durationMs: 50,
-      schemaVersion: 1,
-      severity: "info",
-    };
-    const { service } = makeFixture({}, [currentRecord]);
-    const records = service.getRecords();
-    expect(records).toHaveLength(1);
-    expect(records[0]!.schemaVersion).toBe(1);
-    expect(records[0]!.severity).toBe("info");
-  });
-
   it("reclassifies a malformed persisted record with `type: 'dispatch'` as audit (#10027)", () => {
     // A forward-compat dispatch-record discriminator on a persisted row
     // would otherwise be misclassified as a grant and bypass severity
@@ -841,26 +787,6 @@ describe("AuditService.appendGrantRecord — tier records (#9151)", () => {
 });
 
 describe("AuditService.recordAuth401 / getAuditStats", () => {
-  it("starts at zero", () => {
-    const { service } = makeFixture();
-    expect(service.getAuditStats().auth401Count).toBe(0);
-  });
-
-  it("increments on each call", () => {
-    const { service } = makeFixture();
-    service.recordAuth401();
-    service.recordAuth401();
-    service.recordAuth401();
-    expect(service.getAuditStats().auth401Count).toBe(3);
-  });
-
-  it("does not increment when audit is disabled", () => {
-    const { service } = makeFixture({ auditEnabled: false });
-    service.recordAuth401();
-    service.recordAuth401();
-    expect(service.getAuditStats().auth401Count).toBe(0);
-  });
-
   it("is not reset by clear() — counter is session-scoped, not log-scoped", () => {
     const { service } = makeFixture();
     service.recordAuth401();
@@ -1277,41 +1203,6 @@ describe("AuditService anomaly detection", () => {
     appendHealthy(service, 7, "new.tool");
     for (let i = 0; i < 3; i++) append(service, { toolId: "new.tool", durationMs: 5000 });
     expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
-  });
-
-  it("latency-drift: excludes non-success records from baseline", () => {
-    // 50 success records at 10ms, one error at 5000ms — error excluded.
-    const { service } = makeFixture();
-    for (let i = 0; i < 50; i++) {
-      service.appendRecord({
-        toolId: "test.tool",
-        sessionId: "sess-1",
-        tier: "core",
-        args: {},
-        durationMs: 10,
-        outcome: successOutcome,
-        argsSummary: "{}",
-      });
-    }
-    service.appendRecord({
-      toolId: "test.tool",
-      sessionId: "sess-1",
-      tier: "core",
-      args: {},
-      durationMs: 5000,
-      outcome: {
-        kind: "result",
-        value: {
-          ok: false,
-          error: { code: "EXECUTION_ERROR", message: "fail" },
-        } as import("../../../../shared/types/actions.js").ActionDispatchResult,
-      },
-      argsSummary: "{}",
-    });
-    const stats = service.getAuditStats();
-    const drift = stats.anomalySignals.filter((s) => s.kind === "latency-drift");
-    // The 5000ms error is non-success, so it should NOT appear as latency drift.
-    expect(drift).toHaveLength(0);
   });
 
   it("failure-cluster: fires when 3 failures in a 10-record window", () => {

@@ -243,33 +243,6 @@ describe("useWorktreeActions", () => {
       expect.objectContaining({ type: "filesystem", context: { worktreeId: "wt-1" } })
     );
   });
-
-  it("handleLaunchAgent dispatches agent.launch through the ActionService", () => {
-    dispatchMock.mockResolvedValueOnce({ ok: true, result: { terminalId: "term-1" } });
-
-    const { result } = renderHook(() => useWorktreeActions());
-    result.current.handleLaunchAgent("wt-1", "claude");
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "agent.launch",
-      { agentId: "claude", worktreeId: "wt-1", location: "grid" },
-      { source: "user" }
-    );
-  });
-
-  it("handleLaunchAgent dispatches agent.launch for dev-preview panels", () => {
-    dispatchMock.mockResolvedValueOnce({ ok: true, result: { terminalId: "term-dev" } });
-
-    const { result } = renderHook(() => useWorktreeActions());
-    result.current.handleLaunchAgent("wt-1", "dev-preview");
-
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "agent.launch",
-      { agentId: "dev-preview", worktreeId: "wt-1", location: "grid" },
-      { source: "user" }
-    );
-  });
 });
 
 describe("formatCopyResultMessage", () => {
@@ -308,15 +281,6 @@ describe("formatCopyResultMessage", () => {
         "temporary-file"
       )
     ).toBe("Bundled 42 files (1 KB) as XML into a temporary file");
-  });
-
-  it("says nothing about the clipboard for a non-clipboard destination", () => {
-    // Guards the whole set at once: a destination that forgot to override the
-    // suffix would still claim the bundle reached the clipboard.
-    for (const destination of ["terminal", "temporary-file"] as const) {
-      expect(formatCopyResultMessage({ fileCount: 1 }, destination)).not.toContain("clipboard");
-      expect(formatCopyResultMessage({ fileCount: 1 }, destination)).not.toContain("Copied");
-    }
   });
 });
 

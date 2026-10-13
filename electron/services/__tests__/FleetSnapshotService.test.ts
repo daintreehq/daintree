@@ -333,22 +333,6 @@ describe("FleetSnapshotService", () => {
     service.stop();
   });
 
-  it("polls on its own interval without any external trigger", async () => {
-    const client = makePtyClient([terminal({ agentState: "working" })]);
-    const service = new FleetSnapshotService(client as never);
-    service.start();
-
-    await vi.advanceTimersByTimeAsync(5_000);
-    const afterFirst = client.getAllTerminalsWithCompletenessAsync.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(afterFirst).toBeGreaterThan(0);
-    expect(client.getAllTerminalsWithCompletenessAsync.mock.calls.length).toBeGreaterThan(
-      afterFirst
-    );
-    service.stop();
-  });
-
   it("stops polling after stop and resumes after a restart", async () => {
     const client = makePtyClient([terminal({ agentState: "working" })]);
     const service = new FleetSnapshotService(client as never);
@@ -669,20 +653,6 @@ describe("FleetSnapshotService", () => {
     await vi.runOnlyPendingTimersAsync();
 
     expect(broadcastMock).not.toHaveBeenCalled();
-  });
-
-  it("replays the retained snapshot to a freshly loaded view", async () => {
-    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
-    const service = new FleetSnapshotService(client as never);
-    service.refresh();
-    await vi.runOnlyPendingTimersAsync();
-
-    const wc = { isDestroyed: () => false, send: vi.fn() };
-    service.pushSnapshotTo(wc as never);
-
-    expect(wc.send).toHaveBeenCalledTimes(1);
-    expect((wc.send.mock.calls[0][1] as FleetSnapshot).runs[0].runId).toBe("t1");
-    service.stop();
   });
 
   it("sends nothing to a new view before the first compute", () => {

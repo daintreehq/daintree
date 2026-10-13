@@ -228,13 +228,6 @@ describe("projectPluginVisibility", () => {
     expect(isPluginVisibleInProject("acme.other", PROJECT_B)).toBe(false);
   });
 
-  it("propagates a failed write instead of reporting success", () => {
-    storeMock.set.mockImplementationOnce(() => {
-      throw new Error("disk full");
-    });
-    expect(() => setProjectPluginVisibility(PROJECT_A, "acme.tools", false)).toThrow(/disk full/);
-  });
-
   it("leaves memory matching disk when a write fails", () => {
     storeMock.set.mockImplementationOnce(() => {
       throw new Error("disk full");

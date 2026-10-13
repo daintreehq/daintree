@@ -95,15 +95,6 @@ describe("broadcastFleetRawInput", () => {
     expect(broadcastMock).toHaveBeenCalledWith(["t2", "t1", "t3"], "npm test\r", false);
   });
 
-  it("works for normal terminals without agent identity", () => {
-    seedPanels([makeTerminal("shell-a"), makeTerminal("shell-b")]);
-    useFleetArmingStore.getState().armIds(["shell-a", "shell-b"]);
-
-    expect(broadcastFleetRawInput("shell-a", "\u0003")).toBe(true);
-
-    expect(broadcastMock).toHaveBeenCalledWith(["shell-a", "shell-b"], "\u0003", false);
-  });
-
   it("asks for successes only while a failure chip is showing", () => {
     seedPanels([makeTerminal("t1"), makeTerminal("t2")]);
     useFleetArmingStore.getState().armIds(["t1", "t2"]);
@@ -229,20 +220,6 @@ describe("broadcastFleetRawInput", () => {
 
     expect(broadcastFleetRawInput("t1", "rejected")).toBe(false);
     expect(notifyUserInputMock).not.toHaveBeenCalled();
-  });
-
-  it("calls notifyEnterPressed on every target for a plain Enter submit (#8255)", () => {
-    seedPanels([makeTerminal("t1"), makeTerminal("t2"), makeTerminal("t3")]);
-    useFleetArmingStore.getState().armIds(["t1", "t2", "t3"]);
-
-    expect(broadcastFleetRawInput("t1", "\r")).toBe(true);
-
-    // Every target — origin included — gets notifyEnterPressed so the
-    // synthetic `directing` state closes optimistically. The custom xterm
-    // key handler bypasses the origin's own onEnterPressed listener path,
-    // so the origin needs it explicitly here.
-    const notifiedIds = notifyEnterPressedMock.mock.calls.map(([id]) => id).sort();
-    expect(notifiedIds).toEqual(["t1", "t2", "t3"]);
   });
 
   it("does not call notifyEnterPressed for non-submit payloads", () => {

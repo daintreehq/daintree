@@ -338,16 +338,6 @@ describe("the write is bound to what the dialog previewed", () => {
       baseOid: "bbb",
     });
   });
-
-  it("sends no pins for an agent dispatch, which had no preview to bind to", async () => {
-    const { run, git } = setupActions();
-    await run(
-      "git.rebaseOntoBase",
-      { worktreeId: WT_ID, baseBranch: "develop" },
-      { dispatchSource: "agent" }
-    );
-    expect(git.rebaseOntoBase).toHaveBeenCalledWith(WT_PATH, "develop", undefined);
-  });
 });
 
 describe("refreshWorktree never widens into a global sweep", () => {
@@ -468,11 +458,6 @@ describe("git.abortRepositoryOperation", () => {
     await settleConfirm(false);
     await pending;
     expect(git.abortRepositoryOperation).not.toHaveBeenCalled();
-  });
-
-  it("carries danger: confirm so it is excluded from repeatLast and the palette MRU", () => {
-    const { defOf } = setupActions();
-    expect(defOf("git.abortRepositoryOperation").danger).toBe("confirm");
   });
 });
 

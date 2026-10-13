@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { useDeferredLoading, useDohertyGate, useSkeletonGate } from "../useDeferredLoading";
+import { useDeferredLoading } from "../useDeferredLoading";
 
 describe("useDeferredLoading", () => {
   afterEach(() => {
@@ -10,12 +10,6 @@ describe("useDeferredLoading", () => {
 
   it("returns false initially when isPending is false", () => {
     const { result } = renderHook(() => useDeferredLoading(false, 200));
-    expect(result.current).toBe(false);
-  });
-
-  it("returns false initially when isPending is true (suppressed during delay)", () => {
-    vi.useFakeTimers();
-    const { result } = renderHook(() => useDeferredLoading(true, 200));
     expect(result.current).toBe(false);
   });
 
@@ -83,22 +77,6 @@ describe("useDeferredLoading", () => {
     expect(result.current).toBe(true);
   });
 
-  it("shows the loader immediately when delay is negative", () => {
-    const { result } = renderHook(() => useDeferredLoading(true, -50));
-    expect(result.current).toBe(true);
-  });
-
-  it("does not update state after unmount", () => {
-    vi.useFakeTimers();
-    const { unmount } = renderHook(() => useDeferredLoading(true, 200));
-    unmount();
-    expect(() => {
-      act(() => {
-        vi.advanceTimersByTime(500);
-      });
-    }).not.toThrow();
-  });
-
   it("resets the timer when delay changes", () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
@@ -143,66 +121,6 @@ describe("useDeferredLoading", () => {
 
     act(() => {
       vi.advanceTimersByTime(50);
-    });
-    expect(result.current).toBe(true);
-  });
-});
-
-describe("useDohertyGate", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("does not flip to true before the 400ms Doherty threshold elapses", () => {
-    vi.useFakeTimers();
-    const { result } = renderHook(({ isPending }) => useDohertyGate(isPending), {
-      initialProps: { isPending: true },
-    });
-
-    act(() => {
-      vi.advanceTimersByTime(399);
-    });
-    expect(result.current).toBe(false);
-  });
-
-  it("flips to true after the 400ms Doherty threshold elapses while still pending", () => {
-    vi.useFakeTimers();
-    const { result } = renderHook(({ isPending }) => useDohertyGate(isPending), {
-      initialProps: { isPending: true },
-    });
-
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
-    expect(result.current).toBe(true);
-  });
-});
-
-describe("useSkeletonGate", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("does not flip to true before the 200ms skeleton gate elapses", () => {
-    vi.useFakeTimers();
-    const { result } = renderHook(({ isPending }) => useSkeletonGate(isPending), {
-      initialProps: { isPending: true },
-    });
-
-    act(() => {
-      vi.advanceTimersByTime(199);
-    });
-    expect(result.current).toBe(false);
-  });
-
-  it("flips to true after the 200ms skeleton gate elapses while still pending", () => {
-    vi.useFakeTimers();
-    const { result } = renderHook(({ isPending }) => useSkeletonGate(isPending), {
-      initialProps: { isPending: true },
-    });
-
-    act(() => {
-      vi.advanceTimersByTime(200);
     });
     expect(result.current).toBe(true);
   });

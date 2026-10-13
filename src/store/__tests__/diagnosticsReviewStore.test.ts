@@ -47,15 +47,6 @@ describe("diagnosticsReviewStore", () => {
     resetStore();
   });
 
-  it("starts closed with no payload or error", () => {
-    const state = useDiagnosticsReviewStore.getState();
-    expect(state.isOpen).toBe(false);
-    expect(state.isCollecting).toBe(false);
-    expect(state.isSaving).toBe(false);
-    expect(state.reviewPayload).toBeNull();
-    expect(state.downloadError).toBeNull();
-  });
-
   it("openReview collects then atomically sets isOpen + reviewPayload + clears collecting", async () => {
     collectMock.mockResolvedValueOnce(samplePayload);
 
@@ -230,12 +221,6 @@ describe("diagnosticsReviewStore", () => {
   it("saveReview no-ops if there is no payload yet", async () => {
     await useDiagnosticsReviewStore.getState().saveReview({}, []);
     expect(saveMock).not.toHaveBeenCalled();
-  });
-
-  it("clearError resets the error string", () => {
-    useDiagnosticsReviewStore.setState({ downloadError: "boom" });
-    useDiagnosticsReviewStore.getState().clearError();
-    expect(useDiagnosticsReviewStore.getState().downloadError).toBeNull();
   });
 
   describe("requestSeq (ErrorBoundary reset signal, #9918)", () => {

@@ -7,7 +7,9 @@ vi.mock("@/clients", () => ({
     write: vi.fn(),
     resize: vi.fn(),
     trash: vi.fn().mockResolvedValue(undefined),
-    kill: vi.fn(),
+    kill: vi.fn().mockResolvedValue(undefined),
+    sendKey: vi.fn(),
+    batchDoubleEscape: vi.fn(),
     onData: vi.fn(),
     onExit: vi.fn(),
     onAgentStateChanged: vi.fn(),
@@ -34,6 +36,8 @@ vi.mock("../../persistence/panelPersistence", () => ({
     setProjectIdGetter: vi.fn(),
     save: vi.fn(),
     load: vi.fn().mockReturnValue([]),
+    saveTabGroups: vi.fn(),
+    loadTabGroups: vi.fn().mockReturnValue(new Map()),
   },
 }));
 
@@ -166,5 +170,77 @@ describe("Worktree-scoped bulk actions", () => {
     expect(state.panelsById["wt1-grid-0"]?.location).toBe("trash");
     expect(state.panelsById["wt1-trash-0"]?.location).toBe("trash");
     expect(state.panelsById["wt2-grid-0"]?.location).toBe("grid");
+  });
+});
+
+function makeTerminal(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
+  return {
+    id,
+    type: "terminal",
+    title: `Terminal ${id}`,
+    cwd: "/test",
+    worktreeId: "wt-1",
+    location: "grid",
+    ...overrides,
+  } as unknown as PtyPanelData;
+}
+
+describe("Fleet set-based bulk actions", () => {
+  beforeEach(() => {
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+    vi.clearAllMocks();
+  });
+
+  it("bulkTrashSet trashes only terminals whose ids appear in the set", () => {
+    setTerminals([
+      makeTerminal("a", { location: "grid" }),
+      makeTerminal("b", { location: "grid" }),
+      makeTerminal("c", { location: "grid" }),
+    ]);
+
+    usePanelStore.getState().bulkTrashSet(new Set(["a", "c"]));
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["a"]?.location).toBe("trash");
+    expect(state.panelsById["b"]?.location).toBe("grid");
+    expect(state.panelsById["c"]?.location).toBe("trash");
+  });
+
+  it("bulkTrashSet silently skips terminals already in trash", () => {
+    setTerminals([
+      makeTerminal("a", { location: "grid" }),
+      makeTerminal("b", { location: "trash" }),
+    ]);
+
+    // Should not throw even though 'b' is already trashed
+    usePanelStore.getState().bulkTrashSet(new Set(["a", "b"]));
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["a"]?.location).toBe("trash");
+    expect(state.panelsById["b"]?.location).toBe("trash");
+  });
+
+  it("bulkKillSet removes only terminals whose ids appear in the set", () => {
+    setTerminals([makeTerminal("a"), makeTerminal("b"), makeTerminal("c")]);
+
+    usePanelStore.getState().bulkKillSet(new Set(["a", "b"]));
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["a"]).toBeUndefined();
+    expect(state.panelsById["b"]).toBeUndefined();
+    expect(state.panelsById["c"]).toBeDefined();
+    expect(state.panelIds).toEqual(["c"]);
+  });
+
+  it("bulkKillSet accepts any Iterable<string>", () => {
+    setTerminals([makeTerminal("a"), makeTerminal("b")]);
+    usePanelStore.getState().bulkKillSet(["a", "b"]);
+    expect(usePanelStore.getState().panelIds).toEqual([]);
   });
 });

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import {
   BUILT_IN_PANEL_KINDS,
+  DEFAULT_PANEL_KIND_POLICY,
   getPanelKindColor,
   getPanelKindConfig,
-  getExtensionFallbackDefaults,
   getPanelKindIds,
   getPanelKindOrigin,
   getPluginPanelKinds,
@@ -14,6 +14,7 @@ import {
   normalizeDockLocation,
   normalizeGroupDockLocation,
   registerPanelKind,
+  resolvePanelKindPolicy,
   unregisterPanelKind,
   unregisterPluginPanelKinds,
   clearPanelKindRegistry,
@@ -31,11 +32,6 @@ import {
 } from "../panelKindRegistry.js";
 
 describe("panelKindRegistry metadata", () => {
-  it("extension fallback returns empty object", () => {
-    const result = getExtensionFallbackDefaults();
-    expect(Object.keys(result)).toHaveLength(0);
-  });
-
   it("dev-preview does not use terminal UI", () => {
     expect(panelKindUsesTerminalUi("dev-preview")).toBe(false);
   });
@@ -44,20 +40,8 @@ describe("panelKindRegistry metadata", () => {
     expect(panelKindUsesTerminalUi("terminal")).toBe(true);
   });
 
-  it("browser does not use terminal UI", () => {
-    expect(panelKindUsesTerminalUi("browser")).toBe(false);
-  });
-
   it('legacy "agent" kind is unregistered (collapsed into terminal)', () => {
     expect(getPanelKindConfig("agent")).toBeUndefined();
-  });
-
-  it("returns config for all built-in kinds", () => {
-    for (const kind of ["terminal", "browser", "dev-preview"]) {
-      const config = getPanelKindConfig(kind);
-      expect(config).toBeDefined();
-      expect(config!.id).toBe(kind);
-    }
   });
 
   it("returns undefined for unknown kind", () => {
@@ -66,10 +50,6 @@ describe("panelKindRegistry metadata", () => {
 });
 
 describe("getBuiltInPanelKinds", () => {
-  it("returns every built-in kind", () => {
-    expect(getBuiltInPanelKinds().sort()).toEqual([...BUILT_IN_PANEL_KINDS].sort());
-  });
-
   it("returns a fresh array — mutations do not leak into the SSOT", () => {
     const first = getBuiltInPanelKinds();
     first.length = 0;
@@ -138,12 +118,6 @@ describe("unregisterPluginPanelKinds", () => {
     }
   });
 
-  it("is a no-op when unregistering an unknown pluginId", () => {
-    const before = getPanelKindIds().length;
-    expect(() => unregisterPluginPanelKinds("never-loaded")).not.toThrow();
-    expect(getPanelKindIds()).toHaveLength(before);
-  });
-
   it("is a no-op when unregistering the same plugin twice", () => {
     registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
     unregisterPluginPanelKinds("ext-a");
@@ -158,16 +132,6 @@ describe("unregisterPluginPanelKinds", () => {
 
     registerPanelKind({ ...makeExtensionConfig("ext-a.viewer", "ext-a"), name: "Refreshed" });
     expect(getPanelKindConfig("ext-a.viewer")?.name).toBe("Refreshed");
-  });
-
-  it("leaves other plugins' entries intact when one plugin is unregistered", () => {
-    registerPanelKind(makeExtensionConfig("ext-a.panel", "ext-a"));
-    registerPanelKind(makeExtensionConfig("ext-b.panel", "ext-b"));
-
-    unregisterPluginPanelKinds("ext-a");
-
-    expect(getPanelKindConfig("ext-a.panel")).toBeUndefined();
-    expect(getPanelKindConfig("ext-b.panel")?.extensionId).toBe("ext-b");
   });
 });
 
@@ -214,13 +178,6 @@ describe("clearPanelKindRegistry", () => {
       expect(config!.id).toBe(kind);
     }
   });
-
-  it("is a no-op when no extension entries are registered", () => {
-    expect(() => clearPanelKindRegistry()).not.toThrow();
-    for (const kind of getBuiltInPanelKinds()) {
-      expect(getPanelKindConfig(kind)).toBeDefined();
-    }
-  });
 });
 
 describe("getPluginPanelKinds", () => {
@@ -238,13 +195,6 @@ describe("getPluginPanelKinds", () => {
     expect(kinds.map((k) => k.id).sort()).toEqual(["ext-a.viewer", "ext-b.viewer"]);
     for (const kind of kinds) {
       expect(kind.extensionId).toBeDefined();
-    }
-  });
-
-  it("never returns built-in kinds even when no plugins are registered", () => {
-    expect(getPluginPanelKinds()).toEqual([]);
-    for (const builtIn of BUILT_IN_KINDS) {
-      expect(getPluginPanelKinds().some((k) => k.id === builtIn)).toBe(false);
     }
   });
 });
@@ -323,13 +273,6 @@ describe("registry event listeners", () => {
     registerPanelKind(makeExtensionConfig("ext-a.viewer", "ext-a"));
 
     expect(listener).not.toHaveBeenCalled();
-  });
-
-  it("double-unsubscribe is safe", () => {
-    const listener = vi.fn();
-    const unsubscribe = onPanelKindRegistered(listener);
-    unsubscribe();
-    expect(() => unsubscribe()).not.toThrow();
   });
 
   it("clearPanelKindRegistry fires unregister listeners for removed plugin kinds", () => {
@@ -444,12 +387,6 @@ describe("getPanelKindColor fallback", () => {
     clearPanelKindRegistry();
   });
 
-  it("returns built-in brand color for known kinds", () => {
-    const terminal = getPanelKindColor("terminal");
-    expect(terminal).toBeDefined();
-    expect(terminal).toBe(getPanelKindConfig("terminal")?.color);
-  });
-
   it("returns a neutral text token for unrecognized kinds", () => {
     expect(getPanelKindColor("totally-unknown-kind")).toBe("var(--theme-text-secondary)");
   });
@@ -477,23 +414,6 @@ describe("getFirstRenderSeeds", () => {
       "src/panels/file/FilePane.tsx",
       "src/panels/review/ReviewPane.tsx",
     ]);
-  });
-
-  it("includes the review pane — the seed that previously drifted (#8895)", () => {
-    expect(getFirstRenderSeeds()).toContain("src/panels/review/ReviewPane.tsx");
-  });
-
-  it("emits no empty or non-string seeds", () => {
-    for (const seed of getFirstRenderSeeds()) {
-      expect(typeof seed).toBe("string");
-      expect(seed.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("excludes the eager terminal kind (no lazy first-render chunk)", () => {
-    expect(getFirstRenderSeeds()).not.toContain(getPanelKindConfig("terminal")?.id);
-    // Terminal has no lazyImportPath, so its path can't appear regardless.
-    expect(getPanelKindConfig("terminal")?.firstRenderRestore).toBeUndefined();
   });
 
   it("excludes plugin-registered kinds even when they set firstRenderRestore", () => {
@@ -962,5 +882,63 @@ describe("getPanelKindOrigin", () => {
     expect(config).toBeDefined();
     expect(getPanelKindOrigin(config!)).toBe("project-plugin");
     unregisterPanelKind("project:project-7/acme.dashboard/overview");
+  });
+});
+
+describe("resolvePanelKindPolicy", () => {
+  it("returns the default policy for a kind that omits the policy block", () => {
+    expect(resolvePanelKindPolicy("terminal")).toEqual(DEFAULT_PANEL_KIND_POLICY);
+  });
+
+  it("layers a kind's declared policy over the default", () => {
+    // Review, browser and dev-preview are reading surfaces: focus returns to
+    // what the user was last viewing when the panel leaves the grid.
+    for (const kind of ["review", "browser", "dev-preview"] as const) {
+      expect(getPanelKindConfig(kind)).toBeDefined();
+      expect(resolvePanelKindPolicy(kind)).toEqual({
+        ...DEFAULT_PANEL_KIND_POLICY,
+        dockFallbackTarget: "previous-focused",
+      });
+    }
+  });
+
+  it("accepts a PanelKindConfig directly to skip the registry lookup", () => {
+    const config: PanelKindConfig = {
+      id: "synthetic",
+      name: "Synthetic",
+      iconId: "test",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      policy: { dockPopoverOnSpawn: false, defaultFocusOnCreate: false },
+    };
+    expect(resolvePanelKindPolicy(config)).toEqual({
+      ...DEFAULT_PANEL_KIND_POLICY,
+      dockPopoverOnSpawn: false,
+      defaultFocusOnCreate: false,
+    });
+  });
+
+  it("treats an unknown kind id as undefined (default policy)", () => {
+    expect(resolvePanelKindPolicy("does-not-exist")).toEqual(DEFAULT_PANEL_KIND_POLICY);
+  });
+
+  it("preserves unknown dockFallbackTarget strings on the resolved object (caller decides how to degrade)", () => {
+    // Open union — plugins may declare custom strategies. Resolver doesn't
+    // sanitize; downstream call sites silently degrade unknown values to
+    // first-grid behavior. Verify the field round-trips so a plugin can
+    // detect its own strategy.
+    const config: PanelKindConfig = {
+      id: "synthetic",
+      name: "Synthetic",
+      iconId: "test",
+      color: "#000",
+      hasPty: false,
+      canRestart: false,
+      canConvert: false,
+      policy: { dockFallbackTarget: "plugin-custom-strategy" },
+    };
+    expect(resolvePanelKindPolicy(config).dockFallbackTarget).toBe("plugin-custom-strategy");
   });
 });

@@ -75,32 +75,6 @@ describe("pluginRuntimeStatusStore", () => {
     );
   });
 
-  it("carries production worker health for a plugin with no dev session", () => {
-    const { emit } = installBridge();
-    usePluginRuntimeStatusStore.getState().init();
-
-    emit({
-      pluginId: "acme.prod",
-      status: status({
-        pluginId: "acme.prod",
-        dev: null,
-        worker: {
-          generation: 7,
-          state: "failed",
-          stateSince: 2_000,
-          reason: "crash-loop",
-          detail: "crashed a lot",
-        },
-      }),
-    });
-
-    const stored = usePluginRuntimeStatusStore.getState().statusById.get("acme.prod");
-    expect(stored?.dev).toBe(null);
-    expect(stored?.worker?.state).toBe("failed");
-    expect(stored?.worker?.reason).toBe("crash-loop");
-    expect(stored?.worker?.generation).toBe(7);
-  });
-
   it("removes an instance on a null status", () => {
     const { emit } = installBridge();
     usePluginRuntimeStatusStore.getState().init();

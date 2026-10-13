@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
 /**
- * A dialog-hosted plugin panel offers Reload panel from the dialog header,
- * which has no overflow menu to carry it (#12611). The kinds that share the
- * generic menu but cannot remount a view — and PTY-backed plugin kinds, which
- * are terminals — get no button.
+ * PanelDialogHost frame chrome for kinds from the real shared panel-kind
+ * registry: the diff dialog's full-height pin and the header's Reload panel.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, act, fireEvent, screen, cleanup } from "@testing-library/react";
@@ -30,8 +28,18 @@ vi.mock("@/panels/registry", async () => {
 });
 
 vi.mock("@/components/ui/AppDialog", () => {
-  const AppDialog = ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="dialog">{children}</div>
+  // Surface the className the host passes as a DOM attribute, so the test reads
+  // it back from the tree rather than writing to an outer variable in render.
+  const AppDialog = ({
+    children,
+    className,
+  }: {
+    children: React.ReactNode;
+    className?: string;
+  }) => (
+    <div data-testid="dialog" data-classname={className}>
+      {children}
+    </div>
   );
   AppDialog.Header = ({ children }: { children: React.ReactNode }) => <>{children}</>;
   AppDialog.Title = ({ children }: { children: React.ReactNode }) => <>{children}</>;
@@ -100,6 +108,12 @@ function renderDialogFor(kind: string): void {
   });
 }
 
+/**
+ * A dialog-hosted plugin panel offers Reload panel from the dialog header,
+ * which has no overflow menu to carry it (#12611). The kinds that share the
+ * generic menu but cannot remount a view — and PTY-backed plugin kinds, which
+ * are terminals — get no button.
+ */
 describe("PanelDialogHost Reload panel (#12611)", () => {
   beforeEach(() => {
     cleanup();
@@ -125,5 +139,54 @@ describe("PanelDialogHost Reload panel (#12611)", () => {
 
     expect(screen.getByTestId("dialog")).toBeTruthy();
     expect(screen.queryByTestId("panel-dialog-reload")).toBeNull();
+  });
+});
+
+/**
+ * The diff dialog must pin to full height like the file browser so stepping
+ * between files doesn't resize and re-center the whole frame under the cursor
+ * (#11364).
+ *
+ * The assertion is deliberately behavioral rather than a literal check: it reads
+ * the className `PanelDialogHost` hands `AppDialog` for the real `diff`
+ * definition and compares it against a known full-height kind (`file-browser`)
+ * and a known content-height kind (`review`). Asserting the raw `h-[85vh]`
+ * string would just copy the source-of-truth, which CLAUDE.md flags as
+ * tautological; comparing behaviors instead catches a regression (diff losing
+ * the flag) without pinning the literal.
+ */
+// Render one kind as a single-frame dialog and return the className the host
+// passed AppDialog for it (null when the kind isn't pinned).
+function classNameFor(kind: string): string | null {
+  const id = `${kind}-1`;
+  panelsById.current = { [id]: { id, kind, title: kind } };
+  usePanelDialogStore.setState({ dialogStack: [], requestSeq: 0 });
+  const { container, unmount } = render(<PanelDialogHost />);
+  act(() => {
+    usePanelDialogStore.setState({ dialogStack: [id] });
+  });
+  const result =
+    container.querySelector('[data-testid="dialog"]')?.getAttribute("data-classname") ?? null;
+  unmount();
+  return result;
+}
+
+describe("PanelDialogHost full-height pinning (#11364)", () => {
+  beforeEach(() => {
+    panelsById.current = {};
+    usePanelDialogStore.setState({ dialogStack: [], requestSeq: 0 });
+  });
+
+  it("pins the diff dialog to full height, matching the file browser", () => {
+    const diff = classNameFor("diff");
+    const fileBrowser = classNameFor("file-browser");
+    expect(diff).not.toBeNull();
+    expect(diff).toBe(fileBrowser);
+  });
+
+  it("leaves content-height kinds like review unpinned, so diff is treated differently", () => {
+    const diff = classNameFor("diff");
+    const review = classNameFor("review");
+    expect(diff).not.toBe(review);
   });
 });

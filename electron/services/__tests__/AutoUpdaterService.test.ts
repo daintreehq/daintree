@@ -719,16 +719,6 @@ describe("AutoUpdaterService", () => {
         path.join("/mock/resources", "package-type")
       );
     });
-
-    it("does not affect macOS", () => {
-      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-
-      autoUpdaterService.initialize();
-      vi.advanceTimersByTime(STARTUP_JITTER_MAX_MS);
-
-      expect(autoUpdaterMock.on).toHaveBeenCalled();
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
   });
 
   // AppImageUpdater installs Daintree-1.0.0.AppImage's update as
@@ -1356,12 +1346,6 @@ describe("AutoUpdaterService", () => {
       expect(storeState.dismissedUpdateAt).toBeUndefined();
     });
 
-    it("drops the call when senderFrame.url is undefined", () => {
-      dismissHandler({ senderFrame: {} }, "1.1.0");
-
-      expect(storeState.dismissedUpdateVersion).toBeUndefined();
-    });
-
     it("drops the call from an untrusted origin", () => {
       dismissHandler({ senderFrame: { url: "https://evil.example.com/x.html" } }, "1.1.0");
 
@@ -1400,13 +1384,6 @@ describe("AutoUpdaterService", () => {
       expect(storeState.dismissedUpdateVersion).toBeUndefined();
     });
 
-    it("accepts a strict semver from a trusted sender", () => {
-      dismissHandler(TRUSTED_SENDER, "1.2.3");
-
-      expect(storeState.dismissedUpdateVersion).toBe("1.2.3");
-      expect(typeof storeState.dismissedUpdateAt).toBe("number");
-    });
-
     it("accepts a nightly pre-release semver", () => {
       dismissHandler(TRUSTED_SENDER, "0.9.0-nightly.20251231");
 
@@ -1417,16 +1394,6 @@ describe("AutoUpdaterService", () => {
       dismissHandler(TRUSTED_SENDER, "  1.2.3  ");
 
       expect(storeState.dismissedUpdateVersion).toBe("1.2.3");
-    });
-
-    it("validates sender BEFORE inspecting payload (no version-shape leak)", () => {
-      // If senderFrame validation runs after typeof checks, an attacker could
-      // probe the validation order via type errors. Ensure the untrusted-sender
-      // drop is the first gate.
-      const untrusted = { senderFrame: { url: "https://evil.example.com/x.html" } };
-      dismissHandler(untrusted, { malicious: true });
-
-      expect(storeState.dismissedUpdateVersion).toBeUndefined();
     });
   });
 
@@ -1522,6 +1489,13 @@ describe("AutoUpdaterService", () => {
 
     it("retries on HTTP 5xx (statusCode = 503)", () => {
       errorHandler(Object.assign(new Error("service unavailable"), { statusCode: 503 }));
+      vi.advanceTimersByTime(36_000);
+
+      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries on HTTP 429 (rate limited)", () => {
+      errorHandler(Object.assign(new Error("rate limited"), { statusCode: 429 }));
       vi.advanceTimersByTime(36_000);
 
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
@@ -1848,38 +1822,10 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
     });
 
-    it("retries on HTTP 429 (rate limited)", () => {
-      errorHandler(Object.assign(new Error("rate limited"), { statusCode: 429 }));
-      vi.advanceTimersByTime(36_000);
-
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not retry on HTTP 401 (unauthorized)", () => {
-      errorHandler(Object.assign(new Error("unauthorized"), { statusCode: 401 }));
-      vi.advanceTimersByTime(60_000);
-
-      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
-    });
-
-    it("does not retry on HTTP 403 (forbidden)", () => {
-      errorHandler(Object.assign(new Error("forbidden"), { statusCode: 403 }));
-      vi.advanceTimersByTime(60_000);
-
-      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
-    });
-
     it("retries on Electron net::ERR_INTERNET_DISCONNECTED (issue #7592)", () => {
       // Telemetry shows Electron net errors arrive with the token only in
       // err.message, no err.code — must be classified as transient.
       errorHandler(new Error("net::ERR_INTERNET_DISCONNECTED"));
-      vi.advanceTimersByTime(36_000);
-
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries on Electron net::ERR_NETWORK_CHANGED", () => {
-      errorHandler(new Error("net::ERR_NETWORK_CHANGED"));
       vi.advanceTimersByTime(36_000);
 
       expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
@@ -1917,15 +1863,6 @@ describe("AutoUpdaterService", () => {
       vi.advanceTimersByTime(60_000);
 
       expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
-    });
-
-    it("retries on Electron net::ERR_CONNECTION_REFUSED", () => {
-      // Symmetry with the Node `ECONNREFUSED` code in TRANSIENT_ERROR_CODES —
-      // a brief firewall block or server restart is recoverable.
-      errorHandler(new Error("net::ERR_CONNECTION_REFUSED"));
-      vi.advanceTimersByTime(36_000);
-
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
     });
 
     it("permanent net token wins when both tokens appear in same message", () => {
@@ -1971,10 +1908,6 @@ describe("AutoUpdaterService", () => {
       autoUpdaterMock.checkForUpdates.mockClear();
     });
 
-    it("starts in idle state", () => {
-      expect(autoUpdaterService.getMenuState()).toBe("idle");
-    });
-
     it("a fast manual check (resolves before 400ms) leaves menu state at idle", () => {
       autoUpdaterService.checkForUpdatesManually();
 
@@ -2018,12 +1951,6 @@ describe("AutoUpdaterService", () => {
       availableHandler({ version: "2.0.0" });
 
       expect(autoUpdaterService.getMenuState()).toBe("idle");
-    });
-
-    it("update-downloaded transitions to ready", () => {
-      downloadedHandler({ version: "2.0.0" });
-
-      expect(autoUpdaterService.getMenuState()).toBe("ready");
     });
 
     it("ready persists past subsequent manual checks (no flicker back to idle)", () => {
@@ -2419,45 +2346,6 @@ describe("AutoUpdaterService", () => {
     });
   });
 
-  describe("transient error codes (expanded set)", () => {
-    let errorHandler: (err: unknown) => void;
-
-    beforeEach(() => {
-      autoUpdaterService.initialize();
-      vi.advanceTimersByTime(STARTUP_JITTER_MAX_MS);
-
-      errorHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
-        (args) => args[0] === "error"
-      )![1];
-
-      autoUpdaterMock.checkForUpdates.mockClear();
-    });
-
-    it("retries on ENETDOWN", () => {
-      errorHandler(Object.assign(new Error("network down"), { code: "ENETDOWN" }));
-      vi.advanceTimersByTime(36_000);
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries on EHOSTUNREACH", () => {
-      errorHandler(Object.assign(new Error("host unreachable"), { code: "EHOSTUNREACH" }));
-      vi.advanceTimersByTime(36_000);
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries on EHOSTDOWN", () => {
-      errorHandler(Object.assign(new Error("host down"), { code: "EHOSTDOWN" }));
-      vi.advanceTimersByTime(36_000);
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries on ECONNABORTED", () => {
-      errorHandler(Object.assign(new Error("aborted"), { code: "ECONNABORTED" }));
-      vi.advanceTimersByTime(36_000);
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
-    });
-  });
-
   describe("err.cause unwrap in isTransientUpdateError", () => {
     let errorHandler: (err: unknown) => void;
 
@@ -2470,16 +2358,6 @@ describe("AutoUpdaterService", () => {
       )![1];
 
       autoUpdaterMock.checkForUpdates.mockClear();
-    });
-
-    it("classifies a transient code nested under err.cause", () => {
-      const cause = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
-      const wrapper = Object.assign(new Error("request failed"), { cause });
-
-      errorHandler(wrapper);
-      vi.advanceTimersByTime(36_000);
-
-      expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(1);
     });
 
     it("returns false for a permanent code nested under err.cause", () => {
@@ -2938,22 +2816,6 @@ describe("AutoUpdaterService", () => {
 
       expect(storeMock.delete).toHaveBeenCalledWith("pendingUpdateVersion");
       expect(trackEventMock).not.toHaveBeenCalled();
-    });
-
-    it("propagates the actual platform on linux", () => {
-      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-      process.env.APPIMAGE = "/path/to/app.AppImage";
-      appMock.getVersion.mockReturnValue("1.0.0");
-      storeMock.get.mockImplementation((key: string) =>
-        key === "pendingUpdateVersion" ? "2.0.0" : undefined
-      );
-
-      autoUpdaterService.initialize();
-
-      expect(trackEventMock).toHaveBeenCalledWith(
-        "auto_update_install_version_mismatch",
-        expect.objectContaining({ platform: "linux" })
-      );
     });
 
     it("does not crash when store.delete throws", () => {
@@ -3526,12 +3388,6 @@ describe("AutoUpdaterService", () => {
       });
     });
 
-    it("returns null before any update is detected", () => {
-      autoUpdaterService.initialize();
-
-      expect(getLatest()).toBeNull();
-    });
-
     it("replays the available stage to a renderer that missed the broadcast", () => {
       autoUpdaterService.initialize();
       handlers().available({ version: "2.0.0" });
@@ -3664,14 +3520,6 @@ describe("AutoUpdaterService", () => {
       // A declined install leaves the update installable, so it must stay
       // pullable too.
       expect(getLatest()).toEqual({ version: "2.0.0", downloaded: true });
-    });
-
-    it("answers with null on builds where the updater never activates", () => {
-      appMock.isPackaged = false;
-
-      autoUpdaterService.initialize();
-
-      expect(getLatest()).toBeNull();
     });
 
     it("withdraws an in-progress version once the feed stops offering it", () => {

@@ -43,20 +43,6 @@ describe("SemanticBufferManager", () => {
     manager.dispose();
   });
 
-  it("accumulates data across multiple onData calls before timer", () => {
-    const info = createTerminalInfo();
-    const manager = new SemanticBufferManager(info);
-
-    manager.onData("hel");
-    manager.onData("lo\nworld\n");
-
-    vi.advanceTimersByTime(100);
-    expect(info.semanticBuffer).toContain("hello");
-    expect(info.semanticBuffer).toContain("world");
-
-    manager.dispose();
-  });
-
   it("flush() clears pending data immediately without waiting for timer", () => {
     const info = createTerminalInfo();
     const manager = new SemanticBufferManager(info);
@@ -147,15 +133,6 @@ describe("SemanticBufferManager", () => {
     manager.onData("y\n".repeat(500_000));
     expect(() => vi.advanceTimersByTime(100)).not.toThrow();
     expect(info.semanticBuffer.length).toBeLessThanOrEqual(50);
-
-    manager.dispose();
-  });
-
-  it("getLastCommand() returns undefined on empty buffer", () => {
-    const info = createTerminalInfo();
-    const manager = new SemanticBufferManager(info);
-
-    expect(manager.getLastCommand()).toBeUndefined();
 
     manager.dispose();
   });

@@ -187,24 +187,6 @@ describe("InlineStatusBanner", () => {
     void _allowsNeutralWithoutDismissal;
   });
 
-  it("allows non-error banners to render multiple actions", () => {
-    render(
-      <InlineStatusBanner
-        icon={FileEdit}
-        title="3 files changed"
-        severity="neutral"
-        animated={false}
-        role="status"
-        actions={[
-          { id: "review", label: "Review", onClick: () => {} },
-          { id: "send", label: "Send to assistant", onClick: () => {} },
-        ]}
-      />
-    );
-    expect(screen.getByRole("button", { name: "Review" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Send to assistant" })).toBeTruthy();
-  });
-
   it("emits aria-live='off' without aria-atomic", () => {
     render(
       <InlineStatusBanner
@@ -238,21 +220,6 @@ describe("InlineStatusBanner", () => {
     expect(region.getAttribute("aria-atomic")).toBe("true");
   });
 
-  it("supports role='status' override", () => {
-    render(
-      <InlineStatusBanner
-        icon={Info}
-        title="Status"
-        severity="info"
-        animated={false}
-        role="status"
-        actions={[]}
-      />
-    );
-    expect(screen.getByRole("status")).toBeTruthy();
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
   it("renders neutral severity without leaking a status-color var into inline styles", () => {
     const { container } = render(
       <InlineStatusBanner
@@ -269,25 +236,6 @@ describe("InlineStatusBanner", () => {
     expect(root.style.backgroundColor).toBe("");
     expect(root.style.borderBottom).toBe("");
     expect(root.outerHTML).not.toContain("var(undefined)");
-  });
-
-  it("renders trailingSlot before the dismiss button in DOM order", () => {
-    const onClose = vi.fn();
-    render(
-      <InlineStatusBanner
-        icon={Info}
-        title="With slot"
-        severity="info"
-        animated={false}
-        trailingSlot={<button type="button">Show details</button>}
-        actions={[]}
-        onClose={onClose}
-      />
-    );
-    const slot = screen.getByRole("button", { name: "Show details" });
-    const dismiss = screen.getByRole("button", { name: "Dismiss" });
-    expect(slot).toBeTruthy();
-    expect(slot.compareDocumentPosition(dismiss) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("puts every control before the dismiss in DOM order, in every layout", () => {
@@ -631,23 +579,6 @@ describe("InlineStatusBanner", () => {
       expect(
         extras.compareDocumentPosition(dismiss) & Node.DOCUMENT_POSITION_FOLLOWING
       ).toBeTruthy();
-    });
-
-    it("does not render an empty controls row when hasDescription, no actions, and onClose is present", () => {
-      const { container } = render(
-        <InlineStatusBanner
-          icon={AlertTriangle}
-          title="25 panels open"
-          description="Consider closing idle panels."
-          severity="warning"
-          animated={false}
-          actions={[]}
-          onClose={() => {}}
-        />
-      );
-      // No ml-6 or gap-1 controls row should exist — dismiss is in the title row
-      const controlsRow = container.querySelector('[class*="ml-6"]');
-      expect(controlsRow).toBeNull();
     });
 
     it("does not render a controls row when hasDescription is true with no trailingSlot, no actions, and no onClose", () => {
@@ -1453,18 +1384,6 @@ describe("InlineStatusBanner as the window title-bar surface", () => {
       expect(screen.getByRole("button", { name }).closest(".app-no-drag")).not.toBeNull();
     }
     expect(screen.getByRole("link", { name: "Details" }).closest(".app-no-drag")).not.toBeNull();
-  });
-
-  it("still fires the dismiss action while inside the drag region", () => {
-    const onClick = vi.fn();
-    renderGlobal({
-      description: "This project is in a synced folder.",
-      actions: [{ id: "dismiss", label: "Don't warn for this project", onClick }],
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Don't warn for this project" }));
-
-    expect(onClick).toHaveBeenCalledTimes(1);
   });
 
   it("reports its severity on mount so the caption strip can match it", () => {

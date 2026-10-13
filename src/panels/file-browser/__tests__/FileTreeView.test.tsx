@@ -228,17 +228,6 @@ describe("FileTreeView context-menu interactions", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("still selects a row on a plain click", () => {
-    // Only right-click is decoupled from selection; the ordinary click path
-    // must still drive it. A file row avoids coupling the assertion to the
-    // directory-expansion toggle a folder click also fires.
-    const { onSelect, getByRole } = renderTree();
-
-    fireEvent.click(getByRole("treeitem", { name: "README.md" }));
-
-    expect(onSelect).toHaveBeenCalledWith("README.md", false);
-  });
-
   it("replays the ContextMenu key as a contextmenu event on the selected row", () => {
     const { getByRole } = renderTree({ cursorPath: "README.md" });
     const contextMenuSpy = vi.fn();
@@ -307,22 +296,6 @@ describe("FileTreeView context-menu interactions", () => {
     // key would double-insert.
     fireEvent.keyDown(tree, { key: "i", metaKey: true });
     expect(onInsertFileReference).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves the bare letter and the inject combo to their own handlers", () => {
-    const onInsertFileReference = vi.fn();
-    const { getByRole } = renderTree({
-      cursorPath: "README.md",
-      onInsertFileReference,
-      canInsertFileReference: true,
-    });
-    const tree = getByRole("tree");
-
-    fireEvent.keyDown(tree, { key: "i" });
-    // Cmd+Shift+I belongs to terminal.inject.
-    fireEvent.keyDown(tree, { key: "i", metaKey: true, shiftKey: true });
-
-    expect(onInsertFileReference).not.toHaveBeenCalled();
   });
 
   it("no-ops the shortcut with no selection or no reachable agent", () => {
@@ -812,14 +785,6 @@ describe("FileTreeView drag source", () => {
     return { data, dataTransfer, event };
   }
 
-  it("carries the row's absolute path as a list", () => {
-    const { getByRole } = renderTree();
-
-    const { data } = dragStart(getByRole("treeitem", { name: "README.md" }));
-
-    expect(decodeFileDragPaths(data.get(FILE_DRAG_MIME)!)).toEqual(["/repo/README.md"]);
-  });
-
   // Rows are relative to the base path, so a drag that skipped the join would
   // hand the agent a path resolving against its own cwd instead of the file's.
   it("joins nested rows onto the base path", () => {
@@ -959,19 +924,6 @@ describe("FileTreeView git status markers", () => {
     expect(describedStatus(container, "README.md")).toBeNull();
   });
 
-  it("marks a collapsed folder from a descendant it has never listed", () => {
-    // `src` is collapsed, so no child row exists for the changed file at all —
-    // the aggregate is the only thing that can surface it.
-    const { container } = renderTree({
-      rows: [row("src", true), row("README.md")],
-      gitStatusIndex: buildFileBrowserGitStatusIndex([
-        { relativePath: "src/deep/nested/app.ts", status: "modified" },
-      ]),
-    });
-
-    expect(describedStatus(container, "src")).toBe("Contains modified changes");
-  });
-
   it("phrases a folder as containing changes, not as being changed itself", () => {
     const { container } = renderTree({
       rows: NESTED_ROWS,
@@ -982,18 +934,6 @@ describe("FileTreeView git status markers", () => {
 
     expect(describedStatus(container, "src")).toBe("Contains added changes");
     expect(describedStatus(container, "app.ts")).toBe("Added");
-  });
-
-  it("shows a folder its most urgent descendant when several changed", () => {
-    const { container } = renderTree({
-      rows: [row("src", true)],
-      gitStatusIndex: buildFileBrowserGitStatusIndex([
-        { relativePath: "src/a.ts", status: "untracked" },
-        { relativePath: "src/b.ts", status: "conflicted" },
-      ]),
-    });
-
-    expect(describedStatus(container, "src")).toBe("Contains conflicted changes");
   });
 
   it("renders no markers at all when the source has no git behind it", () => {

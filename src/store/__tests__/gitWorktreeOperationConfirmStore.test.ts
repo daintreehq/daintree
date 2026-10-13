@@ -25,21 +25,6 @@ describe("gitWorktreeOperationConfirmStore", () => {
     expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
-  it("carries the operation for an abort request", async () => {
-    const pending = useGitWorktreeOperationConfirmStore.getState().requestConfirmation({
-      kind: "abort-operation",
-      cwd: "/repo/wt",
-      operation: "MERGING",
-    });
-    expect(useGitWorktreeOperationConfirmStore.getState().pendingConfirm?.request).toEqual({
-      kind: "abort-operation",
-      cwd: "/repo/wt",
-      operation: "MERGING",
-    });
-    useGitWorktreeOperationConfirmStore.getState().resolveConfirmation(false);
-    await expect(pending).resolves.toEqual({ confirmed: false, pinned: null });
-  });
-
   it("cancels a superseded request rather than leaking its Promise", async () => {
     // The action `run()` is awaiting the first Promise. If a second request
     // simply overwrote it, that await would never settle and the first

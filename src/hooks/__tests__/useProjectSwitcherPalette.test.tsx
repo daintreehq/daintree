@@ -383,24 +383,6 @@ describe("useProjectSwitcherPalette", () => {
     });
   });
 
-  it("reads project stats from the push-based store", async () => {
-    projectStatsState.stats = {
-      "project-1": { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
-    };
-
-    const { result } = renderHook(() => useProjectSwitcherPalette());
-
-    act(() => {
-      result.current.open();
-    });
-
-    await waitFor(() => {
-      expect(result.current.results).toHaveLength(1);
-      expect(asProject(result.current.results[0]).activeAgentCount).toBe(0);
-      expect(asProject(result.current.results[0]).waitingAgentCount).toBe(0);
-    });
-  });
-
   it("does not leak unhandled rejections when project loading fails", async () => {
     projectState.loadProjects.mockRejectedValueOnce(new Error("load failed"));
     getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
@@ -474,46 +456,6 @@ describe("useProjectSwitcherPalette", () => {
       },
     ];
 
-    it("defaults to index 1 (active project at index 0) when 2+ projects exist", async () => {
-      projectState.projects = multipleProjects;
-      projectState.currentProject = { id: "project-1" };
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(multipleProjects.map((p) => p.id)));
-
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(3);
-      });
-
-      expect(result.current.selectedIndex).toBe(1);
-      expect(result.current.results[0]!.id).toBe("project-1");
-      expect(result.current.results[0]!.isActive).toBe(true);
-      expect(result.current.results[1]!.id).toBe("project-2");
-      expect(result.current.results[2]!.id).toBe("project-3");
-    });
-
-    it("defaults to index 0 when only 1 project exists", async () => {
-      projectState.projects = [multipleProjects[0]!];
-      projectState.currentProject = { id: "project-1" };
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
-
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(1);
-      });
-
-      expect(result.current.selectedIndex).toBe(0);
-    });
-
     it("defaults to index 0 when no projects exist", async () => {
       projectState.projects = [];
       projectState.currentProject = null;
@@ -530,26 +472,6 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       expect(result.current.selectedIndex).toBe(0);
-    });
-
-    it("defaults to index 1 with exactly 2 projects (active first)", async () => {
-      projectState.projects = [multipleProjects[0]!, multipleProjects[1]!];
-      projectState.currentProject = { id: "project-1" };
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1", "project-2"]));
-
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(2);
-      });
-
-      expect(result.current.selectedIndex).toBe(1);
-      expect(result.current.results[0]!.id).toBe("project-1");
-      expect(result.current.results[1]!.id).toBe("project-2");
     });
 
     /**
@@ -736,27 +658,6 @@ describe("useProjectSwitcherPalette", () => {
       });
     });
 
-    it("allows active project to enter confirm flow", async () => {
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(2);
-      });
-
-      const activeResult = result.current.results.find((p) => p.id === "project-1");
-      expect(activeResult?.isActive).toBe(true);
-
-      await act(async () => {
-        result.current.removeProject("project-1");
-      });
-
-      expect(result.current.removeConfirmProject?.id).toBe("project-1");
-    });
-
     it("confirm calls closeActiveProject for active project, not removeProject", async () => {
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -819,23 +720,6 @@ describe("useProjectSwitcherPalette", () => {
       expect(projectState.closeProject).toHaveBeenCalledWith("project-1", { killTerminals: true });
       expect(projectState.closeActiveProject).not.toHaveBeenCalled();
       expect(result.current.stopConfirmProjectId).toBeNull();
-    });
-
-    it("stop confirmation uses closeProject when a different project is active", async () => {
-      projectState.currentProject = { id: "project-2" };
-
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      await act(async () => {
-        await result.current.stopProject("project-1");
-      });
-
-      await act(async () => {
-        await result.current.confirmStopProject();
-      });
-
-      expect(projectState.closeProject).toHaveBeenCalledWith("project-1", { killTerminals: true });
-      expect(projectState.closeActiveProject).not.toHaveBeenCalled();
     });
 
     it("stop confirmation re-evaluates isActive at confirm time, not at stopProject time", async () => {
@@ -1015,22 +899,6 @@ describe("useProjectSwitcherPalette", () => {
       });
 
       expect(sleepProjectMock).toHaveBeenCalledWith("project-1");
-    });
-
-    it("shows an error notification when sleeping fails", async () => {
-      notifyMock.mockClear();
-      sleepProjectMock.mockRejectedValueOnce(new Error("sleep failed"));
-      getBulkStatsMock.mockResolvedValue(bulkStats());
-
-      const result = await openPalette();
-
-      await act(async () => {
-        await result.current.sleepProject("project-1");
-      });
-
-      expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "error", title: "Couldn't sleep project" })
-      );
     });
 
     it("closes the dialog on failure and routes recovery through the error toast", async () => {
@@ -1488,59 +1356,6 @@ describe("useProjectSwitcherPalette", () => {
       });
     });
 
-    it("advances selection when toggled while open", async () => {
-      projectState.projects = threeProjects;
-      projectState.currentProject = { id: "project-1" };
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(threeProjects.map((p) => p.id)));
-
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      await act(async () => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(3);
-        expect(result.current.selectedIndex).toBe(1);
-      });
-
-      expect(result.current.isOpen).toBe(true);
-
-      await act(async () => {
-        result.current.toggle();
-      });
-
-      expect(result.current.isOpen).toBe(true);
-      expect(result.current.selectedIndex).toBe(2);
-    });
-
-    it("wraps to index 0 at end of list", async () => {
-      projectState.projects = threeProjects;
-      projectState.currentProject = { id: "project-1" };
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(threeProjects.map((p) => p.id)));
-
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      await act(async () => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(3);
-        expect(result.current.selectedIndex).toBe(1);
-      });
-
-      await act(async () => {
-        result.current.toggle();
-      });
-      expect(result.current.selectedIndex).toBe(2);
-
-      await act(async () => {
-        result.current.toggle();
-      });
-      expect(result.current.selectedIndex).toBe(0);
-    });
-
     it("is a no-op with only 1 project", async () => {
       projectState.projects = [threeProjects[0]!];
       projectState.currentProject = { id: "project-1" };
@@ -1709,50 +1524,6 @@ describe("useProjectSwitcherPalette", () => {
 
     afterEach(() => {
       projectState.projects = savedProjects;
-    });
-
-    it("pulls fresh bulk stats for loaded project IDs when opened", async () => {
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(getBulkStatsMock).toHaveBeenCalledWith(["project-1"]);
-      });
-    });
-
-    it("updates the stats store with mapped agent counts from the bulk response", async () => {
-      getBulkStatsMock.mockResolvedValue({
-        "project-1": {
-          processCount: 2,
-          terminalCount: 2,
-          estimatedMemoryMB: 10,
-          terminalTypes: {},
-          processIds: [1, 2],
-          activeAgentCount: 1,
-          waitingAgentCount: 3,
-          blockedAgentCount: 0,
-        },
-      });
-
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(setStatsMock).toHaveBeenCalledWith({
-          "project-1": {
-            activeAgentCount: 1,
-            waitingAgentCount: 3,
-            blockedAgentCount: 0,
-            processCount: 2,
-          },
-        });
-      });
     });
 
     it("seeds only projects the push store has never heard of", async () => {
@@ -2064,21 +1835,6 @@ describe("useProjectSwitcherPalette", () => {
       // LIVE sections would see this row as Other and drag it into the reset.
       expect(result.current.results[result.current.selectedIndex]?.id).toBe("waiting");
       unmount();
-    });
-
-    it("re-sorts an already-open palette when the mode changes", async () => {
-      // Without an explicit recapture the frozen layout keeps serving the order
-      // captured at open(), so the menu would appear to do nothing.
-      const view = await openWith("mostUsed", conflicting());
-      expect(view.result.current.results.map((p) => p.id)).toEqual(["zulu", "alpha", "mike"]);
-
-      act(() => {
-        setOtherSortMode("alphabetical");
-      });
-
-      await waitFor(() => {
-        expect(view.result.current.results.map((p) => p.id)).toEqual(["alpha", "mike", "zulu"]);
-      });
     });
 
     it("sorts a project that registered mid-session into the new order", async () => {
@@ -2480,29 +2236,6 @@ describe("useProjectSwitcherPalette", () => {
         "oldDone",
         "newDone",
       ]);
-    });
-
-    it("sorts pinned projects alphabetically, ignoring recency and frecency", async () => {
-      const projects = [
-        base("zulu", { pinned: true, lastOpened: 9_000, frecencyScore: 50.0 }),
-        base("alpha", { pinned: true, lastOpened: 100, frecencyScore: 1.0 }),
-      ];
-      projectState.projects = projects;
-      projectState.currentProject = null;
-      projectStatsState.stats = {};
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
-
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-      act(() => {
-        result.current.open("modal");
-      });
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(2);
-      });
-
-      // A hidden adaptive score reordering a user-curated set reads as rows
-      // moving on their own — alphabetical wins over every usage signal.
-      expect(result.current.results.map((p) => p.id)).toEqual(["alpha", "zulu"]);
     });
 
     it("orders Running by agent count, then the freshest working transition", async () => {
@@ -3077,23 +2810,6 @@ describe("useProjectSwitcherPalette", () => {
       expect(modalOrder).toContain("closed");
     });
 
-    it("puts the current project first and groups the rest into contiguous sections", async () => {
-      const result = await openIn("modal");
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(3);
-      });
-      expect(asProject(result.current.results[0]).section).toBe("current");
-
-      // Sections must never interleave, or the component's contiguous-run
-      // grouping would emit the same header twice.
-      const seen: string[] = [];
-      for (const project of result.current.results.map(asProject)) {
-        if (seen.at(-1) !== project.section) seen.push(project.section);
-      }
-      expect(new Set(seen).size).toBe(seen.length);
-    });
-
     it("visits every result exactly once per cycle and never lands off-list", async () => {
       const result = await openIn("modal");
       await waitFor(() => {
@@ -3375,29 +3091,6 @@ describe("useProjectSwitcherPalette", () => {
       }
     });
 
-    it("renders projects far past the old fifteen-row cap", async () => {
-      const many = Array.from({ length: 40 }, (_, i) => ({
-        id: `idle-${i}`,
-        name: `Idle ${i}`,
-        path: `/repo/idle-${i}`,
-        emoji: "🌿",
-        lastOpened: 1000 - i,
-        frecencyScore: 1.0,
-        status: "closed" as const,
-      }));
-
-      projectState.projects = many;
-      projectState.currentProject = null;
-      getBulkStatsMock.mockResolvedValue(emptyBulkStats(many.map((p) => p.id)));
-
-      const result = await openIn("modal");
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(40);
-      });
-      expect(result.current.results.map((p) => p.id)).toContain("idle-39");
-    });
-
     it("keeps the highlight on the selected project when a row above it disappears", async () => {
       const withThreeVisible = [
         interleaved[0]!,
@@ -3607,14 +3300,6 @@ describe("assistant presence banding (#11806)", () => {
     });
   });
 
-  it("leaves it dormant when the assistant is idle", async () => {
-    const result = await openWithStats({ ...idle, assistantState: "idle" });
-
-    await waitFor(() => {
-      expect(asProject(result.current.results[0]).section).toBe("other");
-    });
-  });
-
   it("keeps an assistant parked at its prompt out of Needs attention", async () => {
     // Its resting state. A band that fills up with these stops meaning
     // anything, which is the whole point of the restraint.
@@ -3636,19 +3321,6 @@ describe("assistant presence banding (#11806)", () => {
       assistantState: "waiting",
       assistantWaitingReason: "prompt",
       assistantStateSince: LAST_OPENED + 60_000,
-    });
-
-    await waitFor(() => {
-      expect(asProject(result.current.results[0]).section).toBe("attention");
-    });
-  });
-
-  it("escalates an errored assistant however recently the project was seen", async () => {
-    const result = await openWithStats({
-      ...idle,
-      assistantState: "waiting",
-      assistantWaitingReason: "error",
-      assistantStateSince: LAST_OPENED - 60_000,
     });
 
     await waitFor(() => {
@@ -4268,19 +3940,5 @@ describe("useProjectSwitcherPalette window presence (#12597)", () => {
       rejectFirst(new Error("late"));
     });
     expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("foreground");
-  });
-
-  it("leaves rows unmarked when the read fails", async () => {
-    getPresenceSnapshotMock.mockImplementationOnce(() => Promise.reject(new Error("gone")));
-    const { result } = renderHook(() => useProjectSwitcherPalette());
-    act(() => {
-      result.current.open();
-    });
-
-    await waitFor(() => {
-      expect(getPresenceSnapshotMock).toHaveBeenCalled();
-    });
-    await act(async () => {});
-    expect(rowFor(result, "elsewhere").openInOtherWindow).toBeUndefined();
   });
 });

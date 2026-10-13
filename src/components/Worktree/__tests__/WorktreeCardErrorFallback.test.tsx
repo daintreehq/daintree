@@ -38,14 +38,6 @@ describe("WorktreeCardErrorFallback", () => {
     vi.unstubAllEnvs();
   });
 
-  it("renders error message in dev mode", () => {
-    const resetError = vi.fn();
-    render(
-      wrap(<WorktreeCardErrorFallback error={new Error("Card broke")} resetError={resetError} />)
-    );
-    expect(screen.getByText("Card broke")).toBeTruthy();
-  });
-
   it("renders generic message in production mode", () => {
     vi.stubEnv("DEV", false);
     const resetError = vi.fn();

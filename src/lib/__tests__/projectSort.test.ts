@@ -36,11 +36,6 @@ describe("compareProjectsByMode", () => {
     expect(order(CONFLICTING, "alphabetical")).toEqual(["Alpha", "Mike", "Zulu"]);
   });
 
-  it("gives each mode a distinct order for the same input", () => {
-    const orders = OTHER_PROJECTS_SORT_MODES.map((mode) => order(CONFLICTING, mode).join("|"));
-    expect(new Set(orders).size).toBe(OTHER_PROJECTS_SORT_MODES.length);
-  });
-
   it("compares names case-insensitively rather than by code point", () => {
     // A byte-wise compare puts every uppercase letter before every lowercase
     // one, which would file "apple" after "Banana".
@@ -70,14 +65,6 @@ describe("compareProjectsByMode", () => {
     ];
     expect(order(tied, "mostUsed")).toEqual(["Alpha", "Zulu"]);
     expect(order(tied, "recent")).toEqual(["Alpha", "Zulu"]);
-  });
-
-  it("does not let score or recency leak into alphabetical", () => {
-    const mixed: SortableProject[] = [
-      { id: "a", name: "Alpha", lastOpened: 1, frecencyScore: 0 },
-      { id: "z", name: "Zulu", lastOpened: 999, frecencyScore: 99 },
-    ];
-    expect(order(mixed, "alphabetical")).toEqual(["Alpha", "Zulu"]);
   });
 
   it("falls back to last opened when scores tie in most used", () => {

@@ -14,21 +14,6 @@ describe("SettingsSection", () => {
     expect(group.textContent).toContain("Section description");
   });
 
-  it("renders the badge only when one is given", () => {
-    const { rerender } = render(
-      <SettingsSection title="My section" badge="New terminals">
-        <div>child</div>
-      </SettingsSection>
-    );
-    expect(screen.getByText("New terminals")).toBeTruthy();
-    rerender(
-      <SettingsSection title="My section">
-        <div>child</div>
-      </SettingsSection>
-    );
-    expect(screen.queryByText("New terminals")).toBeNull();
-  });
-
   it("omits the description paragraph when there is nothing to add", () => {
     const { container } = render(
       <SettingsSection title="My section">

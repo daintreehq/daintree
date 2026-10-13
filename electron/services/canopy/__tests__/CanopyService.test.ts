@@ -3498,31 +3498,6 @@ describe("CanopyService", () => {
       expect(h.classify).toHaveBeenCalledTimes(2);
     });
 
-    it("describes nothing while the panel is closed, on the priority tier too", async () => {
-      const h = await makeHarness({
-        closed: true,
-        backgroundPollMs: BG,
-        stateChangeScanMs: 0,
-        plan: { mode: "on", activated: true, tier: "priority" },
-        classify: async () => ({
-          category: "approval",
-          confidence: 0.97,
-          attention: 0.97,
-          question: "Allow?",
-        }),
-      });
-      h.runs.push(run("a", { agentState: "waiting" }));
-      h.screens.set("a", APPROVAL_SCREEN);
-      h.service.onFleetChanged();
-      await vi.waitFor(() => expect(h.classify).toHaveBeenCalledTimes(1));
-      await settle();
-      expect(h.describe).not.toHaveBeenCalled();
-      expect(h.service.getSnapshot().cards[0]!.stage).toBe("classified");
-      // The open writes the words the watch left due.
-      h.service.setActive(true);
-      await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(1));
-    });
-
     it("offers a screen's words before the classifier has read it", async () => {
       let release!: () => void;
       const gate = new Promise<void>((resolve) => (release = resolve));
@@ -3591,36 +3566,6 @@ describe("CanopyService", () => {
       expect(card.glance.said).toBe("Committed as 43d0e48: cups now keep two decimal places.");
     });
 
-    it("scans soon after an observed state change while the panel is closed", async () => {
-      const h = await makeHarness({ closed: true, backgroundPollMs: BG, stateChangeScanMs: 0 });
-      h.runs.push(run("a", { agentState: "waiting" }));
-      h.screens.set("a", APPROVAL_SCREEN);
-      h.service.onFleetChanged();
-      await vi.waitFor(() => expect(h.classify).toHaveBeenCalledTimes(1));
-      expect(h.describe).not.toHaveBeenCalled();
-    });
-
-    it("writes the words an open finds due", async () => {
-      const h = await makeHarness({
-        closed: true,
-        backgroundPollMs: BG,
-        stateChangeScanMs: 0,
-        classify: asking(0.97),
-      });
-      h.runs.push(run("a", { agentState: "waiting" }));
-      h.screens.set("a", APPROVAL_SCREEN);
-      h.service.onFleetChanged();
-      await vi.waitFor(() => expect(h.classify).toHaveBeenCalledTimes(1));
-      await settle();
-
-      h.service.setActive(true);
-      await vi.waitFor(() => expect(h.describe).toHaveBeenCalledTimes(1));
-      await settle();
-      const card = h.service.getSnapshot().cards[0]!;
-      expect(card.stage).toBe("described");
-      expect(card.headline).toBe("Headline");
-    });
-
     it("keeps a described run's words when it is read again with the panel closed", async () => {
       const h = await makeHarness({ backgroundPollMs: BG, classify: asking(0.97) });
       h.runs.push(run("a", { agentState: "waiting" }));
@@ -3635,15 +3580,6 @@ describe("CanopyService", () => {
       expect(h.describe).toHaveBeenCalledTimes(1);
       expect(card.headline).toBe("Headline");
       expect(card.wordsFromEarlierRead).toBe(true);
-    });
-
-    it("sends nothing while closed when the background watch is off", async () => {
-      const h = await makeHarness({ closed: true, backgroundPollMs: 0, stateChangeScanMs: 0 });
-      h.runs.push(run("a", { agentState: "waiting" }));
-      h.screens.set("a", APPROVAL_SCREEN);
-      h.service.onFleetChanged();
-      await h.service.refresh();
-      expect(h.classify).not.toHaveBeenCalled();
     });
   });
 

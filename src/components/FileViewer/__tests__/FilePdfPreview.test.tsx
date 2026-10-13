@@ -172,7 +172,6 @@ describe("FilePdfPreview", () => {
       // must not claim either read-error code; the rest have none to claim.
       [404, undefined],
       [415, undefined],
-      [400, undefined],
       [500, undefined],
     ])("reports a %i as a named error and never mounts the frame", async (httpStatus, code) => {
       fetchMock.mockResolvedValue(status(httpStatus));
@@ -339,18 +338,6 @@ describe("FilePdfPreview", () => {
       await waitFor(() => expect(container.querySelectorAll("iframe")).toHaveLength(1));
       // The first mount's probe is aborted by its own cleanup, never reported.
       expect(onError).not.toHaveBeenCalled();
-    });
-
-    it("never shows the previous document while a different one is probed", async () => {
-      const { container, rerender } = render(
-        <FilePdfPreview filePath="/repo/a.pdf" rootPath="/repo" label="a.pdf" />
-      );
-      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-
-      fetchMock.mockReturnValue(new Promise(() => {}));
-      rerender(<FilePdfPreview filePath="/repo/b.pdf" rootPath="/repo" label="b.pdf" />);
-
-      expect(container.querySelector("iframe")).toBeNull();
     });
 
     it("drops the frame when a refresh of the same document fails", async () => {

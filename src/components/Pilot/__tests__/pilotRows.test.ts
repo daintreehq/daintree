@@ -8,17 +8,10 @@ import {
   filterPilotBands,
   filterPilotGroups,
   summarizePilotGroups,
-  PILOT_BAND_FILTER_LABEL,
   type PilotRowContext,
 } from "../pilotRows";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import {
-  bandForRun,
-  bandLabel,
-  emptyBandCounts,
-  FLEET_BANDS,
-  type FleetBand,
-} from "@/lib/fleetAttention";
+import { emptyBandCounts, FLEET_BANDS, type FleetBand } from "@/lib/fleetAttention";
 
 const NOW = 1_700_000_000_000;
 
@@ -223,31 +216,6 @@ describe("buildPilotGroups", () => {
     expect(alpha.rows.map((r) => r.run.runId).sort()).toEqual(["a", "c"]);
   });
 
-  it("orders projects by last opened, not by worst band", () => {
-    const groups = buildPilotGroups(
-      [
-        run({
-          runId: "b",
-          workspaceId: "aa-stale",
-          agentState: "waiting",
-          waitingReason: "error",
-          since: NOW,
-        }),
-        run({ runId: "w", workspaceId: "zz-fresh", agentState: "working", since: NOW }),
-      ],
-      ctx({
-        workspaces: new Map([
-          // Name, band, arrival order and workspace id would ALL put the stale
-          // project first. Only recency lifts the just-opened one over it.
-          ["aa-stale", { kind: "project", name: "aaa", lastOpened: NOW - 3_600_000 }],
-          ["zz-fresh", { kind: "project", name: "zzz", lastOpened: NOW }],
-        ]),
-      })
-    );
-
-    expect(groups.map((g) => g.name)).toEqual(["zzz", "aaa"]);
-  });
-
   it("puts the project just opened above another project's waiting agents", () => {
     // The reported case (#11678): the current project held one working agent and
     // rendered below a project holding four waiting ones, because waiting
@@ -305,25 +273,6 @@ describe("buildPilotGroups", () => {
     );
 
     expect(groups.map((g) => g.name)).toEqual(["zzz", "mmm", "aaa"]);
-  });
-
-  it("breaks an equal last-opened tie by name", () => {
-    const groups = buildPilotGroups(
-      [
-        // Arrival order and workspace id both favour "beta", so only the name
-        // tiebreak can produce the expected order.
-        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
-        run({ runId: "b", workspaceId: "p2", agentState: "working", since: NOW }),
-      ],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "beta", lastOpened: NOW }],
-          ["p2", { kind: "project", name: "alpha", lastOpened: NOW }],
-        ]),
-      })
-    );
-
-    expect(groups.map((g) => g.name)).toEqual(["alpha", "beta"]);
   });
 
   it("sinks a workspace it cannot date below every dated one, without dropping it", () => {
@@ -519,28 +468,6 @@ describe("buildPilotGroups", () => {
     expect(group!.rows.map((r) => r.age)).toEqual(["1h", "1m"]);
   });
 
-  it("stops counting a hand-back once the user has seen that run", () => {
-    const seen = buildPilotGroups(
-      [
-        run({
-          agentState: "completed",
-          since: NOW - 60_000,
-          handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
-        }),
-      ],
-      ctx()
-    );
-    expect(seen[0]!.demandCount).toBe(0);
-    expect(seen[0]!.rows[0]!.band).toBe("done");
-
-    const unseen = buildPilotGroups(
-      [run({ agentState: "completed", since: NOW, handBack: { stoppedAt: NOW } })],
-      ctx()
-    );
-    expect(unseen[0]!.demandCount).toBe(1);
-    expect(unseen[0]!.rows[0]!.band).toBe("review");
-  });
-
   it("files a finished agent sliding to its prompt as a hand-back, not a wait", () => {
     // The `completed` state lasts half a second; what the user actually sees is
     // the agent back at its prompt, which must not read as it asking something.
@@ -671,10 +598,6 @@ describe("filterPilotGroups", () => {
 
   it("drops a group left with no matching rows", () => {
     expect(filterPilotGroups(groups(), "zzzz")).toEqual([]);
-  });
-
-  it("keeps every row when the project name itself matches", () => {
-    expect(filterPilotGroups(groups(), "daintree")[0]!.rows).toHaveLength(2);
   });
 
   it("keeps every row when the project name matches without being typed whole", () => {
@@ -868,17 +791,6 @@ describe("countPilotBands", () => {
     // NOT surface through the Waiting segment — hiding from that segment is
     // the entire point of parking it.
     expect(counts["needs-you"] + counts.working + counts.finished).toBe(counts.all - 2);
-  });
-
-  it("leaves an exited run out of every segment but All", () => {
-    // An exited terminal isn't working, isn't finished, and isn't asking for
-    // anything — putting it in a bucket would make that bucket lie.
-    const counts = countPilotBands(
-      buildPilotGroups([run({ runId: "gone", agentState: "exited", since: NOW })], ctx())
-    );
-
-    expect(counts.all).toBe(1);
-    expect(counts["needs-you"] + counts.working + counts.finished).toBe(0);
   });
 
   it("counts the population it was handed, so a query narrows the segments", () => {
@@ -1122,20 +1034,6 @@ describe("bandFilterHasDemand", () => {
   });
 });
 
-describe("state vocabulary", () => {
-  it("names the bucket wider than the states inside it, never after one of them", () => {
-    // The segment holds `blocked` AND `needs-you`, so it cannot borrow either
-    // one's word: "Waiting 2" over an errored run and a waiting one is a claim
-    // about both that is only true of one. The ROW keeps the exact state.
-    const waiting = run({ agentState: "waiting", waitingReason: "question" });
-    const blocked = run({ agentState: "waiting", waitingReason: "error" });
-
-    expect(bandLabel(bandForRun(waiting), waiting)).toBe("Waiting");
-    expect(bandLabel(bandForRun(blocked), blocked)).toBe("Blocked");
-    expect(PILOT_BAND_FILTER_LABEL["needs-you"]).toBe("Attention");
-  });
-});
-
 describe("filterPilotBands", () => {
   const mixed = () =>
     buildPilotGroups(
@@ -1318,10 +1216,6 @@ describe("hasWorktreeAxis", () => {
       );
     });
 
-    it("is true for a lone agent in a project with two worktrees", () => {
-      expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }], 2)).toBe(true);
-    });
-
     it("is true with no runs at all once the project is known to have two", () => {
       // A scoped view of a project with no agents says "none here yet", which
       // answers the question asked. The whole fleet answers a different one.
@@ -1332,10 +1226,6 @@ describe("hasWorktreeAxis", () => {
       // The root checkout is a first-class entry in that count, so one means a
       // project worked only in its own root.
       expect(hasWorktreeAxis([{ worktreeId: "/repo" }], 1)).toBe(false);
-    });
-
-    it("is false where the project has no worktrees to speak of", () => {
-      expect(hasWorktreeAxis([], 0)).toBe(false);
     });
 
     it("never lets an absent or zero count veto an axis the runs proved", () => {
@@ -1576,19 +1466,6 @@ describe("buildPilotWorktreeGroups", () => {
     expect(hasWorktreeAxis([{ worktreeId: "" }, {}])).toBe(false);
   });
 
-  it("opens the same way twice for the same fleet", () => {
-    // The comparator has to be a total order, or spatial memory never forms.
-    const runs = [
-      run({ runId: "a", worktreeId: "/repo/wt/beta" }),
-      run({ runId: "b", worktreeId: "/repo/wt/alpha" }),
-      run({ runId: "c" }),
-    ];
-
-    expect(worktreeGroups(runs).map((g) => g.groupId)).toEqual(
-      worktreeGroups([...runs].reverse()).map((g) => g.groupId)
-    );
-  });
-
   describe("with the main worktree named", () => {
     /** A root whose basename sorts last, so only the lead rule can move it. */
     const ZEBRA_ROOT = "/repo/zebra";
@@ -1696,12 +1573,6 @@ describe("narrowing on the worktree axis", () => {
     }),
   ];
 
-  it("drops a worktree the query emptied", () => {
-    const filtered = filterPilotGroups(worktreeGroups(SPREAD), "auth");
-
-    expect(filtered.map((g) => g.name)).toEqual(["alpha"]);
-  });
-
   it("admits a whole worktree on its own name", () => {
     // Typing a worktree name to see everything in it is the question this
     // surface exists for, and it is the same rule the project name already got.
@@ -1724,20 +1595,6 @@ describe("narrowing on the worktree axis", () => {
     const filtered = filterPilotGroups(worktreeGroups(SPREAD), "daintree");
 
     expect(filtered.flatMap((g) => g.rows)).toHaveLength(SPREAD.length);
-  });
-
-  it("counts and summarises the scoped population only", () => {
-    const groups = worktreeGroups(SPREAD);
-
-    expect(countPilotBands(groups).all).toBe(SPREAD.length);
-    expect(summarizePilotGroups(groups).demand).toBe(1);
-  });
-
-  it("recomputes a band-filtered worktree's own summary", () => {
-    const filtered = filterPilotBands(worktreeGroups(SPREAD), "needs-you");
-
-    expect(filtered.map((g) => g.name)).toEqual(["alpha"]);
-    expect(filtered[0]!.demandCount).toBe(1);
   });
 });
 

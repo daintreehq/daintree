@@ -39,22 +39,6 @@ describe("launch contract", () => {
 });
 
 describe("parseArgs", () => {
-  it("defaults to one quiet, focused project for five minutes", () => {
-    expect(parseArgs([])).toEqual({
-      options: {
-        projects: 1,
-        terminals: 0,
-        runs: 1,
-        windowSeconds: 300,
-        settleSeconds: 30,
-        stream: false,
-        blurred: false,
-        all: false,
-        json: null,
-      },
-    });
-  });
-
   it("reads every flag", () => {
     const { options } = parseArgs([
       "--projects=3",

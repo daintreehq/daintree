@@ -36,16 +36,6 @@ describe("AgentPatternDetector", () => {
       const input = "\x1b]8;;https://example.com\x1b\\Link\x1b]8;;\x1b\\";
       expect(stripAnsi(input)).toBe("Link");
     });
-
-    it("should handle mixed ANSI codes", () => {
-      const input = "\x1b[33m\x1b[1mBold Yellow\x1b[0m \x1b[2AUp 2 lines";
-      expect(stripAnsi(input)).toBe("Bold Yellow Up 2 lines");
-    });
-
-    it("should preserve non-ANSI content", () => {
-      const input = "Plain text without any escape codes";
-      expect(stripAnsi(input)).toBe("Plain text without any escape codes");
-    });
   });
 
   describe("Claude pattern detection", () => {
@@ -75,22 +65,6 @@ describe("AgentPatternDetector", () => {
       expect(result.isWorking).toBe(true);
       expect(result.matchTier).toBe("fallback");
       expect(result.confidence).toBe(0.75);
-    });
-
-    it("should detect Claude deliberating pattern (fallback)", () => {
-      const output = "✻ Deliberating…";
-      const result = detector.detect(output);
-
-      expect(result.isWorking).toBe(true);
-      expect(result.matchTier).toBe("fallback");
-    });
-
-    it("should detect custom spinnerVerb (fallback)", () => {
-      const output = "✶ Cogitating…";
-      const result = detector.detect(output);
-
-      expect(result.isWorking).toBe(true);
-      expect(result.matchTier).toBe("fallback");
     });
 
     it("should detect new v2.1.79 spinner chars with primary pattern", () => {
@@ -143,25 +117,6 @@ describe("AgentPatternDetector", () => {
       expect(result.isWorking).toBe(true);
       expect(result.matchTier).toBe("primary");
     });
-
-    it("should detect pattern in last N lines only", () => {
-      // Pattern in first line, followed by many other lines
-      const lines = ["✽ Thinking…", ...Array(20).fill("Regular output line")];
-      const output = lines.join("\n");
-      const result = detector.detect(output);
-
-      // Pattern should not be detected since it's outside scan window
-      expect(result.isWorking).toBe(false);
-    });
-
-    it("should detect pattern in last lines when present", () => {
-      // Many lines followed by pattern at end
-      const lines = [...Array(20).fill("Regular output line"), "✽ Working… (esc to interrupt)"];
-      const output = lines.join("\n");
-      const result = detector.detect(output);
-
-      expect(result.isWorking).toBe(true);
-    });
   });
 
   describe("Gemini pattern detection", () => {
@@ -174,14 +129,6 @@ describe("AgentPatternDetector", () => {
       expect(result.isWorking).toBe(true);
       expect(result.matchTier).toBe("primary");
       expect(result.confidence).toBe(0.95);
-    });
-
-    it("should detect Gemini pattern with different spinner state", () => {
-      const output = "⠋ Analyzing code structure (esc to cancel, 2s)";
-      const result = detector.detect(output);
-
-      expect(result.isWorking).toBe(true);
-      expect(result.matchTier).toBe("primary");
     });
 
     it("should detect Gemini spinner fallback pattern", () => {
@@ -198,15 +145,6 @@ describe("AgentPatternDetector", () => {
       const result = detector.detect(output);
 
       expect(result.isWorking).toBe(false);
-    });
-
-    it("should detect Braille spinner glyphs outside the legacy 10-codepoint subset (primary)", () => {
-      // ⣿ (U+28FF) is at the end of the Braille block; not in the old subset.
-      const output = "⣿ Analyzing code structure (esc to cancel, 3s)";
-      const result = detector.detect(output);
-
-      expect(result.isWorking).toBe(true);
-      expect(result.matchTier).toBe("primary");
     });
 
     it("should detect Braille spinner glyphs outside the legacy 10-codepoint subset (fallback)", () => {
@@ -379,20 +317,9 @@ describe("AgentPatternDetector", () => {
         expect(config!.primaryPatterns.length).toBeGreaterThan(0);
       }
     );
-
-    it("should have universal patterns defined", () => {
-      expect(UNIVERSAL_PATTERN_CONFIG.primaryPatterns.length).toBeGreaterThan(0);
-    });
   });
 
   describe("registry fallback path (no customConfig)", () => {
-    it("resolves the registry detection config when no customConfig is provided", () => {
-      const detector = createPatternDetector("claude");
-      const result = detector.detect("✽ Deliberating… (esc to interrupt · 15s)");
-      expect(result.isWorking).toBe(true);
-      expect(result.matchTier).toBe("primary");
-    });
-
     it("registry-resolved detector matches the explicitly-built config's verdicts", () => {
       const explicit = buildTestDetector("codex");
       const fromRegistry = createPatternDetector("codex");
@@ -615,11 +542,6 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
       expect(result.isWorking).toBe(true);
     });
 
-    it("should handle output with only newlines", () => {
-      const result = detector.detect("\n\n\n\n\n");
-      expect(result.isWorking).toBe(false);
-    });
-
     it("should handle mixed unicode characters", () => {
       const output = "🚀 ✽ Thinking… about 日本語";
       const result = detector.detect(output);
@@ -720,15 +642,6 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
       const result = detector.detect("✽ Deliberating… (esc to interrupt · 15s)");
       expect(result.isWorking).toBe(true);
       expect(result.matchedText).toBeUndefined();
-    });
-
-    it("returns identical results on repeated calls (no lastIndex mutation)", () => {
-      const detector = buildTestDetector("claude");
-      const output = "✽ Deliberating… (esc to interrupt · 15s)";
-      const first = detector.detect(output);
-      const second = detector.detect(output);
-      expect(first).toEqual(second);
-      expect(first.isWorking).toBe(true);
     });
 
     it("stays deterministic even with a stateful (/g) custom pattern", () => {

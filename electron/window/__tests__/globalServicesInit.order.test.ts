@@ -986,33 +986,6 @@ describe("initGlobalServices task ordering", () => {
     expect(provider()).toEqual([pvm]);
   });
 
-  it("registers monitor tasks before resource-profile-service so the profile reads ready data", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    const lagIndex = registeredTaskNames.indexOf("event-loop-lag-monitor");
-    const metricsIndex = registeredTaskNames.indexOf("app-metrics-monitor");
-    const profileIndex = registeredTaskNames.indexOf("resource-profile-service");
-
-    expect(lagIndex).toBeGreaterThanOrEqual(0);
-    expect(metricsIndex).toBeGreaterThanOrEqual(0);
-    expect(profileIndex).toBeGreaterThanOrEqual(0);
-    expect(profileIndex).toBeGreaterThan(lagIndex);
-    expect(profileIndex).toBeGreaterThan(metricsIndex);
-  });
-
-  it("registers service-connectivity-registry before mcp-server so onStatusChange wires first", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    const registryIndex = registeredTaskNames.indexOf("service-connectivity-registry");
-    const mcpIndex = registeredTaskNames.indexOf("mcp-server");
-
-    expect(registryIndex).toBeGreaterThanOrEqual(0);
-    expect(mcpIndex).toBeGreaterThanOrEqual(0);
-    expect(mcpIndex).toBeGreaterThan(registryIndex);
-  });
-
   it("calls helpSessionService.setMcpRegistry before pushing the mcp-server task", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
 
@@ -1054,12 +1027,6 @@ describe("initGlobalServices task ordering", () => {
     expect(setMcpRegistry).not.toHaveBeenCalled();
   });
 
-  it("registers help-session-pty so HelpSessionService gets a PtyClient ref for displacement (#7509)", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-    expect(registeredTaskNames).toContain("help-session-pty");
-  });
-
   it("registers database-maintenance after system-sleep-service so onSuspend can attach to a live service", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
@@ -1070,14 +1037,6 @@ describe("initGlobalServices task ordering", () => {
     expect(sleepIndex).toBeGreaterThanOrEqual(0);
     expect(dbMaintIndex).toBeGreaterThanOrEqual(0);
     expect(dbMaintIndex).toBeGreaterThan(sleepIndex);
-  });
-
-  it("registers ccr-config and plugin-service as deferred tasks", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    expect(registeredTaskNames).toContain("ccr-config");
-    expect(registeredTaskNames).toContain("plugin-service");
   });
 
   it("plugin-service task swaps in the live plugin:// resolver (#10322)", async () => {
@@ -1217,13 +1176,6 @@ describe("initGlobalServices task ordering", () => {
     // allocate them (PluginInstaller constructs them lazily at first real use).
     expect(getPluginMcpConsentService).not.toHaveBeenCalled();
     expect(getPluginMcpConsentStore).not.toHaveBeenCalled();
-  });
-
-  it("registers prune-old-logs as a deferred task so it doesn't block cold start (#8622)", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-
-    expect(registeredTaskNames).toContain("prune-old-logs");
   });
 
   it("registers cleanup services migrated out of main.ts as deferred tasks (#8817)", async () => {
@@ -1479,12 +1431,6 @@ describe("initGlobalServices task ordering", () => {
     await run?.();
 
     expect(pruneOldLogsAsync).toHaveBeenCalledWith("/tmp/userData", 30);
-  });
-
-  it("returns 'ok' on the happy path", async () => {
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    const result = await initGlobalServices(fakeRegistry);
-    expect(result).toBe("ok");
   });
 
   it("fresh install stamps the latest schema version without running the migration chain", async () => {

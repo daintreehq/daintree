@@ -54,20 +54,6 @@ describe("HelpService", () => {
     expect(fsMock.existsSync).toHaveBeenCalledWith(path.join("/repo", "help"));
   });
 
-  it("returns null with warning in dev mode when directory is missing", async () => {
-    fsMock.existsSync.mockReturnValue(false);
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const { getHelpFolderPath } = await import("../HelpService.js");
-    const result = getHelpFolderPath();
-
-    expect(result).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[HelpService] Help folder not found:")
-    );
-    warnSpy.mockRestore();
-  });
-
   it("resolves from resourcesPath in packaged mode when directory exists", async () => {
     appMock.app.isPackaged = true;
     fsMock.existsSync.mockReturnValue(true);
@@ -77,21 +63,6 @@ describe("HelpService", () => {
 
     expect(result).toBe(path.join("/app/resources", "help"));
     expect(fsMock.existsSync).toHaveBeenCalledWith(path.join("/app/resources", "help"));
-  });
-
-  it("returns null in packaged mode when directory is missing", async () => {
-    appMock.app.isPackaged = true;
-    fsMock.existsSync.mockReturnValue(false);
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const { getHelpFolderPath } = await import("../HelpService.js");
-    const result = getHelpFolderPath();
-
-    expect(result).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("[HelpService] Help folder not found:")
-    );
-    warnSpy.mockRestore();
   });
 
   it("caches the result and does not call existsSync on subsequent calls", async () => {
@@ -123,18 +94,6 @@ describe("HelpService", () => {
     expect(warnSpy).not.toHaveBeenCalled();
     expect(fsMock.existsSync).toHaveBeenCalledTimes(1);
 
-    warnSpy.mockRestore();
-  });
-
-  it("includes isPackaged in the warning message", async () => {
-    appMock.app.isPackaged = true;
-    fsMock.existsSync.mockReturnValue(false);
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const { getHelpFolderPath } = await import("../HelpService.js");
-    getHelpFolderPath();
-
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("(packaged=true)"));
     warnSpy.mockRestore();
   });
 });

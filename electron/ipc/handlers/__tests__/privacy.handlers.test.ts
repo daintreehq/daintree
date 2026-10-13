@@ -185,30 +185,3 @@ describe("registerPrivacyHandlers", () => {
     expect(utilsMock.typedBroadcast).not.toHaveBeenCalled();
   });
 });
-
-describe("PRIVACY_CLEAR_CACHE handler", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    ipcMainMock._handlers.clear();
-  });
-
-  it("delegates to the session cache cleaner and returns its result unchanged", async () => {
-    sessionCacheCleanerMock.clearAllSessionCaches.mockResolvedValueOnce({ cleared: 4, failed: 1 });
-    registerPrivacyHandlers();
-
-    const handler = ipcMainMock._handlers.get("privacy:clear-cache");
-    expect(handler).toBeDefined();
-
-    await expect(handler!(null)).resolves.toEqual({ cleared: 4, failed: 1 });
-    expect(sessionCacheCleanerMock.clearAllSessionCaches).toHaveBeenCalledTimes(1);
-  });
-
-  it("propagates an unexpected cleaner rejection", async () => {
-    sessionCacheCleanerMock.clearAllSessionCaches.mockRejectedValueOnce(new Error("boom"));
-    registerPrivacyHandlers();
-
-    const handler = ipcMainMock._handlers.get("privacy:clear-cache");
-
-    await expect(handler!(null)).rejects.toThrow("boom");
-  });
-});

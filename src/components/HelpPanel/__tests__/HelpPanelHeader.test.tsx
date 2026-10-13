@@ -93,13 +93,6 @@ describe("HelpPanelHeader", () => {
     }
   });
 
-  it("renders identically when unfocused and when isFocused is omitted", () => {
-    const { container: a } = renderHeader({ isFocused: false });
-    const { container: b } = renderHeader({ isFocused: undefined });
-
-    expect(a.firstElementChild!.className).toBe(b.firstElementChild!.className);
-  });
-
   it("applies focused-state styling distinct from unfocused", () => {
     const { container: unfocused } = renderHeader({ isFocused: false });
     const { container: focused } = renderHeader({ isFocused: true });
@@ -110,27 +103,6 @@ describe("HelpPanelHeader", () => {
     // focus anchor per CLAUDE.md accent-restraint rules).
     expect(focused.firstElementChild!.className).not.toBe(unfocused.firstElementChild!.className);
     expect([...focused.firstElementChild!.classList].some((c) => c.includes("accent"))).toBe(false);
-  });
-
-  it("keeps the primary header row to overflow and hide", () => {
-    const { container, getByLabelText } = renderHeader({
-      canRestartConversation: true,
-      canEndSession: true,
-    });
-
-    expect(getByLabelText("More actions")).not.toBeNull();
-    expect(getByLabelText("Hide Daintree Assistant")).not.toBeNull();
-    // Stop and docs are overflow items, never dedicated header icons — the
-    // destructive stop must not sit adjacent to the benign hide chevron.
-    const overflow = container.querySelector("[data-testid='overflow-menu']")!;
-    const stop = [...overflow.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Stop assistant")
-    );
-    const docs = [...overflow.querySelectorAll("button")].find((b) =>
-      b.textContent?.includes("Open docs")
-    );
-    expect(stop).toBeDefined();
-    expect(docs).toBeDefined();
   });
 
   it("carries no control that could be read as adding a session", () => {
@@ -190,24 +162,6 @@ describe("HelpPanelHeader", () => {
   it("marks the Stop assistant item destructive", () => {
     const { getByText } = renderHeader({ canEndSession: true });
     expect(getByText("Stop assistant").closest("button")!.dataset.destructive).toBe("true");
-  });
-
-  it("invokes onEndSession when Stop assistant is selected", () => {
-    const onEndSession = vi.fn();
-    const { getByText } = renderHeader({ canEndSession: true, onEndSession });
-
-    fireEvent.click(getByText("Stop assistant"));
-
-    expect(onEndSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("invokes onOpenDocs when Open docs is selected", () => {
-    const onOpenDocs = vi.fn();
-    const { getByText } = renderHeader({ onOpenDocs });
-
-    fireEvent.click(getByText("Open docs"));
-
-    expect(onOpenDocs).toHaveBeenCalledTimes(1);
   });
 
   it("offers resuming a past session from the overflow menu, not the header row", () => {

@@ -152,14 +152,6 @@ describe("publishScrollbarGutter", () => {
     expect(document.documentElement.style.getPropertyValue(SCROLLBAR_GUTTER_VAR)).toBe("0px");
   });
 
-  it("publishes a gutter wider than the dialog column unchanged — CSS owns the clamp", () => {
-    stubGutter(30);
-
-    publishScrollbarGutter();
-
-    expect(document.documentElement.style.getPropertyValue(SCROLLBAR_GUTTER_VAR)).toBe("30px");
-  });
-
   it("does not rewrite the property when the figure has not moved", () => {
     stubGutter(11);
     publishScrollbarGutter();

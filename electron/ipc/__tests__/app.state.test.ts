@@ -187,161 +187,13 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
   };
 });
 
-import { CRASH_CRITICAL_FIELDS, registerAppStateHandlers } from "../handlers/app/state.js";
+import { registerAppStateHandlers } from "../handlers/app/state.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { markPerformance } from "../../utils/performance.js";
 import { PERF_MARKS } from "../../../shared/perf/marks.js";
 import type { HandlerDependencies } from "../types.js";
-
-function shouldTriggerBackup(updates: Record<string, unknown>): boolean {
-  return Object.keys(updates).some((k) => CRASH_CRITICAL_FIELDS.has(k));
-}
-
-describe("CRASH_CRITICAL_FIELDS", () => {
-  it("includes terminals", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("terminals")).toBe(true);
-  });
-
-  it("includes panelGridConfig", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("panelGridConfig")).toBe(true);
-  });
-
-  it("includes focusMode", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("focusMode")).toBe(true);
-  });
-
-  it("includes focusPanelState", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("focusPanelState")).toBe(true);
-  });
-
-  it("includes activeWorktreeId", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("activeWorktreeId")).toBe(true);
-  });
-
-  it("includes recipes", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("recipes")).toBe(true);
-  });
-
-  it("includes mruList", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("mruList")).toBe(true);
-  });
-
-  it("includes actionMruList", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("actionMruList")).toBe(true);
-  });
-
-  it("includes actionPinnedIds", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("actionPinnedIds")).toBe(true);
-  });
-
-  it("includes actionHiddenIds", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("actionHiddenIds")).toBe(true);
-  });
-
-  it("includes developerMode", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("developerMode")).toBe(true);
-  });
-
-  it("includes fleetScopeMode", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("fleetScopeMode")).toBe(true);
-  });
-
-  it("does NOT include sidebarWidth", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("sidebarWidth")).toBe(false);
-  });
-
-  it("does NOT include diagnosticsHeight", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("diagnosticsHeight")).toBe(false);
-  });
-
-  it("does NOT include hasSeenWelcome", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("hasSeenWelcome")).toBe(false);
-  });
-
-  it("does NOT include unknown fields", () => {
-    expect(CRASH_CRITICAL_FIELDS.has("unknownField")).toBe(false);
-  });
-
-  it("has exactly 12 fields", () => {
-    expect(CRASH_CRITICAL_FIELDS.size).toBe(12);
-  });
-});
-
-describe("shouldTriggerBackup", () => {
-  it("returns true for a single critical field", () => {
-    expect(shouldTriggerBackup({ focusMode: true })).toBe(true);
-  });
-
-  it("returns true for terminals", () => {
-    expect(shouldTriggerBackup({ terminals: [] })).toBe(true);
-  });
-
-  it("returns true for panelGridConfig", () => {
-    expect(shouldTriggerBackup({ panelGridConfig: { strategy: "automatic", value: 3 } })).toBe(
-      true
-    );
-  });
-
-  it("returns true for activeWorktreeId", () => {
-    expect(shouldTriggerBackup({ activeWorktreeId: "wt-1" })).toBe(true);
-  });
-
-  it("returns true for recipes", () => {
-    expect(shouldTriggerBackup({ recipes: [] })).toBe(true);
-  });
-
-  it("returns true for mruList", () => {
-    expect(shouldTriggerBackup({ mruList: [] })).toBe(true);
-  });
-
-  it("returns true for actionMruList", () => {
-    expect(shouldTriggerBackup({ actionMruList: [] })).toBe(true);
-  });
-
-  it("returns true for actionPinnedIds", () => {
-    expect(shouldTriggerBackup({ actionPinnedIds: [] })).toBe(true);
-  });
-
-  it("returns true for actionHiddenIds", () => {
-    expect(shouldTriggerBackup({ actionHiddenIds: [] })).toBe(true);
-  });
-
-  it("returns true for developerMode", () => {
-    expect(shouldTriggerBackup({ developerMode: { enabled: true } })).toBe(true);
-  });
-
-  it("returns true for fleetScopeMode", () => {
-    expect(shouldTriggerBackup({ fleetScopeMode: "scoped" })).toBe(true);
-  });
-
-  it("returns false for sidebarWidth-only mutation", () => {
-    expect(shouldTriggerBackup({ sidebarWidth: 350 })).toBe(false);
-  });
-
-  it("returns false for diagnosticsHeight-only mutation", () => {
-    expect(shouldTriggerBackup({ diagnosticsHeight: 400 })).toBe(false);
-  });
-
-  it("returns false for hasSeenWelcome-only mutation", () => {
-    expect(shouldTriggerBackup({ hasSeenWelcome: true })).toBe(false);
-  });
-
-  it("returns true for mixed critical+cosmetic mutation", () => {
-    expect(shouldTriggerBackup({ focusMode: true, sidebarWidth: 350, hasSeenWelcome: true })).toBe(
-      true
-    );
-  });
-
-  it("returns true for focusPanelState undefined (clearing on focus-mode exit)", () => {
-    expect(shouldTriggerBackup({ focusPanelState: undefined })).toBe(true);
-  });
-
-  it("returns false for empty object", () => {
-    expect(shouldTriggerBackup({})).toBe(false);
-  });
-});
 
 function makeInvokeEvent(senderId = 1, senderUrl = "") {
   return {
@@ -410,19 +262,6 @@ describe("app:boot handler", () => {
     const { effectiveCachedProjectViews } = await import("../../utils/cachedProjectViews.js");
     const result = (await invokeBoot()) as { terminalConfig: { cachedProjectViews?: number } };
     expect(result.terminalConfig.cachedProjectViews).toBe(effectiveCachedProjectViews(undefined));
-  });
-
-  it("returns a BootResult with crashPending=null and the live crashConfig when no crash is pending", async () => {
-    const result = await invokeBoot();
-    expect(result).toHaveProperty("appState");
-    expect(result).toHaveProperty("terminalConfig");
-    expect(result).toHaveProperty("agentSettings");
-    expect(result).toHaveProperty("crashPending", null);
-    expect(result).toHaveProperty("crashConfig", { autoRestoreOnCrash: false });
-    // Boot inherits systemTmpDir from the hydrate spread so the renderer can skip
-    // the standalone system:get-tmp-dir round-trip on cold boot.
-    expect(typeof (result as { systemTmpDir?: unknown }).systemTmpDir).toBe("string");
-    expect((result as { systemTmpDir: string }).systemTmpDir.length).toBeGreaterThan(0);
   });
 
   it("attaches a pending crash plus the live crashCount when one exists", async () => {

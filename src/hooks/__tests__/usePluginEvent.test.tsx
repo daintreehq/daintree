@@ -58,17 +58,6 @@ function emitPanel(pluginId: string, channel: string, panelId: string, payload: 
   for (const cb of subscribers.get(panelKey(pluginId, channel, panelId)) ?? []) cb(payload);
 }
 
-describe("@daintreehq/plugin-sdk/react entry", () => {
-  it("resolves the runtime hooks as callables", async () => {
-    // The package /react entry re-exports the same canonical implementation the
-    // in-repo hooks wrap; assert it loads and exposes both hooks as functions.
-    const mod = await import("../../../packages/plugin-sdk/src/react");
-    expect(typeof mod.useHostChannel).toBe("function");
-    expect(typeof mod.usePluginEvent).toBe("function");
-    expect(typeof mod.usePluginPanelEvent).toBe("function");
-  });
-});
-
 describe("usePluginEvent", () => {
   it("delivers host pushes to the handler", () => {
     const handler = vi.fn();

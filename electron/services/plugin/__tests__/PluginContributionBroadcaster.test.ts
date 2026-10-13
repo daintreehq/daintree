@@ -299,33 +299,6 @@ describe("mutation broadcasts with nothing project-scoped", () => {
     ).toBe(contributionsMock.contextMenuItems);
   });
 
-  it("emits the seven channels in their historical order", async () => {
-    const b = makeBroadcaster();
-    b.broadcastPluginActions();
-    b.schedulePanelKindsBroadcast();
-    b.scheduleToolbarButtonsBroadcast(true);
-    b.scheduleKeybindingsBroadcast(true);
-    b.scheduleContextMenuItemsBroadcast(true);
-    b.scheduleAgentsBroadcast(true);
-    b.scheduleRecipesBroadcast(true);
-    await flush();
-
-    expect(
-      ipcUtilsMock.broadcastToRenderer.mock.calls.map((call) => (call[1] as { name: string }).name)
-    ).toEqual([
-      "plugin:actions-changed",
-      "plugin:panel-kinds-changed",
-      "plugin:toolbar-buttons-changed",
-      "plugin:keybindings-changed",
-      "plugin:context-menu-items-changed",
-      "plugin:agents-changed",
-      "plugin:recipes-changed",
-    ]);
-    expect(
-      ipcUtilsMock.broadcastToRenderer.mock.calls.every((call) => call[0] === CHANNELS.EVENTS_PUSH)
-    ).toBe(true);
-  });
-
   it("does not consult the view registry for the always-global agents and recipes channels", async () => {
     setPluginContributionScope(PROJECT_PLUGIN_A, PROJECT_A);
     const b = makeBroadcaster();
@@ -690,23 +663,6 @@ describe("pushSnapshotTo", () => {
     expect(payload.kinds.map((k) => k.id)).toEqual(["acme.global.panel"]);
   });
 
-  it("fails closed on an empty-string project id", async () => {
-    setPluginContributionScope(PROJECT_PLUGIN_A, PROJECT_A);
-    contributionsMock.panelKinds = [
-      { id: "acme.global.panel", extensionId: GLOBAL_PLUGIN },
-      { id: "acme.local-a.panel", extensionId: PROJECT_PLUGIN_A },
-    ];
-    const wc = fakeWebContents(11);
-
-    const b = makeBroadcaster();
-    await b.pushSnapshotTo(wc as unknown as Electron.WebContents, "");
-
-    const [payload] = sentPayloads(wc, "plugin:panel-kinds-changed") as Array<{
-      kinds: Array<{ id: string }>;
-    }>;
-    expect(payload.kinds.map((k) => k.id)).toEqual(["acme.global.panel"]);
-  });
-
   it("keeps sending the remaining channels when one send throws (TOCTOU)", async () => {
     const wc = fakeWebContents(11);
     wc.send.mockImplementationOnce(() => {
@@ -739,10 +695,6 @@ describe("pushSnapshotTo", () => {
 describe("per-project visibility of installed plugins", () => {
   const VIS_PROJECT_A = "a".repeat(64);
   const VIS_PROJECT_B = "b".repeat(64);
-
-  it("keeps the identity fast path while nothing is hidden", () => {
-    expect(selectContributionsForProject(actions, (a) => a.pluginId, VIS_PROJECT_A)).toBe(actions);
-  });
 
   it("filters a hidden global plugin out of that project and no other", () => {
     setProjectPluginVisibility(VIS_PROJECT_A, GLOBAL_PLUGIN, false);

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAppTheme } from "../../../shared/theme/index.js";
 
 const storeMock = vi.hoisted(() => ({
@@ -12,8 +12,10 @@ const storeMock = vi.hoisted(() => ({
 
 vi.mock("../../store.js", () => ({ store: storeMock }));
 
+const nativeThemeMock = vi.hoisted(() => ({ shouldUseDarkColors: true }));
+
 vi.mock("electron", () => ({
-  nativeTheme: { shouldUseDarkColors: true },
+  nativeTheme: nativeThemeMock,
 }));
 
 import {
@@ -21,6 +23,11 @@ import {
   injectSkeletonCss,
   injectSkeletonProjectIdentity,
   resolveInitialCanvasBackgroundColor,
+  resolveInitialColorSchemeId,
+  INITIAL_COLOR_SCHEME_ARG,
+  resolveInstanceRole,
+  INSTANCE_ROLE_ARG,
+  resolveE2EPreloadArgs,
 } from "../skeletonCss.js";
 
 interface FakeWc {
@@ -299,3 +306,183 @@ describe("injectSkeletonProjectIdentity (#9162)", () => {
     expect(section?.classList.contains("skeleton-logo-section--identified")).toBe(true);
   });
 });
+
+/**
+ * Tests resolveInitialColorSchemeId — the helper that seeds the renderer's
+ * first-paint theme via webPreferences.additionalArguments (#9169). It must
+ * mirror createWindow/getAppThemeConfig fallback behavior.
+ */
+describe("resolveInitialColorSchemeId (#9169)", () => {
+  const originalScreenshotScale = process.env.DAINTREE_SCREENSHOT_SCALE;
+
+  beforeEach(() => {
+    storeMock.get.mockReset();
+    nativeThemeMock.shouldUseDarkColors = true;
+    delete process.env.DAINTREE_SCREENSHOT_SCALE;
+  });
+
+  afterEach(() => {
+    if (originalScreenshotScale === undefined) {
+      delete process.env.DAINTREE_SCREENSHOT_SCALE;
+    } else {
+      process.env.DAINTREE_SCREENSHOT_SCALE = originalScreenshotScale;
+    }
+  });
+
+  it("returns the persisted color scheme id, trimmed", () => {
+    storeMock.get.mockReturnValue({ colorSchemeId: "  bondi  " });
+    expect(resolveInitialColorSchemeId()).toBe("bondi");
+  });
+
+  it("falls back to daintree when no theme is persisted and the OS prefers dark", () => {
+    storeMock.get.mockReturnValue(undefined);
+    nativeThemeMock.shouldUseDarkColors = true;
+    expect(resolveInitialColorSchemeId()).toBe("daintree");
+  });
+
+  it("falls back to bondi when no theme is persisted and the OS prefers light", () => {
+    storeMock.get.mockReturnValue(undefined);
+    nativeThemeMock.shouldUseDarkColors = false;
+    expect(resolveInitialColorSchemeId()).toBe("bondi");
+  });
+
+  it("falls back when colorSchemeId is not a string", () => {
+    storeMock.get.mockReturnValue({ colorSchemeId: 123 });
+    nativeThemeMock.shouldUseDarkColors = false;
+    expect(resolveInitialColorSchemeId()).toBe("bondi");
+  });
+
+  it("falls back when colorSchemeId is whitespace only", () => {
+    storeMock.get.mockReturnValue({ colorSchemeId: "   " });
+    nativeThemeMock.shouldUseDarkColors = false;
+    expect(resolveInitialColorSchemeId()).toBe("bondi");
+  });
+
+  it("forces daintree when DAINTREE_SCREENSHOT_SCALE is set, even on a light OS", () => {
+    storeMock.get.mockReturnValue(undefined);
+    nativeThemeMock.shouldUseDarkColors = false;
+    process.env.DAINTREE_SCREENSHOT_SCALE = "2";
+    expect(resolveInitialColorSchemeId()).toBe("daintree");
+  });
+
+  it("matches the prefix preload.cts parses (drift guard)", () => {
+    // preload.cts hardcodes this literal rather than importing the constant
+    // (esbuild cross-bundle); this ties both halves of the contract together so
+    // a rename of INITIAL_COLOR_SCHEME_ARG fails loudly instead of silently
+    // reintroducing the flash (#9169).
+    expect(`${INITIAL_COLOR_SCHEME_ARG}=`).toBe("--daintree-initial-color-scheme-id=");
+  });
+});
+
+/**
+ * Tests resolveInstanceRole — the helper that seeds each renderer with the
+ * worker/attended instance role via webPreferences.additionalArguments
+ * (#10123). Worker instances suppress automatic background GitHub polling;
+ * the default must always be attended.
+ */
+describe("resolveInstanceRole (#10123)", () => {
+  const originalRole = process.env.DAINTREE_INSTANCE_ROLE;
+
+  beforeEach(() => {
+    delete process.env.DAINTREE_INSTANCE_ROLE;
+  });
+
+  afterEach(() => {
+    if (originalRole === undefined) {
+      delete process.env.DAINTREE_INSTANCE_ROLE;
+    } else {
+      process.env.DAINTREE_INSTANCE_ROLE = originalRole;
+    }
+  });
+
+  it("defaults to attended when the env var is unset", () => {
+    expect(resolveInstanceRole()).toBe("attended");
+  });
+
+  it("returns worker only for the exact value 'worker'", () => {
+    process.env.DAINTREE_INSTANCE_ROLE = "worker";
+    expect(resolveInstanceRole()).toBe("worker");
+  });
+
+  it("normalizes malformed values to attended", () => {
+    for (const value of ["Worker", "WORKER", " worker", "worker ", "1", "true", ""]) {
+      process.env.DAINTREE_INSTANCE_ROLE = value;
+      expect(resolveInstanceRole()).toBe("attended");
+    }
+  });
+
+  it("matches the prefix preload.cts parses (drift guard)", () => {
+    // preload.cts hardcodes this literal rather than importing the constant
+    // (esbuild cross-bundle); this ties both halves of the contract together
+    // so a rename of INSTANCE_ROLE_ARG fails loudly instead of silently
+    // leaving every instance in attended mode (#10123).
+    expect(`${INSTANCE_ROLE_ARG}=`).toBe("--daintree-instance-role=");
+  });
+});
+
+describe("resolveE2EPreloadArgs", () => {
+  const originalMode = process.env.DAINTREE_E2E_MODE;
+  const originalSkip = process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS;
+  const originalFault = process.env.DAINTREE_E2E_FAULT_MODE;
+  const originalArgv = process.argv;
+
+  beforeEach(() => {
+    delete process.env.DAINTREE_E2E_MODE;
+    delete process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS;
+    delete process.env.DAINTREE_E2E_FAULT_MODE;
+    process.argv = originalArgv.slice(0, 2);
+  });
+
+  afterEach(() => {
+    restoreEnv("DAINTREE_E2E_MODE", originalMode);
+    restoreEnv("DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS", originalSkip);
+    restoreEnv("DAINTREE_E2E_FAULT_MODE", originalFault);
+    process.argv = originalArgv;
+  });
+
+  it("omits all flags outside E2E", () => {
+    expect(resolveE2EPreloadArgs()).toEqual([]);
+  });
+
+  it("threads exact E2E env flags into argv-safe preload switches", () => {
+    process.env.DAINTREE_E2E_MODE = "1";
+    process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS = "1";
+    process.env.DAINTREE_E2E_FAULT_MODE = "1";
+
+    expect(resolveE2EPreloadArgs()).toEqual([
+      "--daintree-e2e-mode",
+      "--daintree-e2e-skip-first-run-dialogs",
+      "--daintree-e2e-fault-mode",
+    ]);
+  });
+
+  it("preserves E2E argv switches when production build strips env reads", () => {
+    process.argv.push(
+      "--daintree-e2e-mode",
+      "--daintree-e2e-skip-first-run-dialogs",
+      "--daintree-e2e-fault-mode"
+    );
+
+    expect(resolveE2EPreloadArgs()).toEqual([
+      "--daintree-e2e-mode",
+      "--daintree-e2e-skip-first-run-dialogs",
+      "--daintree-e2e-fault-mode",
+    ]);
+  });
+
+  it("rejects truthy-but-not-exact env values", () => {
+    process.env.DAINTREE_E2E_MODE = "true";
+    process.env.DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS = "yes";
+    process.env.DAINTREE_E2E_FAULT_MODE = "on";
+
+    expect(resolveE2EPreloadArgs()).toEqual([]);
+  });
+});
+
+function restoreEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}

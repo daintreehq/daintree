@@ -8,11 +8,12 @@
 //
 // Behavioral, not tautological: we run the REAL stock resolver to prove the dock
 // is reachable by default, then assert the scoped resolver refuses the same step.
-import { afterEach, describe, expect, it } from "vitest";
+import type { MouseEvent as ReactMouseEvent } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { KeyboardCode } from "@dnd-kit/core";
 import type { ClientRect, KeyboardCoordinateGetter } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { sameContainerKeyboardCoordinates } from "../DndProvider";
+import { isNoDndTarget, NoDndMouseSensor, sameContainerKeyboardCoordinates } from "../DndProvider";
 
 // Structural mock of the dnd-kit DroppableContainer surface the keyboard
 // coordinate resolvers actually read (id/disabled/data.sortable/node/rect).
@@ -156,5 +157,100 @@ describe("sameContainerKeyboardCoordinates", () => {
       makeContext(active, [active, target])
     );
     expect(scoped).toEqual(stock);
+  });
+});
+
+// The `isNoDndTarget` predicate gates `NoDndMouseSensor` activation. The predicate
+// is the integration seam — testing it directly avoids mounting `DndProvider`
+// (which requires mocking 10+ modules).
+type Activator = (typeof NoDndMouseSensor.activators)[number];
+
+function buildSyntheticEvent(target: EventTarget | null, button = 0): ReactMouseEvent {
+  return {
+    nativeEvent: { target, button } as unknown as MouseEvent,
+  } as ReactMouseEvent;
+}
+
+describe("isNoDndTarget", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("returns true when the target itself carries [data-no-dnd]", () => {
+    const button = document.createElement("button");
+    button.setAttribute("data-no-dnd", "");
+    document.body.appendChild(button);
+
+    expect(isNoDndTarget(button)).toBe(true);
+  });
+
+  it("returns true when an ancestor carries [data-no-dnd]", () => {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-no-dnd", "");
+    const inner = document.createElement("span");
+    wrapper.appendChild(inner);
+    document.body.appendChild(wrapper);
+
+    expect(isNoDndTarget(inner)).toBe(true);
+  });
+
+  it("returns false when no ancestor carries [data-no-dnd]", () => {
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+
+    expect(isNoDndTarget(button)).toBe(false);
+  });
+
+  it("returns false for a null target", () => {
+    expect(isNoDndTarget(null)).toBe(false);
+  });
+
+  it("returns false for non-Element targets (e.g. document, window)", () => {
+    expect(isNoDndTarget(document)).toBe(false);
+    expect(isNoDndTarget(window)).toBe(false);
+  });
+});
+
+describe("NoDndMouseSensor.activators handler", () => {
+  const activator = NoDndMouseSensor.activators[0] as Activator;
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("returns false and does not call onActivation when target is inside [data-no-dnd]", () => {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-no-dnd", "");
+    const button = document.createElement("button");
+    wrapper.appendChild(button);
+    document.body.appendChild(wrapper);
+
+    const onActivation = vi.fn();
+    const result = activator.handler(buildSyntheticEvent(button), { onActivation });
+
+    expect(result).toBe(false);
+    expect(onActivation).not.toHaveBeenCalled();
+  });
+
+  it("returns true and calls onActivation for a normal left-click target", () => {
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+
+    const onActivation = vi.fn();
+    const result = activator.handler(buildSyntheticEvent(button), { onActivation });
+
+    expect(result).toBe(true);
+    expect(onActivation).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false and does not call onActivation for a right-click", () => {
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+
+    const onActivation = vi.fn();
+    const result = activator.handler(buildSyntheticEvent(button, 2), { onActivation });
+
+    expect(result).toBe(false);
+    expect(onActivation).not.toHaveBeenCalled();
   });
 });

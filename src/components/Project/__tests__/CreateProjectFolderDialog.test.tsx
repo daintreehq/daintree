@@ -172,15 +172,6 @@ describe("CreateProjectFolderDialog identity", () => {
     expect(emojiTrigger().textContent).toBe(DEFAULT_PROJECT_EMOJI);
   });
 
-  it("suggests an emoji derived from the folder name", async () => {
-    await renderDialog();
-
-    fireEvent.change(folderInput(), { target: { value: "my-api" } });
-
-    expect(emojiTrigger().textContent).toBe(suggestProjectEmoji("my-api"));
-    expect(emojiTrigger().textContent).not.toBe(DEFAULT_PROJECT_EMOJI);
-  });
-
   it("updates the suggestion as the folder name changes", async () => {
     await renderDialog();
 

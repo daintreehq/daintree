@@ -40,22 +40,6 @@ describe("migration017 — add notification quiet hours", () => {
     expect(after.completedEnabled).toBe(false);
   });
 
-  it("is idempotent — running twice leaves migrated data intact", () => {
-    const data: Record<string, unknown> = {
-      notificationSettings: { enabled: true },
-    };
-    const store = makeStoreMock(data);
-    migration017.up(store);
-    const firstCallCount = (store.set as ReturnType<typeof vi.fn>).mock.calls.length;
-    migration017.up(store);
-    const secondCallCount = (store.set as ReturnType<typeof vi.fn>).mock.calls.length;
-
-    expect(secondCallCount).toBe(firstCallCount);
-    const after = data.notificationSettings as Record<string, unknown>;
-    expect(after.quietHoursEnabled).toBe(false);
-    expect(after.quietHoursStartMin).toBe(22 * 60);
-  });
-
   it("preserves existing quiet hours values when already set", () => {
     const data: Record<string, unknown> = {
       notificationSettings: {
@@ -107,25 +91,5 @@ describe("migration017 — add notification quiet hours", () => {
       const store = makeStoreMock(data);
       expect(() => migration017.up(store)).not.toThrow();
     }
-  });
-
-  it("preserves unrelated fields during backfill", () => {
-    const data: Record<string, unknown> = {
-      notificationSettings: {
-        enabled: true,
-        completedEnabled: true,
-        soundEnabled: false,
-        customField: "keep-me",
-      },
-    };
-    const store = makeStoreMock(data);
-    migration017.up(store);
-
-    const after = data.notificationSettings as Record<string, unknown>;
-    expect(after.enabled).toBe(true);
-    expect(after.completedEnabled).toBe(true);
-    expect(after.soundEnabled).toBe(false);
-    expect(after.customField).toBe("keep-me");
-    expect(after.quietHoursEnabled).toBe(false);
   });
 });

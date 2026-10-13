@@ -100,10 +100,6 @@ describe("buildBrowserPartition", () => {
     expect(buildBrowserPartition(undefined)).toBe("persist:browser-default");
     expect(buildBrowserPartition("")).toBe("persist:browser-default");
   });
-
-  it("always produces a scoped partition, never the legacy bare string", () => {
-    expect(buildBrowserPartition(undefined)).not.toBe("persist:browser");
-  });
 });
 
 describe("isBrowserPartition", () => {

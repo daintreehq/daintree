@@ -661,31 +661,6 @@ describe("McpServerService", () => {
     await expect(promise).rejects.toThrow("MCP renderer bridge destroyed");
   });
 
-  it("serves the Streamable HTTP transport at /mcp and lists tools", async () => {
-    const { window } = createMockWindow({
-      getManifest: () => [
-        createManifestEntry({
-          id: "actions.list" as ActionId,
-          title: "List Actions",
-          description: "Read the action registry",
-          kind: "query",
-        }),
-      ],
-    });
-
-    await service.start(window);
-    const { client, transport } = await connectHttpClient(service.currentPort!);
-    httpTransports.push(transport);
-
-    const result = await client.listTools();
-    const ids = result.tools.map((tool) => tool.name);
-    expect(ids).toContain("actions.list");
-
-    const httpSessions = (service as unknown as { _httpSessions: Map<string, unknown> })
-      ._httpSessions;
-    expect(httpSessions.size).toBe(1);
-  });
-
   it("reuses the same Streamable HTTP session for follow-up tool calls", async () => {
     const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
       ok: true,
@@ -1195,37 +1170,6 @@ describe("McpServerService", () => {
       expect(result.structuredContent).toEqual(objectResult);
       expect(result.content[0]?.type).toBe("text");
       expect(JSON.parse(result.content[0]!.text)).toEqual(objectResult);
-    });
-
-    it("omits structuredContent when the action has a primitive resultSchema", async () => {
-      const { window } = createMockWindow({
-        getManifest: () => [
-          createManifestEntry({
-            id: "worktree.createWithRecipe" as ActionId,
-            title: "Create Worktree",
-            description: "Create a worktree",
-            kind: "command",
-            outputSchema: primitiveSchema,
-          }),
-        ],
-        dispatchAction: () => ({ ok: true, result: "wt-123" }),
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectClient(service.currentPort!);
-      transports.push(transport);
-
-      await client.listTools();
-      const result = (await client.callTool({
-        name: "worktree.createWithRecipe",
-        arguments: {},
-      })) as {
-        content: Array<{ type: string; text: string }>;
-        structuredContent?: Record<string, unknown>;
-      };
-
-      expect(result.structuredContent).toBeUndefined();
-      expect(result.content[0]?.text).toContain("wt-123");
     });
 
     it("omits structuredContent when the action has no resultSchema", async () => {

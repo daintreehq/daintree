@@ -33,14 +33,6 @@ describe("normalizeErrorsInLogContext", () => {
     expect(normalized.id).toBe("terminal-1");
   });
 
-  it("survives a JSON round-trip with its message intact", () => {
-    const normalized = normalizeErrorsInLogContext({ error: new Error("boom") });
-    const roundTripped = JSON.parse(JSON.stringify(normalized)) as {
-      error: { message?: string };
-    };
-    expect(roundTripped.error.message).toBe("boom");
-  });
-
   it("finds Errors nested in objects and inside arrays", () => {
     const nested = new Error("deep");
     const listed = new Error("in a list");

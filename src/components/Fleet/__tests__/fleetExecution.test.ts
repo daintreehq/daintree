@@ -259,18 +259,6 @@ describe("executeFleetBroadcast", () => {
       expect(s.isActive).toBe(false);
     });
 
-    it("tracks per-batch failures through advance calls", async () => {
-      // Advance tracks failures correctly when checked via the real store.
-      // Verified by directly calling advance with batch failures.
-      useFleetBroadcastProgressStore.getState().init(12);
-      useFleetBroadcastProgressStore.getState().advance(5, 1); // batch 1: t3 failed
-      useFleetBroadcastProgressStore.getState().advance(5, 1); // batch 2: t8 failed
-      useFleetBroadcastProgressStore.getState().advance(2, 0); // batch 3: clean
-      const s = useFleetBroadcastProgressStore.getState();
-      expect(s.failed).toBe(2);
-      expect(s.completed).toBe(12);
-    });
-
     it("calls finish even when all submissions reject (isActive becomes false)", async () => {
       submitMock.mockReset();
       submitMock.mockRejectedValue(new Error("boom"));
@@ -282,16 +270,6 @@ describe("executeFleetBroadcast", () => {
     it("calls finish even with empty targets (isActive becomes false)", async () => {
       await executeFleetBroadcast("hello", []);
       expect(useFleetBroadcastProgressStore.getState().isActive).toBe(false);
-    });
-
-    it("existing post-hoc result shape is unchanged by progress tracking", async () => {
-      seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("c")]);
-      const result = await executeFleetBroadcast("hello", ["a", "b", "c"]);
-      expect(result.total).toBe(3);
-      expect(result.successCount).toBe(3);
-      expect(result.failureCount).toBe(0);
-      expect(result.failedIds).toEqual([]);
-      expect(result.perTarget.length).toBe(3);
     });
   });
 

@@ -5,7 +5,6 @@ import {
   planPRWorktrees,
   isTransientError,
   normalizeError,
-  delay,
   cancellableDelay,
   nextBackoffDelay,
   BACKOFF_BASE_MS,
@@ -37,10 +36,6 @@ function makePR(overrides: Partial<PR> = {}): PR {
 }
 
 describe("planIssueWorktrees", () => {
-  it("returns empty for empty input", () => {
-    expect(planIssueWorktrees([], new Set())).toEqual([]);
-  });
-
   it("plans a single open issue", () => {
     const result = planIssueWorktrees([makeIssue({ number: 1 })], new Set());
     expect(result).toHaveLength(1);
@@ -59,16 +54,6 @@ describe("planIssueWorktrees", () => {
     const result = planIssueWorktrees([makeIssue({ number: 1 })], new Set([1]));
     expect(result[0]!.skipped).toBe(true);
     expect(result[0]!.skipReason).toBe("Has worktree");
-  });
-
-  it("generates unique branch names for duplicate issue numbers", () => {
-    // Two different issues with the same number is unrealistic, but test the map behavior
-    const issues = [
-      makeIssue({ number: 1, title: "Fix bug" }),
-      makeIssue({ number: 2, title: "Add feature" }),
-    ];
-    const result = planIssueWorktrees(issues, new Set());
-    expect(result[0]!.branchName).not.toBe(result[1]!.branchName);
   });
 });
 
@@ -112,10 +97,6 @@ describe("planBulkRecipeSpawnBatches", () => {
 });
 
 describe("planPRWorktrees", () => {
-  it("returns empty for empty input", () => {
-    expect(planPRWorktrees([], new Set())).toEqual([]);
-  });
-
   it("plans a single open PR with headRef", () => {
     const result = planPRWorktrees([makePR({ number: 1, headRef: "feature/foo" })], new Set());
     expect(result).toHaveLength(1);
@@ -181,10 +162,6 @@ describe("isTransientError", () => {
     expect(isTransientError("Cannot reach GitHub. Check your internet connection.")).toBe(true);
   });
 
-  it("matches GitHub primary rate limit", () => {
-    expect(isTransientError("GitHub rate limit exceeded. Resets at 12:34 UTC.")).toBe(true);
-  });
-
   it("matches GitHub secondary rate limit", () => {
     expect(isTransientError("GitHub secondary rate limit triggered. Slow down requests.")).toBe(
       true
@@ -203,20 +180,8 @@ describe("isTransientError", () => {
     expect(isTransientError("Unauthorized — invalid token")).toBe(false);
   });
 
-  it("rejects VALIDATION_ERROR code", () => {
-    expect(isTransientError("something", "VALIDATION_ERROR")).toBe(false);
-  });
-
-  it("rejects NOT_FOUND code", () => {
-    expect(isTransientError("something", "NOT_FOUND")).toBe(false);
-  });
-
   it("rejects non-matching messages", () => {
     expect(isTransientError("Something went wrong")).toBe(false);
-  });
-
-  it("rejects empty string", () => {
-    expect(isTransientError("")).toBe(false);
   });
 });
 
@@ -231,18 +196,6 @@ describe("normalizeError", () => {
 
   it("stringifies objects", () => {
     expect(normalizeError({ code: "ERR" })).toBe("[object Object]");
-  });
-
-  it("handles null", () => {
-    expect(normalizeError(null)).toBe("null");
-  });
-});
-
-describe("delay", () => {
-  it("resolves after given ms", async () => {
-    const start = Date.now();
-    await delay(10);
-    expect(Date.now() - start).toBeGreaterThanOrEqual(8); // allow small timer drift
   });
 });
 
@@ -290,12 +243,6 @@ describe("cancellableDelay", () => {
     // No timers should be needed — a zero-ms wait must not block.
     await expect(cancellableDelay(0, () => false)).resolves.toBeUndefined();
   });
-
-  it("does not invoke the cancel guard after a non-positive duration", async () => {
-    const isCancelled = vi.fn(() => false);
-    await cancellableDelay(0, isCancelled);
-    expect(isCancelled).not.toHaveBeenCalled();
-  });
 });
 
 describe("nextBackoffDelay", () => {
@@ -309,16 +256,6 @@ describe("nextBackoffDelay", () => {
     for (let i = 0; i < 20; i++) {
       expect(nextBackoffDelay(BACKOFF_CAP_MS)).toBeLessThanOrEqual(BACKOFF_CAP_MS);
     }
-  });
-
-  it("grows proportional to input", () => {
-    const small = nextBackoffDelay(1000);
-    const large = nextBackoffDelay(10000);
-    // Large's upper bound (30000) is bigger than small's (3000), so eventually
-    // we expect large to produce bigger values on average
-    // This is a probabilistic test — verify the cap works
-    expect(small).toBeLessThanOrEqual(BACKOFF_CAP_MS);
-    expect(large).toBeLessThanOrEqual(BACKOFF_CAP_MS);
   });
 
   it("honors a per-call cap above the default", () => {

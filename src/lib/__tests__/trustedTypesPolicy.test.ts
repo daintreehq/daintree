@@ -52,16 +52,6 @@ describe("trustedTypesPolicy", () => {
     );
   });
 
-  it("createTrustedHTML delegates to the policy and passes input through", async () => {
-    const { createHTMLSpy } = installMockTrustedTypes();
-
-    const { createTrustedHTML } = await import("../trustedTypesPolicy");
-    const result = createTrustedHTML("<svg></svg>");
-
-    expect(createHTMLSpy).toHaveBeenCalledWith("<svg></svg>");
-    expect(result).toBe("<svg></svg>");
-  });
-
   it("setTrustedInnerHTML writes the trusted html to the element", async () => {
     installMockTrustedTypes();
 

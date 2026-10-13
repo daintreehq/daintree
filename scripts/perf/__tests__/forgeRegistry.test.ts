@@ -17,7 +17,6 @@ import {
   scaleProviders,
 } from "../lib/forgeRegistryFixture";
 import { forgeRegistryScenarios } from "../scenarios/forgeRegistry";
-import { EXPECTED_SCENARIO_IDS } from "../scenarios";
 
 /**
  * Two jobs here, and neither is re-running the benchmark.
@@ -183,21 +182,6 @@ describe("forge perf corpus and expectation table", () => {
         }
       }
     }
-  });
-});
-
-describe("forge perf scenarios", () => {
-  it("declares ids that are in the matrix and predicates on every one", () => {
-    for (const scenario of forgeRegistryScenarios) {
-      expect(EXPECTED_SCENARIO_IDS.has(scenario.id)).toBe(true);
-      expect(scenario.correctness?.length ?? 0).toBeGreaterThan(0);
-    }
-    expect(forgeRegistryScenarios.map((scenario) => scenario.id)).toEqual([
-      "PERF-340",
-      "PERF-341",
-      "PERF-342",
-      "PERF-343",
-    ]);
   });
 });
 

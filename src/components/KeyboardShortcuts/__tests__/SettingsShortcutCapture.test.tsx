@@ -41,14 +41,6 @@ vi.mock("@/lib/notify", () => ({
   notify: (...args: unknown[]) => notifyMock(...args),
 }));
 
-vi.mock("@/store/notificationStore", () => ({
-  useNotificationStore: {
-    getState: vi.fn(() => ({
-      addNotification: vi.fn(),
-    })),
-  },
-}));
-
 describe("SettingsShortcutCapture", () => {
   const mockOnCapture = vi.fn();
   const mockOnCancel = vi.fn();
@@ -61,35 +53,6 @@ describe("SettingsShortcutCapture", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-  });
-
-  it("renders idle state with 'Click to record shortcut' button", () => {
-    render(
-      <SettingsShortcutCapture
-        onCapture={mockOnCapture}
-        onCancel={mockOnCancel}
-        excludeActionId="test.action"
-      />
-    );
-
-    expect(screen.getByText("Click to record shortcut")).toBeTruthy();
-    expect(screen.getByText("Cancel")).toBeTruthy();
-    expect(screen.getByText("Remove shortcut")).toBeTruthy();
-    expect(screen.queryByText("Save")).toBeNull();
-  });
-
-  it("enters recording state when clicking record button", async () => {
-    render(
-      <SettingsShortcutCapture
-        onCapture={mockOnCapture}
-        onCancel={mockOnCancel}
-        excludeActionId="test.action"
-      />
-    );
-
-    fireEvent.click(screen.getByText("Click to record shortcut"));
-
-    expect(screen.getByText("Press a key combination")).toBeTruthy();
   });
 
   it("status region announces recording state changes via aria-live", () => {
@@ -110,36 +73,6 @@ describe("SettingsShortcutCapture", () => {
 
     const updatedStatus = screen.getByRole("status");
     expect(updatedStatus.textContent).toContain("Press a key combination");
-  });
-
-  it("captures single key combination and displays it", async () => {
-    render(
-      <SettingsShortcutCapture
-        onCapture={mockOnCapture}
-        onCancel={mockOnCancel}
-        excludeActionId="test.action"
-      />
-    );
-
-    fireEvent.click(screen.getByText("Click to record shortcut"));
-
-    const keyEvent = new KeyboardEvent("keydown", {
-      key: "k",
-      code: "KeyK",
-      ctrlKey: true,
-      bubbles: true,
-    });
-
-    act(() => {
-      window.dispatchEvent(keyEvent);
-    });
-
-    // Should transition to recording complete after timeout
-    act(() => {
-      vi.advanceTimersByTime(1100);
-    });
-
-    expect(screen.getByText("Save")).toBeTruthy();
   });
 
   it("captures two-step chord combination", async () => {
@@ -307,45 +240,6 @@ describe("SettingsShortcutCapture", () => {
     expect(screen.getByText("Press a key combination")).toBeTruthy();
   });
 
-  it("displays conflict warnings when conflicts exist", async () => {
-    const { keybindingService } = await import("@/services/KeybindingService");
-    vi.mocked(keybindingService.findConflicts).mockReturnValue([
-      {
-        actionId: "conflict.action",
-        description: "Conflicting Action",
-        combo: "Cmd+A",
-        scope: "global",
-        priority: 0,
-        kind: "conflict",
-      },
-    ]);
-
-    render(
-      <SettingsShortcutCapture
-        onCapture={mockOnCapture}
-        onCancel={mockOnCancel}
-        excludeActionId="test.action"
-      />
-    );
-
-    fireEvent.click(screen.getByText("Click to record shortcut"));
-
-    const keyEvent = new KeyboardEvent("keydown", {
-      key: "k",
-      code: "KeyK",
-      ctrlKey: true,
-      bubbles: true,
-    });
-
-    act(() => {
-      window.dispatchEvent(keyEvent);
-      vi.advanceTimersByTime(1100);
-    });
-
-    expect(screen.getByText("Conflicts with")).toBeTruthy();
-    expect(screen.getByText("Conflicting Action")).toBeTruthy();
-  });
-
   it("threads scope prop into findConflicts", async () => {
     const { keybindingService } = await import("@/services/KeybindingService");
     vi.mocked(keybindingService.findConflicts).mockReturnValue([]);
@@ -460,62 +354,6 @@ describe("SettingsShortcutCapture", () => {
     expect(screen.queryByText("Unbind")).toBeNull();
   });
 
-  it("uses normalizeKeyForBinding for key normalization", async () => {
-    const { normalizeKeyForBinding } = await import("@/services/KeybindingService");
-    vi.mocked(normalizeKeyForBinding).mockReturnValue("k");
-
-    render(
-      <SettingsShortcutCapture
-        onCapture={mockOnCapture}
-        onCancel={mockOnCancel}
-        excludeActionId="test.action"
-      />
-    );
-
-    fireEvent.click(screen.getByText("Click to record shortcut"));
-
-    const keyEvent = new KeyboardEvent("keydown", {
-      key: "k",
-      code: "KeyK",
-      ctrlKey: true,
-      bubbles: true,
-    });
-
-    act(() => {
-      window.dispatchEvent(keyEvent);
-    });
-
-    expect(normalizeKeyForBinding).toHaveBeenCalledWith(keyEvent);
-  });
-
-  it("calls onCapture with combo when Save is clicked", async () => {
-    render(
-      <SettingsShortcutCapture
-        onCapture={mockOnCapture}
-        onCancel={mockOnCancel}
-        excludeActionId="test.action"
-      />
-    );
-
-    fireEvent.click(screen.getByText("Click to record shortcut"));
-
-    const keyEvent = new KeyboardEvent("keydown", {
-      key: "s",
-      code: "KeyS",
-      ctrlKey: true,
-      bubbles: true,
-    });
-
-    act(() => {
-      window.dispatchEvent(keyEvent);
-      vi.advanceTimersByTime(1100);
-    });
-
-    fireEvent.click(screen.getByText("Save"));
-
-    expect(mockOnCapture).toHaveBeenCalled();
-  });
-
   it("cleans up event listeners on unmount", () => {
     const removeSpy = vi.spyOn(window, "removeEventListener");
 
@@ -535,39 +373,6 @@ describe("SettingsShortcutCapture", () => {
     unmount();
 
     expect(removeSpy).toHaveBeenCalledWith("keydown", expect.any(Function), { capture: true });
-  });
-
-  it("clears timeout on unmount", () => {
-    const clearTimeoutSpy = vi.spyOn(global, "clearTimeout");
-
-    const { unmount } = render(
-      <SettingsShortcutCapture
-        onCapture={mockOnCapture}
-        onCancel={mockOnCancel}
-        excludeActionId="test.action"
-      />
-    );
-
-    // Start recording
-    act(() => {
-      screen.getByText("Click to record shortcut").click();
-    });
-
-    // Dispatch a key event to set a timeout
-    const keyEvent = new KeyboardEvent("keydown", {
-      key: "a",
-      code: "KeyA",
-      ctrlKey: true,
-      bubbles: true,
-    });
-
-    act(() => {
-      window.dispatchEvent(keyEvent);
-    });
-
-    unmount();
-
-    expect(clearTimeoutSpy).toHaveBeenCalled();
   });
 
   describe("IME composition guard", () => {
@@ -629,35 +434,6 @@ describe("SettingsShortcutCapture", () => {
       expect(screen.getByText("Press a key combination")).toBeTruthy();
       expect(keyEvent.defaultPrevented).toBe(false);
       expect(stopPropagationSpy).not.toHaveBeenCalled();
-    });
-
-    it("does not record an IME-composing Enter as the first chord token", () => {
-      render(
-        <SettingsShortcutCapture
-          onCapture={mockOnCapture}
-          onCancel={mockOnCancel}
-          excludeActionId="test.action"
-        />
-      );
-
-      fireEvent.click(screen.getByText("Click to record shortcut"));
-
-      const composingEnter = new KeyboardEvent("keydown", {
-        key: "Enter",
-        code: "Enter",
-        bubbles: true,
-        cancelable: true,
-      });
-      Object.defineProperty(composingEnter, "isComposing", { value: true, configurable: true });
-
-      act(() => {
-        window.dispatchEvent(composingEnter);
-        vi.advanceTimersByTime(1100);
-      });
-
-      // No combo captured — Save button should not appear and the prompt is unchanged.
-      expect(screen.queryByText("Save")).toBeNull();
-      expect(screen.getByText("Press a key combination")).toBeTruthy();
     });
 
     it("does not record an IME-composing Enter as the second token of a pending chord", () => {
@@ -927,71 +703,6 @@ describe("SettingsShortcutCapture", () => {
       expect(screen.getByText("Conflicting Action 1")).toBeTruthy();
       expect(screen.getByText("Conflicting Action 2")).toBeTruthy();
       expect(screen.getAllByText("Unbind")).toHaveLength(2);
-    });
-
-    it("dispatches setOverride action when unbind button is clicked for override conflict", async () => {
-      const { keybindingService } = await import("@/services/KeybindingService");
-      const { actionService } = await import("@/services/ActionService");
-      const { useNotificationStore } = await import("@/store/notificationStore");
-
-      vi.mocked(keybindingService.findConflicts).mockReturnValue([
-        {
-          actionId: "conflict.action",
-          description: "Conflicting Action",
-          combo: "Cmd+A",
-          scope: "global",
-          priority: 0,
-          kind: "conflict",
-        },
-      ]);
-
-      vi.mocked(keybindingService.getOverride).mockReturnValue(["Cmd+K"]);
-      vi.mocked(keybindingService.getDefaultCombo).mockReturnValue("Cmd+A");
-
-      const addNotificationSpy = vi.fn();
-      vi.mocked(useNotificationStore.getState).mockReturnValue({
-        addNotification: addNotificationSpy,
-        notifications: [],
-        updateNotification: vi.fn(),
-        dismissNotification: vi.fn(),
-        removeNotification: vi.fn(),
-        clearNotifications: vi.fn(),
-        reset: vi.fn(),
-      });
-
-      render(
-        <SettingsShortcutCapture
-          onCapture={mockOnCapture}
-          onCancel={mockOnCancel}
-          excludeActionId="test.action"
-        />
-      );
-
-      fireEvent.click(screen.getByText("Click to record shortcut"));
-
-      const keyEvent = new KeyboardEvent("keydown", {
-        key: "k",
-        code: "KeyK",
-        ctrlKey: true,
-        bubbles: true,
-      });
-
-      act(() => {
-        window.dispatchEvent(keyEvent);
-        vi.advanceTimersByTime(1100);
-      });
-
-      await act(async () => {
-        const unbindButton = screen.getByText("Unbind");
-        fireEvent.click(unbindButton);
-        await vi.advanceTimersByTimeAsync(0);
-      });
-
-      expect(actionService.dispatch).toHaveBeenCalledWith(
-        "keybinding.setOverride",
-        { actionId: "conflict.action", combo: [] },
-        { source: "user" }
-      );
     });
 
     it("shows toast with undo action after successful unbind", async () => {

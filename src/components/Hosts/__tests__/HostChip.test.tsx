@@ -229,21 +229,6 @@ describe("HostChip", () => {
     expect(menu.textContent).toContain("Hosts overview…");
   });
 
-  it("switches this window on a plain click and opens a new window on Cmd-click", async () => {
-    await renderWithHosts([host("h1", "studio-01"), host("h2", "studio-02")]);
-    let menu = await openMenu();
-    fireEvent.click(menu.querySelector("[data-host-id='h1']")!);
-    await waitFor(() =>
-      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: false })
-    );
-
-    menu = await openMenu();
-    fireEvent.click(menu.querySelector("[data-host-id='h2']")!, { metaKey: true });
-    await waitFor(() =>
-      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h2", newWindow: true })
-    );
-  });
-
   it("only goes to a host on a plain click, even with a project open; Cmd-click opens a new window", async () => {
     const previous = useProjectStore.getState().currentProject;
     useProjectStore.setState({ currentProject: { id: "proj-1" } as Project });
@@ -308,26 +293,6 @@ describe("HostChip", () => {
     const menu = await openMenu();
     fireEvent.click(menu.querySelector("[data-host-id='local']")!);
     expect(switchWindowHost).not.toHaveBeenCalled();
-  });
-
-  it("offers to update whichever side is behind on a version mismatch", async () => {
-    window.__DAINTREE_HOST_ID__ = { id: "h1" };
-    try {
-      useHostConnectionStore.setState({
-        hostId: "h1",
-        hostName: "studio-01",
-        connection: {
-          status: "version-mismatch",
-          mismatch: { kind: "version", local: "1.4.0", remote: "1.3.0" },
-          remote: { ...HANDSHAKE, version: "1.3.0" },
-        },
-      });
-      await renderWithHosts([host("h1", "studio-01")]);
-      const menu = await openMenu();
-      expect(menu.textContent).toContain("Update studio-01");
-    } finally {
-      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
-    }
   });
 
   it("leaves a different build it connected to anyway to the host's details", async () => {

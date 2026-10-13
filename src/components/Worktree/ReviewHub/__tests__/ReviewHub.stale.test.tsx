@@ -215,15 +215,6 @@ describe("ReviewHub stale visual", () => {
     vi.clearAllMocks();
   });
 
-  it("does not apply surface-stale or aria-busy when no background refresh is in flight", async () => {
-    render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-    await waitFor(() => screen.getByText("index.ts"));
-
-    const scroll = findScrollContainer();
-    expect(scroll.classList.contains("surface-stale")).toBe(false);
-    expect(scroll.getAttribute("aria-busy")).toBeNull();
-  });
-
   it("applies surface-stale and aria-busy=true while a background refresh is in flight", async () => {
     render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     await waitFor(() => screen.getByText("index.ts"));

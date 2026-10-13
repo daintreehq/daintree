@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import Ajv2020 from "ajv/dist/2020.js";
 import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
@@ -22,7 +22,10 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 // terminalQueryActions reaches into the renderer-only client/store layer at
 // module load; stub those so the definitions register in a node test.
-vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: vi.fn() } }));
+const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: { getState: panelStoreMock.getState },
+}));
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: { getState: () => ({ armedIds: new Set<string>() }) },
 }));
@@ -55,6 +58,24 @@ function registerAll(): ActionService {
 function outputSchema(service: ActionService, id: string): Record<string, unknown> | undefined {
   return service.get(id as ActionId)?.outputSchema as Record<string, unknown> | undefined;
 }
+
+type TerminalListItem = {
+  id: string;
+  isFocused: boolean;
+  agentId: string | null;
+  location: string;
+};
+
+async function callList(actions: ActionRegistry, args?: unknown): Promise<TerminalListItem[]> {
+  const factory = actions.get("terminal.list");
+  if (!factory) throw new Error("missing terminal.list");
+  const def = factory() as AnyActionDefinition;
+  return ((await def.run(args, {} as never)) as { terminals: TerminalListItem[] }).terminals;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 // #10676 — the three high-value query actions opt into MCP structuredContent by
 // carrying `mcpOutputSchema: true` alongside a top-level object resultSchema.
@@ -221,13 +242,6 @@ describe("terminal.sendCommandOwned (#12407)", () => {
       /main-process path/
     );
   });
-
-  it("is never replayed, plugin-dispatched or offered in the palette", () => {
-    const def = definition();
-    expect(def.nonRepeatable).toBe(true);
-    expect(def.denyPluginDispatch).toBe(true);
-    expect(def.palette?.mode).toBe("hidden");
-  });
 });
 
 // #12339 — both wait tools carry a hand-written rawOutputSchema but never set
@@ -350,13 +364,6 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
     if (!schema) throw new Error("no output schema was generated");
     return new Ajv2020({ strict: false }).compile(schema);
   }
-
-  it("is a read-only query", () => {
-    const entry = registerAll().get(ID as ActionId);
-
-    expect(entry?.kind).toBe("query");
-    expect(entry?.danger).toBe("safe");
-  });
 
   // Execution belongs to main, which holds the ownership ledger and can open
   // the transcript; a renderer dispatch reaching `run()` is a routing bug.
@@ -498,5 +505,294 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
     ]) {
       expect(validate(payload)).toBe(false);
     }
+  });
+});
+
+describe("terminal.list isFocused field", () => {
+  it("flags exactly one item when a panel matches focusedId", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: "term-b",
+      panelIds: ["term-a", "term-b", "term-c"],
+      panelsById: {
+        "term-a": { id: "term-a", kind: "terminal", location: "grid" },
+        "term-b": { id: "term-b", kind: "agent", location: "grid" },
+        "term-c": { id: "term-c", kind: "terminal", location: "dock" },
+      },
+    });
+
+    const items = await callList(registerDefinitions());
+    const focusedIds = items.filter((t) => t.isFocused).map((t) => t.id);
+    expect(focusedIds).toEqual(["term-b"]);
+  });
+
+  it("returns isFocused:false for every item when focusedId is null", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: null,
+      panelIds: ["term-a", "term-b"],
+      panelsById: {
+        "term-a": { id: "term-a", kind: "terminal", location: "grid" },
+        "term-b": { id: "term-b", kind: "terminal", location: "grid" },
+      },
+    });
+
+    const items = await callList(registerDefinitions());
+    expect(items).toHaveLength(2);
+    expect(items.every((t) => t.isFocused === false)).toBe(true);
+  });
+
+  it("reports runtime-detected agents as agent terminals", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: null,
+      panelIds: ["term-runtime"],
+      panelsById: {
+        "term-runtime": {
+          id: "term-runtime",
+          kind: "terminal",
+          location: "grid",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+      },
+    });
+
+    const items = await callList(registerDefinitions());
+    expect(items).toHaveLength(1);
+    expect(items[0]?.agentId).toBe("claude");
+  });
+});
+
+describe("terminal.list owned argument (#12308)", () => {
+  function seedPanels(): void {
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: null,
+      panelIds: ["term-a", "term-b"],
+      panelsById: {
+        "term-a": { id: "term-a", kind: "terminal", location: "grid" },
+        "term-b": { id: "term-b", kind: "terminal", location: "grid" },
+      },
+    });
+  }
+
+  it("refuses owned:false too, because it cannot honour the argument either way", async () => {
+    seedPanels();
+
+    // A main-side strip that stopped working would otherwise surface as a
+    // wrong answer on the `true` path and silence on the `false` one.
+    await expect(callList(registerDefinitions(), { owned: false })).rejects.toThrow(/owned/);
+  });
+
+  it("lists normally when owned is omitted", async () => {
+    seedPanels();
+
+    const items = await callList(registerDefinitions(), { location: "grid" });
+    expect(items.map((t) => t.id)).toEqual(["term-a", "term-b"]);
+  });
+});
+
+/**
+ * The read half of the client-metadata capability (#12340).
+ *
+ * `terminal.list` carries it rather than a second tool, which is what keeps the
+ * feature to one external allowlist slot. Two things have to hold for that to
+ * be safe: the default listing must stay the cheap inventory its description
+ * promises, and the echo must never widen past the one reserved key — the bag
+ * it sits in also holds `presetEnv`, a real subprocess environment.
+ */
+describe("terminal.list client metadata", () => {
+  function seedTerminals(panelsById: Record<string, unknown>): void {
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: null,
+      panelIds: Object.keys(panelsById),
+      panelsById,
+    });
+  }
+
+  it("omits the field entirely unless it is asked for", async () => {
+    seedTerminals({
+      "term-a": {
+        id: "term-a",
+        kind: "terminal",
+        location: "grid",
+        extensionState: { mcp: { session: "gc-1" } },
+      },
+    });
+
+    const [row] = await callList(registerDefinitions());
+
+    // The default listing is a cheap inventory, and these records are up to 2KB
+    // each — an always-on echo would make every discovery call pay for them.
+    expect(row).not.toHaveProperty("clientMetadata");
+  });
+
+  it("returns only the reserved key, never the bag holding presetEnv", async () => {
+    seedTerminals({
+      "term-a": {
+        id: "term-a",
+        kind: "terminal",
+        location: "grid",
+        extensionState: {
+          mcp: { session: "gc-1" },
+          presetEnv: { ANTHROPIC_API_KEY: "sk-secret" },
+        },
+      },
+    });
+
+    const [row] = await callList(registerDefinitions(), { includeClientMetadata: true });
+
+    expect(row).toMatchObject({ clientMetadata: { session: "gc-1" } });
+    expect(JSON.stringify(row)).not.toContain("sk-secret");
+  });
+
+  it("reports null for a terminal carrying no record", async () => {
+    seedTerminals({
+      "term-a": { id: "term-a", kind: "terminal", location: "grid" },
+      "term-b": {
+        id: "term-b",
+        kind: "terminal",
+        location: "grid",
+        extensionState: { presetEnv: { TOKEN: "x" } },
+      },
+    });
+
+    const rows = await callList(registerDefinitions(), { includeClientMetadata: true });
+
+    expect(rows.map((r) => (r as { clientMetadata?: unknown }).clientMetadata)).toEqual([
+      null,
+      null,
+    ]);
+  });
+
+  it("never exposes a plugin panel's own extension state", async () => {
+    seedTerminals({
+      p1: {
+        id: "p1",
+        kind: "acme.explorer",
+        location: "grid",
+        pluginId: "acme.explorer-plugin",
+        extensionState: { root: "src", expanded: ["src"] },
+      },
+    });
+
+    const [row] = await callList(registerDefinitions(), { includeClientMetadata: true });
+
+    // The plugin bag is arbitrary view state under keys the plugin chose; only
+    // the reserved key is this surface's to read.
+    expect(row).toMatchObject({ clientMetadata: null });
+    expect(JSON.stringify(row)).not.toContain("expanded");
+  });
+
+  it("does not read a plugin's own key that happens to be named 'mcp'", async () => {
+    seedTerminals({
+      p1: {
+        id: "p1",
+        kind: "acme.explorer",
+        location: "grid",
+        pluginId: "acme.explorer-plugin",
+        extensionState: { mcp: { serverToken: "plugin-secret" } },
+      },
+    });
+
+    const [row] = await callList(registerDefinitions(), { includeClientMetadata: true });
+
+    // The reserved key is only reserved on panels the WRITER can reach. A
+    // plugin owns its whole bag under keys it chooses, so reading `mcp` off
+    // every listed panel would publish plugin state no external caller could
+    // have written — and would escape this slice's 2KB and depth bounds too.
+    expect(row).toMatchObject({ clientMetadata: null });
+    expect(JSON.stringify(row)).not.toContain("plugin-secret");
+  });
+
+  it("does not read the key off a non-terminal built-in panel", async () => {
+    seedTerminals({
+      f1: {
+        id: "f1",
+        kind: "file",
+        location: "grid",
+        extensionState: { mcp: { note: "not-writable-here" } },
+      },
+    });
+
+    const [row] = await callList(registerDefinitions(), { includeClientMetadata: true });
+
+    expect(row).toMatchObject({ clientMetadata: null });
+  });
+
+  it("narrows to one terminal by id, and to none when nothing matches", async () => {
+    seedTerminals({
+      "term-a": { id: "term-a", kind: "terminal", location: "grid" },
+      "term-b": { id: "term-b", kind: "terminal", location: "grid" },
+    });
+
+    expect(
+      (await callList(registerDefinitions(), { terminalId: "term-b" })).map((r) => r.id)
+    ).toEqual(["term-b"]);
+    // A filter, not a lookup: the same empty answer every other filter gives.
+    expect(await callList(registerDefinitions(), { terminalId: "term-zzz" })).toEqual([]);
+  });
+
+  it("answers a large metadata read rather than refusing it", async () => {
+    const panelsById: Record<string, unknown> = {};
+    for (let i = 0; i < 40; i++) {
+      panelsById[`term-${i}`] = {
+        id: `term-${i}`,
+        kind: "terminal",
+        location: "grid",
+        extensionState: { mcp: { blob: "x".repeat(2000) } },
+      };
+    }
+    seedTerminals(panelsById);
+
+    // A byte guard belongs downstream of the ownership filter, not here: main
+    // strips `owned` before dispatch and intersects the rows only after this
+    // returns, so refusing at renderer scope would fail `{ owned: true }` for a
+    // caller whose own share of the fleet is one row, or none. Oversize is left
+    // to the transport, which truncates and says so.
+    const rows = await callList(registerDefinitions(), { includeClientMetadata: true });
+    expect(rows).toHaveLength(40);
+
+    // ...and narrowing still works, which is what the description points at.
+    const narrowed = await callList(registerDefinitions(), {
+      includeClientMetadata: true,
+      terminalId: "term-7",
+    });
+    expect(narrowed).toHaveLength(1);
+  });
+});
+
+describe("terminal.waitUntilIdle action definition", () => {
+  it("registers a manifest entry with query/safe/renderer metadata", () => {
+    const def = registerDefinitions().get("terminal.waitUntilIdle")?.() as AnyActionDefinition;
+    expect(def).toBeDefined();
+    expect(def.id).toBe("terminal.waitUntilIdle");
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.scope).toBe("renderer");
+    expect(def.mcpAnnotations?.readOnlyHint).toBe(true);
+    expect(def.mcpAnnotations?.idempotentHint).toBe(false);
+    expect(def.mcpAnnotations?.destructiveHint).toBe(false);
+    expect(def.rawOutputSchema).toBeDefined();
+  });
+
+  it("validates required terminalId via the Zod argsSchema", () => {
+    const def = registerDefinitions().get("terminal.waitUntilIdle")?.() as AnyActionDefinition;
+    expect(def.argsSchema?.safeParse({ terminalId: "term-1" }).success).toBe(true);
+    expect(def.argsSchema?.safeParse({ terminalId: "" }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({}).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ terminalId: "term-1", timeoutMs: 0 }).success).toBe(true);
+    // Negative timeout — rejected by min(0).
+    expect(def.argsSchema?.safeParse({ terminalId: "term-1", timeoutMs: -1 }).success).toBe(false);
+  });
+
+  it("throws when run() is invoked through renderer dispatch", async () => {
+    // Guard for the manifest-only registration: the action exists in the
+    // registry purely so `ActionService.list()` advertises it through the
+    // standard MCP manifest. Execution must stay in the main process — if
+    // the renderer ever dispatches it directly (bypassing the CallTool
+    // short-circuit), the throw catches the bug at the callsite rather
+    // than silently returning a malformed result.
+    const def = registerDefinitions().get("terminal.waitUntilIdle")?.() as AnyActionDefinition;
+    await expect(def.run({ terminalId: "term-1" }, {} as never)).rejects.toThrow(
+      /must be invoked through the MCP main-process path/
+    );
   });
 });

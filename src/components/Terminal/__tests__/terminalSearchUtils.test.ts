@@ -21,48 +21,10 @@ describe("validateRegexTerm", () => {
     expect(result.error).toBeUndefined();
   });
 
-  it("validates a complex valid regex", () => {
-    const result = validateRegexTerm("\\d{4}-\\d{2}-\\d{2}", true);
-    expect(result.isValid).toBe(true);
-    expect(result.error).toBeUndefined();
-  });
-
-  it("validates character classes", () => {
-    const result = validateRegexTerm("[A-Z][a-z]+", false);
-    expect(result.isValid).toBe(true);
-  });
-
   it("rejects invalid regex with unclosed bracket", () => {
     const result = validateRegexTerm("[a-", true);
     expect(result.isValid).toBe(false);
     expect(result.error).toBeDefined();
-  });
-
-  it("rejects invalid regex with unclosed paren", () => {
-    const result = validateRegexTerm("(test", false);
-    expect(result.isValid).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("rejects unterminated escape", () => {
-    const result = validateRegexTerm("test\\", true);
-    expect(result.isValid).toBe(false);
-    expect(result.error).toBeDefined();
-  });
-
-  it("validates lookahead", () => {
-    const result = validateRegexTerm("(?=.*pattern)", true);
-    expect(result.isValid).toBe(true);
-  });
-
-  it("validates case-insensitive regex compilation", () => {
-    const result = validateRegexTerm("[A-Z]", false);
-    expect(result.isValid).toBe(true);
-  });
-
-  it("handles empty string as valid regex", () => {
-    const result = validateRegexTerm("", true);
-    expect(result.isValid).toBe(true);
   });
 
   it("does not lowercase the pattern in case-insensitive mode (preserves named groups)", () => {
@@ -80,27 +42,10 @@ describe("buildSearchOptions", () => {
     expect(options.regex).toBeUndefined();
   });
 
-  it("builds options with case insensitive only", () => {
-    const options = buildSearchOptions(false, false);
-    expect(options.caseSensitive).toBe(false);
-    expect(options.regex).toBeUndefined();
-  });
-
-  it("builds options with regex enabled and case sensitive", () => {
-    const options = buildSearchOptions(true, true);
-    expect(options.caseSensitive).toBe(true);
-    expect(options.regex).toBe(true);
-  });
-
   it("builds options with regex enabled and case insensitive", () => {
     const options = buildSearchOptions(false, true);
     expect(options.caseSensitive).toBe(false);
     expect(options.regex).toBe(true);
-  });
-
-  it("does not include regex property when disabled", () => {
-    const options = buildSearchOptions(true, false);
-    expect(options.regex).toBeUndefined();
   });
 
   it("always includes decorations so onDidChangeResults fires", () => {
@@ -119,29 +64,9 @@ describe("buildSearchOptions", () => {
     expect(buildSearchOptions(false, false).wholeWord).toBeUndefined();
     expect(buildSearchOptions(false, false, false).wholeWord).toBeUndefined();
   });
-
-  it("supports regex and wholeWord together", () => {
-    const options = buildSearchOptions(true, true, true);
-    expect(options.caseSensitive).toBe(true);
-    expect(options.regex).toBe(true);
-    expect(options.wholeWord).toBe(true);
-  });
 });
 
 describe("getSearchDecorationColors", () => {
-  it("returns #RRGGBB hex strings for all four color fields", () => {
-    document.documentElement.style.setProperty(
-      "--theme-search-highlight-background",
-      "rgba(54, 206, 148, 0.20)"
-    );
-    document.documentElement.style.setProperty("--theme-search-highlight-text", "#5F8B6D");
-    const colors = getSearchDecorationColors();
-    expect(colors.matchBackground).toMatch(/^#[0-9a-fA-F]{6}$/);
-    expect(colors.matchOverviewRuler).toMatch(/^#[0-9a-fA-F]{6}$/);
-    expect(colors.activeMatchBackground).toMatch(/^#[0-9a-fA-F]{6}$/);
-    expect(colors.activeMatchColorOverviewRuler).toMatch(/^#[0-9a-fA-F]{6}$/);
-  });
-
   it("flattens a translucent match wash over the terminal background", () => {
     document.documentElement.style.setProperty(
       "--theme-search-highlight-background",

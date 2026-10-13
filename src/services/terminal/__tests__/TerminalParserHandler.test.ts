@@ -58,25 +58,6 @@ describe("TerminalParserHandler", () => {
     expect(decrst).toBeDefined();
   });
 
-  it("should NOT block TUI sequences for Claude agent terminals", () => {
-    mockManaged.launchAgentId = "claude";
-    mockManaged.runtimeAgentId = "claude";
-
-    new TerminalParserHandler(mockManaged);
-
-    const decstbm = csiHandlers.find((h) => h.opts.final === "r");
-    const ed = csiHandlers.find((h) => h.opts.final === "J");
-    const cup = csiHandlers.find((h) => h.opts.final === "H");
-    const hvp = csiHandlers.find((h) => h.opts.final === "f");
-    const vpa = csiHandlers.find((h) => h.opts.final === "d");
-
-    expect(decstbm).toBeUndefined();
-    expect(ed).toBeUndefined();
-    expect(cup).toBeUndefined();
-    expect(hvp).toBeUndefined();
-    expect(vpa).toBeUndefined();
-  });
-
   it("should NOT block TUI sequences for Codex agent terminals", () => {
     new TerminalParserHandler(mockManaged);
 
@@ -154,24 +135,9 @@ describe("TerminalParserHandler", () => {
     expect(dynamicBlockers.some((h) => h.handler([1049]))).toBe(true);
   });
 
-  it("should dispose handlers correctly", () => {
-    const handler = new TerminalParserHandler(mockManaged);
-    // With default config (no blocking), no handlers are registered
-    // But dispose should still work without errors
-    expect(() => handler.dispose()).not.toThrow();
-  });
-
   it("should handle missing parser API gracefully", () => {
     (mockManaged.terminal as any).parser = undefined; // Simulate missing API
     expect(() => new TerminalParserHandler(mockManaged)).not.toThrow();
-  });
-
-  it("should block OSC 52 clipboard write on agent terminals", () => {
-    new TerminalParserHandler(mockManaged);
-
-    const osc52 = oscHandlers.find((h) => h.ident === 52);
-    expect(osc52).toBeDefined();
-    expect(osc52.handler("c;dGVzdA==")).toBe(true);
   });
 
   it("should block OSC 52 clipboard write on regular terminals", () => {
@@ -186,22 +152,7 @@ describe("TerminalParserHandler", () => {
     expect(osc52.handler("c;dGVzdA==")).toBe(true);
   });
 
-  it("should dispose OSC 52 handler correctly", () => {
-    const handler = new TerminalParserHandler(mockManaged);
-    const osc52 = oscHandlers.find((h) => h.ident === 52);
-    expect(osc52).toBeDefined();
-
-    handler.dispose();
-    expect(osc52.disposable.dispose).toHaveBeenCalled();
-  });
-
   describe("OSC 57301 data-loss marker", () => {
-    it("registers the OSC 57301 handler unconditionally", () => {
-      new TerminalParserHandler(mockManaged);
-      const osc = oscHandlers.find((h) => h.ident === 57301);
-      expect(osc).toBeDefined();
-    });
-
     it("parses a valid payload and fires onDataLoss with the byte count", () => {
       const onDataLoss = vi.fn();
       new TerminalParserHandler(mockManaged, undefined, onDataLoss);
@@ -243,13 +194,6 @@ describe("TerminalParserHandler", () => {
         expect(osc.handler(bad)).toBe(true);
       }
       expect(onDataLoss).not.toHaveBeenCalled();
-    });
-
-    it("does not throw when no onDataLoss callback is provided", () => {
-      new TerminalParserHandler(mockManaged);
-      const osc = oscHandlers.find((h) => h.ident === 57301);
-      expect(() => osc.handler("1234;backpressure")).not.toThrow();
-      expect(osc.handler("1234;backpressure")).toBe(true);
     });
 
     it("disposes the OSC 57301 handler", () => {

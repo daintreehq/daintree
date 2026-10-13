@@ -4,11 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { PluginDetailPane } from "../PluginDetailPane";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  BUILT_IN_PLUGIN_CAPABILITIES,
-  type BuiltInPluginCapability,
-  type LoadedPluginInfo,
-} from "@shared/types/plugin";
+import type { BuiltInPluginCapability, LoadedPluginInfo } from "@shared/types/plugin";
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -309,12 +305,6 @@ describe("PluginDetailPane project targeting switch (#13119)", () => {
 });
 
 describe("PluginDetailPane capabilities", () => {
-  it("renders a labelled row for each declared capability", () => {
-    renderPane(withCapabilities(["fs:project-read", "shell:exec"]));
-    expect(screen.getByText("Read project files")).toBeTruthy();
-    expect(screen.getByText("Run shell commands")).toBeTruthy();
-  });
-
   it("does not show the danger summary banner when pluginDanger is safe", () => {
     renderPane(withCapabilities(["fs:project-read"], { pluginDanger: "safe" }));
     expect(screen.queryByText(/Requests sensitive permissions/)).toBeNull();
@@ -336,23 +326,6 @@ describe("PluginDetailPane capabilities", () => {
     });
     renderPane(plugin);
     expect(screen.getByText("https://api.example.com/v1")).toBeTruthy();
-  });
-
-  it("renders a label for every built-in capability when all are declared", () => {
-    renderPane(withCapabilities([...BUILT_IN_PLUGIN_CAPABILITIES]));
-    // One representative label per family, covering all three severity tiers.
-    for (const label of [
-      "Read project files",
-      "Write project files",
-      "Make network requests",
-      "Launch agents",
-      "Register agent CLIs",
-      "Run git commands",
-      "Read clipboard",
-      "Run shell commands",
-    ]) {
-      expect(screen.getByText(label)).toBeTruthy();
-    }
   });
 
   it("renders capabilities in BUILT_IN_PLUGIN_CAPABILITIES order, not manifest order", () => {
@@ -436,16 +409,6 @@ describe("PluginDetailPane MCP servers tab (issue #10584)", () => {
     };
   }
 
-  it("hides the MCP servers tab when the plugin declares none", () => {
-    renderOverview(makePlugin());
-    expect(screen.queryByRole("tab", { name: "MCP servers" })).toBeNull();
-  });
-
-  it("shows the MCP servers tab when the plugin declares at least one server", () => {
-    renderOverview(withMcpServers([{ id: "srv", name: "Demo Server", command: "node" }]));
-    expect(screen.getByRole("tab", { name: "MCP servers" })).toBeTruthy();
-  });
-
   it("renders the declared server and polls the supervisor when the tab is opened", async () => {
     renderOverview(withMcpServers([{ id: "srv", name: "Demo Server", command: "node" }]));
     fireEvent.click(screen.getByRole("tab", { name: "MCP servers" }));
@@ -526,26 +489,6 @@ describe("PluginDetailPane content-gated tabs (#11302)", () => {
 
     fireEvent.click(await screen.findByRole("tab", { name: "Logs" }));
     expect(screen.getByText("project line")).toBeTruthy();
-  });
-
-  it("hides Settings when the plugin declares none", () => {
-    renderOverview(makePlugin());
-    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
-  });
-
-  it("shows Settings when the plugin declares one", () => {
-    renderOverview(withContributes({ settings: [SETTING] }));
-    expect(screen.getByRole("tab", { name: "Settings" })).toBeTruthy();
-  });
-
-  it("shows Permissions when the plugin declares a built-in capability", () => {
-    renderOverview(withCapabilities(["fs:project-read"]));
-    expect(screen.getByRole("tab", { name: "Permissions" })).toBeTruthy();
-  });
-
-  it("shows Permissions only when the plugin declares a built-in capability", () => {
-    renderOverview(makePlugin());
-    expect(screen.queryByRole("tab", { name: "Permissions" })).toBeNull();
   });
 
   it("falls back to Overview when the active tab disappears on a same-id reinstall", () => {

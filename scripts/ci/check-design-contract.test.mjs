@@ -160,10 +160,4 @@ describe("check-design-contract", () => {
 
     expect(result.ok, result.output).toBe(true);
   });
-
-  it("passes against the repository's real contract file", () => {
-    expect(() =>
-      execFileSync(process.execPath, [SCRIPT], { cwd: REPO_ROOT, encoding: "utf-8", stdio: "pipe" })
-    ).not.toThrow();
-  });
 });

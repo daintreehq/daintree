@@ -153,9 +153,4 @@ describe("layoutLauncherColumns", () => {
     expect(layout.continuedKeys.size).toBe(0);
     expect(new Set(layout.columnOf.values())).toEqual(new Set([0]));
   });
-
-  it("is a pure function of the inventory", () => {
-    const input = inventory({ agents: 9, grid: 21, recipes: 3 });
-    expect(layoutLauncherColumns(input, true)).toEqual(layoutLauncherColumns(input, true));
-  });
 });

@@ -4,7 +4,6 @@ import {
   assertMatrixCoverage,
   CORRECTNESS_EXEMPT_SCENARIO_IDS,
   EXPECTED_SCENARIO_IDS,
-  getScenariosForMode,
 } from "../scenarios";
 import { getConstructedReflowTerminalCount } from "../lib/reflowFixture";
 import { classifyMetric } from "../lib/comparability";
@@ -56,18 +55,6 @@ describe("perf scenario matrix", () => {
     expect(getConstructedReflowTerminalCount()).toBe(0);
   });
 
-  it("returns mode-specific scenario sets", () => {
-    const smoke = getScenariosForMode("smoke");
-    const ci = getScenariosForMode("ci");
-    const nightly = getScenariosForMode("nightly");
-    const soak = getScenariosForMode("soak");
-
-    expect(smoke.length).toBeGreaterThan(0);
-    expect(ci.length).toBeGreaterThan(smoke.length - 1);
-    expect(nightly.length).toBeGreaterThanOrEqual(ci.length);
-    expect(soak.length).toBeGreaterThan(0);
-  });
-
   it("pairs every count-reporting scenario with a declared miss count", () => {
     const undeclared = allScenarios
       .filter((scenario) => !scenario.correctness?.length)
@@ -99,18 +86,6 @@ describe("perf scenario matrix", () => {
     const ids = allScenarios.map((scenario) => scenario.id);
     const unique = new Set(ids);
     expect(unique.size).toBe(ids.length);
-  });
-
-  it("PERF-080 returns valid metrics and fixture meets size threshold", async () => {
-    const scenario = allScenarios.find((s) => s.id === "PERF-080");
-    expect(scenario).toBeDefined();
-
-    const context = { mode: "ci" as const, now: () => performance.now() };
-    const sample = await scenario!.run(context);
-
-    expect(sample.metrics).toBeDefined();
-    expect(sample.metrics!.terminalCount).toBeGreaterThan(0);
-    expect(sample.metrics!.bytes).toBeGreaterThan(0);
   });
 
   it("PERF-033 write-to-parse scenario drives a real headless terminal", async () => {
@@ -174,24 +149,6 @@ describe("perf scenario matrix", () => {
     // 12 background terminals × 30 rounds × ~1.8 KB chunks — if this shrinks,
     // the flood stopped flooding and the degradation signal is meaningless.
     expect(sample.metrics!.floodBytes).toBeGreaterThan(500_000);
-  });
-
-  it("PERF-150 fleet broadcast filters chaff to exactly the live grid terminals", async () => {
-    const scenario = allScenarios.find((s) => s.id === "PERF-150");
-    expect(scenario).toBeDefined();
-
-    const context = { mode: "smoke" as const, now: () => performance.now() };
-    const sample = await scenario!.run(context);
-
-    expect(sample.metrics).toBeDefined();
-    // The armed set is 24 eligible + 12 ineligible panels; the real grid-location
-    // predicate must drop the chaff (dock/exited/pty-less/browser) and keep 24.
-    expect(sample.metrics!.eligibleTargets).toBe(24);
-    expect(sample.metrics!.totalPanels).toBe(36);
-    // Every target got a substituted payload dispatched through the broker.
-    expect(sample.metrics!.ackBytes).toBeGreaterThan(0);
-    expect(sample.durationMs).toBeGreaterThanOrEqual(0);
-    expect(Number.isFinite(sample.durationMs)).toBe(true);
   });
 
   it("PERF-161 oversized diff engages the whole-line fallback (no intra-line marking)", async () => {

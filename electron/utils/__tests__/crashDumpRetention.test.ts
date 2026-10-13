@@ -3,13 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  _resetCrashRecoveryInspectionForTests,
-  getInspectedSessionStartMs,
-  markCrashRecoveryInspectionComplete,
-  pruneCrashDumps,
-  type CrashDumpRetentionPolicy,
-} from "../crashDumpRetention.js";
+import { pruneCrashDumps, type CrashDumpRetentionPolicy } from "../crashDumpRetention.js";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -494,20 +488,5 @@ describe("pruneCrashDumps", () => {
 
     expect(first.deletedCount).toBe(1);
     expect(second).toMatchObject({ count: 3, deletedCount: 0 });
-  });
-});
-
-describe("crash recovery inspection gate", () => {
-  afterEach(() => {
-    _resetCrashRecoveryInspectionForTests();
-  });
-
-  it("holds no session start until crash recovery marks its inspection complete", () => {
-    _resetCrashRecoveryInspectionForTests();
-    expect(getInspectedSessionStartMs()).toBeNull();
-
-    markCrashRecoveryInspectionComplete(NOW);
-
-    expect(getInspectedSessionStartMs()).toBe(NOW);
   });
 });

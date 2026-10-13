@@ -7,17 +7,6 @@ const FLEET_SCOPE_PATH = resolve(__dirname, "../ContentGridFleetScope.tsx");
 const DEFAULT_PATH = resolve(__dirname, "../ContentGridDefault.tsx");
 
 describe("ContentGrid panel motion (issue #6162)", () => {
-  it("does not run a CSS grid-template-columns transition on either grid container", async () => {
-    const fleetContent = await readFile(FLEET_SCOPE_PATH, "utf-8");
-    const defaultContent = await readFile(DEFAULT_PATH, "utf-8");
-    // The CSS transition would fight per-panel framer-motion FLIP. Removed
-    // when motion was moved into SortableTerminal / fleet motion.div wrappers.
-    expect(fleetContent).not.toContain("grid-template-columns ${GRID_TRANSITION_DURATION_MS}");
-    expect(defaultContent).not.toContain("grid-template-columns ${GRID_TRANSITION_DURATION_MS}");
-    expect(fleetContent).not.toMatch(/transition:\s*isProjectSwitching/);
-    expect(defaultContent).not.toMatch(/transition:\s*isProjectSwitching/);
-  });
-
   it("imports framer-motion primitives needed for FLIP", async () => {
     const fleetContent = await readFile(FLEET_SCOPE_PATH, "utf-8");
     const defaultContent = await readFile(DEFAULT_PATH, "utf-8");

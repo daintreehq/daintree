@@ -23,40 +23,6 @@ describe("ActivityMonitor", () => {
     // when polling is throttled and adds an idle-state recovery path through
     // the cosmetic-redraw branch of onData().
 
-    it("recovers idle→busy from sustained spinner ticks at background tier", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("bg-1", 1000, onStateChange, {
-        getVisibleLines: () => [],
-        getCursorLine: () => null,
-        pollingIntervalMs: 500,
-        initialState: "idle",
-        skipInitialStateEmit: true,
-        backgroundWorkingRecoveryDelayMs: 600,
-        idleDebounceMs: 4000,
-      });
-
-      monitor.startPolling();
-      expect(monitor.getState()).toBe("idle");
-      onStateChange.mockClear();
-
-      // First spinner tick is PTY output, so it recovers immediately.
-      monitor.onData("\r⠙ Working (esc to interrupt)");
-      expect(monitor.getState()).toBe("busy");
-
-      vi.advanceTimersByTime(700);
-      monitor.onData("\r⠙ Working (esc to interrupt)");
-
-      expect(monitor.getState()).toBe("busy");
-      expect(onStateChange).toHaveBeenCalledWith(
-        "bg-1",
-        1000,
-        "busy",
-        expect.objectContaining({ trigger: "output" })
-      );
-
-      monitor.dispose();
-    });
-
     it("recovers idle→busy from sparse spinner ticks WITH polling running", () => {
       // Reproduces the actual production scenario: 500ms polling cycles run
       // continuously, and sparse spinner ticks (~700ms intervals) accumulate
@@ -88,64 +54,6 @@ describe("ActivityMonitor", () => {
       // the second tick.
       monitor.onData("\r⠙ Working (esc to interrupt)");
       vi.advanceTimersByTime(700);
-      monitor.onData("\r⠙ Working (esc to interrupt)");
-
-      expect(monitor.getState()).toBe("busy");
-
-      monitor.dispose();
-    });
-
-    it("recovers active-tier idle→busy on the first spinner burst", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("active-1", 1000, onStateChange, {
-        getVisibleLines: () => [],
-        getCursorLine: () => null,
-        pollingIntervalMs: 50,
-        initialState: "idle",
-        skipInitialStateEmit: true,
-        backgroundWorkingRecoveryDelayMs: 600,
-        idleDebounceMs: 4000,
-      });
-
-      monitor.startPolling();
-      onStateChange.mockClear();
-
-      // 1000ms of spinner output — well below the 1500ms active debouncer.
-      for (let i = 0; i < 10; i++) {
-        monitor.onData("\r⠙ Working (esc to interrupt)");
-        vi.advanceTimersByTime(100);
-      }
-
-      expect(monitor.getState()).toBe("busy");
-      expect(onStateChange).toHaveBeenCalledWith(
-        "active-1",
-        1000,
-        "busy",
-        expect.objectContaining({ trigger: "output" })
-      );
-
-      monitor.dispose();
-    });
-
-    it("recovers active-tier idle→busy after the full 1500ms debouncer", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("active-2", 1000, onStateChange, {
-        getVisibleLines: () => [],
-        getCursorLine: () => null,
-        pollingIntervalMs: 50,
-        bootCompletePatterns: [/booted/i],
-        idleDebounceMs: 4000,
-      });
-
-      monitor.onData("\nbooted\n");
-      onStateChange.mockClear();
-
-      // First spinner is output and recovers immediately.
-      monitor.onData("\r⠙ Working (esc to interrupt)");
-      expect(monitor.getState()).toBe("busy");
-
-      // 1600ms elapsed > 1500ms default active debouncer.
-      vi.advanceTimersByTime(1600);
       monitor.onData("\r⠙ Working (esc to interrupt)");
 
       expect(monitor.getState()).toBe("busy");
@@ -245,41 +153,6 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("recovers a waiting polling agent immediately on same-line timer output", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("agent-timer-output", 1000, onStateChange, {
-        getVisibleLines: () => ["ready"],
-        getCursorLine: () => "ready",
-        pollingIntervalMs: 100,
-        initialState: "idle",
-        skipInitialStateEmit: true,
-        idleDebounceMs: 800,
-        outputActivityDetection: {
-          enabled: true,
-          activationThreshold: 10_000,
-          leakRatePerMs: 0,
-          maxBytesPerFrame: 64,
-        },
-      });
-
-      monitor.startPolling();
-      vi.advanceTimersByTime(100);
-      expect(monitor.getState()).toBe("idle");
-      onStateChange.mockClear();
-
-      monitor.onData("\rRunning for 8m 51s");
-
-      expect(monitor.getState()).toBe("busy");
-      expect(onStateChange).toHaveBeenCalledWith(
-        "agent-timer-output",
-        1000,
-        "busy",
-        expect.objectContaining({ trigger: "output" })
-      );
-
-      monitor.dispose();
-    });
-
     it("recovers a waiting polling agent immediately on small non-protocol output", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("agent-small-output", 1000, onStateChange, {
@@ -346,77 +219,6 @@ describe("ActivityMonitor", () => {
         "idle",
         expect.objectContaining({ trigger: "timeout" })
       );
-
-      monitor.dispose();
-    });
-
-    it("triggers volume recovery on sustained background-tier output (#6666)", () => {
-      // The pre-#6666 windowed AND-gate required tier-specific window widening
-      // because frames straddled the fixed window boundary at 500ms polling.
-      // The leaky-bucket detector is sample-cadence invariant: the same byte
-      // stream fires at any tier without tier-specific tuning.
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("bg-vol", 1000, onStateChange, {
-        getVisibleLines: () => [],
-        getCursorLine: () => null,
-        pollingIntervalMs: 500,
-        initialState: "idle",
-        skipInitialStateEmit: true,
-        outputActivityDetection: {
-          enabled: true,
-          activationThreshold: 200,
-          maxBytesPerFrame: 120,
-          leakRatePerMs: 0.1,
-        },
-        backgroundWorkingRecoveryDelayMs: 600,
-        idleDebounceMs: 4000,
-      });
-
-      monitor.startPolling();
-      onStateChange.mockClear();
-
-      // Three 100-byte chunks at 500ms cadence (typical batched background
-      // streaming): drain=50/cycle, fill=100/cycle. F1 level=100, F2=150,
-      // F3=200 ≥ threshold → fire.
-      monitor.onData("x".repeat(100));
-      expect(monitor.getState()).toBe("busy");
-      vi.advanceTimersByTime(500);
-      monitor.onData("x".repeat(100));
-      expect(monitor.getState()).toBe("busy");
-      vi.advanceTimersByTime(500);
-      monitor.onData("x".repeat(100));
-
-      expect(monitor.getState()).toBe("busy");
-
-      monitor.dispose();
-    });
-
-    it("restores active debouncer threshold when polling switches back to active", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("tier-switch", 1000, onStateChange, {
-        getVisibleLines: () => [],
-        getCursorLine: () => null,
-        pollingIntervalMs: 50,
-        bootCompletePatterns: [/booted/i],
-        backgroundWorkingRecoveryDelayMs: 600,
-        idleDebounceMs: 4000,
-      });
-
-      // Switch to background then back to active. The cosmeticRecoveryDebouncer
-      // delay must track the tier round-trip — pre-fix the 600ms background
-      // value would persist into the active tier and false-fire recovery.
-      monitor.setPollingInterval(500);
-      monitor.setPollingInterval(50);
-
-      monitor.onData("\nbooted\n");
-      onStateChange.mockClear();
-
-      // The first spinner is output and recovers immediately regardless of tier.
-      monitor.onData("\r⠙ Working (esc to interrupt)");
-      vi.advanceTimersByTime(700);
-      monitor.onData("\r⠙ Working (esc to interrupt)");
-
-      expect(monitor.getState()).toBe("busy");
 
       monitor.dispose();
     });

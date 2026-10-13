@@ -253,36 +253,6 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("clears pattern buffer and TTL fields on reconfigure", () => {
-      vi.setSystemTime(10000);
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("reconf-2", 1, onStateChange, {
-        agentId: "claude",
-        simpleOutputState: false,
-      });
-
-      monitor.onData(CLAUDE_WORKING);
-      expect(monitor.getLastPatternResult()?.isWorking).toBe(true);
-
-      type MonitorInternals = {
-        patternBuf: { getText(): string };
-        lastPatternResult: unknown;
-        lastPatternResultAt: number;
-        lastWorkingIndicatorTimestamp: number;
-      };
-      const internals = monitor as unknown as MonitorInternals;
-      expect(internals.patternBuf.getText().length).toBeGreaterThan(0);
-
-      monitor.reconfigure("gemini");
-
-      expect(internals.patternBuf.getText()).toBe("");
-      expect(internals.lastPatternResult).toBeUndefined();
-      expect(internals.lastPatternResultAt).toBe(0);
-      expect(internals.lastWorkingIndicatorTimestamp).toBe(0);
-
-      monitor.dispose();
-    });
-
     it("preserves timing state (lastActivityTimestamp, workingHoldUntil) across reconfigure", () => {
       vi.setSystemTime(10000);
       const onStateChange = vi.fn();

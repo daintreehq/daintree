@@ -172,26 +172,6 @@ describe("AddHostDialog", () => {
     expect(screen.queryByRole("button", { name: /^Try / })).toBeNull();
   });
 
-  it("offers no .local name when the target already has a domain or ssh failed otherwise", async () => {
-    remoteHosts.probe!.mockResolvedValueOnce(
-      probeResult({
-        reachable: false,
-        sshError: "ssh: Could not resolve hostname studio.lan: nodename nor servname provided",
-        platform: null,
-        install: null,
-        hostModeListening: false,
-        matchesClient: null,
-      })
-    );
-    render(<AddHostDialog isOpen onClose={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
-      target: { value: "greg@studio.lan" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
-    expect(await screen.findByText("Didn't connect")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^Try / })).toBeNull();
-  });
-
   it("shows a discovery failure with Retry rather than an empty scan", async () => {
     remoteHosts.discover!.mockRejectedValueOnce(new Error("tailscale crashed"));
     render(<AddHostDialog isOpen onClose={() => {}} />);

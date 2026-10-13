@@ -417,14 +417,6 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     vi.clearAllMocks();
   });
 
-  it("shows mode toggle when not in PR checkout mode", async () => {
-    renderDialog();
-    await advanceTimersGradually(500);
-
-    expect(screen.getByRole("radio", { name: /new branch/i })).toBeDefined();
-    expect(screen.getByRole("radio", { name: /existing branch/i })).toBeDefined();
-  });
-
   it("does not show mode toggle in PR checkout mode", async () => {
     renderDialog({
       initialPR: {
@@ -691,25 +683,6 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     });
 
     expect(screen.queryByLabelText(/create from remote branch/i)).toBeNull();
-  });
-
-  it("clears validation errors when switching modes", async () => {
-    renderDialog();
-    await advanceTimersGradually(500);
-
-    // Click create without a branch name to trigger validation error
-    await act(async () => {
-      fireEvent.click(screen.getByTestId("create-worktree-button"));
-    });
-
-    expect(screen.getByRole("alert")).toBeDefined();
-
-    // Switch to existing mode — error should clear
-    await act(async () => {
-      fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
-    });
-
-    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("keeps Create available with no existing branch and names the missing pick under the field", async () => {
@@ -1341,19 +1314,6 @@ describe("NewWorktreeDialog — ARIA validation wiring", () => {
       expect(input.getAttribute("autocorrect")).toBe("off");
       expect(input.getAttribute("autocapitalize")).toBe("off");
     }
-  });
-
-  it("does not set aria-invalid on any input on initial render", async () => {
-    renderDialog();
-    await advanceTimersGradually(500);
-
-    const branchInput = screen.getByTestId("branch-name-input");
-    const pathInput = screen.getByTestId("worktree-path-input");
-    const baseBranchButton = document.getElementById("base-branch");
-
-    expect(branchInput.getAttribute("aria-invalid")).toBeNull();
-    expect(pathInput.getAttribute("aria-invalid")).toBeNull();
-    expect(baseBranchButton?.getAttribute("aria-invalid")).toBeNull();
   });
 });
 

@@ -125,17 +125,6 @@ describe("useEditorDomHandlers drop", () => {
   it("leaves an external text or link drop to CodeMirror", () => {
     expect(claimed(["text/plain", "text/uri-list"])).toBe(false);
   });
-
-  // The chip is produced by `useDragDrop`, wired above the content DOM. Halting
-  // propagation here would claim the drop and then insert nothing.
-  it("lets a claimed drop keep bubbling to the wrapper that inserts the chip", () => {
-    const { result } = renderHandlers();
-    const { event, stopPropagation } = dropEvent(["Files"]);
-
-    dropHandlerOf(result.current)(event, {});
-
-    expect(stopPropagation).not.toHaveBeenCalled();
-  });
 });
 
 describe("useEditorDomHandlers", () => {

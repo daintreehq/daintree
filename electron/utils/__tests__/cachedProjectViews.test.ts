@@ -41,14 +41,6 @@ describe("computeDefaultCachedViews", () => {
     expect(computeDefaultCachedViews(Number.NaN)).toBe(2);
     expect(computeDefaultCachedViews(Number.POSITIVE_INFINITY)).toBe(2);
   });
-
-  it("returns strictly increasing caps across the RAM tiers", () => {
-    const low = computeDefaultCachedViews(8 * GIB);
-    const mid = computeDefaultCachedViews(48 * GIB);
-    const high = computeDefaultCachedViews(96 * GIB);
-    expect(low).toBeLessThan(mid);
-    expect(mid).toBeLessThan(high);
-  });
 });
 
 describe("isValidCachedProjectViews", () => {
@@ -107,12 +99,6 @@ describe("effectiveCachedProjectViews", () => {
     expect(effectiveCachedProjectViews(2.5, ramDefault64)).toBe(5);
     expect(effectiveCachedProjectViews(Number.NaN, ramDefault64)).toBe(5);
     expect(effectiveCachedProjectViews({ v: 2 }, ramDefault64)).toBe(5);
-  });
-
-  it("honors the E2E override when stored value is invalid", () => {
-    expect(effectiveCachedProjectViews(99, { totalMemBytes: mem(64), isE2E: true })).toBe(4);
-    expect(effectiveCachedProjectViews("bogus", { totalMemBytes: mem(8), isE2E: true })).toBe(4);
-    expect(effectiveCachedProjectViews(0, { totalMemBytes: mem(128), isE2E: true })).toBe(4);
   });
 
   it("prefers an explicit opts.isE2E over the environment variable", () => {

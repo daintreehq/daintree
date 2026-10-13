@@ -180,9 +180,10 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 `.github/workflows/ci.yml` runs on push/PR to `main` and `develop`:
 
 1. **check** (Ubuntu): typecheck + lint + format (`npm run check`)
-2. **test** (Ubuntu): vitest unit tests, sharded 4 ways
-3. **build** (Ubuntu only): production build verification
-4. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
+2. **test** (Ubuntu): vitest unit tests, sharded 4 ways, minus the perf liveness guard
+3. **perf-liveness** (Ubuntu): `scripts/perf/__tests__/scenarioLiveness.test.ts` on its own runner, ungated, so its per-scenario child processes stay off the shards' critical path
+4. **build** (Ubuntu only): production build verification
+5. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
 
 `check` and `test` default to Ubuntu on push/PR but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites (only a launch smoke before publishing).
 

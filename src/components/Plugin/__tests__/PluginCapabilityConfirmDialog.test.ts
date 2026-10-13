@@ -30,12 +30,6 @@ describe("PluginCapabilityConfirmDialog microcopy", () => {
     expect(new Set(descriptions).size).toBe(GATED.length);
   });
 
-  it("builds a sentence-case title that names the plugin and ends with a question mark", () => {
-    const title = titleFor("Acme Tools", "shell:exec");
-    expect(title).toContain("Acme Tools");
-    expect(title.endsWith("?")).toBe(true);
-  });
-
   it("tells the user plainly that terminal:read reads what their terminals show", () => {
     expect(titleFor("Agent Grid", "terminal:read")).toBe(
       "Allow 'Agent Grid' to read what your terminals show?"

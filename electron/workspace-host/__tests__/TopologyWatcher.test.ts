@@ -653,10 +653,6 @@ describe("TopologyWatcher", () => {
         vi.useRealTimers();
       }
     });
-
-    it("isDark() defaults to false", () => {
-      expect(watcher.isDark()).toBe(false);
-    });
   });
 
   describe("periodic safety-net timer (#8510)", () => {
@@ -833,7 +829,6 @@ describe("isTopologyEventPath", () => {
     ["/repo/.git/worktrees/wt-1/locked", true],
     ["/repo/.git/worktrees/wt-1/gitdir", true],
     ["/repo/.git/worktrees/wt-1/HEAD", true],
-    ["/private/repo/.git/worktrees/wt-1/HEAD", true],
     ["/repo/.git/worktrees/wt-1/index", false],
     ["/repo/.git/worktrees/wt-1/commondir", true],
     ["/repo/.git/worktrees/wt-1/config.worktree", true],

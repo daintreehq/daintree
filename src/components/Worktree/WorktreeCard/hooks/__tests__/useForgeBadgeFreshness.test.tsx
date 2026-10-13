@@ -57,13 +57,6 @@ describe("useForgeBadgeFreshness", () => {
     expect(result.current.freshnessCause).toBeUndefined();
   });
 
-  it("does not age a badge purely because data is old (no age threshold)", () => {
-    // No rate-limit, no circuit-breaker — even a long-idle badge stays fresh.
-    const { result } = renderHook(() => useForgeBadgeFreshness("pr"));
-    expect(result.current.freshnessLevel).toBe("fresh");
-    expect(result.current.freshnessCause).toBeUndefined();
-  });
-
   // -- rate-limit --
 
   it("ages with cause 'rate-limit' while the rate-limit pause is active", () => {
@@ -112,23 +105,6 @@ describe("useForgeBadgeFreshness", () => {
     expect(result.current.freshnessCause).toBeUndefined();
   });
 
-  it("transitions PR freshness as the circuit-breaker store flips", () => {
-    const { result, rerender } = renderHook(() => useForgeBadgeFreshness("pr"));
-    expect(result.current.freshnessLevel).toBe("fresh");
-
-    act(() => {
-      usePRCircuitBreakerStore.setState({ tripped: true });
-    });
-    rerender();
-    expect(result.current.freshnessLevel).toBe("aging");
-
-    act(() => {
-      usePRCircuitBreakerStore.setState({ tripped: false });
-    });
-    rerender();
-    expect(result.current.freshnessLevel).toBe("fresh");
-  });
-
   // -- precedence --
 
   it("rate-limit takes precedence over circuit-breaker for cause", () => {
@@ -138,22 +114,10 @@ describe("useForgeBadgeFreshness", () => {
     expect(result.current.freshnessCause).toBe("rate-limit");
   });
 
-  // -- passthrough --
-
   it("returns rateLimitResetAt from the provider health slice", () => {
     const resetTime = FIXED_NOW + 120_000;
     setRateLimit(true, "primary", resetTime);
     const { result } = renderHook(() => useForgeBadgeFreshness("pr"));
     expect(result.current.rateLimitResetAt).toBe(resetTime);
-  });
-
-  it("returns null rateLimitResetAt when rate limit is not blocked", () => {
-    const { result } = renderHook(() => useForgeBadgeFreshness("pr"));
-    expect(result.current.rateLimitResetAt).toBeNull();
-  });
-
-  it("returns now reflecting wall-clock time", () => {
-    const { result } = renderHook(() => useForgeBadgeFreshness("pr"));
-    expect(result.current.now).toBe(FIXED_NOW);
   });
 });

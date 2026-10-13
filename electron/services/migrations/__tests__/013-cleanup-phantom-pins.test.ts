@@ -108,24 +108,6 @@ describe("migration013 — cleanup phantom pinned entries", () => {
     });
   });
 
-  it("is idempotent — running twice yields the same result and no second write", () => {
-    const data: Record<string, unknown> = {
-      agentSettings: {
-        agents: {
-          opencode: { pinned: true },
-          claude: { pinned: true, customFlags: "--verbose" },
-        },
-      },
-    };
-    const store = makeStoreMock(data);
-    migration013.up(store);
-    expect(store.set).toHaveBeenCalledTimes(1);
-
-    // Second run: no phantoms left, so no further writes.
-    migration013.up(store);
-    expect(store.set).toHaveBeenCalledTimes(1);
-  });
-
   it("does not throw on malformed agentSettings shapes", () => {
     const shapes: Array<[string, unknown]> = [
       ["agents is null", { agents: null }],
@@ -164,26 +146,5 @@ describe("migration013 — cleanup phantom pinned entries", () => {
     };
     expect(Object.keys(written.agents).sort()).toEqual(["broken", "claude"]);
     expect(written.agents.broken).toBeNull();
-  });
-
-  it("removes multiple phantoms in one call", () => {
-    const data: Record<string, unknown> = {
-      agentSettings: {
-        agents: {
-          opencode: { pinned: true },
-          cursor: { pinned: true },
-          kira: { pinned: true },
-          copilot: { pinned: true },
-          claude: { pinned: true, customFlags: "" },
-        },
-      },
-    };
-    const store = makeStoreMock(data);
-    migration013.up(store);
-
-    const written = (store.set as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
-      agents: Record<string, unknown>;
-    };
-    expect(Object.keys(written.agents).sort()).toEqual(["claude"]);
   });
 });

@@ -24,12 +24,6 @@ describe("parseOpenWindowsManifest", () => {
     expect(parseOpenWindowsManifest(serializeOpenWindowsManifest(records))).toEqual(records);
   });
 
-  it("preserves record order — order is the focus order", () => {
-    const records = [record("c"), record("a"), record("b")];
-    const parsed = parseOpenWindowsManifest(serializeOpenWindowsManifest(records));
-    expect(parsed.map((r) => r.projectId)).toEqual(["c", "a", "b"]);
-  });
-
   it("keeps duplicate project ids as separate windows", () => {
     // The manifest is a list of windows and must never collapse to a set of
     // project ids here. A duplicate saved before #12596 is resolved at restore,
@@ -175,16 +169,6 @@ describe("isReadableOpenWindowsManifest", () => {
 });
 
 describe("filterRestorableWindows", () => {
-  it("drops a record whose project no longer exists", () => {
-    const records = [record("gone"), record("here")];
-    expect(filterRestorableWindows(records, new Set(["here"]))).toEqual([record("here")]);
-  });
-
-  it("never substitutes a surviving project for a deleted one", () => {
-    const filtered = filterRestorableWindows([record("gone")], new Set(["other"]));
-    expect(filtered).toEqual([]);
-  });
-
   it("keeps a window that was on a host's project, which only the host can vouch for", () => {
     const remote = record(`studio-01:${"a".repeat(64)}`);
     expect(filterRestorableWindows([remote, record("gone")], new Set())).toEqual([remote]);

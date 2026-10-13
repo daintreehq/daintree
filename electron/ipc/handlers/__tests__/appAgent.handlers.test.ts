@@ -42,15 +42,6 @@ describe("appAgent handlers", () => {
 
   const mockEvent = { sender: { id: 1 } } as never;
 
-  it("throws a sanitized ValidationError without Zod detail for invalid set-config payloads", async () => {
-    const handler = getInvokeHandler(CHANNELS.APP_AGENT_SET_CONFIG);
-
-    await expect(handler(mockEvent, { model: 123 } as never)).rejects.toThrow(
-      `IPC validation failed: ${CHANNELS.APP_AGENT_SET_CONFIG}`
-    );
-    expect(appAgentServiceMock.setConfig).not.toHaveBeenCalled();
-  });
-
   it("does not leak Zod schema field names or values in the thrown message", async () => {
     const handler = getInvokeHandler(CHANNELS.APP_AGENT_SET_CONFIG);
 

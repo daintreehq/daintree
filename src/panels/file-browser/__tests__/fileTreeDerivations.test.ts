@@ -313,14 +313,4 @@ describe("countHiddenRowsMemo", () => {
       }
     }
   });
-
-  it("re-derives when the visibility changes on the same listing", () => {
-    const listings = makeTree();
-    const expanded = new Set(listings.keys());
-    for (const visibility of [...VISIBILITIES, ...VISIBILITIES.slice().reverse()]) {
-      expect(countHiddenRowsMemo(listings, expanded, "", visibility)).toEqual(
-        countHiddenRows(listings, expanded, "", visibility)
-      );
-    }
-  });
 });

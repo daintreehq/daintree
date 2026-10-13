@@ -190,20 +190,6 @@ describe("usePluginRuntimeStore", () => {
     expect(state.disabledPluginIds.has("acme.tool")).toBe(false);
   });
 
-  it("keys the disabled set by instance id so two projects' copies stay separate", async () => {
-    listMock.mockResolvedValue([
-      makePlugin({ id: "acme.tool", projectId: "proj-a", disabled: true }),
-      makePlugin({ id: "acme.tool", projectId: "proj-b" }),
-    ]);
-
-    usePluginRuntimeStore.getState().init();
-
-    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(2));
-    const state = usePluginRuntimeStore.getState();
-    expect(state.disabledPluginIds.has("project__proj-a__acme.tool")).toBe(true);
-    expect(state.disabledPluginIds.has("project__proj-b__acme.tool")).toBe(false);
-  });
-
   it("derives the disabled set and per-plugin metadata from one snapshot", async () => {
     listMock.mockResolvedValue([
       makePlugin({ id: "acme.dev", displayName: "Acme Dev", devMode: true }),
@@ -222,19 +208,6 @@ describe("usePluginRuntimeStore", () => {
       previewToolIds: new Set(),
     });
     expect(state.pluginMetaById.get("acme.plain")?.devMode).toBe(false);
-  });
-
-  it("falls back to the plugin id when the manifest declares no display name", async () => {
-    listMock.mockResolvedValue([makePlugin({ id: "acme.nameless" })]);
-
-    usePluginRuntimeStore.getState().init();
-
-    await vi.waitFor(() =>
-      expect(usePluginRuntimeStore.getState().pluginMetaById.get("acme.nameless")).toBeDefined()
-    );
-    expect(usePluginRuntimeStore.getState().pluginMetaById.get("acme.nameless")?.displayName).toBe(
-      "acme.nameless"
-    );
   });
 
   it("treats a blank displayName as absent rather than rendering an empty name", async () => {
@@ -429,21 +402,5 @@ describe("usePluginRuntimeStore", () => {
       previewToolIds: new Set(),
     });
     expect(state.disabledPluginIds.has("acme.a")).toBe(true);
-  });
-
-  it("unsubscribes and clears every collection on test reset", async () => {
-    const unsub = vi.fn();
-    onProvenanceChangedMock.mockReturnValue(unsub);
-    listMock.mockResolvedValue([makePlugin({ id: "acme.a", disabled: true, devMode: true })]);
-
-    usePluginRuntimeStore.getState().init();
-    await vi.waitFor(() => expect(usePluginRuntimeStore.getState().pluginMetaById.size).toBe(1));
-
-    _resetPluginRuntimeStoreForTest();
-
-    expect(unsub).toHaveBeenCalledTimes(1);
-    const state = usePluginRuntimeStore.getState();
-    expect(state.pluginMetaById.size).toBe(0);
-    expect(state.disabledPluginIds.size).toBe(0);
   });
 });

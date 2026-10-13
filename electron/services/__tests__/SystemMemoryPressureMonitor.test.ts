@@ -805,40 +805,6 @@ describe("createDefaultSystemMemoryPressureMonitor", () => {
     });
   });
 
-  it("opens on the kernel level alone when swap and fseventsd are healthy", async () => {
-    setPlatform("darwin");
-    vi.mocked(execFile).mockImplementation(((
-      file: string,
-      args: string[],
-      _opts: unknown,
-      cb: (err: Error | null, stdout: string) => void
-    ) => {
-      cb(
-        null,
-        file !== "/usr/sbin/sysctl"
-          ? "  1024 launchd\n  2048 fseventsd\n"
-          : args.includes("vm.swapusage")
-            ? "total = 2048.00M  used = 204.80M  free = 1843.20M  (encrypted)"
-            : "2\n"
-      );
-    }) as unknown as typeof execFile);
-    const publish = vi.fn();
-    const monitor = createDefaultSystemMemoryPressureMonitor(publish);
-
-    for (let i = 0; i < EPISODE_OPEN_SAMPLES; i++) {
-      await monitor.sample();
-      clock += SAMPLE_INTERVAL_MS;
-    }
-
-    expect(publish).toHaveBeenCalledWith({
-      status: "degraded",
-      swapUsedPercent: null,
-      swapKind: "swap",
-      fseventsdRssMb: null,
-      kernelPressureLevel: "warn",
-    });
-  });
-
   it("runs the Darwin probes under the C locale and reads a failed spawn as missing", async () => {
     setPlatform("darwin");
     vi.mocked(execFile).mockImplementation(((

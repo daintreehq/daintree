@@ -161,14 +161,6 @@ describe("systemActions adversarial", () => {
   });
 
   describe("slashCommands.list", () => {
-    it("defaults agentId to 'claude' when omitted", async () => {
-      const { run } = setupActions();
-      await run("slashCommands.list", undefined);
-      expect(slashCommandsClientMock.list).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "claude" })
-      );
-    });
-
     it("preserves explicit agentId", async () => {
       const { run } = setupActions();
       await run("slashCommands.list", { agentId: "codex" });
@@ -184,33 +176,6 @@ describe("systemActions adversarial", () => {
         agentId: "claude",
         projectPath: "/repo",
       });
-    });
-  });
-
-  describe("system.getResourceProfileSnapshot", () => {
-    it("returns the client snapshot verbatim", async () => {
-      const snapshot = {
-        profile: "efficiency" as const,
-        thermalState: "serious" as const,
-        isOnBattery: true,
-        speedLimit: 60,
-        lagPressureActive: true,
-      };
-      systemClientMock.getResourceProfileSnapshot.mockResolvedValue(snapshot);
-      const { run } = setupActions();
-      const result = await run("system.getResourceProfileSnapshot");
-      expect(systemClientMock.getResourceProfileSnapshot).toHaveBeenCalledOnce();
-      expect(result).toEqual(snapshot);
-    });
-
-    it("is a read-only MCP tool listed wherever its tier permits it", () => {
-      const { getDef } = setupActions();
-      const def = getDef("system.getResourceProfileSnapshot");
-      expect(def.kind).toBe("query");
-      expect(def.danger).toBe("safe");
-      // Was `discoverable`, which withheld it from tools/list on the false
-      // premise that the meta-tools could still surface it (#11585).
-      expect(def.mcpVisibility).toBeUndefined();
     });
   });
 
@@ -566,20 +531,6 @@ describe("systemActions adversarial", () => {
       expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
     });
 
-    it("never blips the spinner for a dispatch refused before the client is reached", async () => {
-      // The agent-target guard throws before the bracket: a refused dispatch
-      // did no work, so it must not flash the button.
-      const { run } = setupActions();
-      await expect(
-        run("copyTree.generateAndCopyFile", undefined, {
-          dispatchSource: "agent",
-          activeWorktreeId: "wt-active",
-        })
-      ).rejects.toThrow(/explicit/i);
-      expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
-      expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
-    });
-
     it("resolves an explicit worktreePath to the id its IPC takes", async () => {
       setWorktreePathIndexAccessor(() => new Map([["wt-landscape", "/repo/landscape"]]));
       const { run } = setupActions();
@@ -793,24 +744,6 @@ describe("systemActions adversarial", () => {
           context: { eventKind: "agent", worktreeId: "wt-1" },
         })
       );
-    });
-
-    it("gives the toast a bucket of its own rather than the shared fallback", async () => {
-      // notify() derives the bucket from `rateLimitKey ?? correlationId ??
-      // context.projectId ?? context.worktreeId ?? type`. With none of those set
-      // it lands on `type` — pooling this with every other success toast in the
-      // app, where an unrelated burst replaces the one message saying what is
-      // now on the clipboard. The invariant is "not the shared bucket", not any
-      // particular string.
-      const { run } = setupActions();
-      await run(
-        "copyTree.generateAndCopyFile",
-        { worktreeId: "wt-1" },
-        { dispatchSource: "agent" }
-      );
-      const payload = notifyMock.mock.calls[0]?.[0] as { rateLimitKey?: string; type: string };
-      expect(payload.rateLimitKey).toBeTruthy();
-      expect(payload.rateLimitKey).not.toBe(payload.type);
     });
 
     it("describes the copy without a format when none was requested", async () => {

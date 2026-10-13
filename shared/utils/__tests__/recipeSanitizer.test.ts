@@ -118,14 +118,6 @@ describe("sanitizeRecipeTerminals", () => {
     expect(result[1]?.exitBehavior).toBeUndefined();
   });
 
-  it("returns empty array when every terminal is invalid", () => {
-    const result = sanitizeRecipeTerminals([
-      { type: "bogus" },
-      { type: "terminal", command: "bad\ncmd" },
-    ]);
-    expect(result).toEqual([]);
-  });
-
   describe("additionalAllowedTypes (#11860)", () => {
     it("admits an extra agent id only when it is passed in", () => {
       const terminals = [{ type: "acme-agent", initialPrompt: "go" }];

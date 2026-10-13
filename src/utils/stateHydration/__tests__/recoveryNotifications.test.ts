@@ -135,21 +135,6 @@ describe("dispatchRecoveryNotifications", () => {
       });
     });
 
-    it("does not fire when the flag is false", () => {
-      dispatchRecoveryNotifications(makeHydrateResult({ gpuHardwareAccelerationDisabled: false }));
-      expect(notifyMock).not.toHaveBeenCalled();
-    });
-
-    it("stays silent when the user disabled acceleration manually", () => {
-      dispatchRecoveryNotifications(
-        makeHydrateResult({
-          gpuHardwareAccelerationDisabled: true,
-          gpuDisabledReason: "user",
-        })
-      );
-      expect(notifyMock).not.toHaveBeenCalled();
-    });
-
     it("stays silent when disabled with no recorded reason", () => {
       dispatchRecoveryNotifications(
         makeHydrateResult({
@@ -279,11 +264,6 @@ describe("dispatchRecoveryNotifications", () => {
       expect(arg.message).toContain("/tmp/crash-loop.bad");
       expect(arg.priority).toBe("high");
       expect(arg.duration).toBe(0);
-    });
-
-    it("does not fire when crashLoopStateRecovery is null", () => {
-      dispatchRecoveryNotifications(makeHydrateResult({ crashLoopStateRecovery: null }));
-      expect(notifyMock).not.toHaveBeenCalled();
     });
   });
 

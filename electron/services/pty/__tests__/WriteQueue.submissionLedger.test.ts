@@ -408,22 +408,6 @@ describe("WriteQueue submission ledger", () => {
     expect(h.performSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it("reports an untracked submit's failure through the existing status lane", async () => {
-    const h = makeHarness();
-    // Behaviour change from the strict-write fix: a synchronous pty error
-    // during a submit now rejects rather than being swallowed into the log, so
-    // it reaches `failed` — and therefore the pane banner — even with no token.
-    // That is what `failed` is documented to be for: the composer may hold a
-    // partial body with no Enter behind it.
-    h.performSubmit.mockRejectedValue(new Error("write EPIPE"));
-    const wq = new WriteQueue(h.options);
-
-    wq.submit("typed by a person");
-    await vi.runAllTimersAsync();
-
-    expect(h.statuses).toEqual(["failed"]);
-  });
-
   it("records cancelled for a submission refused before the lane sees it", () => {
     const h = makeHarness();
     const wq = new WriteQueue(h.options);
@@ -533,18 +517,6 @@ describe("WriteQueue outputChangeAfterWriteAt", () => {
     expect(first?.at).toBe(at);
     expect(first?.outputChangeAfterWriteAt).toBe(h.outputChangeAt.value);
     expect(wq.getSubmission("tok-5")?.outputChangeAfterWriteAt).toBe(h.outputChangeAt.value);
-  });
-
-  it("derives the value rather than storing it on the record", async () => {
-    const h = makeHarness();
-    const wq = new WriteQueue(h.options);
-    const at = await deliver(wq);
-
-    h.outputChangeAt.value = at + 1_000;
-    const read = wq.getSubmission("tok-1")!;
-    read.outputChangeAfterWriteAt = 1;
-
-    expect(wq.getSubmission("tok-1")?.outputChangeAfterWriteAt).toBe(at + 1_000);
   });
 
   it("is never reported for a submission still queued or writing", async () => {

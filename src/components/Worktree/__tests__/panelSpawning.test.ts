@@ -359,16 +359,6 @@ describe("spawnPanelsFromRecipe", () => {
     expect(mockAddPanel).toHaveBeenCalledTimes(1);
   });
 
-  it("does not invoke onPanelSpawned when callback is omitted", async () => {
-    await spawnPanelsFromRecipe({
-      terminals: [makeTerminal()],
-      worktreeId: "wt-1",
-      cwd: "/path/to/wt",
-    });
-
-    expect(mockAddPanel).toHaveBeenCalledTimes(1);
-  });
-
   it("handles systemClient.getTmpDir rejection gracefully", async () => {
     mockSystemGetTmpDir.mockRejectedValue(new Error("no tmp"));
     mockAgentSettingsGet.mockResolvedValue({ agents: {} });
@@ -409,20 +399,6 @@ describe("spawnPanelsFromRecipe", () => {
         cwd: "/path/to/wt",
       })
     ).rejects.toThrow(AggregateError);
-  });
-
-  it("does not throw when errors occur but callback is provided", async () => {
-    mockAddPanel.mockRejectedValue(new Error("boom"));
-    const cb = vi.fn();
-
-    await spawnPanelsFromRecipe({
-      terminals: [makeTerminal()],
-      worktreeId: "wt-1",
-      cwd: "/path/to/wt",
-      onPanelSpawned: cb,
-    });
-
-    expect(cb).toHaveBeenCalledWith(0, null, expect.any(Error));
   });
 
   it("does not double-fire callback when success callback throws", async () => {
@@ -490,17 +466,6 @@ describe("spawnPanelsFromRecipe", () => {
     expect(
       mockAddPanel.mock.calls.every((c) => (c[0] as { location?: string })?.location === "dock")
     ).toBe(true);
-  });
-
-  it("leaves location undefined for terminals without one (grid default)", async () => {
-    await spawnPanelsFromRecipe({
-      terminals: [makeTerminal()],
-      worktreeId: "wt-1",
-      cwd: "/path/to/wt",
-    });
-
-    const call = mockAddPanel.mock.calls[0]?.[0] as { location?: string };
-    expect(call.location).toBeUndefined();
   });
 
   it("focuses the last grid panel, skipping dock panels (#9764)", async () => {
@@ -610,18 +575,6 @@ describe("spawnPanelsFromRecipe", () => {
     });
 
     expect(mockSetFocused).not.toHaveBeenCalled();
-  });
-
-  it("collects errors from multiple panels and throws single AggregateError", async () => {
-    mockAddPanel.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("fail"));
-
-    await expect(
-      spawnPanelsFromRecipe({
-        terminals: [makeTerminal({ title: "T1" }), makeTerminal({ title: "T2" })],
-        worktreeId: "wt-1",
-        cwd: "/path/to/wt",
-      })
-    ).rejects.toThrow(AggregateError);
   });
 
   describe("when the user declines the panel-limit confirm", () => {

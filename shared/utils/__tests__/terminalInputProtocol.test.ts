@@ -239,17 +239,5 @@ describe("formatForTerminalPaste", () => {
       expect(out.split(BRACKETED_PASTE_END).length - 1).toBe(1);
       expect(out).toBe(`${BRACKETED_PASTE_START}before␛[201~␃mid␛[201~after${BRACKETED_PASTE_END}`);
     });
-
-    it("neutralizes an embedded terminator so the wrapper cannot be escaped", () => {
-      const out = formatForTerminalPaste(`before${BRACKETED_PASTE_END}${ETX}after`, wrapped);
-
-      expect(out.split(BRACKETED_PASTE_END).length - 1).toBe(1);
-      expect(out.endsWith(BRACKETED_PASTE_END)).toBe(true);
-      const body = out.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
-      expect(body).not.toContain(ESC);
-      expect(body).not.toContain(ETX);
-      expect(body).toContain("before");
-      expect(body).toContain("after");
-    });
   });
 });

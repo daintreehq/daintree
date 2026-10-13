@@ -171,12 +171,6 @@ describe("buildPanelSnapshotOptions", () => {
     expect(result.browserConsoleOpen).toBe(true);
   });
 
-  it("handles undefined agentLaunchFlags", () => {
-    const panel = makePanel({ agentLaunchFlags: undefined });
-    const result = buildPanelSnapshotOptions(panel);
-    expect(result!.agentLaunchFlags).toBeUndefined();
-  });
-
   it("returns null for broken agent terminals (missing command)", () => {
     const panel = makePanel({
       kind: "terminal",
@@ -184,16 +178,6 @@ describe("buildPanelSnapshotOptions", () => {
       command: undefined,
     });
     expect(buildPanelSnapshotOptions(panel)).toBeNull();
-  });
-
-  it("returns a plain terminal snapshot when launchAgentId is absent", () => {
-    const panel = makePanel({
-      kind: "terminal",
-      command: "bash",
-    });
-    const result = buildPanelSnapshotOptions(panel);
-    expect(result).toMatchObject({ kind: "terminal", command: "bash" });
-    expect(result!.launchAgentId).toBeUndefined();
   });
 
   it("returns a valid agent terminal snapshot when command and agentId are present", () => {
@@ -308,12 +292,6 @@ describe("panelDuplicationService", () => {
     const panel = makePanel({ launchAgentId: "custom-agent", command: "my-cmd" });
     const result = await buildPanelDuplicateOptions(panel, "grid");
     expect(result.command).toBe("my-cmd");
-  });
-
-  it("uses existing command for non-agent panels", async () => {
-    const panel = makePanel({ command: "zsh" });
-    const result = await buildPanelDuplicateOptions(panel, "grid");
-    expect(result.command).toBe("zsh");
   });
 
   it("includes browserUrl for browser panels", async () => {

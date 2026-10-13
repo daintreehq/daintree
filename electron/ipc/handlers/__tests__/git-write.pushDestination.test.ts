@@ -41,6 +41,14 @@ vi.mock("../../../utils/hardenedGit.js", () => ({
 
 import { registerGitWriteHandlers } from "../git-write.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
+import { CHANNELS } from "../../channels.js";
+import type { StagingStatus } from "../../../../shared/types/git.js";
+import {
+  OperationRegistry,
+  _resetOperationRegistryForTest,
+} from "../../../services/operations/index.js";
+import type { OperationsEvent } from "../../../../shared/types/ipc/operations.js";
+import { scanStagedFilesForConflictMarkers } from "../../../services/git/conflictMarkerScan.js";
 
 const CWD = "/repo";
 const LOCAL_BRANCH = "topic";
@@ -782,22 +790,538 @@ describe("fails closed when the destination is unresolvable", () => {
     ).rejects.toThrow(/no push destination configured/);
     expect(git.log).not.toHaveBeenCalled();
   });
+});
 
-  it("still refuses when an origin remote exists but nothing selects it", async () => {
-    const git = makeGit(
-      {},
-      `refs/heads/${LOCAL_BRANCH}\u0000\u0000`,
-      `refs/heads/${LOCAL_BRANCH}\u0000\u0000`
+describe("git:get-staging-status — push and pull destinations", () => {
+  // A path that does not exist, so the filesystem git-dir read defers to the
+  // fake's rev-parse and no real repository is consulted.
+  const CWD = "/nonexistent/staging-status-repo";
+
+  /** Triangular: tracks origin/release/topic, pushes to fork/topic. */
+  const COMBINED_RECORD = [
+    "refs/heads/topic",
+    "fork",
+    "refs/remotes/fork/topic",
+    "refs/remotes/origin/release/topic",
+    "origin",
+  ].join("\u0000");
+
+  type FakeGit = Record<string, ReturnType<typeof vi.fn>>;
+
+  function makeGit(overrides: FakeGit = {}, current = "topic"): FakeGit {
+    return {
+      status: vi.fn(async () => ({
+        files: [{ path: "a.ts", index: "M", working_dir: " " }],
+        conflicted: [],
+        current,
+        detached: false,
+      })),
+      revparse: vi.fn(async (args: string[]) => {
+        if (args[0] === "--git-dir") return ".git\n";
+        if (args[0] === "--show-toplevel") return `${CWD}\n`;
+        return "0123456789abcdef0123456789abcdef01234567\n";
+      }),
+      raw: vi.fn(async (args: string[]) => {
+        if (args[0] === "for-each-ref") return `${COMBINED_RECORD}\n`;
+        return "";
+      }),
+      getRemotes: vi.fn(async () => [
+        { name: "origin", refs: { fetch: "", push: "" } },
+        { name: "fork", refs: { fetch: "", push: "" } },
+      ]),
+      diff: vi.fn(async () => ""),
+      ...overrides,
+    };
+  }
+
+  function getStagingStatus(): Promise<StagingStatus> {
+    const call = ipcMainMock.handle.mock.calls.find(
+      (c: unknown[]) => c[0] === CHANNELS.GIT_GET_STAGING_STATUS
     );
-    git.getRemotes = vi.fn(async () => [
-      { name: "origin", refs: { fetch: "", push: "" } },
-      { name: "fork", refs: { fetch: "", push: "" } },
+    if (!call) throw new Error("staging status handler not registered");
+    return (call[1] as (e: unknown, cwd: string) => Promise<StagingStatus>)({}, CWD);
+  }
+
+  function forEachRefCalls(git: FakeGit): string[][] {
+    return git.raw!.mock.calls.map((c) => c[0] as string[]).filter((a) => a[0] === "for-each-ref");
+  }
+
+  it("resolves both sides from one for-each-ref and one remote listing", async () => {
+    const git = makeGit();
+    createHardenedGitMock.mockResolvedValue(git);
+
+    const status = await getStagingStatus();
+
+    expect(status.hasRemote).toBe(true);
+    expect(status.pushDestination).toEqual({ remote: "fork", branch: "topic" });
+    expect(status.pullSource).toEqual({ remote: "origin", branch: "release/topic" });
+    expect(forEachRefCalls(git)).toHaveLength(1);
+    expect(git.getRemotes).toHaveBeenCalledTimes(1);
+  });
+
+  it("degrades both destinations to null when the ref read fails", async () => {
+    const git = makeGit({
+      raw: vi.fn(async (args: string[]) => {
+        if (args[0] === "for-each-ref") throw new Error("fatal: bad ref");
+        return "";
+      }),
+    });
+    createHardenedGitMock.mockResolvedValue(git);
+
+    const status = await getStagingStatus();
+
+    expect(status.hasRemote).toBe(true);
+    expect(status.pushDestination).toBeNull();
+    expect(status.pullSource).toBeNull();
+    expect(status.staged.map((e) => e.path)).toEqual(["a.ts"]);
+  });
+
+  it("reports no remote and skips the ref read when listing remotes fails", async () => {
+    const git = makeGit({ getRemotes: vi.fn(async () => Promise.reject(new Error("boom"))) });
+    createHardenedGitMock.mockResolvedValue(git);
+
+    const status = await getStagingStatus();
+
+    expect(status.hasRemote).toBe(false);
+    expect(status.pushDestination).toBeNull();
+    expect(forEachRefCalls(git)).toHaveLength(0);
+  });
+
+  it("skips destination resolution on a detached HEAD", async () => {
+    const git = makeGit({}, "HEAD");
+    createHardenedGitMock.mockResolvedValue(git);
+
+    const status = await getStagingStatus();
+
+    expect(status.isDetachedHead).toBe(true);
+    expect(status.currentBranch).toBeNull();
+    expect(status.pushDestination).toBeNull();
+    expect(forEachRefCalls(git)).toHaveLength(0);
+  });
+
+  it("keeps staging without churn on an unborn branch", async () => {
+    const git = makeGit({
+      revparse: vi.fn(async (args: string[]) => {
+        if (args[0] === "--git-dir") return ".git\n";
+        throw new Error("fatal: ambiguous argument 'HEAD'");
+      }),
+    });
+    createHardenedGitMock.mockResolvedValue(git);
+
+    const status = await getStagingStatus();
+
+    expect(status.staged).toEqual([
+      { path: "a.ts", status: "modified", insertions: null, deletions: null },
     ]);
-    createAuthenticatedGitMock.mockResolvedValue(git);
+    expect(git.diff).not.toHaveBeenCalled();
+    expect(status.repoState).toBe("CLEAN");
+  });
+});
 
-    await expect(getHandler("git:push")(FAKE_EVENT, { cwd: CWD })).rejects.toThrow(
-      /no push destination configured/
+describe("git push as an operation", () => {
+  const FOR_EACH_REF = "refs/heads/topic\u0000origin\u0000refs/remotes/origin/topic";
+
+  type ProgressFn = (data: {
+    stage: string;
+    progress: number;
+    processed: number;
+    total: number;
+  }) => void;
+
+  let events: OperationsEvent[];
+  let registry: OperationRegistry;
+  let progress: ProgressFn | undefined;
+  let releasePush: () => void;
+  let failPush: (error: Error) => void;
+  let pushCalls: number;
+
+  const push = (payload: Record<string, unknown>) =>
+    getHandler("git:push")(FAKE_EVENT, { cwd: CWD, ...payload });
+
+  async function pushStarted(count = 1) {
+    await vi.waitFor(() => expect(pushCalls).toBe(count));
+  }
+
+  beforeEach(() => {
+    events = [];
+    registry = new OperationRegistry({ emit: (_projectId, event) => events.push(event) });
+    _resetOperationRegistryForTest(registry);
+    pushCalls = 0;
+    createAuthenticatedGitMock.mockImplementation(
+      async (_cwd: string, opts?: { progress?: ProgressFn }) => {
+        if (opts?.progress) progress = opts.progress;
+        return {
+          revparse: vi.fn(async () => "topic\n"),
+          raw: vi.fn(async (args: string[]) =>
+            args[0] === "for-each-ref" ? `${FOR_EACH_REF}\n` : ""
+          ),
+          getRemotes: vi.fn(async () => [{ name: "origin", refs: { fetch: "", push: "" } }]),
+          push: vi.fn(
+            () =>
+              new Promise<void>((resolve, reject) => {
+                pushCalls += 1;
+                releasePush = resolve;
+                failPush = reject;
+              })
+          ),
+        };
+      }
     );
-    expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it("joins a retry with the same opId instead of pushing twice", async () => {
+    const first = push({ opId: "op-1" });
+    await pushStarted();
+    const second = push({ opId: "op-1" });
+    releasePush();
+    await Promise.all([first, second]);
+
+    expect(pushCalls).toBe(1);
+    expect(registry.status("op-1")).toMatchObject({ status: "succeeded" });
+
+    // Retried after the answer was lost: answered from the record.
+    await push({ opId: "op-1" });
+    expect(pushCalls).toBe(1);
+  });
+
+  it("gives a second named caller the outcome of a named push running for the cwd", async () => {
+    const first = push({ opId: "op-first" });
+    await pushStarted();
+    const named = push({ opId: "op-join" });
+    failPush(new Error("fatal: Authentication failed"));
+
+    await expect(first).rejects.toThrow();
+    await expect(named).rejects.toThrow();
+    expect(pushCalls).toBe(1);
+    expect(registry.status("op-join")).toMatchObject({ status: "failed" });
+  });
+
+  it("refuses to join a running push that asked for something else", async () => {
+    const first = push({ opId: "op-first" });
+    await pushStarted();
+    await expect(push({ opId: "op-other", setUpstream: true })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+    releasePush();
+    await first;
+    expect(pushCalls).toBe(1);
+  });
+
+  it("rejects a malformed opId before touching git", async () => {
+    await expect(push({ opId: "not/an id" })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(push({ opId: 42 })).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(createAuthenticatedGitMock).not.toHaveBeenCalled();
+    expect(registry.list()).toEqual([]);
+  });
+
+  it("keeps a second unnamed push a silent no-op, as before", async () => {
+    const first = push({});
+    await pushStarted();
+    await push({});
+    expect(pushCalls).toBe(1);
+    releasePush();
+    await first;
+  });
+
+  it("reports progress to the operation, stamped with its opId", async () => {
+    const run = push({ opId: "op-progress" });
+    await pushStarted();
+    progress!({ stage: "writing", progress: 50, processed: 5, total: 10 });
+    releasePush();
+    await run;
+
+    expect(events).toContainEqual({
+      type: "progress",
+      progress: expect.objectContaining({
+        opId: "op-progress",
+        kind: "git-push",
+        stage: "writing",
+        fraction: 0.5,
+      }),
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "settled",
+      record: { opId: "op-progress", outcome: { status: "succeeded" } },
+    });
+  });
+
+  it("records and publishes nothing for a push with no opId", async () => {
+    const run = push({});
+    await pushStarted();
+    progress!({ stage: "writing", progress: 50, processed: 5, total: 10 });
+    releasePush();
+    await run;
+
+    expect(registry.list()).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it("refuses a named caller while an unnamed push, which it has no record to join, owns the cwd", async () => {
+    const unnamed = push({});
+    await pushStarted();
+    await expect(push({ opId: "op-late" })).rejects.toMatchObject({
+      code: "VALIDATION",
+      userMessage: expect.stringContaining("already running"),
+    });
+    expect(pushCalls).toBe(1);
+    expect(registry.status("op-late")).toEqual({ status: "unknown" });
+    releasePush();
+    await unnamed;
+  });
+});
+
+describe("git-write commit and working diff", () => {
+  type FakeStatusFile = { path: string; index: string; working_dir: string };
+  type FakeGit = {
+    status: ReturnType<typeof vi.fn>;
+    diff: ReturnType<typeof vi.fn>;
+    raw: ReturnType<typeof vi.fn>;
+    commit: ReturnType<typeof vi.fn>;
+  };
+
+  function makeFakeGit(overrides: Partial<FakeGit> = {}): FakeGit {
+    return {
+      status: vi.fn().mockResolvedValue({ files: [] as FakeStatusFile[] }),
+      diff: vi.fn().mockResolvedValue(""),
+      raw: vi.fn().mockResolvedValue(""),
+      commit: vi.fn().mockResolvedValue({
+        commit: "abc123",
+        summary: { changes: 1, insertions: 1, deletions: 0 },
+      }),
+      ...overrides,
+    };
+  }
+
+  function getHandler(channel: string) {
+    const call = ipcMainMock.handle.mock.calls.find((c: unknown[]) => c[0] === channel);
+    if (!call) throw new Error(`Handler for ${channel} not registered`);
+    return call[1] as (_e: unknown, ...args: unknown[]) => unknown;
+  }
+
+  function stagedFile(path: string, index = "M"): FakeStatusFile {
+    return { path, index, working_dir: " " };
+  }
+
+  describe("scanStagedFilesForConflictMarkers", () => {
+    it.each([
+      ["<<<<<<< HEAD", "start"],
+      ["||||||| merged common ancestors", "ancestor"],
+      ["=======", "middle"],
+      [">>>>>>> branch", "end"],
+    ])("throws for the %s marker line", async (markerLine) => {
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("f.txt")] }),
+        raw: vi.fn().mockResolvedValue(`head\n${markerLine}\ntail\n`),
+      });
+      await expect(scanStagedFilesForConflictMarkers(git as never)).rejects.toThrow(
+        /Unresolved conflict markers/
+      );
+    });
+
+    it("does not block when markers are mid-line (line-anchored regex)", async () => {
+      // An indented `=======` should not trip the scan; ensures the `^` anchor
+      // in CONFLICT_MARKER_RE is doing its job.
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("doc.md")] }),
+        raw: vi.fn().mockResolvedValue("  =======\ninline <<<<<<< text\n"),
+      });
+      await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
+    });
+
+    it("skips deleted staged entries without reading any blobs", async () => {
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("gone.ts", "D")] }),
+      });
+      await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
+      expect(git.raw).not.toHaveBeenCalled();
+      expect(git.diff).not.toHaveBeenCalled();
+    });
+
+    it("skips binary files reported by numstat", async () => {
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("image.png")] }),
+        diff: vi.fn().mockResolvedValue("-\t-\timage.png\n"),
+      });
+      await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
+      expect(git.raw).not.toHaveBeenCalled();
+    });
+
+    it("short-circuits when there are no staged files", async () => {
+      const git = makeFakeGit();
+      await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
+      expect(git.diff).not.toHaveBeenCalled();
+      expect(git.raw).not.toHaveBeenCalled();
+    });
+
+    it("uses --no-ext-diff and --no-textconv for the numstat probe", async () => {
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("a.ts")] }),
+        raw: vi.fn().mockResolvedValue("ok\n"),
+      });
+      await scanStagedFilesForConflictMarkers(git as never);
+      expect(git.diff).toHaveBeenCalledWith([
+        "--no-ext-diff",
+        "--no-textconv",
+        "--cached",
+        "--numstat",
+      ]);
+    });
+
+    it("guards leading-dash filenames in the index reference via --end-of-options", async () => {
+      // A file named `-danger.ts` would otherwise produce `:-danger.ts`, which
+      // an unprotected argv parser could see as a flag-like token.
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("-danger.ts")] }),
+        raw: vi.fn().mockResolvedValue("clean content\n"),
+      });
+      await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
+      expect(git.raw).toHaveBeenCalledWith(["cat-file", "blob", "--end-of-options", ":-danger.ts"]);
+    });
+
+    it("stops on the first offending file and identifies it", async () => {
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({
+          files: [stagedFile("clean.ts"), stagedFile("bad.ts"), stagedFile("other.ts")],
+        }),
+        raw: vi.fn(async (args: string[]) => {
+          if (args.includes(":bad.ts")) return "<<<<<<< HEAD\n";
+          return "clean content\n";
+        }),
+      });
+      await expect(scanStagedFilesForConflictMarkers(git as never)).rejects.toThrow(
+        /Unresolved conflict markers found in bad\.ts/
+      );
+      expect(git.raw).not.toHaveBeenCalledWith([
+        "cat-file",
+        "blob",
+        "--end-of-options",
+        ":other.ts",
+      ]);
+    });
+
+    it("blocks a first-line marker that follows a UTF-8 BOM", async () => {
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("bom.txt")] }),
+        raw: vi.fn().mockResolvedValue("\uFEFF<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> b\n"),
+      });
+      await expect(scanStagedFilesForConflictMarkers(git as never)).rejects.toThrow(
+        /Unresolved conflict markers found in bom\.txt/
+      );
+    });
+
+    it("blocks when content is exactly at the 1 MB byte cap", async () => {
+      // Exactly STAGED_FILE_SIZE_CAP bytes (cap boundary) with the marker on
+      // its own line. `>` not `>=` means this must still be scanned.
+      const markerLine = "<<<<<<< HEAD\n";
+      const content = markerLine + "a".repeat(1_000_000 - markerLine.length);
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("edge.txt")] }),
+        raw: vi.fn().mockResolvedValue(content),
+      });
+      expect(Buffer.byteLength(content, "utf8")).toBe(1_000_000);
+      await expect(scanStagedFilesForConflictMarkers(git as never)).rejects.toThrow(
+        /Unresolved conflict markers/
+      );
+    });
+
+    it("skips content 1 byte over the cap", async () => {
+      // `>` not `>=` check: 1_000_001 bytes → skip silently, commit proceeds.
+      const content = "<<<<<<< HEAD\n" + "a".repeat(1_000_001 - "<<<<<<< HEAD\n".length);
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("huge.txt")] }),
+        raw: vi.fn().mockResolvedValue(content),
+      });
+      expect(Buffer.byteLength(content, "utf8")).toBe(1_000_001);
+      await expect(scanStagedFilesForConflictMarkers(git as never)).resolves.toBeUndefined();
+    });
+
+    it("propagates cat-file rejections (does not silently permit)", async () => {
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("src/foo.ts")] }),
+        raw: vi.fn().mockRejectedValue(new Error("fatal: bad revision")),
+      });
+      await expect(scanStagedFilesForConflictMarkers(git as never)).rejects.toThrow(/bad revision/);
+    });
+  });
+
+  describe("git:commit handler", () => {
+    it("invokes git.commit when staged content is clean", async () => {
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("src/foo.ts")] }),
+        raw: vi.fn().mockResolvedValue("clean\n"),
+      });
+      createHardenedGitMock.mockReturnValue(git);
+      registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+      const handler = getHandler("git:commit");
+
+      const result = await handler(null, { cwd: "/tmp/repo", message: "feat: add foo" });
+      expect(git.commit).toHaveBeenCalledWith("feat: add foo");
+      expect(result).toEqual({
+        hash: "abc123",
+        summary: "1 changed, 1 insertions(+), 0 deletions(-)",
+      });
+    });
+
+    it("blocks the commit when a staged file carries conflict markers", async () => {
+      const git = makeFakeGit({
+        status: vi.fn().mockResolvedValue({ files: [stagedFile("src/foo.ts")] }),
+        raw: vi.fn().mockResolvedValue("<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n"),
+      });
+      createHardenedGitMock.mockReturnValue(git);
+      registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+      const handler = getHandler("git:commit");
+
+      await expect(handler(null, { cwd: "/tmp/repo", message: "feat: add foo" })).rejects.toThrow(
+        /Unresolved conflict markers found in src\/foo\.ts/
+      );
+      expect(git.commit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("git:get-working-diff handler", () => {
+    it("passes --no-ext-diff and --no-textconv for unstaged diff", async () => {
+      const git = makeFakeGit({ diff: vi.fn().mockResolvedValue("diff content\n") });
+      createHardenedGitMock.mockReturnValue(git);
+      registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+      const handler = getHandler("git:get-working-diff");
+
+      await handler(null, { cwd: "/tmp/repo", type: "unstaged" });
+
+      expect(git.diff).toHaveBeenCalledWith(["--no-ext-diff", "--no-textconv"]);
+    });
+
+    it("passes --no-ext-diff and --no-textconv for staged diff", async () => {
+      const git = makeFakeGit({ diff: vi.fn().mockResolvedValue("diff content\n") });
+      createHardenedGitMock.mockReturnValue(git);
+      registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+      const handler = getHandler("git:get-working-diff");
+
+      await handler(null, { cwd: "/tmp/repo", type: "staged" });
+
+      expect(git.diff).toHaveBeenCalledWith(["--no-ext-diff", "--no-textconv", "--cached"]);
+    });
+
+    it("passes --no-ext-diff and --no-textconv for HEAD diff", async () => {
+      const git = makeFakeGit({ diff: vi.fn().mockResolvedValue("diff content\n") });
+      createHardenedGitMock.mockReturnValue(git);
+      registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+      const handler = getHandler("git:get-working-diff");
+
+      await handler(null, { cwd: "/tmp/repo", type: "head" });
+
+      expect(git.diff).toHaveBeenCalledWith(["--no-ext-diff", "--no-textconv", "HEAD"]);
+    });
+
+    it("rejects an invalid diff type without invoking git", async () => {
+      const git = makeFakeGit();
+      createHardenedGitMock.mockReturnValue(git);
+      registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
+      const handler = getHandler("git:get-working-diff");
+
+      await expect(handler(null, { cwd: "/tmp/repo", type: "garbage" })).rejects.toThrow(
+        /Invalid diff type/
+      );
+      expect(git.diff).not.toHaveBeenCalled();
+    });
   });
 });

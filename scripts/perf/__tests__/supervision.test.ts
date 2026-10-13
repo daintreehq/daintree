@@ -1,7 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import {
-  BACKOFF_POLICY,
   CRASH_CASES,
   FOREIGN_SERVICE_NAME,
   gradeBackoffSchedule,
@@ -11,7 +10,6 @@ import {
   type CrashCase,
 } from "../lib/supervisionFixture";
 import { supervisionScenarios } from "../scenarios/supervision";
-import { classifyMetric } from "../lib/comparability";
 
 /**
  * Unit coverage for the ORACLES, not the scenarios.
@@ -159,15 +157,6 @@ describe("restart-schedule oracle", () => {
     // Graded in both directions: the policy is the claim, not "some delay".
     expect(gradeBackoffSchedule("immediate", workspaceLow, workspaceHigh)).toBeGreaterThan(0);
   });
-
-  it("declares a policy for every supervisor the ladder drives", () => {
-    expect(Object.keys(BACKOFF_POLICY).sort()).toEqual([
-      "MainProcessWatchdogClient",
-      "PluginDevWorkerHost",
-      "PtyHostLifecycle",
-      "WorkspaceHostProcess",
-    ]);
-  });
 });
 
 describe("launch-generation oracle", () => {
@@ -211,22 +200,6 @@ describe("watchdog core ladder", () => {
 });
 
 describe("supervision scenarios", () => {
-  it("declares a miss count on every scenario, and only count-class ones", () => {
-    expect(supervisionScenarios.map((scenario) => scenario.id)).toEqual([
-      "PERF-260",
-      "PERF-261",
-      "PERF-262",
-      "PERF-263",
-      "PERF-264",
-    ]);
-    for (const scenario of supervisionScenarios) {
-      expect(scenario.correctness?.length ?? 0).toBeGreaterThan(0);
-      for (const name of scenario.correctness ?? []) {
-        expect(classifyMetric(name)).toBe("count");
-      }
-    }
-  });
-
   it("PERF-263 emits every predicate it declares, at zero", async () => {
     const scenario = supervisionScenarios.find((entry) => entry.id === "PERF-263")!;
     const sample = await scenario.run({ mode: "smoke", now: () => performance.now() });

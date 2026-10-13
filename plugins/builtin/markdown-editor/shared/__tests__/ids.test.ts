@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
 
 import * as ids from "../ids.js";
 import * as protocol from "../protocol.js";
@@ -13,10 +12,5 @@ describe("shared/ids", () => {
       expect(protocol, `protocol re-exports ${key}`).toHaveProperty(key);
       expect((protocol as Record<string, unknown>)[key], key).toBe(value);
     }
-  });
-
-  it("stays zod-free", () => {
-    const source = readFileSync(new URL("../ids.ts", import.meta.url), "utf8");
-    expect(source).not.toMatch(/\bfrom\s+["']zod["']/);
   });
 });

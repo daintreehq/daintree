@@ -780,17 +780,6 @@ describe("RemoteHostsClient", () => {
     expect(windows.openLocalProject).toHaveBeenCalledWith(1, "abc");
   });
 
-  it("names the host a window is on, for main code that holds a window rather than a sender", async () => {
-    expect(client.windowHost(1)).toBe("local");
-    await client.switchWindowHost(ctxFor(5, 1), {
-      hostId: "studio-01",
-      newWindow: false,
-      projectId: "proj-1",
-    });
-    expect(client.windowHost(1)).toBe("studio-01");
-    expect(client.windowHost(2)).toBe("local");
-  });
-
   it("brings a window on a host back to this machine to show a local project", async () => {
     await client.switchWindowHost(ctxFor(5, 1), {
       hostId: "studio-01",

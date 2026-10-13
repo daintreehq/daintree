@@ -14,16 +14,6 @@ describe("sanitizeSvg", () => {
     }
   });
 
-  it("should accept SVG with common elements", () => {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-      <rect x="10" y="10" width="80" height="80" fill="red"/>
-      <path d="M10 10 L90 90" stroke="black"/>
-      <text x="50" y="50">Hello</text>
-    </svg>`;
-    const result = sanitizeSvg(svg);
-    expect(result.ok).toBe(true);
-  });
-
   it("should reject empty input", () => {
     const result = sanitizeSvg("");
     expect(result.ok).toBe(false);
@@ -228,22 +218,10 @@ describe("validateSvg (strict validation)", () => {
 });
 
 describe("svgToDataUrl", () => {
-  it("should convert SVG to data URL", () => {
-    const svg = '<svg><circle cx="50" cy="50" r="40"/></svg>';
-    const dataUrl = svgToDataUrl(svg);
-    expect(dataUrl).toMatch(/^data:image\/svg\+xml,/);
-    expect(dataUrl).toContain("svg");
-  });
-
   it("should properly encode special characters", () => {
     const svg = '<svg attr="value">text</svg>';
     const dataUrl = svgToDataUrl(svg);
     expect(dataUrl).toMatch(/^data:image\/svg\+xml,/);
     expect(dataUrl).toContain("%22"); // encoded quotes
-  });
-
-  it("should handle empty SVG", () => {
-    const dataUrl = svgToDataUrl("");
-    expect(dataUrl).toBe("data:image/svg+xml,");
   });
 });

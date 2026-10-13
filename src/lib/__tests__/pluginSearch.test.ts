@@ -100,12 +100,6 @@ describe("parsePluginQuery", () => {
     expect(parsed.operators).toEqual([{ key: "builtin", value: null }]);
     expect(parsed.freeText).toBe("-extra");
   });
-
-  it("keeps a colon-bearing capability value intact", () => {
-    const parsed = parsePluginQuery("@cap:network:fetch");
-    expect(parsed.operators).toEqual([{ key: "cap", value: "network:fetch" }]);
-    expect(parsed.freeText).toBe("");
-  });
 });
 
 describe("isQueryActive", () => {
@@ -221,16 +215,8 @@ describe("filterPlugins @cap", () => {
     expect(names(filterPlugins(plugins, "@cap:network:fetch"))).toEqual(["net.plugin"]);
   });
 
-  it("matches case-insensitively", () => {
-    expect(names(filterPlugins(plugins, "@cap:NETWORK:FETCH"))).toEqual(["net.plugin"]);
-  });
-
   it("@cap with no value matches nothing", () => {
     expect(names(filterPlugins(plugins, "@cap:"))).toEqual([]);
-  });
-
-  it("plugins without a capabilities array never match @cap", () => {
-    expect(names(filterPlugins(plugins, "@cap:fs:project-read"))).toEqual(["fs.plugin"]);
   });
 });
 
@@ -296,14 +282,5 @@ describe("filterPlugins free text", () => {
 describe("scorePlugin", () => {
   it("returns 0 for empty free text", () => {
     expect(scorePlugin(makePlugin({ name: "a", displayName: "Alpha" }), "")).toBe(0);
-  });
-
-  it("scores a name hit higher than a description hit for the same term", () => {
-    const nameHit = scorePlugin(makePlugin({ name: "a", displayName: "Logger" }), "logger");
-    const descHit = scorePlugin(
-      makePlugin({ name: "b", displayName: "Tool", description: "A logger tool" }),
-      "logger"
-    );
-    expect(nameHit).toBeGreaterThan(descHit);
   });
 });

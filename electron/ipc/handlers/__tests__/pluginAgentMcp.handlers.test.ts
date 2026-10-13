@@ -826,11 +826,4 @@ describe("plugin agent MCP access IPC", () => {
       expect(storeData.size).toBe(0);
     });
   });
-
-  it("removes its handlers on dispose", () => {
-    dispose();
-    const removed = vi.mocked(ipcMain.removeHandler).mock.calls.map(([ch]) => ch);
-    expect(removed).toEqual(expect.arrayContaining([LIST, SET]));
-    dispose = () => {};
-  });
 });

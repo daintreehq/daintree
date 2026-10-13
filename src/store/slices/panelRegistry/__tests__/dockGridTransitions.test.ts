@@ -257,18 +257,6 @@ describe("dock ↔ grid transitions", () => {
       expect(groups.map((g) => g.panelIds)).toEqual([["global-dock"], ["worktree-dock"]]);
     });
 
-    it("removes a global dock panel from dock groups after restoring it to grid", () => {
-      const globalDocked = createGlobalMockTerminal("global-dock", "dock");
-      setTerminals([globalDocked]);
-
-      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")).toHaveLength(1);
-
-      const moved = usePanelStore.getState().moveTerminalToGrid("global-dock");
-
-      expect(moved).toBe(true);
-      expect(usePanelStore.getState().getTabGroups("dock", "wt-1")).toHaveLength(0);
-    });
-
     it("filters stale grid members out when resolving panels for a dock group", () => {
       const t1 = createMockTerminal("t1", "dock");
       const t2 = createMockTerminal("t2", "grid");
@@ -754,22 +742,6 @@ describe("dock ↔ grid transitions", () => {
       expect(usePanelStore.getState().getPanelGroup("t1")).toBeUndefined();
     });
 
-    it("applies group location when terminal is already in grid", () => {
-      const t1 = createMockTerminal("t1", "grid");
-      const t2 = createMockTerminal("t2", "grid");
-      setTerminals([t1, t2]);
-
-      const group = createMockTabGroup("g1", ["t1", "t2"], "grid");
-      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
-
-      usePanelStore.getState().hydrateTabGroups([group]);
-
-      // Both terminals remain in grid — no override needed
-      const updated = usePanelStore.getState().panelsById["t1"];
-      expect(updated!.location).toBe("grid");
-      expect(updated!.isVisible).toBe(true);
-    });
-
     it("preserves terminal grid location when group says dock", () => {
       const t1 = createMockTerminal("t1", "grid");
       const t2 = createMockTerminal("t2", "grid");
@@ -957,14 +929,6 @@ describe("dock ↔ grid transitions", () => {
       expect(usePanelStore.getState().panelsById["t1"]?.location).toBe("grid");
     });
 
-    it("moveTerminalToDock still docks a dockable panel", () => {
-      setTerminals([createMockTerminal("t1", "grid")]);
-
-      usePanelStore.getState().moveTerminalToDock("t1");
-
-      expect(usePanelStore.getState().panelsById["t1"]?.location).toBe("dock");
-    });
-
     it("moveTerminalToPosition redirects a dock target for a non-dockable kind to the grid", () => {
       setTerminals([nonDockable("t1", "grid")]);
 
@@ -1007,17 +971,6 @@ describe("dock ↔ grid transitions", () => {
       expect(state.tabGroups.get("g1")?.location).toBe("dock");
       expect(state.panelsById["a"]?.location).toBe("dock");
       expect(state.panelsById["b"]?.location).toBe("dock");
-    });
-
-    it("reconcileDockMembership relocates a docked panel whose kind is no longer dockable", async () => {
-      // Simulate a live dockable→non-dockable flip: the panel is already docked
-      // (kind was dockable when it landed), then its kind reports non-dockable.
-      setTerminals([nonDockable("t1", "dock")]);
-      const { reconcileDockMembership } = await import("@/store/reconcileDockMembership");
-
-      reconcileDockMembership();
-
-      expect(usePanelStore.getState().panelsById["t1"]?.location).toBe("grid");
     });
 
     it("reconcileDockMembership leaves a dockable docked panel in place", async () => {

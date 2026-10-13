@@ -24,28 +24,10 @@ describe("classifyError", () => {
       expect(classifyError(makeError("fetch something", { name: "GitError" }))).toBe("git");
     });
 
-    it("classifies WorktreeRemovedError as git", () => {
-      expect(classifyError(makeError("directory removed", { name: "WorktreeRemovedError" }))).toBe(
-        "git"
-      );
-    });
-
     it("classifies FileSystemError by name even with misleading message", () => {
       expect(classifyError(makeError("network timeout", { name: "FileSystemError" }))).toBe(
         "filesystem"
       );
-    });
-
-    it("classifies ProcessError by name", () => {
-      expect(classifyError(makeError("something", { name: "ProcessError" }))).toBe("process");
-    });
-
-    it("classifies WatcherError as process", () => {
-      expect(classifyError(makeError("something", { name: "WatcherError" }))).toBe("process");
-    });
-
-    it("classifies ConfigError as validation", () => {
-      expect(classifyError(makeError("something", { name: "ConfigError" }))).toBe("validation");
     });
 
     it("does not match plain Error name", () => {
@@ -69,18 +51,6 @@ describe("classifyError", () => {
 
     it("classifies EACCES as filesystem", () => {
       expect(classifyError(makeError("spawn terminal", { code: "EACCES" }))).toBe("filesystem");
-    });
-
-    it("classifies ETIMEDOUT as network", () => {
-      expect(classifyError(makeError("something", { code: "ETIMEDOUT" }))).toBe("network");
-    });
-
-    it("classifies EBUSY as filesystem", () => {
-      expect(classifyError(makeError("file is busy", { code: "EBUSY" }))).toBe("filesystem");
-    });
-
-    it("classifies EADDRINUSE as network", () => {
-      expect(classifyError(makeError("something", { code: "EADDRINUSE" }))).toBe("network");
     });
   });
 

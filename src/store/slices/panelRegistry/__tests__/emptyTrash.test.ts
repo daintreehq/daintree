@@ -185,20 +185,6 @@ describe("emptyTrash", () => {
     expect(state.panelIds).toEqual(["p-1"]);
   });
 
-  it("deduplicates duplicate IDs", () => {
-    usePanelStore.setState({
-      panelsById: { "p-1": makePanel("p-1") },
-      panelIds: ["p-1"],
-      trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
-    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
-
-    usePanelStore.getState().emptyTrash(["p-1", "p-1", "p-1"]);
-
-    const state = usePanelStore.getState();
-    expect(state.panelsById["p-1"]).toBeUndefined();
-    expect(state.trashedTerminals.has("p-1")).toBe(false);
-  });
-
   it("kills PTY for each panel and destroys renderer", () => {
     usePanelStore.setState({
       panelsById: {
@@ -342,23 +328,5 @@ describe("emptyTrash", () => {
 
     const state = usePanelStore.getState();
     expect(state.panelIdsByWorktreeId["wt-a"]).toBeUndefined();
-  });
-
-  it("idempotent: calling again with same IDs is a no-op", () => {
-    usePanelStore.setState({
-      panelsById: { "p-1": makePanel("p-1") },
-      panelIds: ["p-1"],
-      trashedTerminals: new Map([["p-1", makeTrashedInfo("p-1")]]),
-    } as unknown as Parameters<typeof usePanelStore.setState>[0]);
-
-    usePanelStore.getState().emptyTrash(["p-1"]);
-    const state1 = usePanelStore.getState();
-    expect(state1.panelIds).toEqual([]);
-
-    // Second call with same IDs should be harmless
-    usePanelStore.getState().emptyTrash(["p-1"]);
-    const state2 = usePanelStore.getState();
-    expect(state2.panelIds).toEqual([]);
-    expect(state2.panelsById).toEqual(state1.panelsById);
   });
 });

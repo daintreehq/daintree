@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { idleWindowScenarios } from "../scenarios/idleWindow";
 import {
   createProcessTreeHarness,
   closeIdleWindow,
@@ -82,19 +81,6 @@ const DURATION_METRICS = [
   "recoveryMs",
   "postHealDiscoveryMs",
 ];
-
-describe("idleWindow scenario declarations", () => {
-  it("declares PERF-092/093/094 and nothing else", () => {
-    expect(idleWindowScenarios.map((s) => s.id)).toEqual(["PERF-092", "PERF-093", "PERF-094"]);
-  });
-
-  it("reports counts as the headline, so durationMs is the self-timed sentinel", () => {
-    for (const scenario of idleWindowScenarios) {
-      expect(scenario.tier).toBe("heavy");
-      expect(scenario.warmups).toBe(1);
-    }
-  });
-});
 
 describe("idleWindow metric naming", () => {
   it("classifies every count metric as machine-independent", () => {

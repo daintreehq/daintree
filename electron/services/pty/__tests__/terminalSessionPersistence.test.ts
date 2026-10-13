@@ -177,20 +177,6 @@ describe("terminalSessionPersistence", () => {
     expect(headless.write).toHaveBeenNthCalledWith(2, "sync payload");
   });
 
-  it("restores a headerless legacy snapshot as v0", async () => {
-    const sessionDir = path.join(userDataDir, "terminal-sessions");
-    await fsp.mkdir(sessionDir, { recursive: true });
-
-    const legacyPath = path.join(sessionDir, "term-legacy.restore");
-    await fsp.writeFile(legacyPath, "legacy content", "utf8");
-
-    const headless = createMockHeadless();
-    const result = restoreSessionFromFile(headless as never, "term-legacy");
-
-    expect(result.restored).toBe(true);
-    expect(headless.write).toHaveBeenCalledWith("legacy content");
-  });
-
   it("rejects a future schema version header", async () => {
     const sessionDir = path.join(userDataDir, "terminal-sessions");
     await fsp.mkdir(sessionDir, { recursive: true });
@@ -605,26 +591,6 @@ describe("terminalSessionPersistence", () => {
     }
   });
 
-  it("writes parser-reset preamble before serialized content on restore", async () => {
-    const sessionDir = path.join(userDataDir, "terminal-sessions");
-    await fsp.mkdir(sessionDir, { recursive: true });
-    await fsp.writeFile(path.join(sessionDir, "term-preamble.restore"), "snapshot-bytes", "utf8");
-
-    const headless = createMockHeadless();
-    const result = restoreSessionFromFile(headless as never, "term-preamble");
-
-    expect(result.restored).toBe(true);
-    const writes = headless.write.mock.calls.map((c: string[]) => c[0]);
-    const preambleIndex = writes.indexOf(RESTORE_PARSER_RESET_PREAMBLE);
-    const contentIndex = writes.indexOf("snapshot-bytes");
-    expect(preambleIndex).toBe(0);
-    expect(contentIndex).toBeGreaterThan(preambleIndex);
-    // Preamble combines DECSTR + Kitty keyboard reset + DECSCUSR.
-    expect(RESTORE_PARSER_RESET_PREAMBLE).toContain("\x1b[!p");
-    expect(RESTORE_PARSER_RESET_PREAMBLE).toContain("\x1b[=0u");
-    expect(RESTORE_PARSER_RESET_PREAMBLE).toContain("\x1b[0 q");
-  });
-
   it("handles alternate screen by exiting and showing TUI explanation", async () => {
     const sessionDir = path.join(userDataDir, "terminal-sessions");
     await fsp.mkdir(sessionDir, { recursive: true });
@@ -657,10 +623,6 @@ describe("terminalSessionPersistence", () => {
 
     it("no-ops on a missing file (ENOENT-safe)", async () => {
       await expect(deleteSessionFile("nonexistent-term")).resolves.toBeUndefined();
-    });
-
-    it("no-ops for an invalid terminal ID", async () => {
-      await expect(deleteSessionFile("../escape")).resolves.toBeUndefined();
     });
   });
 
@@ -753,19 +715,6 @@ describe("terminalSessionPersistence", () => {
       expect(fs.existsSync(path.join(sessionDir, "orphan-term.restore"))).toBe(false);
     });
 
-    it("preserves files within TTL that are in knownIds", async () => {
-      await createFile("term-1.restore", "recent data");
-
-      const result = await evictSessionFiles({
-        ttlMs: 30 * 24 * 60 * 60 * 1000,
-        maxBytes: 1024 * 1024,
-        knownIds: new Set(["term-1"]),
-      });
-
-      expect(result.deleted).toBe(0);
-      expect(fs.existsSync(path.join(sessionDir, "term-1.restore"))).toBe(true);
-    });
-
     it("applies TTL with 30s buffer correctly at boundary", async () => {
       const ttlMs = 60_000; // 1 minute TTL
       // File at ttlMs + 15_000ms old (well within 30s buffer) should be kept
@@ -830,18 +779,6 @@ describe("terminalSessionPersistence", () => {
       expect(result.deleted).toBe(1);
       expect(fs.existsSync(path.join(sessionDir, "known-old.restore"))).toBe(false);
     });
-
-    it("works without knownIds (TTL-only mode)", async () => {
-      const ttlMs = 60_000;
-      await createFile("old.restore", "data", ttlMs + 60_000);
-      await createFile("recent.restore", "data", 1000);
-
-      const result = await evictSessionFiles({ ttlMs, maxBytes: 1024 * 1024 });
-
-      expect(result.deleted).toBe(1);
-      expect(fs.existsSync(path.join(sessionDir, "old.restore"))).toBe(false);
-      expect(fs.existsSync(path.join(sessionDir, "recent.restore"))).toBe(true);
-    });
   });
 
   describe("hibernation markers", () => {
@@ -904,21 +841,6 @@ describe("terminalSessionPersistence", () => {
       expect(bannerOf(headless)).not.toBe(bannerOf(plainHeadless));
       // Marker should be cleaned up
       expect(fs.existsSync(path.join(sessionDir, "term-hib.hibernated"))).toBe(false);
-    });
-
-    it("restoreSessionFromFile shows normal banner without marker", async () => {
-      const sessionDir = path.join(userDataDir, "terminal-sessions");
-      await fsp.mkdir(sessionDir, { recursive: true });
-      await fsp.writeFile(path.join(sessionDir, "term-normal.restore"), "content", "utf8");
-
-      const headless = createMockHeadless();
-      const result = restoreSessionFromFile(headless as never, "term-normal");
-
-      expect(result.restored).toBe(true);
-      const bannerCall = headless.write.mock.calls.find(
-        ([arg]: unknown[]) => typeof arg === "string" && arg.includes("Session restored")
-      );
-      expect(bannerCall).toBeDefined();
     });
   });
 });

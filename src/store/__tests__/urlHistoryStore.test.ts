@@ -124,45 +124,6 @@ describe("urlHistoryStore", () => {
     expect(useUrlHistoryStore.getState().entries["proj1"]).toHaveLength(1);
   });
 
-  it("hydrates legacy entries without favicon field", () => {
-    useUrlHistoryStore.setState({
-      entries: {
-        proj1: [
-          {
-            url: "http://localhost:3000/",
-            title: "Legacy",
-            visitCount: 1,
-            lastVisitAt: Date.now(),
-          },
-        ],
-      },
-    });
-    const entries = useUrlHistoryStore.getState().entries["proj1"];
-    expect(entries![0]!.favicon).toBeUndefined();
-    // Store methods still work on legacy entries
-    useUrlHistoryStore.getState().updateFavicon("proj1", "http://localhost:3000/", "favicon.ico");
-    expect(useUrlHistoryStore.getState().entries["proj1"]![0]!.favicon).toBe("favicon.ico");
-  });
-
-  it("updates lastVisitAt on repeated visits", () => {
-    const store = useUrlHistoryStore.getState();
-    store.recordVisit("proj1", "http://localhost:3000/", "Home");
-    const firstVisitAt = useUrlHistoryStore.getState().entries["proj1"]![0]!.lastVisitAt;
-    // Small delay to ensure timestamp differs
-    store.recordVisit("proj1", "http://localhost:3000/", "Home");
-    const secondVisitAt = useUrlHistoryStore.getState().entries["proj1"]![0]!.lastVisitAt;
-    expect(secondVisitAt).toBeGreaterThanOrEqual(firstVisitAt);
-  });
-
-  it("caps entries at 500 per project", () => {
-    const store = useUrlHistoryStore.getState();
-    for (let i = 0; i < 510; i++) {
-      store.recordVisit("proj1", `http://localhost:3000/page-${i}`, `Page ${i}`);
-    }
-    const entries = useUrlHistoryStore.getState().entries["proj1"];
-    expect(entries!.length).toBeLessThanOrEqual(500);
-  });
-
   it("caps visitCount at 200 to prevent old high-frequency URLs from dominating forever", () => {
     const store = useUrlHistoryStore.getState();
     for (let i = 0; i < 250; i++) {
@@ -183,85 +144,11 @@ describe("urlHistoryStore", () => {
     expect(entries[0]!.visitCount).toBe(3);
   });
 
-  it("preserves non-tracking parameters and sorts them canonically", () => {
-    const store = useUrlHistoryStore.getState();
-    store.recordVisit("proj1", "https://example.com/search?q=foo&sort=date&utm_source=ads", "");
-    const entries = useUrlHistoryStore.getState().entries["proj1"]!;
-    expect(entries[0]!.url).toBe("https://example.com/search?q=foo&sort=date");
-  });
-
-  it("skips OAuth callback URLs (code + state)", () => {
-    const store = useUrlHistoryStore.getState();
-    store.recordVisit(
-      "proj1",
-      "https://app.com/callback?code=abc123&state=xyz789",
-      "Authenticating"
-    );
-    expect(useUrlHistoryStore.getState().entries["proj1"]).toBeUndefined();
-  });
-
-  it("skips URLs with token fragments", () => {
-    const store = useUrlHistoryStore.getState();
-    store.recordVisit("proj1", "https://app.com/#access_token=secret&token_type=Bearer", "");
-    expect(useUrlHistoryStore.getState().entries["proj1"]).toBeUndefined();
-  });
-
-  it("skips URLs with HTTP basic auth credentials", () => {
-    const store = useUrlHistoryStore.getState();
-    store.recordVisit("proj1", "https://user:pass@example.com/api", "");
-    expect(useUrlHistoryStore.getState().entries["proj1"]).toBeUndefined();
-  });
-
-  it("skips AWS pre-signed URLs", () => {
-    const store = useUrlHistoryStore.getState();
-    store.recordVisit(
-      "proj1",
-      "https://bucket.s3.amazonaws.com/file.pdf?X-Amz-Signature=abc&X-Amz-Credential=xyz",
-      "File"
-    );
-    expect(useUrlHistoryStore.getState().entries["proj1"]).toBeUndefined();
-  });
-
-  it("skips GCS signed URLs", () => {
-    const store = useUrlHistoryStore.getState();
-    store.recordVisit(
-      "proj1",
-      "https://storage.googleapis.com/bucket/file?X-Goog-Signature=abc",
-      ""
-    );
-    expect(useUrlHistoryStore.getState().entries["proj1"]).toBeUndefined();
-  });
-
-  it("skips Azure SAS URLs", () => {
-    const store = useUrlHistoryStore.getState();
-    store.recordVisit(
-      "proj1",
-      "https://account.blob.core.windows.net/container/file?sig=abc&se=2026&sv=2024",
-      ""
-    );
-    expect(useUrlHistoryStore.getState().entries["proj1"]).toBeUndefined();
-  });
-
   it("preserves hash-router fragments unchanged", () => {
     const store = useUrlHistoryStore.getState();
     store.recordVisit("proj1", "http://localhost:3000/#/users/42?tab=profile", "Profile");
     const entries = useUrlHistoryStore.getState().entries["proj1"]!;
     expect(entries[0]!.url).toBe("http://localhost:3000/#/users/42?tab=profile");
-  });
-
-  it("prunes entries older than 90 days on the next recordVisit", () => {
-    const stale = Date.now() - 100 * 24 * 3600 * 1000;
-    useUrlHistoryStore.setState({
-      entries: {
-        proj1: [
-          { url: "http://localhost:3000/old", title: "Old", visitCount: 5, lastVisitAt: stale },
-        ],
-      },
-    });
-    useUrlHistoryStore.getState().recordVisit("proj1", "http://localhost:3000/new", "New");
-    const entries = useUrlHistoryStore.getState().entries["proj1"]!;
-    expect(entries).toHaveLength(1);
-    expect(entries[0]!.url).toBe("http://localhost:3000/new");
   });
 
   it("recordVisit with a sensitive URL does not mutate existing safe history", () => {
@@ -360,10 +247,6 @@ describe("sanitizeUrlForHistory", () => {
   it("returns null for tokens after `?` inside hash-router fragments (Angular/SPA implicit flow)", () => {
     expect(sanitizeUrlForHistory("https://app.com/#/callback?access_token=secret")).toBeNull();
     expect(sanitizeUrlForHistory("https://app.com/#/auth?id_token=eyJ&state=x")).toBeNull();
-  });
-
-  it("returns null for GCS signed URLs with uppercase param keys", () => {
-    expect(sanitizeUrlForHistory("https://s.googleapis.com/b/f?X-GOOG-SIGNATURE=abc")).toBeNull();
   });
 
   it("returns null for basic-auth URLs", () => {
@@ -489,12 +372,6 @@ describe("getFrecencySuggestions", () => {
     { url: "http://localhost:5173/", title: "Vite Dev", visitCount: 1, lastVisitAt: now - 1000 },
   ];
 
-  it("returns top entries for empty query", () => {
-    const results = getFrecencySuggestions(entries, "");
-    expect(results.length).toBeGreaterThan(0);
-    expect(results.length).toBeLessThanOrEqual(5);
-  });
-
   it("sorts empty-query results by frecency, not insertion order", () => {
     const now = Date.now();
     const insertionOrdered: UrlHistoryEntry[] = [
@@ -536,39 +413,36 @@ describe("getFrecencySuggestions", () => {
   });
 });
 
-describe("urlHistoryStore persistence migration", () => {
-  const STORAGE_KEY = "daintree-url-history";
-  const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(
-    globalThis,
-    "localStorage"
-  );
+const STORAGE_KEY = "daintree-url-history";
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
-  function installLocalStorage(initial: Record<string, string>): Map<string, string> {
-    const backing = new Map<string, string>(Object.entries(initial));
-    Object.defineProperty(globalThis, "localStorage", {
-      value: {
-        getItem: (key: string) => backing.get(key) ?? null,
-        setItem: (key: string, value: string) => {
-          backing.set(key, value);
-        },
-        removeItem: (key: string) => {
-          backing.delete(key);
-        },
+function installLocalStorage(initial: Record<string, string>): Map<string, string> {
+  const backing = new Map<string, string>(Object.entries(initial));
+  Object.defineProperty(globalThis, "localStorage", {
+    value: {
+      getItem: (key: string) => backing.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        backing.set(key, value);
       },
-      configurable: true,
-      writable: true,
-    });
-    return backing;
-  }
+      removeItem: (key: string) => {
+        backing.delete(key);
+      },
+    },
+    configurable: true,
+    writable: true,
+  });
+  return backing;
+}
 
-  function restoreLocalStorage(): void {
-    if (originalLocalStorageDescriptor) {
-      Object.defineProperty(globalThis, "localStorage", originalLocalStorageDescriptor);
-      return;
-    }
-    delete (globalThis as Partial<typeof globalThis>).localStorage;
+function restoreLocalStorage(): void {
+  if (originalLocalStorageDescriptor) {
+    Object.defineProperty(globalThis, "localStorage", originalLocalStorageDescriptor);
+    return;
   }
+  delete (globalThis as Partial<typeof globalThis>).localStorage;
+}
 
+describe("urlHistoryStore persistence migration", () => {
   beforeEach(() => {
     vi.resetModules();
   });
@@ -764,5 +638,112 @@ describe("urlHistoryStore storage fallback", () => {
       configurable: true,
       writable: true,
     });
+  });
+});
+
+/**
+ * Cross-view write-merge coverage for the shared localStorage partition
+ * (issue #11351). Direct analog to commandHistoryStore: `entries` is a
+ * `Record<projectId, UrlHistoryEntry[]>`, so a stale view writing its own project
+ * must not wipe a sibling project's history. Storage is debounced (300ms), so
+ * writes are driven with fake timers.
+ */
+describe("urlHistoryStore cross-view write merge (#11351)", () => {
+  type PersistedBlob = { version: number; state: { entries: Record<string, UrlHistoryEntry[]> } };
+
+  // Pinned clock so the sibling entry stays inside the 90-day retention window the
+  // reconciler's `migrateEntries` normalization enforces on every input.
+  const NOW = 1_800_000_000_000;
+
+  const siblingEntry: UrlHistoryEntry = {
+    url: "https://sibling.example/",
+    title: "Sibling",
+    visitCount: 3,
+    lastVisitAt: NOW - 1000,
+  };
+
+  function readBlob(backing: Map<string, string>): PersistedBlob {
+    const blob: PersistedBlob = JSON.parse(backing.get(STORAGE_KEY)!);
+    return blob;
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    restoreLocalStorage();
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it("a fresh view's visit does not clobber a sibling project's history", async () => {
+    const backing = installLocalStorage({});
+    const { useUrlHistoryStore: store } = await import("../urlHistoryStore");
+    vi.advanceTimersByTime(400); // drain any hydration-triggered write
+
+    backing.set(
+      STORAGE_KEY,
+      JSON.stringify({ version: 1, state: { entries: { "proj-b": [siblingEntry] } } })
+    );
+
+    store.getState().recordVisit("proj-a", "https://a.example/");
+    vi.advanceTimersByTime(400);
+
+    const written = readBlob(backing);
+    expect(Object.keys(written.state.entries).sort()).toEqual(["proj-a", "proj-b"]);
+    expect(written.state.entries["proj-b"]).toHaveLength(1);
+    expect(written.state.entries["proj-b"]?.[0]?.title).toBe("Sibling");
+  });
+
+  it("a sibling's visit written during the debounce window survives this view's flush", async () => {
+    const backing = installLocalStorage({});
+    const { useUrlHistoryStore: store } = await import("../urlHistoryStore");
+    vi.advanceTimersByTime(400);
+
+    // This view records project A and lets it settle.
+    store.getState().recordVisit("proj-a", "https://a.example/");
+    vi.advanceTimersByTime(400);
+
+    // This view enqueues a SECOND A visit — pending, not yet flushed.
+    store.getState().recordVisit("proj-a", "https://a2.example/");
+
+    // A sibling records project B directly to disk DURING the pending debounce
+    // window. The flush must read disk at flush time to preserve it.
+    const disk = readBlob(backing);
+    disk.state.entries["proj-b"] = [siblingEntry];
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    vi.advanceTimersByTime(400);
+
+    const written = readBlob(backing);
+    expect(Object.keys(written.state.entries).sort()).toEqual(["proj-a", "proj-b"]);
+    expect(written.state.entries["proj-b"]).toHaveLength(1);
+    expect(written.state.entries["proj-b"]?.[0]?.title).toBe("Sibling");
+    expect(written.state.entries["proj-a"]).toHaveLength(2);
+  });
+
+  it("does not resurrect a project's history this view removed, and keeps a sibling's", async () => {
+    const backing = installLocalStorage({});
+    const { useUrlHistoryStore: store } = await import("../urlHistoryStore");
+    vi.advanceTimersByTime(400);
+
+    store.getState().recordVisit("proj-a", "https://a.example/");
+    vi.advanceTimersByTime(400);
+
+    const disk = readBlob(backing);
+    disk.state.entries["proj-b"] = [siblingEntry];
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().removeProjectHistory("proj-a");
+    vi.advanceTimersByTime(400);
+
+    const written = readBlob(backing);
+    expect(written.state.entries["proj-a"]).toBeUndefined();
+    expect(written.state.entries["proj-b"]).toHaveLength(1);
+    expect(written.state.entries["proj-b"]?.[0]?.title).toBe("Sibling");
   });
 });

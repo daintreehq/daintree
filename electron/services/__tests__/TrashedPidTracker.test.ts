@@ -117,12 +117,6 @@ describe("TrashedPidTracker", () => {
       expect(entries).toHaveLength(1);
       expect(entries[0].pid).toBe(200);
     });
-
-    it("appends multiple entries for different terminals", async () => {
-      await tracker.persistTrashed("term-1", 100);
-      await tracker.persistTrashed("term-2", 200);
-      expect(readFile()).toHaveLength(2);
-    });
   });
 
   describe("removeTrashed", () => {

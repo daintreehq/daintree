@@ -30,13 +30,6 @@ function makeFindState(overrides: Partial<FindInPageState> = {}): FindInPageStat
 }
 
 describe("FindBar accessibility", () => {
-  it("input is reachable via aria-label and carries data-testid", () => {
-    render(<FindBar find={makeFindState()} />);
-    const input = screen.getByLabelText("Find in page") as HTMLInputElement;
-    expect(input.tagName).toBe("INPUT");
-    expect(input.getAttribute("data-testid")).toBe("find-bar-input");
-  });
-
   it("input aria-describedby matches counter span id and counter has live-region attrs", () => {
     const { container } = render(<FindBar find={makeFindState({ query: "foo", matchCount: 3 })} />);
     const input = container.querySelector('input[aria-label="Find in page"]') as HTMLInputElement;

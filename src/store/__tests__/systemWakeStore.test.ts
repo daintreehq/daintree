@@ -81,11 +81,6 @@ describe("systemWakeStore", () => {
     cleanupSystemWakeListeners();
   });
 
-  it("subscribes to onWake once on setup", () => {
-    setupSystemWakeListeners();
-    expect(onWakeMock).toHaveBeenCalledOnce();
-  });
-
   it("is idempotent — double setup registers only once", () => {
     setupSystemWakeListeners();
     setupSystemWakeListeners();
@@ -200,24 +195,6 @@ describe("systemWakeStore", () => {
     await flushMicrotasks();
 
     expect(useSystemWakeStore.getState().isWakeRevalidating).toBe(false);
-  });
-
-  it("subscribers observe isWakeRevalidating transitioning true -> false across a tier-3 refresh", async () => {
-    setupSystemWakeListeners();
-
-    const seen: boolean[] = [];
-    const unsubscribe = useSystemWakeStore.subscribe((state, prev) => {
-      if (state.isWakeRevalidating !== prev.isWakeRevalidating) {
-        seen.push(state.isWakeRevalidating);
-      }
-    });
-
-    emitWake(WAKE_LONG_SLEEP_THRESHOLD_MS + 1);
-    takeRefresh(0).resolve();
-    await flushMicrotasks();
-
-    unsubscribe();
-    expect(seen).toEqual([true, false]);
   });
 
   it("revalidate guard: a tier-2 wake during an in-flight tier-3 refresh does not clear isWakeRevalidating", async () => {

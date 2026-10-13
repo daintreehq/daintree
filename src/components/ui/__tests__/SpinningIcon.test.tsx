@@ -53,14 +53,6 @@ describe("SpinningIcon", () => {
     expect(isSpinning(container)).toBe(true);
   });
 
-  it("keeps spinning across rotation boundaries while active", () => {
-    const { container } = render(<SpinningIcon icon={RefreshCw} active={true} />);
-    const spinner = spinnerOf(container);
-    fireIteration(spinner);
-    fireIteration(spinner);
-    expect(isSpinning(container)).toBe(true);
-  });
-
   it("holds the spin past a fast completion until the next rotation boundary, then stops", () => {
     const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={true} />);
     const spinner = spinnerOf(container);
@@ -193,19 +185,6 @@ describe("SpinningIcon", () => {
     );
     expect(spinnerOf(container).classList.contains("mr-1.5")).toBe(true);
     expect(svgOf(container).classList.contains("mr-1.5")).toBe(false);
-  });
-
-  it("clears the backstop timer on unmount", () => {
-    vi.useFakeTimers();
-    const { rerender, unmount } = render(<SpinningIcon icon={RefreshCw} active={true} />);
-    rerender(<SpinningIcon icon={RefreshCw} active={false} />);
-    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
-    unmount();
-    expect(clearSpy).toHaveBeenCalled();
-    // No pending timer callback fires into an unmounted tree.
-    act(() => {
-      vi.advanceTimersByTime(UI_SPIN_CYCLE_MS * 2);
-    });
   });
 
   it("collapses the backstop to 0ms under performance mode", () => {

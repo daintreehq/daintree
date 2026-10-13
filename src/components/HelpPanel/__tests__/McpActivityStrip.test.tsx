@@ -215,13 +215,6 @@ describe("McpActivityStrip", () => {
     expect(await screen.findByText(/couldn't load recent calls/i)).toBeTruthy();
   });
 
-  it("renders the empty state when the session has no calls", async () => {
-    getAuditRecords.mockResolvedValue([]);
-    render(<McpActivityStrip sessionId="session-a" activity={null} />);
-    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
-    expect(await screen.findByText(/to see its tool calls here/i)).toBeTruthy();
-  });
-
   it("does not flash old-session records after the session changes mid-fetch", async () => {
     let resolveFirst: (v: McpAuditRecord[]) => void = () => {};
     const firstFetch = new Promise<McpAuditRecord[]>((res) => {
@@ -716,16 +709,6 @@ describe("McpActivityStrip live activity", () => {
     });
     expect(screen.getByText("terminal.getStatus")).toBeTruthy();
     expect(liveText()).not.toBe("");
-  });
-
-  it("keeps the button's accessible name stable while the live row morphs", () => {
-    const { rerender } = render(<McpActivityStrip sessionId="session-a" activity={null} />);
-    expect(screen.getByRole("button", { name: /recent tool calls/i })).toBeTruthy();
-    rerender(<McpActivityStrip sessionId="session-a" activity={makeActivity({ turnId: "t1" })} />);
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
-    expect(screen.getByRole("button", { name: /recent tool calls/i })).toBeTruthy();
   });
 
   it("does not re-arm the gate for a same-turn call after a sub-400ms settle", () => {

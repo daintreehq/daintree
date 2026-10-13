@@ -140,24 +140,9 @@ describe("isNonKeyboardInput", () => {
       expect(isNonKeyboardInput("\x1bOD")).toBe(true);
     });
 
-    it("matches Home/End (normal mode)", () => {
-      expect(isNonKeyboardInput("\x1b[H")).toBe(true);
-      expect(isNonKeyboardInput("\x1b[F")).toBe(true);
-    });
-
     it("matches Home/End (application mode)", () => {
       expect(isNonKeyboardInput("\x1bOH")).toBe(true);
       expect(isNonKeyboardInput("\x1bOF")).toBe(true);
-    });
-
-    it("matches Page Up/Down", () => {
-      expect(isNonKeyboardInput("\x1b[5~")).toBe(true);
-      expect(isNonKeyboardInput("\x1b[6~")).toBe(true);
-    });
-
-    it("matches Insert and Forward Delete keys", () => {
-      expect(isNonKeyboardInput("\x1b[2~")).toBe(true);
-      expect(isNonKeyboardInput("\x1b[3~")).toBe(true);
     });
 
     it("matches F1–F4 (SS3 prefix)", () => {

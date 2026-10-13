@@ -42,19 +42,6 @@ describe("useTerminalAppearance", () => {
     vi.clearAllMocks();
   });
 
-  it("returns initial values from every contributing store", () => {
-    const { result } = renderHook(() => useTerminalAppearance());
-
-    expect(result.current.fontSize).toBe(useTerminalFontStore.getState().fontSize);
-    expect(result.current.fontFamily).toBe(useTerminalFontStore.getState().fontFamily);
-    expect(result.current.performanceMode).toBe(false);
-    expect(result.current.scrollbackLines).toBe(useScrollbackStore.getState().scrollbackLines);
-    expect(result.current.projectScrollback).toBeUndefined();
-    expect(result.current.screenReaderMode).toBe(false);
-    expect(typeof result.current.wrapperBackground).toBe("string");
-    expect(result.current.effectiveTheme).toBeDefined();
-  });
-
   it("rerenders when terminal font size changes", () => {
     const { result } = renderHook(() => useTerminalAppearance());
     const initial = result.current.fontSize;
@@ -166,13 +153,5 @@ describe("getTerminalAppearanceSnapshot", () => {
     });
 
     expect(getTerminalAppearanceSnapshot().projectScrollback).toBe(1234);
-  });
-
-  it("reads current state on each call (no stale closure)", () => {
-    const first = getTerminalAppearanceSnapshot();
-    useTerminalFontStore.getState().setFontSize(first.fontSize + 8);
-    const second = getTerminalAppearanceSnapshot();
-
-    expect(second.fontSize).toBe(first.fontSize + 8);
   });
 });

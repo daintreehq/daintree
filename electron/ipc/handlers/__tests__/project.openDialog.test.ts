@@ -175,15 +175,4 @@ describe("handleProjectOpenDialog", () => {
     const result = await handler({ sender: { id: 10 } });
     expect(result).toBeNull();
   });
-
-  it("returns the first file path on success", async () => {
-    mockGetWindowForWebContents.mockReturnValue({ id: 1 });
-    (dialog.showOpenDialog as ReturnType<typeof vi.fn>).mockResolvedValue({
-      canceled: false,
-      filePaths: ["/first/path", "/second/path"],
-    });
-
-    const result = await handler({ sender: { id: 10 } });
-    expect(result).toBe("/first/path");
-  });
 });

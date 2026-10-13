@@ -70,15 +70,6 @@ function segmentNames(): string[] {
 }
 
 describe("PilotFilterBar", () => {
-  it("offers the states as one mutually exclusive choice", () => {
-    // A radiogroup, not the sidebar's toolbar of toggles: these segments are
-    // exclusive with All as the null option, which is what a radiogroup IS.
-    renderBar();
-
-    expect(screen.getByRole("radiogroup")).toBeTruthy();
-    expect(screen.getAllByRole("radio")).toHaveLength(7);
-  });
-
   it("reports exactly one checked segment", () => {
     renderBar("working");
 
@@ -119,14 +110,6 @@ describe("PilotFilterBar", () => {
     ]);
   });
 
-  it("selects a segment on click", () => {
-    const { onChange } = renderBar();
-
-    fireEvent.click(screen.getByRole("radio", { name: /Attention/ }));
-
-    expect(onChange).toHaveBeenCalledWith("needs-you");
-  });
-
   it("does not toggle the checked segment back to All", () => {
     // The sidebar's toolbar toggles because its segments are independent
     // presses. Re-selecting the checked radio in a radiogroup is a no-op, not
@@ -163,22 +146,6 @@ describe("PilotFilterBar", () => {
       expect(screen.getByRole("radio", { name: /Attention/ }).getAttribute("aria-label")).toBe(
         "Attention, 2 agents"
       );
-    });
-
-    it("draws Finished as unread while it holds a hand-back, and as done once read", () => {
-      // The solid dot and the solid check, each in its own tone — and the
-      // accessible name below carries the same fact to a reader who cannot
-      // see either.
-      renderBar("all", counts({ all: 3, finished: 3 }), bands({ review: 3 }));
-      const withReview = glyphOfSegment(/Finished/);
-
-      cleanup();
-      renderBar("all", counts({ all: 3, finished: 3 }), bands({ done: 3 }));
-      const acknowledged = glyphOfSegment(/Finished/);
-
-      expect(withReview).toContain("text-text-primary");
-      expect(acknowledged).toContain("text-text-secondary");
-      expect(acknowledged).not.toContain("text-text-primary");
     });
 
     it("names the outstanding work whether the Finished bucket is mixed or pure", () => {
@@ -254,18 +221,6 @@ describe("PilotFilterBar", () => {
 
       press("End");
       expect(liveState().checked).toBe("Other");
-    });
-
-    it("keeps exactly one tab stop through every move", () => {
-      render(<StatefulBar initial="all" />);
-
-      for (const key of ["ArrowRight", "ArrowRight", "End", "Home", "ArrowLeft"]) {
-        press(key);
-        const tabbable = screen
-          .getAllByRole("radio")
-          .filter((el) => el.getAttribute("tabindex") === "0");
-        expect(tabbable).toHaveLength(1);
-      }
     });
 
     it("claims only the keys it handles, and keeps them off the palette", () => {

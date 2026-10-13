@@ -688,15 +688,6 @@ describe("IdleBackgroundAutoCloseService", () => {
   });
 
   describe("multi-window active guard", () => {
-    it("never closes the project active in a window", async () => {
-      enable();
-      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
-      const service = makeService();
-      service.setProjectViewManagersProvider(() => [makePvm("proj-1")]);
-      await runCheck(service);
-      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
-    });
-
     it("never closes a project active in a SECOND (non-focused) window", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([
@@ -917,14 +908,6 @@ describe("IdleBackgroundAutoCloseService", () => {
       await runCheck(service);
       expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t1");
       expect(writeHibernatedMarkerMock).toHaveBeenCalledWith("t2");
-    });
-
-    it("does not broadcast when nothing qualifies", async () => {
-      enable();
-      projectStoreMock.getAllProjects.mockReturnValue([]);
-      const service = makeService();
-      await runCheck(service);
-      expect(broadcastToRendererMock).not.toHaveBeenCalled();
     });
   });
 

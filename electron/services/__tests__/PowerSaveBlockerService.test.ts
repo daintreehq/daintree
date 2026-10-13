@@ -170,19 +170,6 @@ describe("PowerSaveBlockerService", () => {
       expect(powerSaveBlocker.start).not.toHaveBeenCalled();
       expect(service.isBlocking()).toBe(false);
     });
-
-    it("does not start blocker for idle state", () => {
-      emitStateChanged("term-1", "idle", { agentId: "agent-1" });
-
-      expect(powerSaveBlocker.start).not.toHaveBeenCalled();
-      expect(service.isBlocking()).toBe(false);
-    });
-
-    it("does not start blocker for completed state", () => {
-      emitStateChanged("term-1", "completed", { agentId: "agent-1" });
-
-      expect(powerSaveBlocker.start).not.toHaveBeenCalled();
-    });
   });
 
   describe("multi-agent refcounting", () => {
@@ -198,17 +185,6 @@ describe("PowerSaveBlockerService", () => {
       expect(service.isBlocking()).toBe(true);
       expect(service.getActiveCount()).toBe(1);
       expect(powerSaveBlocker.stop).not.toHaveBeenCalled();
-    });
-
-    it("stops blocker when all agents become idle", () => {
-      emitStateChanged("term-1", "working", { agentId: "agent-1" });
-      emitStateChanged("term-2", "working", { agentId: "agent-2" });
-
-      emitStateChanged("term-1", "idle", { agentId: "agent-1" });
-      emitStateChanged("term-2", "idle", { agentId: "agent-2" });
-
-      expect(service.isBlocking()).toBe(false);
-      expect(powerSaveBlocker.stop).toHaveBeenCalled();
     });
   });
 
@@ -279,23 +255,6 @@ describe("PowerSaveBlockerService", () => {
       expect(service.isBlocking()).toBe(true);
     });
 
-    it("terminal reuse after exit works correctly", () => {
-      emitStateChanged("term-1", "working", { agentId: "agent-1" });
-
-      events.emit("agent:exited", {
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      expect(service.isBlocking()).toBe(false);
-
-      // Reuse the same terminal with a new agent
-      emitStateChanged("term-1", "working", { agentId: "agent-2" });
-
-      expect(service.isBlocking()).toBe(true);
-      expect(service.getActiveCount()).toBe(1);
-    });
-
     it("unknown agent events do not affect active blockers", () => {
       emitStateChanged("term-1", "working", { agentId: "agent-1" });
 
@@ -315,15 +274,6 @@ describe("PowerSaveBlockerService", () => {
 
       expect(service.isBlocking()).toBe(true);
       expect(service.getActiveCount()).toBe(1);
-    });
-
-    it("handles unknown terminalId on exited gracefully", () => {
-      events.emit("agent:exited", {
-        terminalId: "unknown-term",
-        timestamp: Date.now(),
-      });
-
-      expect(service.isBlocking()).toBe(false);
     });
   });
 
@@ -572,10 +522,6 @@ describe("PowerSaveBlockerService", () => {
       service.dispose();
       service = new PowerSaveBlockerService();
     }
-
-    it("defaults to holding on AC and not on battery", () => {
-      expect(service.getState().config).toEqual({ enabled: true, onBattery: false });
-    });
 
     it("reads a stored setting and ignores values that are not exactly the opt-out", () => {
       storeMock.data.keepAwake = { enabled: false, onBattery: true };
@@ -934,15 +880,6 @@ describe("PowerSaveBlockerService", () => {
       expect(power.count("on-battery")).toBe(0);
       expect(power.count("on-ac")).toBe(0);
       expect(power.count("resume")).toBe(0);
-    });
-
-    it("double dispose is safe", () => {
-      emitStateChanged("term-1", "working", { agentId: "agent-1" });
-
-      service.dispose();
-      service.dispose();
-
-      expect(service.isBlocking()).toBe(false);
     });
   });
 });

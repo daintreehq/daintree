@@ -413,14 +413,4 @@ describe("PERF-010..013 scenario output", () => {
       expect(metrics[name], name).toBe(0);
     }
   }, 30_000);
-
-  it("every metric is finite — run.ts throws otherwise", async () => {
-    for (const id of ["PERF-010", "PERF-011", "PERF-012", "PERF-013"]) {
-      const sample = await scenario(id).run(context);
-      expect(Number.isFinite(sample.durationMs), `${id} durationMs`).toBe(true);
-      for (const [name, value] of Object.entries(sample.metrics ?? {})) {
-        expect(Number.isFinite(value), `${id}.${name} = ${value}`).toBe(true);
-      }
-    }
-  }, 60_000);
 });

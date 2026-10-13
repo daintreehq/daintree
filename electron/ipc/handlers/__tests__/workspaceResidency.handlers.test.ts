@@ -41,15 +41,6 @@ afterEach(() => {
 });
 
 describe("workspace residency IPC (#12313)", () => {
-  it("reads the grant for a workspace", async () => {
-    residencyMock.isWorkspaceKeepResident.mockReturnValue(true);
-
-    const result = await getHandler("workspace-residency:get")(EVENT, { workspaceId: WORKSPACE });
-
-    expect(residencyMock.isWorkspaceKeepResident).toHaveBeenCalledWith(WORKSPACE);
-    expect(result).toBe(true);
-  });
-
   it("writes both directions of the grant", async () => {
     const set = getHandler("workspace-residency:set");
 
@@ -74,14 +65,5 @@ describe("workspace residency IPC (#12313)", () => {
     );
 
     expect(residencyMock.setWorkspaceKeepResident).not.toHaveBeenCalled();
-  });
-
-  it("removes its handlers on dispose", () => {
-    dispose();
-    const removed = vi.mocked(ipcMain.removeHandler).mock.calls.map(([ch]) => ch);
-    expect(removed).toContain("workspace-residency:get");
-    expect(removed).toContain("workspace-residency:set");
-    // Re-registering in afterEach's dispose must stay safe.
-    dispose = () => {};
   });
 });

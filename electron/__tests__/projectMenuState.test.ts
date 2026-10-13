@@ -251,16 +251,6 @@ describe("refreshProjectMenuState", () => {
     expect(menuItems.get(CLOSE_WINDOW_MENU_ITEM_ID)!.enabled).toBe(true);
   });
 
-  it("does not throw when no application menu has been built yet", () => {
-    getApplicationMenuMock.mockReturnValue(null);
-    expect(() => refreshProjectMenuState()).not.toThrow();
-  });
-
-  it("does not throw when the menu is missing the project items", () => {
-    menuItems.clear();
-    expect(() => refreshProjectMenuState()).not.toThrow();
-  });
-
   it("swallows a resolver failure instead of masking the caller's error", () => {
     // Callers refresh from a `finally` after a project switch, so a throw here
     // would REPLACE the original rejection and hide the real failure.

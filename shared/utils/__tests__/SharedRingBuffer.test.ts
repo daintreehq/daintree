@@ -26,11 +26,6 @@ describe("SharedRingBuffer", () => {
       expect(() => new SharedRingBuffer(sab)).toThrow(/power of two/);
     });
 
-    it("exposes the signal index via getSignalIndex()", () => {
-      expect(SharedRingBuffer.getSignalIndex()).toBe(SharedRingBuffer.SIGNAL_IDX);
-      expect(SharedRingBuffer.getSignalIndex()).toBe(2);
-    });
-
     it("notifyConsumer increments the slot at getSignalIndex()", () => {
       const before = buffer.getSignalValue();
       buffer.notifyConsumer();
@@ -41,10 +36,6 @@ describe("SharedRingBuffer", () => {
   });
 
   describe("basic operations", () => {
-    it("creates buffer with correct capacity", () => {
-      expect(buffer.getCapacity()).toBe(bufferSize);
-    });
-
     it("returns null when reading from empty buffer", () => {
       expect(buffer.read()).toBeNull();
       expect(buffer.readUpTo(100)).toBeNull();

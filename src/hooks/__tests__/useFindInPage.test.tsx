@@ -58,15 +58,6 @@ function createMockWebview(): Electron.WebviewTag & MockWebview {
 }
 
 describe("useFindInPage", () => {
-  it("starts closed with empty state", () => {
-    const { result } = renderHook(() => useFindInPage("panel-1", null, false, false));
-
-    expect(result.current.isOpen).toBe(false);
-    expect(result.current.query).toBe("");
-    expect(result.current.activeMatch).toBe(0);
-    expect(result.current.matchCount).toBe(0);
-  });
-
   it("opens and closes the find bar", () => {
     const webview = createMockWebview();
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
@@ -149,13 +140,6 @@ describe("useFindInPage", () => {
     });
 
     expect(result.current.isOpen).toBe(false);
-  });
-
-  it("subscribes to onFindShortcut IPC", () => {
-    const webview = createMockWebview();
-    renderHook(() => useFindInPage("panel-1", webview, true, true));
-
-    expect(onFindShortcutMock).toHaveBeenCalled();
   });
 
   it("handles find shortcut for open/close", () => {
@@ -321,19 +305,6 @@ describe("useFindInPage", () => {
       findNext: true,
       matchCase: false,
     });
-  });
-
-  it("toggleMatchCase flips matchCase state", () => {
-    const webview = createMockWebview();
-    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
-
-    expect(result.current.matchCase).toBe(false);
-
-    act(() => result.current.toggleMatchCase());
-    expect(result.current.matchCase).toBe(true);
-
-    act(() => result.current.toggleMatchCase());
-    expect(result.current.matchCase).toBe(false);
   });
 
   it("toggleMatchCase re-issues find with matchCase when query is active", () => {

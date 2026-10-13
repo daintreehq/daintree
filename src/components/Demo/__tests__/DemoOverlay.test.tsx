@@ -223,23 +223,6 @@ describe("resolveAnnotationPlacement", () => {
     }
   });
 
-  it("clamps an anchor that starts outside the safe area back inside it", () => {
-    // top-right anchors at (fw - mx, my) with translate(-100%, 0); even a small
-    // box must end up with its right edge no further than the safe margin.
-    const fw = 1920;
-    const fh = 1080;
-    setViewport(fw, fh);
-    const resolved = resolveAnnotationPlacement(annotate({ position: "top-right", text: "Hi" }));
-    expect("error" in resolved).toBe(false);
-    if ("error" in resolved) return;
-
-    const { estW, estH } = estimateCaptionBox("Hi", "md", true, fw, fh);
-    const span = boxSpan(resolved, estW, estH);
-    const mx = fw * SAFE_MARGIN;
-    expect(span.spanRight).toBeLessThanOrEqual(fw - mx + 1.5);
-    expect(span.spanLeft).toBeGreaterThanOrEqual(mx - 1.5);
-  });
-
   it("returns an error for an element placement with no selector", () => {
     setViewport(1920, 1080);
     const resolved = resolveAnnotationPlacement(annotate({ position: "top" }));

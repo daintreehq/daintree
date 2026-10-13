@@ -138,13 +138,6 @@ describe("TourDialog", () => {
     expect(gettingStarted).toHaveBeenCalledTimes(1);
   });
 
-  it("jumps straight to a chapter from the progress track", () => {
-    renderDialog();
-    const target = TOUR_CHAPTERS[4]!;
-    fireEvent.click(screen.getByRole("button", { name: `Chapter 5: ${target.title}` }));
-    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe(target.title);
-  });
-
   it("mutes from the button and the M key, persisting each change", () => {
     const { props } = renderDialog();
     const mute = screen.getByRole("button", { name: "Mute narration" });

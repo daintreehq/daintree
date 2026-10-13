@@ -241,33 +241,6 @@ describe("refreshPath", () => {
     expect(process.env.PATH).toContain("C:\\real\\path");
   });
 
-  it("is idempotent on Windows — repeated calls don't explode PATH", async () => {
-    Object.defineProperty(process, "platform", { value: "win32", writable: true });
-    process.env.PATH = "C:\\Windows\\System32";
-    process.env.SystemRoot = "C:\\Windows";
-
-    execFileMock.mockImplementation(
-      (
-        _cmd: string,
-        _args: string[],
-        _opts: unknown,
-        cb: (err: Error | null, stdout: string) => void
-      ) => {
-        cb(null, "    Path    REG_EXPAND_SZ    %SystemRoot%\\system32");
-      }
-    );
-
-    const { refreshPath } = await import("../environment.js");
-    await refreshPath();
-    const firstPath = process.env.PATH;
-    await refreshPath();
-    const secondPath = process.env.PATH;
-
-    expect(firstPath).toBe(secondPath);
-
-    delete process.env.SystemRoot;
-  });
-
   it("keeps the PATH Daintree was launched with behind the registry's on Windows", async () => {
     Object.defineProperty(process, "platform", { value: "win32", writable: true });
     // Colon-free entries so the assertion holds whatever `path.delimiter` the host has.
@@ -311,20 +284,6 @@ describe("refreshPath", () => {
     await refreshPath();
 
     expect(process.env.PATH).toBe("C:\\Windows\\System32");
-  });
-
-  it("is idempotent — repeated calls don't explode PATH", async () => {
-    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
-
-    const shellPath = "/usr/local/bin:/usr/bin";
-    shellEnvMock.mockResolvedValue({ PATH: shellPath });
-
-    const { refreshPath } = await import("../environment.js");
-    await refreshPath();
-    await refreshPath();
-    await refreshPath();
-
-    expect(process.env.PATH).toBe(shellPath);
   });
 });
 

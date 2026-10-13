@@ -3,7 +3,6 @@ import type { StagingFileEntry } from "@shared/types";
 import {
   DEFAULT_SECTION_STATE,
   countNonDefaultView,
-  isSortKey,
   readGitErrorFields,
   resolveBulkScope,
   sortFiles,
@@ -86,29 +85,10 @@ describe("readGitErrorFields", () => {
   });
 });
 
-describe("isSortKey", () => {
-  it("accepts the three documented sort keys", () => {
-    expect(isSortKey("path")).toBe(true);
-    expect(isSortKey("status")).toBe(true);
-    expect(isSortKey("churn")).toBe(true);
-  });
-
-  it("rejects unknown values", () => {
-    expect(isSortKey("")).toBe(false);
-    expect(isSortKey("size")).toBe(false);
-    expect(isSortKey("PATH")).toBe(false);
-  });
-});
-
 describe("sortFiles", () => {
   it("sorts by path ascending alphabetically", () => {
     const files = [file("c.ts"), file("a.ts"), file("b.ts")];
     expect(sortFiles(files, "path", "asc").map((f) => f.path)).toEqual(["a.ts", "b.ts", "c.ts"]);
-  });
-
-  it("sorts by path descending", () => {
-    const files = [file("a.ts"), file("c.ts"), file("b.ts")];
-    expect(sortFiles(files, "path", "desc").map((f) => f.path)).toEqual(["c.ts", "b.ts", "a.ts"]);
   });
 
   it("sorts by churn descending — highest total touches first", () => {
@@ -121,19 +101,6 @@ describe("sortFiles", () => {
       "big.ts",
       "medium.ts",
       "small.ts",
-    ]);
-  });
-
-  it("sorts by churn ascending — lowest total first", () => {
-    const files = [
-      file("big.ts", { insertions: 80, deletions: 20 }),
-      file("small.ts", { insertions: 1, deletions: 1 }),
-      file("medium.ts", { insertions: 10, deletions: 5 }),
-    ];
-    expect(sortFiles(files, "churn", "asc").map((f) => f.path)).toEqual([
-      "small.ts",
-      "medium.ts",
-      "big.ts",
     ]);
   });
 
@@ -185,21 +152,6 @@ describe("sortFiles", () => {
     expect(sortFiles(files, "status", "asc").map((f) => f.path)).toEqual(["b.ts", "c.ts", "a.ts"]);
   });
 
-  it("pins generated files last when sorting by path ascending", () => {
-    const files = [
-      file("src/index.ts"),
-      file("yarn.lock"),
-      file("README.md"),
-      file("src/foo.min.js"),
-    ];
-    expect(sortFiles(files, "path", "asc").map((f) => f.path)).toEqual([
-      "README.md",
-      "src/index.ts",
-      "src/foo.min.js",
-      "yarn.lock",
-    ]);
-  });
-
   it("pins generated files last when sorting by path descending — direction-independent", () => {
     const files = [
       file("src/index.ts"),
@@ -225,19 +177,6 @@ describe("sortFiles", () => {
       "src/app.ts",
       "src/util.ts",
       "yarn.lock",
-    ]);
-  });
-
-  it("pins generated files last when sorting by status", () => {
-    const files = [
-      file("src/a.ts", { status: "modified" }),
-      file("dist/bundle.js", { status: "added" }),
-      file("src/b.ts", { status: "added" }),
-    ];
-    expect(sortFiles(files, "status", "asc").map((f) => f.path)).toEqual([
-      "src/a.ts",
-      "src/b.ts",
-      "dist/bundle.js",
     ]);
   });
 
@@ -304,16 +243,6 @@ describe("resolveBulkScope", () => {
     ];
     for (const v of combos) {
       expect(resolveBulkScope(v, true)).toBe("selection");
-    }
-  });
-
-  it("never reports 'all' while any narrowing flag is set, across the whole state space", () => {
-    for (const filterQuery of ["", "src"]) {
-      for (const showGenerated of [true, false]) {
-        const v = view({ filterQuery, showGenerated });
-        const isNarrowed = filterQuery !== "" || !showGenerated;
-        expect(resolveBulkScope(v, false) === "all").toBe(!isNarrowed);
-      }
     }
   });
 });

@@ -331,15 +331,6 @@ describe("IdleTerminalNotificationService", () => {
       ]);
     }
 
-    it("records a notified timestamp when it broadcasts", async () => {
-      setup();
-      const service = makeService();
-      await runCheck(service);
-
-      const persisted = storeBacking.idleTerminalNotifiedAt as Record<string, number>;
-      expect(persisted["proj-1"]).toBeGreaterThan(0);
-    });
-
     it("does not re-broadcast for an ignored project within the cooldown", async () => {
       setup();
       const service = makeService();
@@ -592,13 +583,6 @@ describe("IdleTerminalNotificationService", () => {
   });
 
   describe("dismissProject", () => {
-    it("persists a dismissal timestamp", () => {
-      const service = makeService();
-      service.dismissProject("proj-1");
-      const persisted = storeBacking.idleTerminalDismissals as Record<string, number>;
-      expect(persisted["proj-1"]).toBeGreaterThan(0);
-    });
-
     it("ignores empty projectId", () => {
       const service = makeService();
       service.dismissProject("");

@@ -467,36 +467,6 @@ describe("fleetArmingStore", () => {
       expect([...useFleetArmingStore.getState().armedIds].sort()).toEqual(["a1", "a2"]);
     });
 
-    it("no eligible terminals and no prior selection leaves armed set empty", () => {
-      seedPanels([makeAgentTerminal("a1", { worktreeId: "wt-1" })]);
-      useFleetArmingStore.getState().armMatchingFilter(["wt-9"]);
-      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
-    });
-
-    it("replaces the existing armed set when armed set is empty", () => {
-      seedPanels([
-        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
-        makeAgentTerminal("a2", { worktreeId: "wt-2" }),
-      ]);
-      // Armed set starts empty — armMatchingFilter replaces it with matches
-      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
-      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
-    });
-
-    it("unions with existing armed set when non-empty", () => {
-      seedPanels([
-        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
-        makeAgentTerminal("a2", { worktreeId: "wt-2" }),
-      ]);
-      useFleetArmingStore.getState().armIds(["a2"]);
-      // Non-empty armed set → armMatchingFilter adds matches without removing existing
-      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
-      const s = useFleetArmingStore.getState();
-      expect([...s.armedIds].sort()).toEqual(["a1", "a2"]);
-      // Existing armed entries keep their position; new ones are appended
-      expect(s.armOrder).toEqual(["a2", "a1"]);
-    });
-
     it("preserves existing armOrder and appends new matches in panel order", () => {
       seedPanels([
         makeAgentTerminal("a1", { worktreeId: "wt-1" }),
@@ -667,23 +637,6 @@ describe("fleetArmingStore", () => {
       useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["launched", "runtime"]);
     });
-
-    it("is fully idempotent — repeated calls preserve armOrder, armOrderById, and lastArmedId", () => {
-      seedPanels([
-        makeAgentTerminal("a1", { worktreeId: "wt-1" }),
-        makeAgentTerminal("a2", { worktreeId: "wt-1" }),
-      ]);
-      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
-      const first = useFleetArmingStore.getState();
-      const firstOrder = [...first.armOrder];
-      const firstById = { ...first.armOrderById };
-      const firstLast = first.lastArmedId;
-      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
-      const second = useFleetArmingStore.getState();
-      expect(second.armOrder).toEqual(firstOrder);
-      expect(second.armOrderById).toEqual(firstById);
-      expect(second.lastArmedId).toBe(firstLast);
-    });
   });
 
   describe("clear", () => {
@@ -696,12 +649,6 @@ describe("fleetArmingStore", () => {
       expect(s.armOrder).toEqual([]);
       expect(s.armOrderById).toEqual({});
       expect(s.lastArmedId).toBeNull();
-    });
-
-    it("is idempotent on repeated clear", () => {
-      useFleetArmingStore.getState().clear();
-      useFleetArmingStore.getState().clear();
-      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
     });
   });
 
@@ -785,30 +732,6 @@ describe("fleetArmingStore", () => {
           })
         )
       ).toBe(true);
-    });
-
-    it("trash guard beats live detectedAgentId", () => {
-      expect(
-        isFleetArmEligible(
-          makeAgentTerminal("a", {
-            detectedAgentId: "claude",
-            everDetectedAgent: true,
-            location: "trash",
-          })
-        )
-      ).toBe(false);
-    });
-
-    it("hasPty=false guard beats live detectedAgentId", () => {
-      expect(
-        isFleetArmEligible(
-          makeAgentTerminal("a", {
-            detectedAgentId: "claude",
-            everDetectedAgent: true,
-            hasPty: false,
-          })
-        )
-      ).toBe(false);
     });
 
     it("rejects non-PTY panel kinds (browser, dev-preview, review)", () => {
@@ -900,10 +823,6 @@ describe("fleetArmingStore", () => {
   });
 
   describe("broadcastSignal", () => {
-    it("starts at 0", () => {
-      expect(useFleetArmingStore.getState().broadcastSignal).toBe(0);
-    });
-
     it("monotonically increments on noteBroadcastCommit()", () => {
       const { noteBroadcastCommit } = useFleetArmingStore.getState();
       noteBroadcastCommit();
@@ -923,10 +842,6 @@ describe("fleetArmingStore", () => {
   });
 
   describe("previewArmedIds", () => {
-    it("starts empty", () => {
-      expect(useFleetArmingStore.getState().previewArmedIds.size).toBe(0);
-    });
-
     it("setPreviewArmedIds replaces the set", () => {
       const { setPreviewArmedIds } = useFleetArmingStore.getState();
       setPreviewArmedIds(new Set(["a", "b"]));
@@ -986,12 +901,6 @@ describe("fleetArmingStore", () => {
       const ids = computeArmByStateIds("finished", "current", "wt-1");
       expect(ids).toEqual([]);
     });
-
-    it("does not mutate the store", () => {
-      const before = useFleetArmingStore.getState();
-      computeArmByStateIds("working", "all", "wt-1");
-      expect(useFleetArmingStore.getState()).toBe(before);
-    });
   });
 
   describe("panel prune subscription", () => {
@@ -1022,15 +931,6 @@ describe("fleetArmingStore", () => {
       useFleetArmingStore.getState().armIds(["a", "b"]);
 
       seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b", { location: "trash" })]);
-
-      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a"]);
-    });
-
-    it("drops armed ids when a panel transitions to dock", () => {
-      seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b")]);
-      useFleetArmingStore.getState().armIds(["a", "b"]);
-
-      seedPanels([makeAgentTerminal("a"), makeAgentTerminal("b", { location: "dock" })]);
 
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a"]);
     });

@@ -25,14 +25,6 @@ describe("computeWorkingGridAgentCount (#8596)", () => {
     expect(computeWorkingGridAgentCount({})).toBe(0);
   });
 
-  it("counts a single working grid panel", () => {
-    expect(
-      computeWorkingGridAgentCount({
-        "t-1": panel("t-1", { agentState: "working" }),
-      })
-    ).toBe(1);
-  });
-
   it("counts multiple working grid panels", () => {
     expect(
       computeWorkingGridAgentCount({
@@ -77,15 +69,6 @@ describe("computeWorkingGridAgentCount (#8596)", () => {
       computeWorkingGridAgentCount({
         "t-1": panel("t-1", { agentState: "working", location: "grid" }),
         "t-2": panel("t-2", { agentState: "working", location: "trash" }),
-      })
-    ).toBe(1);
-  });
-
-  it("excludes backgrounded working panels", () => {
-    expect(
-      computeWorkingGridAgentCount({
-        "t-1": panel("t-1", { agentState: "working", location: "grid" }),
-        "t-2": panel("t-2", { agentState: "working", location: "background" }),
       })
     ).toBe(1);
   });

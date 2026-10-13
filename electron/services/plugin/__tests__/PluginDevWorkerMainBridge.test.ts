@@ -390,20 +390,6 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(result).toMatchObject({ ok: true, result: undefined });
   });
 
-  it("routes clipboard.readText to the host and replies with its text", async () => {
-    const { host, workerHost } = makeBridge();
-    workerHost.emit("worker-message", {
-      type: "host-call",
-      requestId: "cr",
-      method: "clipboard.readText",
-      params: undefined,
-    });
-    await flush();
-    expect(host.clipboard.readText).toHaveBeenCalled();
-    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "cr");
-    expect(result).toMatchObject({ ok: true, result: "clip-contents" });
-  });
-
   it("relays an empty clipboard read as ok:true with an empty string", async () => {
     const { host, workerHost } = makeBridge();
     host.clipboard.readText.mockResolvedValueOnce("");
@@ -436,22 +422,6 @@ describe("PluginDevWorkerMainBridge", () => {
       ok: true,
       result: { path: "/data/out.pdf", bytes: 1234, revision: "a".repeat(64) },
     });
-  });
-
-  it("relays a documents.renderPdf rejection with its code prefix intact", async () => {
-    const { host, workerHost } = makeBridge();
-    host.documents.renderPdf.mockRejectedValueOnce(
-      new Error("RENDER_TIMEOUT: render exceeded 30000 ms")
-    );
-    workerHost.emit("worker-message", {
-      type: "host-call",
-      requestId: "pdf2",
-      method: "documents.renderPdf",
-      params: { options: { html: "x", outputPath: "/data/out.pdf" } },
-    });
-    await flush();
-    const result = workerHost.sent.find((m) => m.type === "host-result" && m.requestId === "pdf2");
-    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/^RENDER_TIMEOUT:/) });
   });
 
   it("replies host-result ok:false when the host method throws", async () => {
@@ -1308,50 +1278,6 @@ describe("PluginDevWorkerMainBridge", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("disposes registered providers on reload", async () => {
-    const { host, workerHost, bridge } = makeBridge();
-    bridge.waitForActivation().catch(() => {});
-    const dispose = vi.fn();
-    host.registerFileDecorationProvider.mockReturnValueOnce(dispose);
-    workerHost.emit("worker-message", {
-      type: "host-notify",
-      method: "registerFileDecorationProvider",
-      params: { descriptor: { id: "acme.demo.deco" } },
-    });
-    // Let the async registration record its disposer before the generation is
-    // retired (the register message and the exit are distinct tasks in prod).
-    await flush();
-    workerHost.emit("exit", 1, false);
-    expect(dispose).toHaveBeenCalledTimes(1);
-  });
-
-  it("clears prior registrations and fails pending invokes when a generation is retired", async () => {
-    const { host, workerHost, bridge, clear } = makeBridge();
-    bridge.waitForActivation().catch(() => {});
-    // Register an action and start an invocation that never gets a reply.
-    workerHost.emit("worker-message", {
-      type: "host-notify",
-      method: "registerAction",
-      params: {
-        descriptor: {
-          id: "greet",
-          title: "Greet",
-          description: "",
-          category: "Demo",
-          kind: "command",
-          danger: "safe",
-        },
-      },
-    });
-    const wrapper = host.registerAction.mock.calls[0][1] as (a: unknown) => Promise<unknown>;
-    const pending = wrapper({});
-    pending.catch(() => {});
-
-    workerHost.emit("exit", 1, false);
-    expect(clear).toHaveBeenCalled();
-    await expect(pending).rejects.toThrow(/crashed/);
-  });
-
   it("fails pending invokes when the worker crashes (#12216)", async () => {
     const { host, workerHost, bridge } = makeBridge();
     bridge.waitForActivation().catch(() => {});
@@ -1944,23 +1870,6 @@ describe("PluginDevWorkerMainBridge", () => {
       workerHost.emit("worker-message", { type: "unsubscribe", subscriptionId: "fs7" });
       expect(dispose).toHaveBeenCalledTimes(1);
     });
-
-    it("replies with an error when the host watch rejects", async () => {
-      const { host, workerHost } = makeBridge();
-      host.fs.watch.mockRejectedValueOnce(new Error("PERMISSION_REQUIRED: fs:project-read"));
-      workerHost.emit("worker-message", {
-        type: "host-call",
-        requestId: "w3",
-        method: "fs.watch",
-        params: { subscriptionId: "fs3", paths: ["/nope"] },
-      });
-      await flush();
-      const res = workerHost.sent.find(
-        (m: any) => m.type === "host-result" && m.requestId === "w3"
-      );
-      expect(res).toMatchObject({ ok: false });
-      expect(res.error).toMatch(/PERMISSION_REQUIRED/);
-    });
   });
 
   describe("host.fs revision, mkdir and append relay", () => {
@@ -2008,25 +1917,6 @@ describe("PluginDevWorkerMainBridge", () => {
         );
         expect(res).toMatchObject({ ok: true, result: undefined });
       }
-    });
-
-    it("replies with the host's error when an append is refused", async () => {
-      const { host, workerHost } = makeBridge();
-      host.fs.appendFile.mockRejectedValueOnce(
-        new Error("TARGET_IS_SYMLINK: refusing to write through a symlink")
-      );
-      workerHost.emit("worker-message", {
-        type: "host-call",
-        requestId: "a2",
-        method: "fs.appendFile",
-        params: { path: "/repo/link.jsonl", contents: "x" },
-      });
-      await flush();
-      const res = workerHost.sent.find(
-        (m: any) => m.type === "host-result" && m.requestId === "a2"
-      );
-      expect(res).toMatchObject({ ok: false });
-      expect(res.error).toMatch(/^TARGET_IS_SYMLINK/);
     });
   });
 

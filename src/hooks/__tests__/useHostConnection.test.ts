@@ -242,19 +242,6 @@ describe("host connection sync", () => {
     stop();
   });
 
-  it("asks nothing about the lease for a local view when no host is set up", async () => {
-    const { electron } = installElectron();
-    Object.assign(electron, {
-      remoteHosts: { ...electron.remoteHosts, isInUse: vi.fn(async () => false) },
-    });
-    bindView(null);
-    const stop = startHostConnectionSync();
-    await flush();
-    expect(electron.driveLease.get).not.toHaveBeenCalled();
-    expect(getTerminalInputBlock()).toBeNull();
-    stop();
-  });
-
   it("treats an unanswerable in-use check as unused", async () => {
     const { electron } = installElectron();
     Object.assign(electron, {

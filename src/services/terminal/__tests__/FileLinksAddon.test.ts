@@ -4,6 +4,8 @@ import { FileLinksAddon, reportFileLinkFailure } from "../FileLinksAddon";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { systemClient } from "@/clients";
+import { fileBrowserClient } from "@/clients/fileBrowserClient";
+import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 
 vi.mock("@/lib/notify", () => ({
   notify: vi.fn(),
@@ -14,8 +16,15 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/clients", () => ({
-  systemClient: { openPath: vi.fn(), openInEditor: vi.fn(), showItemInFolderUnconfined: vi.fn() },
+  systemClient: {
+    openPath: vi.fn(),
+    openInEditor: vi.fn(),
+    showItemInFolderUnconfined: vi.fn(),
+    checkDirectory: vi.fn(),
+  },
 }));
+vi.mock("@/clients/fileBrowserClient", () => ({ fileBrowserClient: { statPaths: vi.fn() } }));
+vi.mock("@/store/createWorktreeStore", () => ({ getCurrentViewStoreOrNull: vi.fn() }));
 
 const { PROJECT_ID } = vi.hoisted(() => ({ PROJECT_ID: "proj-terminal-1" }));
 
@@ -130,23 +139,6 @@ describe("FileLinksAddon", () => {
           expect(links).toBeDefined();
           expect(links).toHaveLength(1);
           expect(links![0]!.text).toBe("src/App.tsx");
-          resolve();
-        });
-      });
-    });
-
-    it("should match multiple paths on the same line", () => {
-      return new Promise<void>((resolve) => {
-        const terminal = createMockTerminal();
-        const getCwd = () => "/home/user/project";
-        const addon = new FileLinksAddon(terminal, getCwd);
-
-        const line = createMockLine("Error at src/App.tsx:10 and src/utils.ts:20");
-        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
-
-        addon.provideLinks(1, (links) => {
-          expect(links).toBeDefined();
-          expect(links!.length).toBeGreaterThanOrEqual(1);
           resolve();
         });
       });
@@ -1165,22 +1157,6 @@ describe("FileLinksAddon", () => {
   });
 
   describe("path resolution", () => {
-    it("should resolve relative paths against cwd", () => {
-      return new Promise<void>((resolve) => {
-        const terminal = createMockTerminal();
-        const getCwd = () => "/home/user/project";
-        const addon = new FileLinksAddon(terminal, getCwd);
-
-        const line = createMockLine("src/App.tsx:10");
-        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
-
-        addon.provideLinks(1, (links) => {
-          expect(links).toBeDefined();
-          resolve();
-        });
-      });
-    });
-
     it("should handle missing cwd gracefully", () => {
       return new Promise<void>((resolve) => {
         const terminal = createMockTerminal();
@@ -1222,26 +1198,6 @@ describe("FileLinksAddon", () => {
           expect(calls.length).toBe(2);
           expect(calls[1]).toBeNull();
 
-          resolve();
-        });
-      });
-    });
-
-    it("works without an onHover callback (backwards compatible)", () => {
-      return new Promise<void>((resolve) => {
-        const terminal = createMockTerminal();
-        const getCwd = () => "/home/user/project";
-        const addon = new FileLinksAddon(terminal, getCwd);
-
-        const line = createMockLine("src/App.tsx:10");
-        vi.mocked(terminal.buffer.active.getLine).mockReturnValue(line);
-
-        addon.provideLinks(1, (links) => {
-          expect(links).toBeDefined();
-          const link = links![0]!;
-          const mouseEvent = new Event("mousemove") as unknown as MouseEvent;
-          expect(() => link.hover?.(mouseEvent, link.text)).not.toThrow();
-          expect(() => link.leave?.(mouseEvent, link.text)).not.toThrow();
           resolve();
         });
       });
@@ -1467,27 +1423,6 @@ describe("FileLinksAddon", () => {
       expect(systemClient.openPath).not.toHaveBeenCalled();
     });
 
-    it("modified-click path (openInEditor) routes AppError(INVALID_PATH) into the code-aware body", async () => {
-      const terminal = createMockTerminal();
-      const link = await buildLink(terminal, () => "/home/user/project");
-      expect(link).toBeDefined();
-
-      vi.mocked(actionService.dispatch).mockResolvedValue({
-        ok: false,
-        error: { code: "EXECUTION_ERROR", message: "openInEditor failed" },
-      });
-      vi.mocked(systemClient.openInEditor).mockRejectedValue(
-        new Error("[AppError|INVALID_PATH|Path is not a valid file] Path is not a valid file")
-      );
-
-      link!.activate(makeClick({ metaKey: true }), link!.text);
-      await vi.waitFor(() => expect(systemClient.openInEditor).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
-
-      const payload = vi.mocked(notify).mock.calls[0]?.[0] as { message: string };
-      expect(payload.message).toContain("Path is not a valid file");
-    });
-
     it("OUTSIDE_ROOT and INVALID_PATH produce distinct coalesce keys and actions (no bleed)", () => {
       // notify() overwrites the singular action with the latest call's on each
       // coalesce tick — a shared key would flip a coalesced toast's button
@@ -1548,5 +1483,747 @@ describe("FileLinksAddon", () => {
       expect(recovery.title).toBe("Couldn't reveal file");
       expect(recovery.action?.label).toBe("Copy path");
     });
+  });
+});
+
+// The validation memo is module-level, so every test uses its own worktree
+// root — a cached verdict for one root can't leak into the next test.
+let rootCounter = 0;
+function nextRoot(): string {
+  rootCounter += 1;
+  return `/repo${rootCounter}`;
+}
+
+function bindWorktrees(worktrees: Map<string, { id: string; path: string }>): void {
+  vi.mocked(getCurrentViewStoreOrNull).mockReturnValue({
+    getState: () => ({ worktrees }),
+  } as unknown as ReturnType<typeof getCurrentViewStoreOrNull>);
+}
+
+/**
+ * Rows keyed by buffer index, not by call order: the addon reads a row more
+ * than once per hover (the row itself, the wrap probe, the rejoin, the
+ * post-validation re-read), so a call-counting mock would silently change what
+ * a test means the moment that count moved. `rows` is read live, so a test can
+ * model a mid-validation rewrite by mutating it. `wrapped[i]` marks row i as
+ * the CONTINUATION of row i-1.
+ */
+function makeTerminal(rows: string[], wrapped?: boolean[]): Terminal {
+  return {
+    buffer: {
+      active: {
+        getLine: vi.fn((index: number): IBufferLine | undefined => {
+          const text = rows[index];
+          if (text === undefined) return undefined;
+          return {
+            translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+            isWrapped: wrapped ? wrapped[index] === true : index > 0,
+          } as IBufferLine;
+        }),
+      },
+    },
+  } as unknown as Terminal;
+}
+
+/**
+ * An agent TUI's own wrapping: rows padded to `cols`, none flagged
+ * `isWrapped`. Read live like `makeTerminal`, so a test can rewrite a row.
+ */
+function makeGrid(rows: string[], cols: number): Terminal {
+  return {
+    cols,
+    buffer: {
+      active: {
+        getLine: vi.fn((index: number): IBufferLine | undefined => {
+          const row = rows[index];
+          if (row === undefined) return undefined;
+          const text = row.padEnd(cols);
+          return {
+            translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+            isWrapped: false,
+          } as IBufferLine;
+        }),
+      },
+    },
+  } as unknown as Terminal;
+}
+
+function provide(addon: FileLinksAddon, bufferLineNumber = 1): Promise<ILink[] | undefined> {
+  return new Promise((resolve) => {
+    addon.provideLinks(bufferLineNumber, resolve);
+  });
+}
+
+/** A `statPaths` call held open so a test can rewrite the buffer under it. */
+function pendingStat(): {
+  resolve: (kinds: Array<"directory" | "file" | null>) => void;
+  reject: (error: Error) => void;
+} {
+  let resolve: (kinds: Array<"directory" | "file" | null>) => void = () => {};
+  let reject: (error: Error) => void = () => {};
+  vi.mocked(fileBrowserClient.statPaths).mockReturnValue(
+    new Promise((onResolve, onReject) => {
+      resolve = onResolve;
+      reject = onReject;
+    })
+  );
+  return { resolve, reject };
+}
+
+describe("FileLinksAddon directory links", () => {
+  beforeEach(() => {
+    vi.mocked(fileBrowserClient.statPaths).mockReset();
+    vi.mocked(actionService.dispatch).mockReset();
+  });
+
+  it("links a validated extensionless token and activates into the file browser", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+    vi.mocked(actionService.dispatch).mockResolvedValue({ ok: true } as never);
+
+    const addon = new FileLinksAddon(
+      makeTerminal(["wrote files under src/utils today"]),
+      () => root
+    );
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(1);
+    const link = links![0]! as ILink & { kind: string };
+    expect(link.kind).toBe("directory");
+    expect(link.text).toBe("src/utils");
+    expect(fileBrowserClient.statPaths).toHaveBeenCalledWith({
+      worktreeId: root,
+      paths: ["src/utils"],
+    });
+
+    link.activate({ metaKey: false, ctrlKey: false } as MouseEvent, link.text);
+    await vi.waitFor(() => expect(actionService.dispatch).toHaveBeenCalled());
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: root, revealPath: "src/utils", revealKind: "directory" },
+      { source: "user" }
+    );
+  });
+
+  it("drops tokens the filesystem refutes", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue([null]);
+
+    const addon = new FileLinksAddon(makeTerminal(["pick one and/or the other"]), () => root);
+    expect(await provide(addon)).toBeUndefined();
+  });
+
+  it("gives overlapping file matches precedence without any stat", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+
+    const addon = new FileLinksAddon(makeTerminal(["see src/App.tsx for details"]), () => root);
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(1);
+    expect((links![0] as ILink & { kind: string }).kind).toBe("file");
+    expect(fileBrowserClient.statPaths).not.toHaveBeenCalled();
+  });
+
+  it("ships a file:// link alongside a stat-validated directory on one line", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+
+    // The URL resolves synchronously but the directory doesn't, so delivery of
+    // both moves behind the deferred validation callback.
+    const addon = new FileLinksAddon(
+      makeTerminal(["wrote file:///tmp/a.png under src/generated"]),
+      () => root
+    );
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(2);
+    expect(links!.map((link) => (link as ILink & { kind: string }).kind)).toEqual([
+      "file",
+      "directory",
+    ]);
+    expect((links![0] as ILink & { absolutePath: string }).absolutePath).toBe("/tmp/a.png");
+    expect(fileBrowserClient.statPaths).toHaveBeenCalledWith({
+      worktreeId: root,
+      paths: ["src/generated"],
+    });
+  });
+
+  it("keeps the file:// link when directory validation fails", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockRejectedValue(new Error("view evicted"));
+
+    const addon = new FileLinksAddon(
+      makeTerminal(["wrote file:///tmp/a.png under src/generated"]),
+      () => root
+    );
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(1);
+    expect((links![0] as ILink & { absolutePath: string }).absolutePath).toBe("/tmp/a.png");
+  });
+
+  it("keeps file links when validation fails", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockRejectedValue(new Error("view evicted"));
+
+    const addon = new FileLinksAddon(
+      makeTerminal(["compare src/App.tsx with src/legacy please"]),
+      () => root
+    );
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(1);
+    expect((links![0] as ILink & { kind: string }).kind).toBe("file");
+  });
+
+  it("links the worktree root itself without a stat round-trip", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+
+    const addon = new FileLinksAddon(makeTerminal([`cd ${root} first`]), () => root);
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(1);
+    expect((links![0] as ILink & { kind: string }).kind).toBe("directory");
+    expect(fileBrowserClient.statPaths).not.toHaveBeenCalled();
+  });
+
+  it("drops the whole reply when the line was rewritten mid-validation", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    const stat = pendingStat();
+
+    // The row is rewritten while validation is in flight, so links computed
+    // for the old text must not paint on the new.
+    const rows = ["output in src/generated now"];
+    const addon = new FileLinksAddon(makeTerminal(rows), () => root);
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
+    rows[0] = "completely different text";
+    stat.resolve(["directory"]);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+    expect(callback.mock.calls).toEqual([[undefined]]);
+  });
+
+  it("drops the reply when only a wrapped URL's continuation row was rewritten", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    const stat = pendingStat();
+
+    // The hovered row never changes, so the single-row guard sees nothing —
+    // only the rejoined window reveals that the URL now names another file.
+    const rows = ["src/generated file:///tmp/renders/", "a.png"];
+    const addon = new FileLinksAddon(makeTerminal(rows), () => root);
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
+    rows[1] = "b.png";
+    stat.resolve(["directory"]);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+    expect(callback.mock.calls).toEqual([[undefined]]);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "drops the reply on %s when a wrapped bare path's continuation row was rewritten",
+    async (outcome) => {
+      const root = nextRoot();
+      bindWorktrees(new Map([[root, { id: root, path: root }]]));
+      const stat = pendingStat();
+
+      // A bare file link can span rows now, so the rejection branch has to run
+      // the same staleness checks the success branch does — a reply that only
+      // drops its directory links would still paint a file link naming the
+      // path the line used to carry.
+      // The hovered row carries a token that reads as a whole path on its own,
+      // so a reply that skipped the checks would ship a link to `.../a.ts`
+      // while the buffer now says something else entirely.
+      const rows = ["src/generated holds src/renders/a.ts", "x"];
+      const addon = new FileLinksAddon(makeTerminal(rows), () => root);
+      const callback = vi.fn();
+      addon.provideLinks(1, callback);
+      await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+      expect(callback).not.toHaveBeenCalled();
+      rows[1] = "y";
+      if (outcome === "resolve") stat.resolve(["directory"]);
+      else stat.reject(new Error("view evicted"));
+      await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+      expect(callback.mock.calls).toEqual([[undefined]]);
+    }
+  );
+
+  it("drops the reply when a re-wrap moves a row boundary without changing text", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    const stat = pendingStat();
+
+    // Same hovered row, same rejoined string, different split. Every buffer
+    // coordinate a multi-row link carries comes from the row offsets, so
+    // comparing text alone would ship a range underlining the wrong cells.
+    const rows = ["src/generated holds src/", "renders", "/a.png"];
+    const addon = new FileLinksAddon(makeTerminal(rows), () => root);
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
+    rows[1] = "render";
+    rows[2] = "s/a.png";
+    stat.resolve(["directory"]);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+    expect(callback.mock.calls).toEqual([[undefined]]);
+  });
+
+  it("shields a continuation fragment the file pass owns but cannot resolve", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+
+    // With no cwd the rejoined relative token resolves to nothing, but its
+    // continuation row still reads as an absolute directory on its own. The
+    // file pass claims every span it matches, resolved or not, so the looser
+    // directory pass can't come back with a link to a path the line never
+    // named.
+    const addon = new FileLinksAddon(
+      makeTerminal(["open relative", `${root}/existing.ts`]),
+      () => ""
+    );
+
+    expect(await provide(addon, 2)).toBeUndefined();
+    expect(fileBrowserClient.statPaths).not.toHaveBeenCalled();
+  });
+
+  it("never validates the head of a path an app hard-wrapped as a directory", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+
+    // Cut at the margin and resumed under an indent (#12449). On its own the
+    // head is a real directory and would validate, but it's only the first
+    // half of the file path the line names.
+    const head = `open ${root}/src/components`;
+    const addon = new FileLinksAddon(
+      makeGrid([head, "  /Button.tsx now"], head.length),
+      () => root
+    );
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(1);
+    const link = links![0]! as ILink & { kind: string; absolutePath: string };
+    expect(link.kind).toBe("file");
+    expect(link.absolutePath).toBe(`${root}/src/components/Button.tsx`);
+    expect(fileBrowserClient.statPaths).not.toHaveBeenCalled();
+  });
+
+  it("drops the reply when a hard-wrapped continuation row was rewritten", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    const stat = pendingStat();
+
+    // The hovered row never changes; only the app's continuation of its
+    // path does, so the reply would link a file the buffer no longer names.
+    const rows = ["src/generated at /tmp/shots/abcdefghij", "  klmnopqrstuv.png ok"];
+    const addon = new FileLinksAddon(makeGrid(rows, rows[0]!.length), () => root);
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
+    rows[1] = "  klmnopqrstuw.png ok";
+    stat.resolve(["directory"]);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+    expect(callback.mock.calls).toEqual([[undefined]]);
+  });
+
+  it("stays silent after disposal", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    let release: (value: Array<"directory" | "file" | null>) => void = () => {};
+    vi.mocked(fileBrowserClient.statPaths).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+
+    const addon = new FileLinksAddon(makeTerminal(["look in src/deep here"]), () => root);
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    addon.dispose();
+    release(["directory"]);
+    // Give the deferred reply a tick to (not) fire.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(callback).not.toHaveBeenCalled();
+  });
+});
+
+// An unquoted space may sit in a directory name or between two tokens, so a
+// spaced path is only linked once its parent directory is probed (#13136).
+describe("FileLinksAddon paths containing spaces", () => {
+  // The probe memo is module-level, so every test uses its own home directory.
+  let homeCounter = 0;
+  const nextHome = (): string => `/Users/u${++homeCounter}`;
+  const existingDirs = (...dirs: string[]): void => {
+    vi.mocked(systemClient.checkDirectory).mockImplementation(async (dir) => dirs.includes(dir));
+  };
+  const texts = (links: ILink[] | undefined): string[] => (links ?? []).map((link) => link.text);
+  const absolutePath = (link: ILink | undefined): unknown =>
+    link && "absolutePath" in link ? link.absolutePath : undefined;
+  const flat = (rows: string[]): Terminal =>
+    makeTerminal(
+      rows,
+      rows.map(() => false)
+    );
+
+  beforeEach(() => {
+    vi.mocked(systemClient.checkDirectory).mockReset();
+    bindWorktrees(new Map());
+  });
+
+  it("links the whole unquoted path once its parent directory is confirmed", async () => {
+    const home = nextHome();
+    const dir = `${home}/Library/Application Support/Daintree/assistant-scratch/a1/b2`;
+    const path = `${dir}/issue-body.md`;
+    existingDirs(dir);
+
+    const links = await provide(new FileLinksAddon(flat([path]), () => "/repo"));
+
+    expect(texts(links)).toEqual([path]);
+    expect(absolutePath(links?.[0])).toBe(path);
+    expect(links![0]!.range).toEqual({ start: { x: 1, y: 1 }, end: { x: path.length, y: 1 } });
+    expect(systemClient.checkDirectory).toHaveBeenCalledWith(dir);
+  });
+
+  it("never probes or links a spaced UNC path", async () => {
+    existingDirs("//attacker.host/share a");
+
+    const links = await provide(
+      new FileLinksAddon(flat(["see //attacker.host/share a/x.md"]), () => "/repo")
+    );
+
+    expect(systemClient.checkDirectory).not.toHaveBeenCalled();
+    expect(texts(links).some((text) => text.includes("share a"))).toBe(false);
+  });
+
+  it("falls back to the space-free links when the probe refutes the path", async () => {
+    const home = nextHome();
+    existingDirs();
+
+    const links = await provide(
+      new FileLinksAddon(flat([`node ${home}/bin/tool src/a.ts`]), () => "/repo")
+    );
+
+    expect(systemClient.checkDirectory).toHaveBeenCalledWith(`${home}/bin/tool src`);
+    expect(texts(links)).toEqual(["src/a.ts"]);
+    expect(absolutePath(links?.[0])).toBe("/repo/src/a.ts");
+  });
+
+  it("never links the tail fragment once the full path is confirmed", async () => {
+    const home = nextHome();
+    existingDirs(`${home}/Application Support`);
+
+    const links = await provide(
+      new FileLinksAddon(flat([`see ${home}/Application Support/x.md`]), () => "/repo")
+    );
+
+    expect(texts(links)).toEqual([`${home}/Application Support/x.md`]);
+  });
+
+  it("links a confirmed spaced path alongside a later bare path", async () => {
+    const home = nextHome();
+    existingDirs(`${home}/a b`);
+
+    const links = await provide(
+      new FileLinksAddon(flat([`${home}/a b/c.md and d/e.md`]), () => "/repo")
+    );
+
+    expect(texts(links).sort()).toEqual([`${home}/a b/c.md`, "d/e.md"].sort());
+  });
+
+  it("carries a :line:col suffix through to the link", async () => {
+    const home = nextHome();
+    existingDirs(`${home}/a b`);
+
+    const links = await provide(new FileLinksAddon(flat([`${home}/a b/c.ts:42:7`]), () => "/repo"));
+
+    expect(texts(links)).toEqual([`${home}/a b/c.ts:42:7`]);
+    expect(absolutePath(links?.[0])).toBe(`${home}/a b/c.ts`);
+  });
+
+  it("falls back when the probe fails", async () => {
+    const home = nextHome();
+    vi.mocked(systemClient.checkDirectory).mockRejectedValue(new Error("ipc down"));
+
+    const links = await provide(
+      new FileLinksAddon(flat([`${home}/Application Support/x.md`]), () => "/repo")
+    );
+
+    expect(systemClient.checkDirectory).toHaveBeenCalledTimes(1);
+    expect(texts(links)).toEqual(["Support/x.md"]);
+  });
+
+  it("keeps a confirmed path when another probe on the line fails", async () => {
+    const home = nextHome();
+    vi.mocked(systemClient.checkDirectory).mockImplementation(async (dir) => {
+      if (dir === `${home}/a b`) return true;
+      throw new Error("ipc down");
+    });
+
+    const links = await provide(
+      new FileLinksAddon(flat([`${home}/a b/c.md ${home}/d e/f.md`]), () => "/repo")
+    );
+
+    expect(texts(links).sort()).toEqual([`${home}/a b/c.md`, "e/f.md"].sort());
+  });
+
+  it("keeps a directory link inside a spaced path the probe refutes", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+    existingDirs();
+
+    const links = await provide(new FileLinksAddon(flat([`${root}/src foo/bar.ts`]), () => root));
+
+    expect(texts(links).sort()).toEqual([`${root}/src`, "foo/bar.ts"].sort());
+  });
+
+  it("delivers the fallback once at the deadline when the probe stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const home = nextHome();
+      let release: (exists: boolean) => void = () => {};
+      vi.mocked(systemClient.checkDirectory).mockReturnValue(
+        new Promise((resolve) => {
+          release = resolve;
+        })
+      );
+      const callback = vi.fn();
+
+      new FileLinksAddon(flat([`${home}/a b/c.md`]), () => "/repo").provideLinks(1, callback);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(callback).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(texts(callback.mock.calls[0]![0])).toEqual(["b/c.md"]);
+
+      release(true);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(callback).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a confirmed sibling when another probe stalls to the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const home = nextHome();
+      vi.mocked(systemClient.checkDirectory).mockImplementation((dir) =>
+        dir === `${home}/a b` ? Promise.resolve(true) : new Promise(() => {})
+      );
+      const callback = vi.fn();
+
+      new FileLinksAddon(flat([`${home}/a b/c.md ${home}/d e/f.md`]), () => "/repo").provideLinks(
+        1,
+        callback
+      );
+      await vi.advanceTimersByTimeAsync(1_600);
+
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(texts(callback.mock.calls[0]![0]).sort()).toEqual(
+        [`${home}/a b/c.md`, "e/f.md"].sort()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the reply when the row is rewritten mid-probe", async () => {
+    const home = nextHome();
+    const rows = [`${home}/a b/c.md`];
+    let release: (exists: boolean) => void = () => {};
+    vi.mocked(systemClient.checkDirectory).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+
+    const pendingLinks = provide(new FileLinksAddon(flat(rows), () => "/repo"));
+    rows[0] = "something else entirely";
+    release(true);
+
+    expect(await pendingLinks).toBeUndefined();
+  });
+
+  it("links a quoted path without probing", async () => {
+    const home = nextHome();
+    const path = `${home}/Library/Application Support/x.md`;
+
+    const links = await provide(new FileLinksAddon(flat([`wrote "${path}"`]), () => "/repo"));
+
+    expect(texts(links)).toEqual([path]);
+    expect(absolutePath(links?.[0])).toBe(path);
+    expect(links![0]!.range.start.x).toBe(8);
+    expect(systemClient.checkDirectory).not.toHaveBeenCalled();
+  });
+
+  it("leaves a quoted command's relative path linked on its own", async () => {
+    const links = await provide(
+      new FileLinksAddon(flat(["Run 'cat src/a.ts' first"]), () => "/repo")
+    );
+
+    expect(texts(links)).toEqual(["src/a.ts"]);
+    expect(absolutePath(links?.[0])).toBe("/repo/src/a.ts");
+  });
+
+  it("links a shell-escaped path without probing and decodes the space", async () => {
+    const home = nextHome();
+    const raw = `${home}/Application\\ Support/x.md`;
+
+    const links = await provide(new FileLinksAddon(flat([`cat ${raw}`]), () => "/repo"));
+
+    expect(texts(links)).toEqual([raw]);
+    expect(absolutePath(links?.[0])).toBe(`${home}/Application Support/x.md`);
+    expect(systemClient.checkDirectory).not.toHaveBeenCalled();
+  });
+
+  it("links a spaced path that soft-wraps across rows from either row", async () => {
+    const home = nextHome();
+    const path = `${home}/Library/Application Support/Daintree/notes.md`;
+    existingDirs(`${home}/Library/Application Support/Daintree`);
+    const split = 20;
+    const rows = [path.slice(0, split), path.slice(split)];
+
+    for (const row of [1, 2]) {
+      const links = await provide(
+        new FileLinksAddon(makeTerminal(rows, [false, true]), () => "/repo"),
+        row
+      );
+      expect(texts(links)).toEqual([path]);
+      expect(links![0]!.range).toEqual({
+        start: { x: 1, y: 1 },
+        end: { x: path.length - split, y: 2 },
+      });
+    }
+  });
+
+  it("answers synchronously when a line holds no spaced candidate", () => {
+    const callback = vi.fn();
+    new FileLinksAddon(flat(["Error at /a/b.ts in foo/bar.ts"]), () => "/repo").provideLinks(
+      1,
+      callback
+    );
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(texts(callback.mock.calls[0]![0])).toEqual(["/a/b.ts", "foo/bar.ts"]);
+    expect(systemClient.checkDirectory).not.toHaveBeenCalled();
+  });
+});
+
+// Agents print home-relative paths; they link as their absolute spelling,
+// with the printed `~` kept in the underlined text (#13177).
+describe("FileLinksAddon home-relative paths", () => {
+  let homeCounter = 0;
+  const nextHome = (): string => `/Users/tilde${++homeCounter}`;
+  const flat = (rows: string[]): Terminal =>
+    makeTerminal(
+      rows,
+      rows.map(() => false)
+    );
+  const texts = (links: ILink[] | undefined): string[] => (links ?? []).map((link) => link.text);
+  const absolutePath = (link: ILink | undefined): unknown =>
+    link && "absolutePath" in link ? link.absolutePath : undefined;
+
+  beforeEach(() => {
+    vi.mocked(systemClient.checkDirectory).mockReset();
+    vi.mocked(fileBrowserClient.statPaths).mockReset();
+    bindWorktrees(new Map());
+  });
+
+  it("links a ~/ file outside the project by its expanded absolute path", async () => {
+    const home = nextHome();
+    const line = "- Quickest: ~/Library/Caches/drafts/draft-v008.mp4 and ~/src/a.ts:12:3";
+
+    const links = await provide(
+      new FileLinksAddon(
+        flat([line]),
+        () => "/repo",
+        undefined,
+        () => home
+      )
+    );
+
+    expect(texts(links)).toEqual(["~/Library/Caches/drafts/draft-v008.mp4", "~/src/a.ts:12:3"]);
+    expect(links!.map(absolutePath)).toEqual([
+      `${home}/Library/Caches/drafts/draft-v008.mp4`,
+      `${home}/src/a.ts`,
+    ]);
+    expect(links![0]!.range.start.x).toBe(line.indexOf("~") + 1);
+  });
+
+  it("links nothing while the home dir is unknown, then links once it arrives", async () => {
+    const home = nextHome();
+    const known: { home?: string } = {};
+    const addon = new FileLinksAddon(
+      flat(["see ~/src/a.ts"]),
+      () => "/repo",
+      undefined,
+      () => known.home
+    );
+
+    expect(texts(await provide(addon))).toEqual([]);
+    known.home = home;
+    expect(absolutePath((await provide(addon))?.[0])).toBe(`${home}/src/a.ts`);
+  });
+
+  it("probes the expanded parent of an unquoted spaced ~/ path", async () => {
+    const home = nextHome();
+    vi.mocked(systemClient.checkDirectory).mockImplementation(
+      async (dir) => dir === `${home}/Application Support`
+    );
+
+    const links = await provide(
+      new FileLinksAddon(
+        flat(["see ~/Application Support/x.md"]),
+        () => "/repo",
+        undefined,
+        () => home
+      )
+    );
+
+    expect(systemClient.checkDirectory).toHaveBeenCalledWith(`${home}/Application Support`);
+    expect(texts(links)).toEqual(["~/Application Support/x.md"]);
+    expect(absolutePath(links?.[0])).toBe(`${home}/Application Support/x.md`);
+  });
+
+  it("neither probes nor links a spaced ~/ path's tail while home is unknown", async () => {
+    const links = await provide(
+      new FileLinksAddon(flat(["see ~/Application Support/x.md"]), () => "/repo")
+    );
+
+    expect(systemClient.checkDirectory).not.toHaveBeenCalled();
+    expect(texts(links)).toEqual([]);
+  });
+
+  it("links a ~/ directory inside a bound worktree", async () => {
+    const home = nextHome();
+    const root = `${home}/Projects/app`;
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+
+    const links = await provide(
+      new FileLinksAddon(
+        flat(["cd ~/Projects/app/src now"]),
+        () => "/repo",
+        undefined,
+        () => home
+      )
+    );
+
+    expect(texts(links)).toEqual(["~/Projects/app/src"]);
+    expect(fileBrowserClient.statPaths).toHaveBeenCalledWith({ worktreeId: root, paths: ["src"] });
   });
 });

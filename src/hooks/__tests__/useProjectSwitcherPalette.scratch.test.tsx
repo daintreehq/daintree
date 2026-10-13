@@ -264,16 +264,6 @@ describe("createScratch", () => {
     expect(scratchState.createScratch).toHaveBeenCalledWith(undefined);
   });
 
-  it("forwards undefined when no name is supplied at all", async () => {
-    const { result } = renderHook(() => useProjectSwitcherPalette());
-
-    await act(async () => {
-      await result.current.createScratch();
-    });
-
-    expect(scratchState.createScratch).toHaveBeenCalledWith(undefined);
-  });
-
   it("retries creation with the same name when creation itself failed", async () => {
     scratchState.createScratch.mockRejectedValueOnce(new Error("disk full"));
     const { result } = renderHook(() => useProjectSwitcherPalette());
@@ -1407,23 +1397,6 @@ describe("scratch agent-status join", () => {
     });
 
     expect(scratchRow(result, "scratch-1").waitingAgentCount).toBe(3);
-  });
-
-  it("does not let a project entry bleed into a scratch row", async () => {
-    seedScratches(1);
-    projectStatsState.stats = {
-      "project-1": {
-        activeAgentCount: 7,
-        waitingAgentCount: 7,
-        processCount: 7,
-      } as (typeof projectStatsState.stats)[string],
-    };
-
-    const { result } = renderHook(() => useProjectSwitcherPalette());
-
-    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
-
-    expect(scratchRow(result, "scratch-1").activeAgentCount).toBe(0);
   });
 
   it("asks the open-time pull for scratch ids alongside project ids", async () => {

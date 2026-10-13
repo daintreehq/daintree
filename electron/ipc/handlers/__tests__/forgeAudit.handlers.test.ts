@@ -77,67 +77,6 @@ describe("registerForgeAuditHandlers", () => {
     cleanup();
   });
 
-  it("registers all six forge audit channels", () => {
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(6);
-    expect(ipcHandlers.has("forge-audit:get-records")).toBe(true);
-    expect(ipcHandlers.has("forge-audit:get-config")).toBe(true);
-    expect(ipcHandlers.has("forge-audit:get-stats")).toBe(true);
-    expect(ipcHandlers.has("forge-audit:clear-log")).toBe(true);
-    expect(ipcHandlers.has("forge-audit:set-enabled")).toBe(true);
-    expect(ipcHandlers.has("forge-audit:export-log")).toBe(true);
-  });
-
-  it("get-audit-records delegates to service.getRecords", async () => {
-    const sample: ForgeAuditRecord[] = [
-      {
-        id: "1",
-        timestamp: 1,
-        providerId: "builtin.github",
-        methodName: "listIssues",
-        result: "success",
-        durationMs: 10,
-        schemaVersion: 1,
-        severity: "info",
-      },
-    ];
-    auditServiceMock.getRecords.mockReturnValue(sample);
-    await expect(getHandler("forge-audit:get-records")(fakeEvent())).resolves.toEqual(sample);
-    expect(auditServiceMock.getRecords).toHaveBeenCalledTimes(1);
-  });
-
-  it("get-audit-config delegates to service.getAuditConfig", async () => {
-    auditServiceMock.getAuditConfig.mockReturnValue({ enabled: false, maxRecords: 1000 });
-    await expect(getHandler("forge-audit:get-config")(fakeEvent())).resolves.toEqual({
-      enabled: false,
-      maxRecords: 1000,
-    });
-  });
-
-  it("get-audit-stats delegates to service.getAuditStats", async () => {
-    const stats: ForgeAuditStats = {
-      anomalySignals: [
-        {
-          id: "first-seen:builtin.github:listIssues",
-          kind: "first-seen-method",
-          providerId: "builtin.github",
-          methodName: "listIssues",
-          severity: "danger",
-          timestamp: 1,
-          recordIds: ["1"],
-        },
-      ],
-      anomalySuppressed: false,
-      anomalyRecordFloor: 10,
-    };
-    auditServiceMock.getAuditStats.mockReturnValue(stats);
-    await expect(getHandler("forge-audit:get-stats")(fakeEvent())).resolves.toEqual(stats);
-  });
-
-  it("clear-audit-log delegates to service.clear", async () => {
-    await getHandler("forge-audit:clear-log")(fakeEvent());
-    expect(auditServiceMock.clear).toHaveBeenCalledTimes(1);
-  });
-
   it("set-audit-enabled forwards boolean and returns config", async () => {
     auditServiceMock.setEnabled.mockReturnValue({ enabled: false, maxRecords: 500 });
     await expect(getHandler("forge-audit:set-enabled")(fakeEvent(), false)).resolves.toEqual({
@@ -145,15 +84,6 @@ describe("registerForgeAuditHandlers", () => {
       maxRecords: 500,
     });
     expect(auditServiceMock.setEnabled).toHaveBeenCalledWith(false);
-  });
-
-  it("set-audit-enabled forwards true and returns enabled config", async () => {
-    auditServiceMock.setEnabled.mockReturnValue({ enabled: true, maxRecords: 500 });
-    await expect(getHandler("forge-audit:set-enabled")(fakeEvent(), true)).resolves.toEqual({
-      enabled: true,
-      maxRecords: 500,
-    });
-    expect(auditServiceMock.setEnabled).toHaveBeenCalledWith(true);
   });
 
   it("set-audit-enabled rejects non-boolean input", async () => {

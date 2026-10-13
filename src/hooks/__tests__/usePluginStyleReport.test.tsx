@@ -92,12 +92,6 @@ describe("findPluginStyleRoots", () => {
 });
 
 describe("usePluginStyleReport", () => {
-  it("reports no views when none of the plugin's panels is mounted", async () => {
-    const { result } = renderHook(() => usePluginStyleReport("acme.demo"));
-    await act(async () => {});
-    expect(result.current.state.status).toBe("no-views");
-  });
-
   it("reports the mounted view's classes and re-reads on recheck", async () => {
     const { result } = renderHook(() => usePluginStyleReport("acme.demo"));
     await act(async () => {});

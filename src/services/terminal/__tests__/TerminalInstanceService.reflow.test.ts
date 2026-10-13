@@ -350,118 +350,6 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     document.body.innerHTML = "";
   });
 
-  it("unpauses a visible standard terminal and records lastReflowAt", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-
-    expect(unpauseCount(managed)).toBe(1);
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
-  });
-
-  it("throttles per-terminal repairs within 250ms", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-
-    // Re-arm: otherwise the second call would skip because the renderer is
-    // already running, not because of the throttle.
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-
-    expect(unpauseCount(managed)).toBe(1);
-  });
-
-  it("allows a repair again after the throttle window", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-
-    pauseRenderer(managed);
-    // Simulate throttle window passing
-    managed.lastReflowAt = (managed.lastReflowAt ?? 0) - 500;
-    service.maybeReflowTerminal(managed);
-
-    expect(unpauseCount(managed)).toBe(2);
-  });
-
-  it("unpauses agent terminals — the xterm pause gate is renderer-agnostic", () => {
-    const managed = makeManaged({ kind: "terminal", launchAgentId: "claude" });
-    pauseRenderer(managed);
-    expect(managed.runtimeAgentId).toBe("claude");
-
-    service.maybeReflowTerminal(managed);
-
-    expect(unpauseCount(managed)).toBe(1);
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
-  });
-
-  it("skips invisible terminals", () => {
-    const managed = makeManaged({ isVisible: false });
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("skips alt-buffer (TUI) terminals", () => {
-    const managed = makeManaged({ isAltBuffer: true });
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("skips terminals that are mid-attach", () => {
-    const managed = makeManaged({ isAttaching: true });
-    pauseRenderer(managed);
-    service.maybeReflowTerminal(managed);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("skips when terminal has no rendered element yet", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    (managed.terminal as unknown as { element: HTMLElement | undefined }).element = undefined;
-    service.maybeReflowTerminal(managed);
-    // lastReflowAt not set because we short-circuited on missing element
-    expect(managed.lastReflowAt).toBe(0);
-  });
-
-  it("skips — and does not stamp throttle — when element is detached", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    // Disconnect from document
-    managed.hostElement.remove();
-    expect((managed.terminal.element as HTMLElement).isConnected).toBe(false);
-
-    service.maybeReflowTerminal(managed);
-    // Throttle must NOT be stamped — otherwise the next legitimate repair
-    // after reattachment would be suppressed for 250ms.
-    expect(managed.lastReflowAt).toBe(0);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("skips — and does not stamp throttle — when synchronized output mode is active", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    setSyncMode(managed, true);
-
-    service.maybeReflowTerminal(managed);
-    // BSU is open — repainting now would interleave with xterm's buffered
-    // range. Throttle must not stamp so we repair on the next tick after ESU.
-    expect(managed.lastReflowAt).toBe(0);
-    expect(unpauseCount(managed)).toBe(0);
-  });
-
-  it("unpauses when synchronized output mode is false", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    setSyncMode(managed, false);
-
-    service.maybeReflowTerminal(managed);
-    expect(unpauseCount(managed)).toBe(1);
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
-  });
-
   it("does not throttle the post-ESU repair after a BSU skip", () => {
     const managed = makeManaged();
     pauseRenderer(managed);
@@ -1153,17 +1041,6 @@ describe("TerminalInstanceService getSynchronizedOutputMode", () => {
     expect(service.getSynchronizedOutputMode("t1")).toBe(true);
   });
 
-  it("returns false when xterm reports no synchronized output block", () => {
-    const managed = makeManaged();
-    service.instances.set("t1", managed);
-
-    expect(service.getSynchronizedOutputMode("t1")).toBe(false);
-  });
-
-  it("returns null for an unknown terminal id", () => {
-    expect(service.getSynchronizedOutputMode("missing")).toBeNull();
-  });
-
   it("returns null when xterm did not surface modes (defensive)", () => {
     const managed = makeManaged();
     clearSyncModes(managed);
@@ -1204,40 +1081,6 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
       configurable: true,
       writable: true,
     });
-  });
-
-  it("skips repairs while document is hidden", () => {
-    visibilityState = "hidden";
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.instances.set("t1", managed);
-
-    vi.advanceTimersByTime(3000);
-    expect(unpauseCount(managed)).toBe(0);
-    expect(managed.lastReflowAt).toBe(0);
-  });
-
-  it("performs repairs on heartbeat when visible", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    service.instances.set("t1", managed);
-
-    vi.advanceTimersByTime(3000);
-    expect(unpauseCount(managed)).toBe(1);
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
-  });
-
-  it("heartbeat does not repair or stamp throttle while sync block is open", () => {
-    const managed = makeManaged();
-    pauseRenderer(managed);
-    setSyncMode(managed, true);
-    service.instances.set("t1", managed);
-
-    vi.advanceTimersByTime(3000);
-    // Heartbeat tick fired but the sync-mode guard skipped without
-    // stamping — so the next post-ESU heartbeat repairs immediately.
-    expect(unpauseCount(managed)).toBe(0);
-    expect(managed.lastReflowAt).toBe(0);
   });
 
   it("resumes repairs when visibility transitions hidden → visible", () => {

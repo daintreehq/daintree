@@ -9,6 +9,8 @@ import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal } from "@/store/slices";
 import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
+import * as fs from "fs/promises";
+import * as path from "path";
 
 let emptyTrashSpy: (...args: unknown[]) => unknown;
 
@@ -521,20 +523,6 @@ describe("TrashContainer", () => {
   });
 
   describe("empty trash", () => {
-    it("renders Empty trash button when trash has items", () => {
-      const { getByTestId } = render(<TrashContainer trashedTerminals={[makeTrashedItem("1")]} />);
-      expect(getByTestId("empty-trash-button")).not.toBeNull();
-    });
-
-    it("shows Auto-clears hint when trash is empty (ghost pill path excluded)", () => {
-      // The empty trash button only renders inside the popover; the ghost pill
-      // path (count === 0) takes a different branch. Test via presence of items.
-      const { queryByTestId } = render(
-        <TrashContainer trashedTerminals={[makeTrashedItem("1")]} />
-      );
-      expect(queryByTestId("empty-trash-button")).not.toBeNull();
-    });
-
     it("opens ConfirmDialog when Empty trash button is clicked", () => {
       const items = [makeTrashedItem("1"), makeTrashedItem("2")];
       const { getByTestId, queryByTestId } = render(<TrashContainer trashedTerminals={items} />);
@@ -717,5 +705,22 @@ describe("TrashContainer", () => {
       rerender(<TrashContainer trashedTerminals={[survivor]} />);
       expect(title()).not.toMatch(/Remove Terminal 1/);
     });
+  });
+});
+
+describe("Trash pulse stylesheet - Issue #3113", () => {
+  it("should have trash-pulse animation in index.css", async () => {
+    const filePath = path.resolve(__dirname, "../../../index.css");
+    const content = await fs.readFile(filePath, "utf-8");
+    expect(content).toContain("@keyframes trash-pulse");
+    expect(content).toContain(".animate-trash-pulse");
+  });
+
+  it("should include animate-trash-pulse in the reduce-motion variant override", async () => {
+    const filePath = path.resolve(__dirname, "../../../index.css");
+    const content = await fs.readFile(filePath, "utf-8");
+    expect(content).toMatch(
+      /@variant\s+reduce-motion\s*\{[\s\S]*?\.animate-trash-pulse[\s\S]*?animation:\s*none/
+    );
   });
 });

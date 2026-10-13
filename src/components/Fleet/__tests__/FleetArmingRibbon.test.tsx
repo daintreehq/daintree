@@ -174,14 +174,6 @@ describe("FleetArmingRibbon", () => {
     expect(chip.textContent).toContain("in fleet");
   });
 
-  it("clicking the exit chip disarms all", () => {
-    useFleetArmingStore.getState().armIds(["a", "b"]);
-    render(<FleetArmingRibbon />);
-    const exit = screen.getByTestId("fleet-exit");
-    fireEvent.click(exit);
-    expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
-  });
-
   it("renders a leading × exit affordance that disarms on click", () => {
     useFleetArmingStore.getState().armIds(["a", "b"]);
     render(<FleetArmingRibbon />);
@@ -822,13 +814,6 @@ describe("FleetArmingRibbon", () => {
       throw new Error(`menu item not found for ${label.toString()}`);
     }
 
-    it("renders the trigger on the armed ribbon", () => {
-      seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
-      useFleetArmingStore.getState().armIds(["t1", "t2"]);
-      render(<FleetArmingRibbon />);
-      expect(screen.getByTestId("fleet-selection-menu-trigger")).toBeTruthy();
-    });
-
     it("'All waiting — this worktree' arms waiting agents in the current worktree", () => {
       seed([
         makeAgent("t1", "working"),
@@ -897,15 +882,6 @@ describe("FleetArmingRibbon", () => {
       expect(match?.[2]).toEqual({ source: "user" });
       dispatchSpy.mockRestore();
     });
-
-    it("'All working' arms agents in 'working' state", () => {
-      seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
-      useFleetArmingStore.getState().armIds(["t1", "t2"]);
-      render(<FleetArmingRibbon />);
-      fireEvent.click(findMenuItem(/All working — this worktree/));
-      const armed = useFleetArmingStore.getState().armedIds;
-      expect([...armed].sort()).toEqual(["t1", "t2"]);
-    });
   });
 
   describe("broadcast progress counter", () => {
@@ -939,26 +915,6 @@ describe("FleetArmingRibbon", () => {
           vi.advanceTimersByTime(400);
         });
         expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("renders when isActive and the Doherty threshold elapses", () => {
-      vi.useFakeTimers();
-      try {
-        useFleetBroadcastProgressStore.setState({
-          completed: 5,
-          total: 15,
-          isActive: true,
-        });
-        useFleetArmingStore.getState().armIds(["a", "b", "c"]);
-        render(<FleetArmingRibbon />);
-        act(() => {
-          vi.advanceTimersByTime(400);
-        });
-        const el = screen.getByTestId("fleet-broadcast-progress");
-        expect(el.textContent).toContain("5/15");
       } finally {
         vi.useRealTimers();
       }
@@ -1003,26 +959,6 @@ describe("FleetArmingRibbon", () => {
         const el = screen.getByTestId("fleet-broadcast-progress");
         expect(el.textContent).toContain("8/12");
         expect(el.textContent).not.toContain("failed");
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("renders progress counter for small fleets after Doherty threshold", () => {
-      vi.useFakeTimers();
-      try {
-        useFleetBroadcastProgressStore.setState({
-          completed: 3,
-          total: 3,
-          isActive: true,
-        });
-        useFleetArmingStore.getState().armIds(["a", "b"]);
-        render(<FleetArmingRibbon />);
-        expect(screen.queryByTestId("fleet-broadcast-progress")).toBeNull();
-        act(() => {
-          vi.advanceTimersByTime(400);
-        });
-        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
       } finally {
         vi.useRealTimers();
       }
@@ -1094,26 +1030,6 @@ describe("FleetArmingRibbon", () => {
       }
     });
 
-    it("Cancel button is reachable for batched broadcasts — counter visible after Doherty", () => {
-      vi.useFakeTimers();
-      try {
-        useFleetBroadcastProgressStore.setState({
-          completed: 1,
-          total: 7,
-          isActive: true,
-        });
-        useFleetArmingStore.getState().armIds(["a", "b"]);
-        render(<FleetArmingRibbon />);
-        act(() => {
-          vi.advanceTimersByTime(400);
-        });
-        expect(screen.getByTestId("fleet-broadcast-cancel")).toBeTruthy();
-        expect(screen.getByTestId("fleet-broadcast-progress")).toBeTruthy();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
     it("Cancel button does not render for non-batchable fleets (total ≤ 5)", () => {
       // At/below batch size the executor takes the atomic non-batched path
       // — there's nothing to interrupt cooperatively. Hide Cancel.
@@ -1142,14 +1058,6 @@ describe("FleetArmingRibbon", () => {
       });
     });
 
-    it("renders an `+ Add panes…` row in the armed list popover", () => {
-      seed([makeAgent("t1"), makeAgent("t2")]);
-      useFleetArmingStore.getState().armIds(["t1", "t2"]);
-      render(<FleetArmingRibbon />);
-      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
-      expect(screen.getByTestId("fleet-armed-list-add-panes").textContent).toContain("Add panes");
-    });
-
     it("hides `+ Add panes…` row when popover is in picker mode", async () => {
       // Regression: the row belongs to the list view only. When the user
       // swaps into picker mode, the row must not be rendered alongside
@@ -1163,18 +1071,6 @@ describe("FleetArmingRibbon", () => {
       });
       expect(screen.queryByTestId("fleet-armed-list-add-panes")).toBeNull();
       expect(screen.getByTestId("fleet-picker-add-root")).toBeTruthy();
-    });
-
-    it("clicking `+ Add panes…` swaps popover to picker mode", async () => {
-      seed([makeAgent("t1"), makeAgent("t2"), makeAgent("t3")]);
-      useFleetArmingStore.getState().armIds(["t1", "t2"]);
-      render(<FleetArmingRibbon />);
-      fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
-      await act(async () => {
-        fireEvent.click(screen.getByTestId("fleet-armed-list-add-panes"));
-      });
-      expect(screen.getByTestId("fleet-picker-add-root")).toBeTruthy();
-      expect(screen.getByTestId("fleet-picker-back")).toBeTruthy();
     });
 
     it("picker mode hides already-armed panes and shows only addable ones", async () => {

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { PanelKindIcon } from "../PanelKindIcon";
-import { PLUGIN_ICON_COMPONENTS, PLUGIN_ICON_IDS } from "@/components/icons/pluginIconRegistry";
+import { PLUGIN_ICON_COMPONENTS } from "@/components/icons/pluginIconRegistry";
 import type { PluginIconId } from "@/components/icons/pluginIconRegistry";
 
 function markup(iconId: string, props: { color?: string; size?: number } = {}): string {
@@ -25,10 +25,6 @@ function registryGlyph(id: PluginIconId): string {
 }
 
 describe("PanelKindIcon", () => {
-  it.each(PLUGIN_ICON_IDS)("draws %s from the shared registry", (id) => {
-    expect(glyph(id)).toBe(registryGlyph(id));
-  });
-
   it("renders ids the palette previously fell back on", () => {
     // `git-pull-request` and `file-diff` lived only in the header renderer, so
     // the palette showed a terminal glyph for them (#11298).

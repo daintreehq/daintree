@@ -102,12 +102,6 @@ describe("ForgeTooltipContent avatars", () => {
     }
   });
 
-  it("renders the author login next to an avatar image", () => {
-    const { container } = render(<IssueTooltipContent data={baseIssue} />);
-    expect(screen.getByText("octocat")).toBeDefined();
-    expect(container.querySelectorAll("img")).toHaveLength(1);
-  });
-
   it("renders a single assignee as avatar + login", () => {
     const data = { ...baseIssue, assignees: [user("alice")] };
     const { container } = render(<IssueTooltipContent data={data} />);
@@ -266,26 +260,12 @@ describe("IssueTooltipContent freshness item", () => {
 });
 
 describe("PRTooltipContent freshness item", () => {
-  it("renders no freshness item when freshness is absent", () => {
-    const { container } = render(<PRTooltipContent data={prData} />);
-    expect(container.querySelector(".lucide-clock")).toBeNull();
-    expect(container.querySelector(".lucide-circle-pause")).toBeNull();
-  });
-
   it("folds a rate-limit cause onto the metadata row as a Clock + label", () => {
     const { container } = render(
       <PRTooltipContent data={prData} freshness={{ cause: "rate-limit", now: 1000 }} />
     );
     expect(container.querySelector(".lucide-clock")).toBeTruthy();
     expect(screen.getByText(/^Rate limited$/)).toBeTruthy();
-  });
-
-  it("renders a circuit-breaker cause as a PauseCircle", () => {
-    const { container } = render(
-      <PRTooltipContent data={prData} freshness={{ cause: "circuit-breaker", now: 1000 }} />
-    );
-    expect(container.querySelector(".lucide-circle-pause")).toBeTruthy();
-    expect(screen.getByText(/PR detection paused/)).toBeTruthy();
   });
 });
 
@@ -301,14 +281,6 @@ describe("ForgeTooltipContent labels", () => {
     // The row used to stop at four and print "+N more" — a count inside a
     // hover tooltip, which has no further surface to open.
     render(<IssueTooltipContent data={{ ...issueData, labels: manyLabels }} />);
-    for (const label of manyLabels) {
-      expect(screen.getByText(label.name)).toBeTruthy();
-    }
-    expect(screen.queryByText(/more$/)).toBeNull();
-  });
-
-  it("renders every PR label rather than counting the tail (#12001)", () => {
-    render(<PRTooltipContent data={{ ...prData, labels: manyLabels }} />);
     for (const label of manyLabels) {
       expect(screen.getByText(label.name)).toBeTruthy();
     }

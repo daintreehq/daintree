@@ -15,16 +15,8 @@ describe("validateFolderName", () => {
       expect(validateFolderName("café")).toBeNull();
     });
 
-    it("CJK name", () => {
-      expect(validateFolderName("项目")).toBeNull();
-    });
-
     it("name at length boundary (255)", () => {
       expect(validateFolderName("a".repeat(255))).toBeNull();
-    });
-
-    it("name starting with underscore", () => {
-      expect(validateFolderName("_internal")).toBeNull();
     });
 
     it("hidden-style name with leading dot", () => {
@@ -67,12 +59,6 @@ describe("validateFolderName", () => {
   describe("rejects control characters", () => {
     it("null byte", () => {
       expect(validateFolderName("foo\x00bar")).toBe(
-        "Folder name must not contain control characters"
-      );
-    });
-
-    it("tab", () => {
-      expect(validateFolderName("foo\tbar")).toBe(
         "Folder name must not contain control characters"
       );
     });

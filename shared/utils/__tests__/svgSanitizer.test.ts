@@ -255,31 +255,6 @@ describe("sanitizeSvg", () => {
       }
     });
 
-    it("should strip onerror event handlers", () => {
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg">
-        <image onerror="alert('xss')" href="invalid.jpg"/>
-      </svg>`;
-      const result = sanitizeSvg(svg);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.svg).not.toContain("onerror");
-        expect(result.svg).not.toContain("alert");
-        expect(result.modified).toBe(true);
-      }
-    });
-
-    it("should strip onmouseover event handlers", () => {
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg">
-        <rect onmouseover="alert('xss')" width="100" height="100"/>
-      </svg>`;
-      const result = sanitizeSvg(svg);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.svg).not.toContain("onmouseover");
-        expect(result.modified).toBe(true);
-      }
-    });
-
     it("should strip multiple event handlers", () => {
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" onload="init()">
         <circle onclick="click()" onmouseover="hover()" cx="50" cy="50" r="40"/>

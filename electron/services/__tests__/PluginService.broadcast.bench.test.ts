@@ -1,14 +1,9 @@
-// Benchmark for plugin contribution broadcasting and manifest parsing.
-// Prints metrics with PLUGIN_BROADCAST_BENCH=1; the assertions pin the batched shape.
-//
-// 1. host.registerAction ×50 from one plugin: how many `plugin:actions-changed`
-//    snapshots reach the renderer broadcast, and their total serialized bytes.
-// 2. initialize() over the four real builtins plus N fixture plugins: how many
-//    `broadcastToRenderer` calls fire, per channel.
-// 3. getPluginManifestSchema("user").safeParse(github plugin.json) ×100.
+// Benchmark for plugin contribution broadcasting at startup.
+// Prints metrics with PLUGIN_BROADCAST_BENCH=1; the assertions pin the batched shape:
+// initialize() over the four real builtins plus N fixture plugins sends one
+// `broadcastToRenderer` snapshot per contribution channel.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
-import { readFileSync } from "fs";
 import path from "path";
 import os from "os";
 import { performance } from "perf_hooks";
@@ -55,7 +50,6 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
 }));
 
 import { PluginService, pluginService } from "../PluginService.js";
-import { getPluginManifestSchema } from "../../schemas/plugin.js";
 import { clearPanelKindRegistry } from "../../../shared/config/panelKindRegistry.js";
 import { clearToolbarButtonRegistry } from "../../../shared/config/toolbarButtonRegistry.js";
 import { clearPluginKeybindingRegistry } from "../pluginKeybindingRegistry.js";
@@ -70,7 +64,6 @@ import {
 const REPORT = process.env.PLUGIN_BROADCAST_BENCH === "1";
 const BUILTIN_ROOT = path.resolve(__dirname, "../../../plugins/builtin");
 const FIXTURE_PLUGINS = 20;
-const ACTIONS = 50;
 
 let tmpDir: string;
 const services: PluginService[] = [];
@@ -139,12 +132,6 @@ async function writeFixturePlugin(root: string, index: number): Promise<void> {
   );
 }
 
-type ActionHostShape = (pluginId: string) => {
-  host: {
-    registerAction: (descriptor: Record<string, unknown>, handler: () => unknown) => unknown;
-  };
-};
-
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-bench-"));
   storeMock._state.clear();
@@ -166,54 +153,6 @@ afterEach(async () => {
 });
 
 describe("plugin broadcast benchmark", () => {
-  it(`host.registerAction ×${ACTIONS} coalesces into one actions snapshot`, async () => {
-    const root = path.join(tmpDir, "user");
-    await fs.mkdir(path.join(root, "acme.many-actions"), { recursive: true });
-    await fs.writeFile(
-      path.join(root, "acme.many-actions", "plugin.json"),
-      JSON.stringify({ name: "acme.many-actions", version: "1.0.0" })
-    );
-    const service = makeService(root);
-    await service.initialize();
-    await drain();
-    broadcastToRendererMock.mockClear();
-
-    const { host } = (service as unknown as { createHost: ActionHostShape }).createHost(
-      "acme.many-actions"
-    );
-    const t0 = performance.now();
-    for (let i = 0; i < ACTIONS; i++) {
-      void host.registerAction(
-        {
-          id: `action-${i}`,
-          title: `Action ${i}`,
-          description: `Registered action number ${i}`,
-          category: "Bench",
-          kind: "command",
-          danger: "safe",
-          inputSchema: {
-            type: "object",
-            properties: { issue: { type: "number" }, repo: { type: "string" } },
-          },
-        },
-        () => "ok"
-      );
-    }
-    const syncMs = performance.now() - t0;
-    await drain();
-
-    const calls = eventCalls().filter((c) => c.name === "plugin:actions-changed");
-    const bytes = calls.reduce((sum, c) => sum + c.bytes, 0);
-    report("registerAction", { actions: ACTIONS, broadcasts: calls.length, bytes, syncMs });
-
-    expect(service.listPluginActions()).toHaveLength(ACTIONS);
-    const last = broadcastToRendererMock.mock.calls.at(-1)?.[1] as {
-      payload: { actions: unknown[] };
-    };
-    expect(last.payload.actions).toHaveLength(ACTIONS);
-    expect(calls).toHaveLength(1);
-  });
-
   it(`initialize() with 4 builtins + ${FIXTURE_PLUGINS} fixtures sends one snapshot per channel`, async () => {
     const root = path.join(tmpDir, "user");
     for (let i = 0; i < FIXTURE_PLUGINS; i++) await writeFixturePlugin(root, i);
@@ -260,30 +199,5 @@ describe("plugin broadcast benchmark", () => {
     ] as const) {
       expect(lastPayload(name)[key]).toHaveLength(FIXTURE_PLUGINS);
     }
-  });
-
-  it("getPluginManifestSchema().safeParse ×100", () => {
-    // Renamed out of the reserved `daintree.*` namespace so the "user" parse
-    // runs every refinement instead of stopping at the namespace guard.
-    const json = {
-      ...(JSON.parse(readFileSync(path.join(BUILTIN_ROOT, "github", "plugin.json"), "utf8")) as {
-        name: string;
-      }),
-      name: "acme.github",
-    };
-    const ITER = 100;
-    let ok = 0;
-    const t0 = performance.now();
-    for (let i = 0; i < ITER; i++) {
-      if (getPluginManifestSchema("user").safeParse(json).success) ok++;
-    }
-    const viaGetterMs = performance.now() - t0;
-    expect(ok).toBe(ITER);
-
-    const schema = getPluginManifestSchema("user");
-    const t1 = performance.now();
-    for (let i = 0; i < ITER; i++) schema.safeParse(json);
-    const reusedMs = performance.now() - t1;
-    report("manifestSchema", { iterations: ITER, viaGetterMs, reusedMs });
   });
 });

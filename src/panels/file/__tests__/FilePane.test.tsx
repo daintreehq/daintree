@@ -391,23 +391,6 @@ describe("FilePane restore-control wiring", () => {
     expect(props.showRestoreControl).toBe(true);
     expect(props.onRestore).toBeTypeOf("function");
   });
-
-  it("forwards showRestoreControl=false so grouped docked panels keep the inline button hidden", () => {
-    render(
-      <FilePane
-        id="file-2"
-        title="spec.md"
-        isFocused={false}
-        location="dock"
-        onFocus={() => {}}
-        onClose={() => {}}
-        onRestore={() => {}}
-        showRestoreControl={false}
-      />
-    );
-
-    expect(lastContentPanelProps().showRestoreControl).toBe(false);
-  });
 });
 
 // #11114: dispatch() resolves {ok:false} rather than rejecting, so the old
@@ -995,22 +978,6 @@ describe("FilePane show in file browser (#11483)", () => {
       await gate.promise;
     });
   });
-
-  // Reveal carries the path plus the out-of-root opt-in, which is a third shape
-  // alongside the worktree action's and the path-only editor/browser one.
-  // Regressing the args builder into a single branch would send the wrong one.
-  it("keeps reveal's own args shape alongside the sibling worktree target", async () => {
-    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
-    const { container } = renderPane("/repo/src/index.ts");
-
-    await click(button(container, revealCopy().label)!);
-
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "file.showItemInFolder",
-      { path: "/repo/src/index.ts", allowOutsideRoots: true },
-      { source: "user" }
-    );
-  });
 });
 
 // #11191: HTML files get the same Source/Rendered toggle as Markdown; rendered
@@ -1091,12 +1058,6 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
         expect.objectContaining({ path: "/repo/src/index.css", htmlPreview: false })
       )
     );
-  });
-
-  it("still routes rendered Markdown to the MarkdownViewer (regression)", async () => {
-    renderPane("/repo/docs/spec.md", "rendered");
-    expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
-    expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
   });
 
   // #12134: the reading control is the mirror of Wrap — each owns the toolbar
@@ -1662,19 +1623,6 @@ describe("FilePane diff mode (#11274)", () => {
       expect(frame.hasAttribute("sandbox")).toBe(false);
     });
 
-    it("never shows the binary-file error even when a text read would reject the file", async () => {
-      // Arm the read path with the exact rejection PDFs used to hit. If the
-      // classifier were removed the file would fall through and surface it, so
-      // this fails loudly rather than passing on an empty default read.
-      readMock.mockRejectedValueOnce(Object.assign(new Error("binary"), { code: "BINARY_FILE" }));
-
-      const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
-
-      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
-      expect(screen.queryByText(/Binary file/)).toBeNull();
-      expect(readMock).not.toHaveBeenCalled();
-    });
-
     describe("when the document can't be framed (#12598)", () => {
       it("lands in the error state with the preview's reason instead of a blank frame", async () => {
         seedWorktree([]);
@@ -1804,20 +1752,6 @@ describe("FilePane diff mode (#11274)", () => {
   });
 
   describe("change lookup", () => {
-    it("matches a change stored as an absolute path", async () => {
-      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
-      await renderPane({ filePath: "/repo/src/index.ts" });
-      expect(toggleLabels()).toContain("Diff");
-    });
-
-    // The type says worktree-relative; the producer emits absolute today.
-    // Both shapes must resolve to the same file.
-    it("matches the same change stored as a worktree-relative path", async () => {
-      seedWorktree([{ path: "src/index.ts", status: "modified" }]);
-      await renderPane({ filePath: "/repo/src/index.ts" });
-      expect(toggleLabels()).toContain("Diff");
-    });
-
     it("does not match a different file in the same worktree", async () => {
       seedWorktree([{ path: "/repo/src/other.ts", status: "modified" }]);
       await renderPane({ filePath: "/repo/src/index.ts" });

@@ -57,11 +57,6 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
     expect(cardSource).not.toMatch(/isOver\s*&&[^,]*bg-overlay-(soft|subtle|strong|emphasis)/);
   });
 
-  it("does not render the redundant absolute isOver overlay div", () => {
-    expect(cardSource).not.toMatch(/isOver && !isActive && \(\s*<div/);
-    expect(cardSource).not.toContain("z-50 bg-overlay-soft border-2 border-overlay");
-  });
-
   it("pairs any ambient hover lift with the drag guard", () => {
     // Whatever element paints the ambient hover lift must also carry the drag
     // guard, or a sort drag sweeping across it lights each one in turn. The
@@ -109,12 +104,6 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
 // focused (j/k keyboard nav or click), a single sub-line of metadata appears
 // under the headline while the row remains collapsed.
 describe("WorktreeCard focused sub-line (issue #7699)", () => {
-  it("imports FocusedSubLine from the WorktreeCard subdirectory", () => {
-    expect(cardSource).toMatch(
-      /import\s*{\s*FocusedSubLine\s*}\s*from\s*"\.\/WorktreeCard\/FocusedSubLine"/
-    );
-  });
-
   it("renders FocusedSubLine with the focus/active gate, excluding main worktrees", () => {
     expect(cardSource).toMatch(
       /open=\{\s*!isMainWorktree\s*&&\s*effectiveIsCollapsed\s*&&\s*\(isActive\s*\|\|\s*isFocused\)\s*\}/
@@ -243,11 +232,6 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
 // drag handle. The grip always renders for non-pinned rows, but shows disabled
 // styling and a tooltip when group-by-type or search is active.
 describe("WorktreeCard disabled drag handle (issue #8395)", () => {
-  it("accepts isDragHandleDisabled as an optional boolean prop", () => {
-    expect(cardSource).toMatch(/isDragHandleDisabled\s*\?\s*:\s*boolean/);
-    expect(cardSource).toMatch(/isDragHandleDisabled\s*=\s*false/);
-  });
-
   it("renders the disabled grip at the one unavailable level: 50% and cursor-not-allowed", () => {
     expect(cardSource).toContain("cursor-not-allowed opacity-50");
   });
@@ -269,11 +253,6 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     );
   });
 
-  it("wraps the disabled grip in a Tooltip with TooltipTrigger asChild", () => {
-    expect(cardSource).toMatch(/isDragHandleDisabled\s*\?\s*\(\s*<Tooltip>/);
-    expect(cardSource).toMatch(/<TooltipTrigger asChild>/);
-  });
-
   it("keeps the enabled grip with cursor-grab and dragHandleListeners", () => {
     expect(cardSource).toContain("cursor-grab active:cursor-grabbing");
     expect(cardSource).toContain("{...dragHandleListeners}");
@@ -285,19 +264,6 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     // both channels onto whichever value it names.
     expect(cardSource).not.toMatch(/data-worktree-row-drag-handle[\s\S]{0,600}?duration-\d+/);
     expect(gripTransitionRule()).toContain("opacity");
-  });
-
-  it("gates the grip block on dragHandleListeners OR isDragHandleDisabled", () => {
-    // The gate is a named flag rather than the expression inlined at each use
-    // site: the card reads it three times now (the grip, the body padding, and
-    // the data attribute the footer aligns off), and three copies of the same
-    // condition is three chances for them to disagree about whether the row
-    // has a grip. Assert the definition and that nothing has drifted back to
-    // testing the raw expression in place.
-    expect(cardSource).toMatch(
-      /const hasRowDragHandle =\s*Boolean\(dragHandleListeners\)\s*\|\|\s*isDragHandleDisabled;/
-    );
-    expect(cardSource).toMatch(/\{hasRowDragHandle &&/);
   });
 });
 

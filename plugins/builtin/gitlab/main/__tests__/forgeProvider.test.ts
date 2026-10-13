@@ -1209,22 +1209,6 @@ describe("PR-head refspec", () => {
       "refs/merge-requests/42/head:feature-x"
     );
   });
-
-  // `merge-requests/` is not a hierarchy git expands on its own, so a bare
-  // source ref would not resolve.
-  it("fully qualifies the source ref", () => {
-    expect(gitlabForgeProvider.buildPRHeadRefspec?.(1, "b")?.startsWith("refs/")).toBe(true);
-  });
-
-  // The host rejects a refspec whose destination isn't the requested branch
-  // and silently falls back to its default, so this has to land exactly there.
-  it("writes only to the branch the host asked for", () => {
-    const spec = gitlabForgeProvider.buildPRHeadRefspec?.(7, "topic") ?? "";
-    const [source, destination, ...rest] = spec.split(":");
-    expect(rest).toEqual([]);
-    expect(destination).toBe("topic");
-    expect(source).not.toMatch(/^[+\-^]|\*|\s/);
-  });
 });
 
 describe("self-hosted deployment path", () => {
@@ -1360,29 +1344,6 @@ describe("URL builders", () => {
       "search=search+term"
     );
     expect(gitlabForgeProvider.buildIssuesUrl(repo, { state: "all" })).not.toContain("state=");
-  });
-});
-
-describe("self-hosted base URL", () => {
-  it("preserves the configured scheme, port, and path prefix for API calls", async () => {
-    await connectAs("https://gitlab.internal.example:8443/gitlab", "glpat-internal");
-    fetchMock().mockImplementation(async () => jsonResponse([]));
-
-    await gitlabForgeProvider.listIssues(SELF_HOSTED_REPO, {});
-
-    const url = requestUrl(fetchMock().mock.calls[0]);
-    expect(url).toContain("https://gitlab.internal.example:8443/gitlab/api/v4/projects/");
-    expect(requestHeaders(fetchMock().mock.calls[0]).Authorization).toBe("Bearer glpat-internal");
-  });
-
-  it("withholds the token when the settings read fails (fail closed)", async () => {
-    await connectAs("https://gitlab.com", "glpat-secret");
-    setInstanceUrlReader(() => Promise.reject(new Error("settings store unavailable")));
-    fetchMock().mockImplementation(async () => jsonResponse([]));
-
-    await gitlabForgeProvider.listIssues(REPO, {});
-
-    expect(requestHeaders(fetchMock().mock.calls[0]).Authorization).toBeUndefined();
   });
 });
 

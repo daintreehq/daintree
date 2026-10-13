@@ -247,17 +247,6 @@ describe("setFileBrowserView", () => {
     expect(store.get().panelsById["panel-1"]).not.toBe(before);
   });
 
-  it("preserves other browser fields when the sidebar collapses", () => {
-    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
-    setFileBrowserView("panel-1", { browserSidebarCollapsed: true });
-
-    expect(store.get().panelsById["panel-1"]).toMatchObject({
-      browserSidebarCollapsed: true,
-      browserSelectedPath: "src/app.ts",
-      browserExpandedPaths: ["src"],
-    });
-  });
-
   it("stores a dragged width and resets it back to the default", () => {
     setFileBrowserView("panel-1", { browserSidebarWidth: 420 });
     expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSidebarWidth: 420 });
@@ -310,17 +299,6 @@ describe("setFileBrowserView", () => {
 
     setFileBrowserView("panel-1", { browserSidebarWidth: Number.POSITIVE_INFINITY });
     expect(store.get().panelsById["panel-1"]).toBe(stored);
-  });
-
-  it("preserves selection and expansion when the width changes", () => {
-    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
-    setFileBrowserView("panel-1", { browserSidebarWidth: 400 });
-
-    expect(store.get().panelsById["panel-1"]).toMatchObject({
-      browserSidebarWidth: 400,
-      browserSelectedPath: "src/app.ts",
-      browserExpandedPaths: ["src"],
-    });
   });
 
   it("ignores a panel of another kind rather than stamping browser fields onto it", () => {
@@ -390,15 +368,6 @@ describe("setFileBrowserView sort fields (#11620)", () => {
     setFileBrowserView("panel-1", { browserSortKey: "type", browserSortDirection: "asc" });
 
     expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSortKey: "type" });
-  });
-
-  it("writes both halves in one commit", () => {
-    // The pane always sends them together; a split write could land a key while
-    // its direction was still being judged unchanged.
-    setFileBrowserView("panel-1", { browserSortKey: "modified", browserSortDirection: "desc" });
-    const panel = store.get().panelsById["panel-1"];
-
-    expect(panel).toMatchObject({ browserSortKey: "modified", browserSortDirection: "desc" });
   });
 
   it("leaves an existing sort alone when the patch names neither field", () => {

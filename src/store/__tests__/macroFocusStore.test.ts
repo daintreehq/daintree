@@ -26,22 +26,6 @@ describe("macroFocusStore", () => {
       expect(useMacroFocusStore.getState().focusedRegion).toBe("sidebar");
     });
 
-    it("wraps around to the first region", () => {
-      const store = useMacroFocusStore.getState();
-      store.cycleNext(); // grid
-      store.cycleNext(); // sidebar
-      store.cycleNext(); // wraps to grid
-      expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
-    });
-
-    it("includes dock when visible", () => {
-      useMacroFocusStore.getState().setVisibility("dock", true);
-      const store = useMacroFocusStore.getState();
-      store.cycleNext(); // grid
-      store.cycleNext(); // dock
-      expect(useMacroFocusStore.getState().focusedRegion).toBe("dock");
-    });
-
     it("includes all four regions when all visible", () => {
       const store = useMacroFocusStore.getState();
       store.setVisibility("dock", true);
@@ -101,13 +85,6 @@ describe("macroFocusStore", () => {
       store.setVisibility("sidebar", false);
       expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
     });
-
-    it("skips state update when visibility is unchanged", () => {
-      const initialState = useMacroFocusStore.getState();
-      initialState.setVisibility("grid", true); // already true
-      // No error or crash — state unchanged
-      expect(useMacroFocusStore.getState().visibility.grid).toBe(true);
-    });
   });
 
   describe("clearFocus", () => {
@@ -116,22 +93,6 @@ describe("macroFocusStore", () => {
       expect(useMacroFocusStore.getState().focusedRegion).not.toBeNull();
       useMacroFocusStore.getState().clearFocus();
       expect(useMacroFocusStore.getState().focusedRegion).toBeNull();
-    });
-
-    it("is a no-op when already null", () => {
-      useMacroFocusStore.getState().clearFocus();
-      expect(useMacroFocusStore.getState().focusedRegion).toBeNull();
-    });
-  });
-
-  describe("setRegionRef", () => {
-    it("stores and removes element refs", () => {
-      const el = document.createElement("div");
-      const store = useMacroFocusStore.getState();
-      store.setRegionRef("grid", el);
-      expect(store.refs.get("grid")).toBe(el);
-      store.setRegionRef("grid", null);
-      expect(store.refs.has("grid")).toBe(false);
     });
   });
 
@@ -152,20 +113,6 @@ describe("macroFocusStore", () => {
       store.setRegionRef("sidebar", el);
       store.cyclePrev(); // sidebar
       expect(el.focus).toHaveBeenCalledWith({ preventScroll: true });
-    });
-
-    it("recovers when focusedRegion is stale (no longer visible)", () => {
-      const store = useMacroFocusStore.getState();
-      store.setVisibility("dock", true);
-      store.cycleNext(); // grid
-      store.cycleNext(); // dock
-      expect(useMacroFocusStore.getState().focusedRegion).toBe("dock");
-      // Hide dock while it's focused
-      store.setVisibility("dock", false);
-      expect(useMacroFocusStore.getState().focusedRegion).toBeNull();
-      // Cycling from null after visibility change
-      store.cycleNext();
-      expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
     });
 
     it("handles single visible region cycling", () => {

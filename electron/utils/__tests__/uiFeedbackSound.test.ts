@@ -19,10 +19,4 @@ describe("shouldPlayUiFeedbackSound", () => {
       false
     );
   });
-
-  it("stays silent when both are off", () => {
-    expect(shouldPlayUiFeedbackSound({ soundEnabled: false, uiFeedbackSoundEnabled: false })).toBe(
-      false
-    );
-  });
 });

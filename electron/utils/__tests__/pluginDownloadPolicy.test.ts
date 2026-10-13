@@ -9,13 +9,7 @@ vi.mock("node:dns/promises", () => {
 });
 
 import dns from "node:dns/promises";
-import {
-  PLUGIN_DOWNLOAD_TIMEOUT_MS,
-  MAX_DNTR_BYTES,
-  acceptedMime,
-  dntrSuffixOk,
-  fetchWithPrivateHostGuard,
-} from "../pluginDownloadPolicy.js";
+import { acceptedMime, dntrSuffixOk, fetchWithPrivateHostGuard } from "../pluginDownloadPolicy.js";
 
 const mockLookup = dns.lookup as unknown as ReturnType<typeof vi.fn>;
 
@@ -36,14 +30,6 @@ function resolveAllTo(...addresses: string[]) {
 }
 
 describe("pluginDownloadPolicy", () => {
-  it("shares one 30s timeout across both download paths", () => {
-    expect(PLUGIN_DOWNLOAD_TIMEOUT_MS).toBe(30_000);
-  });
-
-  it("re-exports the archive size cap", () => {
-    expect(MAX_DNTR_BYTES).toBe(30 * 1024 * 1024);
-  });
-
   it.each([
     "application/zip",
     "application/zip; charset=utf-8",

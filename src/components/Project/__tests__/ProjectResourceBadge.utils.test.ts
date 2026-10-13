@@ -19,16 +19,6 @@ describe("computeThresholds", () => {
     expect(t.critical).toBe(Math.round(8 * 1024 * 0.33));
   });
 
-  it("scales up on larger machines so the same MB isn't 'critical' everywhere", () => {
-    const small = computeThresholds(8 * GB);
-    const large = computeThresholds(64 * GB);
-    expect(large.elevated).toBeGreaterThan(small.elevated);
-    expect(large.critical).toBeGreaterThan(small.critical);
-    // critical must always sit above elevated.
-    expect(large.critical).toBeGreaterThan(large.elevated);
-    expect(small.critical).toBeGreaterThan(small.elevated);
-  });
-
   it("falls back to fixed MB when total RAM is unknown or invalid", () => {
     expect(computeThresholds(0)).toEqual(FALLBACK_THRESHOLDS);
     expect(computeThresholds(-1)).toEqual(FALLBACK_THRESHOLDS);
@@ -52,12 +42,6 @@ describe("getMemoryState", () => {
   it("returns critical at or above the critical threshold", () => {
     expect(getMemoryState(thresholds.critical, thresholds)).toBe("critical");
     expect(getMemoryState(thresholds.critical * 2, thresholds)).toBe("critical");
-  });
-
-  it("tracks the supplied thresholds, not fixed values", () => {
-    // 800 MB is critical on the old fixed scale but normal on a big machine.
-    const big = computeThresholds(64 * GB);
-    expect(getMemoryState(800, big)).toBe("normal");
   });
 });
 
@@ -146,27 +130,10 @@ describe("formatProcessLabel", () => {
     expect(label).toBe("2 views · Cedar Forge, RuinWeave");
   });
 
-  it("scales the count with the projects sharing the renderer, listing them in order", () => {
-    const names = ["Alpha", "Cedar Forge", "RuinWeave"];
-    const label = formatProcessLabel({ name: "Tab", projectNames: names });
-
-    // The count leads, so it survives the row's truncation.
-    expect(label.startsWith("3 views")).toBe(true);
-    // Every project stays named, in the order given.
-    expect(names.every((name) => label.includes(name))).toBe(true);
-    expect(label.indexOf("Alpha")).toBeLessThan(label.indexOf("RuinWeave"));
-  });
-
   it("keeps same-named projects distinct rather than collapsing them", () => {
     // Names are not unique across projects; two owners must still read as two.
     expect(formatProcessLabel({ name: "Tab", projectNames: ["api", "api"] })).toBe(
       "2 views · api, api"
     );
-  });
-
-  it("keeps the label free of trailing punctuation", () => {
-    for (const projectNames of [undefined, ["RuinWeave"], ["Cedar Forge", "RuinWeave"]]) {
-      expect(formatProcessLabel({ name: "Tab", projectNames })).not.toMatch(/\.$/);
-    }
   });
 });

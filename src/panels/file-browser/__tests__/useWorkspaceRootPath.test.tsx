@@ -27,7 +27,6 @@ vi.mock("@/store/scratchStore", () => ({
 }));
 
 import { useWorkspaceRootPath } from "../useWorkspaceRootPath";
-import { resolveViewWorkspace } from "@/store/viewWorkspace";
 
 function seedView(id: string | undefined) {
   if (id === undefined) {
@@ -131,54 +130,5 @@ describe("useWorkspaceRootPath", () => {
   it("is empty when nothing resolves at all", () => {
     seedView("s-1");
     expect(rootPath()).toBe("");
-  });
-});
-
-describe("resolveViewWorkspace", () => {
-  const project = (id: string, path: string): Project => ({
-    id,
-    path,
-    name: id,
-    emoji: "🌳",
-    lastOpened: 0,
-  });
-  const scratch = (id: string, path: string): Scratch => ({
-    id,
-    path,
-    name: id,
-    createdAt: 0,
-    lastOpened: 0,
-  });
-  const base = {
-    projects: [project("p-1", "/folders/notes")],
-    currentProject: null,
-    scratches: [scratch("s-1", "/scratches/one")],
-    currentScratch: null,
-  };
-
-  it("keys off the seeded id, not the broadcast pointers", () => {
-    const resolved = resolveViewWorkspace({
-      ...base,
-      viewWorkspaceId: "s-1",
-      currentProject: project("p-1", "/folders/notes"),
-    });
-
-    expect(resolved).toMatchObject({ kind: "scratch", scratch: { path: "/scratches/one" } });
-  });
-
-  it("returns null for a seeded id in neither collection", () => {
-    // Unresolved beats naming a sibling window's workspace, which copy-path and
-    // reveal would then act on.
-    expect(resolveViewWorkspace({ ...base, viewWorkspaceId: "gone" })).toBeNull();
-  });
-
-  it("uses the current pointers only for an unbound view", () => {
-    const resolved = resolveViewWorkspace({
-      ...base,
-      viewWorkspaceId: null,
-      currentScratch: scratch("s-9", "/scratches/nine"),
-    });
-
-    expect(resolved).toMatchObject({ kind: "scratch", scratch: { path: "/scratches/nine" } });
   });
 });

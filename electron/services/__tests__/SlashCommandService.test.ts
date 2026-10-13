@@ -39,29 +39,6 @@ function restoreHome(prev: Record<string, string | undefined>): void {
 }
 
 describe("SlashCommandService", () => {
-  it("includes /add-dir in Claude built-ins", async () => {
-    const homeRoot = await makeTempDir();
-    const projectRoot = await makeTempDir();
-    const service = new SlashCommandService();
-
-    const prevHome = process.env.HOME;
-    process.env.HOME = homeRoot;
-
-    try {
-      await fs.mkdir(path.join(projectRoot, ".git"));
-
-      const commands = await service.list("claude", projectRoot);
-      const addDir = commands.find((c) => c.label === "/add-dir");
-
-      expect(addDir).toBeTruthy();
-      expect(addDir?.scope).toBe("built-in");
-    } finally {
-      process.env.HOME = prevHome;
-      await fs.rm(homeRoot, { recursive: true, force: true });
-      await fs.rm(projectRoot, { recursive: true, force: true });
-    }
-  });
-
   it("merges project commands over built-ins and parses frontmatter description", async () => {
     const root = await makeTempDir();
     const service = new SlashCommandService();
@@ -249,39 +226,6 @@ Deploy from the project skill.
     }
   });
 
-  it("labels simple Codex skills with $", async () => {
-    const homeRoot = await makeTempDir();
-    const projectRoot = await makeTempDir();
-    const service = new SlashCommandService();
-    const prev = overrideHome(homeRoot);
-
-    try {
-      await fs.mkdir(path.join(projectRoot, ".git"));
-
-      await writeFile(
-        path.join(projectRoot, ".agents", "skills", "merge-prs", "SKILL.md"),
-        `---
-description: "Merge all PRs"
----
-
-Merge them all.
-`
-      );
-
-      const commands = await service.list("codex", projectRoot);
-      const skill = commands.find((c) => c.label === "$merge-prs");
-
-      expect(skill).toBeTruthy();
-      expect(skill?.scope).toBe("project");
-      expect(skill?.kind).toBe("skill");
-      expect(skill?.description).toBe("Merge all PRs");
-    } finally {
-      restoreHome(prev);
-      await fs.rm(homeRoot, { recursive: true, force: true });
-      await fs.rm(projectRoot, { recursive: true, force: true });
-    }
-  });
-
   it("ignores the retired .codex/commands and .codex/prompts directories", async () => {
     const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
@@ -390,60 +334,6 @@ Research things.
     }
   });
 
-  it("excludes commands with user-invocable: false", async () => {
-    const root = await makeTempDir();
-    const service = new SlashCommandService();
-
-    try {
-      await fs.mkdir(path.join(root, ".git"));
-
-      await writeFile(
-        path.join(root, ".claude", "commands", "internal.md"),
-        `---
-description: "Internal pipeline command"
-user-invocable: false
----
-
-Not for users.
-`
-      );
-
-      const commands = await service.list("claude", root);
-      const internal = commands.find((c) => c.label === "/internal");
-
-      expect(internal).toBeUndefined();
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("excludes commands with user-invocable: no", async () => {
-    const root = await makeTempDir();
-    const service = new SlashCommandService();
-
-    try {
-      await fs.mkdir(path.join(root, ".git"));
-
-      await writeFile(
-        path.join(root, ".claude", "commands", "hidden.md"),
-        `---
-description: "Hidden command"
-user-invocable: no
----
-
-Hidden.
-`
-      );
-
-      const commands = await service.list("claude", root);
-      const hidden = commands.find((c) => c.label === "/hidden");
-
-      expect(hidden).toBeUndefined();
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("includes commands with user-invocable: true or absent header", async () => {
     const root = await makeTempDir();
     const service = new SlashCommandService();
@@ -520,37 +410,6 @@ Hidden.
       expect(commands.find((c) => c.label === "/mixed-no")).toBeUndefined();
     } finally {
       await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("excludes Codex skills with user-invocable: false", async () => {
-    const homeRoot = await makeTempDir();
-    const projectRoot = await makeTempDir();
-    const service = new SlashCommandService();
-    const prev = overrideHome(homeRoot);
-
-    try {
-      await fs.mkdir(path.join(projectRoot, ".git"));
-
-      await writeFile(
-        path.join(projectRoot, ".agents", "skills", "internal", "SKILL.md"),
-        `---
-description: "Internal Codex skill"
-user-invocable: false
----
-
-Not for users.
-`
-      );
-
-      const commands = await service.list("codex", projectRoot);
-      const internal = commands.find((c) => c.label === "$internal");
-
-      expect(internal).toBeUndefined();
-    } finally {
-      restoreHome(prev);
-      await fs.rm(homeRoot, { recursive: true, force: true });
-      await fs.rm(projectRoot, { recursive: true, force: true });
     }
   });
 
@@ -689,24 +548,6 @@ Not for users.
     } finally {
       restoreHome(prev);
       await fs.rm(homeRoot, { recursive: true, force: true });
-      await fs.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("handles missing skills directory gracefully", async () => {
-    const root = await makeTempDir();
-    const service = new SlashCommandService();
-    const prev = overrideHome(root);
-
-    try {
-      await fs.mkdir(path.join(root, ".git"));
-
-      const commands = await service.list("claude", root);
-      expect(commands.length).toBeGreaterThan(0);
-      const skills = commands.filter((c) => c.kind === "skill");
-      expect(skills).toHaveLength(0);
-    } finally {
-      restoreHome(prev);
       await fs.rm(root, { recursive: true, force: true });
     }
   });

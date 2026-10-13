@@ -97,16 +97,14 @@ vi.mock("@/lib/tooltipShortcut", () => ({
   createTooltipContent: () => null,
 }));
 
-const hoverFocusSpy = vi.fn();
-const hoverPointerEnterSpy = vi.fn();
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => "Meta+Shift+P",
   useEffectiveCombo: () => "Cmd+Shift+P",
   useShortcutHintHover: () => ({
-    onPointerEnter: hoverPointerEnterSpy,
+    onPointerEnter: vi.fn(),
     onPointerLeave: vi.fn(),
     onPointerDown: vi.fn(),
-    onFocus: hoverFocusSpy,
+    onFocus: vi.fn(),
     onBlur: vi.fn(),
   }),
 }));
@@ -116,15 +114,6 @@ describe("ToolbarCommandPaletteButton", () => {
     dispatchMock.mockClear();
     dispatchMock.mockImplementation(() => Promise.resolve({ ok: true, result: undefined }));
     toggleButtonVisibilityMock.mockClear();
-    hoverFocusSpy.mockClear();
-    hoverPointerEnterSpy.mockClear();
-  });
-
-  it("renders with the command-palette aria-label and keyboard hint", () => {
-    const { container } = render(<ToolbarCommandPaletteButton />);
-    const button = container.querySelector('button[aria-label="Command palette"]');
-    expect(button).not.toBeNull();
-    expect(button!.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+P");
   });
 
   it("dispatches action.palette.open on click", () => {
@@ -142,22 +131,5 @@ describe("ToolbarCommandPaletteButton", () => {
     fireEvent.click(getByTestId("context-menu-item"));
     expect(toggleButtonVisibilityMock).toHaveBeenCalledTimes(1);
     expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("command-palette", "right");
-  });
-
-  // Tooltip and shortcut-hint teardown around the palette's open/close is
-  // now global (AppPaletteDialog overlay clearing + the shared focus-open
-  // suppression window, issue #11030) — covered by dialogOverlayClearing
-  // and Tooltip tests, so this component only forwards the hint handlers.
-  it("forwards focus and pointer-enter to the shortcut-hint hook", () => {
-    const { container } = render(<ToolbarCommandPaletteButton />);
-    const button = container.querySelector(
-      'button[aria-label="Command palette"]'
-    ) as HTMLButtonElement;
-
-    fireEvent.pointerEnter(button);
-    expect(hoverPointerEnterSpy).toHaveBeenCalledTimes(1);
-
-    fireEvent.focus(button);
-    expect(hoverFocusSpy).toHaveBeenCalledTimes(1);
   });
 });

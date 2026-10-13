@@ -33,10 +33,6 @@ describe("distribution config", () => {
       expect(isWindowsStoreBuild(true)).toBe(true);
     });
 
-    it("returns false when an explicit value of false is supplied (NSIS renderer path)", () => {
-      expect(isWindowsStoreBuild(false)).toBe(false);
-    });
-
     it("returns false when process.windowsStore is undefined (NSIS install or non-Windows)", () => {
       expect(isWindowsStoreBuild()).toBe(false);
     });

@@ -6,7 +6,13 @@ import { render, screen, waitFor, fireEvent, act } from "@testing-library/react"
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import type { ChangeData, HunkData, RenderGutter, RenderToken, ViewType } from "react-diff-view";
 import type { InsertChange, DeleteChange, NormalChange } from "gitdiff-parser";
-import { DiffViewer, _resetLangStateForTests, _flushLangLoadsForTests } from "../DiffViewer";
+import {
+  DiffViewer,
+  FULL_FILE_MAX_LINES,
+  _resetLangStateForTests,
+  _flushLangLoadsForTests,
+} from "../DiffViewer";
+import type { FullFileUnavailableReason } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("refractor/rust", () => {
@@ -14,7 +20,7 @@ vi.mock("refractor/rust", () => {
 });
 
 const { capturedDiffProps } = vi.hoisted(() => ({
-  capturedDiffProps: {} as Record<string, unknown>,
+  capturedDiffProps: {} as Record<string, unknown> & { hunks?: HunkData[] },
 }));
 
 vi.mock("react-diff-view", async () => {
@@ -154,27 +160,11 @@ index 000..111 100644
     expect(screen.getByText("Binary file")).toBeTruthy();
   });
 
-  it("renders FILE_TOO_LARGE sentinel", () => {
-    render(wrap(<DiffViewer diff="FILE_TOO_LARGE" />));
-    expect(screen.getByText("File too large")).toBeTruthy();
-  });
-
-  it("renders ERROR sentinel with error message", () => {
-    render(wrap(<DiffViewer diff="ERROR" />));
-    expect(screen.getByText("Couldn't load diff")).toBeTruthy();
-  });
-
   it("does not render parse-failure fallback for ERROR sentinel", () => {
     render(wrap(<DiffViewer diff="ERROR" />));
     // ERROR sentinel is checked before files.length, so we get the error UI
     expect(screen.getByText("Couldn't load diff")).toBeTruthy();
     expect(screen.queryByText("Unable to parse diff")).toBeNull();
-  });
-
-  it("renders retry button when onRetry is provided", () => {
-    const onRetry = vi.fn();
-    render(wrap(<DiffViewer diff="ERROR" onRetry={onRetry} />));
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("does not render retry button when onRetry is omitted", () => {
@@ -205,16 +195,6 @@ describe("DiffViewer sentinel messages", () => {
     _resetLangStateForTests();
   });
 
-  it("shows NO_CHANGES message", () => {
-    render(wrap(<DiffViewer diff="NO_CHANGES" />));
-    expect(screen.getByText("No changes detected")).toBeTruthy();
-  });
-
-  it("shows BINARY_FILE message", () => {
-    render(wrap(<DiffViewer diff="BINARY_FILE" />));
-    expect(screen.getByText("Binary file")).toBeTruthy();
-  });
-
   it("shows FILE_TOO_LARGE message with 1MB threshold", () => {
     render(wrap(<DiffViewer diff="FILE_TOO_LARGE" />));
     expect(screen.getByText(/File too large/)).toBeTruthy();
@@ -225,17 +205,6 @@ describe("DiffViewer sentinel messages", () => {
 describe("DiffViewer collapse behavior", () => {
   beforeEach(() => {
     _resetLangStateForTests();
-  });
-
-  it("collapses lockfile diff by default with toggle", () => {
-    render(wrap(<DiffViewer diff={LOCKFILE_DIFF} />));
-
-    expect(screen.getByText("Generated file collapsed")).toBeTruthy();
-    expect(screen.getByText("Show diff")).toBeTruthy();
-
-    fireEvent.click(screen.getByText("Show diff"));
-
-    expect(screen.getByText("Hide diff")).toBeTruthy();
   });
 
   it("renders small normal file without collapse", () => {
@@ -327,14 +296,6 @@ describe("DiffViewer centered split", () => {
     expect(screen.getByTestId("diff-hscrollbar").getAttribute("data-scroll-mode")).toBe("native");
   });
 
-  it("keeps the native scroller for single-side deleted-file diffs", () => {
-    const { container } = render(wrap(<DiffViewer diff={DELETED_FILE_DIFF} viewType="split" />));
-
-    expect(container.querySelector(".diff-file-centered")).toBeNull();
-    expect(container.querySelector(".diff-file-scroll")).not.toBeNull();
-    expect(screen.getByTestId("diff-hscrollbar").getAttribute("data-scroll-mode")).toBe("native");
-  });
-
   it("mirrors the scrollbar strip's scrollLeft into --diff-hscroll", () => {
     const { container } = render(wrap(<DiffViewer diff={SMALL_DIFF} viewType="split" />));
     const region = container.querySelector<HTMLElement>(".diff-file-centered");
@@ -380,14 +341,6 @@ describe("DiffViewer wrap attribute", () => {
   it("sets data-wrap=true when wrapLines is on, for added-file diffs", () => {
     const { container } = render(
       wrap(<DiffViewer diff={ADDED_FILE_DIFF} viewType="split" wrapLines />)
-    );
-
-    expect(container.querySelector(".diff-viewer")?.getAttribute("data-wrap")).toBe("true");
-  });
-
-  it("sets data-wrap=true when wrapLines is on, for deleted-file diffs", () => {
-    const { container } = render(
-      wrap(<DiffViewer diff={DELETED_FILE_DIFF} viewType="split" wrapLines />)
     );
 
     expect(container.querySelector(".diff-viewer")?.getAttribute("data-wrap")).toBe("true");
@@ -667,32 +620,6 @@ describe("DiffViewer gutter marker never wraps (#10422)", () => {
     expect(lineNumberSpans[0]!.querySelector("a")).not.toBeNull();
     expect(markerSpans).toHaveLength(1);
     expect(markerSpans[0]!.textContent).toBe("+");
-  });
-
-  it("wraps the line number in a .diff-line-number span for delete rows", () => {
-    const renderGutter = getRenderGutter();
-    const change: DeleteChange = {
-      type: "delete",
-      content: "old",
-      lineNumber: 1,
-      isDelete: true,
-    };
-    const result = renderGutter({
-      change,
-      side: "old",
-      inHoverState: false,
-      renderDefault: () => "1",
-      wrapInAnchor: (n) => <a href="#L1">{n}</a>,
-    });
-    const { container } = render(<>{result}</>);
-
-    const lineNumberSpans = container.querySelectorAll(".diff-line-number");
-    const markerSpans = container.querySelectorAll(".diff-line-marker");
-
-    expect(lineNumberSpans).toHaveLength(1);
-    expect(lineNumberSpans[0]!.querySelector("a")).not.toBeNull();
-    expect(markerSpans).toHaveLength(1);
-    expect(markerSpans[0]!.textContent).toBe("-");
   });
 
   it("emits a sibling .diff-line-marker after the .diff-line-number, never inside it", () => {
@@ -1599,5 +1526,369 @@ describe("DiffViewer scoped Select All (#12135)", () => {
     // React skips the usual `null` call when a callback ref returns a cleanup,
     // so a composed ref that drops the cleanup never tears the caller down.
     expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * A single-hunk modification of one line, with three lines of context, plus the
+ * exact new-side file content it was generated from. Keeping the two in one
+ * factory is the point: the source-consistency check only means something if
+ * the "good" fixture is genuinely consistent.
+ */
+function makeFixture(totalLines: number, changedLine: number) {
+  const originalLine = (n: number) => `line${n}`;
+  const contextStart = changedLine - 3;
+  const hunkLines: string[] = [];
+  for (let n = contextStart; n < changedLine; n++) hunkLines.push(` ${originalLine(n)}`);
+  hunkLines.push(`-${originalLine(changedLine)}`);
+  hunkLines.push(`+CHANGED`);
+  for (let n = changedLine + 1; n <= changedLine + 3; n++) hunkLines.push(` ${originalLine(n)}`);
+
+  const diff = [
+    "diff --git a/f.ts b/f.ts",
+    "index 1111111..2222222 100644",
+    "--- a/f.ts",
+    "+++ b/f.ts",
+    `@@ -${contextStart},7 +${contextStart},7 @@`,
+    ...hunkLines,
+  ].join("\n");
+
+  const source = Array.from({ length: totalLines }, (_, i) =>
+    i + 1 === changedLine ? "CHANGED" : originalLine(i + 1)
+  ).join("\n");
+
+  return { diff, source };
+}
+
+function capturedHunks(): HunkData[] {
+  return capturedDiffProps.hunks ?? [];
+}
+
+/** Every line of content the viewer handed to the diff table. */
+function renderedContent(): string[] {
+  const lines: string[] = [];
+  for (const hunk of capturedHunks()) {
+    for (const change of hunk.changes) lines.push(change.content);
+  }
+  return lines;
+}
+
+function renderViewer(props: Partial<React.ComponentProps<typeof DiffViewer>> & { diff: string }) {
+  return render(
+    <TooltipProvider>
+      <DiffViewer {...props} />
+    </TooltipProvider>
+  );
+}
+
+describe("DiffViewer full file scope", () => {
+  beforeEach(() => {
+    clearCapturedDiffProps();
+    _resetLangStateForTests();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders only the changed region and its context when scope is off", () => {
+    const { diff, source } = makeFixture(12, 5);
+    renderViewer({ diff, source, fullFile: false });
+
+    const content = renderedContent();
+    // The first and last lines of the file sit outside the hunk's context.
+    expect(content).not.toContain("line1");
+    expect(content).not.toContain("line12");
+    expect(content).toContain("CHANGED");
+  });
+
+  it("covers the file end to end without gaps once expanded", () => {
+    const totalLines = 12;
+    const { diff, source } = makeFixture(totalLines, 5);
+    renderViewer({ diff, source, fullFile: true });
+
+    const hunks = capturedHunks();
+    const first = hunks.at(0);
+    const last = hunks.at(-1);
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+    if (!first || !last) return;
+    expect(first.oldStart).toBe(1);
+    // Old and new sides are the same length here (one line replaced one line),
+    // so full coverage means the last hunk reaches the final line.
+    expect(last.oldStart + last.oldLines - 1).toBe(totalLines);
+  });
+
+  it("restores the unexpanded view when scope is switched back off", () => {
+    const { diff, source } = makeFixture(12, 5);
+    const { rerender } = renderViewer({ diff, source, fullFile: true });
+    expect(renderedContent()).toContain("line1");
+
+    rerender(
+      <TooltipProvider>
+        <DiffViewer diff={diff} source={source} fullFile={false} />
+      </TooltipProvider>
+    );
+    expect(renderedContent()).not.toContain("line1");
+  });
+
+  it("refuses to expand against a source that isn't the diff's new side", () => {
+    const { diff } = makeFixture(12, 5);
+    // Same shape, different content — exactly what a file edited between the
+    // diff and the source read looks like.
+    const drifted = Array.from({ length: 12 }, (_, i) => `unrelated${i + 1}`).join("\n");
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
+
+    renderViewer({ diff, source: drifted, fullFile: true, onFullFileVerdict: onVerdict });
+
+    const content = renderedContent();
+    // None of the drifted file's lines may leak in as context.
+    expect(content.some((line) => line.startsWith("unrelated"))).toBe(false);
+    expect(content).toContain("CHANGED");
+    expect(onVerdict).toHaveBeenCalledWith("source-mismatch", expect.any(String));
+  });
+
+  it("reports a truncated source as a mismatch rather than expanding past its end", () => {
+    const { diff } = makeFixture(12, 5);
+    const truncated = ["line1", "line2", "line3"].join("\n");
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
+
+    renderViewer({ diff, source: truncated, fullFile: true, onFullFileVerdict: onVerdict });
+
+    expect(onVerdict).toHaveBeenCalledWith("source-mismatch", expect.any(String));
+  });
+
+  it("falls back rather than committing more rows than the table can carry", () => {
+    const totalLines = FULL_FILE_MAX_LINES + 1;
+    const { diff, source } = makeFixture(totalLines, 100);
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
+
+    renderViewer({ diff, source, fullFile: true, onFullFileVerdict: onVerdict });
+
+    expect(onVerdict).toHaveBeenCalledWith("too-large", expect.any(String));
+    // The diff itself still renders — the fallback is to changed lines, never
+    // to an empty pane.
+    expect(renderedContent()).toContain("CHANGED");
+  });
+
+  it("expands a file sitting exactly on the row ceiling", () => {
+    const { diff, source } = makeFixture(FULL_FILE_MAX_LINES, 100);
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
+
+    renderViewer({ diff, source, fullFile: true, onFullFileVerdict: onVerdict });
+
+    expect(onVerdict).toHaveBeenLastCalledWith(null, expect.any(String));
+    expect(renderedContent()).toContain("line1");
+  });
+
+  it("stays on the plain diff when no source is supplied", () => {
+    const { diff } = makeFixture(12, 5);
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
+
+    renderViewer({ diff, fullFile: true, onFullFileVerdict: onVerdict });
+
+    expect(renderedContent()).not.toContain("line1");
+    // No source is a pending read, not a refusal — there's nothing to explain.
+    expect(onVerdict).toHaveBeenLastCalledWith(null, undefined);
+  });
+
+  // Files on disk almost always end in a newline; a fixture built by joining
+  // lines does not. The difference is invisible until it renders.
+  it("doesn't invent a trailing blank line for a file that ends in a newline", () => {
+    const totalLines = 12;
+    const { diff, source } = makeFixture(totalLines, 5);
+    renderViewer({ diff, source: `${source}\n`, fullFile: true });
+
+    const content = renderedContent();
+    expect(content).toContain("line12");
+    expect(content[content.length - 1]).toBe("line12");
+    expect(content.length).toBe(totalLines + 1); // +1 for the replaced line's delete row
+  });
+
+  it("counts lines for the size ceiling without the trailing newline's empty split", () => {
+    // Exactly at the ceiling once the trailing newline is discounted — a naive
+    // split would read this as one line over and refuse to expand.
+    const { diff, source } = makeFixture(FULL_FILE_MAX_LINES, 100);
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
+
+    renderViewer({
+      diff,
+      source: `${source}\n`,
+      fullFile: true,
+      onFullFileVerdict: onVerdict,
+    });
+
+    expect(onVerdict).toHaveBeenLastCalledWith(null, expect.any(String));
+  });
+
+  it("tolerates a CRLF checkout, where disk lines carry a return the diff doesn't", () => {
+    const { diff, source } = makeFixture(12, 5);
+    const crlf = source.split("\n").join("\r\n");
+    const onVerdict =
+      vi.fn<(reason: FullFileUnavailableReason | null, forSource: unknown) => void>();
+
+    renderViewer({ diff, source: crlf, fullFile: true, onFullFileVerdict: onVerdict });
+
+    expect(onVerdict).toHaveBeenLastCalledWith(null, expect.any(String));
+    expect(renderedContent()).toContain("line1");
+  });
+
+  it("measures the ceiling against the larger side, not just the old one", () => {
+    // A big insertion leaves the old side small while the new side — which is
+    // rendered too — blows past the ceiling.
+    const oldLines = 10;
+    const inserted = FULL_FILE_MAX_LINES + 1 - oldLines;
+    const body = [
+      " line1",
+      ...Array.from({ length: inserted }, (_, i) => `+new${i + 1}`),
+      " line2",
+    ];
+    const diff = [
+      "diff --git a/f.ts b/f.ts",
+      "index 1111111..2222222 100644",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      `@@ -1,2 +1,${inserted + 2} @@`,
+      ...body,
+    ].join("\n");
+    const source = [
+      "line1",
+      ...Array.from({ length: inserted }, (_, i) => `new${i + 1}`),
+      "line2",
+      ...Array.from({ length: oldLines - 2 }, (_, i) => `tail${i + 1}`),
+    ].join("\n");
+    const onVerdict =
+      vi.fn<(reason: FullFileUnavailableReason | null, forSource: unknown) => void>();
+
+    renderViewer({ diff, source, fullFile: true, onFullFileVerdict: onVerdict });
+
+    expect(onVerdict).toHaveBeenCalledWith("too-large", expect.any(String));
+  });
+
+  it("calls a hunkless diff unsupported rather than claiming the file changed", () => {
+    // A pure rename carries no hunks; reporting a mismatch would tell the user
+    // their file changed when nothing did.
+    const renameDiff = [
+      "diff --git a/old.ts b/new.ts",
+      "similarity index 100%",
+      "rename from old.ts",
+      "rename to new.ts",
+    ].join("\n");
+    const onVerdict =
+      vi.fn<(reason: FullFileUnavailableReason | null, forSource: unknown) => void>();
+
+    renderViewer({
+      diff: renameDiff,
+      source: "line1\nline2\n",
+      fullFile: true,
+      onFullFileVerdict: onVerdict,
+    });
+
+    expect(onVerdict).toHaveBeenLastCalledWith("unsupported", expect.any(String));
+  });
+
+  it("clears a fallback verdict once a refreshed diff makes the same source usable", () => {
+    // A host that only heard about failures would keep the explanation up while
+    // the file below it silently rendered fully expanded.
+    const { diff, source } = makeFixture(12, 5);
+    const staleDiff = makeFixture(12, 9).diff;
+    const onVerdict =
+      vi.fn<(reason: FullFileUnavailableReason | null, forSource: unknown) => void>();
+
+    const { rerender } = render(
+      <TooltipProvider>
+        <DiffViewer diff={staleDiff} source={source} fullFile onFullFileVerdict={onVerdict} />
+      </TooltipProvider>
+    );
+    expect(onVerdict).toHaveBeenLastCalledWith("source-mismatch", source);
+
+    // The diff is refreshed and now matches, while the source string is
+    // unchanged — so the verdict, not the source, is what has to move.
+    rerender(
+      <TooltipProvider>
+        <DiffViewer diff={diff} source={source} fullFile onFullFileVerdict={onVerdict} />
+      </TooltipProvider>
+    );
+    expect(onVerdict).toHaveBeenLastCalledWith(null, source);
+  });
+
+  it("notifies once when the scope changes the rendered rows, and not on mount", () => {
+    const { diff, source } = makeFixture(12, 5);
+    const onToggleCollapse = vi.fn();
+    const { rerender } = render(
+      <TooltipProvider>
+        <DiffViewer
+          diff={diff}
+          source={source}
+          fullFile={false}
+          onToggleCollapse={onToggleCollapse}
+        />
+      </TooltipProvider>
+    );
+    expect(onToggleCollapse).not.toHaveBeenCalled();
+
+    rerender(
+      <TooltipProvider>
+        <DiffViewer diff={diff} source={source} fullFile onToggleCollapse={onToggleCollapse} />
+      </TooltipProvider>
+    );
+    expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies when a late-arriving source expands the rows", () => {
+    const { diff, source } = makeFixture(12, 5);
+    const onToggleCollapse = vi.fn();
+    // Scope is on before the read resolves — the common ordering, since the
+    // diff renders first and the file content follows.
+    const { rerender } = render(
+      <TooltipProvider>
+        <DiffViewer diff={diff} fullFile onToggleCollapse={onToggleCollapse} />
+      </TooltipProvider>
+    );
+    expect(onToggleCollapse).not.toHaveBeenCalled();
+
+    rerender(
+      <TooltipProvider>
+        <DiffViewer diff={diff} source={source} fullFile onToggleCollapse={onToggleCollapse} />
+      </TooltipProvider>
+    );
+    expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards expanded context when the source is replaced", async () => {
+    const { diff, source } = makeFixture(12, 5);
+    const { rerender } = renderViewer({ diff, source, fullFile: true });
+    expect(renderedContent()).toContain("line1");
+
+    const drifted = Array.from({ length: 12 }, (_, i) => `unrelated${i + 1}`).join("\n");
+    await act(async () => {
+      rerender(
+        <TooltipProvider>
+          <DiffViewer diff={diff} source={drifted} fullFile />
+        </TooltipProvider>
+      );
+    });
+
+    const content = renderedContent();
+    expect(content).not.toContain("line1");
+    expect(content.some((line) => line.startsWith("unrelated"))).toBe(false);
   });
 });

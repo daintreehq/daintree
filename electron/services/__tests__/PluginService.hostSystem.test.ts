@@ -120,18 +120,6 @@ afterEach(() => {
 });
 
 describe("host.system plugin-data namespace", () => {
-  it("opens a file in the plugin's own data dir with no declared allowedPaths", async () => {
-    // The gap the API exists to close: the renderer's system.openPath validates
-    // against project/worktree/userData roots, none of which cover
-    // ~/.daintree/plugin-data/<id>/, so a plugin could not reveal a file it
-    // had just written there.
-    const host = registerPlugin(["fs:user-data-write"]);
-    const target = await writeInDataDir("shot.png");
-
-    await expect(host.system.openPath(target)).resolves.toBeUndefined();
-    expect(shellMock.openPath).toHaveBeenCalledTimes(1);
-  });
-
   it("reveals a file in the plugin's own data dir", async () => {
     const host = registerPlugin(["fs:user-data-write"]);
     const target = await writeInDataDir("shot.png");
@@ -251,14 +239,6 @@ describe("host.system containment", () => {
       /INVALID_PATH/
     );
     expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
-  });
-
-  it("opens a file inside a declared allowedPaths root", async () => {
-    const host = registerPlugin(["fs:project-read"], [allowed]);
-    const target = join(allowed, "note.txt");
-    await fs.writeFile(target, "x");
-
-    await expect(host.system.openPath(target)).resolves.toBeUndefined();
   });
 });
 

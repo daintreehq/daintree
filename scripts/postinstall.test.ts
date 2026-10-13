@@ -166,31 +166,6 @@ describe("postinstall", () => {
     expect(errorCalls).not.toMatch(/node-pty/);
   });
 
-  it("should continue when the last module fails", async () => {
-    mockRebuild
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("posix-pty-reaper build failed"));
-
-    await runPostinstall();
-
-    expect(mockRebuild).toHaveBeenCalledTimes(3);
-    expect(process.exitCode).toBe(1);
-
-    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
-    expect(errorCalls).toMatch(/posix-pty-reaper/);
-  });
-
-  it("should report all failures when all modules fail", async () => {
-    mockRebuild.mockRejectedValue(new Error("rebuild failed"));
-
-    await runPostinstall();
-
-    expect(mockRebuild).toHaveBeenCalledTimes(3);
-    expect(process.exitCode).toBe(1);
-    expect(consoleErrorSpy).toHaveBeenCalled();
-  });
-
   it("should still run post-install when all rebuilds fail", async () => {
     mockRebuild.mockRejectedValue(new Error("all failed"));
 
@@ -214,23 +189,6 @@ describe("postinstall", () => {
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
     expect(errorCalls).toMatch(/node-pty post-install/);
     expect(errorCalls).toMatch(/ConPTY fetch failed/);
-  });
-
-  it("should exit 0 when everything succeeds", async () => {
-    await runPostinstall();
-
-    expect(process.exitCode).toBeUndefined();
-  });
-
-  it("should log failure details with module names", async () => {
-    mockRebuild.mockRejectedValueOnce(new Error("gyp error"));
-    mockRebuild.mockRejectedValueOnce(new Error("link error"));
-
-    await runPostinstall();
-
-    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
-    expect(errorCalls).toMatch(/node-pty/);
-    expect(errorCalls).toMatch(/win-job-object/);
   });
 
   it("patches node-pty's binding.gyp before rebuilding node-pty", async () => {

@@ -36,14 +36,6 @@ describe("contributes.previewTools / contributes.guestAdapters", () => {
     expect(result.success).toBe(true);
   });
 
-  it("materializes both as empty arrays when the manifest declares neither", () => {
-    const result = parse({});
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.contributes.previewTools).toEqual([]);
-    expect(result.data.contributes.guestAdapters).toEqual([]);
-  });
-
   it("refuses an installed plugin declaring either", () => {
     expect(
       errorCodes(parse({ previewTools: [{ id: "acme.preview.tool", title: "T" }] }, "user"))

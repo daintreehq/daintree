@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { createRef } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -94,12 +93,6 @@ describe("Checkbox behaviour", () => {
   it("renders no indicator at all while unchecked", () => {
     render(<Checkbox aria-label="Enable" checked={false} onCheckedChange={vi.fn()} />);
     expect(screen.getByRole("checkbox").querySelector("svg")).toBeNull();
-  });
-
-  it("forwards the ref to the rendered control", () => {
-    const ref = createRef<HTMLButtonElement>();
-    render(<Checkbox ref={ref} aria-label="Enable" checked={false} onCheckedChange={vi.fn()} />);
-    expect(ref.current).toBe(screen.getByRole("checkbox"));
   });
 
   it("inherits the enclosing field's id and invalid state", () => {

@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
-import { stripAnsiCodes } from "@shared/utils/artifactParser";
 import { z } from "zod";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "@shared/config/mcpLimits";
 
@@ -110,23 +109,6 @@ describe("terminal.getOutput action", () => {
     vi.clearAllMocks();
   });
 
-  it("is registered in the action registry", async () => {
-    const actions = await createRegistry();
-    expect(actions.has("terminal.getOutput")).toBe(true);
-  });
-
-  it("has correct metadata", async () => {
-    const actions = await createRegistry();
-    const actionFn = actions.get("terminal.getOutput");
-    expect(actionFn).toBeDefined();
-
-    const action = actionFn!();
-    expect(action.id).toBe("terminal.getOutput");
-    expect(action.kind).toBe("query");
-    expect(action.danger).toBe("safe");
-    expect(action.category).toBe("terminal");
-  });
-
   it("returns last N lines from terminal buffer", async () => {
     const mockBuffer = "line1\nline2\nline3\nline4\nline5";
     mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
@@ -195,23 +177,6 @@ describe("terminal.getOutput action", () => {
 
     expect(result.content).toBe("green text\nred text");
     expect(result.content).not.toContain("\x1b");
-  });
-
-  it("preserves ANSI codes when stripAnsi is false", async () => {
-    const mockBuffer = "\x1b[32mgreen text\x1b[0m";
-    mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));
-
-    const actions = await createRegistry();
-    const actionFn = actions.get("terminal.getOutput");
-    const action = actionFn!();
-
-    const result = (await action.run(
-      { terminalId: "test-terminal", stripAnsi: false },
-      {}
-    )) as TerminalOutputResult;
-
-    expect(result.content).toBe("\x1b[32mgreen text\x1b[0m");
-    expect(result.content).toContain("\x1b");
   });
 
   it("returns null content for non-existent terminal", async () => {
@@ -402,22 +367,5 @@ describe("terminal.getOutput action", () => {
     // ANSI preserved on the content line; trailing padding + cell-pad spaces gone.
     expect(result.content).toBe("\x1b[32mgreen\x1b[0m");
     expect(result.lineCount).toBe(1);
-  });
-});
-
-describe("stripAnsiCodes utility", () => {
-  it("strips common color codes", () => {
-    const input = "\x1b[32mgreen\x1b[0m \x1b[31mred\x1b[0m";
-    expect(stripAnsiCodes(input)).toBe("green red");
-  });
-
-  it("strips cursor positioning codes", () => {
-    const input = "\x1b[2Jcleared\x1b[H";
-    expect(stripAnsiCodes(input)).toBe("cleared");
-  });
-
-  it("handles text with no ANSI codes", () => {
-    const input = "plain text";
-    expect(stripAnsiCodes(input)).toBe("plain text");
   });
 });

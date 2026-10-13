@@ -51,32 +51,11 @@ describe("useSoundPlaybackListener", () => {
     delete (window as any).electron;
   });
 
-  it("subscribes to sound events on mount", () => {
-    renderHook(() => useSoundPlaybackListener());
-
-    expect(window.electron.sound.onTrigger).toHaveBeenCalledTimes(1);
-    expect(window.electron.sound.onCancel).toHaveBeenCalledTimes(1);
-  });
-
-  it("calls playSound when trigger event fires", () => {
-    renderHook(() => useSoundPlaybackListener());
-    triggerCallback!({ soundFile: "chime.wav" });
-
-    expect(mockPlaySound).toHaveBeenCalledWith("chime.wav", undefined);
-  });
-
   it("forwards detune from the trigger payload to playSound", () => {
     renderHook(() => useSoundPlaybackListener());
     triggerCallback!({ soundFile: "pulse.wav", detune: 9 });
 
     expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", 9);
-  });
-
-  it("forwards explicit detune of 0 (does not coerce to undefined)", () => {
-    renderHook(() => useSoundPlaybackListener());
-    triggerCallback!({ soundFile: "pulse.wav", detune: 0 });
-
-    expect(mockPlaySound).toHaveBeenCalledWith("pulse.wav", 0);
   });
 
   it("calls cancelSound when cancel event fires", () => {

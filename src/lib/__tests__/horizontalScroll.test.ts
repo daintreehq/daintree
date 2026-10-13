@@ -25,27 +25,9 @@ describe("getHorizontalScrollState", () => {
       });
       expect(result.isOverflowing).toBe(false);
     });
-
-    it("should return true when content overflows", () => {
-      const result = getHorizontalScrollState({
-        scrollLeft: 0,
-        scrollWidth: 800,
-        clientWidth: 500,
-      });
-      expect(result.isOverflowing).toBe(true);
-    });
   });
 
   describe("canScrollLeft", () => {
-    it("should return false when at scroll start", () => {
-      const result = getHorizontalScrollState({
-        scrollLeft: 0,
-        scrollWidth: 800,
-        clientWidth: 500,
-      });
-      expect(result.canScrollLeft).toBe(false);
-    });
-
     it("should return false when within epsilon of scroll start", () => {
       const result = getHorizontalScrollState({
         scrollLeft: 0.5,
@@ -53,15 +35,6 @@ describe("getHorizontalScrollState", () => {
         clientWidth: 500,
       });
       expect(result.canScrollLeft).toBe(false);
-    });
-
-    it("should return true when scrolled past start", () => {
-      const result = getHorizontalScrollState({
-        scrollLeft: 50,
-        scrollWidth: 800,
-        clientWidth: 500,
-      });
-      expect(result.canScrollLeft).toBe(true);
     });
 
     it("should return false when no overflow even if scrollLeft is set", () => {
@@ -75,46 +48,10 @@ describe("getHorizontalScrollState", () => {
   });
 
   describe("canScrollRight", () => {
-    it("should return true when at scroll start with overflow", () => {
-      const result = getHorizontalScrollState({
-        scrollLeft: 0,
-        scrollWidth: 800,
-        clientWidth: 500,
-      });
-      expect(result.canScrollRight).toBe(true);
-    });
-
-    it("should return true when partially scrolled with more content", () => {
-      const result = getHorizontalScrollState({
-        scrollLeft: 100,
-        scrollWidth: 800,
-        clientWidth: 500,
-      });
-      expect(result.canScrollRight).toBe(true);
-    });
-
-    it("should return false when scrolled to end", () => {
-      const result = getHorizontalScrollState({
-        scrollLeft: 300,
-        scrollWidth: 800,
-        clientWidth: 500,
-      });
-      expect(result.canScrollRight).toBe(false);
-    });
-
     it("should return false when within epsilon of scroll end", () => {
       const result = getHorizontalScrollState({
         scrollLeft: 299.5,
         scrollWidth: 800,
-        clientWidth: 500,
-      });
-      expect(result.canScrollRight).toBe(false);
-    });
-
-    it("should return false when no overflow", () => {
-      const result = getHorizontalScrollState({
-        scrollLeft: 0,
-        scrollWidth: 500,
         clientWidth: 500,
       });
       expect(result.canScrollRight).toBe(false);

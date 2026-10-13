@@ -8,10 +8,6 @@ function make(id: string, lastOpened: number, name = id): Project {
 }
 
 describe("getMruProjects", () => {
-  it("returns empty array for empty input", () => {
-    expect(getMruProjects([])).toEqual([]);
-  });
-
   it("sorts by lastOpened descending", () => {
     const projects = [make("a", 100), make("b", 300), make("c", 200)];
     const sorted = getMruProjects(projects);

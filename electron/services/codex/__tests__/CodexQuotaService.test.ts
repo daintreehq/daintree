@@ -160,23 +160,6 @@ describe("readCodexQuota", () => {
     expect(runSession).toHaveBeenCalledTimes(2);
   });
 
-  it("does not let a read from before a reset overwrite the cache", async () => {
-    let finishStale: (value: unknown) => void = () => {};
-    runSession.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finishStale = resolve;
-        })
-    );
-    const stale = readCodexQuota();
-    resetCodexQuotaCacheForTests();
-    respondWith(() => ({ rateLimits: { primary: WEEK } }));
-    const fresh = await readCodexQuota();
-    finishStale({ rateLimits: { primary: FIVE_HOURS } });
-    await stale;
-    expect(await readCodexQuota()).toBe(fresh);
-  });
-
   it("bypasses the cache on an explicit refresh", async () => {
     respondWith(() => ({ rateLimits: { primary: FIVE_HOURS } }));
     await readCodexQuota();

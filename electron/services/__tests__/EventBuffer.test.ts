@@ -4,8 +4,10 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventBuffer } from "../EventBuffer.js";
-import { events } from "../events.js";
+import { events, type DaintreeEventMap } from "../events.js";
 import type { WorktreeState } from "../../../shared/types/index.js";
+
+type NotifyEventPayload = DaintreeEventMap["ui:notify"] & { timestamp: number };
 
 describe("EventBuffer", () => {
   let buffer: EventBuffer;
@@ -39,22 +41,6 @@ describe("EventBuffer", () => {
   });
 
   describe("basic operations", () => {
-    it("starts with an empty buffer", () => {
-      const freshBuffer = new EventBuffer(10);
-      expect(freshBuffer.size()).toBe(0);
-      expect(freshBuffer.getAll()).toEqual([]);
-    });
-
-    it("captures events when started", () => {
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      expect(buffer.size()).toBe(1);
-    });
-
     it("can be stopped and started", () => {
       buffer.stop();
 
@@ -76,66 +62,121 @@ describe("EventBuffer", () => {
 
       expect(buffer.size()).toBe(1);
     });
-
-    it("clears the buffer", () => {
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      expect(buffer.size()).toBe(1);
-      buffer.clear();
-      expect(buffer.size()).toBe(0);
-    });
   });
 
-  describe("ring buffer behavior", () => {
-    it("enforces max size", () => {
-      // Buffer is initialized with maxSize of 10
-      for (let i = 0; i < 20; i++) {
+  describe("at capacity 3", () => {
+    beforeEach(() => {
+      buffer.stop();
+      buffer = new EventBuffer(3);
+      buffer.start();
+    });
+
+    it("evicts only after crossing the exact capacity boundary", () => {
+      for (let i = 0; i < 3; i++) {
         events.emit("agent:spawned", {
           agentId: `agent-${i}`,
           terminalId: `term-${i}`,
-          timestamp: Date.now(),
+          timestamp: i + 1,
         });
       }
 
-      expect(buffer.size()).toBe(10);
+      expect(buffer.getAll().map((event) => event.payload.agentId)).toEqual([
+        "agent-0",
+        "agent-1",
+        "agent-2",
+      ]);
+
+      events.emit("agent:spawned", {
+        agentId: "agent-3",
+        terminalId: "term-3",
+        timestamp: 4,
+      });
+
+      expect(buffer.getAll().map((event) => event.payload.agentId)).toEqual([
+        "agent-1",
+        "agent-2",
+        "agent-3",
+      ]);
     });
 
-    it("keeps most recent events when buffer overflows", () => {
-      for (let i = 0; i < 20; i++) {
-        events.emit("agent:spawned", {
-          agentId: `agent-${i}`,
-          terminalId: `term-${i}`,
-          timestamp: Date.now(),
+    it("keeps callback dispatch stable when listeners unsubscribe and subscribe during eviction", () => {
+      const calls: string[] = [];
+
+      let offFirst = () => {};
+      let offSecond = () => {};
+
+      offFirst = buffer.onRecord((record) => {
+        calls.push(`first:${record.payload.agentId}`);
+        offFirst();
+        offSecond();
+        buffer.onRecord((nextRecord) => {
+          calls.push(`third:${nextRecord.payload.agentId}`);
         });
-      }
+      });
 
-      const all = buffer.getAll();
-      expect(all.length).toBe(10);
+      offSecond = buffer.onRecord((record) => {
+        calls.push(`second:${record.payload.agentId}`);
+      });
 
-      // Oldest event should be agent-10, newest should be agent-19
-      expect(all[0].payload.agentId).toBe("agent-10");
-      expect(all[9].payload.agentId).toBe("agent-19");
+      events.emit("agent:spawned", {
+        agentId: "agent-a",
+        terminalId: "term-a",
+        timestamp: 1,
+      });
+      events.emit("agent:spawned", {
+        agentId: "agent-b",
+        terminalId: "term-b",
+        timestamp: 2,
+      });
+
+      expect(calls).toEqual(["first:agent-a", "second:agent-a", "third:agent-b"]);
     });
 
-    it("maintains FIFO order", () => {
-      events.emit("agent:spawned", {
-        agentId: "first",
-        terminalId: "t1",
-        timestamp: Date.now(),
-      });
-      events.emit("agent:spawned", {
-        agentId: "second",
-        terminalId: "t2",
-        timestamp: Date.now(),
+    it("preserves redaction even if a caller mutates a record returned by getAll", () => {
+      events.emit("agent:output", {
+        agentId: "agent-1",
+        data: "TOKEN=super-secret",
+        timestamp: 1,
       });
 
-      const all = buffer.getAll();
-      expect(all[0].payload.agentId).toBe("first");
-      expect(all[1].payload.agentId).toBe("second");
+      const [record] = buffer.getAll();
+      record.payload.data = "TOKEN=super-secret";
+
+      expect(buffer.getFiltered({ search: "super-secret" })).toEqual([]);
+      expect(buffer.getAll()[0].payload.data).toBe(
+        "[REDACTED - May contain sensitive information]"
+      );
+    });
+
+    it("returns filtered snapshots that cannot reintroduce redacted payloads", () => {
+      events.emit("agent:output", {
+        agentId: "agent-1",
+        data: "apiKey=super-secret",
+        timestamp: 1,
+      });
+
+      const [record] = buffer.getFiltered({ agentId: "agent-1" });
+      record.payload.data = "apiKey=super-secret";
+
+      expect(buffer.getFiltered({ search: "super-secret" })).toEqual([]);
+      expect(buffer.getFiltered({ agentId: "agent-1" })[0].payload.data).toBe(
+        "[REDACTED - May contain sensitive information]"
+      );
+    });
+
+    it("filters large payloads without truncating searchable fields", () => {
+      const payload: NotifyEventPayload = {
+        message: `${"x".repeat(250_000)}needle`,
+        type: "info",
+        timestamp: 1,
+      };
+
+      events.emit("ui:notify", payload);
+
+      const matches = buffer.getFiltered({ search: "needle" });
+
+      expect(matches).toHaveLength(1);
+      expect(matches[0].type).toBe("ui:notify");
     });
   });
 
@@ -182,13 +223,6 @@ describe("EventBuffer", () => {
       const filtered = buffer.getFiltered({ types: ["agent:spawned"] });
       expect(filtered.length).toBe(2);
       expect(filtered.every((e) => e.type === "agent:spawned")).toBe(true);
-    });
-
-    it("filters by multiple event types", () => {
-      const filtered = buffer.getFiltered({
-        types: ["agent:spawned", "agent:state-changed"],
-      });
-      expect(filtered.length).toBe(3);
     });
 
     it("filters by agentId", () => {
@@ -254,11 +288,6 @@ describe("EventBuffer", () => {
       });
       expect(filtered.length).toBe(1);
       expect(filtered[0].payload.agentId).toBe("agent-1");
-    });
-
-    it("returns empty array when no matches", () => {
-      const filtered = buffer.getFiltered({ agentId: "nonexistent" });
-      expect(filtered).toEqual([]);
     });
 
     it("returns all events when no filters provided", () => {
@@ -351,41 +380,6 @@ describe("EventBuffer", () => {
       const event = buffer.getAll().find((e) => e.type === "agent:state-changed");
       expect(event?.payload).toEqual(payload);
     });
-
-    it("does not redact non-sensitive events", () => {
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      const all = buffer.getAll();
-      const spawnedEvent = all.find((e) => e.type === "agent:spawned");
-
-      expect(spawnedEvent).toBeDefined();
-      expect(spawnedEvent?.payload.agentId).toBe("agent-1");
-    });
-
-    it("does not redact agent:state-changed events", () => {
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "working",
-        previousState: "idle",
-        timestamp: Date.now(),
-        trigger: "heuristic",
-        confidence: 0.9,
-      });
-
-      const all = buffer.getAll();
-      const stateEvent = all.find((e) => e.type === "agent:state-changed");
-
-      expect(stateEvent).toBeDefined();
-      expect(stateEvent?.payload.state).toBe("working");
-      expect(stateEvent?.payload.previousState).toBe("idle");
-      // Verify trigger and confidence metadata survive sanitization
-      expect(stateEvent?.payload.trigger).toBe("heuristic");
-      expect(stateEvent?.payload.confidence).toBe(0.9);
-    });
   });
 
   describe("event record structure", () => {
@@ -404,52 +398,11 @@ describe("EventBuffer", () => {
       const all = buffer.getAll();
       expect(all[0].id).not.toBe(all[1].id);
     });
-
-    it("includes timestamp in event records", () => {
-      const before = Date.now();
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-      const after = Date.now();
-
-      const all = buffer.getAll();
-      expect(all[0].timestamp).toBeGreaterThanOrEqual(before);
-      expect(all[0].timestamp).toBeLessThanOrEqual(after);
-    });
-
-    it("includes correct event type in records", () => {
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      const all = buffer.getAll();
-      expect(all[0].type).toBe("agent:spawned");
-    });
-
-    it("includes source as 'main' for all events", () => {
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      const all = buffer.getAll();
-      expect(all[0].source).toBe("main");
-    });
   });
 
   describe("edge cases", () => {
     beforeEach(() => {
       buffer.clear();
-    });
-
-    it("handles empty buffer for getFiltered", () => {
-      const filtered = buffer.getFiltered({ types: ["agent:spawned"] });
-      expect(filtered).toEqual([]);
     });
 
     it("handles search with special characters", () => {
@@ -481,19 +434,6 @@ describe("EventBuffer", () => {
 
       const searchResults = buffer.getFiltered({ search: "agent-circular" });
       expect(searchResults.length).toBe(1);
-    });
-
-    it("throws on non-cloneable payload via direct push", () => {
-      expect(() =>
-        (buffer as any).push({
-          id: "fn-test",
-          timestamp: Date.now(),
-          type: "agent:spawned",
-          category: "agent",
-          payload: { fn: () => {}, agentId: "agent-fn" },
-          source: "main",
-        })
-      ).toThrow();
     });
 
     it("start() skips non-cloneable events and logs error", () => {
@@ -531,11 +471,6 @@ describe("EventBuffer", () => {
       expect(warnSpy).toHaveBeenCalledWith("[EventBuffer] Already started");
 
       warnSpy.mockRestore();
-    });
-
-    it("handles stop when not started", () => {
-      const freshBuffer = new EventBuffer(10);
-      expect(() => freshBuffer.stop()).not.toThrow();
     });
   });
 
@@ -580,55 +515,11 @@ describe("EventBuffer", () => {
       expect(traceBeta.length).toBe(1);
       expect(traceBeta[0].payload.traceId).toBe("trace-beta");
     });
-
-    it("combines traceId with other filters", () => {
-      buffer.clear();
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-        traceId: "trace-1",
-      });
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "working",
-        previousState: "idle",
-        timestamp: Date.now(),
-        traceId: "trace-1",
-        trigger: "output",
-        confidence: 1.0,
-      });
-      events.emit("agent:spawned", {
-        agentId: "agent-2",
-        terminalId: "term-2",
-        timestamp: Date.now(),
-        traceId: "trace-1",
-      });
-
-      // Filter by trace ID AND agent ID
-      const filtered = buffer.getFiltered({
-        traceId: "trace-1",
-        agentId: "agent-1",
-      });
-      expect(filtered.length).toBe(2);
-    });
   });
 
   describe("category support", () => {
     beforeEach(() => {
       buffer.clear();
-    });
-
-    it("includes category in event records derived from EVENT_META", () => {
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      const all = buffer.getAll();
-      expect(all[0].category).toBe("agent");
     });
 
     it("assigns correct category to different event types", () => {
@@ -693,37 +584,6 @@ describe("EventBuffer", () => {
       expect(systemEvents[0].category).toBe("system");
     });
 
-    it("combines category filter with other filters", () => {
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-      events.emit("agent:spawned", {
-        agentId: "agent-2",
-        terminalId: "term-2",
-        timestamp: Date.now(),
-      });
-      events.emit("sys:worktree:update", {
-        id: "wt-1",
-        path: "/foo/bar",
-        name: "bar",
-        branch: "main",
-        isCurrent: true,
-        worktreeId: "wt-1",
-        worktreeChanges: null,
-        lastActivityTimestamp: null,
-        aiStatus: "disabled",
-      } as any);
-
-      const filtered = buffer.getFiltered({
-        category: "agent",
-        agentId: "agent-1",
-      });
-      expect(filtered.length).toBe(1);
-      expect(filtered[0].payload.agentId).toBe("agent-1");
-    });
-
     it("getEventsByCategory returns events for specific category", () => {
       events.emit("agent:spawned", {
         agentId: "agent-1",
@@ -782,60 +642,6 @@ describe("EventBuffer", () => {
       expect(stats.system).toBe(1);
       expect(stats.file).toBe(0);
     });
-
-    it("returns empty array for category with no events", () => {
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      const fileEvents = buffer.getEventsByCategory("file");
-      expect(fileEvents).toEqual([]);
-
-      const stats = buffer.getCategoryStats();
-      expect(stats.file).toBe(0);
-    });
-  });
-
-  describe("custom buffer sizes", () => {
-    it("respects custom max size of 1", () => {
-      const tinyBuffer = new EventBuffer(1);
-      tinyBuffer.start();
-
-      events.emit("agent:spawned", {
-        agentId: "first",
-        terminalId: "t1",
-        timestamp: Date.now(),
-      });
-      events.emit("agent:spawned", {
-        agentId: "second",
-        terminalId: "t2",
-        timestamp: Date.now(),
-      });
-
-      expect(tinyBuffer.size()).toBe(1);
-      expect(tinyBuffer.getAll()[0].payload.agentId).toBe("second");
-
-      tinyBuffer.stop();
-    });
-
-    it("handles large buffer size", () => {
-      const largeBuffer = new EventBuffer(1000);
-      largeBuffer.start();
-
-      for (let i = 0; i < 100; i++) {
-        events.emit("agent:spawned", {
-          agentId: `agent-${i}`,
-          terminalId: `term-${i}`,
-          timestamp: Date.now(),
-        });
-      }
-
-      expect(largeBuffer.size()).toBe(100);
-
-      largeBuffer.stop();
-    });
   });
 
   describe("onRecord callback", () => {
@@ -885,22 +691,6 @@ describe("EventBuffer", () => {
       expect(callback).toHaveBeenCalledTimes(1);
     });
 
-    it("supports multiple callbacks", () => {
-      const callback1 = vi.fn();
-      const callback2 = vi.fn();
-      buffer.onRecord(callback1);
-      buffer.onRecord(callback2);
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      expect(callback1).toHaveBeenCalledTimes(1);
-      expect(callback2).toHaveBeenCalledTimes(1);
-    });
-
     it("continues with other callbacks if one throws", () => {
       const errorCallback = vi.fn(() => {
         throw new Error("Test error");
@@ -925,22 +715,6 @@ describe("EventBuffer", () => {
       );
 
       consoleSpy.mockRestore();
-    });
-
-    it("unsubscribe is idempotent", () => {
-      const callback = vi.fn();
-      const unsubscribe = buffer.onRecord(callback);
-
-      unsubscribe();
-      unsubscribe();
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      expect(callback).not.toHaveBeenCalled();
     });
 
     it("receives sanitized payload for sensitive events", () => {

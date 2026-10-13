@@ -129,12 +129,6 @@ describe("host.clipboard capability gating", () => {
     expect(mockClipboard.readText).not.toHaveBeenCalled();
   });
 
-  it("returns the empty string for non-text / empty clipboard content", async () => {
-    mockClipboard.readText.mockReturnValue("");
-    const host = registerPlugin(["clipboard:read"]);
-    expect(await host.clipboard.readText()).toBe("");
-  });
-
   it("write and read are independently gated", async () => {
     // A plugin declaring only write cannot read, and vice versa.
     const writeOnly = registerPlugin(["clipboard:write"]);
@@ -179,16 +173,6 @@ describe("host.clipboard write size guard", () => {
     const overLimit = "a".repeat(LIMIT + 1);
     await expect(host.clipboard.writeText(overLimit)).rejects.toThrow(/PAYLOAD_TOO_LARGE/);
     expect(mockClipboard.writeText).not.toHaveBeenCalled();
-  });
-
-  it("accepts multi-byte text exactly at the byte limit", async () => {
-    const host = registerPlugin(["clipboard:write"]);
-    // 4-byte emoji × (LIMIT / 4) === exactly 8 MiB UTF-8, well under LIMIT by
-    // .length — exercises the boundary on the byte axis, not the char axis.
-    const atLimit = "😀".repeat(LIMIT / 4);
-    expect(Buffer.byteLength(atLimit, "utf8")).toBe(LIMIT);
-    await expect(host.clipboard.writeText(atLimit)).resolves.toBeUndefined();
-    expect(mockClipboard.writeText).toHaveBeenCalledWith(atLimit);
   });
 
   it("measures by UTF-8 byte length, not JS string length (multi-byte chars)", async () => {

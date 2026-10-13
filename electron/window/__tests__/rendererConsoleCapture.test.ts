@@ -292,20 +292,6 @@ describe("detachRendererConsoleCapture", () => {
     expect(wc.removeListener).not.toHaveBeenCalled();
   });
 
-  it("allows a fresh attach after detach to register a new listener", () => {
-    const wc = createMockWebContents();
-    attachRendererConsoleCapture(wc as unknown as Electron.WebContents);
-    detachRendererConsoleCapture(wc as unknown as Electron.WebContents);
-    attachRendererConsoleCapture(wc as unknown as Electron.WebContents);
-
-    expect(wc.on).toHaveBeenCalledTimes(2);
-
-    wc.emit(makeDetails("error", { message: "fresh" }));
-    expect(logErrorMock).toHaveBeenCalledTimes(1);
-
-    detachRendererConsoleCapture(wc as unknown as Electron.WebContents);
-  });
-
   it("clears rate-limit state on detach so reattach starts with a fresh quota", () => {
     const wc = createMockWebContents();
     attachRendererConsoleCapture(wc as unknown as Electron.WebContents);

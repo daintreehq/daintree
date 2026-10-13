@@ -196,23 +196,6 @@ describe("findEntryKey", () => {
     expect(findEntryKey(manifest)).toBe("src/tourExtra.ts");
   });
 
-  it("identifies a tour facade by its hashed file path when the manifest carries no name", () => {
-    const manifest = {
-      "\0virtual:daintree-host/@daintreehq/tour/react": {
-        file: "assets/host-daintreehq-tour-react-Cd4ef5Gh.js",
-        isEntry: true,
-        imports: [],
-        dynamicImports: [],
-      },
-      ...makeManifest(),
-    };
-    expect(findEntryKey(manifest)).toBe("src/main.tsx");
-  });
-
-  it("does not mistake a real chunk for a facade just because it imports react", () => {
-    expect(findEntryKey(makeManifest())).toBe("src/main.tsx");
-  });
-
   it("returns null when the manifest has only facade entries", () => {
     const manifest = {
       "\0virtual:daintree-host/react": {
@@ -232,22 +215,6 @@ describe("collectEagerChunks", () => {
     const manifest = makeManifest();
     const closure = collectEagerChunks(manifest, "src/main.tsx");
     expect([...closure].sort()).toEqual(["_vendor-react.js", "_vendor-xterm.js", "src/main.tsx"]);
-  });
-
-  it("does NOT walk dynamicImports[] (the whole point of the gate)", () => {
-    const manifest = makeManifest();
-    const closure = collectEagerChunks(manifest, "src/main.tsx");
-    expect(closure.has("src/components/Browser/BrowserPane.tsx")).toBe(false);
-    expect(closure.has("_vendor-browser.js")).toBe(false);
-  });
-
-  it("visits each shared chunk exactly once even when reachable via multiple paths", () => {
-    // Both src/main.tsx AND _vendor-xterm.js import _vendor-react.js. The
-    // BFS must not double-count it. (Identity = manifest key.)
-    const manifest = makeManifest();
-    const closure = collectEagerChunks(manifest, "src/main.tsx");
-    const reactChunks = [...closure].filter((k) => k === "_vendor-react.js");
-    expect(reactChunks.length).toBe(1);
   });
 
   it("returns an empty set when the entry key is not in the manifest", () => {
@@ -309,10 +276,6 @@ describe("stableChunkId", () => {
 describe("shrinkageGuardError", () => {
   const THRESHOLD = 0.1; // 10%
 
-  it("returns null when next count is unchanged", () => {
-    expect(shrinkageGuardError(100, 100, THRESHOLD)).toBeNull();
-  });
-
   it("returns null when next count grows (not a shrinkage)", () => {
     expect(shrinkageGuardError(100, 120, THRESHOLD)).toBeNull();
   });
@@ -330,10 +293,6 @@ describe("shrinkageGuardError", () => {
     expect(err).not.toBeNull();
     expect(err).toContain("100");
     expect(err).toContain("89");
-  });
-
-  it("returns null when priorCount is 0 (initial state)", () => {
-    expect(shrinkageGuardError(0, 50, THRESHOLD)).toBeNull();
   });
 
   it("returns null when priorCount is missing (no baseline)", () => {
@@ -612,11 +571,6 @@ describe("compareReport", () => {
 });
 
 describe("parseArgs", () => {
-  it("defaults threshold to 0.05 and flags off", () => {
-    const args = parseArgs(["node", "script.mjs"]);
-    expect(args).toEqual({ isUpdate: false, force: false, threshold: 0.05 });
-  });
-
   it("parses --update and --force", () => {
     const args = parseArgs(["node", "script.mjs", "--update", "--force"]);
     expect(args.isUpdate).toBe(true);

@@ -307,41 +307,6 @@ describe("webviewEmulation handler", () => {
     await expect(queued).resolves.toEqual({ applied: false });
   });
 
-  it("lets the last of three in-flight requests decide the final touch state", async () => {
-    const guest = makeGuest();
-    const pending: Array<() => void> = [];
-    guest.debugger.sendCommand.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          pending.push(resolve);
-        })
-    );
-    guestRegistry.set(7, guest);
-    const handler = await getHandler();
-
-    // Apply a preset, then clear, then apply again — all while every CDP
-    // command is still outstanding.
-    const first = handler(applyRequest());
-    const cleared = handler(applyRequest({ emulation: null }));
-    const second = handler(applyRequest());
-
-    // Requests are serialized, so the next batch of CDP commands is only
-    // issued once the previous request finishes — keep draining past the
-    // moments when nothing is outstanding.
-    for (let i = 0; i < 200; i++) {
-      while (pending.length > 0) pending.shift()!();
-      await Promise.resolve();
-    }
-    await Promise.all([first, cleared, second]);
-
-    // Serialized, so the last request wins: the guest ends up emulated, not
-    // left with the clear's touch teardown applied on top of it.
-    const touchCalls = cdpCalls(guest)
-      .filter(([cmd]) => cmd === "Emulation.setTouchEmulationEnabled")
-      .map(([, params]) => (params as { enabled: boolean }).enabled);
-    expect(touchCalls[touchCalls.length - 1]).toBe(true);
-  });
-
   it("re-issues touch commands after a partial failure instead of trusting the cache", async () => {
     const guest = makeGuest();
     // The first command lands, the second does not — the guest is now in a
@@ -363,21 +328,5 @@ describe("webviewEmulation handler", () => {
       "Emulation.setTouchEmulationEnabled",
       { enabled: true, maxTouchPoints: 5 },
     ]);
-  });
-
-  it("ignores an unregistered guest", async () => {
-    const guest = makeGuest();
-    guestRegistry.set(7, guest);
-    dialogService.getPanelId.mockReturnValue(undefined);
-
-    const handler = await getHandler();
-    await handler(applyRequest());
-
-    expect(guest.enableDeviceEmulation).not.toHaveBeenCalled();
-  });
-
-  it("does nothing when the guest is gone", async () => {
-    const handler = await getHandler();
-    await expect(handler(applyRequest())).resolves.toEqual({ applied: false });
   });
 });

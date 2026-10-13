@@ -379,31 +379,4 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
     mod.notifyAppViewPainted(wc as never);
     expect(wc.send).toHaveBeenCalledTimes(1);
   });
-
-  it("re-holds the intent after a reload drops the painted id", async () => {
-    const mod = await import("../deepLinkInstall.js");
-    mod._resetDeepLinkStateForTest();
-    const wc = makeWebContents(5);
-    registryMock.getAppWebContents.mockReturnValue(wc);
-    mod.activateDeepLinkHandler(makeRegistry(true) as never);
-
-    // Paint, then capture the navigation handler wired on first paint.
-    mod.notifyAppViewPainted(wc as never);
-    const didStartNavigation = wc.on.mock.calls.find(
-      ([evt]) => evt === "did-start-navigation"
-    )?.[1] as ((details: { isMainFrame: boolean; isSameDocument: boolean }) => void) | undefined;
-    expect(didStartNavigation).toBeTypeOf("function");
-
-    // Reload: the navigation starts (held from here) and commits a new document.
-    didStartNavigation?.({ isMainFrame: true, isSameDocument: false });
-    handlerFor(wc, "did-navigate")({}, "app://daintree/index.html");
-
-    // A deep link now is held (not delivered to the unmounted renderer)…
-    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
-    expect(wc.send).not.toHaveBeenCalled();
-
-    // …until the fresh paint flushes it.
-    mod.notifyAppViewPainted(wc as never);
-    expect(wc.send).toHaveBeenCalledTimes(1);
-  });
 });

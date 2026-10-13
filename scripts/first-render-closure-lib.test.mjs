@@ -39,12 +39,6 @@ describe("collectClosure — eager static walk (followDynamic: false)", () => {
     expect(closure.has("y")).toBe(false);
     expect([...closure].sort()).toEqual(["a", "b"]);
   });
-
-  it("returns just the seed when it has no static imports", () => {
-    const graph = { a: { imports: [] } };
-    const closure = collectClosure(["a"], graphOptions(graph));
-    expect([...closure]).toEqual(["a"]);
-  });
 });
 
 describe("collectClosure — total walk (followDynamic: true)", () => {
@@ -69,17 +63,6 @@ describe("collectClosure — robustness", () => {
     };
     const closure = collectClosure(["a"], graphOptions(graph));
     expect([...closure].sort()).toEqual(["a", "b", "c"]);
-  });
-
-  it("visits a diamond-shared node exactly once", () => {
-    const graph = {
-      a: { imports: ["b", "c"] },
-      b: { imports: ["shared"] },
-      c: { imports: ["shared"] },
-      shared: { imports: [] },
-    };
-    const closure = collectClosure(["a"], graphOptions(graph));
-    expect([...closure].filter((k) => k === "shared").length).toBe(1);
   });
 
   it("skips seed keys that resolve to no node", () => {

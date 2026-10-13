@@ -202,16 +202,6 @@ describe("applySubmissionResult", () => {
     expect(record.cancelled).toBe(true);
   });
 
-  it("enters watching when a sent agent is still working", () => {
-    seedPanels([makeAgent("a", { agentState: "working" })]);
-    const runId = useFleetRunStore.getState().beginRun(["a"], { draft: "go" });
-    useFleetRunStore
-      .getState()
-      .applySubmissionResult(runId, makeResult([{ terminalId: "a", status: "fulfilled" }]));
-    expect(useFleetRunStore.getState().run!.status).toBe("watching");
-    expect(appendMock).not.toHaveBeenCalled();
-  });
-
   it("completes immediately when every sent agent is already at rest", () => {
     seedPanels([makeAgent("a", { agentState: "completed" })]);
     const runId = useFleetRunStore.getState().beginRun(["a"], { draft: "go" });

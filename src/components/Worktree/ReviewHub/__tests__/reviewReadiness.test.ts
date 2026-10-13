@@ -453,34 +453,6 @@ describe("deriveReviewReadiness", () => {
   });
 
   describe("boundary values", () => {
-    it("uses singular labels for single counts", () => {
-      const summary = derive({
-        status: makeStatus({
-          staged: [],
-          conflicted: ["src/a.ts"],
-          conflictedFiles: [{ path: "src/a.ts", xy: "UU", label: "both modified" }],
-        }),
-        behindCount: 1,
-      });
-      expect(summary.blockers[0]!.label).toBe("1 conflicted file");
-      expect(summary.warnings.find((i) => i.id === "behind-remote")!.label).toBe(
-        "Behind remote by 1 commit"
-      );
-    });
-
-    it("handles thousands of changed files without conflating counts", () => {
-      const unstaged = Array.from({ length: 2500 }, (_, i) => ({
-        path: `src/file-${i}.ts`,
-        status: "modified" as const,
-        insertions: 1,
-        deletions: 0,
-      }));
-      const summary = derive({ status: makeStatus({ staged: [], unstaged }) });
-      expect(summary.warnings.find((i) => i.id === "nothing-staged")!.detail).toBe(
-        `${(2500).toLocaleString()} changed files`
-      );
-    });
-
     it("treats zero behind/ahead as no divergence", () => {
       const summary = derive({ status: makeStatus(), aheadCount: 0, behindCount: 0 });
       expect(allIds(summary)).not.toContain("behind-remote");

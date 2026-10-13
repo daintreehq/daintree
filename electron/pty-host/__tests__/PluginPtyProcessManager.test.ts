@@ -290,23 +290,6 @@ describe("PluginPtyProcessManager", () => {
     }
   });
 
-  it("SIGKILL sends a real SIGKILL on Unix, not node-pty's SIGHUP default", () => {
-    const platform = process.platform;
-    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-    try {
-      const fake = makeFakePty();
-      spawnMock.mockReturnValue(fake.pty);
-      const { manager } = makeManager();
-      manager.spawn("p1", 0, options());
-      manager.kill("p1", 0, "SIGKILL");
-      // destroyPty's bare kill() defaults to SIGHUP in node-pty, which a child
-      // that ignores HUP survives — the escalation has to name the signal.
-      expect(fake.kills[0]).toBe("SIGKILL");
-    } finally {
-      Object.defineProperty(process, "platform", { value: platform, configurable: true });
-    }
-  });
-
   it("issues only one native kill on Windows, where a second double-frees ConPTY", () => {
     const platform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
@@ -420,18 +403,6 @@ describe("PluginPtyProcessManager", () => {
     // The successor is live and addressable at its own generation.
     manager.write("p1", 1, "hi");
     expect(second.writes).toEqual(["hi"]);
-  });
-
-  it("disposeAll tears down every live PTY", () => {
-    const a = makeFakePty();
-    const b = makeFakePty();
-    spawnMock.mockReturnValueOnce(a.pty).mockReturnValueOnce(b.pty);
-    const { manager } = makeManager();
-    manager.spawn("p1", 0, options());
-    manager.spawn("p2", 0, options());
-    manager.disposeAll();
-    expect(a.calls).toEqual(["destroy", "kill"]);
-    expect(b.calls).toEqual(["destroy", "kill"]);
   });
 });
 

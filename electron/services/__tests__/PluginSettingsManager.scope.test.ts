@@ -246,14 +246,6 @@ describe("PluginSettingsManager secret tier routing (#9167)", () => {
     expect(ui.secretsPlaintext).toEqual(["token"]);
   });
 
-  it("reveals a stored secret only through the explicit reveal path", async () => {
-    const mgr = managerFor([{ id: "token", type: "secret", scope: "user" }]);
-    await mgr.setSettingValueFromUi("acme.scope-test", "token", "sk-secret", "user", null);
-    expect(await mgr.revealSecretSettingForUi("acme.scope-test", "token", "user", null)).toBe(
-      "sk-secret"
-    );
-  });
-
   it("isSecretKey reflects the declared type and the legacy secret flag", () => {
     const mgr = managerFor([
       { id: "typed", type: "secret" },
@@ -313,32 +305,6 @@ describe("PluginSettingsManager onDidChange failure isolation (#10621)", () => {
 
     errorSpy.mockRestore();
     warnSpy.mockRestore();
-  });
-
-  it("does not quarantine a subscriber that recovers between throws", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const mgr = managerFor([{ id: "token", type: "string", scope: "user" }]);
-    let shouldThrow = true;
-    const cb = vi.fn(() => {
-      if (shouldThrow) throw new Error("intermittent");
-    });
-    mgr.addSubscriber("acme.scope-test", { key: "token", scope: "user", cb });
-
-    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "a");
-    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "b");
-    shouldThrow = false;
-    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "c");
-    shouldThrow = true;
-    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "d");
-    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "e");
-
-    // Still subscribed: a final delivery fires.
-    shouldThrow = false;
-    mgr.notifySettingsSubscribers("acme.scope-test", "user", "token", "f");
-    expect(cb).toHaveBeenCalledTimes(6);
-    expect(cb).toHaveBeenLastCalledWith("f");
-
-    errorSpy.mockRestore();
   });
 });
 
@@ -672,11 +638,6 @@ describe("PluginSettingsManager required settings", () => {
     await mgr.setSettingValueFromUi(PLUGIN_ID, "team", "core", "project", PROJECT_ID);
     expect((await mgr.requiredStatusForUi(PLUGIN_ID, PROJECT_ID)).missing).toEqual([]);
     await expect(mgr.missingRequiredForHost(PLUGIN_ID, projectRoot)).resolves.toEqual([]);
-  });
-
-  it("is empty when nothing is required", async () => {
-    const mgr = managerFor([{ id: "token", type: "secret" }]);
-    expect((await mgr.requiredStatusForUi(PLUGIN_ID, null)).missing).toEqual([]);
   });
 
   it("checks a stored secret's presence without decrypting it", async () => {

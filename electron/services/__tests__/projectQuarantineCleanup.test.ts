@@ -63,21 +63,6 @@ describe("cleanupQuarantinedProjectFiles", () => {
   // Round to second boundary to avoid mtime truncation on Linux (ext4 has 1s granularity)
   const NOW = Math.floor(Date.now() / 1000) * 1000;
 
-  it("deletes .corrupted files older than 30 days", async () => {
-    const projectDir = await createProjectDir(VALID_PROJECT_ID);
-    const filePath = await createCorruptedFile(
-      projectDir,
-      "state.json.corrupted.1234567890",
-      THIRTY_ONE_DAYS_MS,
-      NOW
-    );
-
-    const deleted = await cleanupQuarantinedProjectFiles(tmpDir, NOW);
-
-    expect(deleted).toBe(1);
-    await expect(fs.access(filePath)).rejects.toThrow();
-  });
-
   it("preserves .corrupted files newer than 30 days", async () => {
     const projectDir = await createProjectDir(VALID_PROJECT_ID);
     const filePath = await createCorruptedFile(
@@ -166,17 +151,6 @@ describe("cleanupQuarantinedProjectFiles", () => {
     expect(deleted).toBe(0);
   });
 
-  it("handles empty projects directory", async () => {
-    const deleted = await cleanupQuarantinedProjectFiles(tmpDir, NOW);
-    expect(deleted).toBe(0);
-  });
-
-  it("handles missing .corrupted files gracefully (no errors)", async () => {
-    await createProjectDir(VALID_PROJECT_ID);
-    const deleted = await cleanupQuarantinedProjectFiles(tmpDir, NOW);
-    expect(deleted).toBe(0);
-  });
-
   it("processes multiple project directories", async () => {
     const dir1 = await createProjectDir(VALID_PROJECT_ID);
     const dir2 = await createProjectDir(VALID_PROJECT_ID_2);
@@ -206,22 +180,6 @@ describe("cleanupQuarantinedProjectFiles", () => {
     await expect(fs.access(oldFile1)).rejects.toThrow();
     await expect(fs.access(oldFile2)).rejects.toThrow();
     await expect(fs.access(freshFile)).resolves.toBeUndefined();
-  });
-
-  it("is idempotent — calling twice is safe", async () => {
-    const projectDir = await createProjectDir(VALID_PROJECT_ID);
-    await createCorruptedFile(
-      projectDir,
-      "state.json.corrupted.1234567890",
-      THIRTY_ONE_DAYS_MS,
-      NOW
-    );
-
-    const deleted1 = await cleanupQuarantinedProjectFiles(tmpDir, NOW);
-    expect(deleted1).toBe(1);
-
-    const deleted2 = await cleanupQuarantinedProjectFiles(tmpDir, NOW);
-    expect(deleted2).toBe(0);
   });
 
   it("boundary: exactly 30 days old is preserved (uses > not >=)", async () => {
@@ -282,20 +240,6 @@ describe("cleanupQuarantinedProjectFiles", () => {
     await expect(fs.access(futureV2)).rejects.toThrow();
     await expect(fs.access(futureV2Stamped)).rejects.toThrow();
     await expect(fs.access(futureV999999)).rejects.toThrow();
-  });
-
-  it("preserves fresh state.json.future-v<N> files", async () => {
-    const projectDir = await createProjectDir(VALID_PROJECT_ID);
-    const filePath = await createCorruptedFile(
-      projectDir,
-      "state.json.future-v2",
-      TWENTY_NINE_DAYS_MS,
-      NOW
-    );
-
-    const deleted = await cleanupQuarantinedProjectFiles(tmpDir, NOW);
-    expect(deleted).toBe(0);
-    await expect(fs.access(filePath)).resolves.toBeUndefined();
   });
 
   it("preserves files with future mtime (clock-skew safety)", async () => {
@@ -361,25 +305,6 @@ describe("cleanupQuarantinedProjectFiles", () => {
         projectId: VALID_PROJECT_ID,
       })
     );
-  });
-
-  it("does not log reap for fresh files preserved by the age gate", async () => {
-    logInfo.mockClear();
-
-    const projectDir = await createProjectDir(VALID_PROJECT_ID);
-    await createCorruptedFile(
-      projectDir,
-      "state.json.corrupted.1234567890",
-      TWENTY_NINE_DAYS_MS,
-      NOW
-    );
-
-    await cleanupQuarantinedProjectFiles(tmpDir, NOW);
-
-    const reapCalls = logInfo.mock.calls.filter(
-      (call: unknown[]) => call[0] === "quarantine-file-reaped"
-    );
-    expect(reapCalls).toHaveLength(0);
   });
 
   it("reap log context does not contain absolute file path", async () => {

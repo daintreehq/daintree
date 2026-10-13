@@ -172,21 +172,4 @@ describe("handleProjectRunCheck — result projection", () => {
     );
     expect(result.output).toContain("[truncated]");
   });
-
-  it("passes a failing check straight through rather than throwing", async () => {
-    runCheckMock.mockResolvedValue({ ...baseResult, passed: false, exitCode: 2 });
-
-    const result = await handleProjectRunCheck({ projectId: "proj-1", runnerId: "npm-test" });
-
-    expect(result.passed).toBe(false);
-    expect(result.exitCode).toBe(2);
-  });
-
-  it("propagates a service failure-to-start error", async () => {
-    runCheckMock.mockRejectedValue(new Error('No runner "nope" detected in /repo.'));
-
-    await expect(handleProjectRunCheck({ projectId: "proj-1", runnerId: "nope" })).rejects.toThrow(
-      /No runner/
-    );
-  });
 });

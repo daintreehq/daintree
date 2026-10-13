@@ -187,24 +187,6 @@ describe("PresetColorPicker", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("checkmark uses dark ink on a light swatch so it stays visible", () => {
-    // #abb2bf (light gray, luminance ~0.44) — a white checkmark would wash out.
-    const { getByTestId } = render(
-      <PresetColorPicker color="#abb2bf" onChange={onChange} agentColor="#888888" />
-    );
-    expect(getByTestId("check-icon").className).toMatch(/\btext-black\b/);
-    expect(getByTestId("check-icon").className).not.toContain("text-white");
-  });
-
-  it("checkmark uses white ink on a dark swatch", () => {
-    // #be5046 (dark red, luminance ~0.17) — white reads cleanly.
-    const { getByTestId } = render(
-      <PresetColorPicker color="#be5046" onChange={onChange} agentColor="#888888" />
-    );
-    expect(getByTestId("check-icon").className).toContain("text-white");
-    expect(getByTestId("check-icon").className).not.toContain("text-black");
-  });
-
   it.each(PALETTE)("checkmark ink on %s is the higher-contrast of black/white", (swatch) => {
     const { getByTestId } = render(
       <PresetColorPicker color={swatch} onChange={onChange} agentColor="#888888" />

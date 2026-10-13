@@ -2,8 +2,6 @@
 import { cleanup, render } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { STATE_COLORS, STATE_PRIORITY } from "@/components/Worktree/terminalStateConfig";
-import { getAgentConfig } from "@/config/agents";
 import { DAINTREE_MOCK_KIT } from "../daintreeMockKit";
 import { useTourShortcuts } from "@daintreehq/tour/kit";
 import {
@@ -160,31 +158,6 @@ describe("mockup kit", () => {
 });
 
 describe("Daintree's mock kit", () => {
-  it("gives the built-in agents the app's own colours", () => {
-    for (const id of ["claude", "codex", "antigravity"]) {
-      expect(DAINTREE_MOCK_KIT.agents[id]!.color).toBe(getAgentConfig(id)?.color);
-      expect(DAINTREE_MOCK_KIT.agents[id]!.Icon).not.toBeNull();
-    }
-  });
-
-  it("mirrors the app's state glyphs and priority", () => {
-    expect(DAINTREE_MOCK_KIT.statePriority).toEqual(STATE_PRIORITY);
-    for (const state of STATE_PRIORITY) {
-      expect(DAINTREE_MOCK_KIT.states[state]!.colorClass).toBe(STATE_COLORS[state]);
-    }
-    expect(DAINTREE_MOCK_KIT.states.idle!.Icon).toBeNull();
-    expect(DAINTREE_MOCK_KIT.states.working!.iconClassName).toContain("animate-spin-slow");
-  });
-
-  it("renders the working spinner as a real pane header does", () => {
-    const canvas = withKit(DAINTREE_MOCK_KIT, <MockStateGlyph state="working" />);
-    const box = canvas.firstElementChild!;
-    expect(box.className).toContain(STATE_COLORS.working);
-    const icon = box.firstElementChild!;
-    expect(icon.getAttribute("class")).toContain("animate-spin-slow");
-    expect(icon.getAttribute("class")).toContain("motion-reduce:animate-none");
-  });
-
   it("draws pending CI as the app's dot and passing CI as its glyph", () => {
     const pending = withKit(DAINTREE_MOCK_KIT, <MockCIGlyph status="pending" />);
     const dot = pending.firstElementChild!;

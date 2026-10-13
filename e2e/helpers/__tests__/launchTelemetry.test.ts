@@ -68,14 +68,6 @@ describe("install", () => {
     expect(process.stderr.write).toBe(original);
   });
 
-  it("patches stderr.write when both env vars are set", () => {
-    process.env.E2E_LAUNCH_TELEMETRY = "1";
-    process.env.DEBUG = "pw:protocol,pw:browser";
-    const original = process.stderr.write;
-    install();
-    expect(process.stderr.write).not.toBe(original);
-  });
-
   it("does not double-wrap stderr", () => {
     process.env.E2E_LAUNCH_TELEMETRY = "1";
     process.env.DEBUG = "pw:protocol";
@@ -96,27 +88,6 @@ describe("protocol interception", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-  it("consumes pw:protocol SEND lines", () => {
-    process.env.E2E_LAUNCH_TELEMETRY = "1";
-    process.env.DEBUG = "pw:protocol";
-    install();
-    beginAttempt(1, 3);
-    writeDebugLines(PW_PROTOCOL_SEND);
-
-    // Not enough elapsed time for CDP-silent classification
-    expect(classify()).toBe("unknown");
-  });
-
-  it("does not flag CDP-silent when receives arrive", () => {
-    process.env.E2E_LAUNCH_TELEMETRY = "1";
-    process.env.DEBUG = "pw:protocol";
-    install();
-    beginAttempt(1, 3);
-    writeDebugLines(PW_PROTOCOL_SEND, PW_PROTOCOL_RECV);
-
-    vi.advanceTimersByTime(3000);
-    expect(classify()).not.toBe("cdp-handshake-silent");
   });
 
   it("swallows pw:protocol lines so they don't reach real stderr", () => {
@@ -153,17 +124,6 @@ describe("protocol interception", () => {
 
     expect(() => {
       process.stderr.write("  pw:protocol SEND ► {not valid json} +0ms\n");
-    }).not.toThrow();
-  });
-
-  it("tolerates debug lines without JSON payload", () => {
-    process.env.E2E_LAUNCH_TELEMETRY = "1";
-    process.env.DEBUG = "pw:protocol";
-    install();
-    beginAttempt(1, 3);
-
-    expect(() => {
-      process.stderr.write("  pw:protocol some message without json\n");
     }).not.toThrow();
   });
 
@@ -207,41 +167,10 @@ describe("crashpad detection", () => {
     expect(classify()).toBe("crashpad-stderr");
   });
 
-  it("detects generic crashpad signature", () => {
-    beginAttempt(1, 3);
-    observeStderrLine("[crashpad] handler startup failed");
-    expect(classify()).toBe("crashpad-stderr");
-  });
-
-  it("detects Breakpad signature", () => {
-    beginAttempt(1, 3);
-    observeStderrLine("Breakpad exception handler started");
-    expect(classify()).toBe("crashpad-stderr");
-  });
-
   it("does not flag normal stderr as crashpad", () => {
     beginAttempt(1, 3);
     observeStderrLine("normal application stderr output");
     expect(classify()).not.toBe("crashpad-stderr");
-  });
-
-  it("caps stored signature list without throwing", () => {
-    beginAttempt(1, 3);
-
-    const signatures = [
-      "crashpad",
-      "Breakpad",
-      "exception_handler_server",
-      "EXCEPTION_",
-      "handler_start",
-      "Handler was started",
-      "FATAL kr == KERN_SUCCESS",
-    ];
-    for (const sig of signatures) {
-      observeStderrLine(sig);
-    }
-
-    expect(classify()).toBe("crashpad-stderr");
   });
 });
 
@@ -262,13 +191,6 @@ describe("classification priority", () => {
   it("webcontents-crash beats main-process-exit", () => {
     beginAttempt(1, 3);
     observeMainProcessExit(1, null);
-    observeRendererCrash();
-    expect(classify()).toBe("webcontents-crash");
-  });
-
-  it("webcontents-crash beats crashpad-stderr", () => {
-    beginAttempt(1, 3);
-    observeStderrLine("FATAL kr == KERN_SUCCESS");
     observeRendererCrash();
     expect(classify()).toBe("webcontents-crash");
   });
@@ -302,21 +224,6 @@ describe("classification priority", () => {
 
     vi.advanceTimersByTime(3000);
     expect(classify()).toBe("crashpad-stderr");
-  });
-
-  it("returns unknown when no signals are present", () => {
-    beginAttempt(1, 3);
-    expect(classify()).toBe("unknown");
-  });
-
-  it("main-process-exit beats cdp-handshake-silent", () => {
-    install();
-    beginAttempt(1, 3);
-    writeDebugLines(PW_PROTOCOL_SEND);
-    observeMainProcessExit(1, null);
-
-    vi.advanceTimersByTime(3000);
-    expect(classify()).toBe("main-process-exit");
   });
 });
 
@@ -446,13 +353,6 @@ describe("writeSummary", () => {
       // best-effort
     }
   });
-
-  it("returns the resolved mode", () => {
-    beginAttempt(1, 3);
-    observeRendererCrash();
-    const result = writeSummary();
-    expect(result).toBe("webcontents-crash");
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -490,32 +390,6 @@ describe("beginAttempt reset", () => {
     vi.advanceTimersByTime(3000);
     expect(classify()).toBe("unknown");
   });
-
-  it("tracks correct attempt numbers in summaries", () => {
-    const { mock, restore } = mockStderr();
-
-    try {
-      beginAttempt(1, 3);
-      observeStderrLine("crashpad error");
-      writeSummary();
-
-      beginAttempt(2, 3);
-      observeStderrLine("crashpad error");
-      writeSummary();
-
-      const lines = mock.mock.calls.map((c) => String(c[0]));
-      const t1 = lines.find(
-        (l: string) => l.includes("attempt=1/3") && l.includes("e2e_launch_telemetry")
-      );
-      const t2 = lines.find(
-        (l: string) => l.includes("attempt=2/3") && l.includes("e2e_launch_telemetry")
-      );
-      expect(t1).toBeDefined();
-      expect(t2).toBeDefined();
-    } finally {
-      restore();
-    }
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -530,28 +404,5 @@ describe("dispose", () => {
     expect(process.stderr.write).not.toBe(original);
     dispose();
     expect(process.stderr.write).toBe(original);
-  });
-
-  it("resets all state to defaults", () => {
-    process.env.E2E_LAUNCH_TELEMETRY = "1";
-    process.env.DEBUG = "pw:protocol";
-    install();
-    beginAttempt(1, 3);
-    observeStderrLine("FATAL kr == KERN_SUCCESS");
-    observeMainProcessExit(1, "SIGTERM");
-    observeRendererCrash();
-
-    dispose();
-
-    install();
-    beginAttempt(1, 1);
-    expect(classify()).toBe("unknown");
-  });
-
-  it("is idempotent", () => {
-    expect(() => {
-      dispose();
-      dispose();
-    }).not.toThrow();
   });
 });

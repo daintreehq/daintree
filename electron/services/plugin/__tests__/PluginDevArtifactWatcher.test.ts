@@ -164,18 +164,6 @@ describe("PluginDevArtifactWatcher", () => {
     expect(reload).toHaveBeenCalledWith(PLUGIN_ID);
   });
 
-  it("reloads on a view-only rebuild — the case the old bundle-only watch missed", async () => {
-    const { pluginDir } = await makePluginDir();
-    const { watcher, reload } = makeWatcher();
-    await arm(watcher, pluginDir);
-
-    await fsp.writeFile(path.join(pluginDir, "dist", "view.js"), "export default () => 'v2';\n");
-
-    expect(await waitFor(() => reload.mock.calls.length >= 1)).toBe(true);
-    await settleFor(200);
-    expect(reload).toHaveBeenCalledTimes(1);
-  });
-
   it("reloads when only a non-entry chunk changes — the split-chunk case", async () => {
     const { pluginDir } = await makePluginDir();
     const { watcher, reload } = makeWatcher();

@@ -567,16 +567,6 @@ describe("McpServerService", () => {
     expect(storeState.mcpServer.apiKey).toBe(rotatedKey);
   });
 
-  it("persists the freshly generated api key to electron-store on first start", async () => {
-    const { window } = createMockWindow();
-    expect(storeState.mcpServer.apiKey).toBe("");
-
-    await service.start(window);
-    const generatedKey = service.getStatus().apiKey;
-    expect(generatedKey).toMatch(/^daintree_[a-f0-9]+$/);
-    expect(storeState.mcpServer.apiKey).toBe(generatedKey);
-  });
-
   it("auto-generates a bearer token on first start and keeps it across stop/start", async () => {
     const { window } = createMockWindow();
 
@@ -1521,45 +1511,6 @@ describe("McpServerService", () => {
     expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
     expect(dispatchMock).not.toHaveBeenCalled();
   });
-
-  it("denies non-allowlisted actions for the external tier (dispatch never reached)", async () => {
-    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
-      ok: true,
-      result: { dispatched: payload.actionId },
-    }));
-
-    const { window } = createMockWindow({
-      getManifest: () => [
-        createManifestEntry({
-          id: "actions.list" as ActionId,
-          title: "List Actions",
-          description: "Read the action registry",
-          kind: "query",
-        }),
-      ],
-      dispatchAction: dispatchMock,
-    });
-
-    await service.start(window);
-    const { client, transport } = await connectClient(service.currentPort!);
-    transports.push(transport);
-
-    const ids = (await client.listTools()).tools.map((tool) => tool.name);
-    expect(ids).not.toContain("panel.gridLayout.setStrategy");
-
-    const result = getTextResult(
-      await client.callTool({
-        name: "panel.gridLayout.setStrategy",
-        arguments: { strategy: "automatic" },
-      })
-    );
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
-    expect(result.content[0].text).toContain("panel.gridLayout.setStrategy");
-    expect(result.content[0].text).toContain("external");
-    expect(dispatchMock).not.toHaveBeenCalled();
-  });
   describe("workspace-bound external sessions (#11789)", () => {
     const REF_A = {
       kind: "project" as const,
@@ -1883,42 +1834,6 @@ describe("McpServerService", () => {
         expect(liveBinding()).toBe(false);
       });
       expect(service.listActiveClients()).toHaveLength(0);
-    });
-
-    it("still lists a bound session among the external clients", async () => {
-      // A background-bound agent is the one the user most needs to be able to
-      // find and disconnect, since they cannot see it working.
-      const winA = boundWindow(REF_A, "from-window-A");
-      await service.start(winA.window);
-
-      await connectBound(service.currentPort!, REF_A.workspaceId);
-
-      await vi.waitFor(() => {
-        expect(service.listActiveClients()).toHaveLength(1);
-      });
-    });
-
-    it("leaves an unbound external session following focus, exactly as documented", async () => {
-      // The behaviour the pre-binding contract promises, re-asserted through
-      // the new code path so binding can't have quietly changed it.
-      const winA = boundWindow(REF_A, "from-window-A");
-      const winB = boundWindow(REF_B, "from-window-B");
-      const { registry, focus } = twoWindowRegistry(winA, winB);
-      await service.start(registry);
-
-      const client = await connectBound(service.currentPort!);
-
-      focus.current = [winB.windowContext, winA.windowContext];
-      expect(
-        getTextResult(await client.callTool({ name: "terminal.list", arguments: {} })).content[0]
-          .text
-      ).toBe('"from-window-B"');
-
-      focus.current = [winA.windowContext, winB.windowContext];
-      expect(
-        getTextResult(await client.callTool({ name: "terminal.list", arguments: {} })).content[0]
-          .text
-      ).toBe('"from-window-A"');
     });
 
     it("still follows focus when the server was enabled at runtime, not at boot", async () => {

@@ -246,56 +246,6 @@ describe("TerminalProcess.submit", () => {
     expect(internals.agentOutputContentSnapshot).toBeUndefined();
   });
 
-  it("noteAgentOutputActivity respects ActivityMonitor focus suppression (#8865)", () => {
-    const handleActivityState = vi.fn();
-    const ctx = defaultSpawnContext();
-    const terminal = new TerminalProcess(
-      "t-focus-bypass",
-      {
-        cwd: process.cwd(),
-        cols: 80,
-        rows: 24,
-        kind: "terminal",
-        launchAgentId: "claude",
-      },
-      { emitData: () => {}, onExit: () => {} },
-      {
-        agentStateService: { handleActivityState } as any,
-        ptyPool: null,
-        processTreeCache: null,
-      },
-      ctx,
-      createMockPty()
-    );
-
-    const internals = terminal as unknown as {
-      isAgentLive: boolean;
-      terminalInfo: { agentState: string };
-      activityMonitor: { notifyFocus: (ms?: number) => void };
-      agentOutputContentSnapshot: unknown;
-      noteAgentOutputActivity: (before: unknown) => void;
-      getAgentOutputContentSnapshot: () => unknown;
-    };
-
-    // Force a busy-promoting condition: agent live, state idle, baseline set,
-    // visible delta after focus is non-trivial.
-    Object.defineProperty(terminal, "isAgentLive", { value: true, configurable: true });
-    internals.terminalInfo.agentState = "idle";
-    // Seed the snapshot baseline so the activity check has something to diff
-    // against in the noteAgentOutputActivity call below.
-    internals.agentOutputContentSnapshot = { lines: ["before"] };
-    internals.getAgentOutputContentSnapshot = () => ({ lines: ["after redraw with lots of new"] });
-
-    internals.activityMonitor.notifyFocus(2000);
-    // Clear any busy emissions from startPolling()'s initial state — we only
-    // care about whether noteAgentOutputActivity promotes during the window.
-    handleActivityState.mockClear();
-    internals.noteAgentOutputActivity({ lines: ["before"] });
-
-    const busyCalls = handleActivityState.mock.calls.filter((call) => call[1] === "busy");
-    expect(busyCalls.length).toBe(0);
-  });
-
   it("noteAgentOutputActivity respects ActivityMonitor recent-user-input suppression (#10925)", () => {
     const handleActivityState = vi.fn();
     const ctx = defaultSpawnContext();

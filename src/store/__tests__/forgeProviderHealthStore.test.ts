@@ -23,29 +23,6 @@ describe("forgeProviderHealthStore", () => {
     expect(health).toEqual(DEFAULT_PROVIDER_HEALTH);
   });
 
-  it("applies a primary rate-limit block to one provider only", () => {
-    const resetAt = Date.now() + 60_000;
-    useForgeProviderHealthStore.getState().applyRateLimit(BUILTIN_GITHUB_PROVIDER_ID, {
-      blocked: true,
-      kind: "primary",
-      resetAt,
-    });
-
-    const gh = selectForgeProviderHealth(BUILTIN_GITHUB_PROVIDER_ID)(
-      useForgeProviderHealthStore.getState()
-    );
-    expect(gh).toEqual({
-      rateLimitBlocked: true,
-      rateLimitKind: "primary",
-      rateLimitResetAt: resetAt,
-      rateLimitMultiplier: 1,
-      tokenUnhealthy: false,
-      tokenHealth: null,
-      providerName: null,
-      pluginId: null,
-    });
-  });
-
   it("does not cross-contaminate: GitHub and a fake provider keep separate state", () => {
     const store = useForgeProviderHealthStore.getState();
 

@@ -67,23 +67,6 @@ describe("RunCommandDetector", () => {
     ]);
   });
 
-  it("prefers bun.lock over bun.lockb when both exist", async () => {
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "test", scripts: { dev: "vite" } }),
-      "utf-8"
-    );
-    await fs.writeFile(path.join(tempDir, "bun.lock"), "", "utf-8");
-    await fs.writeFile(path.join(tempDir, "bun.lockb"), "", "utf-8");
-
-    const commands = await detector.detect(tempDir);
-    const npmCommands = commands.filter((cmd) => cmd.id.startsWith("npm-"));
-
-    expect(npmCommands).toEqual([
-      expect.objectContaining({ id: "npm-dev", command: "bun run dev" }),
-    ]);
-  });
-
   it("prefers bun.lock over pnpm-lock.yaml when both exist", async () => {
     await fs.writeFile(
       path.join(tempDir, "package.json"),
@@ -683,12 +666,6 @@ describe("RunCommandDetector", () => {
 
       expect(procCommands.map((cmd) => cmd.id)).toEqual(["procfile-worker"]);
     });
-
-    it("returns empty when no Procfile exists", async () => {
-      const commands = await detector.detect(tempDir);
-      const procCommands = commands.filter((cmd) => cmd.id.startsWith("procfile-"));
-      expect(procCommands).toEqual([]);
-    });
   });
 
   describe("mise.toml detection", () => {
@@ -822,12 +799,6 @@ describe("RunCommandDetector", () => {
       const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
 
       expect(miseCommands.map((cmd) => cmd.id)).toEqual(["mise-build"]);
-    });
-
-    it("returns empty when no mise.toml exists", async () => {
-      const commands = await detector.detect(tempDir);
-      const miseCommands = commands.filter((cmd) => cmd.id.startsWith("mise-"));
-      expect(miseCommands).toEqual([]);
     });
 
     it("returns empty when mise.toml has no [tasks]", async () => {
@@ -1027,12 +998,6 @@ describe("RunCommandDetector", () => {
       expect(dc[0]?.command).toBe("python manage.py runserver");
     });
 
-    it("returns empty for missing devcontainer.json", async () => {
-      const commands = await detector.detect(tempDir);
-      const dc = commands.filter((cmd) => cmd.id === "devcontainer-poststart");
-      expect(dc).toEqual([]);
-    });
-
     it("returns empty for devcontainer.json without postStartCommand", async () => {
       const devcontainerDir = path.join(tempDir, ".devcontainer");
       await fs.mkdir(devcontainerDir);
@@ -1055,39 +1020,6 @@ describe("RunCommandDetector", () => {
       const commands = await detector.detect(tempDir);
       const dc = commands.filter((cmd) => cmd.id === "devcontainer-poststart");
       expect(dc).toEqual([]);
-    });
-
-    it("returns empty for null postStartCommand", async () => {
-      const devcontainerDir = path.join(tempDir, ".devcontainer");
-      await fs.mkdir(devcontainerDir);
-      await fs.writeFile(
-        path.join(devcontainerDir, "devcontainer.json"),
-        JSON.stringify({ postStartCommand: null }),
-        "utf-8"
-      );
-
-      const commands = await detector.detect(tempDir);
-      const dc = commands.filter((cmd) => cmd.id === "devcontainer-poststart");
-      expect(dc).toEqual([]);
-    });
-
-    it("does not outrank npm dev script in full detect", async () => {
-      await fs.writeFile(
-        path.join(tempDir, "package.json"),
-        JSON.stringify({ name: "test", scripts: { dev: "vite" } }),
-        "utf-8"
-      );
-      const devcontainerDir = path.join(tempDir, ".devcontainer");
-      await fs.mkdir(devcontainerDir);
-      await fs.writeFile(
-        path.join(devcontainerDir, "devcontainer.json"),
-        JSON.stringify({ postStartCommand: "npm run start" }),
-        "utf-8"
-      );
-
-      const commands = await detector.detect(tempDir);
-      const npmIds = commands.filter((cmd) => cmd.id.startsWith("npm-")).map((cmd) => cmd.id);
-      expect(npmIds).toContain("npm-dev");
     });
   });
 

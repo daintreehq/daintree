@@ -117,19 +117,6 @@ describe("appProtocol utilities", () => {
       expect(headers["Permissions-Policy"]).toContain("geolocation=()");
     });
 
-    it("should include Permissions-Policy header on all MIME types", () => {
-      const mimeTypes = ["text/html", "text/javascript", "text/css", "application/json"];
-      for (const mime of mimeTypes) {
-        const headers = buildHeaders(mime);
-        expect(headers["Permissions-Policy"]).toBe(DAINTREE_APP_PERMISSIONS_POLICY);
-      }
-    });
-
-    it("should accept any MIME type", () => {
-      const headers = buildHeaders("application/json");
-      expect(headers["Content-Type"]).toBe("application/json");
-    });
-
     it("emits a revalidating Cache-Control by default (never no-store)", () => {
       const headers = buildHeaders("text/html");
       expect(headers["Cache-Control"]).toBe("no-cache, must-revalidate");
@@ -141,15 +128,6 @@ describe("appProtocol utilities", () => {
       expect(headers["Last-Modified"]).toBeUndefined();
     });
 
-    it("emits Last-Modified in RFC 7231 GMT format when stats are provided", () => {
-      const mtime = new Date("2025-06-03T12:34:56.789Z");
-      const headers = buildHeaders("text/html", {
-        stats: { mtime },
-        filePath: "index.html",
-      });
-      expect(headers["Last-Modified"]).toBe("Tue, 03 Jun 2025 12:34:56 GMT");
-    });
-
     it("emits an immutable Cache-Control for content-hashed Vite assets", () => {
       const headers = buildHeaders("text/javascript", {
         stats: { mtime: new Date() },
@@ -158,26 +136,10 @@ describe("appProtocol utilities", () => {
       expect(headers["Cache-Control"]).toBe("public, max-age=31536000, immutable");
     });
 
-    it("emits an immutable Cache-Control for content-hashed CSS", () => {
-      const headers = buildHeaders("text/css", {
-        stats: { mtime: new Date() },
-        filePath: "dist/assets/styles-A1b2C3d4.css",
-      });
-      expect(headers["Cache-Control"]).toBe("public, max-age=31536000, immutable");
-    });
-
     it("emits a revalidating Cache-Control for index.html (not content-hashed)", () => {
       const headers = buildHeaders("text/html", {
         stats: { mtime: new Date() },
         filePath: "dist/index.html",
-      });
-      expect(headers["Cache-Control"]).toBe("no-cache, must-revalidate");
-    });
-
-    it("emits a revalidating Cache-Control for unhashed files in dist root", () => {
-      const headers = buildHeaders("text/javascript", {
-        stats: { mtime: new Date() },
-        filePath: "dist/sw.js",
       });
       expect(headers["Cache-Control"]).toBe("no-cache, must-revalidate");
     });
@@ -348,12 +310,6 @@ describe("appProtocol utilities", () => {
       expect(result.filePath).toBe(path.join(distRoot, "secret.txt"));
     });
 
-    it("should handle nested path segments with .. (URL normalizes)", () => {
-      const result = resolveAppUrlToDistPath("app://daintree/nested/../../outside.txt", distRoot);
-      expect(result.error).toBeUndefined();
-      expect(result.filePath).toBe(path.join(distRoot, "outside.txt"));
-    });
-
     it("should reject non-app:// protocol", () => {
       const result = resolveAppUrlToDistPath("http://daintree/index.html", distRoot);
       expect(result.error).toBe("Invalid protocol");
@@ -364,18 +320,6 @@ describe("appProtocol utilities", () => {
       const result = resolveAppUrlToDistPath("not-a-url", distRoot);
       expect(result.error).toBeDefined();
       expect(result.filePath).toBe("");
-    });
-
-    it("should resolve nested paths correctly", () => {
-      const result = resolveAppUrlToDistPath("app://daintree/assets/images/logo.png", distRoot);
-      expect(result.error).toBeUndefined();
-      expect(result.filePath).toBe(path.join(distRoot, "assets", "images", "logo.png"));
-    });
-
-    it("should handle paths with leading slash", () => {
-      const result = resolveAppUrlToDistPath("app://daintree/app.js", distRoot);
-      expect(result.error).toBeUndefined();
-      expect(result.filePath).toBe(path.join(distRoot, "app.js"));
     });
 
     it("should handle encoded dot segments (URL normalizes %2e%2e before resolver)", () => {

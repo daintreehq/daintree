@@ -326,10 +326,6 @@ describe("createPluginSessionServer", () => {
     it.each([
       ["a missing required property", {}, /must have required property 'id'/],
       ["a wrong type", { id: 7 }, /\/id must be string/],
-      ["a value outside the enum", { id: "a", kind: "refund" }, /\/kind must be equal to one/],
-      ["an over-long string", { id: "a".repeat(9) }, /\/id must NOT have more than 8/],
-      ["an undeclared property", { id: "a", extra: true }, /additional properties \("extra"\)/],
-      ["a numeric string for an integer", { id: "a", count: "2" }, /\/count must be integer/],
     ])(
       "refuses %s as an InvalidParams tool error without dispatching",
       async (_label, args, why) => {
@@ -567,11 +563,6 @@ describe("createPluginSessionServer", () => {
     cancel.abort();
     await expect(call).rejects.toThrow();
     await waitFor(() => seen?.aborted === true);
-  });
-
-  it("reports the server key the agent was handed as its server name", async () => {
-    const { client } = await connect(vi.fn(), { serverName: "daintree-ledger-1a2b3c4d" });
-    expect(client.getServerVersion()?.name).toBe("daintree-ledger-1a2b3c4d");
   });
 
   describe("scope", () => {

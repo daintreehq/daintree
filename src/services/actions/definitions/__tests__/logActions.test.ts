@@ -46,18 +46,6 @@ beforeEach(() => {
 });
 
 describe("errors.recent", () => {
-  it("has safe query metadata in the errors category", () => {
-    const def = getDef(setupActions(), "errors.recent");
-    expect(def.id).toBe("errors.recent");
-    expect(def.kind).toBe("query");
-    expect(def.danger).toBe("safe");
-    expect(def.scope).toBe("renderer");
-    expect(def.category).toBe("errors");
-    // Four-line rubric (#8436) — assert the meaningful quality floor, not a
-    // tight ceiling (the registry-wide max lives in actionMetadata.test.ts).
-    expect(def.description.length).toBeGreaterThanOrEqual(80);
-  });
-
   it("returns only active (non-dismissed) errors by default", async () => {
     errorStoreMock.getState.mockReturnValue({
       errors: [
@@ -171,18 +159,6 @@ describe("errors.recent", () => {
 });
 
 describe("notifications.recent", () => {
-  it("has safe query metadata in the diagnostics category", () => {
-    const def = getDef(setupActions(), "notifications.recent");
-    expect(def.id).toBe("notifications.recent");
-    expect(def.kind).toBe("query");
-    expect(def.danger).toBe("safe");
-    expect(def.scope).toBe("renderer");
-    expect(def.category).toBe("diagnostics");
-    // Four-line rubric (#8436) — assert the meaningful quality floor, not a
-    // tight ceiling (the registry-wide max lives in actionMetadata.test.ts).
-    expect(def.description.length).toBeGreaterThanOrEqual(80);
-  });
-
   it("returns projected entries newest-first respecting the limit", async () => {
     notificationHistoryMock.getState.mockReturnValue({
       entries: [

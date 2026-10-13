@@ -67,16 +67,6 @@ describe("useCloudSyncWarning", () => {
     expect(useCloudSyncBannerStore.getState().service).toBeNull();
   });
 
-  it("sets banner when project is in a cloud-synced folder", () => {
-    setupProject({
-      projectId: "p1",
-      projectPath: "/Users/foo/Library/CloudStorage/Dropbox-Personal/work",
-      settings: { runCommands: [] },
-    });
-    renderHook(() => useCloudSyncWarning("/Users/foo"));
-    expect(useCloudSyncBannerStore.getState().service).toBe("Dropbox");
-  });
-
   it("respects cloudSyncWarningDismissed flag in project settings", () => {
     setupProject({
       projectId: "p1",

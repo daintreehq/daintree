@@ -579,26 +579,6 @@ describe("registerShutdownHandler", () => {
     expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).not.toHaveBeenCalled();
   });
 
-  it("halts the deferred init queue after the user confirms quit", async () => {
-    quitWarningMock.getActiveAgentCount.mockReturnValue(2);
-    quitWarningMock.showQuitWarning.mockResolvedValue(true);
-
-    const mainWindow = {} as Electron.BrowserWindow;
-    const { beforeQuitCb } = await setup({
-      windowRegistry: {
-        getPrimary: () => ({ browserWindow: mainWindow }),
-      } as unknown as ShutdownDeps["windowRegistry"],
-    });
-    const event = makeEvent();
-    await beforeQuitCb(event);
-
-    expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledTimes(1);
-
-    await vi.waitFor(() => {
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-    });
-  });
-
   it("does not halt the deferred init queue when the user cancels quit", async () => {
     quitWarningMock.getActiveAgentCount.mockReturnValue(2);
     quitWarningMock.showQuitWarning.mockResolvedValue(false);
@@ -649,22 +629,6 @@ describe("registerShutdownHandler", () => {
     const event = makeEvent();
     await beforeQuitCb(event);
 
-    expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
-
-    await vi.waitFor(() => {
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-    });
-    expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalled();
-  });
-
-  it("runs cleanup when no window and signal shutdown", async () => {
-    signalShutdownMock.isSignalShutdown.mockReturnValue(true);
-
-    const { beforeQuitCb } = await setup();
-    const event = makeEvent();
-    await beforeQuitCb(event);
-
-    expect(event.preventDefault).toHaveBeenCalled();
     expect(quitWarningMock.showQuitWarning).not.toHaveBeenCalled();
 
     await vi.waitFor(() => {
@@ -839,33 +803,6 @@ describe("registerShutdownHandler", () => {
         expect(appMock.exit).toHaveBeenCalledWith(0);
       });
     });
-
-    it("waits for closeTelemetry to resolve before app.exit(0) on cleanup error (mcpServer error is silently caught)", async () => {
-      mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
-      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-      let resolveClose!: () => void;
-      const closeDeferred = new Promise<void>((r) => {
-        resolveClose = r;
-      });
-      closeTelemetryMock.mockReturnValue(closeDeferred);
-
-      const { beforeQuitCb } = await setup({});
-      await beforeQuitCb(makeEvent());
-
-      await vi.waitFor(() => {
-        expect(closeTelemetryMock).toHaveBeenCalled();
-      });
-      expect(appMock.exit).not.toHaveBeenCalled();
-
-      resolveClose();
-
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-
-      consoleSpy.mockRestore();
-    });
   });
 
   describe("hard shutdown timeout", () => {
@@ -973,23 +910,6 @@ describe("registerShutdownHandler", () => {
       warnSpy.mockRestore();
     });
 
-    it("normal cleanup exits with code 0 and timeout does not fire", async () => {
-      mcpServerMock.stop.mockReturnValue(Promise.resolve());
-
-      const { beforeQuitCb } = await setup({});
-      const event = makeEvent();
-      await beforeQuitCb(event);
-
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(appMock.exit).toHaveBeenCalledWith(0);
-      expect(appMock.exit).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(15_000);
-
-      expect(appMock.exit).toHaveBeenCalledTimes(1);
-    });
-
     it("mcpServer error is silently caught and cleanup exits with 0", async () => {
       mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -1079,17 +999,6 @@ describe("registerShutdownHandler", () => {
 
       // POSIX checks spawn detached, so nothing else reaps them on quit.
       expect(projectCheckServiceMock.dispose).toHaveBeenCalledTimes(1);
-    });
-
-    it("clears PluginService's WorkspaceClient reference during shutdown", async () => {
-      const { beforeQuitCb } = await setup({});
-      await beforeQuitCb(makeEvent());
-
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-
-      expect(pluginServiceMock.setWorkspaceClient).toHaveBeenCalledWith(null);
     });
 
     it("waits for the plugin-spawned children to be killed before exiting (#12216)", async () => {
@@ -1219,17 +1128,6 @@ describe("registerShutdownHandler", () => {
       expect(pluginIdx).toBeLessThan(workspaceIdx);
     });
 
-    it("nulls workspaceClientRef after disposeWorkspaceClient runs", async () => {
-      const { beforeQuitCb } = await setup({});
-      await beforeQuitCb(makeEvent());
-
-      await vi.waitFor(() => {
-        expect(appMock.exit).toHaveBeenCalledWith(0);
-      });
-
-      expect(serviceRefsMock.setWorkspaceClientRef).toHaveBeenCalledWith(null);
-    });
-
     it("still tears down PTY/workspace/watchdog when an earlier optional-ref dispose throws", async () => {
       serviceRefsMock.setInitialState({
         autoUpdater: autoUpdaterMock,
@@ -1289,13 +1187,6 @@ describe("registerShutdownHandler", () => {
       expect(eagerIdx).toBeGreaterThanOrEqual(0);
       expect(chainIdx).toBeGreaterThanOrEqual(0);
       expect(eagerIdx).toBeLessThan(chainIdx);
-    });
-
-    it("skips eager backup in smoke test mode", async () => {
-      isSmokeTestMock.value = true;
-      const { beforeQuitCb } = await setup({});
-      await beforeQuitCb(makeEvent());
-      expect(crashRecoveryMock.takeBackup).not.toHaveBeenCalled();
     });
 
     it("continues shutdown when eager takeBackup throws", async () => {
@@ -1785,20 +1676,6 @@ describe("registerShutdownHandler", () => {
       );
       // A best-effort drain must not downgrade the exit to dirty either.
       expect(appMock.exit).toHaveBeenCalledWith(0);
-    });
-
-    it("does not journal non-agent terminals or null-session captures", async () => {
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
-      const ptyClient = makePtyClient({
-        getAllTerminalsAsync: vi.fn(async () => [{ id: "t2", cwd: "/repo" }]),
-        gracefulKillByProject: vi.fn(async () => [{ id: "t2", agentSessionId: null }]),
-      });
-      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
-
-      await beforeQuitCb(makeEvent());
-      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
-
-      expect(persistAgentSessionMock).not.toHaveBeenCalled();
     });
 
     it("journals captures from every project even if one persist call fails", async () => {

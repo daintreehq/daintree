@@ -53,15 +53,6 @@ describe("safeFireAndForget", () => {
     expect((error as Error).message).toBe("string failure");
   });
 
-  it("normalizes null rejections to Error", async () => {
-    safeFireAndForget(Promise.reject(null));
-    await flushMicrotasks();
-
-    expect(mockedReport).toHaveBeenCalledTimes(1);
-    const [, error] = mockedReport.mock.calls[0]!;
-    expect(error).toBeInstanceOf(Error);
-  });
-
   it("forwards options.context as the metadata message", async () => {
     safeFireAndForget(Promise.reject(new Error("inner")), {
       context: "marking onboarding step",

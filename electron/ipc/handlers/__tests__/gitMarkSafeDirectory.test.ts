@@ -85,14 +85,6 @@ describe("git:mark-safe-directory handler", () => {
     realpathMock.mockImplementation(async (p: string) => p);
   });
 
-  it("registers the mark-safe-directory channel", () => {
-    registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "git:mark-safe-directory",
-      expect.any(Function)
-    );
-  });
-
   it("rejects a non-string payload", async () => {
     registerGitWriteHandlers({} as Parameters<typeof registerGitWriteHandlers>[0]);
     const handler = getHandler("git:mark-safe-directory");

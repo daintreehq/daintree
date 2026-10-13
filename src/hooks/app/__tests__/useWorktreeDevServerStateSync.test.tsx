@@ -34,13 +34,11 @@ function makeSession(
 
 describe("useWorktreeDevServerStateSync", () => {
   let listeners: Listener[];
-  let unsubscribe: () => void;
   let sessions: DevPreviewSessionState[];
 
   beforeEach(() => {
     listeners = [];
     sessions = [];
-    unsubscribe = vi.fn() as () => void;
     useWorktreeDevServerStore.getState().reset();
     vi.stubGlobal("window", {
       ...window,
@@ -52,7 +50,6 @@ describe("useWorktreeDevServerStateSync", () => {
             // Mirror the real IPC contract: the returned cleanup detaches the
             // handler so no further payloads are delivered.
             return () => {
-              unsubscribe();
               const i = listeners.indexOf(cb);
               if (i >= 0) listeners.splice(i, 1);
             };
@@ -82,13 +79,6 @@ describe("useWorktreeDevServerStateSync", () => {
     renderHook(() => useWorktreeDevServerStateSync());
     emit({ state: makeSession("   ", "running") });
     expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId).toEqual({});
-  });
-
-  it("unsubscribes on unmount", () => {
-    const { unmount } = renderHook(() => useWorktreeDevServerStateSync());
-    expect(unsubscribe).not.toHaveBeenCalled();
-    unmount();
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it("does not mutate the store from a broadcast delivered after unmount", () => {

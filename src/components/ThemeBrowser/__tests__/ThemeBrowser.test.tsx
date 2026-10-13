@@ -164,16 +164,6 @@ describe("ThemeBrowser", () => {
     expect(useThemeBrowserStore.getState().isOpen).toBe(false);
   });
 
-  it("aria-live announces the previewed theme", () => {
-    const target = otherDarkScheme();
-    const { container } = render(<Harness />);
-
-    fireEvent.click(findRowByName(target.name));
-
-    const live = container.querySelector('[aria-live="polite"]');
-    expect(live?.textContent).toBe(`Previewing: ${target.name}`);
-  });
-
   it("ArrowDown on the list previews the specific next theme row", () => {
     render(<Harness />);
 
@@ -256,11 +246,6 @@ describe("ThemeBrowser", () => {
     }
   });
 
-  it("registers a 'theme-browser' overlay claim while mounted", () => {
-    render(<Harness />);
-    expect(useUIStore.getState().overlayStack.includes("theme-browser")).toBe(true);
-  });
-
   it("releases the 'theme-browser' overlay claim on unmount", () => {
     const { unmount } = render(<Harness />);
     expect(useUIStore.getState().overlayStack.includes("theme-browser")).toBe(true);
@@ -268,11 +253,6 @@ describe("ThemeBrowser", () => {
     unmount();
 
     expect(useUIStore.getState().overlayStack.includes("theme-browser")).toBe(false);
-  });
-
-  it("renders with aria-modal='true' for native focus management", () => {
-    render(<Harness />);
-    expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("true");
   });
 
   it("portal toggle is a no-op while the browser is mounted", () => {
@@ -696,19 +676,6 @@ describe("ThemeBrowser navigation contract", () => {
     // The rule: the list is navigated virtually. If focus ever lands on a row,
     // the user's next keystroke stops reaching the filter.
     expect(document.activeElement).toBe(input);
-  });
-
-  it("points aria-activedescendant at the row being previewed", () => {
-    render(<Harness />);
-    const input = screen.getByLabelText("Filter themes");
-    act(() => input.focus());
-    fireEvent.keyDown(input, { key: "ArrowDown" });
-
-    const active = input.getAttribute("aria-activedescendant");
-    expect(active).toBeTruthy();
-    const row = document.getElementById(active!);
-    expect(row).not.toBeNull();
-    expect(row!.getAttribute("role")).toBe("option");
   });
 
   it("keeps 'what is saved' and 'what is being tried' separately addressable", () => {

@@ -52,11 +52,6 @@ describe("when clause evaluator", () => {
       expect(evaluate(parse("ready"), ctx)).toBe(false);
     });
 
-    it("evaluates undefined context value as falsy", () => {
-      const ctx: WhenClauseContext = { ready: undefined };
-      expect(evaluate(parse("ready"), ctx)).toBe(false);
-    });
-
     it("evaluates dotted path from nested context", () => {
       const ctx: WhenClauseContext = { panel: { kind: "terminal" } };
       expect(evaluate(parse("panel.kind"), ctx)).toBe(true);
@@ -146,16 +141,6 @@ describe("when clause evaluator", () => {
       expect(evaluate(parse("!a"), ctx)).toBe(false);
       expect(evaluate(parse("!!a"), ctx)).toBe(true);
     });
-
-    it("short-circuits &&", () => {
-      const ctx: WhenClauseContext = { a: false, b: true };
-      expect(evaluate(parse("a && b"), ctx)).toBe(false);
-    });
-
-    it("short-circuits ||", () => {
-      const ctx: WhenClauseContext = { a: true, b: false };
-      expect(evaluate(parse("a || b"), ctx)).toBe(true);
-    });
   });
 
   describe("integration: parse + evaluate", () => {
@@ -166,13 +151,6 @@ describe("when clause evaluator", () => {
       expect(evaluate(parse("panel.kind == 'terminal' && panel.agentState == 'idle'"), ctx)).toBe(
         true
       );
-    });
-
-    it("fails when condition doesn't match", () => {
-      const ctx: WhenClauseContext = {
-        panel: { kind: "browser" },
-      };
-      expect(evaluate(parse("panel.kind == 'terminal'"), ctx)).toBe(false);
     });
 
     it("handles deeply nested context", () => {

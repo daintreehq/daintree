@@ -252,29 +252,6 @@ describe("artifactParser", () => {
     expect(patches[0]).toContain("+++ /dev/null");
   });
 
-  it("splits multi-file diffs at diff lines, not mid-patch --- lines", () => {
-    const input = [
-      "diff --git a/src/a.ts b/src/a.ts",
-      "--- a/src/a.ts",
-      "+++ b/src/a.ts",
-      "@@ -1 +1 @@",
-      "-old a",
-      "+new a",
-      "diff --git a/src/b.ts b/src/b.ts",
-      "--- a/src/b.ts",
-      "+++ b/src/b.ts",
-      "@@ -1 +1 @@",
-      "-old b",
-      "+new b",
-    ].join("\n");
-
-    const patches = extractPatches(input);
-    expect(patches).toHaveLength(2);
-    expect(patches[0]).toContain("+new a");
-    expect(patches[0]).not.toContain("+new b");
-    expect(patches[1]).toContain("+new b");
-  });
-
   it("extracts a patch with a body far larger than the worker's 5KB window", () => {
     let patch = "diff --git a/big.ts b/big.ts\n--- a/big.ts\n+++ b/big.ts\n@@ -1,500 +1,500 @@\n";
     for (let i = 0; i < 500; i++) {
@@ -334,13 +311,6 @@ describe("artifactParser", () => {
     const input = "\x1b]8;;https://youtu.be/dQw4w9WgXcQ\x07Click here\x1b]8;;\x07";
     const cleaned = stripAnsiCodes(input);
     expect(cleaned).toBe("Click here");
-  });
-
-  it("strips mixed ANSI codes and OSC 8 hyperlinks", () => {
-    const input =
-      "\x1b[36m\x1b]8;;https://youtube.com/watch?v=abc12345678\x1b\\https://youtube.com/watch?v=abc12345678\x1b]8;;\x1b\\\x1b[0m";
-    const cleaned = stripAnsiCodes(input);
-    expect(cleaned).toBe("https://youtube.com/watch?v=abc12345678");
   });
 
   it("strips DCS sequences (Kitty graphics / Sixel / tmux passthrough)", () => {

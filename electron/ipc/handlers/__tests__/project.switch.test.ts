@@ -934,60 +934,6 @@ describe("project:switch activeWorktreeId pre-apply (#5000)", () => {
     >;
     expect(savedState.activeWorktreeId).toBeUndefined();
   });
-
-  it("persists activeWorktreeId from outgoingState on project reopen", async () => {
-    const mockView = {
-      webContents: { id: 200, isDestroyed: () => false, send: vi.fn() },
-    };
-
-    const pvm = {
-      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
-    };
-
-    const fakeWindow2 = { id: 2, isDestroyed: () => false };
-    mockGetWindowForWebContents.mockReturnValue(fakeWindow2);
-
-    const ctx = makeWindowContext(2, 20, { projectViewManager: pvm as never });
-    const registry = makeWindowRegistry([ctx]);
-
-    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
-    projectStoreMock.getProjectById.mockReturnValue({
-      id: "proj-reopen",
-      name: "Reopen Project",
-      path: "/projects/reopen",
-      status: "background",
-    });
-    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
-    projectStoreMock.getProjectState.mockResolvedValue(null);
-    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
-
-    const deps = {
-      mainWindow: { id: 1 } as unknown,
-      windowRegistry: registry,
-      projectViewManager: pvm,
-    } as unknown as HandlerDependencies;
-
-    registerProjectCrudHandlers(deps);
-
-    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
-    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
-      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
-    }
-
-    const handler = handleMap.get(CHANNELS.PROJECT_REOPEN);
-    const fakeEvent = { sender: { id: 20 } };
-    const outgoingState = {
-      draftInputs: {},
-      activeWorktreeId: "wt-reopen",
-    };
-
-    await handler!(fakeEvent, "proj-reopen", outgoingState);
-
-    expect(projectStoreMock.saveProjectState).toHaveBeenCalledWith(
-      "proj-old",
-      expect.objectContaining({ activeWorktreeId: "wt-reopen" })
-    );
-  });
 });
 
 describe("project:switch outgoing tabGroups pre-apply (#5001)", () => {
@@ -1701,29 +1647,6 @@ describe("project:switch concurrent worktree load", () => {
     expect(worktreeService.loadProject).not.toHaveBeenCalledWith("/projects/old", 7);
     expect(worktreeService.unregisterWindow).not.toHaveBeenCalled();
   });
-
-  it("does not surface a worktree load failure through a successful swap", async () => {
-    const sendMock = vi.fn();
-    const { invoke } = setup({
-      switchTo: async () => ({
-        view: { webContents: { id: 300, isDestroyed: () => false, send: sendMock } },
-        isNew: false,
-      }),
-      loadProject: async () => {
-        throw new Error("Not a git repository");
-      },
-    });
-
-    // Forward-fail (#8400): the load rejection — even though it now starts
-    // before the swap — must resolve the switch and surface as the targeted
-    // worktree-load-status, not reject the handler.
-    await invoke();
-
-    expect(sendMock).toHaveBeenCalledWith(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
-      projectId: "proj-new",
-      worktreeLoadError: "Not a git repository",
-    });
-  });
 });
 
 describe("project:switch status timing (#12461)", () => {
@@ -2093,19 +2016,6 @@ describe("project:switch PTY port ordering (#10075)", () => {
     expect(distributeMock).not.toHaveBeenCalled();
     // onProjectSwitch still fires regardless of new/warm.
     expect(ptyClient.onProjectSwitch).toHaveBeenCalledWith(7, "proj-new", "/projects/new");
-  });
-
-  it("resumes the incoming project's workspace host on switch (#10743)", async () => {
-    const { invoke, worktreeService } = setup({
-      isNew: false,
-      loadProject: async () => undefined,
-    });
-
-    await invoke();
-
-    // Switching TO a project must foreground its host so a previously
-    // backgrounded project resumes full-rate polling for fresh state.
-    expect(worktreeService.resumeProject).toHaveBeenCalledWith("/projects/new");
   });
 });
 

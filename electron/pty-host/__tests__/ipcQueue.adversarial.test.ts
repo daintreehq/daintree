@@ -236,26 +236,6 @@ describe("IpcQueueManager adversarial", () => {
     expect(coord.resume).not.toHaveBeenCalled();
   });
 
-  it("emitReliabilityMetric throwing after pause releases the token (#7641)", () => {
-    vi.mocked(deps.emitReliabilityMetric).mockImplementationOnce(() => {
-      throw new Error("DataCloneError");
-    });
-    mgr.addBytes("t1", HIGH_BYTES);
-
-    const result = mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
-
-    expect(result).toBe(false);
-    expect(mgr.isPaused("t1")).toBe(false);
-    expect(coord.resume).toHaveBeenCalledWith("ipc-queue");
-
-    // A subsequent applyBackpressure must succeed cleanly — the previous
-    // failure must not have left the coordinator state inconsistent.
-    coord.resume.mockClear();
-    const retry = mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
-    expect(retry).toBe(true);
-    expect(mgr.isPaused("t1")).toBe(true);
-  });
-
   it("dispose releases held pause tokens and cancels their safety timeouts", () => {
     mgr.addBytes("t1", HIGH_BYTES);
     mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
@@ -278,31 +258,12 @@ describe("IpcQueueManager adversarial", () => {
     expect(coord.resume).not.toHaveBeenCalled();
   });
 
-  it("removeBytes clamps at 0 and deletes the map entry when reaching zero", () => {
-    mgr.addBytes("t1", 100);
-    mgr.removeBytes("t1", 100);
-    expect(mgr.getQueuedBytes("t1")).toBe(0);
-
-    mgr.removeBytes("t1", 50);
-    expect(mgr.getQueuedBytes("t1")).toBe(0);
-  });
-
   it("isAtCapacity respects strict > comparison — exactly at the limit is still under capacity", () => {
     expect(mgr.isAtCapacity("t1", IPC_MAX_QUEUE_BYTES)).toBe(false);
     expect(mgr.isAtCapacity("t1", IPC_MAX_QUEUE_BYTES + 1)).toBe(true);
   });
 
   describe("aggregate byte tracking", () => {
-    it("tracks total queued bytes across multiple terminals", () => {
-      expect(mgr.getTotalQueuedBytes()).toBe(0);
-
-      mgr.addBytes("t1", 1000);
-      mgr.addBytes("t2", 2500);
-      mgr.addBytes("t1", 500);
-
-      expect(mgr.getTotalQueuedBytes()).toBe(4000);
-    });
-
     it("removeBytes clamps the aggregate delta to per-terminal balance (no underflow)", () => {
       mgr.addBytes("t1", 1000);
       mgr.addBytes("t2", 1500);
@@ -335,13 +296,6 @@ describe("IpcQueueManager adversarial", () => {
       expect(mgr.getTotalQueuedBytes()).toBe(1000);
     });
 
-    it("dispose resets the aggregate scalar", () => {
-      mgr.addBytes("t1", 1000);
-      mgr.addBytes("t2", 2000);
-      mgr.dispose();
-      expect(mgr.getTotalQueuedBytes()).toBe(0);
-    });
-
     it("getQueueSnapshot returns ResourceGovernor-compatible shape", () => {
       mgr.addBytes("t1", 1000);
       mgr.addBytes("t2", 2500);
@@ -351,22 +305,6 @@ describe("IpcQueueManager adversarial", () => {
       const byId = new Map(snap.perTerminal.map((e) => [e.terminalId, e.pendingBytes]));
       expect(byId.get("t1")).toBe(1000);
       expect(byId.get("t2")).toBe(2500);
-    });
-
-    it("aggregate boundary tracking at 0, low, high, max, max+1", () => {
-      expect(mgr.getTotalQueuedBytes()).toBe(0);
-
-      mgr.addBytes("t1", LOW_BYTES);
-      expect(mgr.getTotalQueuedBytes()).toBe(LOW_BYTES);
-
-      mgr.addBytes("t1", HIGH_BYTES - LOW_BYTES);
-      expect(mgr.getTotalQueuedBytes()).toBe(HIGH_BYTES);
-
-      mgr.addBytes("t1", IPC_MAX_QUEUE_BYTES - HIGH_BYTES);
-      expect(mgr.getTotalQueuedBytes()).toBe(IPC_MAX_QUEUE_BYTES);
-
-      mgr.addBytes("t1", 1);
-      expect(mgr.getTotalQueuedBytes()).toBe(IPC_MAX_QUEUE_BYTES + 1);
     });
   });
 

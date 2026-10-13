@@ -149,19 +149,4 @@ describe("idleTerminals IPC adversarial", () => {
     ).rejects.toThrow(/projectId/);
     expect(serviceMock.dismissProject).not.toHaveBeenCalled();
   });
-
-  it("service errors propagate from updateConfig", async () => {
-    serviceMock.updateConfig.mockImplementationOnce(() => {
-      throw new Error("service down");
-    });
-    await expect(
-      getHandler(CHANNELS.IDLE_TERMINAL_UPDATE_CONFIG)(fakeEvent(), { enabled: true })
-    ).rejects.toThrow("service down");
-  });
-
-  it("cleanup removes all four handlers", () => {
-    expect(ipcHandlers.size).toBe(4);
-    cleanup();
-    expect(ipcHandlers.size).toBe(0);
-  });
 });

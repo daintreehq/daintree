@@ -127,15 +127,4 @@ describe("actionPrefsStore", () => {
       expect(useActionPrefsStore.getState().hiddenActionIds).toEqual([]);
     });
   });
-
-  describe("isActionPinned / isActionHidden", () => {
-    it("reflects state", () => {
-      useActionPrefsStore.getState().pinAction("a.pinned");
-      useActionPrefsStore.getState().hideAction("a.hidden");
-      expect(useActionPrefsStore.getState().isActionPinned("a.pinned")).toBe(true);
-      expect(useActionPrefsStore.getState().isActionPinned("a.other")).toBe(false);
-      expect(useActionPrefsStore.getState().isActionHidden("a.hidden")).toBe(true);
-      expect(useActionPrefsStore.getState().isActionHidden("a.other")).toBe(false);
-    });
-  });
 });

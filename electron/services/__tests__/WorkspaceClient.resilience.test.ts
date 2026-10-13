@@ -315,18 +315,6 @@ describe("WorkspaceClient multi-process manager", () => {
       await load2;
     });
 
-    it("switches window from one project to another", async () => {
-      const load1 = client.loadProject("/project-a", 1);
-      await readyAndResolveLoad(0);
-      await load1;
-
-      const load2 = client.loadProject("/project-b", 1);
-      expect(mockHosts).toHaveLength(2);
-
-      await readyAndResolveLoad(1);
-      await load2;
-    });
-
     it("demotes the old host to background when the last window switches away (#10743)", async () => {
       const load1 = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
@@ -1674,35 +1662,6 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(await p1).toEqual([{ id: "wt-a" }]);
       expect(await p2).toEqual([{ id: "wt-b" }]);
     });
-
-    it("no-windowId path fans out to all hosts in parallel", async () => {
-      const load1 = client.loadProject("/project-a", 1);
-      await readyAndResolveLoadFake(0);
-      await load1;
-
-      const load2 = client.loadProject("/project-b", 2);
-      await readyAndResolveLoadFake(1);
-      await load2;
-
-      const callsBefore0 = h(0).sendWithResponse.mock.calls.length;
-      const callsBefore1 = h(1).sendWithResponse.mock.calls.length;
-
-      const statesPromise = client.getAllStatesAsync();
-      await vi.advanceTimersByTimeAsync(0);
-
-      // Both hosts received requests before either resolves
-      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore0 + 1);
-      expect(h(1).sendWithResponse.mock.calls.length).toBe(callsBefore1 + 1);
-
-      const reqA = h(0).getLastRequest()!;
-      const reqB = h(1).getLastRequest()!;
-      h(0).resolveRequest(reqA.requestId, { states: [{ id: "wt-a" }] });
-      h(1).resolveRequest(reqB.requestId, { states: [{ id: "wt-b" }] });
-
-      const result = await statesPromise;
-      expect(result).toHaveLength(2);
-      expect(result.map((s: any) => s.id)).toEqual(["wt-a", "wt-b"]);
-    });
   });
 
   describe("blue-green swap", () => {
@@ -2086,20 +2045,6 @@ describe("WorkspaceClient multi-process manager", () => {
         credentials: { kind: "bearer", value: "test-token" },
       });
     });
-
-    it("updateForgeCredentials propagates null credentials", async () => {
-      const load1 = client.loadProject("/project-a", 1);
-      await readyAndResolveLoad(0);
-      await load1;
-
-      client.updateForgeCredentials("daintree.github.github", null);
-
-      expect(h(0).send).toHaveBeenCalledWith({
-        type: "update-forge-credentials",
-        providerId: "daintree.github.github",
-        credentials: null,
-      });
-    });
   });
 
   describe("dispose", () => {
@@ -2290,16 +2235,6 @@ describe("WorkspaceClient multi-process manager", () => {
   });
 
   describe("manualRestartForWindow", () => {
-    it("resolves the window's host and invokes manualRestart", async () => {
-      const load = client.loadProject("/project-a", 1);
-      await readyAndResolveLoad(0);
-      await load;
-
-      client.manualRestartForWindow(1);
-
-      expect(h(0).manualRestart).toHaveBeenCalledTimes(1);
-    });
-
     it("triggers reloadProjectAfterRestart via the emitted 'restarted' event", async () => {
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);

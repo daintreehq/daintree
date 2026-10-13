@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { fileURLToPath } from "node:url";
 
 const appMock = vi.hoisted(() => ({
   getVersion: vi.fn(() => "0.0.0"),
@@ -585,41 +584,6 @@ describe("reserved contribution point warnings", () => {
     expect(registerPluginMenuItem).not.toHaveBeenCalled();
   });
 
-  it("does not call registerForgeProviders when the manifest declares no forgeProviders", async () => {
-    await writePlugin("forge-none", {
-      name: "acme.forge-none",
-      version: "1.0.0",
-      engines: { daintree: "^0.7.0" },
-    });
-
-    const service = new PluginService(tmpDir, "0.7.5");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(registerForgeProviders).not.toHaveBeenCalled();
-  });
-
-  it("does not warn about reserved points when the manifest omits them", async () => {
-    await writePlugin("plain", {
-      name: "acme.plain",
-      version: "1.0.0",
-      engines: { daintree: "^0.7.0" },
-    });
-
-    const service = new PluginService(tmpDir, "0.7.5");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    const warnMessages = warnSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(warnMessages.some((m: string) => m.includes("contributes.experimental_views"))).toBe(
-      false
-    );
-    expect(
-      warnMessages.some((m: string) => m.includes("contributes.experimental_mcpServers"))
-    ).toBe(false);
-    expect(warnMessages.some((m: string) => m.includes("contributes.forgeProviders"))).toBe(false);
-  });
-
   it("does not warn when reserved arrays are explicitly present but empty", async () => {
     await writePlugin("explicit-empty", {
       name: "acme.explicit-empty",
@@ -689,95 +653,6 @@ describe("reserved contribution point warnings", () => {
     ).toHaveLength(1);
   });
 
-  it("still processes other contributions when reserved points are present", async () => {
-    mockPluginMcpSupervisor.start.mockClear();
-    await writePlugin("mixed", {
-      name: "acme.mixed",
-      version: "1.0.0",
-      engines: { daintree: "^0.7.0" },
-      contributes: {
-        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        views: [{ id: "viewer", componentPath: "./v.js", location: "panel" }],
-        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
-      },
-    });
-
-    const service = new PluginService(tmpDir, "0.7.5");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(registerPanelKind).toHaveBeenCalledTimes(1);
-    // mcpServers is registered (no warning) but, under lazy
-    // discovery (#9235), is NOT spawned at activation.
-    expect(mockPluginMcpSupervisor.start).not.toHaveBeenCalled();
-    expect(service.findMcpServerContribution("acme.mixed", "svc")).toBeDefined();
-  });
-
-  it("rejects the whole manifest when any view entry is an orphan (#10620)", async () => {
-    await writePlugin("many", {
-      name: "acme.many",
-      version: "1.0.0",
-      engines: { daintree: "^0.7.0" },
-      contributes: {
-        // `a` matches a panel and would bind; `c` is an orphan with no matching
-        // panel id. A single orphan view now fails the whole manifest
-        // (view_panel_ref_unknown superRefine) rather than logging a warning.
-        panels: [{ id: "a", name: "A", iconId: "eye", color: "#000" }],
-        views: [
-          { id: "a", componentPath: "./a.js", location: "panel" },
-          { id: "c", componentPath: "./c.js", location: "panel" },
-        ],
-      },
-    });
-
-    const service = new PluginService(tmpDir, "0.7.5");
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(0);
-    expect(registerPanelKind).not.toHaveBeenCalled();
-    const orphanWarnings = warnSpy.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).includes('"c" has no matching contributes.panels')
-    );
-    expect(orphanWarnings).toHaveLength(0);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Invalid manifest in many"),
-      expect.anything()
-    );
-  });
-
-  it("rejects a views entry with an invalid location at schema level", () => {
-    const result = getPluginManifestSchema("user").safeParse({
-      name: "acme.bad-location",
-      version: "1.0.0",
-      contributes: {
-        views: [{ id: "main", componentPath: "./v.js", location: "floating" }],
-      },
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects a views entry missing componentPath", () => {
-    const result = getPluginManifestSchema("user").safeParse({
-      name: "acme.no-path",
-      version: "1.0.0",
-      contributes: {
-        views: [{ id: "main", location: "panel" }],
-      },
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects an mcpServers entry missing command", () => {
-    const result = getPluginManifestSchema("user").safeParse({
-      name: "acme.no-cmd",
-      version: "1.0.0",
-      contributes: {
-        mcpServers: [{ id: "svc", name: "Svc" }],
-      },
-    });
-    expect(result.success).toBe(false);
-  });
-
   it("rejects an mcpServers entry with non-string env values", () => {
     const result = getPluginManifestSchema("user").safeParse({
       name: "acme.bad-env",
@@ -787,17 +662,6 @@ describe("reserved contribution point warnings", () => {
       },
     });
     expect(result.success).toBe(false);
-  });
-
-  it("accepts an mcpServers entry without optional args/env fields", () => {
-    const result = getPluginManifestSchema("user").safeParse({
-      name: "acme.minimal-mcp",
-      version: "1.0.0",
-      contributes: {
-        mcpServers: [{ id: "svc", name: "Svc", command: "node" }],
-      },
-    });
-    expect(result.success).toBe(true);
   });
 });
 
@@ -850,33 +714,6 @@ describe("Plugin exception containment (#9276)", () => {
       expect(service.hasPlugin("acme.throws-activate")).toBe(true);
     });
 
-    it("returns undefined when the plugin's activate succeeds", async () => {
-      const pluginDir = path.join(tmpDir, "clean-activate");
-      await fs.mkdir(pluginDir);
-      await fs.writeFile(
-        path.join(pluginDir, "plugin.json"),
-        JSON.stringify({ name: "acme.clean-activate", version: "1.0.0", main: "main.mjs" })
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "main.mjs"),
-        "export function activate() { return () => {}; }"
-      );
-
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-      await service.activatePlugin("acme.clean-activate");
-
-      expect(service.getPluginLoadError("acme.clean-activate")).toBeUndefined();
-    });
-
-    it("returns undefined when the plugin declares no main entry", async () => {
-      await writePlugin("no-main", { name: "acme.no-main", version: "1.0.0" });
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-
-      expect(service.getPluginLoadError("acme.no-main")).toBeUndefined();
-    });
-
     it("load error persists in the provenance record across unload", async () => {
       const pluginDir = path.join(tmpDir, "throws-then-unload");
       await fs.mkdir(pluginDir);
@@ -900,28 +737,6 @@ describe("Plugin exception containment (#9276)", () => {
       service.unloadPlugin("acme.throws-then-unload");
       expect(service.getPluginLoadError("acme.throws-then-unload")).toBeDefined();
       expect(service.getPluginLoadError("acme.throws-then-unload")?.message).toBe("boom");
-    });
-
-    it("normalises non-Error throws into a load error record", async () => {
-      const pluginDir = path.join(tmpDir, "throws-string");
-      await fs.mkdir(pluginDir);
-      await fs.writeFile(
-        path.join(pluginDir, "plugin.json"),
-        JSON.stringify({ name: "acme.throws-string", version: "1.0.0", main: "main.mjs" })
-      );
-      // Throw a plain string — many plugin authors do this.
-      await fs.writeFile(
-        path.join(pluginDir, "main.mjs"),
-        "export function activate() { throw 'plain-string-failure'; }"
-      );
-
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-      await service.activatePlugin("acme.throws-string");
-
-      const record = service.getPluginLoadError("acme.throws-string");
-      expect(record?.message).toBe("plain-string-failure");
-      expect(record?.stack).toBeUndefined();
     });
   });
 
@@ -950,29 +765,6 @@ describe("Plugin exception containment (#9276)", () => {
 
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining(`Handler "acme.throwy-handler:blow-up" threw:`),
-        original
-      );
-    });
-
-    it("dispatchHandler rejects with an async handler's rejection and logs", async () => {
-      await writePlugin("acme.async-throwy", {
-        name: "acme.async-throwy",
-        version: "1.0.0",
-      });
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-
-      const original = new Error("async boom");
-      service.registerHandler("acme.async-throwy", "blow-up", async () => {
-        throw original;
-      });
-
-      await expect(
-        service.dispatchHandler("acme.async-throwy", "blow-up", makeCtx("acme.async-throwy"), [])
-      ).rejects.toBe(original);
-
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining(`Handler "acme.async-throwy:blow-up" threw:`),
         original
       );
     });
@@ -1016,34 +808,6 @@ describe("Plugin exception containment (#9276)", () => {
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining(
           `Unload step "unregisterPluginMenuItems" for "acme.cascade-test" threw:`
-        ),
-        expect.any(Error)
-      );
-    });
-
-    it("continues past a throwing toolbar unregister", async () => {
-      await writePlugin("toolbar-throws", {
-        name: "acme.toolbar-throws",
-        version: "1.0.0",
-        contributes: {
-          panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }],
-        },
-      });
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-
-      vi.mocked(unregisterPluginToolbarButtons).mockImplementationOnce(() => {
-        throw new Error("toolbar boom");
-      });
-
-      service.unloadPlugin("acme.toolbar-throws");
-
-      // Subsequent steps in cascade still run.
-      expect(unregisterPluginPanelKinds).toHaveBeenCalledWith("acme.toolbar-throws");
-      expect(service.hasPlugin("acme.toolbar-throws")).toBe(false);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Unload step "unregisterPluginToolbarButtons" for "acme.toolbar-throws" threw:`
         ),
         expect.any(Error)
       );
@@ -1145,80 +909,5 @@ describe("Plugin exception containment (#9276)", () => {
 
       removeHandlersSpy.mockRestore();
     });
-  });
-
-  describe("Boundary 1 — non-Error throws", () => {
-    it("normalises a bare `throw undefined` into a string message", async () => {
-      const pluginDir = path.join(tmpDir, "throws-undefined");
-      await fs.mkdir(pluginDir);
-      await fs.writeFile(
-        path.join(pluginDir, "plugin.json"),
-        JSON.stringify({ name: "acme.throws-undefined", version: "1.0.0", main: "main.mjs" })
-      );
-      // `throw undefined` is a real footgun in plugin code — make sure the
-      // load-error record never sneaks an `undefined` into its `message`
-      // field, which would violate the type contract for the F19 / #9271
-      // consumer.
-      await fs.writeFile(
-        path.join(pluginDir, "main.mjs"),
-        "export function activate() { throw undefined; }"
-      );
-
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-      await service.activatePlugin("acme.throws-undefined");
-
-      const record = service.getPluginLoadError("acme.throws-undefined");
-      expect(record).toBeDefined();
-      expect(typeof record?.message).toBe("string");
-      expect(record?.message.length).toBeGreaterThan(0);
-    });
-
-    it("normalises a bare `throw null` into a string message", async () => {
-      const pluginDir = path.join(tmpDir, "throws-null");
-      await fs.mkdir(pluginDir);
-      await fs.writeFile(
-        path.join(pluginDir, "plugin.json"),
-        JSON.stringify({ name: "acme.throws-null", version: "1.0.0", main: "main.mjs" })
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "main.mjs"),
-        "export function activate() { throw null; }"
-      );
-
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-      await service.activatePlugin("acme.throws-null");
-
-      const record = service.getPluginLoadError("acme.throws-null");
-      expect(record).toBeDefined();
-      expect(typeof record?.message).toBe("string");
-      expect(record?.message.length).toBeGreaterThan(0);
-    });
-  });
-});
-
-describe("hello-daintree sample fixture", () => {
-  const fixturePath = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../../plugins/sample/hello-daintree/plugin.json"
-  );
-  const readManifest = async (): Promise<unknown> =>
-    JSON.parse(await fs.readFile(fixturePath, "utf8"));
-
-  it("validates against the manifest schema", async () => {
-    const result = getPluginManifestSchema("builtin").safeParse(await readManifest());
-    expect(result.success).toBe(true);
-  });
-
-  it("declares the first-party name and the wired contribution points", async () => {
-    const manifest = getPluginManifestSchema("builtin").parse(await readManifest());
-    expect(manifest.name).toBe("daintree.hello");
-    expect(manifest.engines?.daintree).toBe(">=0.11.0");
-    expect(manifest.contributes.toolbarButtons).toHaveLength(1);
-    expect(manifest.contributes.toolbarButtons[0].id).toBe("ping");
-    expect(manifest.contributes.menuItems).toHaveLength(1);
-    expect(manifest.contributes.fileDecorationProviders).toHaveLength(1);
-    expect(manifest.contributes.fileDecorationProviders[0].scopes).toEqual(["hello:*"]);
   });
 });

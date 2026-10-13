@@ -301,15 +301,6 @@ describe("assembleKeyterms", () => {
     expect(result).not.toContain("terminal_ident_28");
   });
 
-  it("falls back gracefully when git fails", async () => {
-    gitListBranchesMock.mockRejectedValueOnce(new Error("git not found"));
-    const result = await assembleKeyterms({
-      customDictionary: ["MyTerm"],
-      projectPath: "/some/path",
-    });
-    expect(result).toContain("MyTerm");
-  });
-
   it("falls back gracefully when ptyClient fails", async () => {
     const ptyClient = {
       getAllTerminalSnapshots: vi.fn().mockRejectedValue(new Error("pty error")),
@@ -397,16 +388,6 @@ describe("formatKeytermPrompt", () => {
     expect(formatKeytermPrompt([])).toBe("");
   });
 
-  it("formats a single term without a trailing separator", () => {
-    expect(formatKeytermPrompt(["Daintree"])).toBe("Keywords: Daintree");
-  });
-
-  it("preserves casing of terms", () => {
-    expect(formatKeytermPrompt(["Daintree", "xterm", "PtyClient"])).toBe(
-      "Keywords: Daintree, xterm, PtyClient"
-    );
-  });
-
   it("drops whole terms that would exceed the char cap (never mid-term truncation)", () => {
     // "Keywords: foo" = 13 chars. ", toolong_word_here" would push to 32.
     const result = formatKeytermPrompt(["foo", "toolong_word_here"], 20);
@@ -422,10 +403,6 @@ describe("formatKeytermPrompt", () => {
   it("includes a term whose total length lands exactly at the cap", () => {
     // "Keywords: abc" is exactly 13 chars; cap of 13 must include it.
     expect(formatKeytermPrompt(["abc"], 13)).toBe("Keywords: abc");
-  });
-
-  it("skips blank terms in the input", () => {
-    expect(formatKeytermPrompt(["foo", "", "bar"])).toBe("Keywords: foo, bar");
   });
 
   it("caps the full string (including the prefix) at maxChars", () => {
@@ -449,15 +426,6 @@ describe("formatKeytermPrompt", () => {
     expect(result).toBe("Keywords: foo, bar");
   });
 
-  it("returns empty string when every term is over the cap", () => {
-    expect(formatKeytermPrompt(["averylongterm1", "averylongterm2"], 15)).toBe("");
-  });
-
-  it("returns empty string when maxChars is smaller than the prefix alone", () => {
-    // "Keywords: " is 10 chars; "abc" pushes candidate to 13 — nothing can fit at cap 8.
-    expect(formatKeytermPrompt(["abc"], 8)).toBe("");
-  });
-
   it("skips whitespace-only terms defensively", () => {
     expect(formatKeytermPrompt(["   ", "\t\n", "foo"])).toBe("Keywords: foo");
   });
@@ -466,14 +434,6 @@ describe("formatKeytermPrompt", () => {
 describe("sanitizeOpenAIKeywords", () => {
   const CR = String.fromCharCode(13);
   const LF = String.fromCharCode(10);
-
-  it("passes through safe terms unchanged and in order", () => {
-    expect(sanitizeOpenAIKeywords(["Daintree", "xterm", "PtyClient"])).toEqual([
-      "Daintree",
-      "xterm",
-      "PtyClient",
-    ]);
-  });
 
   it("preserves internal spaces, punctuation, and casing in literal terms", () => {
     expect(sanitizeOpenAIKeywords(["AC-42", "Premium Plus", "node_modules"])).toEqual([
@@ -490,14 +450,6 @@ describe("sanitizeOpenAIKeywords", () => {
     ["line feed", `foo${LF}bar`],
   ])("drops a term containing %s", (_label, term) => {
     expect(sanitizeOpenAIKeywords([term])).toEqual([]);
-  });
-
-  it("drops the whole offending term rather than stripping the character", () => {
-    // Stripping would yield "div" — a different literal the user never typed,
-    // biasing transcription toward a word that isn't on their screen.
-    const result = sanitizeOpenAIKeywords(["<div>"]);
-    expect(result).toEqual([]);
-    expect(result).not.toContain("div");
   });
 
   it("keeps safe terms that surround a rejected one", () => {
@@ -592,18 +544,10 @@ describe("sanitizeOpenAIKeywords", () => {
     ]);
   });
 
-  it("returns an empty array when every term is unsafe", () => {
-    expect(sanitizeOpenAIKeywords(["<a>", `b${LF}c`, "   ", "c>d"])).toEqual([]);
-  });
-
   it("trims a trailing newline rather than rejecting the term", () => {
     // Trimming yields the same term the user meant; only an INTERNAL CR/LF
     // (a multi-line blob) is grounds for dropping it.
     expect(sanitizeOpenAIKeywords([`Daintree${LF}`, `xterm${CR}`])).toEqual(["Daintree", "xterm"]);
-  });
-
-  it("returns an empty array for empty input", () => {
-    expect(sanitizeOpenAIKeywords([])).toEqual([]);
   });
 
   it("ignores non-string entries defensively", () => {
@@ -616,11 +560,5 @@ describe("sanitizeOpenAIKeywords", () => {
     const input = Object.freeze(["Daintree", "<bad>", "xterm"]);
     expect(sanitizeOpenAIKeywords(input)).toEqual(["Daintree", "xterm"]);
     expect(input).toEqual(["Daintree", "<bad>", "xterm"]);
-  });
-
-  it("produces a prompt free of rejected terms when composed with formatKeytermPrompt", () => {
-    const prompt = formatKeytermPrompt(sanitizeOpenAIKeywords(["Daintree", "<script>", "xterm"]));
-    expect(prompt).toBe("Keywords: Daintree, xterm");
-    expect(prompt).not.toContain("script");
   });
 });

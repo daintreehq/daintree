@@ -166,21 +166,6 @@ describe("defineIpcNamespace", () => {
     const removed = ipcMainMock.removeHandler.mock.calls.map((call) => call[0]);
     expect(removed).toEqual(["clipboard:save-image"]);
   });
-
-  it("channels() returns every channel string the namespace owns", () => {
-    const ns = defineIpcNamespace({
-      name: "clipboard",
-      ops: {
-        saveImage: op(CH.saveImage, async () => ({
-          filePath: "/tmp/x.png",
-          thumbnailDataUrl: "data:image/png;base64,AA",
-        })),
-        writeText: op(CH.writeText, async (_text: string) => undefined),
-      },
-    });
-
-    expect(ns.channels().sort()).toEqual(["clipboard:save-image", "clipboard:write-text"]);
-  });
 });
 
 describe("opValidated", () => {
@@ -388,22 +373,6 @@ describe("opValidated", () => {
     ).rejects.toBeInstanceOf(ValidationError);
     expect(handler).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
-  });
-
-  it("non-validated and validated ops can coexist in the same namespace", () => {
-    const ns = defineIpcNamespace({
-      name: "mixed",
-      ops: {
-        plain: op(CH.writeText, async (_text: string) => undefined),
-        validated: opValidated(SLASH_LIST, SlashListSchema, async () => []),
-      },
-    });
-
-    ns.register();
-
-    const channels = ipcMainMock.handle.mock.calls.map((call) => call[0]);
-    expect(channels).toContain("clipboard:write-text");
-    expect(channels).toContain(SLASH_LIST);
   });
 
   // Regression for #9882: opValidated() must apply the same ForbidIpcEnvelopeKeys

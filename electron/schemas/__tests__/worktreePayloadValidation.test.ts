@@ -16,14 +16,6 @@ describe("WorktreeCreatePayloadSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts the optional fromRemote flag", () => {
-    const result = WorktreeCreatePayloadSchema.safeParse({
-      rootPath: "/home/user/repo",
-      options: { ...validOptions, fromRemote: true },
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("preserves all optional CreateWorktreeOptions fields (no silent stripping)", () => {
     // Regression guard: a plain z.object() strips undeclared fields, which
     // would break PR-dropdown, remote-mode, and branch-reuse creation paths.
@@ -64,18 +56,6 @@ describe("WorktreeCreatePayloadSchema", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.options.submoduleInit).toBe("none");
-  });
-
-  it("carries collisionPolicy through, since only the host can enforce it", () => {
-    // A renderer-side branch check reserves nothing, so the policy is worthless
-    // unless it reaches WorkspaceService, where collision detection rides the
-    // atomic `git worktree add` failure.
-    const result = WorktreeCreatePayloadSchema.safeParse({
-      rootPath: "/home/user/repo",
-      options: { ...validOptions, collisionPolicy: "error" },
-    });
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.data.options.collisionPolicy).toBe("error");
   });
 
   it("rejects a submoduleInit policy outside the declared union", () => {

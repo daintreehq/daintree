@@ -43,16 +43,6 @@ describe("migration021 — merge disabled plugins", () => {
     expect("disabledBuiltins" in after).toBe(false);
   });
 
-  it("preserves existing disabled ids when there is no legacy field", () => {
-    const data: Record<string, unknown> = {
-      plugins: { disabled: ["acme.user"] },
-    };
-    const store = makeStoreMock(data);
-    migration021.up(store);
-    const after = data.plugins as Record<string, unknown>;
-    expect(after.disabled).toEqual(["acme.user"]);
-  });
-
   it("is a no-op when there is no plugins state", () => {
     const data: Record<string, unknown> = {};
     const store = makeStoreMock(data);

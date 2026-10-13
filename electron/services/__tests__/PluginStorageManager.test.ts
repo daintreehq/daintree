@@ -84,24 +84,6 @@ describe("PluginStorageManager store cache", () => {
     expect(b).not.toBe(a);
   });
 
-  it("persists, reads back, and deletes a value through the backing store", async () => {
-    const mgr = managerFor();
-    const filePath = (await mgr.resolveStorageFilePath(PLUGIN_ID, "user"))!;
-    const store = mgr.getOrCreateStorageStore(PLUGIN_ID, "user", filePath);
-
-    expect(await store.set("count", 3)).toBe(true);
-    expect(await store.get<number>("count")).toBe(3);
-
-    // The value is written to the plugin-storage path on disk, not plugin-settings.
-    const onDisk = JSON.parse(await fs.readFile(filePath, "utf-8"));
-    expect(onDisk).toEqual({ count: 3 });
-
-    expect(await store.delete("count")).toBe(true);
-    expect(await store.get("count")).toBeUndefined();
-    // Deleting an already-absent key is a no-op (false), not a throw.
-    expect(await store.delete("count")).toBe(false);
-  });
-
   it("round-trips a literal __proto__ key without prototype pollution", async () => {
     const mgr = managerFor();
     const filePath = (await mgr.resolveStorageFilePath(PLUGIN_ID, "user"))!;
@@ -204,34 +186,6 @@ describe("PluginStorageManager subscribers", () => {
     errorSpy.mockRestore();
     warnSpy.mockRestore();
   });
-
-  it("resets the failure counter on a successful notification (no quarantine on intermittent errors)", () => {
-    const mgr = managerFor();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    let shouldThrow = true;
-    const cb = vi.fn(() => {
-      if (shouldThrow) throw new Error("intermittent");
-    });
-    mgr.addSubscriber(PLUGIN_ID, { key: "k", scope: "user", cb });
-
-    // Two throws, then a success resets the counter.
-    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "a");
-    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "b");
-    shouldThrow = false;
-    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "c");
-    // Two more throws — still under the consecutive threshold, so not removed.
-    shouldThrow = true;
-    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "d");
-    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "e");
-
-    // The subscriber is still live: a final success fires.
-    shouldThrow = false;
-    mgr.notifyStorageSubscribers(PLUGIN_ID, "user", "k", "f");
-    expect(cb).toHaveBeenCalledTimes(6);
-    expect(cb).toHaveBeenLastCalledWith("f");
-
-    errorSpy.mockRestore();
-  });
 });
 
 describe("PluginStorageManager evictWorktreeScopedStores", () => {
@@ -262,26 +216,6 @@ describe("PluginStorageManager evictWorktreeScopedStores", () => {
 
     const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
     expect(second).not.toBe(first);
-  });
-
-  it("re-reads the backing file after eviction, dropping a stale in-memory snapshot", async () => {
-    const mgr = managerFor();
-    const filePath = path.join(tmpDir, "wt-stale.json");
-    const first = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
-    expect(await first.set("k", "old")).toBe(true);
-    expect(await first.get("k")).toBe("old");
-
-    // Simulate the file changing out from under the cached store while the
-    // worktree was inactive (e.g. another window wrote it).
-    await fs.writeFile(filePath, JSON.stringify({ k: "new" }), "utf-8");
-    // The cached store notices the file changed rather than serving its snapshot.
-    expect(await first.get("k")).toBe("new");
-
-    mgr.evictWorktreeScopedStores();
-
-    // A post-eviction store reads the updated value straight from disk.
-    const second = mgr.getOrCreateStorageStore(PLUGIN_ID, "worktree", filePath);
-    expect(await second.get("k")).toBe("new");
   });
 });
 

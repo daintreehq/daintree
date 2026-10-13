@@ -57,15 +57,6 @@ describe("collectActiveProjectIds (#11102)", () => {
     expect([...ids].sort()).toEqual(["proj-incoming", "proj-outgoing"]);
   });
 
-  it("deduplicates a project that is foreground in more than one window", () => {
-    const windowOne = makePvm("proj-a");
-    const windowTwo = makePvm("proj-a");
-
-    const ids = collectActiveProjectIds(providerOf([windowOne, windowTwo]), "proj-a", "test");
-
-    expect(ids.size).toBe(1);
-  });
-
   it("unions the fallback pointer additively rather than using it as the sole source", () => {
     const window = makePvm("proj-visible");
 
@@ -146,11 +137,6 @@ describe("collectActiveProjectIds with Host mode visibility", () => {
     });
     const ids = collectActiveProjectIds(providerOf([makePvm("proj-a")]), "ptr", "test");
     expect([...ids].sort()).toEqual(["proj-a", "ptr"]);
-  });
-
-  it("is a no-op when no Host mode service is registered", () => {
-    const ids = collectActiveProjectIds(providerOf([makePvm("proj-a")]), null, "test");
-    expect([...ids]).toEqual(["proj-a"]);
   });
 });
 

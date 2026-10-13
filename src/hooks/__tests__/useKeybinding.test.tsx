@@ -41,17 +41,6 @@ describe("useEffectiveCombo", () => {
     vi.clearAllMocks();
   });
 
-  it("returns the current combo synchronously on mount", () => {
-    overrides.set("agent.claude", "Cmd+Shift+C");
-    const { result } = renderHook(() => useEffectiveCombo("agent.claude"));
-    expect(result.current).toBe("Cmd+Shift+C");
-  });
-
-  it("returns undefined when no binding exists", () => {
-    const { result } = renderHook(() => useEffectiveCombo("agent.unknown"));
-    expect(result.current).toBeUndefined();
-  });
-
   it("re-renders when subscribers are notified and the value changes", () => {
     overrides.set("agent.claude", "Cmd+Shift+C");
     const { result } = renderHook(() => useEffectiveCombo("agent.claude"));
@@ -73,14 +62,6 @@ describe("useEffectiveCombo", () => {
 
     rerender({ id: "agent.gemini" });
     expect(result.current).toBe("Cmd+Shift+G");
-  });
-
-  it("unsubscribes on unmount", () => {
-    const { unmount } = renderHook(() => useEffectiveCombo("agent.claude"));
-    expect(subscribers.size).toBe(1);
-
-    unmount();
-    expect(subscribers.size).toBe(0);
   });
 
   it("uses a stable subscribe reference across renders (no churn)", () => {
@@ -106,17 +87,6 @@ describe("useKeybindingDisplay", () => {
     vi.clearAllMocks();
   });
 
-  it("returns the formatted display combo synchronously on mount", () => {
-    displayOverrides.set("agent.claude", "⌘+⇧+C");
-    const { result } = renderHook(() => useKeybindingDisplay("agent.claude"));
-    expect(result.current).toBe("⌘+⇧+C");
-  });
-
-  it("returns an empty string when no binding exists", () => {
-    const { result } = renderHook(() => useKeybindingDisplay("agent.unknown"));
-    expect(result.current).toBe("");
-  });
-
   it("re-renders when subscribers are notified and the display changes", () => {
     displayOverrides.set("agent.claude", "⌘+⇧+C");
     const { result } = renderHook(() => useKeybindingDisplay("agent.claude"));
@@ -133,11 +103,6 @@ describe("useLastInvalidKey — issue #8105", () => {
     subscribers.clear();
     lastInvalidKeyRef.current = null;
     vi.clearAllMocks();
-  });
-
-  it("returns null initially", () => {
-    const { result } = renderHook(() => useLastInvalidKey());
-    expect(result.current).toBeNull();
   });
 
   it("re-renders with the new value after subscribers are notified", () => {

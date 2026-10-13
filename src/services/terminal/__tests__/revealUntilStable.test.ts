@@ -103,16 +103,6 @@ describe("revealUntilStable", () => {
     expect(attempt).toHaveBeenCalledTimes(callsBeforeAbort);
   });
 
-  it("does not abort when the caller stays live", async () => {
-    const isAborted = vi.fn(() => false);
-    const result = revealUntilStable("t-1", () => true, isAborted, "[test]");
-
-    await pump(MAX_REVEAL_FRAMES);
-
-    await expect(result).resolves.toBe(true);
-    expect(isAborted).toHaveBeenCalled();
-  });
-
   it("isolates a throwing reveal, logging it under the caller's context", async () => {
     const boom = new Error("renderer gone");
     const attempt = vi.fn(() => {

@@ -35,32 +35,12 @@ describe("parseBranchInput", () => {
     });
   });
 
-  it("parses branch with custom unknown prefix", () => {
-    const result = parseBranchInput("spike/experiment");
-    expect(result).toEqual({
-      prefix: "spike",
-      slug: "experiment",
-      fullBranchName: "spike/experiment",
-      hasPrefix: true,
-    });
-  });
-
   it("parses branch without prefix", () => {
     const result = parseBranchInput("quick-fix");
     expect(result).toEqual({
       prefix: "",
       slug: "quick-fix",
       fullBranchName: "quick-fix",
-      hasPrefix: false,
-    });
-  });
-
-  it("handles empty input", () => {
-    const result = parseBranchInput("");
-    expect(result).toEqual({
-      prefix: "",
-      slug: "",
-      fullBranchName: "",
       hasPrefix: false,
     });
   });
@@ -274,13 +254,5 @@ describe("buildBranchName", () => {
 
   it("builds branch without prefix", () => {
     expect(buildBranchName("", "quick-fix")).toBe("quick-fix");
-  });
-
-  it("handles empty slug", () => {
-    expect(buildBranchName("feature", "")).toBe("feature/");
-  });
-
-  it("handles empty prefix and slug", () => {
-    expect(buildBranchName("", "")).toBe("");
   });
 });

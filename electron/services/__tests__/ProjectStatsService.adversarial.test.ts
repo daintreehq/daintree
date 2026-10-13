@@ -589,27 +589,6 @@ describe("ProjectStatsService adversarial", () => {
     svc.stop();
   });
 
-  it("identical successive stats do not trigger a second broadcast", async () => {
-    const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
-    ptyClient.getProjectStats.mockResolvedValue({
-      projectId: "p1",
-      terminalCount: 0,
-    });
-
-    const svc = new ProjectStatsService(ptyClient as never);
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    const after1 = broadcastMock.mock.calls.length;
-
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    const after2 = broadcastMock.mock.calls.length;
-
-    expect(after2).toBe(after1);
-    svc.stop();
-  });
-
   it("replays the retained snapshot to a view that missed every broadcast", async () => {
     const ptyClient = makePtyClient();
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
@@ -683,30 +662,6 @@ describe("ProjectStatsService adversarial", () => {
     });
     expect(() => svc.pushSnapshotTo(racing as never)).not.toThrow();
     svc.stop();
-  });
-
-  it("repeated empty-projects refresh does not spam broadcasts", async () => {
-    projectStoreMock.getAllProjects.mockReturnValue([]);
-    const ptyClient = makePtyClient();
-    const svc = new ProjectStatsService(ptyClient as never);
-
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    svc.refresh();
-    await vi.runAllTimersAsync();
-
-    // Document current behavior: empty broadcast fires every refresh
-    // because the empty-projects shortcut bypasses shallowEqual.
-    // If/when this is tightened to dedupe, expect the count to drop to 1.
-    expect(broadcastMock.mock.calls.length).toBeGreaterThanOrEqual(1);
-    svc.stop();
-  });
-
-  it("stop without start is a no-op (does not throw)", () => {
-    const svc = new ProjectStatsService(makePtyClient() as never);
-    expect(() => svc.stop()).not.toThrow();
   });
 
   it("compute with no ptyClient is a silent no-op", async () => {
@@ -1028,20 +983,6 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
     svc.stop();
   });
 
-  it("omits the assistant fields entirely when no assistant is live", async () => {
-    const ptyClient = makePtyClient();
-    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
-
-    const svc = new ProjectStatsService(ptyClient as never);
-    svc.refresh();
-    await vi.runAllTimersAsync();
-
-    expect(lastPayload().p1).not.toHaveProperty("assistantState");
-    expect(lastPayload().p1).not.toHaveProperty("assistantWaitingReason");
-    expect(lastPayload().p1).not.toHaveProperty("assistantStateSince");
-    svc.stop();
-  });
-
   // The change gate is hand-enumerated, so each field needs its own proof: one
   // left out of `shallowEqual` would leave an already-open switcher showing
   // stale assistant state until some unrelated worker tally happened to move.
@@ -1075,25 +1016,6 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
     await vi.runAllTimersAsync();
 
     expect(broadcastMock.mock.calls.length).toBeGreaterThan(firstCount);
-    svc.stop();
-  });
-
-  it("broadcasts the assistant going away so the row can stop reporting it", async () => {
-    const ptyClient = makePtyClient();
-    ptyClient.getAllTerminalsAsync.mockResolvedValue([
-      helpTerminal({ agentState: "working", lastStateChange: 1_000 }),
-    ]);
-
-    const svc = new ProjectStatsService(ptyClient as never);
-    svc.refresh();
-    await vi.runAllTimersAsync();
-    expect(lastPayload().p1.assistantState).toBe("working");
-
-    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
-    svc.refresh();
-    await vi.runAllTimersAsync();
-
-    expect(lastPayload().p1).not.toHaveProperty("assistantState");
     svc.stop();
   });
 

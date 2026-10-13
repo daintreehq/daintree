@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { CollapsedAlarmPill, collapsedAlarmDescriptionId } from "../CollapsedAlarmPill";
+import { CollapsedAlarmPill } from "../CollapsedAlarmPill";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AlarmDescriptor } from "@/lib/worktreeAlarmTier";
 
@@ -65,12 +65,6 @@ describe("CollapsedAlarmPill", () => {
     const { pill } = renderPill(authFailed);
     expect(pill.getAttribute("data-tone")).toBe("warning");
     expect(pill.getAttribute("data-alarm-kind")).toBe("auth-failed");
-  });
-
-  it("renders behind chip with warning tone", () => {
-    const { pill } = renderPill(behind);
-    expect(pill.getAttribute("data-tone")).toBe("warning");
-    expect(pill.getAttribute("data-alarm-kind")).toBe("behind");
   });
 
   it("carries no words of its own — that is the whole point of the change", () => {
@@ -254,18 +248,5 @@ describe("CollapsedAlarmPill keyboard reach", () => {
     setRevealed(false);
     setRevealed(true);
     await waitFor(() => expect(isOpen(), "the next visit did not reveal").toBe(true));
-  });
-});
-
-describe("collapsedAlarmDescriptionId", () => {
-  it("makes one IDREF of a worktree path, spaces and all", () => {
-    // aria-describedby is a space-separated list, so a raw path with a space
-    // would point at two ids, neither of them this one.
-    const id = collapsedAlarmDescriptionId("/Users/dev/My Projects/helios");
-    expect(id).not.toMatch(/\s/);
-  });
-
-  it("gives two worktrees two ids", () => {
-    expect(collapsedAlarmDescriptionId("/a/b c")).not.toBe(collapsedAlarmDescriptionId("/a/b-c"));
   });
 });

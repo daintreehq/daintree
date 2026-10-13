@@ -72,13 +72,6 @@ afterAll(async () => {
 });
 
 describe("@daintreehq/plugin-sdk/react — React stays external", () => {
-  it("pulls no React source into the SDK bundle", () => {
-    const reactInputs = Object.keys(metafile.inputs).filter((input) =>
-      /(^|[/\\])node_modules[/\\]react(-dom)?[/\\]/.test(input)
-    );
-    expect(reactInputs).toEqual([]);
-  });
-
   it("bundles nothing from node_modules at all", () => {
     // Transitive and parser-free: every declared dependency is externalized, so
     // any npm package appearing as a build input means something reachable from

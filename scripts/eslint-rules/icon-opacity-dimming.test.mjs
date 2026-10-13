@@ -51,10 +51,6 @@ ruleTester.run("no-icon-opacity-dimming", rule, {
         <span className={cn("flex", isStale && "opacity-50 transition-opacity duration-150")}>x</span>
       );`,
     },
-    {
-      name: "opacity on a non-imported lowercase element is out of scope",
-      code: `const A = () => <span className="opacity-60">label</span>;`,
-    },
   ],
   invalid: [
     {

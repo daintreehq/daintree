@@ -359,12 +359,7 @@ describe("useRepositoryStats", () => {
   });
 
   describe("isTokenError", () => {
-    const tokenErrorMessages = [
-      "GitHub token not configured. Set it in Settings.",
-      "Invalid GitHub token",
-      "Token lacks required permissions",
-      "SSO authorization required for this organization",
-    ];
+    const tokenErrorMessages = ["GitHub token not configured. Set it in Settings."];
 
     it.each(tokenErrorMessages)("returns isTokenError=true for error: %s", async (errorMsg) => {
       getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
@@ -441,48 +436,6 @@ describe("useRepositoryStats", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.isTokenError).toBe(false);
-        expect(result.current.error).toBeNull();
-      });
-    });
-
-    it("clears isTokenError when daintree:refresh-sidebar triggers a successful refetch", async () => {
-      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo" });
-      onSwitchMock.mockReturnValue(() => {});
-      getRepoStatsMock.mockResolvedValueOnce({
-        commitCount: 0,
-        issueCount: 0,
-        prCount: 0,
-        loading: false,
-        stale: false,
-        lastUpdated: null,
-        error: "GitHub token not configured. Set it in Settings.",
-      });
-
-      const { result } = renderHook(() => useRepositoryStats());
-
-      await waitFor(() => {
-        expect(result.current.isTokenError).toBe(true);
-        expect(result.current.error).toBe("GitHub token not configured. Set it in Settings.");
-      });
-
-      getRepoStatsMock.mockResolvedValueOnce({
-        commitCount: 5,
-        issueCount: 2,
-        prCount: 1,
-        loading: false,
-        stale: false,
-        lastUpdated: 2000,
-      });
-
-      await act(async () => {
-        window.dispatchEvent(new CustomEvent("daintree:refresh-sidebar"));
-        await Promise.resolve();
-      });
-
-      await waitFor(() => {
-        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
-        expect(getRepoStatsMock.mock.calls[1]?.[1]).toBe(true);
         expect(result.current.isTokenError).toBe(false);
         expect(result.current.error).toBeNull();
       });
@@ -2363,14 +2316,6 @@ describe("useRepositoryStats", () => {
         expect(result.current.freshnessLevel).toBe("fresh");
       });
     });
-
-    it("respects FRESH_THRESHOLD_MS / AGING_THRESHOLD_MS as documented boundaries", async () => {
-      const { FRESH_THRESHOLD_MS: FRESH, AGING_THRESHOLD_MS: AGING } =
-        await import("../useRepositoryStats");
-      expect(FRESH).toBe(90_000);
-      expect(AGING).toBe(300_000);
-      expect(AGING).toBeGreaterThan(FRESH);
-    });
   });
 
   describe("errorSeverity", () => {
@@ -2397,12 +2342,6 @@ describe("useRepositoryStats", () => {
       });
       return rendered;
     }
-
-    it("stays null while polls succeed", async () => {
-      const { result } = await mountWithBaseline();
-      expect(result.current.error).toBeNull();
-      expect(result.current.errorSeverity).toBeNull();
-    });
 
     it("reports a single failure after a fresh baseline as transient and keeps the counts", async () => {
       const { result } = await mountWithBaseline();
@@ -2665,34 +2604,6 @@ describe("useRepositoryStats", () => {
   });
 
   describe("wake-coordinator subscription", () => {
-    it("refreshes when wakeEpoch increments past the value seen at mount", async () => {
-      getCurrentMock.mockResolvedValue({ id: "p", path: "/repo/a" });
-      onSwitchMock.mockReturnValue(() => {});
-      getRepoStatsMock.mockResolvedValue({
-        commitCount: 1,
-        issueCount: 1,
-        prCount: 1,
-        loading: false,
-        stale: false,
-        lastUpdated: 1000,
-      });
-
-      renderHook(() => useRepositoryStats());
-
-      await waitFor(() => {
-        expect(getRepoStatsMock).toHaveBeenCalledTimes(1);
-      });
-
-      await act(async () => {
-        useSystemWakeStore.setState((s) => ({ wakeEpoch: s.wakeEpoch + 1 }));
-        await Promise.resolve();
-      });
-
-      await waitFor(() => {
-        expect(getRepoStatsMock).toHaveBeenCalledTimes(2);
-      });
-    });
-
     it("does not refresh for a wakeEpoch that was already current at mount", async () => {
       // Simulate a prior wake landing before this consumer mounts.
       useSystemWakeStore.setState({

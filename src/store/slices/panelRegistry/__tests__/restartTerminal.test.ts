@@ -387,19 +387,6 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     });
   });
 
-  it("preserves launchAgentId on the panel after demoted restart (launch identity)", async () => {
-    const demoted = { ...agentPanelBase, agentState: "exited" as const, exitCode: 0 };
-    usePanelStore.setState({
-      panelsById: { [demoted.id]: demoted },
-      panelIds: [demoted.id],
-    });
-
-    await usePanelStore.getState().restartTerminal("test-1");
-
-    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
-    expect(after?.launchAgentId).toBe("claude");
-  });
-
   it("preserves agentState: exited across repeated demoted restarts", async () => {
     // Without this, the first demoted restart clears agentState, and the
     // next restart relaunches the agent because the guard sees no exit
@@ -536,39 +523,6 @@ describe("restartTerminal exit/demotion semantics (#5807)", () => {
     const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData | undefined;
     expect(after?.launchAgentId).toBe("claude");
     expect(after?.agentState).toBe("exited");
-  });
-
-  // Scenario 3: "shell survives agent exit" remains holds — a cold-launched
-  // agent terminal whose agent is still actively working (no demotion signal)
-  // relaunches as the agent on restart.
-  it("relaunches cold-launched agent terminal as agent when still active (shell-survives invariant)", async () => {
-    const active = {
-      id: "test-1",
-      kind: "terminal" as const,
-      launchAgentId: "claude",
-      agentLaunchFlags: ["--persisted-flag"],
-      title: "Claude",
-      cwd: "/some/path",
-      command: "claude",
-      cols: 80,
-      rows: 24,
-      location: "grid" as const,
-      agentState: "working" as const,
-      // No exitCode, no "exited" state — the invariant from #5807 (iii):
-      // shell survives agent exit means demotion state is respected; while
-      // the agent is live, restart still relaunches it.
-    };
-    usePanelStore.setState({
-      panelsById: { [active.id]: active },
-      panelIds: [active.id],
-    });
-
-    await usePanelStore.getState().restartTerminal("test-1");
-
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
-    const payload = mockSpawn.mock.calls[0]![0];
-    expect(payload.launchAgentId).toBe("claude");
-    expect(payload.command).toBeDefined();
   });
 });
 

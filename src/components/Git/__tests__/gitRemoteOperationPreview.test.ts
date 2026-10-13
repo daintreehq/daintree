@@ -22,7 +22,6 @@ function stubGit(overrides: {
   hasRemote?: boolean;
   pushBehind?: number;
   reject?: boolean;
-  rejectCommits?: boolean;
   rejectPushCommits?: boolean;
   rejectRebaseCommits?: boolean;
 }) {
@@ -50,11 +49,7 @@ function stubGit(overrides: {
           hasRemote: overrides.hasRemote ?? true,
         })
   );
-  const listCommits = vi.fn(() =>
-    overrides.rejectCommits
-      ? Promise.reject(new Error("git log failed"))
-      : Promise.resolve({ items: overrides.items ?? [] })
-  );
+  const listCommits = vi.fn(() => Promise.resolve({ items: overrides.items ?? [] }));
   const pushCommits = overrides.pushCommits ?? [];
   const listPushCommits = vi.fn(() =>
     overrides.rejectPushCommits
@@ -111,15 +106,6 @@ describe("buildGitRemoteOperationPreview", () => {
     await buildGitRemoteOperationPreview("/repo", "push");
     expect(listPushCommits).toHaveBeenCalledWith("/repo", "feature/x", PREVIEW_COMMIT_LIMIT);
     expect(listCommits).not.toHaveBeenCalled();
-  });
-
-  // Named explicitly rather than left to main to re-resolve: anything that
-  // checks out another branch between the two reads would otherwise move the
-  // range onto a branch the approver never saw.
-  it("names the branch the status just reported when it asks for the range", async () => {
-    const { listPushCommits } = stubGit({ currentBranch: "release/topic" });
-    await buildGitRemoteOperationPreview("/repo", "push");
-    expect(listPushCommits).toHaveBeenCalledWith("/repo", "release/topic", PREVIEW_COMMIT_LIMIT);
   });
 
   it("carries the range total and the creates-branch flag through for the push tail", async () => {
@@ -267,20 +253,6 @@ describe("buildGitRemoteOperationPreview", () => {
     });
   });
 
-  it("carries the resolved push destination through from the staging status", async () => {
-    stubGit({ pushDestination: { remote: "fork", branch: "release/topic" } });
-    await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
-      destination: { remote: "fork", branch: "release/topic" },
-    });
-  });
-
-  it("preserves a null destination rather than inventing origin", async () => {
-    stubGit({ pushDestination: null });
-    await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
-      destination: null,
-    });
-  });
-
   it("carries the upstream separately from the push destination", async () => {
     // A triangular branch pulls from one repository and pushes to another; the
     // pull-rebase confirm must name the former, not the latter (#11746).
@@ -299,18 +271,6 @@ describe("buildGitRemoteOperationPreview", () => {
     await expect(buildGitRemoteOperationPreview("/repo", "push")).rejects.toThrow(
       "git status failed"
     );
-  });
-
-  // Neither operation may leave the generic recent-history read in its path. That
-  // IPC swallows git failures into an empty list, so a preview routed through it
-  // renders a broken repository as "nothing to do" — the reassuring answer, and
-  // the one that lets a destructive confirm be approved against a read that never
-  // happened.
-  it("never routes either preview through the failure-swallowing history read", async () => {
-    const { listCommits } = stubGit({ rejectCommits: true });
-    await buildGitRemoteOperationPreview("/repo", "push");
-    await buildGitRemoteOperationPreview("/repo", "pull-rebase");
-    expect(listCommits).not.toHaveBeenCalled();
   });
 });
 

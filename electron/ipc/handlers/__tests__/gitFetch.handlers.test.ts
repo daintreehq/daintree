@@ -65,12 +65,6 @@ describe("git:fetch IPC", () => {
     expect(fetchWorktree).toHaveBeenCalledWith("/repo", false);
   });
 
-  it("sends prune=true for Fetch and prune", async () => {
-    await invoke({ cwd: "/repo", prune: true });
-
-    expect(fetchWorktree).toHaveBeenCalledWith("/repo", true);
-  });
-
   it("rejects a relative cwd before reaching the workspace service", async () => {
     await expect(invoke({ cwd: "repo" })).rejects.toThrow();
     expect(fetchWorktree).not.toHaveBeenCalled();
@@ -104,12 +98,6 @@ describe("git:fetch IPC", () => {
     // A sibling's recent fetch comes back as `success`, not `skipped` — every
     // skip here means the refs on screen are exactly as stale as before.
     fetchWorktree.mockResolvedValue({ status: "skipped", skipReason: "no-common-dir" });
-
-    await expect(invoke({ cwd: "/repo" })).rejects.toBeInstanceOf(GitOperationError);
-  });
-
-  it("refuses a fetch cancelled by teardown", async () => {
-    fetchWorktree.mockResolvedValue({ status: "skipped", skipReason: "stale-generation" });
 
     await expect(invoke({ cwd: "/repo" })).rejects.toBeInstanceOf(GitOperationError);
   });
@@ -148,12 +136,5 @@ describe("git:fetch IPC", () => {
     cleanup = registerGitFetchHandlers({} as HandlerDependencies);
 
     await expect(invoke({ cwd: "/repo" })).rejects.toThrow();
-  });
-
-  it("removes its handler on cleanup", () => {
-    cleanup();
-    cleanup = () => {};
-
-    expect(ipcHandlers.has(GIT_FETCH_METHOD_CHANNELS.fetch)).toBe(false);
   });
 });

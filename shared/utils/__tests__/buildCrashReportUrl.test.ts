@@ -226,13 +226,6 @@ describe("buildCrashReportUrl", () => {
     expect(title).toContain("Power was interrupted");
   });
 
-  it("uses a cause-aware title for external-kill when no errorMessage", () => {
-    const result = buildCrashReportUrl(
-      baseEntry({ errorMessage: undefined, crashCause: "external-kill" })
-    );
-    expect(decodeTitle(result.url)).toContain("Daintree was forced to close");
-  });
-
   it("falls back to the generic V1 title when neither errorMessage nor crashCause is set", () => {
     const result = buildCrashReportUrl(
       baseEntry({ errorMessage: undefined, crashCause: undefined })

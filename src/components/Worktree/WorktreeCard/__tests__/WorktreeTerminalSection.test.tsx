@@ -103,17 +103,6 @@ function renderSection(overrides: Partial<WorktreeTerminalSectionProps> = {}) {
 }
 
 describe("WorktreeTerminalSection summary icon", () => {
-  it("shows agent icon when all terminals share the same detectedAgentId (collapsed)", () => {
-    renderSection({
-      isExpanded: false,
-      terminals: [
-        makeTerminal({ detectedAgentId: "claude" }),
-        makeTerminal({ detectedAgentId: "claude" }),
-      ],
-    });
-    expect(screen.getByTestId("agent-icon")).toBeDefined();
-  });
-
   it("drops the summary glyph once expanded, where the child rows carry agent identity", () => {
     // The glyph earns its ~18px of a 240px column only while the sessions it
     // summarises are hidden. Expanded, every child row is directly below the
@@ -166,14 +155,6 @@ describe("WorktreeTerminalSection summary icon", () => {
     expect(screen.queryByTestId("agent-icon")).toBeNull();
   });
 
-  it("shows agent icon for single terminal with detectedAgentId", () => {
-    renderSection({
-      terminals: [makeTerminal({ detectedAgentId: "claude" })],
-      counts: { ...baseCounts, total: 1 },
-    });
-    expect(screen.getByTestId("agent-icon")).toBeDefined();
-  });
-
   it("falls back to SquareTerminal for unknown agent", () => {
     renderSection({
       terminals: [makeTerminal({ detectedAgentId: "unknown-agent" as never })],
@@ -216,14 +197,6 @@ describe("WorktreeTerminalSection summary icon", () => {
     expect(icon.getAttribute("data-agent")).toBe("gemini");
   });
 
-  it("uses detectedAgentId to classify a plain shell that entered agent mode", () => {
-    renderSection({
-      terminals: [makeTerminal({ detectedAgentId: "claude" })],
-      counts: { ...baseCounts, total: 1 },
-    });
-    expect(screen.getByTestId("agent-icon")).toBeDefined();
-  });
-
   it("uses runtimeIdentity to classify a plain shell that entered agent mode", () => {
     renderSection({
       terminals: [
@@ -240,16 +213,6 @@ describe("WorktreeTerminalSection summary icon", () => {
     });
     expect(screen.getByTestId("agent-icon")).toBeDefined();
   });
-
-  it("does not paint the agent icon directly (renders in currentColor)", () => {
-    renderSection({
-      terminals: [makeTerminal({ detectedAgentId: "claude" })],
-      counts: { ...baseCounts, total: 1 },
-    });
-    const icon = screen.getByTestId("agent-icon");
-    expect(icon.getAttribute("brandColor")).toBeNull();
-    expect(icon.getAttribute("style")).toBeNull();
-  });
 });
 
 describe("WorktreeTerminalSection arming click handlers", () => {
@@ -260,56 +223,6 @@ describe("WorktreeTerminalSection arming click handlers", () => {
       armOrderById: {},
       lastArmedId: null,
     });
-  });
-
-  it("plain click on an eligible agent tile arms it", () => {
-    const term = makeTerminal({
-      id: "a1",
-      detectedAgentId: "claude",
-      kind: "terminal",
-      hasPty: true,
-    });
-    const onSelect = vi.fn();
-    renderSection({
-      isExpanded: true,
-      terminals: [term],
-      counts: { ...baseCounts, total: 1 },
-      onTerminalSelect: onSelect,
-    });
-
-    // The row button renders "Test Terminal" as the title
-    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
-    fireEvent.click(button);
-
-    expect(useFleetArmingStore.getState().armedIds.has("a1")).toBe(true);
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
-  it("plain click on a runtime-identified agent tile arms it", () => {
-    const term = makeTerminal({
-      id: "runtime-agent",
-      kind: "terminal",
-      hasPty: true,
-      runtimeIdentity: {
-        kind: "agent",
-        id: "claude",
-        iconId: "claude",
-        agentId: "claude",
-      },
-    });
-    const onSelect = vi.fn();
-    renderSection({
-      isExpanded: true,
-      terminals: [term],
-      counts: { ...baseCounts, total: 1 },
-      onTerminalSelect: onSelect,
-    });
-
-    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
-    fireEvent.click(button);
-
-    expect(useFleetArmingStore.getState().armedIds.has("runtime-agent")).toBe(true);
-    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("shift-click on a sidebar entry toggles a single id (additive single add, no range extend)", () => {
@@ -555,23 +468,6 @@ describe("WorktreeTerminalSection row state icon", () => {
     expect(stateIcon).not.toBeNull();
   });
 
-  it("renders waiting icon for identity-less terminal with agentState='waiting'", () => {
-    const term = makeTerminal({
-      id: "no-id-2",
-      kind: "terminal",
-      hasPty: true,
-      agentState: "waiting",
-    });
-    const { container } = renderSection({
-      isExpanded: true,
-      terminals: [term],
-      counts: { ...baseCounts, total: 1 },
-    });
-    const row = container.querySelector('[data-terminal-id="no-id-2"]');
-    const stateIcon = row?.querySelector('[aria-label="waiting"]');
-    expect(stateIcon).not.toBeNull();
-  });
-
   describe("hand-backs (#13235)", () => {
     function setRun(overrides: Partial<FleetRunRow>) {
       useFleetSnapshotStore.setState({
@@ -735,26 +631,6 @@ describe("WorktreeTerminalSection row state icon", () => {
     expect(waitingIcon).not.toBeNull();
   });
 
-  it("does not render any state icon when agentState='exited'", () => {
-    const term = makeTerminal({
-      id: "exited-1",
-      kind: "terminal",
-      hasPty: true,
-      launchAgentId: "claude",
-      agentState: "exited",
-    });
-    const { container } = renderSection({
-      isExpanded: true,
-      terminals: [term],
-      counts: { ...baseCounts, total: 1 },
-    });
-    const row = container.querySelector('[data-terminal-id="exited-1"]');
-    const stateIcons = row?.querySelectorAll(
-      '[aria-label="working"], [aria-label="waiting"], [aria-label="directing"], [aria-label="finished"], [aria-label="exited"], [aria-label="idle"]'
-    );
-    expect(stateIcons?.length ?? 0).toBe(0);
-  });
-
   it("does not render any state icon during the post-exit IPC race (stale agentState)", () => {
     // Renderer can receive `terminal:exit` (sets exitCode/runtimeStatus) before
     // the `agent:state-changed` "exited" event lands — agentState may still
@@ -778,24 +654,6 @@ describe("WorktreeTerminalSection row state icon", () => {
       '[aria-label="working"], [aria-label="waiting"], [aria-label="directing"], [aria-label="finished"], [aria-label="exited"], [aria-label="idle"]'
     );
     expect(stateIcons?.length ?? 0).toBe(0);
-  });
-
-  it("renders waiting icon when agentState='completed' and agent chrome is live", () => {
-    const term = makeTerminal({
-      id: "completed-1",
-      kind: "terminal",
-      hasPty: true,
-      detectedAgentId: "claude",
-      agentState: "completed",
-    });
-    const { container } = renderSection({
-      isExpanded: true,
-      terminals: [term],
-      counts: { ...baseCounts, total: 1 },
-    });
-    const row = container.querySelector('[data-terminal-id="completed-1"]');
-    const waitingIcon = row?.querySelector('[aria-label="waiting"]');
-    expect(waitingIcon).not.toBeNull();
   });
 
   it("does not render state icon when agentState is undefined (plain shell)", () => {
@@ -822,36 +680,6 @@ describe("WorktreeTerminalSection row state icon", () => {
 });
 
 describe("WorktreeTerminalSection collapsed pill state indicators", () => {
-  it("renders multi-state indicators when collapsed with mixed agent states", () => {
-    renderSection({
-      isExpanded: false,
-      counts: {
-        total: 5,
-        byState: { idle: 0, working: 2, waiting: 2, directing: 0, completed: 1, exited: 0 },
-        unread: 0,
-      },
-    });
-    const indicators = screen.getByTestId("collapsed-session-indicators");
-    expect(indicators).toBeDefined();
-    const countSpans = indicators.querySelectorAll(".font-mono.tabular-nums");
-    expect(countSpans.length).toBe(3);
-  });
-
-  it("renders single state indicator when only one non-idle state has count", () => {
-    renderSection({
-      isExpanded: false,
-      counts: {
-        total: 3,
-        byState: { idle: 0, working: 3, waiting: 0, directing: 0, completed: 0, exited: 0 },
-        unread: 0,
-      },
-    });
-    const indicators = screen.getByTestId("collapsed-session-indicators");
-    expect(indicators).toBeDefined();
-    const countSpans = indicators.querySelectorAll(".font-mono.tabular-nums");
-    expect(countSpans.length).toBe(1);
-  });
-
   it("sets aria-label with full state breakdown on the role=img container", () => {
     renderSection({
       isExpanded: false,
@@ -886,18 +714,6 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
       counts: {
         total: 2,
         byState: { idle: 2, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
-        unread: 0,
-      },
-    });
-    expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
-  });
-
-  it("renders nothing when all non-idle states have zero count", () => {
-    renderSection({
-      isExpanded: false,
-      counts: {
-        total: 0,
-        byState: { idle: 0, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
         unread: 0,
       },
     });

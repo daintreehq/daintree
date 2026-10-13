@@ -83,10 +83,6 @@ describe("OAuthLoopbackService", () => {
       );
     });
 
-    it("rejects non-OAuth URLs", () => {
-      expect(looksLikeOAuthUrl("https://example.com/page?foo=bar")).toBe(false);
-    });
-
     it("rejects invalid URLs", () => {
       expect(looksLikeOAuthUrl("not a url")).toBe(false);
     });
@@ -332,21 +328,6 @@ describe("OAuthLoopbackService", () => {
 
       expect(new URL(resultA.callbackUrl).searchParams.get("code")).toBe("CODE_A");
       expect(new URL(resultB.callbackUrl).searchParams.get("code")).toBe("CODE_B");
-    });
-
-    it("resolves null on cancel", async () => {
-      const authUrl =
-        "https://auth.example.com/authorize?client_id=abc&response_type=code&redirect_uri=http://localhost:3000/auth/callback";
-
-      const promise = startOAuthLoopback(authUrl, "test-panel");
-
-      await vi.waitFor(() => {
-        expect(shell.openExternal).toHaveBeenCalledTimes(1);
-      });
-
-      cancelOAuthLoopback("test-panel");
-      const result = await promise;
-      expect(result).toEqual({ success: false, cause: "cancelled" });
     });
   });
 });

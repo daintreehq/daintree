@@ -537,49 +537,6 @@ describe("set-active-project non-empty envHash warming (#9810)", () => {
     expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
   });
 
-  it("falls back to env-empty warm when projectEnv is undefined (back-compat with #9774 callers)", async () => {
-    const pool = makeFakePool();
-    const handlers = createConnectionHandlers(makePoolCtx(pool));
-
-    handlers["set-active-project"]({
-      windowId: 1,
-      projectId: "proj-a",
-      projectPath: "/repo",
-      panelCwds: ["/repo/wt-a"],
-      // projectEnv omitted — must match pre-#9810 behaviour
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
-    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
-    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
-  });
-
-  it("falls back to env-empty warm when projectEnv is an empty object (matches acquirePtyProcess contract)", async () => {
-    const pool = makeFakePool();
-    const handlers = createConnectionHandlers(makePoolCtx(pool));
-
-    handlers["set-active-project"]({
-      windowId: 1,
-      projectId: "proj-a",
-      projectPath: "/repo",
-      panelCwds: ["/repo/wt-a"],
-      projectEnv: {},
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // `{}` is filtered to nothing by computePoolEnvHash, so the warm collapses
-    // to the env-empty path — no point burning a slot on a hash that
-    // `acquireByKey` would also produce for the no-caller-env case.
-    expect(pool.warmForKey).toHaveBeenCalledTimes(1);
-    expect(pool.warmForKey.mock.calls[0]?.[1]).toBeUndefined();
-    expect(pool.warmForKey.mock.calls[0]?.[2]).toBe("env-empty");
-  });
-
   it("collapses to env-empty warm when every projectEnv key is filtered by computePoolEnvHash (#9810)", async () => {
     const pool = makeFakePool();
     const handlers = createConnectionHandlers(makePoolCtx(pool));

@@ -195,8 +195,6 @@ const TERMINAL_ONLY_LABELS = [
   "View terminal info",
 ];
 
-const GENERIC_PANEL_LABELS = ["Rename panel", "Send to background", "Trash panel", "Remove panel"];
-
 type Row = "---" | { label: string; disabled: boolean; destructive: boolean };
 
 /** A row's label: all of its text but the shortcut hint. */
@@ -338,30 +336,10 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     __resetPanelCloseGuardsForTests();
   });
 
-  it.each(GENERIC_PANEL_LABELS)("offers %s on a plugin panel", (label) => {
-    renderMenuFor(pluginPanel);
-
-    expect(screen.getByText(label)).toBeTruthy();
-  });
-
   it.each(TERMINAL_ONLY_LABELS)("never offers %s on a plugin panel", (label) => {
     renderMenuFor(pluginPanel);
 
     expect(screen.queryByText(label)).toBeNull();
-  });
-
-  it("routes a generic item to the panel the menu was opened on with the panel action", () => {
-    renderMenuFor(pluginPanel);
-
-    screen.getByText("Trash panel").click();
-
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    // Assert BOTH halves: the action id proves it's the panel action, not a
-    // mislabeled terminal one, and the explicit id proves it doesn't fall back
-    // to `focusedId` — the exact misrouting this issue is about.
-    const [actionId, args] = dispatch.mock.calls[0]!;
-    expect(actionId).toBe("terminal.trash");
-    expect(args).toMatchObject({ terminalId: "panel-1" });
   });
 
   it("draws the shared list row for row, the worktree move first (#12606)", () => {

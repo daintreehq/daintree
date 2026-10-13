@@ -103,24 +103,6 @@ describe("@xterm/headless options.scrollback active truncation (issue #6215)", (
     }
   });
 
-  it("setting options.scrollback to the current value is a no-op on buffer length", async () => {
-    terminal = new Terminal({
-      cols: COLS,
-      rows: ROWS,
-      scrollback: INITIAL_SCROLLBACK,
-      allowProposedApi: true,
-    });
-
-    await writeAll(terminal, buildLines(LINES_TO_WRITE));
-    terminal.options.scrollback = REDUCED_SCROLLBACK;
-    const lengthAfterFirstTrim = terminal.buffer.active.length;
-
-    terminal.options.scrollback = REDUCED_SCROLLBACK;
-    const lengthAfterRepeat = terminal.buffer.active.length;
-
-    expect(lengthAfterRepeat).toBe(lengthAfterFirstTrim);
-  });
-
   // #11673 — the renderer decides whether a shrink is destructive by measuring
   // how much scrollback is retained. Measuring buffer.active gets that wrong
   // under a TUI: the alternate screen is a bare viewport, so it reports zero

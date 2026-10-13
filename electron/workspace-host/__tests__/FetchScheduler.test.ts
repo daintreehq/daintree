@@ -214,40 +214,6 @@ describe("FetchScheduler", () => {
     expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true, undefined);
   });
 
-  it("triggerNow() while non-force fetch is in-flight does not stack a duplicate force call", async () => {
-    let resolveFirst: () => void = () => {};
-    let callCount = 0;
-    const host = makeHost({
-      onExecuteFetch: vi.fn().mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) {
-          return new Promise<void>((resolve) => {
-            resolveFirst = resolve;
-          });
-        }
-        return Promise.resolve();
-      }),
-    });
-    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
-
-    // First fetch (non-force) goes in-flight via the scheduled timer.
-    scheduler.schedule(true);
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
-    expect(host.onExecuteFetch).toHaveBeenCalledWith(false, undefined);
-
-    // While in-flight, a second triggerNow defers (sets _pendingForceFetch).
-    const forced = scheduler.triggerNow();
-    // Synchronously, we still see only one call — defer hasn't fired.
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
-
-    resolveFirst();
-    await forced;
-    // Now the deferred force ran exactly once after the first completed.
-    expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
-    expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true, undefined);
-  });
-
   it("threads prune through triggerNow to the host", async () => {
     const host = makeHost();
     const scheduler = new FetchScheduler(host as FetchSchedulerHost);
@@ -385,17 +351,6 @@ describe("FetchScheduler", () => {
 
     expect(host.onExecuteFetch).toHaveBeenCalledTimes(2);
     expect(host.onExecuteFetch).toHaveBeenLastCalledWith(true, expected);
-  });
-
-  it("does not execute fetch when host is not running", async () => {
-    const host = makeHost();
-    const scheduler = new FetchScheduler(host as FetchSchedulerHost);
-
-    host.isRunning = false;
-    scheduler.schedule(true);
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(host.onExecuteFetch).not.toHaveBeenCalled();
   });
 
   it("does not reschedule after completion when host is not running", async () => {

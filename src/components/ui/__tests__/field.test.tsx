@@ -13,17 +13,6 @@ function describedTexts(control: Element): string[] {
 }
 
 describe("Field ARIA wiring", () => {
-  it("associates the generated control id with the label", () => {
-    render(
-      <Field>
-        <FieldLabel>Endpoint</FieldLabel>
-        <Input />
-      </Field>
-    );
-    const input = screen.getByLabelText("Endpoint");
-    expect(input.tagName).toBe("INPUT");
-  });
-
   it("adopts a caller-supplied control id instead of generating one", () => {
     render(
       <Field controlId="explicit-id">

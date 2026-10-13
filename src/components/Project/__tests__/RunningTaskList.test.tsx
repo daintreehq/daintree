@@ -99,13 +99,6 @@ describe("RunningTaskList overflow", () => {
     expect(screen.queryByTestId("running-task-overflow")).toBeNull();
   });
 
-  it("keeps the tail out of the DOM until the disclosure is opened", () => {
-    seedTasks(8);
-    render(<RunningTaskList worktreeId={WORKTREE_ID} />);
-    expect(screen.getByText("cmd-3")).toBeTruthy();
-    expect(screen.queryByText("cmd-2")).toBeNull();
-  });
-
   it("opens the tail so every hidden task is reachable (#12001)", () => {
     seedTasks(8);
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
@@ -169,16 +162,6 @@ describe("RunningTaskList overflow", () => {
 
     expect(killMock).toHaveBeenCalledWith("task-0");
     expect(storeState.activateTerminal).not.toHaveBeenCalled();
-  });
-
-  it("stops a hidden task, killing that task's own terminal", () => {
-    seedTasks(8);
-    render(<RunningTaskList worktreeId={WORKTREE_ID} />);
-    openOverflow();
-
-    const row = within(overflowList()).getByText("cmd-2").closest("[data-task-row]")!;
-    fireEvent.click(within(row as HTMLElement).getByLabelText("Stop task"));
-    expect(killMock).toHaveBeenCalledWith("task-2");
   });
 
   it("restarts a hidden failed task", () => {

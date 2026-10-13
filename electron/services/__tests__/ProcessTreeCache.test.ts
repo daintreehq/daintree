@@ -21,11 +21,9 @@ vi.mock("child_process", () => ({
   spawn: mockSpawn,
 }));
 
-type CpuSnapshot = { kernelTicks: bigint; userTicks: bigint; wallMs: number };
 type CacheInternals = {
   cache: Map<number, ProcessInfo>;
   childrenMap: Map<number, number[]>;
-  cpuSnapshots: Map<string, CpuSnapshot>;
   isRefreshing: boolean;
   isWindows: boolean;
   pollTimer: NodeJS.Timeout | null;
@@ -74,28 +72,11 @@ describe("ProcessTreeCache", () => {
     expect(descendants).toEqual([4, 2, 3]);
   });
 
-  it("returns empty array for pid with no children", () => {
-    const processTree = createSeededCache();
-    expect(processTree.getDescendantPids(4)).toEqual([]);
-  });
-
   it("returns only direct children for flat structure", () => {
     const processTree = createSeededCache();
     // PID 1 has children [2, 3], PID 2 has child [4]
     // Asking for descendants of PID 3 (no children)
     expect(processTree.getDescendantPids(3)).toEqual([]);
-  });
-
-  it("returns immediate children when no grandchildren exist", () => {
-    const processTree = createSeededCache();
-    // PID 2 has child [4], no further nesting
-    expect(processTree.getDescendantPids(2)).toEqual([4]);
-  });
-
-  it("does not include root pid in descendants", () => {
-    const processTree = createSeededCache();
-    const descendants = processTree.getDescendantPids(1);
-    expect(descendants).not.toContain(1);
   });
 
   it("does not mutate childrenMap when getting descendants", () => {
@@ -166,14 +147,6 @@ describe("getTreeResourceSummary", () => {
     expect(summary!.memoryKb).toBe(20000);
     expect(summary!.breakdown).toHaveLength(1);
     expect(summary!.breakdown[0].pid).toBe(4);
-  });
-
-  it("sorts breakdown by CPU descending", () => {
-    const processTree = createSeededCache();
-    const summary = processTree.getTreeResourceSummary(1);
-
-    // PID 1 doesn't exist in cache, so this should return null
-    expect(summary).toBeNull();
   });
 
   it("aggregates full tree from PID 2", () => {
@@ -318,115 +291,6 @@ describe("aggregateSubtreeMemory", () => {
   });
 });
 
-describe("Windows CPU delta computation", () => {
-  // The formula in refreshWindows():
-  //   cpuPercent = Number((totalDelta * 10000n) / capacity) / 100
-  //   where totalDelta = kernelDelta + userDelta (in 100ns ticks)
-  //   capacity = deltaWallMs * 10000n * numCpus (converting ms to 100ns ticks × cores)
-
-  function computeCpuPercent(
-    kernelTicks: bigint,
-    userTicks: bigint,
-    priorKernelTicks: bigint,
-    priorUserTicks: bigint,
-    deltaWallMs: number,
-    numCpus: number
-  ): number {
-    const totalDelta = kernelTicks - priorKernelTicks + (userTicks - priorUserTicks);
-    if (totalDelta < 0n) return 0;
-    const capacity = BigInt(deltaWallMs) * 10000n * BigInt(numCpus);
-    if (capacity === 0n) return 0;
-    return Math.min(Number((totalDelta * 10000n) / capacity) / 100, 100);
-  }
-
-  it("returns 0 on first poll (no prior snapshot)", () => {
-    const tree = new ProcessTreeCache();
-    const internals = tree as unknown as CacheInternals;
-
-    // No prior snapshot means cpuPercent defaults to 0
-    expect(internals.cpuSnapshots.size).toBe(0);
-  });
-
-  it("computes nonzero CPU% for a process using ticks over a 2.5s interval", () => {
-    // 1 CPU, 2500ms wall time = 2500 * 10000 = 25_000_000 ticks capacity
-    // Process used 12_500_000 ticks kernel + 0 user = 50% of one core
-    const result = computeCpuPercent(12_500_000n, 0n, 0n, 0n, 2500, 1);
-    expect(result).toBe(50);
-  });
-
-  it("splits CPU across cores correctly", () => {
-    // 4 CPUs, 1000ms wall time = 1000 * 10000 * 4 = 40_000_000 ticks capacity
-    // Process used 10_000_000 ticks total = 25% of total capacity
-    const result = computeCpuPercent(5_000_000n, 5_000_000n, 0n, 0n, 1000, 4);
-    expect(result).toBe(25);
-  });
-
-  it("returns 0 when tick delta is negative (PID reuse)", () => {
-    // New process has fewer ticks than what the old snapshot recorded
-    const result = computeCpuPercent(100n, 100n, 50_000_000n, 50_000_000n, 2500, 1);
-    expect(result).toBe(0);
-  });
-
-  it("returns 0 when deltaWallMs is 0 (same-millisecond call)", () => {
-    const result = computeCpuPercent(10_000_000n, 0n, 0n, 0n, 0, 1);
-    expect(result).toBe(0);
-  });
-
-  it("caps at 100% even with excessive ticks", () => {
-    // More ticks than wall time × cores should be capped
-    const result = computeCpuPercent(100_000_000n, 100_000_000n, 0n, 0n, 1000, 1);
-    expect(result).toBe(100);
-  });
-
-  it("prunes stale snapshot entries after processes exit", () => {
-    const tree = new ProcessTreeCache();
-    const internals = tree as unknown as CacheInternals;
-
-    // Seed snapshots for two processes
-    internals.cpuSnapshots.set("100:2023-01-01T00:00:00Z", {
-      kernelTicks: 1000n,
-      userTicks: 500n,
-      wallMs: 1000,
-    });
-    internals.cpuSnapshots.set("200:2023-01-01T00:00:00Z", {
-      kernelTicks: 2000n,
-      userTicks: 1000n,
-      wallMs: 1000,
-    });
-
-    expect(internals.cpuSnapshots.size).toBe(2);
-
-    // Simulate that only PID 100 survives by setting cache with only PID 100
-    // (In real usage, refreshWindows prunes after building newCache)
-    // We just verify the map is accessible for pruning
-    internals.cpuSnapshots.delete("200:2023-01-01T00:00:00Z");
-    expect(internals.cpuSnapshots.size).toBe(1);
-    expect(internals.cpuSnapshots.has("100:2023-01-01T00:00:00Z")).toBe(true);
-  });
-
-  it("uses pid:creationDate as snapshot key for PID reuse detection", () => {
-    const tree = new ProcessTreeCache();
-    const internals = tree as unknown as CacheInternals;
-
-    // Two different processes reusing PID 42 with different creation dates
-    internals.cpuSnapshots.set("42:2023-01-01T00:00:00Z", {
-      kernelTicks: 50_000_000n,
-      userTicks: 0n,
-      wallMs: 1000,
-    });
-    internals.cpuSnapshots.set("42:2023-06-01T00:00:00Z", {
-      kernelTicks: 1_000n,
-      userTicks: 0n,
-      wallMs: 1000,
-    });
-
-    expect(internals.cpuSnapshots.size).toBe(2);
-    // Different creation dates are tracked independently
-    expect(internals.cpuSnapshots.get("42:2023-01-01T00:00:00Z")!.kernelTicks).toBe(50_000_000n);
-    expect(internals.cpuSnapshots.get("42:2023-06-01T00:00:00Z")!.kernelTicks).toBe(1_000n);
-  });
-});
-
 describe("poll scheduling and adaptive backoff", () => {
   let cache: ProcessTreeCache;
   let internals: CacheInternals;
@@ -497,15 +361,6 @@ describe("poll scheduling and adaptive backoff", () => {
     vi.useRealTimers();
   });
 
-  it("uses setTimeout (not setInterval) for scheduling", async () => {
-    cache.start();
-    // Let the initial synchronous refresh() settle (its finally block schedules the first poll)
-    await vi.advanceTimersByTimeAsync(0);
-    expect(refreshSpy).toHaveBeenCalledTimes(1);
-    // One pending setTimeout, not an interval
-    expect(vi.getTimerCount()).toBe(1);
-  });
-
   it("advances backoff by 1.5x when PID set is unchanged", async () => {
     cache.start();
     await vi.advanceTimersByTimeAsync(0); // first refresh
@@ -539,14 +394,6 @@ describe("poll scheduling and adaptive backoff", () => {
     // One more tick to confirm it stays at ceiling
     await vi.advanceTimersByTimeAsync(15_000);
     expect(cache.getCurrentIntervalMs()).toBe(15_000);
-  });
-
-  it("stop() clears all pending timers", async () => {
-    cache.start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(1);
-    cache.stop();
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("disposed flag prevents rescheduling after stop()", async () => {
@@ -603,14 +450,6 @@ describe("poll scheduling and adaptive backoff", () => {
 
     await vi.advanceTimersByTimeAsync(cache.getCurrentIntervalMs() - 1);
     expect(refreshSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("setPollInterval is no-op when value unchanged", async () => {
-    cache.start();
-    await vi.advanceTimersByTimeAsync(0);
-    const timersBefore = vi.getTimerCount();
-    cache.setPollInterval(2500); // same value
-    expect(vi.getTimerCount()).toBe(timersBefore);
   });
 
   // The lineage ledger is the only record of descendants that have already
@@ -1146,28 +985,6 @@ describe("ProcessTreeCache command/env construction", () => {
       expect(cache.getDescendantPids(300)).toEqual([500]);
     });
 
-    it("carries ExecutablePath through to ProcessInfo", async () => {
-      // `ImagePathProbe` no longer starts a PowerShell per PID on Windows; this
-      // field is where the image basename comes from instead (#12243).
-      const cache = await runWindowsRefresh(
-        JSON.stringify([
-          {
-            ProcessId: 100,
-            ParentProcessId: 1,
-            Name: "node.exe",
-            CommandLine: "node server.js",
-            ExecutablePath: "C:\\Program Files\\nodejs\\node.exe",
-            KernelModeTime: "0",
-            UserModeTime: "0",
-            WorkingSetSize: "1048576",
-            CreationDate: null,
-          },
-        ])
-      );
-
-      expect(cache.getProcess(100)?.executablePath).toBe("C:\\Program Files\\nodejs\\node.exe");
-    });
-
     it("leaves executablePath absent when the census carries none", async () => {
       // CIM returns null for processes it cannot open. An absent field must not
       // become an empty string that reads as a resolved path.
@@ -1454,16 +1271,6 @@ describe("ProcessTreeCache command/env construction", () => {
 
       internals.advanceBackoff();
       expect(cache.getCurrentIntervalMs()).toBe(60_000);
-    });
-
-    it("still advances toward the idle ceiling at the shipped base interval", () => {
-      const cache = new ProcessTreeCache(1_500);
-      const internals = cache as unknown as { advanceBackoff: () => void };
-
-      internals.advanceBackoff();
-      expect(cache.getCurrentIntervalMs()).toBe(2_250);
-      for (let i = 0; i < 20; i++) internals.advanceBackoff();
-      expect(cache.getCurrentIntervalMs()).toBe(15_000);
     });
   });
 

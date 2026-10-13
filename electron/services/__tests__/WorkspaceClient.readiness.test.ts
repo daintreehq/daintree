@@ -12,6 +12,7 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     private _isReady = false;
     private _isDisposed = false;
     private readyResolve: (() => void) | null = null;
+    private readyReject: ((err: Error) => void) | null = null;
     private readyPromise: Promise<void>;
     private responseHandlers = new Map<string, (result: any) => void>();
     private responseRejects = new Map<string, (error: Error) => void>();
@@ -19,8 +20,9 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     constructor(projectPath: string) {
       super();
       this.projectPath = projectPath;
-      this.readyPromise = new Promise((resolve) => {
+      this.readyPromise = new Promise((resolve, reject) => {
         this.readyResolve = resolve;
+        this.readyReject = reject;
       });
       mockHosts.push(this);
     }
@@ -39,12 +41,16 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
 
     send = vi.fn((_msg?: unknown) => true);
 
-    sendWithResponse = vi.fn(<T>(request: { requestId: string; type: string }): Promise<T> => {
-      return new Promise<T>((resolve, reject) => {
-        this.responseHandlers.set(request.requestId, resolve);
-        this.responseRejects.set(request.requestId, reject);
-      });
-    });
+    // Second parameter mirrors the real sendWithResponse(request, timeoutMs?)
+    // so callers passing an explicit timeout type-check against this double.
+    sendWithResponse = vi.fn(
+      <T>(request: { requestId: string; type: string }, _timeoutMs?: number): Promise<T> => {
+        return new Promise<T>((resolve, reject) => {
+          this.responseHandlers.set(request.requestId, resolve);
+          this.responseRejects.set(request.requestId, reject);
+        });
+      }
+    );
 
     pauseHealthCheck = vi.fn();
     resumeHealthCheck = vi.fn();
@@ -73,6 +79,13 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
       if (this.readyResolve) {
         this.readyResolve();
         this.readyResolve = null;
+      }
+    }
+
+    simulateReadyFailure(err: Error): void {
+      if (this.readyReject) {
+        this.readyReject(err);
+        this.readyReject = null;
       }
     }
 
@@ -139,6 +152,10 @@ vi.mock("../ProjectStore.js", () => ({
     getProjectSettings: vi.fn().mockResolvedValue({ runCommands: [] }),
     resolveProjectIdForPath: vi.fn((p: string) => `id-for-${p}`),
   },
+}));
+
+vi.mock("../../store.js", () => ({
+  store: { get: vi.fn().mockReturnValue(null), set: vi.fn() },
 }));
 
 import { WorkspaceClient } from "../WorkspaceClient.js";
@@ -309,5 +326,377 @@ describe("WorkspaceClient.waitForReady after host restart", () => {
     // A poisoned entry is replaced by a freshly spawned host, so the load is cold.
     await expect(load).resolves.toBe("cold");
     consoleError.mockRestore();
+  });
+});
+
+// The project-switch IPC handler starts loadProject concurrently with the view
+// swap, so rapid switches can have several loads in flight per window at once.
+// The pool's windowToProject mapping must be "last REQUESTED wins" — a slow
+// early load completing after a later one must not steal the mapping back.
+describe("WorkspaceClient.loadProject request ordering", () => {
+  let client: WorkspaceClient;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockHosts.length = 0;
+    client = new WorkspaceClient({
+      maxRestartAttempts: 3,
+      showCrashDialog: false,
+      healthCheckIntervalMs: 1000,
+      maxWarmEntries: 3,
+    });
+  });
+
+  afterEach(() => {
+    client.dispose();
+    vi.useRealTimers();
+  });
+
+  function h(index: number): MockHost {
+    return mockHosts[index];
+  }
+
+  async function readyAndResolveLoad(hostIndex: number): Promise<void> {
+    h(hostIndex).simulateReady();
+    await vi.advanceTimersByTimeAsync(0);
+    const req = h(hostIndex).getLastRequest()!;
+    h(hostIndex).resolveRequest(req.requestId);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it("a superseded load completing late does not steal the window mapping (A→B→C)", async () => {
+    const loadA = client.loadProject("/project-a", 1);
+    await readyAndResolveLoad(0);
+    await loadA;
+    expect(client.getHostForWindow(1)).toBe(h(0));
+
+    // Rapid A→B→C: both loads in flight; C's host becomes ready FIRST.
+    const loadB = client.loadProject("/project-b", 1);
+    const loadC = client.loadProject("/project-c", 1);
+
+    await readyAndResolveLoad(2);
+    await loadC;
+    expect(client.getHostForWindow(1)).toBe(h(2));
+
+    // B's slow host finishes last — the stale completion must not flip the
+    // mapping back to B while the window displays C.
+    await readyAndResolveLoad(1);
+    await loadB;
+
+    expect(client.getHostForWindow(1)).toBe(h(2));
+    // The superseded host stays warm for a future switch-back but is demoted
+    // to background polling, mirroring a switch-away.
+    expect(h(1).send).toHaveBeenCalledWith({ type: "background" });
+  });
+
+  it("a same-project re-request does not strand the winning attachment", async () => {
+    const loadA = client.loadProject("/project-a", 1);
+    await readyAndResolveLoad(0);
+    await loadA;
+
+    // Two loads for the SAME project race (e.g. a switch retried while the
+    // first cold spawn is still in flight). Whatever the completion order,
+    // the window must stay attached to the project's host and the host must
+    // not be reaped as dormant.
+    const first = client.loadProject("/project-b", 1);
+    const second = client.loadProject("/project-b", 1);
+    await readyAndResolveLoad(1);
+    await Promise.all([first, second]);
+
+    expect(client.getHostForWindow(1)).toBe(h(1));
+
+    // Far past the dormant grace period: the winning attachment's host must
+    // survive (a stale-undo that stranded it would have scheduled cleanup).
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(h(1).dispose).not.toHaveBeenCalled();
+  });
+
+  it("a load completing after the window released does not resurrect the mapping", async () => {
+    const load = client.loadProject("/project-b", 1);
+    client.unregisterWindow(1);
+
+    await readyAndResolveLoad(0);
+    await load;
+
+    expect(client.getHostForWindow(1)).toBeUndefined();
+  });
+});
+
+describe("WorkspaceClient.prewarmProject", () => {
+  let client: WorkspaceClient;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockHosts.length = 0;
+    client = new WorkspaceClient({
+      maxRestartAttempts: 3,
+      showCrashDialog: false,
+      healthCheckIntervalMs: 1000,
+      // Pin the dormant warm-pool cap so eviction assertions stay deterministic
+      // regardless of the host machine's RAM (the default is now RAM-scaled).
+      maxWarmEntries: 3,
+    });
+  });
+
+  afterEach(() => {
+    client.dispose();
+    vi.useRealTimers();
+  });
+
+  function h(index: number): MockHost {
+    return mockHosts[index];
+  }
+
+  async function readyAndResolveLoadFake(hostIndex: number): Promise<void> {
+    h(hostIndex).simulateReady();
+    await vi.advanceTimersByTimeAsync(0);
+    const req = h(hostIndex).getLastRequest()!;
+    h(hostIndex).resolveRequest(req.requestId);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it("is idempotent — second call for same path is a no-op", () => {
+    client.prewarmProject("/project-a");
+    client.prewarmProject("/project-a");
+
+    expect(mockHosts).toHaveLength(1);
+  });
+
+  it("is a no-op when entry already exists from loadProject", async () => {
+    const load = client.loadProject("/project-a", 1);
+    await readyAndResolveLoadFake(0);
+    await load;
+
+    client.prewarmProject("/project-a");
+    expect(mockHosts).toHaveLength(1);
+  });
+
+  it("is a no-op after dispose", () => {
+    client.dispose();
+    client.prewarmProject("/project-a");
+    expect(mockHosts).toHaveLength(0);
+  });
+
+  it("loadProject after prewarm hits the warm path — no second fork", async () => {
+    client.prewarmProject("/project-a");
+    await readyAndResolveLoadFake(0);
+
+    const load = client.loadProject("/project-a", 1);
+    await expect(load).resolves.toBe("warm");
+
+    // Only one host was ever created
+    expect(mockHosts).toHaveLength(1);
+    expect(h(0).dispose).not.toHaveBeenCalled();
+  });
+
+  it("loadProject during in-flight prewarm awaits the same initPromise", async () => {
+    client.prewarmProject("/project-a");
+    // Host created but not ready yet
+    expect(mockHosts).toHaveLength(1);
+
+    // Start loadProject while prewarm is in-flight
+    const loadPromise = client.loadProject("/project-a", 1);
+
+    // Complete the init
+    await readyAndResolveLoadFake(0);
+    // Joined the prewarmed host rather than spawning one, even though it was
+    // still loading.
+    await expect(loadPromise).resolves.toBe("warm");
+
+    // Still only one host
+    expect(mockHosts).toHaveLength(1);
+  });
+
+  it("dormant cleanup evicts prewarm entry after grace period", async () => {
+    client.prewarmProject("/project-a");
+    await readyAndResolveLoadFake(0);
+
+    // Just before grace period
+    await vi.advanceTimersByTimeAsync(179_999);
+    expect(h(0).dispose).not.toHaveBeenCalled();
+
+    // At grace period
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h(0).dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("LRU cap evicts oldest prewarm when 4th dormant entry is added", async () => {
+    // Prewarm 4 projects
+    for (let i = 0; i < 4; i++) {
+      client.prewarmProject(`/project-${i}`);
+      await readyAndResolveLoadFake(i);
+    }
+
+    // 4 dormant entries — cap is 3, so the oldest (project-0) should be evicted
+    expect(h(0).dispose).toHaveBeenCalledTimes(1);
+    expect(h(1).dispose).not.toHaveBeenCalled();
+    expect(h(2).dispose).not.toHaveBeenCalled();
+    expect(h(3).dispose).not.toHaveBeenCalled();
+  });
+
+  it("failed init cleans up the entry", async () => {
+    client.prewarmProject("/project-a");
+    h(0).simulateReadyFailure(new Error("Fork failed"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h(0).dispose).toHaveBeenCalled();
+
+    // A subsequent loadProject should create a fresh host
+    const load = client.loadProject("/project-a", 1);
+    expect(mockHosts).toHaveLength(2);
+    await readyAndResolveLoadFake(1);
+    await load;
+  });
+
+  it("failed init via sendWithResponse rejection cleans up the entry", async () => {
+    client.prewarmProject("/project-a");
+    h(0).simulateReady();
+    await vi.advanceTimersByTimeAsync(0);
+    const req = h(0).getLastRequest()!;
+    h(0).rejectRequest(req.requestId, new Error("load-project failed"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h(0).dispose).toHaveBeenCalled();
+  });
+});
+
+describe("WorkspaceClient.relayFetchThrottle", () => {
+  let client: WorkspaceClient;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockHosts.length = 0;
+    client = new WorkspaceClient({
+      maxRestartAttempts: 3,
+      showCrashDialog: false,
+      healthCheckIntervalMs: 1000,
+    });
+  });
+
+  afterEach(() => {
+    client.dispose();
+    vi.useRealTimers();
+  });
+
+  function h(index: number): MockHost {
+    return mockHosts[index];
+  }
+
+  async function loadProject(projectPath: string, hostIndex: number, windowId: number) {
+    const load = client.loadProject(projectPath, windowId);
+    h(hostIndex).simulateReady();
+    await vi.advanceTimersByTimeAsync(0);
+    const req = h(hostIndex).getLastRequest()!;
+    h(hostIndex).resolveRequest(req.requestId);
+    await vi.advanceTimersByTimeAsync(0);
+    await load;
+  }
+
+  it("fans out the multiplier to every pooled host", async () => {
+    await loadProject("/project-a", 0, 1);
+    await loadProject("/project-b", 1, 2);
+
+    client.relayFetchThrottle(4);
+
+    expect(h(0).relayFetchThrottle).toHaveBeenCalledWith(4);
+    expect(h(1).relayFetchThrottle).toHaveBeenCalledWith(4);
+  });
+
+  it("seeds hosts created after the last state change from the pool cache", async () => {
+    client.relayFetchThrottle(5);
+
+    await loadProject("/project-a", 0, 1);
+
+    // The host was created after the relay — it must still receive the
+    // cached multiplier at construction, not wait for the next state change.
+    expect(h(0).relayFetchThrottle).toHaveBeenCalledWith(5);
+  });
+});
+
+describe("WorkspaceClient.refreshPullRequests", () => {
+  let client: WorkspaceClient;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockHosts.length = 0;
+    client = new WorkspaceClient({
+      maxRestartAttempts: 3,
+      showCrashDialog: false,
+      healthCheckIntervalMs: 1000,
+    });
+  });
+
+  afterEach(() => {
+    client.dispose();
+    vi.useRealTimers();
+  });
+
+  function h(index: number): MockHost {
+    return mockHosts[index];
+  }
+
+  async function loadProject(projectPath: string, hostIndex: number, windowId: number) {
+    const load = client.loadProject(projectPath, windowId);
+    h(hostIndex).simulateReady();
+    await vi.advanceTimersByTimeAsync(0);
+    const req = h(hostIndex).getLastRequest()!;
+    h(hostIndex).resolveRequest(req.requestId);
+    await vi.advanceTimersByTimeAsync(0);
+    await load;
+  }
+
+  it("dispatches to every pooled host before any of them has responded", async () => {
+    await loadProject("/project-a", 0, 1);
+    await loadProject("/project-b", 1, 2);
+    h(0).sendWithResponse.mockClear();
+    h(1).sendWithResponse.mockClear();
+
+    const refresh = client.refreshPullRequests();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Neither host has responded yet. A sequential fan-out would leave the
+    // second host untouched until the first resolved, so both requests being
+    // in flight at once is what proves the walk is concurrent.
+    expect(h(0).getLastRequest()?.type).toBe("refresh-prs");
+    expect(h(1).getLastRequest()?.type).toBe("refresh-prs");
+
+    h(0).resolveRequest(h(0).getLastRequest()!.requestId);
+    h(1).resolveRequest(h(1).getLastRequest()!.requestId);
+    await refresh;
+  });
+
+  it("gives the refresh more response headroom than the host default", async () => {
+    await loadProject("/project-a", 0, 1);
+    h(0).sendWithResponse.mockClear();
+
+    const refresh = client.refreshPullRequests();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A manual refresh now awaits CI enrichment on top of provider
+    // re-resolution and PR re-detection, so it must not inherit the host's
+    // default per-request budget.
+    const timeoutMs = h(0).sendWithResponse.mock.calls[0][1];
+    expect(timeoutMs).toBeDefined();
+    expect(timeoutMs).toBeGreaterThan(30_000);
+
+    h(0).resolveRequest(h(0).getLastRequest()!.requestId);
+    await refresh;
+  });
+
+  it("refreshes the surviving host when another host fails", async () => {
+    await loadProject("/project-a", 0, 1);
+    await loadProject("/project-b", 1, 2);
+    h(0).sendWithResponse.mockClear();
+    h(1).sendWithResponse.mockClear();
+    h(0).sendWithResponse.mockRejectedValueOnce(new Error("host crashed"));
+
+    const refresh = client.refreshPullRequests();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h(1).getLastRequest()?.type).toBe("refresh-prs");
+    h(1).resolveRequest(h(1).getLastRequest()!.requestId);
+
+    // A crashed host must not reject the whole fan-out.
+    await expect(refresh).resolves.toBeUndefined();
   });
 });

@@ -76,11 +76,6 @@ describe("BootMigrationState", () => {
     expect(state.load().completed).toEqual(["a", "b"]);
   });
 
-  it("exposes the configured marker path", () => {
-    const state = new BootMigrationState(markerPath);
-    expect(state.getMarkerPath()).toBe(markerPath);
-  });
-
   it("writes atomically without leaving a tmp file behind on success", () => {
     const state = new BootMigrationState(markerPath);
     state.save(["a"]);

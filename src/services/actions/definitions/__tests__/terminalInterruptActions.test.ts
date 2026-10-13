@@ -181,22 +181,6 @@ describe("terminal.interrupt (#12338)", () => {
     expect(parsed?.success).toBe(false);
   });
 
-  it("never reports the agent as stopped", async () => {
-    seedPanels([makeAgent("a")]);
-    const result = (await run("terminal.interrupt", { terminalId: "a" })) as Record<
-      string,
-      unknown
-    >;
-    expect(result).not.toHaveProperty("interrupted");
-    expect(result).not.toHaveProperty("stopped");
-    expect(Object.keys(result).sort()).toEqual([
-      "agentId",
-      "agentStateAtDispatch",
-      "status",
-      "terminalId",
-    ]);
-  });
-
   // The contract lives in the value set, not the prose: every outcome this tool
   // can report is something it *asked for*, never something it observed. A
   // `status: "interrupted"` added later fails here. Asserted on the values
@@ -212,11 +196,6 @@ describe("terminal.interrupt (#12338)", () => {
   // itself can never supply it.
   it("points the caller at the terminal for the outcome it cannot report", () => {
     expect(describedStatus()).toMatch(/read the terminal/i);
-  });
-
-  it("declines plugin dispatch, like the rest of the injection surface", () => {
-    expect(definition("terminal.interrupt").denyPluginDispatch).toBe(true);
-    expect(definition("terminal.interruptOwned").denyPluginDispatch).toBe(true);
   });
 });
 

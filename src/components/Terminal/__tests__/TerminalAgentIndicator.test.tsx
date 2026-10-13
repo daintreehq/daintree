@@ -282,24 +282,6 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(agentTooltip!.textContent).toContain("2h 14m");
   });
 
-  it("omits elapsed time when startedAt is undefined", () => {
-    mockTerminal = { id: "t1", isInputLocked: false };
-
-    render(
-      <TerminalAgentIndicator
-        id="t1"
-
-        agentState="working"
-        activity={{ headline: "Building project", status: "working", type: "background" }}
-      />
-    );
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Building project"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).not.toContain("· ");
-  });
-
   it("updates elapsed time after timer interval", () => {
     const base = new Date("2026-03-19T11:59:15Z").getTime();
 
@@ -441,32 +423,6 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     );
     expect(exitLine().textContent).not.toMatch(/:\s*$/);
     expect(exitLine().className).not.toContain("text-status-error");
-  });
-
-  it("eases the chip between states on the state-change tier and snaps under reduced motion", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalAgentIndicator id="t1" agentState="working" />);
-
-    const chip = screen.getByRole("status", { name: /agent state/i });
-    const transition = chip.className.split(" ").find((c) => c.startsWith("transition-"));
-    expect(transition).toBeDefined();
-    expect(transition).not.toBe("transition-all");
-    expect(transition).toContain("background-color");
-    expect(transition).toContain("border-color");
-    expect(chip.className).toContain("duration-150");
-    expect(chip.className).toContain("ease-out");
-    expect(chip.className).toContain("reduce-motion:transition-none");
-  });
-
-  it("falls back to Agent {state} when no headline", () => {
-    mockTerminal = { id: "t1" };
-
-    render(<TerminalAgentIndicator id="t1" agentState="directing" />);
-
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent directing"));
-    expect(agentTooltip).toBeTruthy();
   });
 
   it("does not show stalled state for working agent past 60 seconds", () => {

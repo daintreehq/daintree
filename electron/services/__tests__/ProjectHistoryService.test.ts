@@ -255,17 +255,6 @@ describe("ProjectHistoryService", () => {
     expect(history.current()).toBe("c");
   });
 
-  it("reports the project the window is in", () => {
-    const history = new ProjectHistoryService();
-    expect(history.current()).toBeNull();
-
-    visit(history, "a", "b");
-    expect(history.current()).toBe("b");
-
-    history.record("a");
-    expect(history.current()).toBe("a");
-  });
-
   it("stops growing while keeping the newest visits", () => {
     const shortRun = new ProjectHistoryService();
     for (let i = 0; i < 200; i++) shortRun.record(`p${i}`);

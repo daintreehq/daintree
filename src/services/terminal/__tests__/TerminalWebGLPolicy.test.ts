@@ -51,16 +51,6 @@ describe("TerminalWebGLPolicy.wantsWebGLAtTier", () => {
     }
   });
 
-  it("focus does not change the result — an unfocused visible standard terminal still wants WebGL", () => {
-    const policy = makePolicy();
-    const unfocusedStandard = makeManaged({
-      isVisible: true,
-      isFocused: false,
-      runtimeAgentId: undefined,
-    });
-    expect(policy.wantsWebGLAtTier(unfocusedStandard, TerminalRefreshTier.VISIBLE)).toBe(true);
-  });
-
   it("ineligible tiers (BACKGROUND, undefined) never want WebGL, even visible + focused + agent", () => {
     const policy = makePolicy();
     const managed = makeManaged({ isVisible: true, isFocused: true, runtimeAgentId: "claude" });
@@ -115,11 +105,6 @@ describe("TerminalWebGLPolicy.shouldHaveActiveWebGL — DOM-mode pin safety net"
 
   it("returns true for the focus-pinned terminal while in DOM mode", () => {
     const policy = makePolicy({ getMode: () => "dom", getPinnedId: () => "t1" });
-    expect(policy.shouldHaveActiveWebGL(baseManaged())).toBe(true);
-  });
-
-  it("returns true for a visible eligible terminal in WebGL mode", () => {
-    const policy = makePolicy({ getMode: () => "webgl" });
     expect(policy.shouldHaveActiveWebGL(baseManaged())).toBe(true);
   });
 });

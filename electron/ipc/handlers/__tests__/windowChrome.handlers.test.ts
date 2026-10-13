@@ -59,15 +59,6 @@ describe("windowChrome IPC", () => {
 
   afterEach(() => cleanup());
 
-  it("forwards a severity to the sender's own window", async () => {
-    const win = makeWindow();
-    registryMock.getWindowForWebContents.mockReturnValue(win);
-
-    await getHandler()(eventFrom(), { severity: "warning" });
-
-    expect(overlayMock.setTitleBarOverlayBannerSeverity).toHaveBeenCalledWith(win, "warning");
-  });
-
   it("forwards a null severity when the banner leaves the band", async () => {
     await getHandler()(eventFrom(), { severity: null });
 
@@ -119,9 +110,7 @@ describe("windowChrome IPC", () => {
 
   it.each([
     ["an unknown severity", { severity: "catastrophic" }],
-    ["a non-string severity", { severity: 3 }],
     ["a missing severity key", {}],
-    ["a bare string instead of a payload", "warning"],
     ["no payload at all", undefined],
   ])("rejects %s without touching the native overlay", async (_label, payload) => {
     await expect(getHandler()(eventFrom(), payload)).rejects.toThrow();

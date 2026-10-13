@@ -116,8 +116,38 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-vite-
 
+      # The perf liveness guard runs in its own job below: it spawns a child per
+      # scenario and alone took ~380s, which made its shard the long pole.
       - name: Test (vitest unit, shard ${{ matrix.shard }}/4)
-        run: npx vitest run --shard=${{ matrix.shard }}/4
+        run: npx vitest run --shard=${{ matrix.shard }}/4 --exclude scripts/perf/__tests__/scenarioLiveness.test.ts
+
+  # Drives every perf scenario's run() once in a child process. Not gated on
+  # `check`, so it finishes long before the shards start instead of extending
+  # whichever shard it lands in.
+  perf-liveness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test (perf scenario liveness)
+        run: npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts
 
   build:
     runs-on: ubuntu-latest
@@ -192,7 +222,7 @@ jobs:
   # Insulates against matrix/job name changes breaking required checks.
   ci-ok:
     if: always()
-    needs: [check, test, build]
+    needs: [check, test, perf-liveness, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 

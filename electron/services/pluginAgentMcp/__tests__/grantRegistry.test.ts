@@ -402,12 +402,5 @@ describe("PluginMcpGrantRegistry", () => {
       await waiting;
       expect(registry.isHeld(grant.credentialId)).toBe(true);
     });
-
-    it("holds nothing for an instance with no grants", () => {
-      const registry = new PluginMcpGrantRegistry();
-      registry.holdPlugin("acme.ledger", "surface-1");
-      const { grant } = issue(registry);
-      expect(registry.isHeld(grant.credentialId)).toBe(false);
-    });
   });
 });

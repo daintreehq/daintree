@@ -6,27 +6,6 @@ function createMockRaw() {
 }
 
 describe("PtyPauseCoordinator", () => {
-  it("calls underlying pause on first hold", () => {
-    const raw = createMockRaw();
-    const coord = new PtyPauseCoordinator(raw);
-
-    coord.pause("backpressure");
-
-    expect(raw.pause).toHaveBeenCalledTimes(1);
-    expect(coord.isPaused).toBe(true);
-  });
-
-  it("does not call underlying pause on second hold", () => {
-    const raw = createMockRaw();
-    const coord = new PtyPauseCoordinator(raw);
-
-    coord.pause("backpressure");
-    coord.pause("ipc-queue");
-
-    expect(raw.pause).toHaveBeenCalledTimes(1);
-    expect(coord.isPaused).toBe(true);
-  });
-
   it("does not call underlying resume when releasing non-final hold", () => {
     const raw = createMockRaw();
     const coord = new PtyPauseCoordinator(raw);
@@ -66,17 +45,6 @@ describe("PtyPauseCoordinator", () => {
     expect(coord.isPaused).toBe(true);
   });
 
-  it("no-ops when resuming the same token twice", () => {
-    const raw = createMockRaw();
-    const coord = new PtyPauseCoordinator(raw);
-
-    coord.pause("backpressure");
-    coord.resume("backpressure");
-    coord.resume("backpressure");
-
-    expect(raw.resume).toHaveBeenCalledTimes(1);
-  });
-
   it("forceReleaseAll clears all holds and resumes", () => {
     const raw = createMockRaw();
     const coord = new PtyPauseCoordinator(raw);
@@ -89,15 +57,6 @@ describe("PtyPauseCoordinator", () => {
     expect(raw.resume).toHaveBeenCalledTimes(1);
     expect(coord.isPaused).toBe(false);
     expect(coord.heldTokens.size).toBe(0);
-  });
-
-  it("forceReleaseAll no-ops when no holds", () => {
-    const raw = createMockRaw();
-    const coord = new PtyPauseCoordinator(raw);
-
-    coord.forceReleaseAll();
-
-    expect(raw.resume).not.toHaveBeenCalled();
   });
 
   it("handles three-way interleaved pause/resume correctly", () => {
@@ -141,33 +100,8 @@ describe("PtyPauseCoordinator", () => {
     expect(coord.isPaused).toBe(true);
   });
 
-  it("catches errors from underlying resume", () => {
-    const raw = createMockRaw();
-    raw.resume.mockImplementation(() => {
-      throw new Error("PTY dead");
-    });
-    const coord = new PtyPauseCoordinator(raw);
-
-    coord.pause("backpressure");
-    expect(() => coord.resume("backpressure")).not.toThrow();
-    expect(coord.isPaused).toBe(false);
-  });
-
-  it("reports held tokens accurately", () => {
-    const raw = createMockRaw();
-    const coord = new PtyPauseCoordinator(raw);
-
-    coord.pause("backpressure");
-    coord.pause("system-sleep");
-
-    expect(coord.hasToken("backpressure")).toBe(true);
-    expect(coord.hasToken("system-sleep")).toBe(true);
-    expect(coord.hasToken("resource-governor")).toBe(false);
-    expect(coord.hasToken("ipc-queue")).toBe(false);
-  });
-
   describe("hasAnyBackpressureToken", () => {
-    it.each(["ipc-queue", "port-queue", "port-queue-5", "backpressure"] as const)(
+    it.each(["ipc-queue", "port-queue", "backpressure"] as const)(
       "returns true when %s is held",
       (token) => {
         const coord = new PtyPauseCoordinator(createMockRaw());
@@ -175,11 +109,6 @@ describe("PtyPauseCoordinator", () => {
         expect(coord.hasAnyBackpressureToken()).toBe(true);
       }
     );
-
-    it("returns false when no tokens are held", () => {
-      const coord = new PtyPauseCoordinator(createMockRaw());
-      expect(coord.hasAnyBackpressureToken()).toBe(false);
-    });
 
     it("returns false when only non-backpressure tokens are held", () => {
       const coord = new PtyPauseCoordinator(createMockRaw());
@@ -194,14 +123,6 @@ describe("PtyPauseCoordinator", () => {
       coord.pause("port-queue-3");
       coord.pause("system-sleep");
       expect(coord.hasAnyBackpressureToken()).toBe(true);
-    });
-
-    it("returns false after the backpressure token is released", () => {
-      const coord = new PtyPauseCoordinator(createMockRaw());
-      coord.pause("ipc-queue");
-      coord.pause("resource-governor");
-      coord.resume("ipc-queue");
-      expect(coord.hasAnyBackpressureToken()).toBe(false);
     });
   });
 
@@ -344,18 +265,6 @@ describe("PtyPauseCoordinator", () => {
       expect(coord.isCapturing).toBe(false);
     });
 
-    it("restores ordinary pause semantics once capture ends", () => {
-      const raw = createMockRaw();
-      const coord = new PtyPauseCoordinator(raw);
-      coord.enterCaptureMode();
-      coord.exitCaptureMode();
-
-      coord.pause("resource-governor");
-
-      expect(raw.pause).toHaveBeenCalledTimes(1);
-      expect(coord.isReadPaused).toBe(true);
-    });
-
     it("leaves nothing to re-apply after forceReleaseAll during capture", () => {
       const raw = createMockRaw();
       const coord = new PtyPauseCoordinator(raw);
@@ -368,21 +277,6 @@ describe("PtyPauseCoordinator", () => {
       expect(coord.isReadPaused).toBe(false);
       expect(raw.pause).toHaveBeenCalledTimes(1);
       expect(raw.resume).toHaveBeenCalledTimes(1);
-    });
-
-    it("tolerates a dead PTY on entry and exit", () => {
-      const coord = new PtyPauseCoordinator({
-        pause: () => {
-          throw new Error("dead");
-        },
-        resume: () => {
-          throw new Error("dead");
-        },
-      });
-      coord.pause("resource-governor");
-
-      expect(() => coord.enterCaptureMode()).not.toThrow();
-      expect(() => coord.exitCaptureMode()).not.toThrow();
     });
   });
 

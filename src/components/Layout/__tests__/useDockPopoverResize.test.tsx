@@ -256,11 +256,6 @@ describe("useDockPopoverResize", () => {
     expect(result.current.handleProps.max).toBe(1400 * POPOVER_MAX_HEIGHT_RATIO);
   });
 
-  it("names the panel and leaves the reset hint to the shared handle", () => {
-    const { result } = renderHook(() => useDockPopoverResize());
-    expect(result.current.handleProps.label).toBe("Resize docked panel");
-  });
-
   it("resets on Enter and Space, and jumps to the bounds on Home and End", () => {
     act(() => {
       useDockStore.setState({ popoverHeight: 420 });

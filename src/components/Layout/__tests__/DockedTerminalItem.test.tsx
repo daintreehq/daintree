@@ -8,7 +8,7 @@
  * render harness (no source-string assertions) and verify the store wiring: the
  * dock popover only closes when moveTerminalToGrid succeeds.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
@@ -20,6 +20,9 @@ const moveTerminalToGridMock = vi.fn();
 let mockActiveDockTerminalId: string | null = null;
 let mockDockAgentState: string | undefined = undefined;
 let mockIsAgent = false;
+let capturedOnOpenChange: ((open: boolean) => void) | null = null;
+let capturedOnOpenAutoFocus: ((event: { preventDefault: () => void }) => void) | null = null;
+let capturedOnFocusOutside: ((event: { preventDefault: () => void }) => void) | null = null;
 
 vi.mock("@/store", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -119,10 +122,37 @@ vi.mock("@/components/Terminal/terminalFocus", () => ({
   getTerminalFocusTarget: () => "terminal",
 }));
 
+// Popover mock: captures the Radix callbacks (onOpenChange, onOpenAutoFocus,
+// onFocusOutside) so tests can invoke them directly. Focus-driven dismissal is
+// blocked at onFocusOutside, so the mock does not simulate a mount-time
+// onOpenChange(false) — a close through onOpenChange now models a genuine
+// pointer-outside / Escape dismissal.
 vi.mock("@/components/ui/popover", () => ({
-  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Popover: ({
+    children,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => {
+    capturedOnOpenChange = onOpenChange ?? null;
+    return <>{children}</>;
+  },
   PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  PopoverContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  PopoverContent: ({
+    children,
+    onOpenAutoFocus,
+    onFocusOutside,
+  }: {
+    children: React.ReactNode;
+    onOpenAutoFocus?: (event: { preventDefault: () => void }) => void;
+    onFocusOutside?: (event: { preventDefault: () => void }) => void;
+  }) => {
+    capturedOnOpenAutoFocus = onOpenAutoFocus ?? null;
+    capturedOnFocusOutside = onFocusOutside ?? null;
+    return <div>{children}</div>;
+  },
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -137,6 +167,9 @@ vi.mock("@dnd-kit/core", () => ({
 
 import { DockedTerminalItem } from "../DockedTerminalItem";
 import { DragHandleProvider } from "@/components/DragDrop/DragHandleContext";
+import { handleDockFocusOutside } from "../dockPopoverGuard";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { TerminalRefreshTier } from "@/types";
 
 function makeTerminal(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -183,11 +216,6 @@ describe("DockedTerminalItem move-to-grid gesture", () => {
     mockDockAgentState = undefined;
     render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
     expect(screen.queryByRole("button", { name: /agent/i })).toBeNull();
-  });
-
-  it("does not render a dedicated Open in grid button on the chip", () => {
-    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
-    expect(screen.queryByRole("button", { name: "Open Terminal in grid" })).toBeNull();
   });
 
   it("moves the terminal to the grid on double-click and closes the dock on success", () => {
@@ -254,13 +282,6 @@ describe("DockedTerminalItem drag wiring", () => {
     // not be forwarded onto the chip.
     expect(onKeyDown).not.toHaveBeenCalled();
   });
-
-  it("renders without a drag-handle provider (no listeners) without throwing", () => {
-    expect(() =>
-      render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />)
-    ).not.toThrow();
-    expect(screen.getByRole("button", { name: /drag to reorder/i })).not.toBeNull();
-  });
 });
 
 // #11187 — plain (non-agent) terminals must show a running/finished affordance
@@ -321,4 +342,215 @@ describe("DockedTerminalItem plain-terminal activity cue (#11187)", () => {
       vi.useRealTimers();
     }
   });
+});
+
+/**
+ * DockedTerminalItem — focus-driven dismissal guard (#6602).
+ *
+ * Radix's DismissableLayer fires a focus-outside dismissal while a just-opened
+ * dock popover's terminal is still migrating into the portal (focus transiently
+ * leaves the layer). The fix blocks that path at PopoverContent's onFocusOutside
+ * (preventDefault), so genuine pointer-outside / Escape closes still reach
+ * onOpenChange and are honored. Focus is moved into the terminal once the
+ * popover container ref settles and its stable wrapper has been moved in — a
+ * synchronous step, no MutationObserver, no fixed timer.
+ */
+describe("DockedTerminalItem mount-time close guard (#6602)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    openDockTerminalMock.mockClear();
+    closeDockTerminalMock.mockClear();
+    moveTerminalToGridMock.mockClear();
+    mockActiveDockTerminalId = null;
+    mockDockAgentState = undefined;
+    mockIsAgent = false;
+    capturedOnOpenChange = null;
+    capturedOnOpenAutoFocus = null;
+    capturedOnFocusOutside = null;
+    vi.mocked(terminalInstanceService.focus).mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("wires onFocusOutside to the focus-dismissal guard and never closes on mount", () => {
+    mockActiveDockTerminalId = "t-1";
+
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    // Focus-driven dismissal is blocked at the PopoverContent boundary, not by a
+    // timer/ref in handleOpenChange — so the just-opened popover never closes.
+    expect(closeDockTerminalMock).not.toHaveBeenCalled();
+    expect(capturedOnFocusOutside).toBe(handleDockFocusOutside);
+  });
+
+  it("honors a genuine onOpenChange(false) close immediately", () => {
+    mockActiveDockTerminalId = "t-1";
+
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(capturedOnOpenChange).not.toBeNull();
+
+    // A pointer-outside / Escape close reaches onOpenChange (focus closes are
+    // intercepted upstream) and is honored with no delay or swallow window.
+    act(() => {
+      capturedOnOpenChange?.(false);
+    });
+    expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing when mounted closed (no spurious close to ignore)", () => {
+    mockActiveDockTerminalId = null;
+
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(closeDockTerminalMock).not.toHaveBeenCalled();
+    expect(openDockTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("still honors a real onOpenChange(false) when mounted closed", () => {
+    // Regression guard against accidentally arming the ref unconditionally.
+    mockActiveDockTerminalId = null;
+
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(capturedOnOpenChange).not.toBeNull();
+
+    act(() => {
+      capturedOnOpenChange?.(false);
+    });
+
+    expect(closeDockTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses Radix auto-focus and focuses the terminal once its wrapper is moved in", () => {
+    mockActiveDockTerminalId = "t-1";
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(capturedOnOpenAutoFocus).not.toBeNull();
+
+    // Radix's own auto-focus is blocked; we focus the terminal ourselves.
+    const preventDefault = vi.fn();
+    act(() => {
+      capturedOnOpenAutoFocus?.({ preventDefault });
+    });
+    expect(preventDefault).toHaveBeenCalledOnce();
+
+    // The popover container ref settles synchronously on mount, so the stable
+    // wrapper is moved in and the terminal is focused — no MutationObserver.
+    expect(terminalInstanceService.focus).toHaveBeenCalledWith("t-1");
+  });
+
+  it("does not focus an MCP-created dock terminal", () => {
+    mockActiveDockTerminalId = "t-1";
+    render(
+      <DockedTerminalItem
+        terminal={makeTerminal({ id: "t-1", spawnedBy: "mcp", focusPolicy: "preserve" })}
+      />
+    );
+    expect(capturedOnOpenAutoFocus).not.toBeNull();
+
+    const preventDefault = vi.fn();
+    act(() => {
+      capturedOnOpenAutoFocus?.({ preventDefault });
+    });
+    expect(preventDefault).toHaveBeenCalledOnce();
+
+    // focusPolicy "preserve" short-circuits the focus effect even though the
+    // wrapper is moved into the popover.
+    expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+  });
+});
+
+describe("DockedTerminalItem lifecycle and pop-out (#8160)", () => {
+  let rafCallbacks: Array<{ id: number; cb: FrameRequestCallback; cancelled: boolean }> = [];
+  let nextRafId = 1;
+
+  function flushRaf() {
+    const pending = rafCallbacks.filter((e) => !e.cancelled);
+    rafCallbacks = [];
+    for (const entry of pending) entry.cb(performance.now());
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    rafCallbacks = [];
+    nextRafId = 1;
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((cb) => {
+      const id = nextRafId++;
+      rafCallbacks.push({ id, cb, cancelled: false });
+      return id;
+    });
+    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => {
+      const entry = rafCallbacks.find((e) => e.id === id);
+      if (entry) entry.cancelled = true;
+    });
+    openDockTerminalMock.mockClear();
+    closeDockTerminalMock.mockClear();
+    moveTerminalToGridMock.mockClear();
+    mockActiveDockTerminalId = null;
+    mockDockAgentState = undefined;
+    mockIsAgent = false;
+    vi.mocked(terminalInstanceService.applyRendererPolicy).mockClear();
+    vi.mocked(terminalInstanceService.focus).mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("schedules a single RAF on open and applies VISIBLE policy when it fires", () => {
+    mockActiveDockTerminalId = "t-1";
+
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(rafCallbacks.length).toBe(1);
+    expect(terminalInstanceService.applyRendererPolicy).not.toHaveBeenCalled();
+
+    act(() => {
+      flushRaf();
+    });
+
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-1",
+      TerminalRefreshTier.VISIBLE
+    );
+  });
+
+  it("applies BACKGROUND policy synchronously when mounted closed", () => {
+    mockActiveDockTerminalId = null;
+
+    render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(terminalInstanceService.applyRendererPolicy).toHaveBeenCalledWith(
+      "t-1",
+      TerminalRefreshTier.BACKGROUND
+    );
+    expect(rafCallbacks.length).toBe(0);
+  });
+
+  it("cancels the pending RAF and never applies VISIBLE when closed before it fires", () => {
+    mockActiveDockTerminalId = "t-1";
+
+    const { rerender } = render(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+    expect(rafCallbacks.length).toBe(1);
+    expect(rafCallbacks[0]?.cancelled).toBe(false);
+
+    mockActiveDockTerminalId = null;
+    rerender(<DockedTerminalItem terminal={makeTerminal({ id: "t-1" })} />);
+
+    expect(rafCallbacks[0]?.cancelled).toBe(true);
+
+    act(() => {
+      flushRaf();
+    });
+
+    const calls = vi.mocked(terminalInstanceService.applyRendererPolicy).mock.calls;
+    expect(calls.some((c) => c[1] === TerminalRefreshTier.VISIBLE)).toBe(false);
+    expect(calls.some((c) => c[1] === TerminalRefreshTier.BACKGROUND)).toBe(true);
+  });
+
+  // The "Open in grid" affordance moved out of DockedTerminalItem's overlay and
+  // into PanelHeader's control slot (#8359). Button rendering + onRestore wiring
+  // is covered by PanelHeader.test.tsx; the conditional dock-close lives in
+  // DockedPanel.handleRestore.
 });

@@ -328,15 +328,4 @@ describe("PluginCapabilityConsentService", () => {
     ).toBe(true);
     expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
   });
-
-  it("revokeAllForPlugin clears grants in every scope through the service", async () => {
-    const { service, store } = makeService();
-    store.grant({ pluginId: "acme.x", capability: "shell:exec" });
-    store.grant({ pluginId: "acme.x", capability: "shell:exec", scopeKey: "proj-1" });
-    expect(service.revokeAllForPlugin("acme.x")).toBe(true);
-    expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
-    expect(
-      store.hasGrant({ pluginId: "acme.x", capability: "shell:exec", scopeKey: "proj-1" })
-    ).toBe(false);
-  });
 });

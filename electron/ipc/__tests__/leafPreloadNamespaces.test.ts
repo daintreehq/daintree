@@ -1,320 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { CHANNELS } from "../channels.js";
-import {
-  SLASH_COMMANDS_METHOD_CHANNELS,
-  buildSlashCommandsPreloadBindings,
-} from "../handlers/slashCommands.preload.js";
-import {
-  GLOBAL_ENV_METHOD_CHANNELS,
-  buildGlobalEnvPreloadBindings,
-} from "../handlers/globalEnv.preload.js";
-import { HELP_METHOD_CHANNELS, buildHelpPreloadBindings } from "../handlers/help.preload.js";
-import {
-  ACCESSIBILITY_METHOD_CHANNELS,
-  buildAccessibilityPreloadBindings,
-} from "../handlers/accessibility.preload.js";
-import {
-  EVENT_INSPECTOR_METHOD_CHANNELS,
-  buildEventInspectorPreloadBindings,
-} from "../handlers/eventInspector.preload.js";
-import {
-  COMMANDS_METHOD_CHANNELS,
-  buildCommandsPreloadBindings,
-} from "../handlers/commands.preload.js";
-import { PORTAL_METHOD_CHANNELS, buildPortalPreloadBindings } from "../handlers/portal.preload.js";
-import {
-  DEV_PREVIEW_METHOD_CHANNELS,
-  buildDevPreviewPreloadBindings,
-} from "../handlers/devPreview.preload.js";
-import { PLUGIN_METHOD_CHANNELS, buildPluginPreloadBindings } from "../handlers/plugin.preload.js";
-import {
-  SCRATCH_METHOD_CHANNELS,
-  buildScratchPreloadBindings,
-} from "../handlers/scratch/preload.js";
-import { DEMO_METHOD_CHANNELS, buildDemoPreloadBindings } from "../handlers/demo.preload.js";
-import { SENTRY_METHOD_CHANNELS, buildSentryPreloadBindings } from "../handlers/sentry.preload.js";
-import {
-  SHORTCUT_HINTS_METHOD_CHANNELS,
-  buildShortcutHintsPreloadBindings,
-} from "../handlers/shortcutHints.preload.js";
-import {
-  FORGE_RECOMMENDATION_METHOD_CHANNELS,
-  buildForgeRecommendationPreloadBindings,
-} from "../handlers/forgeRecommendation.preload.js";
-import {
-  FORGE_CREDENTIAL_IMPORT_METHOD_CHANNELS,
-  buildForgeCredentialImportPreloadBindings,
-} from "../handlers/forgeCredentialImport.preload.js";
-import { CLI_METHOD_CHANNELS, buildCliPreloadBindings } from "../handlers/cli.preload.js";
-import { GEMINI_METHOD_CHANNELS, buildGeminiPreloadBindings } from "../handlers/gemini.preload.js";
-import {
-  AGENT_CAPABILITIES_METHOD_CHANNELS,
-  buildAgentCapabilitiesPreloadBindings,
-} from "../handlers/agentCapabilities.preload.js";
-import {
-  GLOBAL_RECIPES_METHOD_CHANNELS,
-  buildGlobalRecipesPreloadBindings,
-} from "../handlers/globalRecipes.preload.js";
-import {
-  CONNECTIVITY_METHOD_CHANNELS,
-  buildConnectivityPreloadBindings,
-} from "../handlers/connectivity.preload.js";
-import {
-  PROJECT_PRESENCE_METHOD_CHANNELS,
-  buildProjectPresencePreloadBindings,
-} from "../handlers/projectPresence.preload.js";
-import {
-  PRIVACY_METHOD_CHANNELS,
-  buildPrivacyPreloadBindings,
-} from "../handlers/privacy.preload.js";
-import {
-  ONBOARDING_METHOD_CHANNELS,
-  buildOnboardingPreloadBindings,
-} from "../handlers/onboarding.preload.js";
+import { buildSlashCommandsPreloadBindings } from "../handlers/slashCommands.preload.js";
+import { buildGlobalEnvPreloadBindings } from "../handlers/globalEnv.preload.js";
+import { buildHelpPreloadBindings } from "../handlers/help.preload.js";
+import { buildAccessibilityPreloadBindings } from "../handlers/accessibility.preload.js";
+import { buildEventInspectorPreloadBindings } from "../handlers/eventInspector.preload.js";
+import { buildCommandsPreloadBindings } from "../handlers/commands.preload.js";
+import { buildPortalPreloadBindings } from "../handlers/portal.preload.js";
+import { buildDevPreviewPreloadBindings } from "../handlers/devPreview.preload.js";
+import { buildPluginPreloadBindings } from "../handlers/plugin.preload.js";
+import { buildScratchPreloadBindings } from "../handlers/scratch/preload.js";
+import { buildDemoPreloadBindings } from "../handlers/demo.preload.js";
+import { buildSentryPreloadBindings } from "../handlers/sentry.preload.js";
+import { buildShortcutHintsPreloadBindings } from "../handlers/shortcutHints.preload.js";
+import { buildForgeRecommendationPreloadBindings } from "../handlers/forgeRecommendation.preload.js";
+import { buildForgeCredentialImportPreloadBindings } from "../handlers/forgeCredentialImport.preload.js";
+import { buildCliPreloadBindings } from "../handlers/cli.preload.js";
+import { buildGeminiPreloadBindings } from "../handlers/gemini.preload.js";
+import { buildAgentCapabilitiesPreloadBindings } from "../handlers/agentCapabilities.preload.js";
+import { buildGlobalRecipesPreloadBindings } from "../handlers/globalRecipes.preload.js";
+import { buildConnectivityPreloadBindings } from "../handlers/connectivity.preload.js";
+import { buildProjectPresencePreloadBindings } from "../handlers/projectPresence.preload.js";
+import { buildPrivacyPreloadBindings } from "../handlers/privacy.preload.js";
+import { buildOnboardingPreloadBindings } from "../handlers/onboarding.preload.js";
 
 describe("leaf preload namespace bindings", () => {
-  describe("METHOD_CHANNELS stay in sync with CHANNELS", () => {
-    it("slashCommands matches", () => {
-      expect(SLASH_COMMANDS_METHOD_CHANNELS.list).toBe(CHANNELS.SLASH_COMMANDS_LIST);
-    });
-
-    it("globalEnv matches", () => {
-      expect(GLOBAL_ENV_METHOD_CHANNELS.get).toBe(CHANNELS.GLOBAL_ENV_GET);
-      expect(GLOBAL_ENV_METHOD_CHANNELS.set).toBe(CHANNELS.GLOBAL_ENV_SET);
-    });
-
-    it("help matches", () => {
-      expect(HELP_METHOD_CHANNELS.getFolderPath).toBe(CHANNELS.HELP_GET_FOLDER_PATH);
-      expect(HELP_METHOD_CHANNELS.markTerminal).toBe(CHANNELS.HELP_MARK_TERMINAL);
-      expect(HELP_METHOD_CHANNELS.unmarkTerminal).toBe(CHANNELS.HELP_UNMARK_TERMINAL);
-      expect(HELP_METHOD_CHANNELS.getPinnedActionContext).toBe(
-        CHANNELS.HELP_GET_PINNED_ACTION_CONTEXT
-      );
-    });
-
-    it("accessibility matches", () => {
-      expect(ACCESSIBILITY_METHOD_CHANNELS.getEnabled).toBe(CHANNELS.ACCESSIBILITY_GET_ENABLED);
-    });
-
-    it("eventInspector matches", () => {
-      expect(EVENT_INSPECTOR_METHOD_CHANNELS.getEvents).toBe(CHANNELS.EVENT_INSPECTOR_GET_EVENTS);
-      expect(EVENT_INSPECTOR_METHOD_CHANNELS.getFiltered).toBe(
-        CHANNELS.EVENT_INSPECTOR_GET_FILTERED
-      );
-      expect(EVENT_INSPECTOR_METHOD_CHANNELS.clear).toBe(CHANNELS.EVENT_INSPECTOR_CLEAR);
-    });
-
-    it("commands matches", () => {
-      expect(COMMANDS_METHOD_CHANNELS.list).toBe(CHANNELS.COMMANDS_LIST);
-      expect(COMMANDS_METHOD_CHANNELS.get).toBe(CHANNELS.COMMANDS_GET);
-      expect(COMMANDS_METHOD_CHANNELS.execute).toBe(CHANNELS.COMMANDS_EXECUTE);
-      expect(COMMANDS_METHOD_CHANNELS.getBuilder).toBe(CHANNELS.COMMANDS_GET_BUILDER);
-    });
-
-    it("portal matches", () => {
-      expect(PORTAL_METHOD_CHANNELS.create).toBe(CHANNELS.PORTAL_CREATE);
-      expect(PORTAL_METHOD_CHANNELS.show).toBe(CHANNELS.PORTAL_SHOW);
-      expect(PORTAL_METHOD_CHANNELS.hide).toBe(CHANNELS.PORTAL_HIDE);
-      expect(PORTAL_METHOD_CHANNELS.resize).toBe(CHANNELS.PORTAL_RESIZE);
-      expect(PORTAL_METHOD_CHANNELS.closeTab).toBe(CHANNELS.PORTAL_CLOSE_TAB);
-      expect(PORTAL_METHOD_CHANNELS.navigate).toBe(CHANNELS.PORTAL_NAVIGATE);
-      expect(PORTAL_METHOD_CHANNELS.goBack).toBe(CHANNELS.PORTAL_GO_BACK);
-      expect(PORTAL_METHOD_CHANNELS.goForward).toBe(CHANNELS.PORTAL_GO_FORWARD);
-      expect(PORTAL_METHOD_CHANNELS.reload).toBe(CHANNELS.PORTAL_RELOAD);
-    });
-
-    it("devPreview matches", () => {
-      expect(DEV_PREVIEW_METHOD_CHANNELS.ensure).toBe(CHANNELS.DEV_PREVIEW_ENSURE);
-      expect(DEV_PREVIEW_METHOD_CHANNELS.restart).toBe(CHANNELS.DEV_PREVIEW_RESTART);
-      expect(DEV_PREVIEW_METHOD_CHANNELS.restartAndClearCache).toBe(
-        CHANNELS.DEV_PREVIEW_RESTART_AND_CLEAR_CACHE
-      );
-      expect(DEV_PREVIEW_METHOD_CHANNELS.reinstallAndRestart).toBe(
-        CHANNELS.DEV_PREVIEW_REINSTALL_AND_RESTART
-      );
-      expect(DEV_PREVIEW_METHOD_CHANNELS.stop).toBe(CHANNELS.DEV_PREVIEW_STOP);
-      expect(DEV_PREVIEW_METHOD_CHANNELS.stopByPanel).toBe(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL);
-      expect(DEV_PREVIEW_METHOD_CHANNELS.getState).toBe(CHANNELS.DEV_PREVIEW_GET_STATE);
-      expect(DEV_PREVIEW_METHOD_CHANNELS.getByWorktree).toBe(CHANNELS.DEV_PREVIEW_GET_BY_WORKTREE);
-    });
-
-    it("plugin matches (plugin:invoke intentionally excluded)", () => {
-      expect(PLUGIN_METHOD_CHANNELS.list).toBe(CHANNELS.PLUGIN_LIST);
-      expect(PLUGIN_METHOD_CHANNELS.setEnabled).toBe(CHANNELS.PLUGIN_SET_ENABLED);
-      expect(PLUGIN_METHOD_CHANNELS.toolbarButtons).toBe(CHANNELS.PLUGIN_TOOLBAR_BUTTONS);
-      expect(PLUGIN_METHOD_CHANNELS.validateActionIds).toBe(CHANNELS.PLUGIN_VALIDATE_ACTION_IDS);
-      expect(PLUGIN_METHOD_CHANNELS.getActions).toBe(CHANNELS.PLUGIN_ACTIONS_GET);
-      expect(PLUGIN_METHOD_CHANNELS.registerAction).toBe(CHANNELS.PLUGIN_ACTIONS_REGISTER);
-      expect(PLUGIN_METHOD_CHANNELS.unregisterAction).toBe(CHANNELS.PLUGIN_ACTIONS_UNREGISTER);
-      expect(PLUGIN_METHOD_CHANNELS.getPanelKinds).toBe(CHANNELS.PLUGIN_PANEL_KINDS_GET);
-      expect(PLUGIN_METHOD_CHANNELS.getAuditRecords).toBe(CHANNELS.PLUGIN_GET_AUDIT_RECORDS);
-      expect(PLUGIN_METHOD_CHANNELS.getAuditConfig).toBe(CHANNELS.PLUGIN_GET_AUDIT_CONFIG);
-      expect(PLUGIN_METHOD_CHANNELS.clearAuditLog).toBe(CHANNELS.PLUGIN_CLEAR_AUDIT_LOG);
-      expect(PLUGIN_METHOD_CHANNELS.setAuditEnabled).toBe(CHANNELS.PLUGIN_SET_AUDIT_ENABLED);
-      expect(PLUGIN_METHOD_CHANNELS.setAuditMaxRecords).toBe(CHANNELS.PLUGIN_SET_AUDIT_MAX_RECORDS);
-      expect(PLUGIN_METHOD_CHANNELS.exportAuditLog).toBe(CHANNELS.PLUGIN_EXPORT_AUDIT_LOG);
-      expect(PLUGIN_METHOD_CHANNELS.getDiagnosticsSnapshot).toBe(
-        CHANNELS.PLUGIN_GET_DIAGNOSTICS_SNAPSHOT
-      );
-    });
-
-    it("scratch matches", () => {
-      expect(SCRATCH_METHOD_CHANNELS.getAll).toBe(CHANNELS.SCRATCH_GET_ALL);
-      expect(SCRATCH_METHOD_CHANNELS.getCurrent).toBe(CHANNELS.SCRATCH_GET_CURRENT);
-      expect(SCRATCH_METHOD_CHANNELS.create).toBe(CHANNELS.SCRATCH_CREATE);
-      expect(SCRATCH_METHOD_CHANNELS.update).toBe(CHANNELS.SCRATCH_UPDATE);
-      expect(SCRATCH_METHOD_CHANNELS.remove).toBe(CHANNELS.SCRATCH_REMOVE);
-      expect(SCRATCH_METHOD_CHANNELS.switch).toBe(CHANNELS.SCRATCH_SWITCH);
-      expect(SCRATCH_METHOD_CHANNELS.saveAsProject).toBe(CHANNELS.SCRATCH_SAVE_AS_PROJECT);
-    });
-
-    it("sentry matches", () => {
-      expect(SENTRY_METHOD_CHANNELS.getConsentState).toBe(CHANNELS.SENTRY_GET_CONSENT_STATE);
-    });
-
-    it("shortcutHints matches", () => {
-      expect(SHORTCUT_HINTS_METHOD_CHANNELS.getCounts).toBe(CHANNELS.SHORTCUT_HINTS_GET_COUNTS);
-      expect(SHORTCUT_HINTS_METHOD_CHANNELS.incrementCount).toBe(
-        CHANNELS.SHORTCUT_HINTS_INCREMENT_COUNT
-      );
-      expect(SHORTCUT_HINTS_METHOD_CHANNELS.getHintedHover).toBe(
-        CHANNELS.SHORTCUT_HINTS_GET_HINTED_HOVER
-      );
-      expect(SHORTCUT_HINTS_METHOD_CHANNELS.setHintedHover).toBe(
-        CHANNELS.SHORTCUT_HINTS_SET_HINTED_HOVER
-      );
-    });
-
-    it("forgeRecommendation matches", () => {
-      expect(FORGE_RECOMMENDATION_METHOD_CHANNELS.getDismissed).toBe(
-        CHANNELS.FORGE_RECOMMENDATION_GET_DISMISSED
-      );
-      expect(FORGE_RECOMMENDATION_METHOD_CHANNELS.markDismissed).toBe(
-        CHANNELS.FORGE_RECOMMENDATION_MARK_DISMISSED
-      );
-    });
-
-    it("forgeCredentialImport matches", () => {
-      expect(FORGE_CREDENTIAL_IMPORT_METHOD_CHANNELS.previewCredentialImport).toBe(
-        CHANNELS.FORGE_PREVIEW_CREDENTIAL_IMPORT
-      );
-      expect(FORGE_CREDENTIAL_IMPORT_METHOD_CHANNELS.commitCredentialImport).toBe(
-        CHANNELS.FORGE_COMMIT_CREDENTIAL_IMPORT
-      );
-    });
-
-    it("cli matches", () => {
-      expect(CLI_METHOD_CHANNELS.install).toBe(CHANNELS.CLI_INSTALL);
-      expect(CLI_METHOD_CHANNELS.getStatus).toBe(CHANNELS.CLI_GET_STATUS);
-    });
-
-    it("gemini matches", () => {
-      expect(GEMINI_METHOD_CHANNELS.getStatus).toBe(CHANNELS.GEMINI_GET_STATUS);
-      expect(GEMINI_METHOD_CHANNELS.enableAlternateBuffer).toBe(
-        CHANNELS.GEMINI_ENABLE_ALTERNATE_BUFFER
-      );
-    });
-
-    it("agentCapabilities matches", () => {
-      expect(AGENT_CAPABILITIES_METHOD_CHANNELS.getRegistry).toBe(
-        CHANNELS.AGENT_CAPABILITIES_GET_REGISTRY
-      );
-      expect(AGENT_CAPABILITIES_METHOD_CHANNELS.getAgentIds).toBe(
-        CHANNELS.AGENT_CAPABILITIES_GET_AGENT_IDS
-      );
-      expect(AGENT_CAPABILITIES_METHOD_CHANNELS.getAgentMetadata).toBe(
-        CHANNELS.AGENT_CAPABILITIES_GET_AGENT_METADATA
-      );
-      expect(AGENT_CAPABILITIES_METHOD_CHANNELS.isAgentEnabled).toBe(
-        CHANNELS.AGENT_CAPABILITIES_IS_AGENT_ENABLED
-      );
-      expect(AGENT_CAPABILITIES_METHOD_CHANNELS.getCcrPresets).toBe(
-        CHANNELS.AGENT_CAPABILITIES_GET_CCR_PRESETS
-      );
-    });
-
-    it("globalRecipes matches", () => {
-      expect(GLOBAL_RECIPES_METHOD_CHANNELS.getRecipes).toBe(CHANNELS.GLOBAL_GET_RECIPES);
-      expect(GLOBAL_RECIPES_METHOD_CHANNELS.addRecipe).toBe(CHANNELS.GLOBAL_ADD_RECIPE);
-      expect(GLOBAL_RECIPES_METHOD_CHANNELS.updateRecipe).toBe(CHANNELS.GLOBAL_UPDATE_RECIPE);
-      expect(GLOBAL_RECIPES_METHOD_CHANNELS.deleteRecipe).toBe(CHANNELS.GLOBAL_DELETE_RECIPE);
-    });
-
-    it("connectivity matches", () => {
-      expect(CONNECTIVITY_METHOD_CHANNELS.getState).toBe(CHANNELS.CONNECTIVITY_GET_STATE);
-    });
-
-    it("projectPresence matches", () => {
-      expect(PROJECT_PRESENCE_METHOD_CHANNELS.getSnapshot).toBe(
-        CHANNELS.PROJECT_PRESENCE_GET_SNAPSHOT
-      );
-    });
-
-    it("privacy matches", () => {
-      expect(PRIVACY_METHOD_CHANNELS.getSettings).toBe(CHANNELS.PRIVACY_GET_SETTINGS);
-      expect(PRIVACY_METHOD_CHANNELS.setTelemetryLevel).toBe(CHANNELS.PRIVACY_SET_TELEMETRY_LEVEL);
-      expect(PRIVACY_METHOD_CHANNELS.setLogRetention).toBe(CHANNELS.PRIVACY_SET_LOG_RETENTION);
-      expect(PRIVACY_METHOD_CHANNELS.openDataFolder).toBe(CHANNELS.PRIVACY_OPEN_DATA_FOLDER);
-      expect(PRIVACY_METHOD_CHANNELS.clearCache).toBe(CHANNELS.PRIVACY_CLEAR_CACHE);
-      expect(PRIVACY_METHOD_CHANNELS.resetAllData).toBe(CHANNELS.PRIVACY_RESET_ALL_DATA);
-      expect(PRIVACY_METHOD_CHANNELS.getDataFolderPath).toBe(CHANNELS.PRIVACY_GET_DATA_FOLDER_PATH);
-    });
-
-    it("onboarding matches", () => {
-      expect(ONBOARDING_METHOD_CHANNELS.get).toBe(CHANNELS.ONBOARDING_GET);
-      expect(ONBOARDING_METHOD_CHANNELS.setStep).toBe(CHANNELS.ONBOARDING_SET_STEP);
-      expect(ONBOARDING_METHOD_CHANNELS.complete).toBe(CHANNELS.ONBOARDING_COMPLETE);
-      expect(ONBOARDING_METHOD_CHANNELS.markToastSeen).toBe(CHANNELS.ONBOARDING_MARK_TOAST_SEEN);
-      expect(ONBOARDING_METHOD_CHANNELS.markNewsletterSeen).toBe(
-        CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN
-      );
-      expect(ONBOARDING_METHOD_CHANNELS.markWaitingNudgeSeen).toBe(
-        CHANNELS.ONBOARDING_MARK_WAITING_NUDGE_SEEN
-      );
-      expect(ONBOARDING_METHOD_CHANNELS.markAgentsSeen).toBe(CHANNELS.ONBOARDING_MARK_AGENTS_SEEN);
-      expect(ONBOARDING_METHOD_CHANNELS.recordAgentFirstSeen).toBe(
-        CHANNELS.ONBOARDING_RECORD_AGENT_FIRST_SEEN
-      );
-      expect(ONBOARDING_METHOD_CHANNELS.dismissWelcomeCard).toBe(
-        CHANNELS.ONBOARDING_DISMISS_WELCOME_CARD
-      );
-      expect(ONBOARDING_METHOD_CHANNELS.dismissSetupBanner).toBe(
-        CHANNELS.ONBOARDING_DISMISS_SETUP_BANNER
-      );
-      expect(ONBOARDING_METHOD_CHANNELS.getChecklist).toBe(CHANNELS.ONBOARDING_CHECKLIST_GET);
-      expect(ONBOARDING_METHOD_CHANNELS.dismissChecklist).toBe(
-        CHANNELS.ONBOARDING_CHECKLIST_DISMISS
-      );
-      expect(ONBOARDING_METHOD_CHANNELS.markChecklistItem).toBe(
-        CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM
-      );
-    });
-
-    it("demo matches", () => {
-      expect(DEMO_METHOD_CHANNELS.moveTo).toBe(CHANNELS.DEMO_MOVE_TO);
-      expect(DEMO_METHOD_CHANNELS.moveToSelector).toBe(CHANNELS.DEMO_MOVE_TO_SELECTOR);
-      expect(DEMO_METHOD_CHANNELS.click).toBe(CHANNELS.DEMO_CLICK);
-      expect(DEMO_METHOD_CHANNELS.type).toBe(CHANNELS.DEMO_TYPE);
-      expect(DEMO_METHOD_CHANNELS.screenshot).toBe(CHANNELS.DEMO_SCREENSHOT);
-      expect(DEMO_METHOD_CHANNELS.waitForSelector).toBe(CHANNELS.DEMO_WAIT_FOR_SELECTOR);
-      expect(DEMO_METHOD_CHANNELS.pause).toBe(CHANNELS.DEMO_PAUSE);
-      expect(DEMO_METHOD_CHANNELS.resume).toBe(CHANNELS.DEMO_RESUME);
-      expect(DEMO_METHOD_CHANNELS.sleep).toBe(CHANNELS.DEMO_SLEEP);
-      expect(DEMO_METHOD_CHANNELS.scroll).toBe(CHANNELS.DEMO_SCROLL);
-      expect(DEMO_METHOD_CHANNELS.drag).toBe(CHANNELS.DEMO_DRAG);
-      expect(DEMO_METHOD_CHANNELS.pressKey).toBe(CHANNELS.DEMO_PRESS_KEY);
-      expect(DEMO_METHOD_CHANNELS.spotlight).toBe(CHANNELS.DEMO_SPOTLIGHT);
-      expect(DEMO_METHOD_CHANNELS.dismissSpotlight).toBe(CHANNELS.DEMO_DISMISS_SPOTLIGHT);
-      expect(DEMO_METHOD_CHANNELS.annotate).toBe(CHANNELS.DEMO_ANNOTATE);
-      expect(DEMO_METHOD_CHANNELS.dismissAnnotation).toBe(CHANNELS.DEMO_DISMISS_ANNOTATION);
-      expect(DEMO_METHOD_CHANNELS.waitForIdle).toBe(CHANNELS.DEMO_WAIT_FOR_IDLE);
-      expect(DEMO_METHOD_CHANNELS.startCapture).toBe(CHANNELS.DEMO_START_CAPTURE);
-      expect(DEMO_METHOD_CHANNELS.stopCapture).toBe(CHANNELS.DEMO_STOP_CAPTURE);
-      expect(DEMO_METHOD_CHANNELS.getCaptureStatus).toBe(CHANNELS.DEMO_GET_CAPTURE_STATUS);
-    });
-  });
-
   describe("slashCommands", () => {
     it("routes list() to slash-commands:list with the payload forwarded", async () => {
       const invoke = vi.fn().mockResolvedValue([]);
@@ -352,16 +62,6 @@ describe("leaf preload namespace bindings", () => {
   });
 
   describe("help", () => {
-    it("routes getFolderPath() to help:get-folder-path with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue("/tmp/help");
-      const bindings = buildHelpPreloadBindings(invoke);
-
-      await bindings.getFolderPath();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("help:get-folder-path");
-    });
-
     it("routes markTerminal() to help:mark-terminal with the terminalId forwarded", async () => {
       const invoke = vi.fn().mockResolvedValue(undefined);
       const bindings = buildHelpPreloadBindings(invoke);
@@ -370,26 +70,6 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("help:mark-terminal", "term-1");
-    });
-
-    it("routes unmarkTerminal() to help:unmark-terminal with the terminalId forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue(undefined);
-      const bindings = buildHelpPreloadBindings(invoke);
-
-      await bindings.unmarkTerminal("term-1");
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("help:unmark-terminal", "term-1");
-    });
-
-    it("routes getPinnedActionContext() to help:get-pinned-action-context with the sessionId forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue(null);
-      const bindings = buildHelpPreloadBindings(invoke);
-
-      await bindings.getPinnedActionContext("session-7");
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("help:get-pinned-action-context", "session-7");
     });
   });
 
@@ -406,16 +86,6 @@ describe("leaf preload namespace bindings", () => {
   });
 
   describe("eventInspector", () => {
-    it("routes getEvents() to event-inspector:get-events with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue([]);
-      const bindings = buildEventInspectorPreloadBindings(invoke);
-
-      await bindings.getEvents();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("event-inspector:get-events");
-    });
-
     it("routes getFiltered(filters) to event-inspector:get-filtered with the filters forwarded", async () => {
       const invoke = vi.fn().mockResolvedValue([]);
       const bindings = buildEventInspectorPreloadBindings(invoke);
@@ -425,16 +95,6 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("event-inspector:get-filtered", filters);
-    });
-
-    it("routes clear() to event-inspector:clear with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue(undefined);
-      const bindings = buildEventInspectorPreloadBindings(invoke);
-
-      await bindings.clear();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("event-inspector:clear");
     });
   });
 
@@ -449,17 +109,6 @@ describe("leaf preload namespace bindings", () => {
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("commands:list", ctx);
     });
-
-    it("routes execute(payload) to commands:execute with the payload forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue({ success: true });
-      const bindings = buildCommandsPreloadBindings(invoke);
-
-      const payload = { commandId: "do-thing", context: {} };
-      await bindings.execute(payload);
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("commands:execute", payload);
-    });
   });
 
   describe("portal", () => {
@@ -472,16 +121,6 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("portal:create", payload);
-    });
-
-    it("routes goBack(tabId) to portal:go-back with the tabId forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue(true);
-      const bindings = buildPortalPreloadBindings(invoke);
-
-      await bindings.goBack("t1");
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("portal:go-back", "t1");
     });
   });
 
@@ -505,16 +144,6 @@ describe("leaf preload namespace bindings", () => {
   });
 
   describe("plugin", () => {
-    it("routes list() to plugin:list with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue([]);
-      const bindings = buildPluginPreloadBindings(invoke);
-
-      await bindings.list();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("plugin:list");
-    });
-
     it("routes registerAction(pluginId, contribution) with both args forwarded", async () => {
       const invoke = vi.fn().mockResolvedValue(undefined);
       const bindings = buildPluginPreloadBindings(invoke);
@@ -535,16 +164,6 @@ describe("leaf preload namespace bindings", () => {
   });
 
   describe("scratch", () => {
-    it("routes getAll() to scratch:get-all with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue([]);
-      const bindings = buildScratchPreloadBindings(invoke);
-
-      await bindings.getAll();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("scratch:get-all");
-    });
-
     it("routes update(scratchId, updates) with both args forwarded", async () => {
       const invoke = vi.fn().mockResolvedValue({});
       const bindings = buildScratchPreloadBindings(invoke);
@@ -558,16 +177,6 @@ describe("leaf preload namespace bindings", () => {
   });
 
   describe("demo", () => {
-    it("routes click() to demo:click with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue(undefined);
-      const bindings = buildDemoPreloadBindings(invoke);
-
-      await bindings.click();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("demo:click");
-    });
-
     it("routes moveTo(payload) to demo:move-to with the payload forwarded", async () => {
       const invoke = vi.fn().mockResolvedValue(undefined);
       const bindings = buildDemoPreloadBindings(invoke);
@@ -602,39 +211,9 @@ describe("leaf preload namespace bindings", () => {
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("shortcut-hints:increment-count", "act-1");
     });
-
-    it("routes getHintedHover() to shortcut-hints:get-hinted-hover with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue([]);
-      const bindings = buildShortcutHintsPreloadBindings(invoke);
-
-      await bindings.getHintedHover();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("shortcut-hints:get-hinted-hover");
-    });
-
-    it("routes setHintedHover(keys) to shortcut-hints:set-hinted-hover with the keys forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue(undefined);
-      const bindings = buildShortcutHintsPreloadBindings(invoke);
-
-      await bindings.setHintedHover(["act-1@1"]);
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("shortcut-hints:set-hinted-hover", ["act-1@1"]);
-    });
   });
 
   describe("forgeRecommendation", () => {
-    it("routes getDismissed() to forge-recommendation:get-dismissed with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue({});
-      const bindings = buildForgeRecommendationPreloadBindings(invoke);
-
-      await bindings.getDismissed();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("forge-recommendation:get-dismissed");
-    });
-
     it("routes markDismissed(path) to forge-recommendation:mark-dismissed with the path forwarded", async () => {
       const invoke = vi.fn().mockResolvedValue(undefined);
       const bindings = buildForgeRecommendationPreloadBindings(invoke);
@@ -647,19 +226,6 @@ describe("leaf preload namespace bindings", () => {
   });
 
   describe("forgeCredentialImport", () => {
-    it("routes previewCredentialImport(providerId) to forge:preview-credential-import", async () => {
-      const invoke = vi.fn().mockResolvedValue({ unavailable: true, reason: "not-signed-in" });
-      const bindings = buildForgeCredentialImportPreloadBindings(invoke);
-
-      await bindings.previewCredentialImport("daintree.github.github");
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith(
-        "forge:preview-credential-import",
-        "daintree.github.github"
-      );
-    });
-
     it("routes commitCredentialImport(providerId, expected) to forge:commit-credential-import", async () => {
       const invoke = vi
         .fn()

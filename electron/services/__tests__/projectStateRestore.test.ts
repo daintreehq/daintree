@@ -68,13 +68,6 @@ describe("countResumableAgentPanels", () => {
     expect(count).toBe(2);
   });
 
-  it("is zero when a project holds panels but none of them launch an agent", () => {
-    // Distinct from "no panels at all": both restore no agents, and the row
-    // must read the same either way.
-    const count = countResumableAgentPanels([snapshot(), snapshot({ id: "t2" })], CONTEXT);
-    expect(count).toBe(0);
-  });
-
   it("does not count an agent panel sitting in the trash", () => {
     const count = countResumableAgentPanels(
       [

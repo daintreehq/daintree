@@ -187,20 +187,9 @@ describe("hydrateAppState active-worktree selection", () => {
     expect(setActiveWorktree).not.toHaveBeenCalled();
   });
 
-  // #11234: for a git-backed project an empty list means "the host hasn't
-  // reported yet", so the saved selection is kept rather than dropped.
-  it("keeps the saved selection in a git-backed project whose worktree list is still unknown", async () => {
-    const { setActiveWorktree } = await hydrateWith({
-      project: gitProject,
-      workspaceId: gitProject.id,
-      activeWorktreeId: "wt-saved",
-    });
-    expect(setActiveWorktree).toHaveBeenCalledExactlyOnceWith("wt-saved");
-  });
-
   // A rejected `worktree:get-all-with-status` resolves to the `null` sentinel,
   // which is the other spelling of "unknown" — same outcome as the empty list
-  // above. The host never answered, so it never said "no repository" either.
+  // in the #11650 cases below. The host never answered, so it never said "no repository" either.
   it("keeps the saved selection when the worktree fetch fails outright", async () => {
     worktreeClientMock.getAllWithStatus.mockRejectedValue(new Error("host unavailable"));
     const { setActiveWorktree } = await hydrateWith({

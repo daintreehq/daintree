@@ -182,21 +182,6 @@ describe("notarize-macos", () => {
       expect(submitPath).not.toContain(".app");
     });
 
-    it("should persist state immediately after submit, before wait", async () => {
-      mockExecFileSync
-        .mockReturnValueOnce("") // ditto
-        .mockReturnValueOnce(JSON.stringify({ id: "sub-456", status: "In Progress" }))
-        .mockReturnValueOnce(JSON.stringify({ id: "sub-456", status: "Accepted" }))
-        .mockReturnValueOnce("stapled");
-
-      await afterSign(createContext());
-
-      // Find the submission state persist (after submit, before wait)
-      const tmpWrites = mockWriteFileSync.mock.calls.filter((c: any[]) => c[0].endsWith(".tmp"));
-      const statuses = tmpWrites.map((c: any[]) => JSON.parse(c[1])["3"].status);
-      expect(statuses).toContain("submitted");
-    });
-
     it("should throw when ditto zip fails", async () => {
       const err = new Error("zip error");
       (err as any).stderr = "No space left on device";

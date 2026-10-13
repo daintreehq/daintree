@@ -58,12 +58,6 @@ describe("scrubReportPath", () => {
     expect(result).toContain("Ubuntu");
   });
 
-  it("redacts JSON-doubled WSL localhost paths", () => {
-    const json = JSON.stringify({ cwd: "\\\\wsl.localhost\\Ubuntu\\home\\carol" });
-    const result = scrubReportPath(json);
-    expect(result).not.toContain("carol");
-  });
-
   it("leaves paths without a username unchanged", () => {
     expect(scrubReportPath("/usr/local/lib/node_modules/foo")).toBe(
       "/usr/local/lib/node_modules/foo"

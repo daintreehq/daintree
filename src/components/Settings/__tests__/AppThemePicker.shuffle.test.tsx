@@ -103,25 +103,6 @@ describe("AppThemePicker shuffle button", () => {
     });
   });
 
-  it("renders the shuffle button when multiple themes are available", () => {
-    render(<AppThemePicker />);
-    expect(screen.getByText("Random theme")).toBeTruthy();
-  });
-
-  it("calls commitSchemeSelection with a different theme on shuffle click", () => {
-    const commitSchemeSelection = vi.fn();
-    storeState.commitSchemeSelection = commitSchemeSelection;
-
-    render(<AppThemePicker />);
-    const shuffleBtn = screen.getByText("Random theme");
-    fireEvent.click(shuffleBtn);
-
-    expect(commitSchemeSelection).toHaveBeenCalledTimes(1);
-    const selectedId = commitSchemeSelection.mock.calls[0]![0];
-    expect(selectedId).not.toBe("theme-a");
-    expect(["theme-b", "theme-c"]).toContain(selectedId);
-  });
-
   it("invokes document.startViewTransition when shuffling with motion enabled", () => {
     const startViewTransition = vi.fn((cb: () => void) => {
       cb();
@@ -201,14 +182,6 @@ describe("AppThemePicker image loading attributes", () => {
     expect(heroImgs[0]!.getAttribute("loading")).not.toBe("lazy");
   });
 
-  it("does not render row thumbnails after list removal", () => {
-    const { container } = render(<AppThemePicker />);
-    const thumbs = container.querySelectorAll<HTMLImageElement>("img[src*='/themes/thumb/']");
-    expect(thumbs.length).toBe(0);
-    const listboxes = container.querySelectorAll('[role="listbox"]');
-    expect(listboxes.length).toBe(0);
-  });
-
   it("shows fallback (token background + PaletteStrip) instead of broken hero image", () => {
     const { container } = render(<AppThemePicker />);
     const heroImg = container.querySelector<HTMLImageElement>("img[src='/themes/theme-a.webp']");
@@ -247,14 +220,6 @@ describe("AppThemePicker Change theme button", () => {
       previewSchemeId: null,
       setPreviewSchemeId: vi.fn(),
     });
-  });
-
-  it("renders the Change theme button with the current theme name in the hero", () => {
-    const onClose = vi.fn();
-    render(<AppThemePicker onClose={onClose} />);
-    expect(screen.getByRole("button", { name: /change theme/i })).toBeTruthy();
-    // The hero caption names the theme; the preferred-theme selects may name it too.
-    expect(screen.getAllByText("Theme A").length).toBeGreaterThan(0);
   });
 
   it("dispatches daintree:open-theme-browser when the Change theme button is clicked", () => {

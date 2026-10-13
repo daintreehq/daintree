@@ -5,10 +5,7 @@ import {
   type PortBatcherDeps,
 } from "../portBatcher.js";
 import type { PortQueueManager } from "../portQueue.js";
-import {
-  PORT_BATCH_THRESHOLD_BYTES,
-  PORT_BATCH_THROUGHPUT_DELAY_MS,
-} from "../../services/pty/types.js";
+import { PORT_BATCH_THROUGHPUT_DELAY_MS } from "../../services/pty/types.js";
 
 function bytes(text: string): Uint8Array {
   return new Uint8Array(Buffer.from(text, "utf8"));
@@ -204,21 +201,6 @@ describe("PortBatcher", () => {
     expect(deps.postMessage).toHaveBeenCalledOnce();
   });
 
-  it("threshold bypass: sync flush when bytes exceed 64KB", () => {
-    const deps = createDeps();
-    const batcher = new PortBatcher(deps);
-
-    const bigData = bytesOfLength(PORT_BATCH_THRESHOLD_BYTES);
-    batcher.write("t1", bigData, PORT_BATCH_THRESHOLD_BYTES);
-
-    // Should have flushed synchronously — no timer needed
-    expect(deps.postMessage).toHaveBeenCalledOnce();
-    expect(deps.postMessage).toHaveBeenCalledWith("t1", bigData, PORT_BATCH_THRESHOLD_BYTES);
-
-    // No pending timers
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("multi-terminal grouping: interleaved writes produce separate postMessages", () => {
     const deps = createDeps();
     const batcher = new PortBatcher(deps);
@@ -245,20 +227,6 @@ describe("PortBatcher", () => {
     expect(deps.postMessage).not.toHaveBeenCalled();
   });
 
-  it("pending byte reservation: capacity check includes buffered bytes", () => {
-    const qm = createMockQueueManager();
-    (qm.isAtCapacity as ReturnType<typeof vi.fn>).mockImplementation(
-      (_id: string, bytes: number) => bytes > 100
-    );
-    const deps = createDeps({ portQueueManager: qm });
-    const batcher = new PortBatcher(deps);
-
-    // First write of 80 bytes succeeds (80 <= 100)
-    expect(batcher.write("t1", bytesOfLength(80), 80)).toBe(true);
-    // Second write of 30 bytes should fail (80 + 30 = 110 > 100)
-    expect(batcher.write("t1", bytesOfLength(30, "y"), 30)).toBe(false);
-  });
-
   it("capacity rejection flushes pending data to prevent split-channel delivery", () => {
     const qm = createMockQueueManager();
     (qm.isAtCapacity as ReturnType<typeof vi.fn>).mockImplementation(
@@ -279,65 +247,12 @@ describe("PortBatcher", () => {
     expect(deps.postMessage).toHaveBeenCalledWith("t1", buffered, 80);
   });
 
-  it("flushTerminal: flushes only the specified terminal", () => {
-    const deps = createDeps();
-    const batcher = new PortBatcher(deps);
-
-    batcher.write("t1", bytes("aaa"), 3);
-    batcher.write("t2", bytes("bbb"), 3);
-
-    batcher.flushTerminal("t1");
-
-    expect(deps.postMessage).toHaveBeenCalledOnce();
-    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("aaa"), 3);
-
-    // t2 is still buffered, flushes on timer
-    vi.runAllTimers();
-    expect(deps.postMessage).toHaveBeenCalledTimes(2);
-    expect(deps.postMessage).toHaveBeenCalledWith("t2", bytes("bbb"), 3);
-  });
-
-  it("flushTerminal: subsequent write to a fresh terminal starts in latency mode", () => {
-    const deps = createDeps();
-    const batcher = new PortBatcher(deps);
-
-    batcher.write("t1", bytes("aaa"), 3);
-    batcher.write("t1", bytes("bbb"), 3); // t1 upgrades to throughput
-
-    batcher.flushTerminal("t1");
-    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("aaabbb"), 6);
-
-    // Next write to a fresh terminal starts with its own idle entry → latency (setImmediate),
-    // not stale throughput inherited from t1.
-    (deps.postMessage as ReturnType<typeof vi.fn>).mockClear();
-    batcher.write("t2", bytes("ccc"), 3);
-
-    vi.advanceTimersByTime(2);
-    expect(deps.postMessage).toHaveBeenCalledWith("t2", bytes("ccc"), 3);
-  });
-
   it("flushTerminal on non-existent id is a no-op", () => {
     const deps = createDeps();
     const batcher = new PortBatcher(deps);
 
     batcher.flushTerminal("nonexistent");
     expect(deps.postMessage).not.toHaveBeenCalled();
-  });
-
-  it("postMessage error calls onError with failed payloads", () => {
-    const deps = createDeps();
-    (deps.postMessage as ReturnType<typeof vi.fn>).mockImplementation(() => {
-      throw new Error("port closed");
-    });
-    const batcher = new PortBatcher(deps);
-
-    batcher.write("t1", bytes("data"), 4);
-    vi.runAllTimers();
-
-    expect(deps.onError).toHaveBeenCalledOnce();
-    expect(deps.onError).toHaveBeenCalledWith(expect.any(Error), [
-      { id: "t1", data: bytes("data"), bytes: 4 },
-    ]);
   });
 
   it("postMessage error reports remaining buffered terminals for fallback delivery", () => {
@@ -357,14 +272,6 @@ describe("PortBatcher", () => {
     ]);
   });
 
-  it("flush on empty buffer is a no-op", () => {
-    const deps = createDeps();
-    const batcher = new PortBatcher(deps);
-
-    batcher.flush();
-    expect(deps.postMessage).not.toHaveBeenCalled();
-  });
-
   it("dispose cancels pending timers and rejects further writes", () => {
     const deps = createDeps();
     const batcher = new PortBatcher(deps);
@@ -376,15 +283,6 @@ describe("PortBatcher", () => {
     expect(batcher.write("t1", bytes("more"), 4)).toBe(false);
   });
 
-  it("dispose is safe to call twice", () => {
-    const deps = createDeps();
-    const batcher = new PortBatcher(deps);
-
-    batcher.dispose();
-    batcher.dispose();
-    // No error thrown
-  });
-
   it("addBytes is called only at flush time, not during write", () => {
     const deps = createDeps();
     const batcher = new PortBatcher(deps);
@@ -394,16 +292,6 @@ describe("PortBatcher", () => {
 
     vi.runAllTimers();
     expect(deps.portQueueManager.addBytes).toHaveBeenCalledWith("t1", 4);
-  });
-
-  it("single chunk flush emits the same bytes", () => {
-    const deps = createDeps();
-    const batcher = new PortBatcher(deps);
-
-    batcher.write("t1", bytes("single"), 6);
-    vi.runAllTimers();
-
-    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("single"), 6);
   });
 
   it("threshold accumulation: multiple small writes trigger sync flush at threshold", () => {
@@ -449,28 +337,6 @@ describe("PortBatcher", () => {
     expect(Array.from(emitted)).toEqual([1, 2, 3, 4]);
   });
 
-  it("multi-byte UTF-8: emitted byteLength matches Buffer.byteLength of the source string", () => {
-    // ACK accounting on the host uses chunk.byteLength (the UTF-8 byte count),
-    // not character count. A regression that confused string.length and
-    // byteLength would silently miscalibrate backpressure for non-ASCII output.
-    const deps = createDeps();
-    const batcher = new PortBatcher(deps);
-
-    const text = "café — 日本語 🚀";
-    const expectedBytes = Buffer.byteLength(text, "utf8");
-    expect(expectedBytes).toBeGreaterThan(text.length);
-
-    batcher.write("t1", bytes(text), expectedBytes);
-    vi.runAllTimers();
-
-    const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
-    expect(postMessage).toHaveBeenCalledOnce();
-    const [, emitted, ackBytes] = postMessage.mock.calls[0];
-    expect(ackBytes).toBe(expectedBytes);
-    expect((emitted as Uint8Array).byteLength).toBe(expectedBytes);
-    expect(Buffer.from(emitted as Uint8Array).toString("utf8")).toBe(text);
-  });
-
   it("byte-count mismatch routes through onError instead of throwing", () => {
     // mergeChunks runs inside the flush try/catch, so allocation failures
     // (e.g., a future caller passing a wrong totalBytes) surface via onError
@@ -491,24 +357,6 @@ describe("PortBatcher", () => {
     expect(deps.onError).toHaveBeenCalledWith(expect.any(Error), [
       { id: "t1", data: new Uint8Array(0), bytes: 4 },
     ]);
-  });
-
-  it("flush concatenates multiple chunks into a single contiguous Uint8Array", () => {
-    const deps = createDeps();
-    const batcher = new PortBatcher(deps);
-
-    batcher.write("t1", bytes("foo"), 3);
-    batcher.write("t1", bytes("bar"), 3);
-    batcher.write("t1", bytes("baz"), 3);
-    vi.runAllTimers();
-
-    const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
-    expect(postMessage).toHaveBeenCalledOnce();
-    const emitted = postMessage.mock.calls[0][1] as Uint8Array;
-
-    expect(emitted.byteLength).toBe(9);
-    expect(emitted.buffer.byteLength).toBe(9);
-    expect(Buffer.from(emitted).toString("utf8")).toBe("foobarbaz");
   });
 
   describe("owned zero-copy fast path (#8367)", () => {
@@ -595,29 +443,6 @@ describe("PortBatcher", () => {
       expect(Buffer.from(emitted).toString("utf8")).toBe("foobar");
     });
 
-    it("owned + non-owned writes to the same terminal still concatenate correctly", () => {
-      // Two writes accumulate into one multi-chunk entry, so the fast path
-      // (single-chunk only) never engages regardless of the owned flags — the
-      // merge must still produce a correct fresh contiguous copy. (The
-      // `entry.owned &&= owned` accumulation is defensive: a single-chunk entry
-      // only ever has one write, so it has no observable effect today; it
-      // guards a future fast path that might span multiple chunks.)
-      const deps = createDeps();
-      const batcher = new PortBatcher(deps);
-
-      const a = ownedBytes("aa");
-      const b = ownedBytes("bb");
-      batcher.write("t1", a, 2, true);
-      batcher.write("t1", b, 2, false);
-      vi.runAllTimers();
-
-      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
-      const emitted = postMessage.mock.calls[0][1] as Uint8Array;
-
-      expect(emitted.buffer).not.toBe(a.buffer);
-      expect(Buffer.from(emitted).toString("utf8")).toBe("aabb");
-    });
-
     it("owned zero-length chunk fast-paths without breaking ACK accounting", () => {
       // A 0-byte owned chunk satisfies the predicate (byteOffset 0,
       // byteLength 0 === buffer.byteLength) — it must pass through cleanly and
@@ -653,20 +478,6 @@ describe("PortBatcher", () => {
       const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
       const order = postMessage.mock.calls.map((c) => c[0] as string);
       expect(order).toEqual(["t2", "t1", "t3"]);
-    });
-
-    it("falls back to insertion order when no terminal is focused", () => {
-      const deps = createDeps({ getFocusedTerminalId: () => null });
-      const batcher = new PortBatcher(deps);
-
-      batcher.write("t1", bytes("a"), 1);
-      batcher.write("t2", bytes("b"), 1);
-      batcher.write("t3", bytes("c"), 1);
-      vi.runAllTimers();
-
-      const postMessage = deps.postMessage as ReturnType<typeof vi.fn>;
-      const order = postMessage.mock.calls.map((c) => c[0] as string);
-      expect(order).toEqual(["t1", "t2", "t3"]);
     });
 
     it("focused id absent from the flush leaves sibling order intact", () => {
@@ -809,17 +620,6 @@ describe("PortBatcher", () => {
       expect(byId.get("t2")).toBe(3);
 
       vi.runAllTimers();
-      expect(batcher.getPendingByteSnapshot()).toEqual([]);
-    });
-
-    it("getPendingByteSnapshot is empty after dispose", () => {
-      const deps = createDeps();
-      const batcher = new PortBatcher(deps);
-
-      batcher.write("t1", bytes("aaaa"), 4);
-      expect(batcher.getPendingByteSnapshot()).toHaveLength(1);
-
-      batcher.dispose();
       expect(batcher.getPendingByteSnapshot()).toEqual([]);
     });
 

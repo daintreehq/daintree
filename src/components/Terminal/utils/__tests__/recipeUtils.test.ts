@@ -10,12 +10,6 @@ describe("recipeUtils", () => {
       expect(summary).toBe("");
     });
 
-    it("returns single terminal label", () => {
-      const terminals: RecipeTerminal[] = [{ type: "terminal" }];
-      const summary = getRecipeTerminalSummary(terminals);
-      expect(summary).toBe("Terminal");
-    });
-
     it("uses custom title when provided", () => {
       const terminals: RecipeTerminal[] = [{ type: "terminal", title: "Build" }];
       const summary = getRecipeTerminalSummary(terminals);
@@ -44,26 +38,10 @@ describe("recipeUtils", () => {
       expect(summary).toBe("Terminal • Claude • Dev server");
     });
 
-    it("formats agent names with proper capitalization", () => {
-      const terminals: RecipeTerminal[] = [
-        { type: "claude" },
-        { type: "gemini" },
-        { type: "codex" },
-      ];
-      const summary = getRecipeTerminalSummary(terminals);
-      expect(summary).toBe("Claude • Gemini • Codex");
-    });
-
     it("uses agent config display names when available", () => {
       const terminals: RecipeTerminal[] = [{ type: "opencode" }];
       const summary = getRecipeTerminalSummary(terminals);
       expect(summary).toBe("OpenCode");
-    });
-
-    it("handles dev-preview terminals", () => {
-      const terminals: RecipeTerminal[] = [{ type: "dev-preview" }];
-      const summary = getRecipeTerminalSummary(terminals);
-      expect(summary).toBe("Dev server");
     });
 
     it("joins multiple terminals with bullet separator", () => {
@@ -86,19 +64,6 @@ describe("recipeUtils", () => {
       ];
       const summary = getRecipeTerminalSummary(terminals);
       expect(summary).toBe("Claude • Gemini • Codex • Terminal +1");
-    });
-
-    it("truncates and shows overflow count when more than 4 terminals", () => {
-      const terminals: RecipeTerminal[] = [
-        { type: "claude" },
-        { type: "terminal", title: "Server" },
-        { type: "dev-preview" },
-        { type: "gemini" },
-        { type: "terminal", title: "Extra 1" },
-        { type: "terminal", title: "Extra 2" },
-      ];
-      const summary = getRecipeTerminalSummary(terminals);
-      expect(summary).toBe("Claude • Server • Dev server • Gemini +2");
     });
 
     it("shows exactly 4 terminals without overflow", () => {

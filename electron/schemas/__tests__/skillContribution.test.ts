@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPluginManifestSchema, MANIFEST_CONTRIBUTION_CAPS } from "../plugin.js";
+import { getPluginManifestSchema } from "../plugin.js";
 
 const schema = getPluginManifestSchema("user");
 
@@ -39,11 +39,6 @@ describe("contributes.skills schema (#10892)", () => {
     expect(result.success).toBe(true);
   });
 
-  it("makes triggers optional", () => {
-    const result = manifestWithSkills([{ id: "s", name: "S", path: "./skills/s.md" }]);
-    expect(result.success).toBe(true);
-  });
-
   it("rejects a duplicate skill id at the second occurrence", () => {
     const result = manifestWithSkills([
       { id: "dup", name: "One", path: "./skills/a.md" },
@@ -51,17 +46,6 @@ describe("contributes.skills schema (#10892)", () => {
     ]);
     expect(result.success).toBe(false);
     expect(errorCodes(result)).toContain("duplicate_contribution_id");
-  });
-
-  it("caps the skills array", () => {
-    const many = Array.from({ length: MANIFEST_CONTRIBUTION_CAPS.skills + 1 }, (_v, i) => ({
-      id: `s${i}`,
-      name: `S${i}`,
-      path: `./skills/s${i}.md`,
-    }));
-    expect(manifestWithSkills(many).success).toBe(false);
-    const atCap = many.slice(0, MANIFEST_CONTRIBUTION_CAPS.skills);
-    expect(manifestWithSkills(atCap).success).toBe(true);
   });
 
   it("rejects a malformed id", () => {

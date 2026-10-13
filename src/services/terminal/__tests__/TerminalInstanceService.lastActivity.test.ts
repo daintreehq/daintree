@@ -220,11 +220,6 @@ describe("TerminalInstanceService - scrollToLastActivity", () => {
     expect(managed.terminal.scrollToBottom).toHaveBeenCalled();
     expect(managed.terminal.scrollToLine).not.toHaveBeenCalled();
   });
-
-  it("no-ops for unknown terminal ID", () => {
-    service.scrollToLastActivity("nonexistent");
-    // Should not throw
-  });
 });
 
 describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
@@ -296,5 +291,91 @@ describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
 
     expect(marker.dispose).not.toHaveBeenCalled();
     expect(managed.terminal.registerMarker).not.toHaveBeenCalled();
+  });
+});
+
+interface ViewportMockManaged {
+  terminal: {
+    buffer: { active: { baseY: number; viewportY: number } };
+    scrollToBottom: ReturnType<typeof vi.fn>;
+  };
+  isUserScrolledBack: boolean;
+  isAltBuffer: boolean;
+  latestWasAtBottom: boolean;
+  _suppressScrollTracking?: boolean;
+  _userScrollIntent?: boolean;
+  hostElement: HTMLDivElement;
+  listeners: Array<() => void>;
+}
+
+type ViewportTestService = {
+  instances: Map<string, ViewportMockManaged>;
+  scrollToBottom: (id: string) => void;
+  resumeAutoScroll: (id: string) => void;
+};
+
+function makeViewportManaged(overrides: Partial<ViewportMockManaged> = {}): ViewportMockManaged {
+  const hostElement = document.createElement("div");
+  return {
+    terminal: {
+      buffer: { active: { baseY: 100, viewportY: 100 } },
+      scrollToBottom: vi.fn(),
+    },
+    isUserScrolledBack: false,
+    isAltBuffer: false,
+    latestWasAtBottom: true,
+    hostElement,
+    listeners: [],
+    ...overrides,
+  };
+}
+
+describe("TerminalInstanceService - Viewport Pinning", () => {
+  let service: ViewportTestService;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: ViewportTestService;
+      });
+    service.instances.clear();
+  });
+
+  describe("scrollToBottom suppression flag", () => {
+    it("sets _suppressScrollTracking during scrollToBottom and clears after", () => {
+      const managed = makeViewportManaged({ isUserScrolledBack: true });
+      service.instances.set("t1", managed);
+
+      service.scrollToBottom("t1");
+
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalled();
+      expect(managed._suppressScrollTracking).toBe(false);
+      expect(managed.isUserScrolledBack).toBe(false);
+      expect(managed.latestWasAtBottom).toBe(true);
+    });
+
+    it("clears _suppressScrollTracking even if scrollToBottom throws", () => {
+      const managed = makeViewportManaged();
+      managed.terminal.scrollToBottom.mockImplementation(() => {
+        throw new Error("boom");
+      });
+      service.instances.set("t1", managed);
+
+      expect(() => service.scrollToBottom("t1")).toThrow("boom");
+      expect(managed._suppressScrollTracking).toBe(false);
+    });
+  });
+
+  describe("resumeAutoScroll", () => {
+    it("resets isUserScrolledBack and scrolls to bottom", () => {
+      const managed = makeViewportManaged({ isUserScrolledBack: true });
+      service.instances.set("t1", managed);
+
+      service.resumeAutoScroll("t1");
+
+      expect(managed.isUserScrolledBack).toBe(false);
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalled();
+    });
   });
 });

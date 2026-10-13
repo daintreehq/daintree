@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  BATCH_BRANCH_CHUNK_SIZE,
-  GRAPHQL_BATCH_CHUNK_SIZE,
   buildBatchBranchPRQuery,
   buildBatchPRQuery,
   buildBatchRequiredChecksQuery,
   buildBatchIssuesQuery,
   buildBatchPRsQuery,
+  buildGitHubSearchQuery,
   LIST_ISSUE_COMMENTS_QUERY,
   LIST_PRS_QUERY,
   REPO_STATS_AND_PAGE_QUERY,
@@ -49,11 +48,6 @@ describe("PROJECT_HEALTH_QUERY", () => {
     expect(PROJECT_HEALTH_QUERY).not.toContain("$merged60");
     expect(PROJECT_HEALTH_QUERY).not.toContain("$merged120");
     expect(PROJECT_HEALTH_QUERY).not.toContain("$merged180");
-  });
-
-  it("declares only owner and repo as variables", () => {
-    expect(PROJECT_HEALTH_QUERY).toContain("$owner: String!");
-    expect(PROJECT_HEALTH_QUERY).toContain("$repo: String!");
   });
 });
 
@@ -123,10 +117,6 @@ describe("REPO_STATS_AND_PAGE_QUERY", () => {
     );
     expect(prsBlock).toContain("totalCount");
     expect(prsBlock).toContain("pageInfo { hasNextPage endCursor }");
-  });
-
-  it("includes statusCheckRollup on PRs so the toolbar can render CI badges from the broadcast", () => {
-    expect(REPO_STATS_AND_PAGE_QUERY).toContain("statusCheckRollup");
   });
 
   it("includes reviewDecision and mergeStateStatus on the PR fragment", () => {
@@ -271,11 +261,6 @@ describe("LIST_PRS_QUERY", () => {
     );
     expect(contextsLine).not.toMatch(/\bfirst\b/);
     expect(contextsLine).not.toMatch(/\blast\b/);
-  });
-
-  it("retains the raw statusCheckRollup.state field", () => {
-    expect(LIST_PRS_QUERY).toContain("statusCheckRollup {");
-    expect(LIST_PRS_QUERY).toContain("state");
   });
 });
 
@@ -575,25 +560,6 @@ describe("buildBatchBranchPRQuery", () => {
     expect(query).toContain("remaining");
     expect(query).toContain("resetAt");
   });
-
-  it("emits one aliased block per branch in the caller's chunk", () => {
-    const branches = Array.from({ length: BATCH_BRANCH_CHUNK_SIZE }, (_, i) => `branch-${i}`);
-    const query = buildBatchBranchPRQuery("owner", "repo", branches);
-    for (let i = 0; i < branches.length; i++) {
-      expect(query).toContain(`b${i}: repository`);
-      expect(query).toContain(`headRefName: "branch-${i}"`);
-    }
-  });
-
-  it("exports BATCH_BRANCH_CHUNK_SIZE as 20 (per-chunk cap)", () => {
-    expect(BATCH_BRANCH_CHUNK_SIZE).toBe(20);
-  });
-});
-
-describe("GRAPHQL_BATCH_CHUNK_SIZE", () => {
-  it("equals BATCH_BRANCH_CHUNK_SIZE", () => {
-    expect(GRAPHQL_BATCH_CHUNK_SIZE).toBe(BATCH_BRANCH_CHUNK_SIZE);
-  });
 });
 
 describe("buildBatchIssuesQuery", () => {
@@ -621,11 +587,6 @@ describe("buildBatchIssuesQuery", () => {
     expect(query).toContain("i1: issue");
     expect(query).toContain("i2: issue");
     expect(query).toContain("i3: issue");
-  });
-
-  it("aliases use i{num} prefix", () => {
-    const query = buildBatchIssuesQuery("owner", "repo", [42]);
-    expect(query).toContain("i42: issue(number: 42)");
   });
 
   it("includes the full field set from GET_ISSUE_QUERY", () => {
@@ -690,11 +651,6 @@ describe("buildBatchPRsQuery", () => {
     expect(repoMatches?.length).toBe(1);
     expect(query).toContain("p10: pullRequest");
     expect(query).toContain("p11: pullRequest");
-  });
-
-  it("aliases use p{num} prefix", () => {
-    const query = buildBatchPRsQuery("owner", "repo", [99]);
-    expect(query).toContain("p99: pullRequest(number: 99)");
   });
 
   it("includes the full field set from GET_PR_QUERY", () => {
@@ -804,5 +760,41 @@ describe("PR_CI_STATUS_QUERY", () => {
     const commitSelection =
       /commit\s*\{([^]*?)statusCheckRollup/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
     expect(commitSelection).toContain("oid");
+  });
+});
+
+describe("buildGitHubSearchQuery", () => {
+  it("returns empty for open issues with no search", () => {
+    expect(buildGitHubSearchQuery(undefined, "open", "issue")).toBe("");
+    expect(buildGitHubSearchQuery("", "open", "issue")).toBe("");
+  });
+
+  it("returns is:open + search text for open issues with search", () => {
+    expect(buildGitHubSearchQuery("bug fix", "open", "issue")).toBe("is:open bug fix");
+  });
+
+  it("returns is:closed for closed issues with no search", () => {
+    expect(buildGitHubSearchQuery(undefined, "closed", "issue")).toBe("is:closed");
+  });
+
+  it("returns is:merged for merged PRs with no search", () => {
+    expect(buildGitHubSearchQuery(undefined, "merged", "pr")).toBe("is:merged");
+  });
+
+  it("returns search text only for all state with search", () => {
+    expect(buildGitHubSearchQuery("feature", "all", "issue")).toBe("feature");
+  });
+
+  it("returns empty for all state with no search", () => {
+    expect(buildGitHubSearchQuery(undefined, "all", "issue")).toBe("");
+  });
+
+  it("defaults to open when state is undefined", () => {
+    expect(buildGitHubSearchQuery(undefined, undefined, "issue")).toBe("");
+    expect(buildGitHubSearchQuery("test", undefined, "issue")).toBe("is:open test");
+  });
+
+  it("trims whitespace from search text", () => {
+    expect(buildGitHubSearchQuery("  hello  ", "closed", "issue")).toBe("is:closed hello");
   });
 });

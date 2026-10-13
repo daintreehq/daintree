@@ -236,32 +236,6 @@ describe("project:remove handler", () => {
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
   });
 
-  it("removes the project when the host is confirmed gone (nothing to journal)", async () => {
-    projectStoreMock.removeProject.mockResolvedValue(undefined);
-    teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
-      confirmed: true,
-      terminalsKilled: 0,
-    });
-
-    const ptyClient = {
-      getProjectStats: vi.fn(),
-      onProjectSwitch: vi.fn(),
-      setActiveProject: vi.fn(),
-    };
-
-    const deps = {
-      mainWindow: {} as unknown,
-      ptyClient,
-    } as unknown as HandlerDependencies;
-
-    registerProjectCrudHandlers(deps);
-    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
-
-    await handler(fakeEvent, "proj-gone");
-
-    expect(projectStoreMock.removeProject).toHaveBeenCalledWith("proj-gone");
-  });
-
   it("removes the project when no ptyClient is provided", async () => {
     projectStoreMock.removeProject.mockResolvedValue(undefined);
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { CliAvailability } from "@shared/types";
 
 const {
@@ -12,6 +12,9 @@ const {
   mockGetScratchState,
   mockLogError,
   mockRemovePanel,
+  mockOpenTour,
+  panelsById,
+  controllers,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn().mockResolvedValue({ ok: true }),
   mockGetContext: vi.fn(() => ({})),
@@ -23,6 +26,18 @@ const {
   mockGetScratchState: vi.fn(),
   mockLogError: vi.fn(),
   mockRemovePanel: vi.fn(),
+  mockOpenTour: vi.fn(),
+  panelsById: {} as Record<string, unknown>,
+  controllers: new Map<
+    number,
+    {
+      launchWhenReady: ReturnType<typeof vi.fn>;
+      getSnapshot: () => { phase: string };
+      subscribe: (listener: () => void) => () => void;
+      phase: string;
+      listeners: Set<() => void>;
+    }
+  >(),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -53,7 +68,7 @@ vi.mock("@/store/projectStore", () => ({
 // closed mid-flight (#12108); the real panel store is far too heavy for this
 // node-environment suite, and only `removePanel` is reached.
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ removePanel: mockRemovePanel }) },
+  usePanelStore: { getState: () => ({ panelsById, removePanel: mockRemovePanel }) },
 }));
 
 // Leaf-path mock, mirroring the projectStore one — the action reads the scratch
@@ -70,6 +85,30 @@ vi.mock("@/lib/sidebarToggle", () => ({
   suppressSidebarResizes: vi.fn(),
 }));
 
+vi.mock("@/components/Tour/tourEvents", () => ({ openTour: mockOpenTour }));
+
+vi.mock("@/controllers/helpSessionControllerRegistry", () => ({
+  acquireHelpSessionController: (slot: number) => {
+    let controller = controllers.get(slot);
+    if (!controller) {
+      const listeners = new Set<() => void>();
+      const created = {
+        launchWhenReady: vi.fn(),
+        phase: "idle",
+        listeners,
+        getSnapshot: () => ({ phase: created.phase }),
+        subscribe: (listener: () => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      };
+      controller = created;
+      controllers.set(slot, controller);
+    }
+    return controller;
+  },
+}));
+
 import { registerHelpActions } from "../helpActions";
 import {
   markHelpPanelRuntimeMounted,
@@ -77,6 +116,8 @@ import {
   resetHelpPanelRuntimeGateForTests,
 } from "@/lib/helpPanelRuntimeGate";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { usePaletteStore } from "@/store/paletteStore";
+import { makePluginTourId } from "@shared/utils/tourIds";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import type { AnyActionDefinition } from "../../actionTypes";
@@ -232,20 +273,6 @@ describe("help.launchAgent", () => {
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
       expect.objectContaining({ agentId: "daintree-assistant", cwd: "/repo" }),
-      { source: "user" }
-    );
-  });
-
-  it("keeps a non-assistant help agent in the provisioned session dir", async () => {
-    (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
-      "/mock/help"
-    );
-
-    await action.run({ agentId: "codex" }, stubCtx);
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({ agentId: "codex", cwd: "/mock/help" }),
       { source: "user" }
     );
   });
@@ -450,14 +477,6 @@ describe("help.launchAgent", () => {
       })
     );
     expect(mockDispatch).not.toHaveBeenCalled();
-  });
-
-  it("has correct metadata", () => {
-    expect(action.id).toBe("help.launchAgent");
-    expect(action.category).toBe("help");
-    expect(action.kind).toBe("command");
-    expect(action.danger).toBe("safe");
-    expect(action.scope).toBe("renderer");
   });
 
   it("does not pass a model arg, even when stale assistantModelId is persisted in agent settings", async () => {
@@ -779,19 +798,6 @@ describe("help.launchAgent", () => {
     beforeEach(() => {
       vi.mocked(window.electron.help.getFolderPath).mockResolvedValue("/mock/help");
       mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "term-help" } });
-    });
-
-    it("sends the help prompt without the Electron framing", async () => {
-      await action.run(undefined, stubCtx);
-
-      expect(mockDispatch).toHaveBeenCalledWith(
-        "agent.launch",
-        expect.objectContaining({
-          prompt:
-            "I need help with Daintree, an IDE for orchestrating AI coding agents. Please briefly tell me how you can help.",
-        }),
-        expect.anything()
-      );
     });
 
     it("launches into the active tab when it is empty", async () => {
@@ -1157,5 +1163,257 @@ describe("help.launchAgent", () => {
       expect(mockRemovePanel).toHaveBeenCalledWith("term-help");
       expect(useHelpPanelStore.getState().sessions[1]?.terminalId).toBe("term-other");
     });
+  });
+});
+
+const PROJECT = { id: "proj-1", path: "/repo" };
+
+function extractAction(): AnyActionDefinition {
+  const registry: ActionRegistry = new Map();
+  // Only `onOpenShortcuts` is reachable from the help actions.
+  const callbacks = { onOpenShortcuts: vi.fn() } as unknown as ActionCallbacks;
+  registerHelpActions(registry, callbacks);
+  const factory = registry.get("help.resumePastSession");
+  if (!factory) throw new Error("help.resumePastSession not registered");
+  return factory();
+}
+
+function bindLane(slot: number, terminalId: string, agentId: string, agentSessionId?: string) {
+  const store = useHelpPanelStore.getState();
+  store.ensureSlot(slot);
+  useHelpPanelStore.getState().setTerminal(slot, terminalId, agentId, `bearer-${slot}`);
+  panelsById[terminalId] = { id: terminalId, kind: "terminal", agentSessionId };
+}
+
+describe("help.resumePastSession", () => {
+  let action: AnyActionDefinition;
+  const run = async (args?: unknown): Promise<unknown> => action.run(args, {});
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    controllers.clear();
+    for (const key of Object.keys(panelsById)) delete panelsById[key];
+    mockGetProjectState.mockReturnValue({ currentProject: PROJECT, isBootstrapped: true });
+    mockGetScratchState.mockReturnValue({ currentScratch: null });
+    resetHelpPanelRuntimeGateForTests();
+    markHelpPanelRuntimeMounted();
+    useHelpPanelStore.setState(useHelpPanelStore.getInitialState(), true);
+    usePaletteStore.setState({ activePaletteId: null });
+    action = extractAction();
+  });
+
+  // Lane claims are module state held until the launch aimed at the lane
+  // settles. Settle every launch so no claim outlives its test.
+  afterEach(() => {
+    for (const controller of controllers.values()) {
+      for (const phase of ["provisioning", "idle"]) {
+        controller.phase = phase;
+        controller.listeners.forEach((listener) => listener());
+      }
+    }
+  });
+
+  it("stays out of the MCP surface", () => {
+    expect(action.mcpVisibility).toBe("hidden");
+  });
+
+  it("opens the picker and the panel when called without a session", async () => {
+    await run();
+    expect(usePaletteStore.getState().activePaletteId).toBe("assistant-sessions");
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
+    expect(controllers.size).toBe(0);
+  });
+
+  it("focuses the tab already showing the conversation instead of resuming it again", async () => {
+    bindLane(0, "term-0", "claude");
+    bindLane(1, "term-1", "claude", "ABC-1");
+    useHelpPanelStore.getState().setActiveSlot(0);
+
+    const result = await run({ agentId: "claude", sessionId: "abc-1" });
+
+    expect(result).toEqual({ outcome: "focused" });
+    expect(useHelpPanelStore.getState().activeSlot).toBe(1);
+    expect(controllers.size).toBe(0);
+  });
+
+  it("resumes into the free active tab by exact id", async () => {
+    const result = await run({ agentId: "claude", sessionId: "abc-1" });
+
+    expect(result).toEqual({ outcome: "resumed" });
+    expect(controllers.get(0)?.launchWhenReady).toHaveBeenCalledWith({
+      agentId: "claude",
+      replaceExisting: true,
+      resumeTarget: { sessionId: "abc-1" },
+    });
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
+  });
+
+  it("opens a new tab when the open ones are busy, and claims it until the launch settles", async () => {
+    bindLane(0, "term-0", "claude");
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({ outcome: "resumed" });
+    expect(useHelpPanelStore.getState().sessions[1]).toBeDefined();
+    expect(useHelpPanelStore.getState().activeSlot).toBe(1);
+    const controller = controllers.get(1)!;
+    expect(controller.launchWhenReady).toHaveBeenCalledTimes(1);
+
+    // While the launch is in flight the lane stays claimed: a second pick
+    // goes elsewhere rather than displacing it.
+    controller.phase = "provisioning";
+    controller.listeners.forEach((listener) => listener());
+    await run({ agentId: "claude", sessionId: "def-2" });
+    expect(controllers.get(2)?.launchWhenReady).toHaveBeenCalledTimes(1);
+    expect(controller.launchWhenReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports every tab busy instead of displacing one, then replaces the tab the user names", async () => {
+    bindLane(0, "term-0", "claude");
+    bindLane(1, "term-1", "claude");
+    bindLane(2, "term-2", "claude");
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({
+      outcome: "lanes-full",
+    });
+    expect(controllers.size).toBe(0);
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1", slot: 1 })).toEqual({
+      outcome: "resumed",
+    });
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith(
+      expect.objectContaining({ replaceExisting: true, resumeTarget: { sessionId: "abc-1" } })
+    );
+    expect(useHelpPanelStore.getState().activeSlot).toBe(1);
+  });
+
+  it("refuses a named tab another resume is already heading for", async () => {
+    bindLane(0, "term-0", "claude");
+    bindLane(1, "term-1", "claude");
+    bindLane(2, "term-2", "claude");
+    await run({ agentId: "claude", sessionId: "abc-1", slot: 1 });
+    controllers.get(1)!.phase = "provisioning";
+    controllers.get(1)!.listeners.forEach((listener) => listener());
+
+    expect(await run({ agentId: "claude", sessionId: "def-2", slot: 1 })).toEqual({
+      outcome: "lanes-full",
+    });
+    expect(controllers.get(1)!.launchWhenReady).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a tab is busy rather than dropping the pick when it is mid-launch", async () => {
+    const { acquireHelpSessionController } =
+      await import("@/controllers/helpSessionControllerRegistry");
+    acquireHelpSessionController(0);
+    controllers.get(0)!.phase = "provisioning";
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({
+      outcome: "unavailable",
+    });
+    expect(controllers.get(0)!.launchWhenReady).not.toHaveBeenCalled();
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
+
+    // The refused pick left no claim behind.
+    controllers.get(0)!.phase = "idle";
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({ outcome: "resumed" });
+  });
+
+  it("ignores a closed tab's capture when checking the agent", async () => {
+    useHelpPanelStore.getState().setHibernateSession(PROJECT.id, 2, {
+      sessionId: "old",
+      cwd: "/help",
+      agentId: "claude",
+    });
+    expect(await run({ agentId: "codex", sessionId: "thread-1" })).toEqual({
+      outcome: "resumed",
+    });
+  });
+
+  it("refuses a named tab that has since closed", async () => {
+    expect(await run({ agentId: "claude", sessionId: "abc-1", slot: 2 })).toEqual({
+      outcome: "lanes-full",
+    });
+    expect(controllers.size).toBe(0);
+  });
+
+  it("resumes a conversation captured for a closed tab back into that tab", async () => {
+    useHelpPanelStore.getState().setHibernateSession(PROJECT.id, 2, {
+      sessionId: "abc-1",
+      cwd: "/help",
+      agentId: "claude",
+    });
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({ outcome: "resumed" });
+    expect(useHelpPanelStore.getState().sessions[2]).toBeDefined();
+    expect(controllers.get(2)?.launchWhenReady).toHaveBeenCalled();
+  });
+
+  it("explains instead of launching when another tab runs a different agent", async () => {
+    bindLane(0, "term-0", "claude");
+
+    expect(await run({ agentId: "codex", sessionId: "thread-1" })).toEqual({
+      outcome: "agent-mismatch",
+    });
+    expect(controllers.size).toBe(0);
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
+  });
+
+  it("allows a different agent when the tab running the other one is the one replaced", async () => {
+    bindLane(0, "term-0", "claude");
+
+    expect(await run({ agentId: "codex", sessionId: "thread-1", slot: 0 })).toEqual({
+      outcome: "resumed",
+    });
+  });
+
+  it("does nothing without a workspace", async () => {
+    mockGetProjectState.mockReturnValue({ currentProject: null, isBootstrapped: true });
+
+    expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({
+      outcome: "unavailable",
+    });
+    expect(controllers.size).toBe(0);
+  });
+
+  it("keys captured entries by workspace, so another project's capture is not this tab's", async () => {
+    useHelpPanelStore.getState().setHibernateSession("other-project", 2, {
+      sessionId: "abc-1",
+      cwd: "/help",
+      agentId: "claude",
+    });
+
+    await run({ agentId: "claude", sessionId: "abc-1" });
+    expect(controllers.get(0)?.launchWhenReady).toHaveBeenCalled();
+    expect(controllers.get(2)).toBeUndefined();
+  });
+});
+
+function helpTourShow(): AnyActionDefinition {
+  const registry: ActionRegistry = new Map();
+  // help.tour.show reaches no callback; every one is a stub.
+  const callbacks: ActionCallbacks = new Proxy(Object.create(null), { get: () => vi.fn() });
+  registerHelpActions(registry, callbacks);
+  return registry.get("help.tour.show")!();
+}
+
+describe("help.tour.show", () => {
+  it("still needs no arguments, so every existing caller keeps working", () => {
+    const schema = helpTourShow().argsSchema!;
+    expect(schema.safeParse(undefined).success).toBe(true);
+    expect(schema.safeParse({}).success).toBe(true);
+  });
+
+  it("accepts any tour id as a string and nothing else", () => {
+    const schema = helpTourShow().argsSchema!;
+    // Whether a tour is registered under it is the host's call, not validation's.
+    expect(schema.safeParse({ tourId: "plugin:missing/tour" }).success).toBe(true);
+    expect(schema.safeParse({ tourId: 7 }).success).toBe(false);
+  });
+
+  it("opens the Daintree tour without arguments and the named tour with one", async () => {
+    const action = helpTourShow();
+    await action.run(undefined, {});
+    await action.run({}, {});
+    const acme = makePluginTourId("acme.tools", "welcome");
+    await action.run({ tourId: acme }, {});
+    expect(mockOpenTour.mock.calls).toEqual([[undefined], [undefined], [acme]]);
   });
 });

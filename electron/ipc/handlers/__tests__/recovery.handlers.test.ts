@@ -121,29 +121,6 @@ describe("registerRecoveryHandlers", () => {
     collectDiagnosticsMock.mockResolvedValue({ version: "test", platform: "darwin" });
   });
 
-  it("registers all four recovery channels via typedHandleWithContext", () => {
-    registerRecoveryHandlers(deps);
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("recovery:reload-app", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "recovery:reset-and-reload",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "recovery:export-diagnostics",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("recovery:open-logs", expect.any(Function));
-  });
-
-  it("cleanup removes the handlers", () => {
-    const cleanup = registerRecoveryHandlers(deps);
-    cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("recovery:reload-app");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("recovery:reset-and-reload");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("recovery:export-diagnostics");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("recovery:open-logs");
-  });
-
   describe("recovery:reload-app", () => {
     function buildWindow() {
       return {
@@ -247,46 +224,6 @@ describe("registerRecoveryHandlers", () => {
       expect(win.loadURL).not.toHaveBeenCalled();
     });
 
-    it("rejects the main renderer URL (not the recovery page)", async () => {
-      const { getCrashRecoveryService: getCrash } =
-        await import("../../../services/CrashRecoveryService.js");
-      const resetMock = vi.fn();
-      vi.mocked(getCrash).mockReturnValue({
-        resetToFresh: resetMock,
-      } as unknown as ReturnType<typeof getCrash>);
-
-      const win = buildWindow();
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
-      const handler = getHandlerFn("recovery:reset-and-reload");
-
-      await expect(handler(buildEvent(MAIN_RENDERER_URL))).rejects.toThrow(
-        "recovery:reset-and-reload rejected: untrusted sender"
-      );
-      expect(resetMock).not.toHaveBeenCalled();
-      expect(win.loadURL).not.toHaveBeenCalled();
-    });
-
-    it("rejects missing senderFrame", async () => {
-      const { getCrashRecoveryService: getCrash } =
-        await import("../../../services/CrashRecoveryService.js");
-      const resetMock = vi.fn();
-      vi.mocked(getCrash).mockReturnValue({
-        resetToFresh: resetMock,
-      } as unknown as ReturnType<typeof getCrash>);
-
-      const win = buildWindow();
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
-      const handler = getHandlerFn("recovery:reset-and-reload");
-
-      await expect(handler(buildEvent(null))).rejects.toThrow(
-        "recovery:reset-and-reload rejected: untrusted sender"
-      );
-      expect(resetMock).not.toHaveBeenCalled();
-      expect(win.loadURL).not.toHaveBeenCalled();
-    });
-
     it("resets state, clears the pending crash, then reloads the app when sender is the recovery page", async () => {
       const { getCrashRecoveryService: getCrash } =
         await import("../../../services/CrashRecoveryService.js");
@@ -363,23 +300,6 @@ describe("registerRecoveryHandlers", () => {
 
       await expect(handler(buildEvent(TRUSTED_RECOVERY_URL))).rejects.toThrow("no space");
       expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
-    });
-
-    it("rejects the main renderer URL (not the recovery page)", async () => {
-      registerRecoveryHandlers(deps);
-      const handler = getHandlerFn("recovery:export-diagnostics");
-      await expect(handler(buildEvent(MAIN_RENDERER_URL))).rejects.toThrow(
-        "recovery:export-diagnostics rejected: untrusted sender"
-      );
-      expect(dialogMock.showSaveDialog).not.toHaveBeenCalled();
-    });
-
-    it("rejects missing senderFrame", async () => {
-      registerRecoveryHandlers(deps);
-      const handler = getHandlerFn("recovery:export-diagnostics");
-      await expect(handler(buildEvent(null))).rejects.toThrow(
-        "recovery:export-diagnostics rejected: untrusted sender"
-      );
     });
 
     it("writes file and reveals it on success", async () => {

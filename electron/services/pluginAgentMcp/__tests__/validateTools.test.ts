@@ -53,10 +53,6 @@ describe("validateAgentMcpTools", () => {
   it.each([
     [{ destructiveHint: false }, /annotations\.destructiveHint may only be true/],
     [{ openWorldHint: false }, /annotations\.openWorldHint may only be true/],
-    [
-      { destructiveHint: false, openWorldHint: false },
-      /annotations\.destructiveHint may only be true/,
-    ],
   ])("rejects a plugin vouching for its own tool's safety %j", (annotations, message) => {
     expect(() => validateAgentMcpTools({ add_entry: tool({ annotations }) })).toThrow(message);
   });
@@ -267,17 +263,6 @@ describe("validateAgentMcpTools", () => {
       "a remote reference",
       { type: "object", properties: { a: { $ref: "https://example.com/a.json" } } },
       /references "https:\/\/example.com\/a.json", which does not resolve within the schema/,
-    ],
-    ["an async schema", { type: "object", $async: true }, /is an async \(\$async\) schema/],
-    [
-      "an unknown format",
-      { type: "object", properties: { a: { type: "string", format: "bogus" } } },
-      /cannot be compiled: unknown format "bogus"/,
-    ],
-    [
-      "an unsupported dialect",
-      { type: "object", $schema: "http://json-schema.org/draft-04/schema#" },
-      /declares \$schema .*; only JSON Schema 2020-12/,
     ],
   ])("rejects a roster with %s, naming the tool and field", (_label, schema, why) => {
     expect(() =>

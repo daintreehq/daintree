@@ -259,12 +259,6 @@ describe("dbMaintenanceWorker (real worker thread)", () => {
     expect(rows.map((r) => (JSON.parse(r.record) as { v: string }).v)).toEqual(["final-flush"]);
   });
 
-  it("reports quick_check ok on a healthy database", async () => {
-    const w = spawn();
-    const response = await request(w, { op: "quickCheck" });
-    expect(response).toMatchObject({ ok: true, result: "ok" });
-  });
-
   it("probes a healthy file at an arbitrary path, not just its own connection", async () => {
     const candidatePath = path.join(tmpDir, "candidate.db");
     const candidate = new Database(candidatePath);

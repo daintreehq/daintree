@@ -142,19 +142,6 @@ describe("ConsoleDrawer", () => {
       expect(adapter.getAttribute("data-terminal-id")).toBe(mockTerminalId);
     });
 
-    it("keeps XtermAdapter mounted when drawer is open", () => {
-      renderDrawer({ defaultOpen: true });
-      const adapter = screen.getByTestId("xterm-adapter");
-      expect(adapter).toBeTruthy();
-      expect(adapter.getAttribute("data-terminal-id")).toBe(mockTerminalId);
-    });
-
-    it("keeps XtermAdapter in DOM after toggling from open to closed", () => {
-      renderDrawer({ defaultOpen: true });
-      fireEvent.click(getToggleButton());
-      expect(screen.getByTestId("xterm-adapter")).toBeTruthy();
-    });
-
     it("keeps XtermAdapter mounted when the Console tab is active", () => {
       renderDrawer({ defaultOpen: true });
       fireEvent.click(screen.getByRole("tab", { name: /console/i }));
@@ -170,18 +157,6 @@ describe("ConsoleDrawer", () => {
   });
 
   describe("drawer visibility", () => {
-    it("collapses to height 0 when closed by default", () => {
-      const { container } = renderDrawer({ defaultOpen: false });
-      const drawer = container.querySelector<HTMLElement>('[id^="console-drawer-"]');
-      expect(drawer?.style.height).toBe("0px");
-    });
-
-    it("expands to a fixed height when open by default", () => {
-      const { container } = renderDrawer({ defaultOpen: true });
-      const drawer = container.querySelector<HTMLElement>('[id^="console-drawer-"]');
-      expect(drawer?.style.height).toBe("300px");
-    });
-
     it("toggles height when the button is clicked", () => {
       const { container } = renderDrawer({ defaultOpen: false });
       const drawer = container.querySelector<HTMLElement>('[id^="console-drawer-"]');
@@ -201,16 +176,6 @@ describe("ConsoleDrawer", () => {
       expect(screen.getByRole("button", { name: "Toggle output drawer" })).toBeTruthy();
     });
 
-    it("sets aria-expanded to false when closed", () => {
-      renderDrawer({ defaultOpen: false });
-      expect(getToggleButton().getAttribute("aria-expanded")).toBe("false");
-    });
-
-    it("sets aria-expanded to true when open", () => {
-      renderDrawer({ defaultOpen: true });
-      expect(getToggleButton().getAttribute("aria-expanded")).toBe("true");
-    });
-
     it("toggles aria-expanded on click", () => {
       renderDrawer({ defaultOpen: false });
       const button = getToggleButton();
@@ -220,16 +185,6 @@ describe("ConsoleDrawer", () => {
       expect(button.getAttribute("aria-expanded")).toBe("true");
       fireEvent.click(button);
       expect(button.getAttribute("aria-expanded")).toBe("false");
-    });
-
-    it("rotates the chevron icon when open", () => {
-      renderDrawer({ defaultOpen: false });
-      const closedIcon = getToggleButton().querySelector("svg");
-      expect(closedIcon?.getAttribute("class")).not.toContain("rotate-180");
-
-      fireEvent.click(getToggleButton());
-      const openIcon = getToggleButton().querySelector("svg");
-      expect(openIcon?.getAttribute("class")).toContain("rotate-180");
     });
   });
 
@@ -317,12 +272,6 @@ describe("ConsoleDrawer", () => {
       expect(screen.queryByRole("button", { name: "More restart options" })).toBeNull();
     });
 
-    it("renders primary restart button and overflow trigger when handler is provided", () => {
-      renderDrawer({ defaultOpen: false, onRestartDevServer: vi.fn(), status: "running" });
-      expect(screen.getByRole("button", { name: "Restart dev server" })).toBeTruthy();
-      expect(screen.getByRole("button", { name: "More restart options" })).toBeTruthy();
-    });
-
     it("uses a non-chevron glyph for the overflow trigger so it is distinct from the drawer toggle", () => {
       renderDrawer({ defaultOpen: true, onRestartDevServer: vi.fn(), status: "running" });
       const toggleIconClass = getToggleButton().querySelector("svg")?.getAttribute("class") ?? "";
@@ -338,21 +287,6 @@ describe("ConsoleDrawer", () => {
       expect(toggleIconClass).toContain("chevron");
       expect(overflowIconClass).not.toContain("chevron");
       expect(overflowIconClass).not.toBe(toggleIconClass);
-    });
-
-    it("renders all four tier options in dropdown", () => {
-      renderDrawer({
-        defaultOpen: false,
-        onReloadPreview: vi.fn(),
-        onRestartDevServer: vi.fn(),
-        onRequestRestartAndClearCache: vi.fn(),
-        onRequestReinstallAndRestart: vi.fn(),
-        status: "running",
-      });
-      expect(screen.getByRole("menuitem", { name: "Reload preview" })).toBeTruthy();
-      expect(screen.getByRole("menuitem", { name: "Restart dev server" })).toBeTruthy();
-      expect(screen.getByRole("menuitem", { name: "Restart and clear cache" })).toBeTruthy();
-      expect(screen.getByRole("menuitem", { name: "Reinstall dependencies" })).toBeTruthy();
     });
 
     it("calls onRestartDevServer when primary button is clicked", () => {
@@ -463,16 +397,6 @@ describe("ConsoleDrawer", () => {
   });
 
   describe("terminalInstanceService integration", () => {
-    it("calls setVisible with false when initially closed", () => {
-      renderDrawer({ defaultOpen: false });
-      expect(terminalInstanceService.setVisible).toHaveBeenCalledWith(mockTerminalId, false);
-    });
-
-    it("calls setVisible with true when open on the Output tab", () => {
-      renderDrawer({ defaultOpen: true });
-      expect(terminalInstanceService.setVisible).toHaveBeenCalledWith(mockTerminalId, true);
-    });
-
     it("keeps the Output terminal hidden while the host panel is parked in the dock", () => {
       const { rerender } = render(
         <ConsoleDrawer

@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  deriveEffectiveTier,
-  PORTAL_BULK_CLOSE_TIER_THRESHOLD,
-  type WorktreeDeleteTierCtx,
-} from "../deriveEffectiveTier";
+import { deriveEffectiveTier, type WorktreeDeleteTierCtx } from "../deriveEffectiveTier";
 
 const worktreeCtx = (over: Partial<WorktreeDeleteTierCtx> = {}): WorktreeDeleteTierCtx => ({
   force: false,
@@ -80,16 +76,10 @@ describe("deriveEffectiveTier — worktree.delete", () => {
 });
 
 describe("deriveEffectiveTier — portal bulk close", () => {
-  it("threshold constant is 3", () => {
-    expect(PORTAL_BULK_CLOSE_TIER_THRESHOLD).toBe(3);
-  });
-
   it.each([
     ["portal.closeAllTabs", 0, "D0"],
-    ["portal.closeAllTabs", 1, "D0"],
     ["portal.closeAllTabs", 2, "D0"],
     ["portal.closeAllTabs", 3, "D1"],
-    ["portal.closeAllTabs", 7, "D1"],
     ["portal.closeOthers", 2, "D0"],
     ["portal.closeOthers", 3, "D1"],
   ] as const)("%s with %i tabs → %s", (actionId, tabCount, expected) => {

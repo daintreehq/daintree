@@ -49,7 +49,6 @@ vi.mock("../../../../utils/hardenedGit.js", () => ({
 }));
 
 import { executeClone } from "../gitClone.js";
-import { isSupportedCloneUrl } from "../../../../../shared/utils/gitRemoteUrl.js";
 
 const base = {
   url: "https://github.com/daintreehq/daintree.git",
@@ -100,15 +99,5 @@ describe("executeClone options", () => {
 
     await executeClone({ ...base, depth: "full" });
     expect(cloneRepository).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("isSupportedCloneUrl", () => {
-  it("accepts HTTPS, SCP-style SSH and ssh:// remotes", () => {
-    expect(isSupportedCloneUrl("https://github.com/a/b")).toBe(true);
-    expect(isSupportedCloneUrl("git@github.com:a/b.git")).toBe(true);
-    expect(isSupportedCloneUrl("ssh://git@git.example.com:2222/a/b.git")).toBe(true);
-    expect(isSupportedCloneUrl("file:///srv/repo")).toBe(false);
-    expect(isSupportedCloneUrl("/srv/repo")).toBe(false);
   });
 });

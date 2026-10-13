@@ -101,16 +101,6 @@ describe("ClearLogsRow — clear confirmation", () => {
     expect(clearDispatches()).toHaveLength(dispatchesBefore);
     expect(await screen.findByRole("alertdialog")).toBeTruthy();
   });
-
-  it("does not use window.confirm", () => {
-    const confirmSpy = vi.spyOn(window, "confirm");
-
-    render(<ClearLogsRow />);
-    fireEvent.click(screen.getByRole("button", { name: "Clear logs" }));
-
-    expect(confirmSpy).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
-  });
 });
 
 describe("restoreClearedLogOverrides — the Undo for Clear all overrides", () => {

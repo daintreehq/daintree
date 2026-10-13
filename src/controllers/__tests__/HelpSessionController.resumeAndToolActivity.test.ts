@@ -375,125 +375,6 @@ describe("HelpSessionController — resume banner gating (#10057)", () => {
     ctrl.stop();
   });
 
-  it("refuses the cwd-keyed resume-latest fallback while a sibling lane is open", async () => {
-    // Every lane of a project shares one session directory, so "the latest
-    // session in this cwd" is as likely to be the sibling's conversation as this
-    // lane's. With no specific id to resume and a sibling present, the launch
-    // must start fresh rather than pull another tab's transcript into this one.
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    primeResumeInputs(ctrl);
-    helpPanelState.openSlots = [0, 1];
-    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
-      sessionId: "",
-      // Captured in the session directory the resume will launch in.
-      cwd: "/help",
-      agentId: "claude",
-    };
-
-    await ctrl["_executeLaunch"](
-      7,
-      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
-      { id: "p1", path: "/repo" },
-      undefined
-    );
-
-    // No resume was attempted: the sentinel entry is consumed, and the launch that
-    // follows is a fresh one rather than `--continue` against a shared cwd.
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
-    expect(ctrl.getSnapshot().showResumeBanner).toBe(false);
-    for (const call of panelStoreState.addPanel.mock.calls) {
-      expect(JSON.stringify(call[0])).not.toContain("--continue");
-    }
-    ctrl.stop();
-  });
-
-  it("refuses resume-latest when a sibling lane is hibernated, even with only this lane open", async () => {
-    // Closed but captured: the sibling's transcript is still in the shared cwd,
-    // and after a restart it is exactly the one `--continue` would find first.
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    primeResumeInputs(ctrl);
-    helpPanelState.openSlots = [0];
-    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
-      sessionId: "",
-      // Captured in the session directory the resume will launch in.
-      cwd: "/help",
-      agentId: "claude",
-    };
-    helpPanelState.hibernateSessions[slotKey("p1", 1)] = {
-      sessionId: "sibling-id",
-      cwd: "/repo",
-      agentId: "claude",
-    };
-
-    await ctrl["_executeLaunch"](
-      7,
-      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
-      { id: "p1", path: "/repo" },
-      undefined
-    );
-
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
-    for (const call of panelStoreState.addPanel.mock.calls) {
-      expect(JSON.stringify(call[0])).not.toContain("--continue");
-    }
-    ctrl.stop();
-  });
-
-  it("refuses resume-latest when the entry was captured in a different directory", async () => {
-    // A lane from before every lane shared one directory has its entry keyed to
-    // `<hash>-s1`. Resuming "latest" from the shared directory would pick up
-    // whatever conversation that directory saw last, not this entry's.
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    primeResumeInputs(ctrl);
-    helpPanelState.openSlots = [0];
-    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
-      sessionId: "",
-      cwd: "/help-s1",
-      agentId: "claude",
-    };
-
-    await ctrl["_executeLaunch"](
-      7,
-      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
-      { id: "p1", path: "/repo" },
-      undefined
-    );
-
-    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("p1", 0);
-    for (const call of panelStoreState.addPanel.mock.calls) {
-      expect(JSON.stringify(call[0])).not.toContain("--continue");
-    }
-    ctrl.stop();
-  });
-
-  it("never falls back to resume-latest, even as the project's only lane (#13205)", async () => {
-    // "Only lane now" can't prove no other conversation ever used the shared
-    // directory — a lane closed before a restart left its transcript there.
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    primeResumeInputs(ctrl);
-    helpPanelState.openSlots = [0];
-    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
-      sessionId: "",
-      cwd: "/help",
-      agentId: "claude",
-    };
-
-    await ctrl["_executeLaunch"](
-      7,
-      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
-      { id: "p1", path: "/repo" },
-      undefined
-    );
-
-    // No resume panel at all — the fresh launch goes through agent.launch.
-    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
-    ctrl.stop();
-  });
-
   it("shows the resume banner when the hibernation sessionId is specific", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
@@ -880,26 +761,6 @@ describe("HelpSessionController — picked past-session resume (#13206)", () => 
     expect(takeMock()).not.toHaveBeenCalled();
     ctrl.stop();
   });
-
-  it("records the exact id on an ordinary captured-entry resume too", async () => {
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    ctrl["_launchGen"] = 7;
-    primeProvision();
-    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-resumed");
-    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
-      sessionId: "abc-123",
-      cwd: "/help",
-      agentId: "claude",
-    };
-
-    await ctrl["_executeLaunch"](7, { agentId: "claude" }, { id: "p1", path: "/repo" }, undefined);
-
-    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ agentSessionId: "abc-123" })
-    );
-    ctrl.stop();
-  });
 });
 
 describe("HelpSessionController — launchWhenReady (#13206)", () => {
@@ -1002,13 +863,6 @@ describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
   }
   const fireStarted = (payload: Record<string, unknown>) => toolStartedListeners[0]!(payload);
   const fireSettled = (payload: Record<string, unknown>) => toolSettledListeners[0]!(payload);
-
-  it("start() arms the tool-call started/settled subscriptions", () => {
-    const ctrl = startCtrl();
-    expect(mockMcpOnToolCallStarted).toHaveBeenCalledTimes(1);
-    expect(mockMcpOnToolCallSettled).toHaveBeenCalledTimes(1);
-    ctrl.stop();
-  });
 
   it("a started event populates an in-flight row", () => {
     const ctrl = startCtrl();

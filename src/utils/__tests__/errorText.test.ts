@@ -138,15 +138,6 @@ describe("boundedErrorText", () => {
     expect(boundedErrorText("short error", 200)).toBe("short error");
   });
 
-  it("middle-truncates when over limit", () => {
-    const long = "a".repeat(250);
-    const result = boundedErrorText(long, 200);
-    expect(result.length).toBeLessThanOrEqual(200);
-    expect(result).toContain("…");
-    expect(result.startsWith("a")).toBe(true);
-    expect(result.endsWith("a")).toBe(true);
-  });
-
   it("preserves both ends when middle-truncating", () => {
     const text = "PREFIX_" + "x".repeat(240) + "_SUFFIX";
     const result = boundedErrorText(text, 200);

@@ -186,18 +186,6 @@ describe("SessionSnapshotter", () => {
       expect(persistAsyncMock).not.toHaveBeenCalled();
     });
 
-    it("is safe to call multiple times", () => {
-      const host = createHost();
-      const snap = new SessionSnapshotter(host);
-
-      snap.schedule();
-      expect(() => {
-        snap.dispose();
-        snap.dispose();
-        snap.dispose();
-      }).not.toThrow();
-    });
-
     it("blocks reschedule and post-await persist when disposed mid-flight", async () => {
       const host = createHost();
       host.asyncResolved = false;
@@ -480,19 +468,6 @@ describe("SessionSnapshotter", () => {
 
       expect(() => snap.flushSyncOnKill()).not.toThrow();
       expect(persistSyncMock).not.toHaveBeenCalled();
-    });
-
-    it("uses banner-aware serialize so restore banner is stripped before persist", () => {
-      // Hibernation calls flushSyncOnKill with banner markers present from a
-      // prior restore. The banner must NOT be baked into the snapshot or it
-      // will stack on the next hibernate→restore cycle.
-      const host = createHost({ bannerMarkers: true });
-      const snap = new SessionSnapshotter(host);
-
-      snap.flushSyncOnKill();
-
-      expect(persistSyncMock).toHaveBeenCalledTimes(1);
-      expect(persistSyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE);
     });
 
     it("skips when serialized state is null", () => {

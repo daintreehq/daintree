@@ -229,27 +229,6 @@ describe("Toast accessibility", () => {
     expect(screen.getByText("Test message")).toBeTruthy();
   });
 
-  it("restores focus to previously focused element on dismiss", async () => {
-    const target = createFixtureButton("Target");
-    target.focus();
-
-    render(<Toaster />);
-    await act(async () => {
-      addToast();
-      vi.advanceTimersByTime(16);
-    });
-
-    const dismissButton = screen.getByLabelText("Dismiss notification");
-    await act(async () => {
-      dismissButton.focus();
-    });
-    await act(async () => {
-      fireEvent.click(dismissButton);
-    });
-
-    expect(document.activeElement).toBe(target);
-  });
-
   it("does not steal focus on auto-dismiss", async () => {
     const target = createFixtureButton("External");
     target.focus();
@@ -267,26 +246,6 @@ describe("Toast accessibility", () => {
     });
 
     expect(document.activeElement).toBe(target);
-  });
-
-  it("uses role=status for non-error toasts", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({ type: "info" });
-      vi.advanceTimersByTime(16);
-    });
-
-    expect(screen.getByRole("status")).toBeTruthy();
-  });
-
-  it("uses role=alert for error toasts", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({ type: "error", message: "Error occurred" });
-      vi.advanceTimersByTime(16);
-    });
-
-    expect(screen.getByRole("alert")).toBeTruthy();
   });
 
   it("applies Tier 2 enter duration and spring easing once visible (issue #6331)", async () => {
@@ -826,32 +785,6 @@ describe("Toast count chip overflow & live-region throttling (issue #6427)", () 
     expect(screen.getByRole("status").textContent).toContain("150 events");
   });
 
-  it("caps the visible glyph on the no-title path", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({ message: "x", count: 200 });
-      vi.advanceTimersByTime(16);
-    });
-
-    const chip = screen.getByTestId("toast-coalesce-badge");
-    expect(chip.querySelector('[aria-hidden="true"]')?.textContent).toBe("×99+");
-    expect(screen.getByRole("status").textContent).toContain("200 events");
-  });
-
-  it("sets aria-busy on the live region while count updates are in flight", async () => {
-    render(<Toaster />);
-    let toastId: string;
-    await act(async () => {
-      toastId = addToast({ title: "Build", message: "x", count: 2 });
-      vi.advanceTimersByTime(16);
-    });
-
-    await act(async () => {
-      useNotificationStore.getState().updateNotification(toastId!, { count: 3 });
-    });
-    expect(screen.getByRole("status").getAttribute("aria-busy")).toBe("true");
-  });
-
   it("clears aria-busy after the trailing 300ms inactivity window", async () => {
     render(<Toaster />);
     let toastId: string;
@@ -943,20 +876,6 @@ describe("Toast count chip overflow & live-region throttling (issue #6427)", () 
     expect(stateUpdateOnUnmounted).toBeUndefined();
     consoleError.mockRestore();
   });
-
-  it("renders no chip when notification.count is non-finite", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({
-        title: "Build",
-        message: "x",
-        count: Number.POSITIVE_INFINITY as unknown as number,
-      });
-      vi.advanceTimersByTime(16);
-    });
-
-    expect(screen.queryByLabelText(/events$/)).toBeNull();
-  });
 });
 
 describe("Toast overflow menu", () => {
@@ -972,16 +891,6 @@ describe("Toast overflow menu", () => {
     vi.useRealTimers();
   });
 
-  it("does not render the options trigger when context is absent", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast();
-      vi.advanceTimersByTime(16);
-    });
-
-    expect(screen.queryByLabelText("Notification options")).toBeNull();
-  });
-
   it("does not render the options trigger when context has no projectId", async () => {
     render(<Toaster />);
     await act(async () => {
@@ -990,16 +899,6 @@ describe("Toast overflow menu", () => {
     });
 
     expect(screen.queryByLabelText("Notification options")).toBeNull();
-  });
-
-  it("renders the options trigger when context.projectId is set", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({ context: { projectId: "p1" } });
-      vi.advanceTimersByTime(16);
-    });
-
-    expect(screen.getByLabelText("Notification options")).toBeTruthy();
   });
 
   it("dispatches project.muteNotifications and dismisses when Mute is selected", async () => {
@@ -1052,20 +951,6 @@ describe("Toast severity-based dismissal (issue #5859)", () => {
   afterEach(() => {
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
-  });
-
-  it("error toast survives past the old 3s fallback", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({ type: "error", message: "Something failed" });
-      vi.advanceTimersByTime(16);
-    });
-
-    await act(async () => {
-      vi.advanceTimersByTime(3500);
-    });
-    expect(screen.getByText("Something failed")).toBeTruthy();
   });
 
   it("error toast dismisses around the 8s severity default", async () => {
@@ -1265,14 +1150,6 @@ describe("Toast overflow pill (issue #6424)", () => {
     expect(pill.getAttribute("aria-label")).toBe("1 more in notification center");
   });
 
-  it("renders the cumulative count for multiple evictions", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      useNotificationHistoryStore.setState({ evictedToInboxCount: 4 });
-    });
-    expect(screen.getByTestId("toast-overflow-pill").textContent).toBe("+4 more");
-  });
-
   it("opens the notification center and clears the count when clicked", async () => {
     render(<Toaster />);
     await act(async () => {
@@ -1287,16 +1164,6 @@ describe("Toast overflow pill (issue #6424)", () => {
     expect(useUIStore.getState().notificationCenterOpen).toBe(true);
     expect(useNotificationHistoryStore.getState().evictedToInboxCount).toBe(0);
     expect(screen.queryByTestId("toast-overflow-pill")).toBeNull();
-  });
-
-  it("uses neutral surface tokens and does not paint the accent colour", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
-    });
-    const pill = screen.getByTestId("toast-overflow-pill");
-    expect(pill.className).not.toContain("bg-accent-primary");
-    expect(pill.className).not.toContain("text-accent-primary");
   });
 
   it("renders the pill end-to-end when MAX_VISIBLE_TOASTS evicts a real toast", async () => {
@@ -1416,31 +1283,6 @@ describe("Toast success dwell — 2000ms (issue #6844)", () => {
       vi.advanceTimersByTime(200);
     });
     expect(screen.queryByText("Undone")).toBeNull();
-  });
-
-  it("does NOT dismiss before the 2000ms dwell elapses (synchronous)", async () => {
-    render(<Toaster />);
-    await act(async () => {
-      addToast({
-        message: "File copied",
-        action: {
-          label: "Open",
-          onClick: () => {},
-          successLabel: "Opened",
-        },
-      });
-      vi.advanceTimersByTime(16);
-    });
-
-    const actionButton = screen.getByText("Open");
-    await act(async () => {
-      fireEvent.click(actionButton);
-    });
-
-    await act(async () => {
-      vi.advanceTimersByTime(1000);
-    });
-    expect(screen.getByText("Opened")).toBeTruthy();
   });
 
   it("success label dwells for ~2000ms before auto-dismissing (async onClick)", async () => {

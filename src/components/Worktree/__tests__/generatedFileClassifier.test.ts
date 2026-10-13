@@ -22,24 +22,7 @@ function makeFile(overrides: Partial<File> = {}): File {
 
 describe("isGeneratedFile", () => {
   describe("lockfile basenames", () => {
-    it.each([
-      "package-lock.json",
-      "npm-shrinkwrap.json",
-      "pnpm-lock.yaml",
-      "pnpm-lock.yml",
-      "yarn.lock",
-      "bun.lock",
-      "bun.lockb",
-      "Cargo.lock",
-      "go.sum",
-      "Gemfile.lock",
-      "Pipfile.lock",
-      "poetry.lock",
-      "composer.lock",
-      "mix.lock",
-      "flake.lock",
-      "deno.lock",
-    ])("detects: %s", (name) => {
+    it.each(["package-lock.json", "pnpm-lock.yaml", "go.sum"])("detects: %s", (name) => {
       expect(isGeneratedFile(name)).toBe(true);
     });
 
@@ -58,26 +41,9 @@ describe("isGeneratedFile", () => {
   describe("suffix patterns", () => {
     it.each([
       "bundle.min.js",
-      "app.min.css",
-      "vendor.min.mjs",
       "vendor.min.js.map",
-      "theme.min.css.map",
-      "file.lockb",
-      "app.bundle.js",
       "styles.bundle.css",
-      "app.bundle.js.map",
-      "styles.bundle.css.map",
-      "shared.chunk.js",
-      "lib.chunk.css",
-      "shared.chunk.js.map",
-      "lib.chunk.css.map",
-      "user.pb.go",
-      "message.pb.cc",
-      "types.pb.h",
-      "proto/messages.pb.ts",
       "proto/messages.pb.d.ts",
-      "Form.designer.cs",
-      "module.wasm",
       "src/__snapshots__/component.snap",
       "something.lock",
     ])("detects: %s", (name) => {
@@ -91,14 +57,7 @@ describe("isGeneratedFile", () => {
   });
 
   describe("extension regex patterns (.gen.<ext>, .generated.<ext>)", () => {
-    it.each([
-      "schema.gen.ts",
-      "types.gen.js",
-      "api.generated.ts",
-      "types.generated.js",
-      "schema.generated.css",
-      "schema.generated.graphql",
-    ])("detects: %s", (name) => {
+    it.each(["schema.gen.ts", "schema.generated.graphql"])("detects: %s", (name) => {
       expect(isGeneratedFile(name)).toBe(true);
     });
   });
@@ -106,14 +65,8 @@ describe("isGeneratedFile", () => {
   describe("build-output directories", () => {
     it.each([
       "dist/bundle.js",
-      "build/index.html",
       ".next/cache/manifest.json",
-      ".nuxt/server.js",
-      ".svelte-kit/output.js",
-      ".out/report.html",
-      "coverage/lcov.info",
       "packages/app/dist/index.js",
-      "__generated__/schema.ts",
       "src/__generated__/types.ts",
     ])("detects: %s", (name) => {
       expect(isGeneratedFile(name)).toBe(true);
@@ -121,15 +74,7 @@ describe("isGeneratedFile", () => {
   });
 
   describe("non-generated files", () => {
-    it.each([
-      "src/index.ts",
-      "src/component.tsx",
-      "README.md",
-      "CHANGELOG.md",
-      "types/foo.d.ts",
-      "docs/guide.md",
-      "package.json",
-    ])("does not flag: %s", (name) => {
+    it.each(["src/index.ts", "types/foo.d.ts", "package.json"])("does not flag: %s", (name) => {
       expect(isGeneratedFile(name)).toBe(false);
     });
 

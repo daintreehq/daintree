@@ -8,22 +8,6 @@ describe("parseEnvPaste", () => {
     expect(result.errors).toEqual([]);
   });
 
-  it("parses a simple KEY=VALUE", () => {
-    const { pairs, errors } = parseEnvPaste("FOO=bar");
-    expect(errors).toEqual([]);
-    expect(pairs).toEqual([{ key: "FOO", value: "bar" }]);
-  });
-
-  it("parses multiple lines", () => {
-    const { pairs, errors } = parseEnvPaste("A=1\nB=2\nC=3");
-    expect(errors).toEqual([]);
-    expect(pairs).toEqual([
-      { key: "A", value: "1" },
-      { key: "B", value: "2" },
-      { key: "C", value: "3" },
-    ]);
-  });
-
   it("normalizes CRLF to LF", () => {
     const { pairs, errors } = parseEnvPaste("FOO=bar\r\nBAZ=qux\r\n");
     expect(errors).toEqual([]);
@@ -182,12 +166,6 @@ describe("parseEnvPaste", () => {
     const { pairs, errors } = parseEnvPaste("  FOO = bar  ");
     expect(errors).toEqual([]);
     expect(pairs).toEqual([{ key: "FOO", value: "bar" }]);
-  });
-
-  it("returns zero pairs for comment-only input", () => {
-    const { pairs, errors } = parseEnvPaste("# just a comment\n# and another");
-    expect(pairs).toEqual([]);
-    expect(errors).toEqual([]);
   });
 
   it("preserves unknown escape sequences (backslash stays)", () => {

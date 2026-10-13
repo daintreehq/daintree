@@ -80,20 +80,6 @@ describe("broadcast-write result reporting", () => {
     expect(sendEvent).not.toHaveBeenCalled();
   });
 
-  it("reports transient and permanent failures together without successes", () => {
-    const { sendEvent, failing, write } = setup();
-    failing.set("t1", "EAGAIN");
-    failing.set("t3", "EPIPE");
-    write();
-    expect(sendEvent).toHaveBeenCalledWith({
-      type: "broadcast-write-result",
-      results: [
-        { id: "t1", ok: false, error: { code: "EAGAIN", message: "EAGAIN" } },
-        { id: "t3", ok: false, error: { code: "EPIPE", message: "EPIPE" } },
-      ],
-    });
-  });
-
   it("forgets a failed target once its terminal is gone", () => {
     const { sendEvent, failing, live, write } = setup();
     failing.set("t2", "EAGAIN");

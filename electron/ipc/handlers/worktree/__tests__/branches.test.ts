@@ -103,20 +103,6 @@ describe("handleWorktreeFetchPRBranch", () => {
     );
   });
 
-  it("passes undefined through so the host applies its GitHub-shaped default", async () => {
-    resolveForgeRemoteNameForCwdMock.mockResolvedValue("upstream");
-
-    await invoke();
-
-    expect(fetchPRBranch).toHaveBeenCalledWith(
-      "/repo",
-      42,
-      "feature/my-branch",
-      "upstream",
-      undefined
-    );
-  });
-
   it("maps a null remote to undefined, leaving the host's origin default", async () => {
     resolveForgeRemoteNameForCwdMock.mockResolvedValue(null);
 

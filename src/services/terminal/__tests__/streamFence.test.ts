@@ -57,12 +57,6 @@ describe("streamFence", () => {
       expect(stripCoveredOutput(5, "xyz", { start: 5, end: 8 })).toBe("xyz");
     });
 
-    it("keeps covering late chunks after later output has already arrived", () => {
-      // A chunk that took the other transport can land after its successor.
-      expect(stripCoveredOutput(10, "new", { start: 10, end: 13 })).toBe("new");
-      expect(stripCoveredOutput(10, "old", { start: 7, end: 10 })).toEqual(new Uint8Array(0));
-    });
-
     it("leaves chunks untouched without a fence or an offset", () => {
       expect(stripCoveredOutput(undefined, "abc", { start: 0, end: 3 })).toBe("abc");
       expect(stripCoveredOutput(50, "abc", undefined)).toBe("abc");

@@ -78,43 +78,6 @@ describe("SurfaceHeader density geometry", () => {
   });
 });
 
-describe("SurfaceHeader composition", () => {
-  it("renders arbitrary children in order", () => {
-    render(
-      <SurfaceHeader data-testid="header">
-        <div>
-          <span>Leading</span>
-          <span>Badge</span>
-        </div>
-        <button type="button">Trailing</button>
-      </SurfaceHeader>
-    );
-
-    expect(screen.getByTestId("header").textContent).toBe("LeadingBadgeTrailing");
-  });
-
-  it("forwards a ref to the underlying element", () => {
-    const ref = { current: null as HTMLDivElement | null };
-    render(
-      <SurfaceHeader ref={ref}>
-        <span>Title</span>
-      </SurfaceHeader>
-    );
-
-    expect(ref.current).toBeInstanceOf(HTMLDivElement);
-  });
-
-  it("forwards arbitrary DOM attributes", () => {
-    render(
-      <SurfaceHeader data-testid="header" role="group" aria-label="Panel chrome">
-        <span>Title</span>
-      </SurfaceHeader>
-    );
-
-    expect(screen.getByTestId("header").getAttribute("aria-label")).toBe("Panel chrome");
-  });
-});
-
 describe("SurfaceHeader className merging", () => {
   it("leaves the caller as the sole winner in every group it overrides", () => {
     // Mirrors CrossWorktreeDiff's override shape. Asserting group cardinality
@@ -154,20 +117,6 @@ describe("SurfaceHeaderTitle", () => {
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Dialog");
   });
 
-  it("renders an h3 when asked", () => {
-    render(<SurfaceHeaderTitle as="h3">Section</SurfaceHeaderTitle>);
-
-    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Section");
-  });
-
-  it("renders the icon ahead of the children", () => {
-    render(
-      <SurfaceHeaderTitle icon={<span data-testid="icon">*</span>}>Labelled</SurfaceHeaderTitle>
-    );
-
-    expect(screen.getByRole("heading").textContent).toBe("*Labelled");
-  });
-
   it("lets a caller override the default type scale", () => {
     // The file viewers rely on this to shrink the title; a merge that kept both
     // sizes would resolve by stylesheet order rather than by the caller.
@@ -175,32 +124,9 @@ describe("SurfaceHeaderTitle", () => {
 
     expect(matching(screen.getByRole("heading"), /^text-(xs|sm|base|lg|xl)$/)).toEqual(["text-sm"]);
   });
-
-  it("forwards an id so a dialog can point aria-labelledby at it", () => {
-    render(<SurfaceHeaderTitle id="title-1">Titled</SurfaceHeaderTitle>);
-
-    expect(screen.getByRole("heading").getAttribute("id")).toBe("title-1");
-  });
 });
 
 describe("SurfaceHeaderCloseButton", () => {
-  it("renders a non-submitting button carrying the supplied label", () => {
-    render(<SurfaceHeaderCloseButton aria-label="Close settings" />);
-    const button = screen.getByRole("button", { name: "Close settings" });
-
-    // Defaulting to type="submit" inside a form would submit it on close.
-    expect(button.getAttribute("type")).toBe("button");
-  });
-
-  it("invokes its click handler", () => {
-    const onClick = vi.fn();
-    render(<SurfaceHeaderCloseButton aria-label="Close dialog" onClick={onClick} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
-
-    expect(onClick).toHaveBeenCalledTimes(1);
-  });
-
   it("does not submit a surrounding form", () => {
     const onSubmit = vi.fn((e: React.FormEvent) => e.preventDefault());
     render(

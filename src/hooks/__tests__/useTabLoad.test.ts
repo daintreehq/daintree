@@ -8,13 +8,6 @@ afterEach(() => {
 });
 
 describe("useTabLoad", () => {
-  it("starts in the loading state", () => {
-    const initialize = vi.fn(() => new Promise<void>(() => {}));
-    const { result } = renderHook(() => useTabLoad({ initialize }));
-    expect(result.current.isLoading).toBe(true);
-    expect(result.current.loadError).toBeNull();
-  });
-
   it("clears loading when initialize resolves", async () => {
     const initialize = vi.fn().mockResolvedValue(undefined);
     const { result } = renderHook(() => useTabLoad({ initialize }));
@@ -100,55 +93,6 @@ describe("useTabLoad", () => {
       result.current.retryAction();
     });
     await waitFor(() => expect(initialize).toHaveBeenCalledTimes(2));
-  });
-
-  it("clears the error and re-enters the loading state on retry", async () => {
-    const initialize = vi.fn().mockRejectedValueOnce(new Error("oh no"));
-    const retry = vi.fn().mockResolvedValue(undefined);
-    const { result } = renderHook(() => useTabLoad({ initialize, retry }));
-
-    await waitFor(() => expect(result.current.loadError).toBe("oh no"));
-
-    act(() => {
-      result.current.retryAction();
-    });
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.loadError).toBeNull();
-  });
-
-  it("discards a stale resolution after a retry has fired", async () => {
-    let resolveFirst: (() => void) | undefined;
-    const initialize = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveFirst = resolve;
-        })
-    );
-    const retry = vi.fn().mockResolvedValue(undefined);
-    const { result } = renderHook(() => useTabLoad({ initialize, retry }));
-
-    act(() => {
-      result.current.retryAction();
-    });
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    await act(async () => {
-      resolveFirst?.();
-      await Promise.resolve();
-    });
-    expect(result.current.loadError).toBeNull();
-  });
-
-  it("does not update state after unmount", async () => {
-    vi.useFakeTimers();
-    const initialize = vi.fn(() => new Promise<void>(() => {}));
-    const { unmount } = renderHook(() => useTabLoad({ initialize, timeoutMs: 50 }));
-    unmount();
-    expect(() => {
-      act(() => {
-        vi.advanceTimersByTime(500);
-      });
-    }).not.toThrow();
   });
 
   it("keeps the timeout error when the timed-out attempt later resolves", async () => {

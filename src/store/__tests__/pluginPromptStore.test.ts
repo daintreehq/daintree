@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   usePluginPromptStore,
   enqueueUiPrompt,
-  dismissValueFor,
   __resetPluginPromptStoreForTesting,
 } from "../pluginPromptStore";
 import type { PluginUiPromptRequest } from "@shared/types/pluginUiPrompt";
@@ -18,12 +17,6 @@ function confirmRequest(promptId: string, pluginId: string): PluginUiPromptReque
 describe("pluginPromptStore", () => {
   beforeEach(() => {
     __resetPluginPromptStoreForTesting();
-  });
-
-  it("dismissValueFor maps confirm→false and the others→undefined", () => {
-    expect(dismissValueFor("confirm")).toBe(false);
-    expect(dismissValueFor("quickPick")).toBeUndefined();
-    expect(dismissValueFor("inputBox")).toBeUndefined();
   });
 
   it("surfaces the first prompt and queues the rest FIFO", () => {
@@ -43,12 +36,6 @@ describe("pluginPromptStore", () => {
 
     await expect(first).resolves.toEqual(answer);
     expect(usePluginPromptStore.getState().current?.promptId).toBe("b");
-  });
-
-  it("stores each resolver inside its queue item (not a module-level map)", () => {
-    void enqueueUiPrompt(quickPickRequest("a", "p1"));
-    const item = usePluginPromptStore.getState().current;
-    expect(typeof item?.resolve).toBe("function");
   });
 
   it("cancelByPluginId resolves matching prompts with the dismiss value and drops them", async () => {

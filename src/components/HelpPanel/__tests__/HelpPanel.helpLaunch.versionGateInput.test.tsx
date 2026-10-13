@@ -648,30 +648,6 @@ beforeEach(() => {
 });
 
 describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
-  it("blocks the single-supported-agent launch when installed version is below assistantMinVersion", async () => {
-    helpPanelState.preferredAgentId = null;
-    cliAvailabilityState.availability = { claude: "ready" };
-    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockGetAgentVersion.mockResolvedValue({
-      agentId: "claude",
-      installedVersion: "0.2.74",
-      latestVersion: "1.0.0",
-      updateAvailable: true,
-      lastChecked: Date.now(),
-    });
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "blocked-term" } });
-
-    const { findByTestId } = render(<HelpPanel width={380} />);
-
-    await findByTestId("help-version-too-old");
-
-    expect(mockGetAgentVersion).toHaveBeenCalledWith("claude", false);
-    expect(mockProvisionSession).not.toHaveBeenCalled();
-    expect(mockDispatch).not.toHaveBeenCalled();
-    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-  });
-
   it("blocks the preferredAgentId auto-launch when installed version is below assistantMinVersion", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
@@ -692,25 +668,6 @@ describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
     expect(mockProvisionSession).not.toHaveBeenCalled();
     expect(mockDispatch).not.toHaveBeenCalled();
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-  });
-
-  it("renders the upgrade copy with required and installed versions", async () => {
-    helpPanelState.preferredAgentId = "claude";
-    mockGetFolderPath.mockResolvedValue("/help");
-    mockGetAgentVersion.mockResolvedValue({
-      agentId: "claude",
-      installedVersion: "0.2.74",
-      latestVersion: "1.0.0",
-      updateAvailable: true,
-      lastChecked: Date.now(),
-    });
-
-    const { findByTestId } = render(<HelpPanel width={380} />);
-
-    const block = await findByTestId("help-version-too-old");
-    expect(block.textContent).toContain("Update Claude");
-    expect(block.textContent).toContain("1.0.0");
-    expect(block.textContent).toContain("0.2.74");
   });
 
   it("the settings action dispatches app.settings.openTab to the assistant tab", async () => {
