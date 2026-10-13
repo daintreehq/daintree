@@ -5,7 +5,7 @@ import { openWithDefaultApp } from "../utils/openPath.js";
 import { linuxDesktopAppEnv } from "./pty/EnvironmentFilter.js";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "../../shared/types/editor.js";
 import { withPathProbeSlot } from "../utils/findOnPath.js";
-import { isWindowsAbsolutePath, splitWindowsPath } from "../utils/windowsExecutable.js";
+import { findWindowsPathFile, windowsEnvValue } from "../utils/windowsExecutable.js";
 
 interface EditorDefinition {
   id: KnownEditorId;
@@ -272,42 +272,46 @@ function jetbrainsToolboxScriptDirs(): string[] {
 }
 
 function binaryCandidates(binary: string, extraDirs: string[]): string[] {
-  const isWindows = process.platform === "win32";
-  const p = isWindows ? path.win32 : path.posix;
-  // On Windows only absolute PATH entries: a relative one (`.`) would be
-  // resolved against the working directory.
-  const pathDirs = isWindows
-    ? splitWindowsPath(process.env.PATH ?? "").filter(isWindowsAbsolutePath)
-    : (process.env.PATH ?? "").split(p.delimiter).filter(Boolean);
-  const searchDirs = [...extraDirs, ...pathDirs];
-
-  // A name that already has an extension (`notepad++.exe`) is tried as given first.
-  const extensions = isWindows
-    ? [
-        ...(p.extname(binary) ? [""] : []),
-        ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";").map((e) => e.toLowerCase()),
-      ]
-    : [""];
-
-  const candidates: string[] = [];
-  for (const dir of searchDirs) {
-    for (const ext of extensions) {
-      candidates.push(p.join(dir, binary + ext));
-    }
-  }
-  return candidates;
+  const pathDirs = (process.env.PATH ?? "").split(path.posix.delimiter).filter(Boolean);
+  return [...extraDirs, ...pathDirs].map((dir) => path.posix.join(dir, binary));
 }
 
 async function isExecutableFile(fullPath: string): Promise<boolean> {
   try {
     const stat = await fs.promises.stat(fullPath);
     if (!stat.isFile()) return false;
-    if (process.platform === "win32") return true;
     await fs.promises.access(fullPath, fs.constants.X_OK);
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * The Windows PATH search, with `extraDirs` ahead of PATH. It shares its slots
+ * and per-directory deadline with every other Windows lookup, so a PATH entry
+ * on a dropped network share is searched past rather than waited on. Only
+ * absolute directories count, so the working directory is never searched.
+ */
+function findWindowsEditor(binary: string, extraDirs: string[] = []): Promise<string | null> {
+  const searchPath = [
+    ...extraDirs.map((dir) => (dir.includes(";") ? `"${dir}"` : dir)),
+    windowsEnvValue(process.env, "PATH") ?? "",
+  ]
+    .filter(Boolean)
+    .join(";");
+  // A name that already has an extension (`notepad++.exe`) is tried as given
+  // first, then each PATHEXT extension: execa starts what cmd.exe can, which
+  // includes a `.vbs` wrapper run by its file association.
+  const extensions = (windowsEnvValue(process.env, "PATHEXT") ?? ".EXE;.CMD;.BAT")
+    .split(";")
+    .filter(Boolean)
+    .map((extension) => extension.toLowerCase());
+  const candidates = [
+    ...(path.win32.extname(binary) ? [binary] : []),
+    ...extensions.map((extension) => binary + extension),
+  ];
+  return findWindowsPathFile(candidates, { PATH: searchPath });
 }
 
 function resolveEditorDef(id: KnownEditorId): EditorDefinition | undefined {
@@ -320,11 +324,18 @@ function resolveEditorDef(id: KnownEditorId): EditorDefinition | undefined {
  * and picks exactly the file a sequential search would. Only the waiting moves
  * off the main thread; separate editors walk concurrently under the slot cap,
  * which is shared with every POSIX PATH lookup (`findOnPath`) so that together
- * they can never hold more of libuv's fs pool than the cap allows. Windows PATH
- * searches (`windowsExecutable.ts`) keep a cap of their own.
+ * they can never hold more of libuv's fs pool than the cap allows. Windows
+ * goes through its own PATH search, in PATHEXT order within each directory.
  */
 async function findExecutable(def: EditorDefinition): Promise<string | null> {
   const extraDirs = def.extraDirs ? def.extraDirs() : [];
+  if (process.platform === "win32") {
+    for (const binary of def.binaries) {
+      const found = await findWindowsEditor(binary, extraDirs);
+      if (found) return found;
+    }
+    return null;
+  }
   for (const binary of def.binaries) {
     for (const candidate of binaryCandidates(binary, extraDirs)) {
       if (await withPathProbeSlot(() => isExecutableFile(candidate))) return candidate;
@@ -342,10 +353,7 @@ async function findExecutable(def: EditorDefinition): Promise<string | null> {
  */
 async function launchProgram(binary: string): Promise<string | null> {
   if (process.platform !== "win32" || /[\\/:]/.test(binary)) return binary;
-  for (const candidate of binaryCandidates(binary, [])) {
-    if (await withPathProbeSlot(() => isExecutableFile(candidate))) return candidate;
-  }
-  return null;
+  return findWindowsEditor(binary);
 }
 
 export async function discover(): Promise<DiscoveredEditor[]> {
