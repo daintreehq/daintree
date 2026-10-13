@@ -38,7 +38,7 @@ const panelStore = create<{
   maximizedId: string | null;
   maximizeTarget: Target;
   preMaximizeLayout: unknown;
-  setFocused: (id: string | null) => void;
+  setFocused: (id: string | null, shouldPing?: boolean, options?: { followed?: boolean }) => void;
   exitMaximize: () => void;
 }>((set, get) => ({
   panelsById: {},
@@ -47,8 +47,8 @@ const panelStore = create<{
   maximizedId: null,
   maximizeTarget: null,
   preMaximizeLayout: null,
-  setFocused: (id) => {
-    h.calls.push(`focus:${id}`);
+  setFocused: (id, _shouldPing, options) => {
+    h.calls.push(`focus:${id}${options?.followed ? ":followed" : ""}`);
     if (id && !h.mruSuppressed) h.mruRecorded.push(id);
     set({ focusedId: id });
   },
@@ -61,12 +61,14 @@ const panelStore = create<{
 
 const focusStore = create<{
   gestureSidebarHidden: boolean;
-  setFocusMode: (enabled: boolean) => void;
+  gestureAssistantHidden: boolean;
+  setSidebarGestureHidden: (hidden: boolean) => void;
 }>((set) => ({
   gestureSidebarHidden: false,
-  setFocusMode: (enabled) => {
-    h.calls.push(`focus-mode:${enabled}`);
-    set({ gestureSidebarHidden: enabled });
+  gestureAssistantHidden: false,
+  setSidebarGestureHidden: (hidden) => {
+    h.calls.push(`focus-mode:${hidden}`);
+    set({ gestureSidebarHidden: hidden });
   },
 }));
 
@@ -112,7 +114,8 @@ beforeEach(() => {
     maximizeTarget: null,
     preMaximizeLayout: null,
   });
-  focusStore.setState({ gestureSidebarHidden: false });
+  focusStore.setState({ gestureSidebarHidden: false, gestureAssistantHidden: false });
+  panelStore.setState({ tabGroups: new Map() });
 });
 
 afterEach(() => {
@@ -136,7 +139,12 @@ describe("applyDriverNavigation", () => {
       () => true
     );
 
-    expect(h.calls).toEqual(["worktree:wt-2:false", "focus-mode:true", "resolve:wt-2", "focus:t2"]);
+    expect(h.calls).toEqual([
+      "worktree:wt-2:false",
+      "focus-mode:true",
+      "resolve:wt-2",
+      "focus:t2:followed",
+    ]);
     // The driver's maximize wins over the one this screen had stashed for the worktree.
     expect(panelStore.getState()).toMatchObject({
       maximizedId: "t2",
@@ -146,6 +154,63 @@ describe("applyDriverNavigation", () => {
     // suppression this view had before is restored.
     expect(h.mruRecorded).toEqual([]);
     expect(h.mruSuppressed).toBe(false);
+  });
+
+  it("leaves this screen's own assistant suppression alone", async () => {
+    focusStore.setState({ gestureAssistantHidden: true });
+    await applyDriverNavigation(nav({ focusMode: true }), () => true);
+    expect(focusStore.getState()).toMatchObject({
+      gestureSidebarHidden: true,
+      gestureAssistantHidden: true,
+    });
+  });
+
+  it("shows the focused panel's tab before the driver's tab-group save arrives", async () => {
+    const group = { id: "g1", panelIds: ["t1", "global"], activeTabId: "global", location: "grid" };
+    panelStore.setState({ tabGroups: new Map([["g1", group]]) });
+
+    await applyDriverNavigation(nav({ focusedPanelId: "t1" }), () => true);
+
+    expect(panelStore.getState().tabGroups.get("g1")).toEqual({ ...group, activeTabId: "t1" });
+    expect(panelStore.getState().focusedId).toBe("t1");
+  });
+
+  it("drops a maximize it already holds once its panel can no longer show it", async () => {
+    panelStore.setState({ maximizedId: "t1", maximizeTarget: { type: "panel", id: "t1" } });
+    h.resolveMaximize.mockReturnValue(null);
+
+    await applyDriverNavigation(
+      nav({ maximize: { panelId: "t1", target: { type: "panel", id: "t1" } } }),
+      () => true
+    );
+
+    expect(panelStore.getState()).toMatchObject({ maximizedId: null, maximizeTarget: null });
+  });
+
+  it("follows a maximize in a project with no worktrees", async () => {
+    worktreeStore.setState({ activeWorktreeId: null });
+    await applyDriverNavigation(
+      nav({
+        activeWorktreeId: null,
+        maximize: { panelId: "global", target: { type: "panel", id: "global" } },
+      }),
+      () => true
+    );
+    expect(panelStore.getState()).toMatchObject({
+      maximizedId: "global",
+      maximizeTarget: { type: "panel", id: "global" },
+    });
+
+    // A panel filed in a worktree isn't one this grid shows.
+    await applyDriverNavigation(
+      nav({
+        activeWorktreeId: null,
+        maximize: { panelId: "t1", target: { type: "panel", id: "t1" } },
+      }),
+      () => true
+    );
+    expect(panelStore.getState().maximizedId).toBeNull();
+    expect(h.resolveMaximize).not.toHaveBeenCalled();
   });
 
   it("returns to the grid rather than keep a maximize it can't show", async () => {
@@ -187,6 +252,24 @@ describe("applyDriverNavigation", () => {
 });
 
 describe("startDriverNavigationReporter", () => {
+  it("keeps a forced report asked for while its stores were still loading", async () => {
+    vi.useFakeTimers();
+    const sent: DriveLeaseNavigation[] = [];
+    const reporter = startDriverNavigationReporter({
+      mayReport: () => true,
+      send: (navigation) => sent.push(navigation),
+      delayMs: 0,
+    });
+    reporter.reportNow();
+    vi.advanceTimersByTime(0);
+    await vi.dynamicImportSettled();
+    await Promise.resolve();
+    vi.advanceTimersByTime(0);
+
+    expect(sent).toEqual([nav()]);
+    reporter.dispose();
+  });
+
   async function loaded() {
     // Lets the reporter's store imports resolve and its subscriptions attach.
     await vi.dynamicImportSettled();
@@ -205,7 +288,7 @@ describe("startDriverNavigationReporter", () => {
     await loaded();
 
     panelStore.getState().setFocused("t1");
-    focusStore.getState().setFocusMode(true);
+    focusStore.getState().setSidebarGestureHidden(true);
     vi.advanceTimersByTime(50);
     expect(sent).toEqual([nav({ focusedPanelId: "t1", focusMode: true })]);
 

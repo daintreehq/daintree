@@ -182,8 +182,17 @@ let driverNavigation: DriveLeaseNavigation | null = null;
  * while it watched. Undefined while it doesn't drive.
  */
 let navigationLeaseId: number | null | undefined = undefined;
-/** Takeovers whose read-back of the project hasn't finished: nothing is reported meanwhile. */
+/**
+ * Takeovers (and handoffs) still moving this view to where the previous driver
+ * was: nothing is reported meanwhile.
+ */
 const takeOversSettling = new Set<symbol>();
+/**
+ * This view has watched since it last drove, so what it shows is the
+ * driver's as it followed it, not yet a place of its own: once it drives, it
+ * first moves to where the driver last was.
+ */
+let handoffOwed = false;
 let navigationReporter: DriverNavigationReporter | null = null;
 let navigationRunning: Promise<void> | null = null;
 let navigationAgain = false;
@@ -291,12 +300,46 @@ async function applyLatestDriverNavigation(): Promise<void> {
 function noteLeaseNavigation(lease: DriveLeaseView): void {
   if (!lease.drivingHere) {
     navigationLeaseId = undefined;
+    handoffOwed = true;
     driverNavigation = lease.driverNavigation ?? null;
     return;
   }
   if (takeOversSettling.size > 0) return;
+  const navigation = lease.driverNavigation;
+  if (handoffOwed && navigation) {
+    // It came to drive without taking over (the holder left, or another of
+    // this machine's windows took it): it starts from where the driver was,
+    // as a takeover does, before it says where it is.
+    handoffOwed = false;
+    const { projectId } = lease;
+    const settling = Symbol("handoff");
+    takeOversSettling.add(settling);
+    const isCurrent = () =>
+      getViewWorkspaceId() === projectId &&
+      getDriveLeaseSnapshot()?.projectId === projectId &&
+      getDriveLeaseSnapshot()?.drivingHere === true;
+    void applyDriverNavigation(navigation, isCurrent)
+      .catch((error: unknown) => {
+        logWarn("[HostConnection] Couldn't move to where the driver was", { error });
+      })
+      .finally(() => settleTakeOver(settling, projectId));
+    return;
+  }
+  handoffOwed = false;
   navigationLeaseId = lease.holder?.leaseId ?? null;
   if (lease.isHolderEndpoint) navigationReporter?.reportNow();
+}
+
+/**
+ * A takeover or handoff is done with: reporting resumes under the lease as it
+ * now stands, which may have moved on while it settled.
+ */
+function settleTakeOver(settling: symbol, projectId: string): void {
+  takeOversSettling.delete(settling);
+  const lease = getDriveLeaseSnapshot();
+  if (syncRefs > 0 && lease?.projectId === projectId && getViewWorkspaceId() === projectId) {
+    noteLeaseNavigation(lease);
+  }
 }
 
 function mayReportNavigation(projectId: string, hostId: HostId | null): boolean {
@@ -423,7 +466,8 @@ export async function takeOverDrive(
       options.ifLeaseId === undefined ? { projectId } : { projectId, ifLeaseId: options.ifLeaseId }
     );
   } catch (error) {
-    takeOversSettling.delete(settling);
+    // Its own event about the takeover may have landed meanwhile.
+    settleTakeOver(settling, projectId);
     throw error;
   }
   leaseGeneration += 1;
@@ -459,24 +503,31 @@ export async function takeOverDrive(
       logWarn("[HostConnection] Couldn't read the host's terminals after taking over", { error });
     }
     if (!isCurrent()) return;
-    await rehydrateHostProjectState(projectId, {
-      isCurrent,
-      authoritative: true,
-      follow: true,
-      keepActiveWorktree: navigation !== null,
-    });
+    try {
+      await rehydrateHostProjectState(projectId, {
+        isCurrent,
+        authoritative: true,
+        follow: true,
+        keepActiveWorktree: navigation !== null,
+      });
+    } catch (error) {
+      logWarn("[HostConnection] Couldn't read the project's saved state after taking over", {
+        error,
+      });
+    }
+    // Even without the saved state: what this view showed while displaced is
+    // not where the driver was.
     if (navigation && isCurrent()) await applyDriverNavigation(navigation, isCurrent);
   })()
     .catch((error: unknown) => {
-      logWarn("[HostConnection] Couldn't read the project's saved state after taking over", {
+      logWarn("[HostConnection] Couldn't move to where the driver was after taking over", {
         error,
       });
     })
     .finally(() => {
-      takeOversSettling.delete(settling);
-      if (generation !== takeOverGeneration || !isCurrent()) return;
-      navigationLeaseId = view.holder?.leaseId ?? null;
-      navigationReporter?.reportNow();
+      // A later takeover settles for itself; this one only lets go.
+      if (generation === takeOverGeneration) handoffOwed = false;
+      settleTakeOver(settling, projectId);
     });
 }
 
@@ -770,6 +821,7 @@ function beginSync(): () => void {
     for (const dispose of disposers.splice(0)) dispose();
     driverNavigation = null;
     navigationLeaseId = undefined;
+    handoffOwed = false;
     setHostInputBlock(null);
     setLeaseInputBlock(null);
     setDriveLeaseSnapshot(null);
@@ -898,6 +950,7 @@ export function _reloadHostConnectionSyncForTesting(): void {
   navigationRunning = null;
   navigationAgain = false;
   takeOversSettling.clear();
+  handoffOwed = false;
   Object.assign(openClaim, { projectId: null, done: false, inFlight: false, owed: false });
 }
 

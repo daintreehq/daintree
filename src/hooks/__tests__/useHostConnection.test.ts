@@ -1296,4 +1296,84 @@ describe("following the driver's navigation (#13281)", () => {
     expect(reporter.mayReport()).toBe(true);
     stop();
   });
+
+  it("moves to where the driver was before reporting, when it comes to drive without taking over", async () => {
+    const { emitLease } = hostWindow(leaseView(holder(), false));
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    const reporter = reporters.at(-1)!;
+    let arrived!: () => void;
+    applyNavigation.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (arrived = () => resolve(undefined)))
+    );
+
+    // The driver left and this window is next.
+    emitLease({
+      type: "changed",
+      state: {
+        ...leaseView(holder({ leaseId: 8, isHostLocal: true }), true),
+        isHolderEndpoint: true,
+        driverNavigation: navigation("wt-2"),
+      },
+    });
+    expect(applyNavigation.mock.calls.at(-1)![0]).toEqual(navigation("wt-2"));
+    expect(reporter.mayReport()).toBe(false);
+    expect(reporter.reportNow).not.toHaveBeenCalled();
+
+    arrived();
+    await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
+    expect(reporter.mayReport()).toBe(true);
+    stop();
+  });
+
+  it("still moves to where the driver was when the saved state can't be read after taking over", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.takeOver.mockResolvedValueOnce(leaseView(holder(), false));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await flush();
+    const reporter = reporters.at(-1)!;
+    applyNavigation.mockClear();
+    rehydrate.mockRejectedValueOnce(new Error("link down"));
+    electron.driveLease.takeOver.mockResolvedValue({
+      ...leaseView(holder({ endpointId: "me", leaseId: 7 }), true),
+      isHolderEndpoint: true,
+      driverNavigation: navigation("wt-2"),
+    });
+
+    await takeOverDrive("proj-1");
+
+    await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
+    stop();
+  });
+
+  it("reports once its own takeover event has landed, even when the answer is lost", async () => {
+    const { electron, emitLease } = installElectron();
+    electron.driveLease.takeOver.mockResolvedValueOnce(leaseView(holder(), false));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await flush();
+    const reporter = reporters.at(-1)!;
+    let fail!: (error: Error) => void;
+    electron.driveLease.takeOver.mockImplementation(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    const mine = {
+      ...leaseView(holder({ endpointId: "me", leaseId: 7 }), true),
+      isHolderEndpoint: true,
+    };
+
+    const taking = takeOverDrive("proj-1");
+    emitLease({ type: "changed", state: mine });
+    expect(reporter.reportNow).not.toHaveBeenCalled();
+    fail(new Error("answer lost"));
+    await expect(taking).rejects.toThrow("answer lost");
+
+    expect(reporter.reportNow).toHaveBeenCalled();
+    expect(reporter.mayReport()).toBe(true);
+    stop();
+  });
 });

@@ -89,7 +89,9 @@ export function startDriverNavigationReporter(options: {
 
   const flush = () => {
     timer = null;
-    if (disposed || !stores || !options.mayReport()) {
+    // Still loading: a forced report waits for the stores rather than being lost.
+    if (disposed || !stores) return;
+    if (!options.mayReport()) {
       force = false;
       return;
     }
@@ -173,65 +175,110 @@ export async function applyDriverNavigation(
   }
   const activeWorktreeId = stores.useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
 
+  // Only the sidebar: the assistant's suppression is this screen's own.
   const focus = stores.useFocusStore.getState();
   if (focus.gestureSidebarHidden !== navigation.focusMode) {
-    focus.setFocusMode(navigation.focusMode);
+    focus.setSidebarGestureHidden(navigation.focusMode);
   }
 
+  // Checked even when this view already holds the same maximize: a follow pass
+  // may have moved its panel since, and a maximize that can't render blanks
+  // the grid.
   const panels = stores.usePanelStore.getState();
   const wanted = navigation.maximize;
-  if (wanted === null) {
+  const resolved =
+    wanted === null ? null : resolveFollowedMaximize(stores, panels, wanted, activeWorktreeId);
+  if (resolved === null) {
+    // Not one this view can show yet: back to the grid rather than keep a
+    // maximize of this screen's own over what the driver sees.
     panels.exitMaximize();
-  } else if (panels.maximizedId !== wanted.panelId || !sameTarget(panels, wanted.target)) {
-    const resolved =
-      activeWorktreeId === null
-        ? null
-        : stores.resolveMaximizeForWorktree(
-            {
-              maximizedId: wanted.panelId,
-              maximizeTarget: wanted.target,
-              // The column count to go back to is this screen's own.
-              preMaximizeLayout: panels.preMaximizeLayout,
-            },
-            activeWorktreeId,
-            panels
-          );
-    if (resolved) {
-      stores.usePanelStore.setState({
-        maximizedId: resolved.maximizedId,
-        maximizeTarget: resolved.maximizeTarget,
-        preMaximizeLayout: resolved.preMaximizeLayout,
-      });
-    } else {
-      // Not one this view can show yet: back to the grid rather than keep a
-      // maximize of this screen's own over what the driver sees.
-      panels.exitMaximize();
-    }
+  } else if (
+    panels.maximizedId !== resolved.maximizedId ||
+    !sameTarget(panels, resolved.maximizeTarget)
+  ) {
+    stores.usePanelStore.setState({
+      maximizedId: resolved.maximizedId,
+      maximizeTarget: resolved.maximizeTarget,
+      preMaximizeLayout: resolved.preMaximizeLayout,
+    });
   }
 
   const focusedPanelId = navigation.focusedPanelId;
   const current = stores.usePanelStore.getState();
-  if (focusedPanelId === current.focusedId) return;
   if (focusedPanelId === null) {
-    current.setFocused(null);
+    if (current.focusedId !== null) current.setFocused(null);
     return;
   }
   const panel = current.panelsById[focusedPanelId];
   if (!isFollowedPanel(panel)) return;
   if (panel!.worktreeId !== undefined && panel!.worktreeId !== activeWorktreeId) return;
-  // The driver's pick, not this screen's: it stays out of the quick switcher's order.
+  showTab(stores, focusedPanelId);
+  if (focusedPanelId === current.focusedId) return;
+  // The driver's pick, not this screen's: it stays out of the quick switcher's
+  // order and leaves the panels' recency alone.
   const wasSuppressed = stores.isMruRecordingSuppressed();
   stores.suppressMruRecording(true);
   try {
-    current.setFocused(focusedPanelId);
+    current.setFocused(focusedPanelId, false, { followed: true });
   } finally {
     stores.suppressMruRecording(wasSuppressed);
   }
 }
 
+type Maximize = NonNullable<DriveLeaseNavigation["maximize"]>;
+type ResolvedMaximize = NonNullable<ReturnType<Stores["resolveMaximizeForWorktree"]>>;
+
+function resolveFollowedMaximize(
+  stores: Stores,
+  panels: PanelState,
+  wanted: Maximize,
+  activeWorktreeId: string | null
+): ResolvedMaximize | null {
+  const snapshot = {
+    maximizedId: wanted.panelId,
+    maximizeTarget: wanted.target,
+    // The column count to go back to is this screen's own.
+    preMaximizeLayout: panels.preMaximizeLayout,
+  };
+  if (activeWorktreeId !== null) {
+    return stores.resolveMaximizeForWorktree(snapshot, activeWorktreeId, panels);
+  }
+  // A project with no worktrees: its panels are filed in none.
+  const panel = panels.panelsById[wanted.panelId];
+  if (!panel || panel.location !== "grid" || panel.worktreeId !== undefined) return null;
+  if (wanted.target.type === "panel") return wanted.target.id === wanted.panelId ? snapshot : null;
+  const group = panels.tabGroups.get(wanted.target.id);
+  if (
+    !group ||
+    group.location !== "grid" ||
+    group.worktreeId !== undefined ||
+    !group.panelIds.includes(wanted.panelId)
+  ) {
+    return null;
+  }
+  return snapshot;
+}
+
+/**
+ * The driver's focus arrives ahead of its tab-group save, so the group the
+ * panel sits in shows it here and now. Not saved: the host's own save of the
+ * groups follows.
+ */
+function showTab(stores: Stores, panelId: string): void {
+  const { tabGroups } = stores.usePanelStore.getState();
+  for (const group of tabGroups.values()) {
+    if (!group.panelIds.includes(panelId)) continue;
+    if (group.activeTabId === panelId) return;
+    const next = new Map(tabGroups);
+    next.set(group.id, { ...group, activeTabId: panelId });
+    stores.usePanelStore.setState({ tabGroups: next });
+    return;
+  }
+}
+
 function sameTarget(
   panels: Pick<PanelState, "maximizeTarget">,
-  target: NonNullable<DriveLeaseNavigation["maximize"]>["target"]
+  target: Maximize["target"]
 ): boolean {
   return panels.maximizeTarget?.type === target.type && panels.maximizeTarget.id === target.id;
 }

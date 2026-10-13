@@ -95,7 +95,12 @@ export interface TerminalFocusSlice {
    */
   pingSeq: number;
   preMaximizeLayout: PreMaximizeLayoutSnapshot | null;
-  setFocused: (id: string | null, shouldPing?: boolean) => void;
+  /**
+   * `followed`: focus another screen's driver chose, which this view only
+   * shows. Skips the recency stamp, whose save could outlive the watch and
+   * land once this view drives.
+   */
+  setFocused: (id: string | null, shouldPing?: boolean, options?: { followed?: boolean }) => void;
   /**
    * Synthetic boot-time focus: lands an initial `focusedId` without
    * corrupting persistence. Mirrors the grid branch of `setFocused` (the
@@ -249,7 +254,7 @@ export const createTerminalFocusSlice =
       pingedId: null,
       pingSeq: 0,
       preMaximizeLayout: null,
-      setFocused: (id, shouldPing = false) => {
+      setFocused: (id, shouldPing = false, options) => {
         if (id) {
           const previousFocusedId = get().focusedId;
           const focusActuallyChanged = id !== previousFocusedId;
@@ -274,7 +279,11 @@ export const createTerminalFocusSlice =
           // A restamp only matters when it changes the recency ordering that
           // restore reads; when this panel already holds the newest stamp,
           // skip the panelsById spread and the persistence save.
-          if (terminal && (focusActuallyChanged || !holdsNewestLastActive(terminal, terminals))) {
+          if (
+            !options?.followed &&
+            terminal &&
+            (focusActuallyChanged || !holdsNewestLastActive(terminal, terminals))
+          ) {
             stampLastActive(id);
           }
           // Wake-on-focus: recover this pane's renderer when focus MOVES to it.
