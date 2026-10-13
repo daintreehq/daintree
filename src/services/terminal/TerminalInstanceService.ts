@@ -250,8 +250,8 @@ class TerminalInstanceService {
   private watchHolds = new Set<string>();
   /** Bumped by each echo for an id, so a seed read before it can't land after it. */
   private watchEchoSeq = new Map<string, number>();
-  private watchSeedIds = new Set<string>();
-  private watchSeedScheduled = false;
+  /** Held, but the PTY's grid is still unknown; retried on the next lease event. */
+  private watchUnseeded = new Set<string>();
   private watchEpoch = 0;
   private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
@@ -1183,6 +1183,7 @@ class TerminalInstanceService {
 
     if (this.watchHolds.has(id) && result.appliedCols !== null && result.appliedRows !== null) {
       this.watchEchoSeq.set(id, (this.watchEchoSeq.get(id) ?? 0) + 1);
+      this.watchUnseeded.delete(id);
       this.resizeController.adoptPtyGeometry(id, result.appliedCols, result.appliedRows);
     }
   }
@@ -1207,48 +1208,56 @@ class TerminalInstanceService {
       this.stopWatching();
       return;
     }
+    // A seed that failed (the link dropped mid-read) gets another go on the
+    // next lease answer, which a reconnect always brings.
+    const retry = [...this.watchUnseeded];
     this.instances.forEach((managed, id) => this.watchTerminal(id, managed));
+    for (const id of retry) this.seedWatchedGeometry(id);
   }
 
   private watchTerminal(id: string, managed: ManagedTerminal): void {
     if (this.watchHolds.has(id)) return;
     this.resizeController.holdGeometry(id);
     this.watchHolds.add(id);
+    this.watchUnseeded.add(id);
     const echo = managed.lastPtyResizeResult;
     if (echo && echo.appliedCols !== null && echo.appliedRows !== null) {
       this.resizeController.adoptPtyGeometry(id, echo.appliedCols, echo.appliedRows);
     }
     // The driver may not resize again for a long time, so ask the host where
     // the PTY sits now rather than wait for its next echo.
-    this.watchSeedIds.add(id);
-    if (this.watchSeedScheduled) return;
-    this.watchSeedScheduled = true;
-    queueMicrotask(() => this.seedWatchedGeometry());
+    this.seedWatchedGeometry(id);
   }
 
-  /** One inventory read for every terminal that started watching this turn. */
-  private seedWatchedGeometry(): void {
-    this.watchSeedScheduled = false;
-    const ids = [...this.watchSeedIds];
-    this.watchSeedIds.clear();
-    const lease = getDriveLeaseSnapshot();
-    if (!lease || !this.isWatching() || ids.length === 0) return;
+  /**
+   * Read where the PTY sits now. Dropped if anything newer spoke for this
+   * terminal meanwhile: an echo, a take-over, or a new instance under the id.
+   */
+  private seedWatchedGeometry(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
     const epoch = this.watchEpoch;
-    const seqAtRead = new Map(ids.map((id) => [id, this.watchEchoSeq.get(id) ?? 0]));
+    const seq = this.watchEchoSeq.get(id) ?? 0;
     terminalClient
-      .getForProject(lease.projectId)
-      .then((infos) => {
-        if (epoch !== this.watchEpoch) return;
-        for (const info of infos) {
-          const seq = seqAtRead.get(info.id);
-          if (seq === undefined || !this.watchHolds.has(info.id)) continue;
-          if ((this.watchEchoSeq.get(info.id) ?? 0) !== seq) continue;
-          if (!info.ptyCols || !info.ptyRows) continue;
-          this.resizeController.adoptPtyGeometry(info.id, info.ptyCols, info.ptyRows);
+      .getInfo(id)
+      .then((info) => {
+        if (
+          epoch !== this.watchEpoch ||
+          this.instances.get(id) !== managed ||
+          (this.watchEchoSeq.get(id) ?? 0) !== seq ||
+          !this.watchHolds.has(id)
+        ) {
+          return;
         }
+        this.watchUnseeded.delete(id);
+        if (!info.ptyCols || !info.ptyRows) return;
+        this.resizeController.adoptPtyGeometry(id, info.ptyCols, info.ptyRows);
       })
       .catch((error: unknown) => {
-        logWarn("[TerminalInstanceService] Couldn't read the PTY grid to watch at", { error });
+        logWarn("[TerminalInstanceService] Couldn't read the PTY grid to watch at", {
+          id,
+          error,
+        });
       });
   }
 
@@ -1258,10 +1267,9 @@ class TerminalInstanceService {
    * pass so the panes don't supersede one another's.
    */
   private stopWatching(): void {
-    if (this.watchHolds.size === 0) return;
     this.watchEpoch += 1;
-    this.watchSeedIds.clear();
-    const refit: string[] = [];
+    if (this.watchHolds.size === 0) return;
+    const unmeasured: string[] = [];
     for (const id of this.watchHolds) {
       const managed = this.instances.get(id);
       if (managed) {
@@ -1271,11 +1279,16 @@ class TerminalInstanceService {
         managed.lastHeight = 0;
         this.resizeController.invalidatePtyGrid(id);
       }
-      if (this.resizeController.releaseGeometry(id) && managed) refit.push(id);
+      if (!this.resizeController.releaseGeometry(id) || !managed) continue;
+      // `fit` rather than the resize pass for a pane it can measure: the pass
+      // sends nothing when the pane's grid is the one xterm already holds,
+      // and the PTY is still on the other frontend's.
+      if (this.resizeController.fit(id) === null) unmeasured.push(id);
     }
     this.watchHolds.clear();
     this.watchEchoSeq.clear();
-    if (refit.length > 0) this.runResizePass(refit, { immediate: true });
+    this.watchUnseeded.clear();
+    if (unmeasured.length > 0) this.runResizePass(unmeasured, { immediate: true });
   }
 
   /**
@@ -4036,6 +4049,7 @@ class TerminalInstanceService {
     this.instances.delete(id);
     if (this.watchHolds.delete(id)) {
       this.watchEchoSeq.delete(id);
+      this.watchUnseeded.delete(id);
       this.resizeController.releaseGeometry(id);
     }
     this.scheduleWhySlowReport();

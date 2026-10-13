@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalResizeResult } from "@shared/types/pty-host";
-import type { BackendTerminalInfo } from "@shared/types/ipc/terminal";
+import type { TerminalInfoPayload } from "@shared/types/ipc/terminal";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 import type { ManagedTerminal } from "../types";
 
 let capturedResizeResultCb: ((id: string, result: TerminalResizeResult) => void) | null = null;
 
-const { getForProject, resize } = vi.hoisted(() => ({
-  getForProject: vi.fn<(projectId: string) => Promise<BackendTerminalInfo[]>>(),
+const { getInfo, resize } = vi.hoisted(() => ({
+  getInfo: vi.fn<(id: string) => Promise<TerminalInfoPayload>>(),
   resize: vi.fn(),
 }));
 
@@ -22,7 +22,7 @@ vi.mock("@/clients", () => ({
     onExit: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
     onReset: vi.fn(() => vi.fn()),
-    getForProject,
+    getInfo,
     resize,
     write: vi.fn(),
     setActivityTier: vi.fn(),
@@ -89,8 +89,33 @@ function lease(overrides: Partial<DriveLeaseView> = {}): DriveLeaseView {
   } as unknown as DriveLeaseView;
 }
 
-function info(id: string, ptyCols: number, ptyRows: number): BackendTerminalInfo {
-  return { id, cwd: "/", spawnedAt: 0, ptyCols, ptyRows } as BackendTerminalInfo;
+const laptopLease = () =>
+  lease({ holder: { clientName: "Laptop", leaseId: 8 } } as unknown as Partial<DriveLeaseView>);
+
+function info(id: string, ptyCols?: number, ptyRows?: number): TerminalInfoPayload {
+  return { id, ptyCols, ptyRows } as TerminalInfoPayload;
+}
+
+/** Answers each info read from `grids`, by id. */
+function answerFrom(grids: Record<string, [number, number]>): void {
+  getInfo.mockImplementation(async (id) => {
+    const grid = grids[id];
+    return grid ? info(id, grid[0], grid[1]) : info(id);
+  });
+}
+
+/** The next info read waits until the returned function answers it. */
+function deferredInfo(): (value: TerminalInfoPayload) => void {
+  let answer!: (value: TerminalInfoPayload) => void;
+  getInfo.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+  return (value) => answer(value);
+}
+
+/** A pane laid out at a box that fits 100x30. */
+function makeMeasurable(managed: ManagedTerminal): void {
+  managed.hostElement.checkVisibility = () => true;
+  managed.hostElement.getBoundingClientRect = () => ({ width: 1000, height: 700 }) as DOMRect;
+  managed.fitAddon.proposeDimensions = () => ({ cols: 100, rows: 30 });
 }
 
 function echo(cols: number, rows: number): TerminalResizeResult {
@@ -105,9 +130,7 @@ function echo(cols: number, rows: number): TerminalResizeResult {
 }
 
 async function settle(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 4; i++) await Promise.resolve();
 }
 
 describe("TerminalInstanceService — watching a project another frontend drives (#13282)", () => {
@@ -115,10 +138,13 @@ describe("TerminalInstanceService — watching a project another frontend drives
   let gate: InputGate;
 
   beforeEach(async () => {
+    // jsdom has no layout: every pane reads as not laid out, as an unattached one does.
+    HTMLElement.prototype.checkVisibility ??= () => false;
     vi.resetModules();
     vi.clearAllMocks();
     capturedResizeResultCb = null;
-    getForProject.mockResolvedValue([]);
+    getInfo.mockReset();
+    answerFrom({});
 
     gate = (await import("../inputGate")) as InputGate;
     gate.setDriveLeaseSnapshot(null);
@@ -134,32 +160,33 @@ describe("TerminalInstanceService — watching a project another frontend drives
     gate.setDriveLeaseSnapshot(null);
   });
 
-  const cols = (id: string) => service.instances.get(id)!.terminal.cols;
-  const rows = (id: string) => service.instances.get(id)!.terminal.rows;
+  const grid = (id: string) => {
+    const { cols, rows } = service.instances.get(id)!.terminal;
+    return [cols, rows];
+  };
   const locked = (id: string) => service.resizeController.isResizeLocked(id);
 
-  it("leaves ordinary local use alone: no lease, no hold, no inventory read", async () => {
+  it("leaves a view that drives alone: no hold, no info read", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
     gate.setDriveLeaseSnapshot(lease({ drivingHere: true }));
     await settle();
 
     expect(locked("t1")).toBe(false);
-    expect(getForProject).not.toHaveBeenCalled();
+    expect(getInfo).not.toHaveBeenCalled();
   });
 
   it("holds every pane at the grid the PTY reports once another frontend drives", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
     await service.prewarmTerminal("t2", "terminal", {});
-    getForProject.mockResolvedValue([info("t1", 200, 50), info("t2", 90, 30)]);
+    answerFrom({ t1: [200, 50], t2: [90, 30] });
 
     gate.setDriveLeaseSnapshot(lease());
     await settle();
 
-    expect(getForProject).toHaveBeenCalledTimes(1);
-    expect(getForProject).toHaveBeenCalledWith("proj-1");
+    expect(getInfo.mock.calls.map(([id]) => id)).toEqual(["t1", "t2"]);
     expect(locked("t1")).toBe(true);
-    expect([cols("t1"), rows("t1")]).toEqual([200, 50]);
-    expect([cols("t2"), rows("t2")]).toEqual([90, 30]);
+    expect(grid("t1")).toEqual([200, 50]);
+    expect(grid("t2")).toEqual([90, 30]);
 
     // The pane's own box can no longer reach the PTY.
     service.resizeController.sendPtyResize("t1", 100, 30);
@@ -171,79 +198,153 @@ describe("TerminalInstanceService — watching a project another frontend drives
     gate.setDriveLeaseSnapshot(lease());
     await settle();
 
-    capturedResizeResultCb?.("t1", echo(150, 45));
+    capturedResizeResultCb!("t1", echo(150, 45));
 
-    expect([cols("t1"), rows("t1")]).toEqual([150, 45]);
+    expect(grid("t1")).toEqual([150, 45]);
     expect(resize).not.toHaveBeenCalled();
   });
 
-  it("ignores a driver's echo while this view drives", async () => {
+  it("ignores a PTY echo while this view drives, even for a pane Canopy holds", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
-    const before = [cols("t1"), rows("t1")];
+    service.holdGeometry("t1");
+    gate.setDriveLeaseSnapshot(lease({ drivingHere: true }));
+    const before = grid("t1");
 
-    capturedResizeResultCb?.("t1", echo(150, 45));
+    expect(capturedResizeResultCb).toBeTypeOf("function");
+    capturedResizeResultCb!("t1", echo(150, 45));
 
-    expect([cols("t1"), rows("t1")]).toEqual(before);
+    expect(grid("t1")).toEqual(before);
+  });
+
+  it("keeps the grid through a failed resize's echo", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    answerFrom({ t1: [200, 50] });
+    gate.setDriveLeaseSnapshot(lease());
+    await settle();
+
+    capturedResizeResultCb!("t1", {
+      ...echo(150, 45),
+      appliedCols: null,
+      appliedRows: null,
+      outcome: "failed",
+    });
+
+    expect(grid("t1")).toEqual([200, 50]);
   });
 
   it("holds and seeds a terminal created while watching", async () => {
     gate.setDriveLeaseSnapshot(lease());
-    getForProject.mockResolvedValue([info("late", 132, 43)]);
+    answerFrom({ late: [132, 43] });
 
     await service.prewarmTerminal("late", "terminal", {});
     await settle();
 
     expect(locked("late")).toBe(true);
-    expect([cols("late"), rows("late")]).toEqual([132, 43]);
+    expect(grid("late")).toEqual([132, 43]);
   });
 
-  it("lets a newer echo win over an inventory read already in flight", async () => {
+  it("lets a newer echo win over an info read already in flight", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
-    let answer!: (infos: BackendTerminalInfo[]) => void;
-    getForProject.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const answer = deferredInfo();
 
     gate.setDriveLeaseSnapshot(lease());
     await settle();
-    capturedResizeResultCb?.("t1", echo(150, 45));
-    answer([info("t1", 200, 50)]);
+    capturedResizeResultCb!("t1", echo(150, 45));
+    answer(info("t1", 200, 50));
     await settle();
 
-    expect([cols("t1"), rows("t1")]).toEqual([150, 45]);
+    expect(grid("t1")).toEqual([150, 45]);
   });
 
-  it("re-fits every watched pane in one pass on taking the project over", async () => {
+  it("re-fits and resizes the PTY on taking the project over, even at an unchanged grid", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
     await service.prewarmTerminal("t2", "terminal", {});
+    // The driver's pane happens to fit the same grid as this one.
+    answerFrom({ t1: [100, 30], t2: [200, 50] });
     gate.setDriveLeaseSnapshot(lease());
     await settle();
+    expect(grid("t1")).toEqual([100, 30]);
+    makeMeasurable(service.instances.get("t1")!);
     const pass = vi.spyOn(service, "runResizePass").mockImplementation(() => {});
-    service.instances.get("t1")!.ptyCols = 100;
-    service.instances.get("t1")!.ptyRows = 30;
 
     gate.setDriveLeaseSnapshot(lease({ drivingHere: true, isHolderEndpoint: true }));
 
     expect(locked("t1")).toBe(false);
     expect(locked("t2")).toBe(false);
+    // The PTY was last sized by the other frontend, so the grid xterm already
+    // holds still has to be sent.
+    expect(resize).toHaveBeenCalledWith("t1", 100, 30);
+    // A pane with no layout to measure yet goes to the pass instead.
     expect(pass).toHaveBeenCalledTimes(1);
-    expect(pass).toHaveBeenCalledWith(["t1", "t2"], { immediate: true });
-    // The PTY was last sized by the other frontend, so the re-fit must send.
-    expect(service.instances.get("t1")!.ptyCols).toBeUndefined();
+    expect(pass).toHaveBeenCalledWith(["t2"], { immediate: true });
   });
 
-  it("drops an inventory read that answers after the take-over", async () => {
+  it("drops a read from before the take-over once watching starts again", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
-    let answer!: (infos: BackendTerminalInfo[]) => void;
-    getForProject.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    vi.spyOn(service, "runResizePass").mockImplementation(() => {});
+    const answerOld = deferredInfo();
     gate.setDriveLeaseSnapshot(lease());
     await settle();
-    vi.spyOn(service, "runResizePass").mockImplementation(() => {});
-    const before = [cols("t1"), rows("t1")];
 
-    gate.setDriveLeaseSnapshot(null);
-    answer([info("t1", 200, 50)]);
+    gate.setDriveLeaseSnapshot(lease({ drivingHere: true }));
+    const answerNew = deferredInfo();
+    gate.setDriveLeaseSnapshot(lease());
     await settle();
 
-    expect([cols("t1"), rows("t1")]).toEqual(before);
+    expect(getInfo).toHaveBeenCalledTimes(2);
+    answerNew(info("t1", 150, 45));
+    await settle();
+    answerOld(info("t1", 200, 50));
+    await settle();
+
+    expect(grid("t1")).toEqual([150, 45]);
+  });
+
+  it("drops a read meant for an instance since replaced under the same id", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    const answerOld = deferredInfo();
+    gate.setDriveLeaseSnapshot(lease());
+    await settle();
+
+    service.destroy("t1");
+    const answerNew = deferredInfo();
+    await service.prewarmTerminal("t1", "terminal", {});
+    await settle();
+    answerNew(info("t1", 150, 45));
+    await settle();
+    answerOld(info("t1", 200, 50));
+    await settle();
+
+    expect(locked("t1")).toBe(true);
+    expect(grid("t1")).toEqual([150, 45]);
+  });
+
+  it("retries a failed read on the next lease answer", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    getInfo.mockRejectedValueOnce(new Error("link down"));
+    gate.setDriveLeaseSnapshot(lease());
+    await settle();
+    expect(grid("t1")).not.toEqual([200, 50]);
+
+    answerFrom({ t1: [200, 50] });
+    gate.setDriveLeaseSnapshot(laptopLease());
+    await settle();
+
+    expect(grid("t1")).toEqual([200, 50]);
+  });
+
+  it("takes one hold per pane however often the lease changes hands", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    vi.spyOn(service, "runResizePass").mockImplementation(() => {});
+    gate.setDriveLeaseSnapshot(lease());
+    gate.setDriveLeaseSnapshot(laptopLease());
+    await settle();
+
+    capturedResizeResultCb!("t1", echo(150, 45));
+    expect(grid("t1")).toEqual([150, 45]);
+
+    gate.setDriveLeaseSnapshot(null);
+    expect(locked("t1")).toBe(false);
   });
 
   it("keeps Canopy's hold when the watch ends, and re-fits only once both let go", async () => {
