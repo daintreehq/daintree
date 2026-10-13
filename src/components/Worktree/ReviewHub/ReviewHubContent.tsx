@@ -194,6 +194,13 @@ export interface ReviewHubContentProps {
 
 const selectNoProviderHealth = () => null;
 
+function isTextWidget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+  );
+}
+
 /**
  * Self-contained Review & Commit surface. All staging-status fetches,
  * subscriptions, push/pull-rebase IPC, and UI interaction state live in this
@@ -1750,6 +1757,12 @@ export function ReviewHubContent({
       // listener closes the entire hub, so it stands aside on the trigger's own
       // open marker rather than relying on that ordering alone.
       if (document.querySelector(`[${PR_CHECKS_OPEN_ATTR}="true"]`)) return;
+      const nothingTransient = !selectedFile && !selectedBaseBranchFile && selectedPaths.size === 0;
+      // A filter with text clears itself first (SearchField's own Escape);
+      // only an empty one gives Escape over to leaving the field.
+      if (nothingTransient && e.target instanceof HTMLInputElement && e.target.value !== "") {
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       if (selectedFile) {
@@ -1760,7 +1773,20 @@ export function ReviewHubContent({
         setSelectedPaths(new Set());
         setSelectionSection(null);
         selectionAnchorRef.current = null;
-      } else {
+      } else if (isTextWidget(e.target)) {
+        // Leaving a text field is as far as Escape goes from inside one: the
+        // commit message lives only in this panel, so closing here would lose
+        // the draft to a key pressed to dismiss something smaller.
+        // With the file list collapsed there is nowhere steadier to go, so
+        // focus stays put rather than dropping to the document.
+        const list = fileListRef.current;
+        if (list && e.target instanceof HTMLElement) {
+          e.target.blur();
+          list.focus();
+        }
+      } else if (!e.repeat) {
+        // Never on auto-repeat: a held Escape that just left the commit box
+        // would otherwise run on into closing the panel and its draft.
         onClose();
       }
       return;
@@ -1770,12 +1796,7 @@ export function ReviewHubContent({
     // a text widget (filter inputs, commit textarea) or an open dropdown menu
     // has focus so normal typing and menu navigation are unaffected.
     const target = e.target instanceof HTMLElement ? e.target : null;
-    if (
-      target &&
-      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
-    ) {
-      return;
-    }
+    if (isTextWidget(target)) return;
     if (document.activeElement?.closest('[role="menu"]')) return;
     // A radiogroup (the diff mode switch) answers its own arrow keys, the way it
     // does everywhere else; this capture listener would otherwise take Up/Down

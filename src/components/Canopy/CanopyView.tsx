@@ -390,9 +390,7 @@ function CanopyShortcuts() {
           ? [
               {
                 keys: [paneClose],
-                label: isMac()
-                  ? "Trash the agent's terminal; the toast takes it back"
-                  : "In a reply: trash the agent's terminal; the toast takes it back",
+                label: isMac() ? "Close Canopy" : "In a reply: close Canopy",
               },
             ]
           : []),

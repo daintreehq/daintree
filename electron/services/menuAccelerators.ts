@@ -35,7 +35,7 @@ const KEY_TO_ACCELERATOR: Record<string, string> = {
   PageDown: "PageDown",
 };
 
-interface ParsedAccelerator {
+export interface ParsedAccelerator {
   /** Cmd on macOS, Ctrl on Windows/Linux (CommandOrControl). */
   primary: boolean;
   /** Explicit Control (distinct from primary only on macOS). */
@@ -85,8 +85,20 @@ export function comboToAccelerator(combo: string): string | undefined {
   return accelerator.join("+");
 }
 
+// Memoized per platform: the key hooks consult the defaults on every keystroke.
+let defaultsCache: {
+  platform: string;
+  bindings: ReturnType<typeof buildDefaultKeybindings>;
+} | null = null;
+
 function getDefaultKeybindingsForPlatform() {
-  return buildDefaultKeybindings(process.platform === "win32", process.platform === "linux");
+  if (defaultsCache?.platform !== process.platform) {
+    defaultsCache = {
+      platform: process.platform,
+      bindings: buildDefaultKeybindings(process.platform === "win32", process.platform === "linux"),
+    };
+  }
+  return defaultsCache.bindings;
 }
 
 /**
@@ -122,6 +134,51 @@ export function getMenuAccelerator(actionId: string): string | undefined {
 export function isKeybindingOwnedAction(actionId: string): boolean {
   if (actionId in getValidatedOverrides()) return true;
   return getDefaultKeybindingsForPlatform().some((b) => b.actionId === actionId);
+}
+
+/**
+ * Whether any keybinding-system action (default or user override) already
+ * resolves to this accelerator. A registry-declared agent shortcut that lands
+ * on one must not register natively: the native item would win on macOS and
+ * silently take the key from the binding the user can see and rebind.
+ */
+export function isAcceleratorClaimedByKeybinding(accelerator: string): boolean {
+  const target = parseAccelerator(accelerator);
+  if (!target) return false;
+  const mac = process.platform === "darwin";
+  // Same physical key whatever the spelling: modifier order, and Cmd vs Ctrl
+  // off the Mac, where both are the primary key.
+  const samePhysicalKey = (combo: string) => {
+    const parsed = parseAccelerator(comboToAccelerator(combo) ?? "");
+    if (!parsed) return false;
+    const primary = (a: ParsedAccelerator) => (mac ? a.primary : a.primary || a.ctrl);
+    return (
+      primary(parsed) === primary(target) &&
+      (!mac || parsed.ctrl === target.ctrl) &&
+      parsed.shift === target.shift &&
+      parsed.alt === target.alt &&
+      parsed.key.toUpperCase() === target.key.toUpperCase()
+    );
+  };
+  const overrides = getValidatedOverrides();
+  const actionIds = new Set([
+    ...getDefaultKeybindingsForPlatform().map((b) => b.actionId),
+    ...Object.keys(overrides),
+  ]);
+  for (const actionId of actionIds) {
+    const combos =
+      overrides[actionId] ??
+      getDefaultKeybindingsForPlatform()
+        .filter((b) => b.actionId === actionId)
+        .map((b) => b.combo);
+    for (const combo of combos) {
+      // A chord's first stroke counts too: a native item on it would swallow
+      // the chord before the renderer saw its second key.
+      const firstStroke = combo?.trim().split(/\s+/)[0];
+      if (firstStroke && samePhysicalKey(firstStroke)) return true;
+    }
+  }
+  return false;
 }
 
 let rendererOwnedAccelerators: ParsedAccelerator[] = [];
@@ -190,21 +247,58 @@ export function isRendererOwnedShortcut(input: Electron.Input): boolean {
   const mac = process.platform === "darwin";
   const inputKey = input.key.length === 1 ? input.key.toUpperCase() : input.key;
 
-  for (const acc of rendererOwnedAccelerators) {
-    const primaryDown = mac ? input.meta : input.control;
-    // Explicit Control is only distinct from primary on macOS. Elsewhere it is
-    // the primary key, whether spelled CommandOrControl or, as the Windows and
-    // Linux replacement defaults are ("Ctrl+Shift+O"), Control.
-    const accPrimary = mac ? acc.primary : acc.primary || acc.ctrl;
-    if (accPrimary !== primaryDown) continue;
-    if (mac && acc.ctrl !== input.control) continue;
-    if (acc.shift !== input.shift) continue;
-    if (acc.alt !== input.alt) continue;
-    if (mac && !acc.primary && input.meta) continue;
+  return rendererOwnedAccelerators.some((acc) =>
+    acceleratorMatchesInput(acc, input, inputKey, mac)
+  );
+}
 
-    if (keyMatches(acc, input, inputKey, mac)) return true;
+function acceleratorMatchesInput(
+  acc: ParsedAccelerator,
+  input: Electron.Input,
+  inputKey: string,
+  mac: boolean
+): boolean {
+  const primaryDown = mac ? input.meta : input.control;
+  // Explicit Control is only distinct from primary on macOS. Elsewhere it is
+  // the primary key, whether spelled CommandOrControl or, as the Windows and
+  // Linux replacement defaults are ("Ctrl+Shift+O"), Control.
+  const accPrimary = mac ? acc.primary : acc.primary || acc.ctrl;
+  if (accPrimary !== primaryDown) return false;
+  if (mac && acc.ctrl !== input.control) return false;
+  if (acc.shift !== input.shift) return false;
+  if (acc.alt !== input.alt) return false;
+  if (mac && !acc.primary && input.meta) return false;
+  return keyMatches(acc, input, inputKey, mac);
+}
+
+/**
+ * The first of these actions whose effective single-stroke binding in `scope`
+ * (user override, else the platform default) matches this keystroke. Lets a
+ * main-process key hook honour rebinds instead of hard-coding the defaults.
+ */
+export function findActionForInput(
+  input: Electron.Input,
+  actionIds: readonly string[],
+  scope: string,
+  accepts: (accelerator: ParsedAccelerator) => boolean = () => true
+): string | undefined {
+  if (input.type !== "keyDown") return undefined;
+  const mac = process.platform === "darwin";
+  const inputKey = input.key.length === 1 ? input.key.toUpperCase() : input.key;
+  const overrides = getValidatedOverrides();
+  const defaults = getDefaultKeybindingsForPlatform();
+  for (const actionId of actionIds) {
+    const combos =
+      overrides[actionId] ??
+      defaults.filter((b) => b.actionId === actionId && b.scope === scope).map((b) => b.combo);
+    for (const combo of combos) {
+      const accelerator = combo ? comboToAccelerator(combo) : undefined;
+      const parsed = accelerator ? parseAccelerator(accelerator) : null;
+      if (parsed && accepts(parsed) && acceleratorMatchesInput(parsed, input, inputKey, mac))
+        return actionId;
+    }
   }
-  return false;
+  return undefined;
 }
 
 function keyMatches(
@@ -224,4 +318,43 @@ function keyMatches(
   if (mac && input.alt && /^[A-Z]$/.test(accKey) && input.code === `Key${accKey}`) return true;
   // Arrow keys arrive as "ArrowUp" etc. on Input; accelerators store "Up".
   return input.key === `Arrow${accKey}`;
+}
+
+const TERMINAL_CYCLE_ACTIONS = ["terminal.focusNext", "terminal.focusPrevious"] as const;
+const PORTAL_TAB_FOR_TERMINAL_CYCLE: Record<string, string> = {
+  "terminal.focusNext": "portal.nextTab",
+  "terminal.focusPrevious": "portal.prevTab",
+};
+
+/**
+ * The terminal-cycle action a Tab keystroke triggers, resolved against the
+ * effective bindings so a rebind off Tab releases the key and an unbind does
+ * too. Main takes only Tab combos before the page (Ctrl+Tab did not reliably
+ * reach the renderer on Windows); a cycle rebound to any other key is left to
+ * the renderer, which owns text fields, terminals, recording and chords.
+ *
+ * `portalActionId` is set when the same keystroke is also the portal's tab
+ * key, so the renderer can give it to the portal while the portal has focus.
+ */
+export function findTerminalCycleAction(
+  input: Electron.Input
+): { actionId: string; portalActionId?: string } | undefined {
+  const isTab = (acc: ParsedAccelerator) => acc.key === "Tab";
+  const actionId = findActionForInput(input, TERMINAL_CYCLE_ACTIONS, "global", isTab);
+  if (!actionId) return undefined;
+  const portalActionId = PORTAL_TAB_FOR_TERMINAL_CYCLE[actionId]!;
+  return findActionForInput(input, [portalActionId], "portal") === portalActionId
+    ? { actionId, portalActionId }
+    : { actionId };
+}
+
+/**
+ * Portal tab keys a focused portal page hands to the portal. Only combos held
+ * with Cmd/Ctrl qualify: a bare or Shift-only key is the page's own typing.
+ */
+export function findPortalPageAction(
+  input: Electron.Input,
+  actionIds: readonly string[]
+): string | undefined {
+  return findActionForInput(input, actionIds, "portal", (acc) => acc.primary || acc.ctrl);
 }

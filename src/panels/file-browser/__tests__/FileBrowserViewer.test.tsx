@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createContext, forwardRef, useContext, type ReactNode } from "react";
+import { createContext, forwardRef, useContext, useImperativeHandle, type ReactNode } from "react";
 import { fireEvent, render, act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
@@ -12,7 +12,10 @@ import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 // + mode wiring renders, and capture the viewMode handed to MarkdownViewer —
 // the seam the toggle drives for markdown. HTML has no such prop (HtmlViewer is
 // rendered-only), so there the mode shows up as which mock is on screen.
-const { readMock } = vi.hoisted(() => ({ readMock: vi.fn() }));
+const { readMock, openSearchMock } = vi.hoisted(() => ({
+  readMock: vi.fn(),
+  openSearchMock: vi.fn(),
+}));
 vi.mock("@/clients/filesClient", () => ({
   filesClient: { read: readMock },
 }));
@@ -107,12 +110,17 @@ vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
 // proves the routing, and an HTML source branch wired to empty content or the
 // wrong path would satisfy that while showing the reader nothing (#12205).
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
-  CodeViewer: (props: { content: string; filePath: string }) => (
-    <div
-      data-testid="code-viewer-mock"
-      data-content={props.content}
-      data-file-path={props.filePath}
-    />
+  CodeViewer: forwardRef<{ openSearch: () => void }, { content: string; filePath: string }>(
+    function CodeViewerMock(props, ref) {
+      useImperativeHandle(ref, () => ({ openSearch: openSearchMock }));
+      return (
+        <div
+          data-testid="code-viewer-mock"
+          data-content={props.content}
+          data-file-path={props.filePath}
+        />
+      );
+    }
   ),
 }));
 vi.mock("@/components/Html/HtmlViewer", () => ({
@@ -256,6 +264,7 @@ import type {
 import type { FolderListingStatus } from "../useFileBrowserTree";
 
 interface ViewerOpts {
+  isFocused?: boolean;
   editorContext?: { projectId: string; worktreePath: string | null; isFocused: boolean };
   panelId?: string;
   sidebarCollapsed?: boolean;
@@ -322,6 +331,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
       <FileBrowserViewer
         editorContext={opts.editorContext}
         panelId={opts.panelId ?? "panel-1"}
+        isFocused={opts.isFocused}
         filePath={filePath}
         rootPath="/repo"
         fileName={fileName}
@@ -481,6 +491,18 @@ describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
     expect(screen.queryByRole("radio", { name: "Source" })).toBeNull();
     expect(screen.queryByRole("radio", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+
+  it("opens the source view's find bar on Cmd+F only while the panel is focused", async () => {
+    openSearchMock.mockClear();
+    const { rerender } = renderViewer("/repo/src/notes.txt", { isFocused: false });
+    await screen.findByTestId("code-viewer-mock");
+    window.dispatchEvent(new Event("daintree:find-in-panel"));
+    expect(openSearchMock).not.toHaveBeenCalled();
+
+    rerender(viewerJsx("/repo/src/notes.txt", { isFocused: true }));
+    window.dispatchEvent(new Event("daintree:find-in-panel"));
+    expect(openSearchMock).toHaveBeenCalledTimes(1);
   });
 
   it("shows the toggle and defaults an HTML file to source (#12205)", async () => {

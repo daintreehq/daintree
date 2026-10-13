@@ -52,6 +52,7 @@ describe("buildDefaultKeybindings", () => {
     const changed = linux.filter((b, i) => b !== mac[i]).map((b) => b.actionId);
     expect(changed.sort()).toEqual([
       "canopy.toggle",
+      "fleet.accept",
       "terminal.focusDown",
       "terminal.focusLeft",
       "terminal.focusRight",
@@ -82,8 +83,30 @@ describe("buildDefaultKeybindings", () => {
       .slice(0, core.length)
       .filter((b, i) => b !== core[i])
       .map((b) => b.actionId);
-    expect(changed).toEqual(["canopy.toggle"]);
+    expect(changed).toEqual(["fleet.accept", "canopy.toggle"]);
     expect(windows.length).toBeGreaterThan(core.length);
+  });
+
+  it("leaves Ctrl+Y to text fields off the Mac, where it is Redo", () => {
+    for (const table of [windows, linux]) {
+      const [accept] = table.filter((b) => b.actionId === "fleet.accept");
+      expect(accept?.when).toBe("fleetArmed && !textInputFocused");
+    }
+  });
+
+  it("keeps the fleet's quick actions inert while nothing is armed", () => {
+    for (const actionId of ["fleet.reject", "fleet.restart", "fleet.kill", "fleet.trash"]) {
+      expect(mac.find((b) => b.actionId === actionId)?.when).toBe("fleetArmed");
+    }
+  });
+
+  it("keeps the remapped defaults off the keys they collided with", () => {
+    expect(globalCombo(mac, "terminal.sendToAgent")).toEqual(["Cmd+K Cmd+I"]);
+    expect(globalCombo(mac, "fleet.kill")).toEqual(["Cmd+K Cmd+Shift+K"]);
+    expect(globalCombo(mac, "dock.focusNextWaiting")).toEqual(["Cmd+K Cmd+/"]);
+    for (const combo of ["Cmd+Shift+E", "Cmd+Shift+K", "Cmd+Shift+/"]) {
+      expect(mac.some((b) => b.scope === "global" && b.combo === combo)).toBe(false);
+    }
   });
 
   it("keeps Switch host clear of every other global default where it exists", () => {

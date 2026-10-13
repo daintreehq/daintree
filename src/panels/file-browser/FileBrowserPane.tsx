@@ -1442,6 +1442,7 @@ export function FileBrowserPane({
           >
             <FileBrowserViewer
               panelId={id}
+              isFocused={!!isFocused}
               editorContext={
                 project && (source?.kind === "worktree" || basePath === project.path)
                   ? {

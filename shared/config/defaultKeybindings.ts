@@ -424,7 +424,8 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "dock.focusNextWaiting",
-    combo: "Cmd+Shift+/",
+    // Cmd+Shift+/ is Cmd+? on a US Mac: the Help menu's search field.
+    combo: "Cmd+K Cmd+/",
     scope: "global",
     priority: 0,
     description: "Jump to next waiting dock agent",
@@ -440,7 +441,9 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "terminal.sendToAgent",
-    combo: "Cmd+Shift+E",
+    // A chord, not Cmd+Shift+E: that key is the composer's expand-editor
+    // shortcut, which a global binding would swallow.
+    combo: "Cmd+K Cmd+I",
     scope: "global",
     priority: 0,
     description: "Send selection to another terminal",
@@ -456,7 +459,8 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   // Fleet quick-actions. Registered at priority 5 (ELEVATED) so they outrank
   // any future global binding on the same combo while the fleet ribbon is
-  // visible; when nothing is armed each action no-ops so the UI stays intact.
+  // visible. They only match while something is armed, so with an empty fleet
+  // the key reaches whatever has focus (Ctrl+Y redo in an editor, say).
   // fleet.reject is Cmd+Shift+Y — the shifted twin of fleet.accept (Cmd+Y) —
   // NOT Cmd+N: a destructive-adjacent broadcast ("n⏎" to every armed agent)
   // must never sit on a reflexive "new" key whose meaning flips with
@@ -496,6 +500,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 5,
     description: "Accept all armed waiting agents",
     category: "Fleet",
+    when: "fleetArmed",
   },
   {
     actionId: "fleet.reject",
@@ -504,6 +509,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 5,
     description: "Reject all armed waiting agents",
     category: "Fleet",
+    when: "fleetArmed",
   },
   {
     actionId: "fleet.restart",
@@ -512,14 +518,18 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 5,
     description: "Restart all armed agents",
     category: "Fleet",
+    when: "fleetArmed",
   },
   {
     actionId: "fleet.kill",
-    combo: "Cmd+Shift+K",
+    // Behind the prefix: killing every armed terminal is irreversible, and a
+    // single stroke also took Delete line from code editors.
+    combo: "Cmd+K Cmd+Shift+K",
     scope: "global",
     priority: 5,
     description: "Kill all armed terminals",
     category: "Fleet",
+    when: "fleetArmed",
   },
   {
     actionId: "fleet.trash",
@@ -528,6 +538,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 5,
     description: "Trash all armed terminals",
     category: "Fleet",
+    when: "fleetArmed",
   },
   // Directional terminal navigation (Ghostty-style: Cmd+Option+Arrow)
   {
@@ -1205,6 +1216,17 @@ const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
 // over from the overview family, and Ctrl+Shift+O is none of the keys Daintree
 // reserves for the PTY.
 const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
+  // Ctrl+Y is Redo in text fields and editors off the Mac; it accepts the fleet
+  // only from outside them.
+  {
+    actionId: "fleet.accept",
+    combo: "Cmd+Y",
+    scope: "global",
+    priority: 5,
+    description: "Accept all armed waiting agents",
+    category: "Fleet",
+    when: "fleetArmed && !textInputFocused",
+  },
   {
     actionId: "canopy.toggle",
     combo: "Ctrl+Shift+O",

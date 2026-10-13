@@ -977,6 +977,26 @@ describe("ReviewHub", () => {
     });
   });
 
+  describe("Escape in a section filter", () => {
+    it("clears a filter with text first, then leaves the empty field without closing", async () => {
+      const onClose = vi.fn();
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      const filter = screen.getAllByPlaceholderText("Filter…")[0]! as HTMLInputElement;
+      fireEvent.change(filter, { target: { value: "index" } });
+      filter.focus();
+
+      fireEvent.keyDown(filter, { key: "Escape" });
+      await waitFor(() => expect(filter.value).toBe(""));
+      expect(onClose).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(filter, { key: "Escape" });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.activeElement).not.toBe(filter);
+    });
+  });
+
   describe("clean-tree push affordance", () => {
     afterEach(() => {
       // The real (unmocked) confirm store is shared suite-wide — resolve any

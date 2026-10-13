@@ -53,6 +53,7 @@ import { removeProjectWithCleanup } from "./ipc/handlers/projectCrud/crud.js";
 import { isWindowsStoreBuild, getBuildChannelLabel } from "../shared/config/distribution.js";
 import {
   getMenuAccelerator,
+  isAcceleratorClaimedByKeybinding,
   isKeybindingOwnedAction,
   rendererMenuAccelerator,
   resetRendererOwnedAccelerators,
@@ -184,14 +185,19 @@ export function createApplicationMenu(
         // bindings — including "none" when cleared or chord-bound; the
         // registry fallback would silently resurrect the old shortcut. Only
         // agents outside the keybinding system entirely use the registry's
-        // shortcut field, natively registered and executing.
+        // shortcut field, natively registered and executing — unless another
+        // binding already holds that key, which the native item would steal.
         const keybindingOwned = isKeybindingOwnedAction(`agent.${agent.id}`);
+        const registryAccelerator =
+          !keybindingOwned && agent.shortcut
+            ? convertShortcutToAccelerator(agent.shortcut)
+            : undefined;
         items.push({
           label: `New ${agent.name}`,
           accelerator: keybindingOwned
             ? rendererMenuAccelerator(`agent.${agent.id}`)
-            : agent.shortcut
-              ? convertShortcutToAccelerator(agent.shortcut)
+            : registryAccelerator && !isAcceleratorClaimedByKeybinding(registryAccelerator)
+              ? registryAccelerator
               : undefined,
           click: (_item, browserWindow) =>
             sendAction("agent.launch", getTargetBrowserWindow(browserWindow), {

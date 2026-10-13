@@ -600,7 +600,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     notifyFirstInteractive(): Promise<void>;
     notifyViewPainted(): Promise<void>;
     notifyWarmViewPainted(): Promise<void>;
-    onMenuAction(callback: (payload: { actionId: string; args?: unknown }) => void): () => void;
+    /**
+     * `portalActionId` names the portal action the same keystroke is bound to,
+     * for main-intercepted keys the renderer resolves by its own focus scope.
+     */
+    onMenuAction(
+      callback: (payload: { actionId: string; args?: unknown; portalActionId?: string }) => void
+    ): () => void;
     reloadConfig(): Promise<{ success: boolean }>;
     onConfigReloaded(callback: () => void): () => void;
     /**

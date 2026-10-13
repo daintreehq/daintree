@@ -537,6 +537,58 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  it("bare Escape Escape from an armed pane's terminal interrupts the fleet", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const pane = document.createElement("div");
+    pane.setAttribute("data-panel-id", "t1");
+    const input = document.createElement("textarea");
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    xterm.appendChild(input);
+    pane.appendChild(xterm);
+    document.body.appendChild(pane);
+    try {
+      fireEvent.keyDown(input, { key: "Escape" });
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.filter((c) => c[0] === "fleet.interrupt")).toHaveLength(1);
+    } finally {
+      pane.remove();
+      dispatchSpy.mockRestore();
+    }
+  });
+
+  it("leaves bare Escape Escape to a terminal that is not in the fleet", async () => {
+    // An agent's own double-Escape (rewind, say) must not turn into an
+    // interrupt of every armed agent just because a fleet exists elsewhere.
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working"), makeAgent("t3", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const pane = document.createElement("div");
+    pane.setAttribute("data-panel-id", "t3");
+    const input = document.createElement("textarea");
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    xterm.appendChild(input);
+    pane.appendChild(xterm);
+    document.body.appendChild(pane);
+    try {
+      const first = fireEvent.keyDown(input, { key: "Escape" });
+      const second = fireEvent.keyDown(input, { key: "Escape" });
+      expect(first).toBe(true);
+      expect(second).toBe(true);
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      pane.remove();
+      dispatchSpy.mockRestore();
+    }
+  });
+
   it("single bare Escape does NOT dispatch fleet.interrupt", async () => {
     // First bare Esc passes through so xterm still broadcasts a single
     // raw \x1b for menu/prompt dismissal across the armed set.

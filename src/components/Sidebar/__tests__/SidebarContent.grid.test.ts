@@ -234,9 +234,9 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       expect(source).toMatch(/virtuosoRef\.current\?\.scrollToIndex\(/);
     });
 
-    it("preserves the toolbar sub-mode entered via Enter / ArrowRight", () => {
-      expect(source).toMatch(/"Enter"/);
-      expect(source).toMatch(/"ArrowRight"/);
+    it("enters the toolbar sub-mode via ArrowRight / F2, while Enter opens the row", () => {
+      expect(source).toMatch(/e\.key === "ArrowRight" \|\| e\.key === "F2"/);
+      expect(source).toMatch(/e\.key === "Enter" \|\| e\.key === " "/);
       expect(source).toMatch(/"Escape"/);
       expect(source).toMatch(/setGridMode\(\s*"toolbar"\s*\)/);
     });

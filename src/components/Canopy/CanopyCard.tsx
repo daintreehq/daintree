@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
+import { useCanopyStore } from "@/store/canopyStore";
 import { Button } from "@/components/ui/button";
 import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -354,21 +355,15 @@ export function CanopyCard({
   };
 
   // Cmd+W with the keyboard in this pane — its terminal, its reply or its
-  // title bar — closes the agent's terminal to the trash, as Cmd+W on its grid
-  // pane would; the trash keeps it running a while, and the toast takes it
-  // back. From the list, Cmd+W closes the panel instead.
-  const onTrashRef = useRef(onTrash);
-  const itemRef = useRef(item);
-  useEffect(() => {
-    onTrashRef.current = onTrash;
-    itemRef.current = item;
-  });
+  // title bar — closes Canopy, as it does from the list. Closing the place you
+  // inspect an agent from must not dispose of the agent; trashing it stays on
+  // its own labelled, two-press control.
   useEffect(() => {
     const section = sectionRef.current;
     if (!section) return;
     const onClose = (event: Event) => {
       event.preventDefault();
-      onTrashRef.current(itemRef.current);
+      useCanopyStore.getState().close();
     };
     section.addEventListener(CLOSE_REQUEST_EVENT, onClose);
     return () => section.removeEventListener(CLOSE_REQUEST_EVENT, onClose);

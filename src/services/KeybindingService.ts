@@ -5,7 +5,7 @@ import type {
   KeybindingResolutionResult,
 } from "./keybindingUtils";
 import { combosFieldsEqual, normalizeKeyForBinding, parseCombo } from "./keybindingUtils";
-import { DEFAULT_KEYBINDINGS } from "./defaultKeybindings";
+import { DEFAULT_KEYBINDINGS, KEYBINDING_PRIORITY } from "./defaultKeybindings";
 import { isMac } from "@/lib/platform";
 import { formatChordText } from "@/lib/kbdShortcut";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
@@ -511,9 +511,15 @@ class KeybindingService {
 
         // Every combo an override holds triggers the action, matching what the
         // settings list shows and what conflict detection checks.
-        const combos = this.overrides.has(binding.actionId)
+        const isOverridden = this.overrides.has(binding.actionId);
+        const combos = isOverridden
           ? (this.overrides.get(binding.actionId) ?? [])
           : [binding.combo];
+        // A user's own assignment outranks every contributed default, whatever
+        // order the plugin and the override arrived in.
+        const priority = isOverridden
+          ? Math.max(binding.priority, KEYBINDING_PRIORITY.OVERRIDE)
+          : binding.priority;
         for (const effectiveCombo of combos) {
           if (!effectiveCombo) continue;
 
@@ -531,9 +537,9 @@ class KeybindingService {
                 this.matchesEventInternal(event, chordParts[1]!, mac, eventKey) &&
                 whenHolds()
               ) {
-                if (binding.priority > chordCompletionPriority) {
+                if (priority > chordCompletionPriority) {
                   chordCompletionMatch = binding;
-                  chordCompletionPriority = binding.priority;
+                  chordCompletionPriority = priority;
                 }
               }
             } else {
@@ -549,9 +555,9 @@ class KeybindingService {
               this.matchesEventInternal(event, effectiveCombo, mac, eventKey) &&
               whenHolds()
             ) {
-              if (binding.priority > bestPriority) {
+              if (priority > bestPriority) {
                 bestMatch = binding;
-                bestPriority = binding.priority;
+                bestPriority = priority;
               }
             }
           }
@@ -616,9 +622,9 @@ class KeybindingService {
           if (existing.actionId === config.actionId) continue;
           // Compare against the EFFECTIVE combo — a user override remaps where a
           // built-in actually fires, so a plugin binding at the overridden combo
-          // would otherwise slip past this guard and then win at resolution
-          // (PLUGIN priority > DEFAULT). Fall back to the stored combo when no
-          // override exists.
+          // would otherwise register a dead duplicate (overrides resolve at
+          // OVERRIDE priority, above PLUGIN). Fall back to the stored combo when
+          // no override exists.
           const effectiveCombo = this.getEffectiveCombo(existing.actionId) ?? existing.combo;
           if (!effectiveCombo) continue;
           if (!combosFieldsEqual(effectiveCombo, config.combo)) continue;

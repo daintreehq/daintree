@@ -3,6 +3,16 @@ import { isElectronAvailable } from "./useElectron";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
+import { keybindingService } from "@/services/KeybindingService";
+
+// Main takes the terminal-cycle keys before the page sees them, so it cannot
+// know the portal has focus. It names the portal action the same keystroke is
+// bound to, and the renderer, which knows the scope, picks between them.
+function resolveMenuActionId(payload: { actionId: string; portalActionId?: string }): string {
+  return payload.portalActionId && keybindingService.getScope() === "portal"
+    ? payload.portalActionId
+    : payload.actionId;
+}
 
 export function useMenuActions(): void {
   useEffect(() => {
@@ -16,7 +26,8 @@ export function useMenuActions(): void {
           return;
         }
 
-        const result = await actionService.dispatch(payload.actionId, payload.args, {
+        const actionId = resolveMenuActionId(payload);
+        const result = await actionService.dispatch(actionId, payload.args, {
           source: "menu",
         });
         // A destructive action that parked a confirmation reports
