@@ -56,21 +56,24 @@ function useCommittedField(current: string, commit: (value: string) => Promise<u
       setBase(current);
       return;
     }
-    if (pending === null && base !== current) {
+    // Only the value being saved here is exempt: any other change arriving is someone else's.
+    if (base !== current && current !== pending) {
       // Asked once: saving again keeps the edit, now made against the new value.
       setBase(current);
       setError(`Renamed to "${current}" in another window. Save again to use "${next}" instead`);
       return;
     }
     setPending(next);
+    // An older save settling never clears a newer one's pending value.
+    const settle = () => setPending((value) => (value === next ? null : value));
     commit(next).then(
       () => {
-        setPending(null);
+        settle();
         setBase(next);
         setError(undefined);
       },
       (err: unknown) => {
-        setPending(null);
+        settle();
         setError(clientErrorText(err, "Couldn't save"));
       }
     );

@@ -394,6 +394,13 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       const wc = ctx.services.projectViewManager?.getActiveView()?.webContents;
       if (wc && !wc.isDestroyed()) wc.focus();
     },
+    showsHost(windowId, hostId) {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      if (!pvm) return false;
+      return [pvm.getActiveProjectId(), pvm.getOutgoingBridgeProjectId()].some(
+        (key) => key !== null && parseHostScopedKey(key).hostId === hostId
+      );
+    },
     async replaceWithLocalWindow(windowId) {
       const old = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
       if (!old || old.isDestroyed()) return;

@@ -1025,6 +1025,25 @@ describe("RemoteHostsClient", () => {
       expect(bindings.get(7)).toBe("local");
     });
 
+    it("doesn't replace a window sent to another host after its switch home failed", async () => {
+      registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
+      const replaceWithLocalWindow = vi.fn(async () => {});
+      const quick = quickClient({
+        openLocalProject: vi.fn(async () => {
+          // The person sends the window elsewhere while its switch home is failing.
+          bindings.set(1, "studio-02");
+          throw new Error("The local project didn't load");
+        }),
+        lastLocalProjectId: vi.fn(() => "local-proj"),
+        replaceWithLocalWindow,
+      });
+      bindings.set(1, "studio-01");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await quick.forget({ hostId: "studio-01" });
+      warn.mockRestore();
+      expect(replaceWithLocalWindow).not.toHaveBeenCalled();
+    });
+
     it("holds the host from the first moment of its removal, so nothing starts on it meanwhile", async () => {
       const home = deferred();
       const quick = quickClient({
@@ -1148,6 +1167,33 @@ describe("RemoteHostsClient", () => {
         connection: { kind: "ssh", target: "newbox.example" },
       });
       expect(replaceWithLocalWindow).toHaveBeenCalledWith(1);
+    });
+
+    it("leaves a window whose local project is already on screen, however long it takes to finish", async () => {
+      const replaceWithLocalWindow = vi.fn(async () => {});
+      const retarget = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: () => null },
+        windows: {
+          ...windows,
+          openLocalProject: vi.fn(() => new Promise<void>(() => {})),
+          lastLocalProjectId: vi.fn(() => "local-proj"),
+          replaceWithLocalWindow,
+          showsHost: () => false,
+        },
+        installRouter,
+        emit: () => {},
+        forgetSwitchWaitMs: 5,
+      });
+      bindings.set(1, "studio-01");
+      await retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      expect(replaceWithLocalWindow).not.toHaveBeenCalled();
     });
 
     it("dials nothing for the host while it is being re-pointed", async () => {

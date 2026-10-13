@@ -86,6 +86,8 @@ export interface WindowControl {
    * project of this machine's to return to, since a view's host is fixed.
    */
   replaceWithLocalWindow?(windowId: number): Promise<void>;
+  /** Whether the view on screen in a window (or still leaving it) is one of this host's. */
+  showsHost?(windowId: number, hostId: HostId): boolean;
   /**
    * Tell a window's view, if it is up, that it has a host's project list to
    * offer ({@link RemoteHostsClient.takeProjectOffer}). A view still loading
@@ -343,8 +345,10 @@ export class RemoteHostsClient {
                 (error: unknown) => {
                   console.warn("[RemoteHosts] Couldn't bring a window back from a host:", error);
                   // The switch home itself failed, so the host's view may be back on
-                  // screen whatever the binding says: a local window replaces it.
-                  return replace();
+                  // screen whatever the binding says: a local window replaces it,
+                  // unless the person has since sent the window to another host.
+                  const bound = this.options.bindings.get(windowId);
+                  return isLocalHostId(bound) || bound === hostId ? replace() : undefined;
                 }
               );
         let landed = false;
@@ -358,7 +362,15 @@ export class RemoteHostsClient {
         });
         await Promise.race([moved, waited]);
         clearTimeout(timer);
-        if (!landed && replaceOnTimeout) await replace();
+        // Only while the old machine's view is still what it shows: a local
+        // project still finishing its activation is already this machine's.
+        if (
+          !landed &&
+          replaceOnTimeout &&
+          (this.options.windows.showsHost?.(windowId, hostId) ?? true)
+        ) {
+          await replace();
+        }
       })
     );
     for (const windowId of this.options.bindings.windowsOn(hostId)) {

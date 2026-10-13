@@ -154,6 +154,19 @@ describe("HostDetail name", () => {
     expect(document.body.textContent).not.toContain("in another window");
   });
 
+  it("still asks before overwriting another window's rename that arrived while its own save ran", () => {
+    client.update.mockImplementationOnce(() => new Promise(() => {}));
+    const { rerender } = render(<HostDetail entry={entry("studio-01")} onBack={() => {}} />);
+    const field = screen.getByDisplayValue("studio-01");
+    fireEvent.change(field, { target: { value: "Mine" } });
+    fireEvent.blur(field);
+    rerender(<HostDetail entry={entry("Theirs")} onBack={() => {}} />);
+    fireEvent.change(field, { target: { value: "Mine again" } });
+    fireEvent.blur(field);
+    expect(client.update).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain('Renamed to "Theirs" in another window');
+  });
+
   it("never writes an edit begun before another window's rename over it without asking", async () => {
     const { rerender } = render(<HostDetail entry={entry("studio-01")} onBack={() => {}} />);
     fireEvent.change(screen.getByDisplayValue("studio-01"), { target: { value: "Mine" } });
