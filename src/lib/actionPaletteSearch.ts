@@ -169,12 +169,24 @@ function scoreTitle(
   return score;
 }
 
+/**
+ * Whether every word of the query appears in the field as typed. The gate for
+ * prose: a sentence walked fuzzily spells almost anything ("theme" across "the
+ * merge"), but a multi-word query whose words the sentence really holds ("split
+ * panel" in "split the panel") is a match a reader can see.
+ */
+function containsEveryWord(lowerField: string, lowerQuery: string): boolean {
+  if (lowerField.includes(lowerQuery)) return true;
+  const words = lowerQuery.split(/\s+/).filter(Boolean);
+  return words.length > 1 && words.every((word) => lowerField.includes(word));
+}
+
 function scoreKeywords(lowerQuery: string, keywordsLower: readonly string[]): number {
   let max = 0;
   for (const kw of keywordsLower) {
     // Keywords are synonyms the row never renders, so a fuzzy hit on one is a
-    // match with no visible reason at all. Whole-query hits only.
-    if (kw.length === 0 || !kw.includes(lowerQuery)) continue;
+    // match with no visible reason at all. Whole words only.
+    if (kw.length === 0 || !containsEveryWord(kw, lowerQuery)) continue;
     const s = scoreSubsequence(lowerQuery, kw, kw);
     if (s > max) max = s;
   }
@@ -207,14 +219,14 @@ function scoreActionLower(
       ? 0
       : scoreSubsequence(lowerQuery, item.category, item.categoryLower);
 
-  // Prose only counts when it holds the query whole. Walked fuzzily, a sentence
-  // spells almost anything — "theme" across "the merge" — and ranked rows the
-  // palette can't show a reason for: `getActionMatchRanges` never marks a
-  // scattered walk through a description, so the ranker doesn't credit one.
+  // Prose only counts when it holds every word of the query. Walked fuzzily, a
+  // sentence spells almost anything — "theme" across "the merge" — and ranked
+  // rows the palette can't show a reason for: `getActionMatchRanges` marks only
+  // whole words in a description, so the ranker credits nothing less.
   const descriptionRaw =
     item.descriptionLower.length > 0 &&
     (queryMask & ~charMasks[maskBase + 2]!) === 0 &&
-    item.descriptionLower.includes(lowerQuery)
+    containsEveryWord(item.descriptionLower, lowerQuery)
       ? scoreSubsequence(lowerQuery, item.description, item.descriptionLower)
       : 0;
 
@@ -504,7 +516,19 @@ function fieldMatchRanges(
   const substringIdx = lowerField.indexOf(lowerQuery);
   if (substringIdx >= 0) return [[substringIdx, substringIdx + qLen - 1]];
 
-  if (!allowFuzzy) return null;
+  if (!allowFuzzy) {
+    // The ranker's prose gate (`containsEveryWord`): each word where it first
+    // appears, or nothing.
+    const words = lowerQuery.split(/\s+/).filter(Boolean);
+    if (words.length < 2) return null;
+    const ranges: MatchRange[] = [];
+    for (const word of words) {
+      const at = lowerField.indexOf(word);
+      if (at < 0) return null;
+      ranges.push([at, at + word.length - 1]);
+    }
+    return ranges.sort((a, b) => a[0] - b[0]);
+  }
 
   if (qLen >= 2) {
     const initials: MatchRange[] = [];
@@ -541,7 +565,7 @@ function fieldMatchRanges(
 
 /**
  * The evidence to show for a ranked row: the title when the query lands there,
- * otherwise a whole-query hit in the description. The description never gets a
+ * otherwise a hit on every word of the query in the description. The description never gets a
  * fuzzy walk — across a sentence it lands on scattered letters ("Stage every
  * change in the") that read as random bold, not as a reason. Category and keyword hits have no rendered text
  * to mark, so they return null and the row simply shows no emphasis.
