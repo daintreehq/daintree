@@ -15,6 +15,7 @@ import {
   GitCommitHorizontal,
   Check,
   ChevronRight,
+  Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -274,7 +275,7 @@ function LocalCommitsSkeleton({ count }: { count: number | null | undefined }) {
             <div className="mt-0.5 flex items-center gap-1.5">
               <SkeletonBone className="h-4 w-20 rounded-[var(--radius-sm)]" />
               <SkeletonBone className="h-4 w-12 rounded-[var(--radius-sm)]" />
-              <SkeletonBone className="ml-auto h-4 w-14 rounded-[var(--radius-sm)]" />
+              <SkeletonBone className="ml-auto h-4 w-16 rounded-[var(--radius-sm)]" />
             </div>
           </div>
         </div>
@@ -434,12 +435,27 @@ function LocalCommitRow({
                   className={cn(
                     // 24px tall to the pointer without growing the metadata line.
                     "relative after:absolute after:-inset-y-1 after:inset-x-0 after:content-['']",
-                    "ml-auto shrink-0 flex items-center gap-1 px-1 font-mono text-xs text-text-secondary hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)]",
+                    // -me-1 puts the hash's last glyph on the row's content edge,
+                    // the line the search field, body and footer all end on.
+                    "group/hash ml-auto -me-1 shrink-0 flex items-center gap-1 px-1 font-mono text-xs text-text-secondary hover:text-text-primary transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)]",
                     isCopied && "text-text-primary"
                   )}
                   aria-label={`Copy hash ${commit.shortHash}`}
                 >
-                  {isCopied ? <Check aria-hidden="true" className="size-3" /> : null}
+                  {/* The slot is always reserved so the hashes hold one column;
+                      the glyph shows on the cursor row — where the pointer is, or
+                      the row Enter acts on — and turns into the check once copied. */}
+                  {isCopied ? (
+                    <Check aria-hidden="true" className="size-3 shrink-0" />
+                  ) : (
+                    <Copy
+                      aria-hidden="true"
+                      className={cn(
+                        "size-3 shrink-0 transition-opacity duration-150 ease-out",
+                        isActive ? "opacity-100" : "opacity-0 group-hover/hash:opacity-100"
+                      )}
+                    />
+                  )}
                   <span>{commit.shortHash}</span>
                 </button>
               </TooltipTrigger>
@@ -486,7 +502,9 @@ interface PushLine {
 function describePush(status: PushStatus): PushLine | null {
   if (status.kind === "idle" || status.kind === "loading") return null;
   if (status.kind === "no-destination") {
-    return { detail: "No push destination for this branch", outgoing: false };
+    // Name the fix: without an upstream or a push remote, nothing can say
+    // which of these rows have left the machine.
+    return { detail: "No push destination · set an upstream to push", outgoing: false };
   }
   if (status.kind === "failed") {
     return { detail: "Couldn't read push status", outgoing: false };
@@ -1023,23 +1041,25 @@ export function LocalCommitsDropdown({
               ? "Still working…"
               : "Searching commits…"
             : "Loading commits…"
-          : copyFailed
-            ? "Couldn't copy hash"
-            : copiedHash
-              ? "Hash copied"
-              : !error && data.length === 0
-                ? trimmedSearch
-                  ? "No matching commits"
-                  : "No commits"
-                : loadingMore
-                  ? "Loading more commits…"
-                  : pushLine
-                    ? pushLineText(pushLine)
-                    : showPushSummary && showCheckingPush
-                      ? isSlowPush
-                        ? "Still checking push status…"
-                        : "Checking push status…"
-                      : ""}
+          : !error && data.length === 0
+            ? trimmedSearch
+              ? "No matching commits"
+              : "No commits"
+            : loadingMore
+              ? "Loading more commits…"
+              : pushLine
+                ? pushLineText(pushLine)
+                : showPushSummary && showCheckingPush
+                  ? isSlowPush
+                    ? "Still checking push status…"
+                    : "Checking push status…"
+                  : ""}
+      </span>
+      {/* Copy feedback has its own region: rows stay actionable while a search
+          or revalidation runs, and the read's status above must not hold the
+          confirmation back past its two seconds. */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {copyFailed ? "Couldn't copy hash" : copiedHash ? "Hash copied" : ""}
       </span>
 
       {/* The combobox points `aria-controls` here, so it exists in every state
