@@ -111,7 +111,7 @@ const TICK_COUNT: Record<Fixture, number> = { sidebar: 5, collapsed: 5, grid: 4,
 const TOOLTIP_ROWS = [
   { row: "attention", text: "Agent asking for attention" },
   { row: "cleanup", text: "Ready for cleanup" },
-  { row: "finished", text: "Finished, unseen: no agent working or asking for anything" },
+  { row: "finished", text: "Finished, unread: no agent working or asking for anything" },
 ] as const;
 
 let server: Awaited<ReturnType<typeof startPreviewServer>> | undefined;
