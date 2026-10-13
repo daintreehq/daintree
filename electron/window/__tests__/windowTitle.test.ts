@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   composeWindowTitle,
   rememberRemoteWorkspaceTitle,
@@ -123,6 +123,13 @@ describe("composeWindowTitle", () => {
 });
 
 describe("resolveWindowProjectName", () => {
+  afterEach(() => {
+    setRemoteHostNameResolver(() => null);
+    for (const hostId of ["studio-01", "studio-02", "studio-03", "studio-03-2"]) {
+      forgetRemoteWorkspaceTitles(hostId);
+    }
+  });
+
   it("names a host's project with its host, which this machine's store has no row for", () => {
     setRemoteHostNameResolver(() => null);
     rememberRemoteWorkspaceTitle("studio-01:proj-9", "daintree", "studio-01");

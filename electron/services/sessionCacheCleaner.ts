@@ -230,9 +230,17 @@ export async function clearHostPartitions(hostId: string): Promise<ClearSessionC
   }
 
   for (const entry of entries) {
-    if (!entry.isDirectory() || !isHostPartitionDirName(entry.name, hostId)) continue;
+    const isSymlink = entry.isSymbolicLink();
+    if (!entry.isDirectory() && !isSymlink) continue;
+    if (!isHostPartitionDirName(entry.name, hostId)) continue;
     const partitionDir = path.join(partitionsRoot, entry.name);
     const live = findLiveSession(partitionDir);
+    if (!live && isSymlink) {
+      // Never traverse an unopened symlinked partition; report it instead.
+      console.warn(`[SessionCacheCleaner] Skipped symlinked partition ${partitionDir}`);
+      result.failed++;
+      continue;
+    }
     if (live) {
       try {
         await live.clearData();

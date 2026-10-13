@@ -5,6 +5,7 @@ import {
   parseHostScopedKey,
   sameHostConnection,
   toHostScopedKey,
+  type HostConnection,
   type HostConnectionState,
   type HostDescriptor,
   type HostId,
@@ -293,7 +294,7 @@ export class RemoteHostsClient {
   private refuseWhileInstalling(descriptor: HostDescriptor, then: string): void {
     if (!this.options.isInstalling?.(descriptor.connection)) return;
     const message = `Daintree is being installed on ${descriptor.name}. ${then} once that finishes.`;
-    throw new AppError({ code: "CONFLICT", message, userMessage: message });
+    throw new AppError({ code: "VALIDATION", message, userMessage: message });
   }
 
   connect(payload: { hostId: string }): HostConnectionState {

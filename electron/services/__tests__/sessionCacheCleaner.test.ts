@@ -426,6 +426,37 @@ describe("clearHostPartitions", () => {
     expect(fs.readdirSync(partitionsRoot).some((n) => n.includes("daintree-clearing"))).toBe(false);
   });
 
+  it("matches a long host id by its hashed part, and no other host's", () => {
+    // Each "-" escapes to five characters, so both parts are past 64 and hashed.
+    const longId = `h${"-".repeat(30)}`;
+    const otherLong = `g${"-".repeat(30)}`;
+    for (const name of [
+      browserOf(longId, "proj-1"),
+      devPreviewOf(longId, "proj-1"),
+      dirName(remotePortalPartition(longId)),
+    ]) {
+      expect(isHostPartitionDirName(name, longId)).toBe(true);
+      expect(isHostPartitionDirName(name, otherLong)).toBe(false);
+    }
+  });
+
+  it("clears a symlinked partition only through its live session, never by its target", async () => {
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-partition-target-"));
+    seedFile(path.join(target, "Cookies"));
+    fs.mkdirSync(partitionsRoot, { recursive: true });
+    const link = partitionDir(browserOf("studio", "proj-1"));
+    fs.symlinkSync(target, link);
+
+    expect(await clearHostPartitions("studio")).toEqual({ cleared: 0, failed: 1 });
+    expect(fs.existsSync(path.join(target, "Cookies"))).toBe(true);
+
+    const live = { storagePath: link, clearData: vi.fn(() => Promise.resolve()) };
+    trackSession(live as unknown as Electron.Session);
+    expect(await clearHostPartitions("studio")).toEqual({ cleared: 1, failed: 0 });
+    expect(live.clearData).toHaveBeenCalledTimes(1);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
   it("has nothing to do when no partition was ever made", async () => {
     await expect(clearHostPartitions("studio")).resolves.toEqual({ cleared: 0, failed: 0 });
   });

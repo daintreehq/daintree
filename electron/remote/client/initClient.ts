@@ -480,9 +480,10 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
       for (const ctx of getWindowRegistry()?.all() ?? []) {
         const pvm = ctx.services.projectViewManager;
         if (!pvm) continue;
-        const active = pvm.getActiveProjectId();
+        // What the window shows, or still shows while a switch home loads, stays.
+        const onScreen = new Set([pvm.getActiveProjectId(), pvm.getOutgoingBridgeProjectId()]);
         for (const entry of pvm.getAllViews()) {
-          if (entry.projectId === active) continue;
+          if (onScreen.has(entry.projectId)) continue;
           if (parseHostScopedKey(entry.projectId).hostId !== hostId) continue;
           // One still loading has a restore that would finish it: stop that first.
           pvm.abandonBackgroundRestore(entry.projectId);

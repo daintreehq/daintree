@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   ProjectHistoryService,
   discardFromAllProjectHistories,
@@ -300,6 +300,11 @@ describe("ProjectHistoryService", () => {
 });
 
 describe("discarding a removed host's workspaces", () => {
+  afterEach(() => {
+    disposeProjectHistory(901);
+    disposeProjectHistory(902);
+  });
+
   it("drops them from every window's history, wherever they sit", () => {
     resetProjectHistory(901);
     resetProjectHistory(902);
@@ -315,7 +320,5 @@ describe("discarding a removed host's workspaces", () => {
 
     expect(one.snapshot().entries).toEqual([PROJECT_B, PROJECT_A]);
     expect(two.snapshot().entries).toEqual(["studio-2:p1"]);
-    disposeProjectHistory(901);
-    disposeProjectHistory(902);
   });
 });

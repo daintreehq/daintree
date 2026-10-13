@@ -102,6 +102,8 @@ export default function HostsSettingsTab() {
   useEffect(() => {
     const open = (hostId: HostId) => {
       setDetailHostId(hostId);
+      // The latest request decides what opens: an earlier update's would win otherwise.
+      setUpdateRequest(null);
       setPluginsRequest((prev) => ({ hostId, seq: (prev?.seq ?? 0) + 1 }));
     };
     const pending = takePendingHostPlugins();

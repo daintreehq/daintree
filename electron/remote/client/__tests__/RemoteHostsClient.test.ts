@@ -884,10 +884,15 @@ describe("RemoteHostsClient", () => {
 
     it("refuses to remove the host, and changes nothing", async () => {
       const busy = installingClient(() => true);
+      bindings.set(1, "studio-01");
+      vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-proj");
       await expect(busy.forget({ hostId: "studio-01" })).rejects.toMatchObject({
-        code: "CONFLICT",
+        code: "VALIDATION",
       });
       expect(registry.get("studio-01")).not.toBeNull();
+      expect(registry.retiredIds().size).toBe(0);
+      expect(bindings.get(1)).toBe("studio-01");
+      expect(windows.openLocalProject).not.toHaveBeenCalled();
       expect(manager.disconnect).not.toHaveBeenCalled();
     });
 
@@ -895,7 +900,7 @@ describe("RemoteHostsClient", () => {
       const busy = installingClient(() => true);
       await expect(
         busy.update({ hostId: "studio-01", connection: { kind: "ssh", target: "other.example" } })
-      ).rejects.toMatchObject({ code: "CONFLICT" });
+      ).rejects.toMatchObject({ code: "VALIDATION" });
       expect(registry.get("studio-01")?.connection).toEqual({
         kind: "ssh",
         target: "studio.example",

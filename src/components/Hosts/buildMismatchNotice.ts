@@ -54,6 +54,19 @@ export function noticeBuildMismatch(
   });
 }
 
+/** A host was removed from this device: forget which of its builds were noticed. */
+export function forgetBuildMismatchNotices(hostId: HostId): void {
+  const prefix = `${hostId}\u0000`;
+  for (const key of [...noticed]) if (key.startsWith(prefix)) noticed.delete(key);
+  try {
+    for (const key of Object.keys(window.localStorage)) {
+      if (key.startsWith(NOTICED_KEY_PREFIX + prefix)) window.localStorage.removeItem(key);
+    }
+  } catch {
+    // No storage: nothing kept there.
+  }
+}
+
 export function _resetBuildMismatchNoticesForTesting(): void {
   noticed.clear();
   try {
