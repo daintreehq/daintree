@@ -157,7 +157,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       // window isn't showing. A window without a view manager observes nothing.
       return ctx.services.projectViewManager?.getActiveProjectId() ?? null;
     },
-    getStatusMap: () => projectStatsService.getLastBroadcast(),
+    getAcknowledgeableCompletionAt: (id) => projectStatsService.getAcknowledgeableCompletionAt(id),
     // The observed id is whatever the focused view has active, which is the
     // scratch UUID while a scratch is open (#11518). Both kinds now carry
     // status entries, so the stamp has to land in the store that owns the row —

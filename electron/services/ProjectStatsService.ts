@@ -26,6 +26,7 @@ export class ProjectStatsService {
   private eventUnsubscribes: Array<() => void> = [];
   private started = false;
   private lastBroadcast: ProjectStatusMap = {};
+  private acknowledgeableCompletionAt = new Map<string, number>();
   private pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   private generation = 0;
 
@@ -101,6 +102,16 @@ export class ProjectStatsService {
    */
   getLastBroadcast(): ProjectStatusMap {
     return this.lastBroadcast;
+  }
+
+  /**
+   * The latest completion the project acknowledgement watermark can clear for
+   * this workspace, as of the last compute, or undefined when there is none.
+   * Hand-backs carrying a run record are left out: they are seen per run, and
+   * the watermark has no say over them (#13238).
+   */
+  getAcknowledgeableCompletionAt(projectId: string): number | undefined {
+    return this.acknowledgeableCompletionAt.get(projectId);
   }
 
   /**
@@ -283,6 +294,7 @@ export class ProjectStatsService {
         // same shape as the prior non-empty broadcast still fires
         // (shallowEqual would otherwise suppress it).
         this.lastBroadcast = {};
+        this.acknowledgeableCompletionAt = new Map();
         typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, {});
         return;
       }
@@ -328,9 +340,13 @@ export class ProjectStatsService {
       );
 
       const statusMap: ProjectStatusMap = {};
+      const acknowledgeable = new Map<string, number>();
       for (const [id, terminalCount] of terminalCounts) {
         const counts = agentCounts.get(id);
         if (!counts) continue;
+        if (counts.latestWatermarkUnacknowledgedAt !== null) {
+          acknowledgeable.set(id, counts.latestWatermarkUnacknowledgedAt);
+        }
         statusMap[id] = {
           // Net out the assistant help PTY the host counted but the switcher
           // must not show; clamp in case stats momentarily lag (#10989).
@@ -372,6 +388,8 @@ export class ProjectStatsService {
         };
       }
 
+      // Not on the wire, so it is kept current whether or not the payload moved.
+      this.acknowledgeableCompletionAt = acknowledgeable;
       if (!this.shallowEqual(statusMap, this.lastBroadcast)) {
         this.lastBroadcast = statusMap;
         typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, statusMap);

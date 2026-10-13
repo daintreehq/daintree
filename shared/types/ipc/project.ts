@@ -207,6 +207,11 @@ export interface ProjectStats {
 /** Per-project entry in bulk stats response, includes agent counts */
 export interface BulkProjectStatsEntry extends ProjectStats, AssistantPresenceEntry {
   activeAgentCount: number;
+  /**
+   * Agents asking something of the user. A turn main watched an agent hand back
+   * counts as finished instead, even resting at its prompt; parked and snoozed
+   * runs are withheld.
+   */
   waitingAgentCount: number;
   /**
    * Waiting agents blocked on an error — a subset of
@@ -217,11 +222,15 @@ export interface BulkProjectStatsEntry extends ProjectStats, AssistantPresenceEn
   blockedAgentCount: number;
   /** Earliest transition into `waiting`, absent when nothing is waiting. */
   oldestWaitingSince?: number;
-  /** Agents settled in `completed` — finished work awaiting review. */
+  /**
+   * Agents that handed work back — settled in `completed`, or at a plain prompt
+   * after a turn main watched. Presence, seen or not.
+   */
   completedAgentCount: number;
   /**
-   * Completed agents the user hasn't seen yet — their completion postdates the
-   * project's acknowledgement watermark. Subset of
+   * Finished agents the user hasn't seen yet: by the run's own hand-back record
+   * when it has one, else by the project's acknowledgement watermark. Parked and
+   * snoozed runs are withheld. Subset of
    * {@link BulkProjectStatsEntry.completedAgentCount}.
    */
   unacknowledgedCompletedAgentCount: number;
@@ -266,7 +275,7 @@ export interface ProjectStatusEntry extends AssistantPresenceEntry {
    * Waiting agents whose `waitingReason` is `"error"` — settled after a blocking
    * failure, where input may not unblock them. A subset of
    * {@link ProjectStatusEntry.waitingAgentCount}, never additional to it: the
-   * switcher reports "waiting" for the remainder and "blocked" for these,
+   * switcher reports "need input" for the remainder and "blocked" for these,
    * so double-counting would overstate both.
    */
   blockedAgentCount: number;
@@ -277,12 +286,16 @@ export interface ProjectStatusEntry extends AssistantPresenceEntry {
    * a `lastStateChange` (a pre-detection boot window).
    */
   oldestWaitingSince?: number;
-  /** Agents settled in `completed` — finished work awaiting review. */
+  /**
+   * Agents that handed work back — settled in `completed`, or at a plain prompt
+   * after a turn main watched. Presence, seen or not.
+   */
   completedAgentCount: number;
   /**
-   * Completed agents the user hasn't seen yet: their transition into
-   * `completed` postdates the project's acknowledgement watermark
-   * (`Project.lastCompletionSeenAt`). Holds the project in the switcher's
+   * Finished agents the user hasn't seen yet: by the run's own hand-back record
+   * when it has one (#13238), else because the completion postdates the
+   * project's acknowledgement watermark (`Project.lastCompletionSeenAt`).
+   * Parked and snoozed runs are withheld. Holds the project in the switcher's
    * "Needs attention" band with no time-based expiry — work finished while the
    * user was away stays surfaced until actually seen. A subset of
    * {@link ProjectStatusEntry.completedAgentCount}.

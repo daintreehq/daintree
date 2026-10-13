@@ -37,6 +37,15 @@ export interface ProjectAgentCounts {
   oldestUnacknowledgedCompletionAt: number | null;
   /** Latest unacknowledged completion, or null when everything was seen. */
   latestUnacknowledgedCompletionAt: number | null;
+  /**
+   * Latest unacknowledged completion the project watermark can clear: one with
+   * no hand-back record. Null when there is none. Main-only — the completion
+   * acknowledger stamps this, never {@link latestUnacknowledgedCompletionAt},
+   * because a recorded hand-back answers only to its own seen state and a
+   * watermark stamped from it would never clear the count, or could move
+   * backwards past completions it had already acknowledged.
+   */
+  latestWatermarkUnacknowledgedAt: number | null;
   /** Latest completion regardless of acknowledgement, for "finished 2h ago". */
   latestCompletionAt: number | null;
   /** Latest transition into `working`, or null. Orders the Running band. */
@@ -213,6 +222,7 @@ function empty(): ProjectAgentCounts {
     unacknowledgedCompleted: 0,
     oldestUnacknowledgedCompletionAt: null,
     latestUnacknowledgedCompletionAt: null,
+    latestWatermarkUnacknowledgedAt: null,
     latestCompletionAt: null,
     latestWorkingSince: null,
     snoozed: 0,
@@ -566,7 +576,13 @@ export function computeProjectAgentCounts(
         // A shelved completion is exempt: the hand-back is real, but the user
         // has already said they don't want to be reminded of it yet.
         const seenUpTo = lastCompletionSeenAt?.get(terminal.projectId) ?? 0;
-        if (!isShelved && at > seenUpTo) noteUnacknowledged(entry, at);
+        if (!isShelved && at > seenUpTo) {
+          noteUnacknowledged(entry, at);
+          entry.latestWatermarkUnacknowledgedAt = Math.max(
+            entry.latestWatermarkUnacknowledgedAt ?? 0,
+            at
+          );
+        }
       }
     }
   }

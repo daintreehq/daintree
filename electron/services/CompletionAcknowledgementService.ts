@@ -1,4 +1,3 @@
-import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { logWarn } from "../utils/logger.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
@@ -21,8 +20,14 @@ export interface CompletionAcknowledgementDeps {
    * be acknowledged while the user is elsewhere.
    */
   getObservedProjectId: () => string | null;
-  /** Latest pushed status map (ProjectStatsService.getLastBroadcast). */
-  getStatusMap: () => ProjectStatusMap;
+  /**
+   * The latest unacknowledged completion the watermark can clear for a
+   * project, or undefined when there is none
+   * (`ProjectStatsService.getAcknowledgeableCompletionAt`). Hand-backs with a
+   * run record are excluded: they are seen per run, so stamping from them
+   * would never clear them and could drag the watermark backwards (#13238).
+   */
+  getAcknowledgeableCompletionAt: (projectId: string) => number | undefined;
   /** Persist the acknowledgement watermark for a project. */
   markSeen: (projectId: string, seenUpTo: number) => void;
   /** Fired after a stamp so the stats push can clear the attention state. */
@@ -133,9 +138,7 @@ export class CompletionAcknowledgementService {
       return;
     }
 
-    const entry = this.deps.getStatusMap()[observed];
-    if (!entry || entry.unacknowledgedCompletedAgentCount <= 0) return;
-    const latest = entry.latestUnacknowledgedCompletionAt;
+    const latest = this.deps.getAcknowledgeableCompletionAt(observed);
     if (latest === undefined) return;
 
     // The dwell clock starts at whichever is later: when the project came

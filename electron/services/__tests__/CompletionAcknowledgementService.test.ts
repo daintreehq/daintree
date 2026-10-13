@@ -45,7 +45,14 @@ describe("CompletionAcknowledgementService", () => {
     refreshes = 0;
     service = new CompletionAcknowledgementService({
       getObservedProjectId: () => observed,
-      getStatusMap: () => statusMap,
+      // The status map stands in for every completion being record-less, which
+      // is the only kind the watermark answers for.
+      getAcknowledgeableCompletionAt: (id) => {
+        const entry = statusMap[id];
+        return entry && entry.unacknowledgedCompletedAgentCount > 0
+          ? entry.latestUnacknowledgedCompletionAt
+          : undefined;
+      },
       markSeen: (projectId, seenUpTo) => stamps.push({ projectId, seenUpTo }),
       onAcknowledged: () => refreshes++,
       now: () => now,

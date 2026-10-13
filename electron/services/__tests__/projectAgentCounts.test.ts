@@ -871,6 +871,7 @@ describe("computeProjectAgentCounts — assistant presence (#11806)", () => {
 });
 
 describe("computeProjectAgentCounts — hand-backs and parks (#13238)", () => {
+  const p1Terminals = () => [agent({ id: "a", agentState: "completed", lastStateChange: 4_000 })];
   type HandBack = { stoppedAt: number; seenAt?: number; markedUnreadAt?: number };
   const count = (
     terminals: CountableTerminal[],
@@ -995,6 +996,30 @@ describe("computeProjectAgentCounts — hand-backs and parks (#13238)", () => {
       active: 1,
       snoozed: 0,
     });
+  });
+
+  it("offers the watermark only the completions it can clear", () => {
+    // A recorded hand-back answers to its own seen state. Stamping the
+    // watermark from it would never clear it, and an old one marked unread
+    // would drag the watermark back under completions already acknowledged.
+    const p1 = count(
+      [
+        agent({ id: "a", agentState: "completed", lastStateChange: 4_000 }),
+        agent({ id: "b", agentState: "completed", lastStateChange: 9_000 }),
+        agent({ id: "c", agentState: "waiting" }),
+      ],
+      { b: { stoppedAt: 9_000 }, c: { stoppedAt: 1_000, seenAt: 2_000, markedUnreadAt: 3_000 } },
+      { seenUpTo: 3_500 }
+    );
+
+    expect(p1).toMatchObject({
+      unacknowledgedCompleted: 3,
+      latestUnacknowledgedCompletionAt: 9_000,
+      latestWatermarkUnacknowledgedAt: 4_000,
+    });
+    expect(
+      count(p1Terminals(), {}, { seenUpTo: 5_000 }).latestWatermarkUnacknowledgedAt
+    ).toBeNull();
   });
 
   it("withholds a snoozed unseen hand-back from the unseen tally", () => {

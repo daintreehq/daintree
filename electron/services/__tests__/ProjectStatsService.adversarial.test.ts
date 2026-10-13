@@ -1355,6 +1355,8 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     const latest = () => (broadcastMock.mock.calls.at(-1) as [string, { p1: Entry }])[1].p1;
     expect(handBack.getRecord).toHaveBeenCalledWith("t1", 10);
     expect(latest()).toMatchObject({ waitingAgentCount: 1, unacknowledgedCompletedAgentCount: 1 });
+    // Seen per run, so the project acknowledger is offered nothing to stamp.
+    expect(svc.getAcknowledgeableCompletionAt("p1")).toBeUndefined();
 
     record.seenAt = 200;
     eventEmitter.emit("terminal:hand-back-changed", { id: "t1", unseen: false, timestamp: 200 });
