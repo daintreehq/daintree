@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { agentStatePhrase } from "@/lib/agentStateVocabulary";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
@@ -36,7 +37,7 @@ function makeSignature(type: ClusterType, memberIds: string[], latestStateChange
 function makeHeadline(type: ClusterType, count: number): string {
   switch (type) {
     case "waiting":
-      return `${pluralize(count, "agent needs", "agents need")} input`;
+      return agentStatePhrase(count, "waiting");
     case "error":
       return `${pluralize(count, "agent")} exited with errors`;
     case "completion":

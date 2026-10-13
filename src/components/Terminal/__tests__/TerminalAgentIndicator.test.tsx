@@ -66,7 +66,7 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
     waiting: "waiting",
     directing: "directing",
     idle: "idle",
-    completed: "done",
+    completed: "finished",
     exited: "exited",
     unread: "unread",
   };
@@ -345,21 +345,22 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
 
     render(<TerminalAgentIndicator id="t1" agentState="completed" />);
 
-    expect(screen.getByRole("status", { name: "Agent state: done" })).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Agent state: finished" })).toBeTruthy();
     const tooltip = screen.getByTestId("tooltip-content");
     expect(tooltip.textContent).toContain("Cost: $0.42");
     // The readout itself is metadata and lives in the header row, not here.
     expect(screen.queryByText(/^\$0\.42/)).toBeNull();
   });
 
-  it("draws a seen hand-back as the neutral settled chip, cost or not", () => {
+  it("draws a seen hand-back as the solid done glyph, with no tinted ring", () => {
     mockTerminal = { id: "t1", agentState: "waiting" };
     setHandBack({ stoppedAt: 1, seenAt: 2 });
 
     render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
 
-    const chip = screen.getByRole("status", { name: "Agent state: done" });
-    expect(chip.className).toContain("bg-overlay-soft");
+    const chip = screen.getByRole("status", { name: "Agent state: finished" });
+    expect(chip.className).toContain("border-transparent");
+    expect(chip.className).not.toMatch(/\bbg-/);
     expect(chip.className).toContain("text-completed");
     expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: waiting");
   });
@@ -371,10 +372,11 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
 
     const chip = screen.getByRole("status", { name: "Agent state: unread" });
-    expect(chip.className).toContain("bg-overlay-soft");
+    expect(chip.className).toContain("border-transparent");
+    expect(chip.className).not.toMatch(/\bbg-/);
     expect(chip.className).not.toContain("state-waiting");
     // The tooltip names what was observed, not the coerced display state.
-    expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: done");
+    expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: finished");
   });
 
   it("keeps an approval wait amber whatever the hand-back says", () => {

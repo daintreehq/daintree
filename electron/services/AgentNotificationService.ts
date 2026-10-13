@@ -679,7 +679,7 @@ class AgentNotificationService {
       if (settings.enabled === false || !settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
       this.completionBurstBuffer.push({
-        title: "Agent completed",
+        title: "Agent finished",
         body: `${label} finished its task`,
         worktreeId,
         terminalId,
@@ -796,7 +796,7 @@ class AgentNotificationService {
       const first = items[0];
       this.enqueue(
         {
-          title: "Agents completed",
+          title: "Agents finished",
           body: `${items.length} agents finished their tasks`,
           worktreeId: first.worktreeId,
           terminalId: first.terminalId,

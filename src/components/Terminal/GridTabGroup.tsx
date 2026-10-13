@@ -15,6 +15,7 @@ import { addTabForPanel } from "./useContentGridContext";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
+import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -166,9 +167,10 @@ export const GridTabGroup = React.memo(function GridTabGroup({
   // Filter to PTY panels because getGroupAmbientAgentState expects agent-state
   // fields only present on PtyPanelData; browser/dev-preview panels contribute
   // nothing to ambient state anyway.
+  const handBackRunIds = useHandBackRunIds();
   const groupAmbientState = useMemo(
-    () => getGroupAmbientAgentState(panels.filter(isPtyPanel)),
-    [panels]
+    () => getGroupAmbientAgentState(panels.filter(isPtyPanel), handBackRunIds),
+    [panels, handBackRunIds]
   );
 
   // Restore focus to the destination tab when switching tabs within a focused

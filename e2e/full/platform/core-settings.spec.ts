@@ -1222,7 +1222,7 @@ test.describe("Core: Settings", () => {
 
         const previewButton = window
           .getByRole("tabpanel", { name: "Notifications" })
-          .getByRole("button", { name: "Preview completed sound" });
+          .getByRole("button", { name: "Preview finished sound" });
         await expect(previewButton).toBeVisible({ timeout: T_SHORT });
         await previewButton.click();
 

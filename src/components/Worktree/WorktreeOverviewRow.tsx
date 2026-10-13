@@ -566,7 +566,7 @@ export function WorktreeOverviewRow({
                       type="button"
                       tabIndex={-1}
                       aria-expanded={sessionsExpanded}
-                      aria-label={`${marks.length} active sessions${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
+                      aria-label={`${pluralize(marks.length, "active session")}${sessionSummary.breakdown ? `: ${sessionSummary.breakdown}` : ""}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         setSessionsExpanded((v) => !v);

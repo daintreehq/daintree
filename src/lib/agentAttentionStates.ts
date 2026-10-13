@@ -1,3 +1,4 @@
+import { isHandBackWait } from "./handBackPresentation";
 import {
   getAttentionAgentState,
   type AttentionAgentState,
@@ -27,10 +28,13 @@ const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentSt
  * the shared launcher both draw the same dot, and a second copy is how the two
  * start disagreeing about what "running" means.
  */
+const NO_HAND_BACKS: ReadonlySet<string> = new Set();
+
 export function deriveAgentAttentionStates(
   panelsById: Record<string, PanelInstance>,
   panelIds: readonly string[],
-  activeWorktreeId: string | null
+  activeWorktreeId: string | null,
+  handBackRunIds: ReadonlySet<string> = NO_HAND_BACKS
 ): Map<string, AttentionAgentState | null> {
   const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
   for (const pid of panelIds) {
@@ -48,7 +52,8 @@ export function deriveAgentAttentionStates(
     if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
     if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
     const arr = statesPerAgent.get(agentId) ?? [];
-    arr.push(p.agentState);
+    // A hand-back is not asking for anything, so it earns no amber dot.
+    arr.push(isHandBackWait(handBackRunIds, p) ? "completed" : p.agentState);
     statesPerAgent.set(agentId, arr);
   }
   const result = new Map<string, AttentionAgentState | null>();

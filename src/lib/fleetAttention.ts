@@ -161,7 +161,7 @@ export function runCanopyPlacement(run: FleetRunRow): RunCanopyRefinement | unde
  *
  * Derived from the band rather than re-read from `agentState` so the visible
  * label, the tone and the ordering can never disagree — a seen hand-back
- * must not still say "ready for review" while sorting as done.
+ * must not still say "unread" while sorting as done.
  * `running` and `idle` split on state because they each cover two situations
  * the user can tell apart and would want to.
  *
@@ -179,7 +179,7 @@ export function bandLabel(band: FleetBand, run: FleetRunRow): string {
     case "needs-you":
       return "Waiting";
     case "review":
-      return "Ready for review";
+      return "Unread";
     case "running":
       return run.agentState === "directing" ? "Directing" : "Working";
     case "quiet":

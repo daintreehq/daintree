@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Lock, CheckCircle2, Moon } from "lucide-react";
-import { OctagonAlert, TriangleAlert } from "@/components/icons";
+import { Lock, Moon } from "lucide-react";
+import { DoneCircle, OctagonAlert, TriangleAlert } from "@/components/icons";
 import type { AgentState, PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -291,7 +291,7 @@ export function TerminalHeaderContent({
               role="status"
               aria-label="Agent finished with no file changes"
             >
-              <CheckCircle2 className="w-3 h-3" aria-hidden="true" />
+              <DoneCircle className="w-3 h-3" aria-hidden="true" />
               Finished, no changes
             </span>
           </TooltipTrigger>

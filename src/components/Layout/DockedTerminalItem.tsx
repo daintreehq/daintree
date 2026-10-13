@@ -16,10 +16,12 @@ import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
   getEffectiveStateLabel,
+  SESSION_COLORS,
+  SESSION_ICONS,
+  SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
+import { useSessionPresentation } from "@/hooks/useRunHandBackState";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { DockActivityCue } from "./DockActivityCue";
@@ -311,11 +313,18 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   ]);
 
   const agentState = getDockDisplayAgentState(terminal);
+  // Indicator stays visible for the lifetime of the agent chrome — idle/missing
+  // state coerces to waiting so it never disappears mid-flight.
+  const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
+  // A hand-back draws unread or done, as on the pane's own chip, and is not a
+  // wait: it neither takes the amber ring nor counts as blocked.
+  const shownAgentState = useSessionPresentation(terminal.id, displayAgentState);
+  const isHandBack = shownAgentState !== displayAgentState;
   const isWorking = agentState === "working";
-  const isWaiting = agentState === "waiting";
+  const isWaiting = agentState === "waiting" && !isHandBack;
   const isActive = isWorking || isWaiting;
   const commandText = terminal.activityHeadline || terminal.lastCommand;
-  const blockedState = useDockBlockedState(agentState);
+  const blockedState = useDockBlockedState(isHandBack ? undefined : agentState);
   // Plain (non-agent) terminals surface their own running/finished affordance —
   // the agent path above returns undefined for them by design.
   const plainActivityState = getDockDisplayActivityState(terminal);
@@ -324,13 +333,13 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   // Use shortened title without command summary for dock items
   const displayTitle = terminal.title;
-  // Indicator stays visible for the lifetime of the agent chrome — idle/missing
-  // state coerces to waiting so it never disappears mid-flight.
-  const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
   // The glyph is smoothed (idle/missing shows as waiting); the words are not.
   // Name and tooltip say what was observed, and nothing when nothing was.
   const observedStateLabel = agentState ? getEffectiveStateLabel(agentState) : undefined;
-  const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
+  // A hand-back is named for what it is drawn as; the observation rides along.
+  const stateLabel =
+    isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
+  const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
   const isDeprioritized = !isOpen && isDockAgentStateDeprioritized(agentState);
 
   // Re-fit the terminal once a resize gesture settles on a new popover height.
@@ -382,7 +391,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${terminal.title}${displayAgentState ? (observedStateLabel ? ` — agent ${observedStateLabel}` : "") : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${terminal.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -410,19 +419,19 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 )}
 
                 {/* State icon (compact spacing from title) */}
-                {displayAgentState && StateIcon && (
+                {shownAgentState && StateIcon && (
                   <Tooltip open={stateTip.open} onOpenChange={stateTip.onOpenChange}>
                     <TooltipTrigger asChild onPointerEnter={stateTip.onPointerEnter}>
                       <div
                         className={cn(
                           "ml-1.5 flex items-center shrink-0 transition-[color] duration-150 ease-out",
-                          getEffectiveStateColor(displayAgentState)
+                          SESSION_COLORS[shownAgentState]
                         )}
                       >
                         <StateIcon
                           className={cn(
                             DOCK_STATE_GLYPH_CLASS,
-                            displayAgentState === "working" && "animate-spin-slow",
+                            shownAgentState === "working" && "animate-spin-slow",
                             "motion-reduce:animate-none"
                           )}
                           aria-hidden="true"
@@ -430,8 +439,10 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                       </div>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                      {observedStateLabel
-                        ? `Agent ${observedStateLabel}`
+                      {stateLabel
+                        ? isHandBack
+                          ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
+                          : `Agent ${stateLabel}`
                         : "No agent state observed"}
                     </TooltipContent>
                   </Tooltip>

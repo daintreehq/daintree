@@ -124,7 +124,7 @@ function buildRunCountSegments(run: FleetRun): RunCountSegment[] {
   }
   if (counts.working > 0) segments.push({ label: `${counts.working} working`, tone: "neutral" });
   if (counts.waiting > 0) segments.push({ label: `${counts.waiting} waiting`, tone: "neutral" });
-  if (counts.done > 0) segments.push({ label: `${counts.done} done`, tone: "neutral" });
+  if (counts.done > 0) segments.push({ label: `${counts.done} finished`, tone: "neutral" });
   if (counts.sendFailed > 0) segments.push({ label: `${counts.sendFailed} failed`, tone: "error" });
   return segments;
 }

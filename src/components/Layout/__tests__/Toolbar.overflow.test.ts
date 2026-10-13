@@ -53,9 +53,10 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       expect(source).toContain("agentAttentionStates");
       // Shared with the launcher so the overflow dot matches the visible
       // agent button; computed inside useShallow so agent ticks that don't
-      // change a pip state don't re-render the toolbar.
+      // change a pip state don't re-render the toolbar. Hand-backs are passed
+      // in so an agent handing its turn back never earns the waiting dot.
       expect(source).toMatch(
-        /useShallow\(\(s\) => deriveAgentAttentionStates\(s\.panelsById, s\.panelIds, activeWorktreeId\)\)/
+        /useShallow\(\(s\) =>\s*deriveAgentAttentionStates\(\s*s\.panelsById,\s*s\.panelIds,\s*activeWorktreeId,\s*handBackRunIds\s*\)/
       );
     });
 

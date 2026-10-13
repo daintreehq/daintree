@@ -144,10 +144,10 @@ const THEME_FIELD_LABELS: Record<string, string> = {
 
 const NOTIFICATION_FIELD_LABELS: Record<string, string> = {
   enabled: "Notifications",
-  completedEnabled: "Completed alerts",
+  completedEnabled: "Finished alerts",
   waitingEnabled: "Waiting alerts",
   soundEnabled: "Sounds",
-  completedSoundFile: "Completed sound",
+  completedSoundFile: "Finished sound",
   waitingSoundFile: "Waiting sound",
   escalationSoundFile: "Escalation sound",
   waitingEscalationEnabled: "Waiting escalation",

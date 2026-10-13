@@ -59,7 +59,7 @@ export const SESSION_OPTIONS: readonly FilterOption<SessionFilter>[] = [
   { value: "hasTerminals", label: "Has terminals" },
   { value: "working", label: "Working" },
   { value: "waiting", label: "Waiting" },
-  { value: "completed", label: "Completed" },
+  { value: "completed", label: "Finished" },
   { value: "exited", label: "Exited" },
 ];
 

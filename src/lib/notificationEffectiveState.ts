@@ -61,7 +61,7 @@ export interface KindEffectiveState {
 
 /** Concise display names for the summary — `EVENT_KIND_LABEL` is too verbose for a list. */
 export const KIND_SHORT_LABEL: Record<NotificationEventKind, string> = {
-  completed: "Completed",
+  completed: "Finished",
   waiting: "Waiting",
   workingPulse: "Working pulse",
   uiFeedback: "UI sounds",

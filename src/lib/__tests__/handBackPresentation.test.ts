@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
-import { handBackStateForRun, resolveSessionPresentation } from "../handBackPresentation";
+import {
+  handBackRunKey,
+  handBackStateForRun,
+  isAskingWait,
+  isHandBackWait,
+  resolveSessionPresentation,
+} from "../handBackPresentation";
 
 const NOW = 1_700_000_000_000;
 
@@ -82,5 +88,56 @@ describe("resolveSessionPresentation", () => {
 
   it("never brings back a glyph the display state suppressed", () => {
     expect(resolveSessionPresentation(undefined, "completed", undefined, "seen")).toBeUndefined();
+  });
+});
+
+describe("handBackRunKey", () => {
+  it("lists every hand-back run, seen or not, in a stable order", () => {
+    const snap = snapshot([
+      run({ runId: "b", agentState: "waiting", handBack: seen }),
+      run({ runId: "a", agentState: "completed", handBack: unseen }),
+      run({ runId: "approval", agentState: "waiting", waitingReason: "approval", handBack: seen }),
+      run({ runId: "none", agentState: "waiting" }),
+    ]);
+    expect(handBackRunKey(snap).split("\n")).toEqual(["a", "b"]);
+  });
+
+  it("is empty before a snapshot arrives, and equal across snapshots with the same set", () => {
+    expect(handBackRunKey(null)).toBe("");
+    const first = snapshot([run({ agentState: "waiting", handBack: unseen })]);
+    const second = snapshot([run({ agentState: "waiting", handBack: seen })]);
+    expect(handBackRunKey(first)).toBe(handBackRunKey(second));
+  });
+});
+
+describe("isHandBackWait / isAskingWait", () => {
+  const ids = new Set(["t1"]);
+
+  it("treats a prompt wait the fleet holds a hand-back for as no wait", () => {
+    for (const waitingReason of [undefined, "prompt"] as const) {
+      const panel = { id: "t1", agentState: "waiting" as const, waitingReason };
+      expect(isHandBackWait(ids, panel)).toBe(true);
+      expect(isAskingWait(ids, panel)).toBe(false);
+    }
+  });
+
+  it("keeps an approval, question or error wait asking even with a record", () => {
+    for (const waitingReason of ["approval", "question", "error"] as const) {
+      const panel = { id: "t1", agentState: "waiting" as const, waitingReason };
+      expect(isHandBackWait(ids, panel)).toBe(false);
+      expect(isAskingWait(ids, panel)).toBe(true);
+    }
+  });
+
+  it("keeps a prompt wait with no hand-back record asking", () => {
+    const panel = { id: "other", agentState: "waiting" as const };
+    expect(isAskingWait(ids, panel)).toBe(true);
+  });
+
+  it("never calls a state other than waiting a wait", () => {
+    for (const agentState of ["working", "completed", "idle", "exited", "directing"] as const) {
+      expect(isAskingWait(ids, { id: "t1", agentState })).toBe(false);
+      expect(isHandBackWait(ids, { id: "t1", agentState })).toBe(false);
+    }
   });
 });

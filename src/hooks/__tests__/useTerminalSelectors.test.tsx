@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { usePanelStoreMock, useWorktreeStoreMock } = vi.hoisted(() => ({
@@ -15,6 +15,7 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: useWorktreeStoreMock,
 }));
 
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import {
   useTerminalNotificationCounts,
   useConflictedWorktrees,
@@ -70,6 +71,7 @@ function setupBoth(
     id: string;
     worktreeId?: string;
     agentState?: string;
+    waitingReason?: string;
     location?: string;
     lastStateChange?: number;
     exitCode?: number;
@@ -802,5 +804,57 @@ describe("buildWorktreeIds memoization", () => {
         ids
       )
     ).toBe(true);
+  });
+});
+
+describe("hand-backs are not waits", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
+    useFleetSnapshotStore.setState({ snapshot: null });
+  });
+
+  function deliverHandBacks(ids: string[], seen: boolean) {
+    act(() => {
+      useFleetSnapshotStore.getState().applySnapshot({
+        runs: ids.map((runId) => ({
+          runId,
+          workspaceId: "p1",
+          spawnedAt: 1,
+          cwd: "/repo",
+          agentState: "waiting" as const,
+          handBack: seen ? { stoppedAt: 2, seenAt: 3 } : { stoppedAt: 2 },
+        })),
+        changedAt: 4,
+        degraded: false,
+        lastSuccessfulAt: 4,
+      });
+    });
+  }
+
+  it("drops an unread or read hand-back from the waiting counts, and keeps an approval", () => {
+    setupBoth([
+      { id: "unread", agentState: "waiting", location: "grid" },
+      { id: "read", agentState: "waiting", location: "grid" },
+      { id: "approval", agentState: "waiting", waitingReason: "approval", location: "grid" },
+    ]);
+    deliverHandBacks(["unread"], false);
+    deliverHandBacks(["unread", "read"], true);
+
+    const waiting = renderHook(() => useWaitingTerminals());
+    expect(waiting.result.current.map((t) => t.id)).toEqual(["approval"]);
+    const counts = renderHook(() => useTerminalNotificationCounts());
+    expect(counts.result.current.waitingCount).toBe(1);
+    const stats = renderHook(() => useBackgroundPanelStats("none", true));
+    expect(stats.result.current.waitingCount).toBe(1);
+  });
+
+  it("counts a prompt wait as waiting until the fleet reports it as a hand-back", () => {
+    setupBoth([{ id: "t1", agentState: "waiting", location: "grid" }]);
+    const { result } = renderHook(() => useTerminalNotificationCounts());
+    expect(result.current.waitingCount).toBe(1);
+
+    deliverHandBacks(["t1"], false);
+    expect(result.current.waitingCount).toBe(0);
   });
 });

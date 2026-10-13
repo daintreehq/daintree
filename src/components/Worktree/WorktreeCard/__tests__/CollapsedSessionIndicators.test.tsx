@@ -98,7 +98,7 @@ describe("summarizeSessionStates", () => {
       5,
       2
     );
-    expect(breakdown).toBe("1 waiting, 2 unread, 2 done");
+    expect(breakdown).toBe("1 waiting, 2 unread, 2 finished");
     expect(visibleStates.map((v) => v.state)).toEqual(["waiting", "unread", "completed"]);
   });
 
@@ -180,7 +180,12 @@ describe("CollapsedSessionIndicators", () => {
     // State colours are tuned as graphics (3:1). As 11px text they drop under
     // 4.5:1 in every light theme, so no count may inherit one, while each glyph
     // must still carry its own state's hue.
-    const stateHues = new Set<string>(REACHABLE.map((state) => SESSION_COLORS[state]));
+    // Done and unread are drawn in the neutral text ramp rather than a hue, and
+    // the count's own neutral is not inheriting a state colour.
+    const isNeutral = (c: string) => c.startsWith("text-text-");
+    const stateHues = new Set<string>(
+      REACHABLE.map((state) => SESSION_COLORS[state]).filter((c) => !isNeutral(c))
+    );
     const { segments } = renderCluster(ALL_REACHABLE, undefined, 1);
     for (const seg of segments) {
       const count = seg.querySelector(".tabular-nums")!;
@@ -189,13 +194,15 @@ describe("CollapsedSessionIndicators", () => {
         inherited.filter((c) => stateHues.has(c)),
         `${seg.dataset.state} count is state-coloured`
       ).toEqual([]);
-      // The hue has to sit on an HTML element the glyph inherits from: forced
+      // The tone has to sit on an HTML element the glyph inherits from: forced
       // colors repaints that element's `color`, but a colour set on the svg
       // itself survives and left waiting amber on white at 1.7:1.
-      const hued = Array.from(seg.querySelectorAll("*")).filter((el) =>
-        (el.getAttribute("class") ?? "").split(/\s+/).some((c) => stateHues.has(c))
+      const ownTone = Object.entries(SESSION_COLORS).find(([s]) => s === seg.dataset.state)?.[1];
+      expect(ownTone, `${seg.dataset.state} has a tone`).toBeDefined();
+      const hued = Array.from(seg.querySelectorAll("*")).filter(
+        (el) => el !== count && (el.getAttribute("class") ?? "").split(/\s+/).includes(ownTone!)
       );
-      expect(hued, `${seg.dataset.state} glyph carries no state hue`).toHaveLength(1);
+      expect(hued, `${seg.dataset.state} glyph carries no state tone`).toHaveLength(1);
       expect(hued[0]!.tagName.toLowerCase()).not.toBe("svg");
       expect(hued[0]!.contains(glyphOf(seg))).toBe(true);
     }

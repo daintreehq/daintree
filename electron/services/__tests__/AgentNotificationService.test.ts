@@ -213,7 +213,7 @@ describe("AgentNotificationService", () => {
     vi.advanceTimersByTime(5000);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-      "Agent completed",
+      "Agent finished",
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
@@ -366,7 +366,7 @@ describe("AgentNotificationService", () => {
     vi.advanceTimersByTime(3000);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-      "Agent completed",
+      "Agent finished",
       expect.stringContaining("finished"),
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
@@ -876,7 +876,7 @@ describe("AgentNotificationService", () => {
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agents completed",
+        "Agents finished",
         "3 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",
@@ -1408,7 +1408,7 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(5000);
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agent completed",
+        "Agent finished",
         expect.stringContaining("finished"),
         expect.objectContaining({ worktreeId: "wt-B" }),
         "notification:watch-navigate",
@@ -1476,7 +1476,7 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(5000);
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agent completed",
+        "Agent finished",
         expect.any(String),
         expect.objectContaining({ worktreeId: "wt-fresh" }),
         "notification:watch-navigate",
@@ -1498,7 +1498,7 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(5000);
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agent completed",
+        "Agent finished",
         expect.any(String),
         expect.objectContaining({ worktreeId: undefined }),
         "notification:watch-navigate",
@@ -1644,10 +1644,10 @@ describe("AgentNotificationService", () => {
       // Advance past the 2s completion debounce + 0ms flush timer
       vi.advanceTimersByTime(2001);
 
-      // Both completions should be captured (grouped into one "Agents completed"
+      // Both completions should be captured (grouped into one "Agents finished"
       // burst rather than silently dropping one).
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agents completed",
+        "Agents finished",
         "2 agents finished their tasks",
         expect.any(Object),
         "notification:watch-navigate",
@@ -1747,7 +1747,7 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(5000);
 
       expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-        "Agent completed",
+        "Agent finished",
         expect.stringContaining("claude"),
         expect.objectContaining({ panelId: "term-1" }),
         "notification:watch-navigate",
@@ -2698,7 +2698,7 @@ describe("notifications owned by a view on a remote Shell", () => {
     events.emit("agent:state-changed", makePayload("completed", "waiting"));
     vi.advanceTimersByTime(2001);
     expect(notificationServiceMock.showWatchNotification).toHaveBeenLastCalledWith(
-      "Agent completed",
+      "Agent finished",
       expect.any(String),
       expect.any(Object),
       "notification:watch-navigate",
@@ -2749,7 +2749,7 @@ describe("notifications owned by a view on a remote Shell", () => {
     events.emit("agent:state-changed", makePayload("completed"));
     vi.advanceTimersByTime(2001);
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-      "Agent completed",
+      "Agent finished",
       expect.any(String),
       expect.any(Object),
       "notification:watch-navigate",
@@ -2766,7 +2766,7 @@ describe("notifications owned by a view on a remote Shell", () => {
     vi.advanceTimersByTime(2001);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-      "Agent completed",
+      "Agent finished",
       expect.any(String),
       expect.any(Object),
       "notification:watch-navigate",

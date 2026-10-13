@@ -7,6 +7,8 @@ import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { getNarrowPanels } from "@/store/slices/panelRegistry/selectors";
 import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility";
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
+import { isAskingWait } from "@/lib/handBackPresentation";
+import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
 export { isTerminalOrphaned, isTerminalVisible };
 
 let _cachedWorktrees: Map<string, WorktreeSnapshot> | null = null;
@@ -52,6 +54,9 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
   waitingCount: number;
 } {
   const worktreeIds = useWorktreeIds();
+  // A hand-back is not asking for anything, so it never reaches the title's
+  // `(N)` or the Dock badge — the same call every other waiting count makes.
+  const handBackIds = useHandBackRunIds();
 
   return usePanelStore(
     useShallow((state) => {
@@ -65,7 +70,7 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
         if (!isPtyPanel(panel)) continue;
         if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
 
-        if (panel.agentState !== "waiting") continue;
+        if (!isAskingWait(handBackIds, panel)) continue;
 
         if (blurTime !== undefined) {
           if (panel.lastStateChange == null) continue;
@@ -80,15 +85,17 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
   );
 }
 
+/** Agents asking for something. An unread or read hand-back is not one of them. */
 export function useWaitingTerminals(): PtyPanelData[] {
   const worktreeIds = useWorktreeIds();
+  const handBackIds = useHandBackRunIds();
 
   return usePanelStore(
     useShallow((state) => {
       const out: PtyPanelData[] = [];
       for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
         if (!isPtyPanel(panel)) continue;
-        if (panel.agentState !== "waiting") continue;
+        if (!isAskingWait(handBackIds, panel)) continue;
         if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
         out.push(panel);
       }
@@ -176,6 +183,7 @@ export function useBackgroundPanelStats(
   workingCount: number;
   waitingCount: number;
 } {
+  const handBackIds = useHandBackRunIds();
   return usePanelStore(
     useShallow((state) => {
       if (!enabled) return EMPTY_BACKGROUND_PANEL_STATS;
@@ -187,7 +195,7 @@ export function useBackgroundPanelStats(
           active++;
           if (isPtyPanel(panel)) {
             if (panel.agentState === "working") working++;
-            else if (panel.agentState === "waiting") waiting++;
+            else if (isAskingWait(handBackIds, panel)) waiting++;
           }
         }
       }

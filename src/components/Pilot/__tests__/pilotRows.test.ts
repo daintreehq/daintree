@@ -556,7 +556,7 @@ describe("buildPilotGroups", () => {
       ctx()
     );
     expect(group!.rows[0]!.band).toBe("review");
-    expect(group!.rows[0]!.statusLabel).toBe("Ready for review");
+    expect(group!.rows[0]!.statusLabel).toBe("Unread");
   });
 
   it("acknowledges per run rather than per workspace", () => {

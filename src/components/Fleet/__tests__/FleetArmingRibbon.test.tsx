@@ -1489,7 +1489,7 @@ describe("supervised run status line (#10930)", () => {
     render(<FleetArmingRibbon />);
     const status = screen.getByTestId("fleet-run-status");
     expect(status.textContent).toContain("1 sent to studio-01");
-    expect(status.textContent).toContain("1 done");
+    expect(status.textContent).toContain("1 finished");
     expect(status.textContent).not.toContain("working");
   });
 
@@ -1502,7 +1502,7 @@ describe("supervised run status line (#10930)", () => {
     const status = screen.getByTestId("fleet-run-status");
     expect(status.textContent).toContain("Run finished");
     expect(status.textContent).toContain("1 waiting");
-    expect(status.textContent).toContain("1 done");
+    expect(status.textContent).toContain("1 finished");
 
     fireEvent.click(screen.getByTestId("fleet-run-dismiss"));
     expect(useFleetRunStore.getState().run).toBeNull();

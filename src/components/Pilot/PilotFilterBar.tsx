@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import type { ComponentType, KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
-import { BAND_GLYPH } from "./PilotRunState";
+import { BAND_GLYPH, BAND_GLYPH_TONE } from "./PilotRunState";
 import {
   bandFilterHasDemand,
   PILOT_BAND_FILTER_LABEL,
@@ -49,8 +49,8 @@ const SEGMENT_TONE: Record<Exclude<PilotBandFilter, "all">, SegmentVisual> = {
     tone: "text-state-working",
   },
   finished: {
-    Icon: BAND_GLYPH.review,
-    tone: "text-category-blue",
+    Icon: BAND_GLYPH.done,
+    tone: BAND_GLYPH_TONE.done,
   },
   // Parked never earns a hue: it is the user's own silence, and a coloured
   // segment would re-demand the attention parking just released.
@@ -99,10 +99,9 @@ function segmentIsHued(
  *
  * Only `needs-you` escalates, and only because it has somewhere to escalate
  * TO: `blocked` has a mark of its own. `finished` holds `review` and `done`,
- * which are the same app-standard check circle at two tones — that mark is not
- * this surface's to reinterpret, so its distinction rides the hue
- * (`bandFilterHasDemand` already owns that) and, for anyone the hue cannot
- * reach, `segmentQualifier` below puts it into the segment's spoken name.
+ * the solid dot and the solid check: it draws the unread dot while it holds a
+ * hand-back nobody has read and the check once every one has been, and
+ * `segmentQualifier` below puts the same fact into the segment's spoken name.
  *
  * Escalation is also why the first segment could not stay called "Waiting": a
  * red prohibition sign beside that word contradicted itself, where beside
@@ -118,6 +117,9 @@ function segmentVisual(
       Icon: BAND_GLYPH.blocked,
       tone: "text-status-danger",
     };
+  }
+  if (segment === "finished" && bands.review > 0) {
+    return { Icon: BAND_GLYPH.review, tone: BAND_GLYPH_TONE.review };
   }
   return SEGMENT_TONE[segment];
 }
@@ -139,7 +141,7 @@ function segmentQualifier(
     // MIXED case left a segment holding three hand-backs and one holding three
     // acknowledged completions with the same accessible name — the glyph tells
     // them apart, and a glyph is not a channel a screen reader can reach.
-    return bands.done > 0 ? `including ${bands.review} ready for review` : `all ready for review`;
+    return bands.done > 0 ? `including ${bands.review} unread` : `all unread`;
   }
   return null;
 }

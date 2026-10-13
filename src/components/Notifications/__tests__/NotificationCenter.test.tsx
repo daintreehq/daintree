@@ -665,7 +665,7 @@ describe("NotificationCenter muted pill", () => {
     render(<NotificationCenter open onClose={() => {}} />);
 
     const pill = screen.getByTestId("notification-muted-pill");
-    expect(pill.textContent).toContain("Off: Completed, Waiting");
+    expect(pill.textContent).toContain("Off: Finished, Waiting");
     expect(pill.textContent).not.toContain("Working pulse");
     expect(pill.textContent).not.toContain("UI sounds");
   });
@@ -681,7 +681,7 @@ describe("NotificationCenter muted pill", () => {
     render(<NotificationCenter open onClose={() => {}} />);
 
     const pill = screen.getByTestId("notification-muted-pill");
-    expect(pill.textContent).toContain("Off: Completed, Waiting");
+    expect(pill.textContent).toContain("Off: Finished, Waiting");
   });
 
   it("does not list off-by-default sound kinds as switched off", () => {

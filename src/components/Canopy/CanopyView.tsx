@@ -1485,7 +1485,7 @@ function CanopyInbox({
             // counts the agents.
             [
               needsYou > 0
-                ? `${pluralize(needsYou, "needs", "need")} you`
+                ? `${pluralize(needsYou, "agent")} ${needsYou === 1 ? "needs" : "need"} you`
                 : // "Nothing" is a conclusion: qualified while some screens
                   // can't be read at all, withheld while Daintree can't see its
                   // agents, and held back while any run in the inbox has yet to

@@ -606,7 +606,7 @@ describe("WorktreeTerminalSection row state icon", () => {
     it("draws a read hand-back as done while the attribute keeps the observed state", () => {
       setRun({ agentState: "waiting", handBack: { stoppedAt: 1, seenAt: 2 } });
       const row = rowFor();
-      expect(row.querySelector('[aria-label="done"]')).not.toBeNull();
+      expect(row.querySelector('[aria-label="finished"]')).not.toBeNull();
       expect(row.querySelector('[aria-label="waiting"]')).toBeNull();
       expect(row.getAttribute("data-terminal-agent-state")).toBe("waiting");
     });
@@ -750,7 +750,7 @@ describe("WorktreeTerminalSection row state icon", () => {
     });
     const row = container.querySelector('[data-terminal-id="exited-1"]');
     const stateIcons = row?.querySelectorAll(
-      '[aria-label="working"], [aria-label="waiting"], [aria-label="directing"], [aria-label="done"], [aria-label="exited"], [aria-label="idle"]'
+      '[aria-label="working"], [aria-label="waiting"], [aria-label="directing"], [aria-label="finished"], [aria-label="exited"], [aria-label="idle"]'
     );
     expect(stateIcons?.length ?? 0).toBe(0);
   });
@@ -775,7 +775,7 @@ describe("WorktreeTerminalSection row state icon", () => {
     });
     const row = container.querySelector('[data-terminal-id="exit-race-1"]');
     const stateIcons = row?.querySelectorAll(
-      '[aria-label="working"], [aria-label="waiting"], [aria-label="directing"], [aria-label="done"], [aria-label="exited"], [aria-label="idle"]'
+      '[aria-label="working"], [aria-label="waiting"], [aria-label="directing"], [aria-label="finished"], [aria-label="exited"], [aria-label="idle"]'
     );
     expect(stateIcons?.length ?? 0).toBe(0);
   });
@@ -863,7 +863,9 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
     });
     const indicators = screen.getByTestId("collapsed-session-indicators");
     expect(indicators.getAttribute("role")).toBe("img");
-    expect(indicators.getAttribute("aria-label")).toBe("5 sessions: 2 working, 2 waiting, 1 done");
+    expect(indicators.getAttribute("aria-label")).toBe(
+      "5 sessions: 2 working, 2 waiting, 1 finished"
+    );
   });
 
   it("does not render indicators when section is expanded", () => {

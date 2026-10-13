@@ -862,7 +862,7 @@ describe("WorktreeHeader collapsed session indicators", () => {
       sessionStates: { ...allZeroStates, working: 2, completed: 3 },
     });
     const container = screen.getByTestId("collapsed-session-indicators");
-    expect(container.getAttribute("aria-label")).toBe("5 sessions: 2 working, 3 done");
+    expect(container.getAttribute("aria-label")).toBe("5 sessions: 2 working, 3 finished");
   });
 
   it("orders states by STATE_PRIORITY (working before waiting)", () => {

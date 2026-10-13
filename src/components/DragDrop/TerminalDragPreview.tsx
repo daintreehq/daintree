@@ -3,10 +3,8 @@ import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { PlaceholderContent } from "./PlaceholderContent";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
-import {
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
-} from "@/components/Worktree/terminalStateConfig";
+import { SESSION_COLORS, SESSION_ICONS } from "@/components/Worktree/terminalStateConfig";
+import { useSessionPresentation } from "@/hooks/useRunHandBackState";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -32,8 +30,12 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
   // Drag visual color mirrors the same chrome descriptor used by tabs/panels.
   const chrome = deriveTerminalChrome(terminal);
   const agentState = isPtyPanel(terminal) ? terminal.agentState : undefined;
-  const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
-  const StateIcon = displayAgentState ? getEffectiveStateIcon(displayAgentState) : null;
+  // A hand-back draws unread or done, as on the pane's own chip.
+  const displayAgentState = useSessionPresentation(
+    terminal.id,
+    getTerminalAgentDisplayState(chrome, agentState)
+  );
+  const StateIcon = displayAgentState ? SESSION_ICONS[displayAgentState] : null;
   const isGroupDrag = (groupTabCount ?? 0) > 1;
 
   return (
@@ -73,7 +75,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             <StateIcon
               className={cn(
                 "h-3 w-3 shrink-0",
-                getEffectiveStateColor(displayAgentState),
+                SESSION_COLORS[displayAgentState],
                 displayAgentState === "working" && "animate-spin-slow",
                 "motion-reduce:animate-none"
               )}

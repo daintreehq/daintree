@@ -48,7 +48,7 @@ describe("NotificationSettingsTab", () => {
       const control = container.querySelector(`#${id}`);
       expect(control?.getAttribute("role")).toBe("switch");
     }
-    expect(screen.getByRole("switch", { name: "Agent completed" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Agent finished" })).toBeTruthy();
     expect(container.querySelector('input[type="checkbox"]')).toBeNull();
 
     const completed = container.querySelector("#notif-completed");
@@ -62,7 +62,7 @@ describe("NotificationSettingsTab", () => {
     render(<NotificationSettingsTab />);
     await waitFor(() => expect(getSettings).toHaveBeenCalled());
 
-    const picker = await screen.findByRole("combobox", { name: "Completed sound" });
+    const picker = await screen.findByRole("combobox", { name: "Finished sound" });
     expect(picker.hasAttribute("disabled")).toBe(true);
     expect(
       screen.getByText("Turn on Play sound to choose sounds and hear UI feedback")
@@ -91,7 +91,7 @@ describe("NotificationSettingsTab", () => {
     render(<NotificationSettingsTab />);
 
     const resetButton = await screen.findByRole("button", {
-      name: "Reset Agent completed to default",
+      name: "Reset Agent finished to default",
     });
     fireEvent.click(resetButton);
     expect(setSettings).toHaveBeenCalledWith({ completedEnabled: false });

@@ -77,7 +77,7 @@ describe("deriveHighestPriorityCluster", () => {
       expect(cluster!.count).toBe(2);
       expect(cluster!.memberIds).toEqual(["a", "b"]);
       expect(cluster!.latestStateChange).toBe(NOW - 1);
-      expect(cluster!.headline).toBe("2 agents need input");
+      expect(cluster!.headline).toBe("2 agents waiting");
     });
 
     it("includes waiting agents with waitingReason='question'", () => {
@@ -509,7 +509,7 @@ describe("deriveHighestPriorityCluster", () => {
         makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
         makeAgent("c", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
       ]);
-      expect(cluster?.headline).toBe("3 agents need input");
+      expect(cluster?.headline).toBe("3 agents waiting");
     });
   });
 });

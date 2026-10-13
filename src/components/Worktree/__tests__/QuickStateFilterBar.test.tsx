@@ -350,7 +350,7 @@ describe("QuickStateFilterBar", () => {
     const colorBySegment: [RegExp, string][] = [
       [/Working/, "text-state-working"],
       [/Attention/, "text-state-waiting"],
-      [/Finished/, "text-category-blue"],
+      [/Finished/, "text-text-primary"],
     ];
     for (const [name, colorClass] of colorBySegment) {
       const svg = glyphBox(screen.getByRole("radio", { name }));
@@ -390,7 +390,7 @@ describe("QuickStateFilterBar", () => {
     expect(waitingClass).not.toMatch(FADED);
   });
 
-  it("hues Finished only while it holds an unseen hand-back, as Pilot does (#13234)", () => {
+  it("draws Finished as unread only while it holds an unread hand-back, as Pilot does (#13234)", () => {
     const finishedGlyphClass = (finishedUnseen: number) => {
       const { unmount } = renderBar(
         <QuickStateFilterBar
@@ -412,7 +412,7 @@ describe("QuickStateFilterBar", () => {
     expect(seen).not.toMatch(FADED);
   });
 
-  it("says in the accessible name how many Finished worktrees are unseen", () => {
+  it("says in the accessible name how many Finished worktrees are unread", () => {
     const nameFor = (finishedUnseen: number) => {
       const { unmount } = renderBar(
         <QuickStateFilterBar
@@ -427,8 +427,8 @@ describe("QuickStateFilterBar", () => {
       return name;
     };
     expect(nameFor(0)).toBe("Finished, 3 worktrees");
-    expect(nameFor(2)).toBe("Finished, 3 worktrees, including 2 unseen");
-    expect(nameFor(3)).toBe("Finished, 3 worktrees, all unseen");
+    expect(nameFor(2)).toBe("Finished, 3 worktrees, including 2 unread");
+    expect(nameFor(3)).toBe("Finished, 3 worktrees, all unread");
   });
 
   it("does not fade icons when the counts prop is omitted", () => {

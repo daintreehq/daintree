@@ -112,7 +112,7 @@ function shipsOn(kind: NotificationEventKind): boolean {
 
 /** The per-project silences the row menu writes, with the words the strip uses. */
 const PROJECT_SILENCEABLE = [
-  ["completedEnabled", "Completed"],
+  ["completedEnabled", "Finished"],
   ["waitingEnabled", "Waiting"],
 ] as const;
 

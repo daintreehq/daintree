@@ -973,9 +973,7 @@ describe("PilotView", () => {
       render(<PilotView />);
 
       expect(segment(/Attention/).getAttribute("aria-label")).toBe("Attention, 1 agent");
-      expect(segment(/Finished/).getAttribute("aria-label")).toBe(
-        "Finished, 1 agent, all ready for review"
-      );
+      expect(segment(/Finished/).getAttribute("aria-label")).toBe("Finished, 1 agent, all unread");
 
       fireEvent.click(segment(/Finished/));
       expect(rowTitles()).toHaveLength(1);
@@ -1327,7 +1325,7 @@ describe("PilotView", () => {
       ]);
       render(<PilotView />);
 
-      expect(screen.getByTestId("pilot-summary").textContent).toBe("Ready for review");
+      expect(screen.getByTestId("pilot-summary").textContent).toBe("Agent unread");
       expect(screen.queryByTestId("pilot-demand-action")).toBeNull();
     });
 
@@ -1858,9 +1856,7 @@ describe("PilotView", () => {
 
       expect(screen.getByTestId("pilot-group-demand").textContent).toBe("111");
       // The words are on the group, where they are not colour-and-digit alone.
-      expect(
-        screen.getByRole("group", { name: /1 blocked, 1 waiting, 1 ready for review/ })
-      ).toBeTruthy();
+      expect(screen.getByRole("group", { name: /1 blocked, 1 waiting, 1 unread/ })).toBeTruthy();
     });
   });
 

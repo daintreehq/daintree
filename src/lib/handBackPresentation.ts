@@ -42,6 +42,47 @@ export function handBackStateForRun(
   return indexSnapshot(snapshot).get(runId) ?? "none";
 }
 
+const keyCache = new WeakMap<FleetSnapshot, string>();
+
+/**
+ * Every run the fleet holds a hand-back for, seen or not, as one sorted string.
+ * A primitive, so a store selector over it only re-renders when the set itself
+ * changes rather than on every fleet tick.
+ */
+export function handBackRunKey(snapshot: FleetSnapshot | null): string {
+  if (snapshot === null) return "";
+  const cached = keyCache.get(snapshot);
+  if (cached !== undefined) return cached;
+  const key = [...indexSnapshot(snapshot).keys()].sort().join("\n");
+  keyCache.set(snapshot, key);
+  return key;
+}
+
+/**
+ * A wait that is really a hand-back: the agent finished its turn and is sitting
+ * at its prompt. Read or not, it is not asking for anything, so it never counts
+ * as waiting — the same call the session glyph makes, which draws it settled.
+ * Display only: `agentState` still reports `waiting`.
+ */
+export function isHandBackWait(
+  handBackRunIds: ReadonlySet<string>,
+  panel: { id: string; agentState?: AgentState; waitingReason?: WaitingReason }
+): boolean {
+  return (
+    panel.agentState === "waiting" &&
+    isHandBackStop(panel.agentState, panel.waitingReason) &&
+    handBackRunIds.has(panel.id)
+  );
+}
+
+/** An agent asking for something: waiting, and not merely handing its turn back. */
+export function isAskingWait(
+  handBackRunIds: ReadonlySet<string>,
+  panel: { id: string; agentState?: AgentState; waitingReason?: WaitingReason }
+): boolean {
+  return panel.agentState === "waiting" && !isHandBackWait(handBackRunIds, panel);
+}
+
 /**
  * The glyph state for a session. A seen hand-back draws as settled, an unseen
  * one as unread, and everything else — approval, question and error waits

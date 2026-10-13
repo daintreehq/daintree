@@ -122,6 +122,17 @@ vi.mock("@/utils/logger", () => ({
 vi.mock("@/components/Worktree/terminalStateConfig", () => ({
   getEffectiveStateIcon: () => null,
   getEffectiveStateColor: () => "",
+  SESSION_ICONS: {},
+  SESSION_COLORS: {},
+  SESSION_LABELS: {},
+}));
+
+// The hand-back join reads the fleet snapshot store; these suites draw the
+// observed state as it is.
+vi.mock("@/hooks/useRunHandBackState", () => ({
+  useSessionPresentation: (_id: string, state: unknown) => state,
+  useRunHandBackState: () => "none",
+  useHandBackRunIds: () => new Set<string>(),
 }));
 
 vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
