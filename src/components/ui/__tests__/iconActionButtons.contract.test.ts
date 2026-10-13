@@ -46,11 +46,6 @@ const SURVIVORS: Record<string, string> = {
   "src/components/Settings/VoiceInputSettingsTab.tsx": "suggestion chip",
   // A rounded-full scrim over a theme preview image, deliberately not chrome.
   "src/components/ThemeBrowser/ThemeBrowser.tsx": "scrim close over a preview",
-  // The commit row's hash chip is labelled by the hash itself, which must stay
-  // on screen through the check; CopyButton's labelled form would swap it for
-  // "Copied". Its copy state is the list's, shared with Enter on the cursor
-  // row (see the copy-feedback contract's matching entry).
-  "src/components/Layout/LocalCommitsDropdown.tsx": "commit-row hash chip",
 };
 
 const CLOSE_NAME = /^(Dismiss|Hide|Close)\b/;
@@ -82,27 +77,67 @@ function stringAttr(node: ts.JsxOpeningLikeElement, name: string): string | unde
   return undefined;
 }
 
+/** A name that carries a glyph or passes children through, not words. */
+const GLYPH_NAME = /^children$|icon|glyph/i;
+
+const isJsx = (e: ts.Node) =>
+  ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e) || ts.isJsxFragment(e);
+
+function hasString(e: ts.Node): boolean {
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return true;
+  if (ts.isTemplateExpression(e)) return true;
+  if (isJsx(e)) return false;
+  return ts.forEachChild(e, (c) => (hasString(c) ? true : undefined)) ?? false;
+}
+
+function rendersElementOrGlyph(e: ts.Node): boolean {
+  if (isJsx(e) || (ts.isIdentifier(e) && GLYPH_NAME.test(e.text))) return true;
+  return ts.forEachChild(e, (c) => (rendersElementOrGlyph(c) ? true : undefined)) ?? false;
+}
+
+const RENDERS_NOTHING = new Set([
+  ts.SyntaxKind.NullKeyword,
+  ts.SyntaxKind.TrueKeyword,
+  ts.SyntaxKind.FalseKeyword,
+]);
+
+/** Whether a `{…}` child renders words, by its rendered branches, not its condition. */
+function rendersText(e: ts.Expression): boolean {
+  if (ts.isParenthesizedExpression(e)) return rendersText(e.expression);
+  if (ts.isConditionalExpression(e)) return rendersText(e.whenTrue) || rendersText(e.whenFalse);
+  if (ts.isBinaryExpression(e)) {
+    const op = e.operatorToken.kind;
+    if (op === ts.SyntaxKind.AmpersandAmpersandToken) return rendersText(e.right);
+    if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken) {
+      return rendersText(e.left) || rendersText(e.right);
+    }
+  }
+  if (RENDERS_NOTHING.has(e.kind) || (ts.isIdentifier(e) && e.text === "undefined")) return false;
+  return hasString(e) || !rendersElementOrGlyph(e);
+}
+
 /**
  * True when the button shows words beside its glyph — "Copy details", a
  * "Copied" swap. A labelled control is a different, legitimate shape; this
- * contract is about the icon-only ones.
+ * contract is about the icon-only ones. A rendered text expression such as
+ * `{commit.shortHash}` labels it too; `{children}`, icon-named values and
+ * `sr-only` text do not.
  */
 function hasVisibleText(node: ts.JsxElement): boolean {
   let text = false;
   const visit = (n: ts.Node) => {
+    if (ts.isJsxElement(n) && /\bsr-only\b/.test(stringAttr(n.openingElement, "className") ?? "")) {
+      return;
+    }
     if (ts.isJsxText(n) && n.text.trim()) text = true;
     if (
       ts.isJsxExpression(n) &&
+      n.expression &&
       n.parent &&
-      (ts.isJsxElement(n.parent) || ts.isJsxFragment(n.parent))
+      (ts.isJsxElement(n.parent) || ts.isJsxFragment(n.parent)) &&
+      rendersText(n.expression)
     ) {
-      const hasString = (e: ts.Node): boolean =>
-        ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) || ts.isTemplateExpression(e)
-          ? true
-          : ts.isJsxElement(e) || ts.isJsxSelfClosingElement(e)
-            ? false
-            : (ts.forEachChild(e, (c) => (hasString(c) ? true : undefined)) ?? false);
-      if (n.expression && hasString(n.expression)) text = true;
+      text = true;
     }
     ts.forEachChild(n, visit);
   };
