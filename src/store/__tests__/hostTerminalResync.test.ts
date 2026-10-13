@@ -20,7 +20,14 @@ vi.mock("@/utils/logger", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
 }));
-vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => store } }));
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
+    getState: () => store,
+    setState: (update: (state: typeof store) => Partial<typeof store>) => {
+      Object.assign(store, update(store));
+    },
+  },
+}));
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: { setAgentState, reportLost },
 }));
@@ -202,5 +209,79 @@ describe("resyncHostTerminals", () => {
     expect(store.updateAgentState).not.toHaveBeenCalled();
     expect(store.addPanel).not.toHaveBeenCalled();
     expect(syncWatchedPanels).not.toHaveBeenCalled();
+  });
+});
+
+describe("resyncHostTerminals following the driver (#13280)", () => {
+  const following = { isCurrent: () => true, follow: true };
+
+  it("removes what the driver closed instead of keeping it as exited", async () => {
+    panel("t-gone");
+    panel("t-finished", { exitCode: 0, runtimeStatus: "exited" });
+    panel("t-held", { restoreRecovery: { reason: "manual" } });
+    getForProject.mockResolvedValue([]);
+    reconnectBulk.mockResolvedValue({ "t-gone": { exists: false } });
+
+    await resyncHostTerminals("proj-1", following);
+
+    expect(store.removePanel).toHaveBeenCalledWith("t-finished", { backendAlreadyClosed: true });
+    expect(store.removePanel).toHaveBeenCalledWith("t-gone", { backendAlreadyClosed: true });
+    expect(store.removePanel).not.toHaveBeenCalledWith("t-held", expect.anything());
+    expect(store.setRuntimeStatus).not.toHaveBeenCalled();
+    expect(reportLost).not.toHaveBeenCalled();
+  });
+
+  it("takes a terminal the driver trashed out of this view's layout", async () => {
+    panel("t-trashed");
+    panel("t-already", { location: "trash" });
+    getForProject.mockResolvedValue([
+      { id: "t-trashed", cwd: "/repo", spawnedAt: 1, isTrashed: true },
+      { id: "t-already", cwd: "/repo", spawnedAt: 1, isTrashed: true },
+    ]);
+
+    await resyncHostTerminals("proj-1", following);
+
+    expect(store.removePanel).toHaveBeenCalledTimes(1);
+    expect(store.removePanel).toHaveBeenCalledWith("t-trashed", { backendAlreadyClosed: true });
+  });
+
+  it("shows a terminal the driver restarted as running again", async () => {
+    panel("t-restarted", { exitCode: 1, runtimeStatus: "exited" });
+    panel("t-dead", { exitCode: 1, runtimeStatus: "exited" });
+    getForProject.mockResolvedValue([
+      { id: "t-restarted", cwd: "/repo", spawnedAt: 2 },
+      { id: "t-dead", cwd: "/repo", spawnedAt: 1, hasPty: false },
+    ]);
+
+    await resyncHostTerminals("proj-1", following);
+
+    expect(store.panelsById["t-restarted"]).toMatchObject({ runtimeStatus: "running" });
+    expect(store.panelsById["t-restarted"]!.exitCode).toBeUndefined();
+    expect(store.panelsById["t-dead"]).toMatchObject({ exitCode: 1, runtimeStatus: "exited" });
+    expect(store.removePanel).not.toHaveBeenCalled();
+  });
+
+  it("leaves an exit that landed while the list was read alone", async () => {
+    panel("t-live");
+    getForProject.mockImplementation(async () => {
+      store.panelsById["t-live"] = { ...store.panelsById["t-live"]!, runtimeStatus: "exited" };
+      return [{ id: "t-live", cwd: "/repo", spawnedAt: 1 }];
+    });
+
+    await resyncHostTerminals("proj-1", following);
+
+    expect(store.panelsById["t-live"]).toMatchObject({ runtimeStatus: "exited" });
+  });
+
+  it("keeps an exited pane as it is when not following", async () => {
+    panel("t-finished", { exitCode: 0, runtimeStatus: "exited" });
+    panel("t-trashed");
+    getForProject.mockResolvedValue([
+      { id: "t-trashed", cwd: "/repo", spawnedAt: 1, isTrashed: true },
+    ]);
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(store.removePanel).not.toHaveBeenCalled();
   });
 });

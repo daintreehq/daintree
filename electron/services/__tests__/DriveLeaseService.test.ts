@@ -5,7 +5,7 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
 }));
 
-import { DriveLeaseService } from "../DriveLeaseService.js";
+import { DriveLeaseService, PANELS_CHANGED_DELAY_MS } from "../DriveLeaseService.js";
 import { EndpointRegistryImpl } from "../../ipc/endpointRegistry.js";
 import type { ClientEndpoint, Disposable, HostFrame } from "../../ipc/endpoint.js";
 import type { DriveLeaseEvent } from "../../../shared/types/ipc/driveLease.js";
@@ -50,10 +50,16 @@ class FakeEndpoint implements ClientEndpoint {
     for (const cb of [...this.closeListeners]) cb();
   }
 
-  events(): DriveLeaseEvent[] {
+  allEvents(): DriveLeaseEvent[] {
     return this.sent
       .filter((frame) => frame.channel === "drive-lease:event")
       .map((frame) => frame.args[0] as DriveLeaseEvent);
+  }
+
+  events(): Array<Extract<DriveLeaseEvent, { type: "changed" }>> {
+    return this.allEvents().filter(
+      (event): event is Extract<DriveLeaseEvent, { type: "changed" }> => event.type === "changed"
+    );
   }
 }
 
@@ -413,6 +419,81 @@ describe("DriveLeaseService", () => {
 
   it("reports an unleased project as vacant", () => {
     expect(service.getDriveTarget("empty")).toEqual({ kind: "vacant" });
+  });
+});
+
+describe("DriveLeaseService panel notices", () => {
+  const panelNotices = (endpoint: FakeEndpoint) =>
+    endpoint.allEvents().filter((event) => event.type === "panels-changed");
+
+  async function laptopDrivesWithHostWatching() {
+    const hostWindow = local(1);
+    const otherHostWindow = local(2);
+    const laptop = remote("s1:e1", "greg-mbp-id");
+    const otherProject = local(3, "q");
+    for (const endpoint of [hostWindow, otherHostWindow, laptop, otherProject]) {
+      registry.add(endpoint);
+    }
+    await settle();
+    service.takeOver("p", laptop);
+    return { hostWindow, otherHostWindow, laptop, otherProject };
+  }
+
+  it("tells every view that watches the project, once per burst of saves", async () => {
+    const { hostWindow, otherHostWindow, laptop, otherProject } =
+      await laptopDrivesWithHostWatching();
+
+    service.notifyPanelsChanged("p");
+    service.notifyPanelsChanged("p");
+    expect(panelNotices(hostWindow)).toEqual([]);
+    vi.advanceTimersByTime(PANELS_CHANGED_DELAY_MS);
+    service.notifyPanelsChanged("p");
+    vi.advanceTimersByTime(PANELS_CHANGED_DELAY_MS);
+
+    const expected = [
+      { type: "panels-changed", projectId: "p" },
+      { type: "panels-changed", projectId: "p" },
+    ];
+    expect(panelNotices(hostWindow)).toEqual(expected);
+    expect(panelNotices(otherHostWindow)).toEqual(expected);
+    // The driver saved it, and a view on another project has nothing to follow.
+    expect(panelNotices(laptop)).toEqual([]);
+    expect(panelNotices(otherProject)).toEqual([]);
+  });
+
+  it("tells nobody while this machine's own windows drive among themselves", async () => {
+    const a = local(1);
+    const b = local(2);
+    registry.add(a);
+    registry.add(b);
+    await settle();
+
+    service.notifyPanelsChanged("p");
+    vi.advanceTimersByTime(PANELS_CHANGED_DELAY_MS);
+
+    expect(panelNotices(a)).toEqual([]);
+    expect(panelNotices(b)).toEqual([]);
+  });
+
+  it("decides who watches when the notice goes, not when the save landed", async () => {
+    const { hostWindow, laptop } = await laptopDrivesWithHostWatching();
+
+    service.notifyPanelsChanged("p");
+    service.takeOver("p", hostWindow);
+    vi.advanceTimersByTime(PANELS_CHANGED_DELAY_MS);
+
+    expect(panelNotices(hostWindow)).toEqual([]);
+    expect(panelNotices(laptop)).toEqual([{ type: "panels-changed", projectId: "p" }]);
+  });
+
+  it("sends nothing still pending once disposed", async () => {
+    const { hostWindow } = await laptopDrivesWithHostWatching();
+
+    service.notifyPanelsChanged("p");
+    service.dispose();
+    vi.advanceTimersByTime(PANELS_CHANGED_DELAY_MS);
+
+    expect(panelNotices(hostWindow)).toEqual([]);
   });
 });
 

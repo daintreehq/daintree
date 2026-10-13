@@ -1,6 +1,6 @@
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HydrateResult } from "@shared/types/ipc/app";
-import type { TabGroup } from "@shared/types/panel";
+import type { PanelLocation, TabGroup } from "@shared/types/panel";
 import { getWorktreeIdSet, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { logWarn } from "@/utils/logger";
 
@@ -19,6 +19,13 @@ export interface HostProjectRehydrateOptions {
    * because writes made while the link was down never reached the host.
    */
   authoritative: boolean;
+  /**
+   * This view watches while another screen drives, so beyond taking the
+   * host's order and groups it follows the driver's panels: a panel the
+   * host's save files elsewhere moves there, and one the save no longer has
+   * leaves this view. Terminals are the terminal resync's to remove.
+   */
+  follow?: boolean;
 }
 
 /**
@@ -94,6 +101,12 @@ export async function rehydrateHostProjectState(
     if (!options.isCurrent()) return;
   }
 
+  if (options.follow) {
+    const { transferBetweenWorktreeIndex } = await import("@/store/slices/panelRegistry/worktreeIndex");
+    if (!options.isCurrent()) return;
+    followSavedPanels(saved, usePanelStore, transferBetweenWorktreeIndex);
+  }
+
   if (options.authoritative) {
     const store = usePanelStore.getState();
     store.restoreTerminalOrder(saved.map((entry) => entry.id));
@@ -137,6 +150,59 @@ export async function rehydrateHostProjectState(
     if (typeof text === "string") hostRecord[terminalId] = text;
   }
   draftInputPersistence.rebaseProject(projectId, hostRecord);
+}
+
+type PanelStore = typeof import("@/store/panelStore").usePanelStore;
+type TransferIndex =
+  typeof import("@/store/slices/panelRegistry/worktreeIndex").transferBetweenWorktreeIndex;
+
+/** Where the host's save files each panel this view can show, as the driver laid it out. */
+const FOLLOWED_LOCATIONS: ReadonlySet<PanelLocation> = new Set<PanelLocation>(["grid", "dock"]);
+
+function followSavedPanels(
+  saved: ReadonlyArray<{ id: string; location?: unknown; worktreeId?: unknown; kind?: unknown }>,
+  store: PanelStore,
+  transferBetweenWorktreeIndex: TransferIndex
+): void {
+  const savedIds = new Set(saved.map((entry) => entry.id));
+  store.setState((state) => {
+    let panelsById = state.panelsById;
+    let panelIdsByWorktreeId = state.panelIdsByWorktreeId;
+    for (const entry of saved) {
+      const panel = panelsById[entry.id];
+      if (!panel || !FOLLOWED_LOCATIONS.has(panel.location)) continue;
+      const location =
+        typeof entry.location === "string" && FOLLOWED_LOCATIONS.has(entry.location as PanelLocation)
+          ? (entry.location as PanelLocation)
+          : panel.location;
+      const worktreeId =
+        typeof entry.worktreeId === "string" ? entry.worktreeId : panel.worktreeId;
+      if (location === panel.location && worktreeId === panel.worktreeId) continue;
+      panelsById = {
+        ...panelsById,
+        [entry.id]: { ...panel, location, worktreeId, isVisible: location === "grid" },
+      };
+      panelIdsByWorktreeId = transferBetweenWorktreeIndex(
+        panelIdsByWorktreeId,
+        panel.worktreeId,
+        worktreeId,
+        entry.id
+      );
+    }
+    if (panelsById === state.panelsById) return state;
+    return { panelsById, panelIdsByWorktreeId };
+  });
+  // Closed or trashed by the driver. Only kinds rebuilt from the save are
+  // removed here: a terminal goes when the host stops running it, a dialog
+  // belongs to this screen alone, and removing a dev preview would ask the
+  // host to stop a server only the driver may stop.
+  const state = store.getState();
+  for (const id of state.panelIds) {
+    const panel = state.panelsById[id];
+    if (!panel || savedIds.has(id) || !FOLLOWED_LOCATIONS.has(panel.location)) continue;
+    if (panelKindHasPty(panel.kind ?? "terminal") || panel.kind === "dev-preview") continue;
+    state.removePanel(id);
+  }
 }
 
 async function applyActiveWorktree(

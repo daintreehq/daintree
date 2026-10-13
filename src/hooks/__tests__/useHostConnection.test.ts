@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
-import type { DriveLeaseEvent } from "@shared/types/ipc/driveLease";
+import type { DriveLeaseEvent, DriveLeaseView } from "@shared/types/ipc/driveLease";
 import type {
   DriveLeaseHolder,
   HostConnectionState,
@@ -85,7 +85,7 @@ function leaseView(
   leaseHolder: DriveLeaseHolder | null,
   drivingHere: boolean,
   projectId = "proj-1"
-): DriveLeaseEvent["state"] {
+): DriveLeaseView {
   return {
     projectId,
     holder: leaseHolder,
@@ -781,7 +781,7 @@ describe("runHostOperation", () => {
 
 describe("project state after a fresh session or a takeover", () => {
   const optionsOf = (call: unknown[]) =>
-    call[1] as { authoritative: boolean; isCurrent: () => boolean };
+    call[1] as { authoritative: boolean; follow?: boolean; isCurrent: () => boolean };
 
   it("reads the host's saved project state back only when the link came back on a fresh session", async () => {
     const { electron, emitHost } = installElectron();
@@ -811,13 +811,17 @@ describe("project state after a fresh session or a takeover", () => {
     await flush();
 
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
-    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
-    expect(optionsOf(rehydrate.mock.calls[0]!).authoritative).toBe(true);
+    // Following the driver reads the layout back too; this is the resync's own read.
+    const resyncReads = () => rehydrate.mock.calls.filter((call) => !optionsOf(call).follow);
+    await vi.waitFor(() => expect(resyncReads()).toHaveLength(1));
+    expect(optionsOf(resyncReads()[0]!).authoritative).toBe(true);
     stop();
   });
 
   it("rehydrates after an explicit disconnect and a new connection", async () => {
-    const { emitHost } = installElectron();
+    const { electron, emitHost } = installElectron();
+    // This view's own claim on open stays out, so only the path under test reads state back.
+    electron.driveLease.takeOver.mockImplementationOnce(() => new Promise(() => {}));
     bindView("studio-01");
     const stop = startHostConnectionSync();
     await flush();
@@ -833,7 +837,7 @@ describe("project state after a fresh session or a takeover", () => {
     stop();
   });
 
-  it("takes the previous driver's saved state after taking over", async () => {
+  it("takes the previous driver's terminals and saved state after taking over", async () => {
     const { electron } = installElectron();
     // This view's own claim on open stays out, so only the path under test reads state back.
     electron.driveLease.takeOver.mockImplementationOnce(() => new Promise(() => {}));
@@ -841,14 +845,92 @@ describe("project state after a fresh session or a takeover", () => {
     const stop = startHostConnectionSync();
     await flush();
     electron.driveLease.takeOver.mockResolvedValue(leaseView(holder(), true));
+    electron.terminal.getForProject.mockClear();
 
     await takeOverDrive("proj-1");
 
-    expect(rehydrate).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    // The terminals first, so the saved order also places the ones just adopted.
+    expect(electron.terminal.getForProject).toHaveBeenCalledWith("proj-1");
+    expect(electron.terminal.getForProject.mock.invocationCallOrder[0]!).toBeLessThan(
+      rehydrate.mock.invocationCallOrder[0]!
+    );
     expect(rehydrate.mock.calls[0]![0]).toBe("proj-1");
     const options = optionsOf(rehydrate.mock.calls[0]!);
     expect(options.authoritative).toBe(true);
     expect(options.isCurrent()).toBe(true);
+    stop();
+  });
+});
+
+describe("following the driver while watching (#13280)", () => {
+  const optionsOf = (call: unknown[]) =>
+    call[1] as { authoritative: boolean; follow?: boolean; isCurrent: () => boolean };
+  const followCalls = () => rehydrate.mock.calls.filter((call) => optionsOf(call).follow === true);
+
+  function hostWindow(driving: boolean) {
+    const installed = installElectron();
+    Object.assign(installed.electron, {
+      remoteHosts: { ...installed.electron.remoteHosts, isInUse: vi.fn(async () => true) },
+    });
+    installed.electron.driveLease.get.mockResolvedValue(leaseView(holder(), driving));
+    bindView(null);
+    return installed;
+  }
+
+  it("shows the host's terminals and layout as soon as the host's own window learns it watches", async () => {
+    const { electron } = hostWindow(false);
+    const stop = startHostConnectionSync();
+
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    expect(electron.terminal.getForProject).toHaveBeenCalledWith("proj-1");
+    expect(optionsOf(followCalls()[0]!)).toMatchObject({ authoritative: true, follow: true });
+    stop();
+  });
+
+  it("reads the panels back each time the host says the driver changed them", async () => {
+    const { electron, emitLease } = hostWindow(false);
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    electron.terminal.getForProject.mockClear();
+
+    emitLease({ type: "panels-changed", projectId: "proj-1" });
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
+    expect(electron.terminal.getForProject).toHaveBeenCalledTimes(1);
+
+    emitLease({ type: "panels-changed", projectId: "another-project" });
+    await flush();
+    expect(followCalls()).toHaveLength(2);
+    stop();
+  });
+
+  it("follows nothing while this view drives", async () => {
+    const { electron, emitLease } = hostWindow(true);
+    const stop = startHostConnectionSync();
+    await flush();
+
+    emitLease({ type: "panels-changed", projectId: "proj-1" });
+    await flush();
+
+    expect(rehydrate).not.toHaveBeenCalled();
+    expect(electron.terminal.getForProject).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("drops a pass that a takeover overtook", async () => {
+    const { electron, emitLease } = hostWindow(false);
+    let answer!: (infos: unknown[]) => void;
+    electron.terminal.getForProject.mockImplementation(
+      () => new Promise<unknown[]>((resolve) => (answer = resolve))
+    );
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(electron.terminal.getForProject).toHaveBeenCalled());
+
+    emitLease({ type: "changed", state: leaseView(holder({ isHostLocal: true }), true) });
+    answer([]);
+    await flush();
+
+    expect(followCalls()).toHaveLength(0);
     stop();
   });
 });

@@ -159,6 +159,57 @@ async function runResyncPass(projectState: boolean): Promise<void> {
 /** Bumped by every lease event and by teardown, so a slower lookup never overrides either. */
 let leaseGeneration = 0;
 
+let followRunning: Promise<void> | null = null;
+let followAgain = false;
+/** Bumped by every follow request and by teardown, as {@link resyncGeneration} is for resyncs. */
+let followGeneration = 0;
+
+function watches(projectId: string): boolean {
+  const lease = getDriveLeaseSnapshot();
+  return lease?.projectId === projectId && lease.drivingHere === false;
+}
+
+/**
+ * While another screen drives this view's project, show the panels it shows:
+ * adopt the terminals the host runs, drop the ones it closed, and take the
+ * driver's saved layout. Runs whenever this view starts watching and whenever
+ * the host says the driver saved a different panel set. Nothing is written
+ * back: a watcher's saves of the host's project state are skipped. Overlapping
+ * requests coalesce into one follow-up pass.
+ */
+function followHostPanels(): Promise<void> {
+  followGeneration += 1;
+  if (followRunning) {
+    followAgain = true;
+    return followRunning;
+  }
+  followRunning = (async () => {
+    do {
+      followAgain = false;
+      await runFollowPass();
+    } while (followAgain);
+  })().finally(() => {
+    followRunning = null;
+  });
+  return followRunning;
+}
+
+async function runFollowPass(): Promise<void> {
+  const projectId = getViewWorkspaceId();
+  if (syncRefs === 0 || !projectId || !watches(projectId)) return;
+  const generation = followGeneration;
+  const isCurrent = () =>
+    generation === followGeneration && getViewWorkspaceId() === projectId && watches(projectId);
+  try {
+    // The terminals first, so the host's saved order also places the ones just adopted.
+    await resyncHostTerminals(projectId, { isCurrent, follow: true });
+    if (!isCurrent()) return;
+    await rehydrateHostProjectState(projectId, { isCurrent, authoritative: true, follow: true });
+  } catch (error) {
+    logWarn("[HostConnection] Couldn't follow the driver's panels", { error });
+  }
+}
+
 async function refreshLease(): Promise<void> {
   const projectId = getViewWorkspaceId();
   const lease = window.electron?.driveLease;
@@ -177,6 +228,7 @@ async function refreshLease(): Promise<void> {
 
 function applyLease(lease: DriveLeaseView): void {
   setDriveLeaseSnapshot(lease);
+  if (!lease.drivingHere) void followHostPanels();
   const driver = drivenElsewhereBy(lease);
   setLeaseInputBlock(
     driver === null
@@ -228,13 +280,20 @@ export async function takeOverDrive(
   // before the takeover must not land on top of it.
   dropDeferredHostOwnedWrites("this view took the project over");
   applyLease(view);
-  // The previous driver's saved layout is the project's now; this view's was
-  // stale while it was displaced.
+  // The previous driver's terminals and saved layout are the project's now;
+  // this view's were stale while it was displaced. The terminals first, so the
+  // saved order also places the ones just adopted.
   const generation = leaseGeneration;
-  void rehydrateHostProjectState(projectId, {
-    isCurrent: () => generation === leaseGeneration && getViewWorkspaceId() === projectId,
-    authoritative: true,
-  }).catch((error: unknown) => {
+  const isCurrent = () => generation === leaseGeneration && getViewWorkspaceId() === projectId;
+  void (async () => {
+    try {
+      await resyncHostTerminals(projectId, { isCurrent });
+    } catch (error) {
+      logWarn("[HostConnection] Couldn't read the host's terminals after taking over", { error });
+    }
+    if (!isCurrent()) return;
+    await rehydrateHostProjectState(projectId, { isCurrent, authoritative: true });
+  })().catch((error: unknown) => {
     logWarn("[HostConnection] Couldn't read the project's saved state after taking over", {
       error,
     });
@@ -391,6 +450,8 @@ function beginSync(): () => void {
         if (event.type === "changed" && event.state.projectId === projectId) {
           leaseGeneration += 1;
           applyLease(event.state);
+        } else if (event.type === "panels-changed" && event.projectId === projectId) {
+          if (watches(projectId)) void followHostPanels();
         }
       })
     );
@@ -471,6 +532,8 @@ function beginSync(): () => void {
           case "resync-required":
             if (event.hostId === hostId) {
               void resyncFromHost({ freshSession: event.reason === "reconnected" });
+              // A dropped event may have been the driver's panels changing.
+              if (projectId && watches(projectId)) void followHostPanels();
             }
             return;
           default:
@@ -496,6 +559,7 @@ function beginSync(): () => void {
     disposed = true;
     leaseGeneration += 1;
     resyncGeneration += 1;
+    followGeneration += 1;
     for (const dispose of disposers.splice(0)) dispose();
     setHostInputBlock(null);
     setLeaseInputBlock(null);
@@ -618,6 +682,8 @@ export function _reloadHostConnectionSyncForTesting(): void {
   resyncRunning = null;
   resyncAgain = false;
   resyncProjectStateOwed = false;
+  followRunning = null;
+  followAgain = false;
   Object.assign(openClaim, { projectId: null, done: false, inFlight: false, owed: false });
 }
 

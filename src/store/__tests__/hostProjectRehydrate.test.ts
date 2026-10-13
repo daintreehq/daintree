@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { store, drafts, selection } = vi.hoisted(() => {
   const store = {
     panelsById: {} as Record<string, Record<string, unknown>>,
+    panelIds: [] as string[],
+    panelIdsByWorktreeId: {} as Record<string, string[]>,
     addPanel: vi.fn(async (args: { requestedId?: string; kind?: string }) => {
       const id = args.requestedId ?? "new";
       store.panelsById[id] = { id, kind: args.kind };
@@ -37,7 +39,14 @@ vi.mock("@/utils/logger", () => ({
 }));
 const setDraftInputs = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("@/clients", () => ({ projectClient: { setDraftInputs } }));
-vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => store } }));
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: {
+    getState: () => store,
+    setState: (update: (state: typeof store) => Partial<typeof store>) => {
+      Object.assign(store, update(store));
+    },
+  },
+}));
 vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => drafts },
 }));
@@ -238,5 +247,77 @@ describe("rehydrateHostProjectState", () => {
     });
     await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
     expect(drafts.local).toEqual({ t1: "mine" });
+  });
+});
+
+describe("rehydrateHostProjectState following the driver (#13280)", () => {
+  function watcherHas(panels: Array<Record<string, unknown> & { id: string }>) {
+    store.panelsById = Object.fromEntries(panels.map((p) => [p.id, { ...p }]));
+    store.panelIds = panels.map((p) => p.id);
+    store.panelIdsByWorktreeId = {};
+    for (const p of panels) {
+      const key = typeof p.worktreeId === "string" ? p.worktreeId : "__none__";
+      (store.panelIdsByWorktreeId[key] ??= []).push(p.id);
+    }
+  }
+
+  it("moves panels where the driver filed them and drops the ones it closed", async () => {
+    watcherHas([
+      { id: "t1", kind: "terminal", location: "grid", worktreeId: "wt-main" },
+      { id: "browser-1", kind: "browser", location: "grid", worktreeId: "wt-main" },
+      { id: "closed", kind: "browser", location: "grid", worktreeId: "wt-main" },
+      { id: "t-unsaved", kind: "terminal", location: "grid", worktreeId: "wt-main" },
+      { id: "preview", kind: "dev-preview", location: "grid", worktreeId: "wt-main" },
+      { id: "modal", kind: "browser", location: "dialog" },
+    ]);
+    hydrate.mockResolvedValue(
+      hostSaved({
+        appState: {
+          terminals: [
+            { id: "t1", kind: "terminal", location: "dock", worktreeId: "wt-feature" },
+            { id: "browser-1", kind: "browser", location: "grid", worktreeId: "wt-feature" },
+          ],
+        },
+      })
+    );
+
+    await rehydrateHostProjectState("proj-1", {
+      isCurrent: current,
+      authoritative: true,
+      follow: true,
+    });
+
+    expect(store.panelsById.t1).toMatchObject({
+      location: "dock",
+      worktreeId: "wt-feature",
+      isVisible: false,
+    });
+    expect(store.panelsById["browser-1"]).toMatchObject({
+      location: "grid",
+      worktreeId: "wt-feature",
+    });
+    expect(store.panelIdsByWorktreeId["wt-feature"]).toEqual(["t1", "browser-1"]);
+    expect(store.panelIdsByWorktreeId["wt-main"]).toEqual(["closed", "t-unsaved", "preview"]);
+    // Terminals go with the host's PTY, dev previews with the driver's stop, dialogs with this screen.
+    expect(store.removePanel.mock.calls).toEqual([["closed"]]);
+  });
+
+  it("neither moves nor drops anything when not following", async () => {
+    watcherHas([
+      { id: "t1", kind: "terminal", location: "grid", worktreeId: "wt-main" },
+      { id: "closed", kind: "browser", location: "grid", worktreeId: "wt-main" },
+    ]);
+    hydrate.mockResolvedValue(
+      hostSaved({
+        appState: {
+          terminals: [{ id: "t1", kind: "terminal", location: "dock", worktreeId: "wt-feature" }],
+        },
+      })
+    );
+
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+
+    expect(store.panelsById.t1).toMatchObject({ location: "grid", worktreeId: "wt-main" });
+    expect(store.removePanel).not.toHaveBeenCalled();
   });
 });

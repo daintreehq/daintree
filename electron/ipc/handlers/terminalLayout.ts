@@ -1,4 +1,5 @@
 import { projectStore } from "../../services/ProjectStore.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { noteRendererSessionIdentityEdits } from "../../services/pty/agentSessionCapturePersistence.js";
 import { isUsableTerminalGeometry } from "../../../shared/types/terminal.js";
 import {
@@ -229,6 +230,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           // (#11497).
           mruList: existingState?.mruList,
         }));
+        peekDriveLeaseService()?.notifyPanelsChanged(projectId);
       }
     ),
     getTerminalSizes: op(
@@ -337,6 +339,7 @@ export const terminalLayoutNamespace = defineIpcNamespace({
           // See setTerminals: this rebuild deletes any field it omits (#11497).
           mruList: existingState?.mruList,
         }));
+        peekDriveLeaseService()?.notifyPanelsChanged(projectId);
       }
     ),
     getFocusMode: op(TERMINAL_LAYOUT_METHOD_CHANNELS.getFocusMode, async (projectId: string) => {

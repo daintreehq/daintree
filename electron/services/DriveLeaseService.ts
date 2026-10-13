@@ -33,6 +33,9 @@ export const DEFAULT_DRIVE_LEASE_RELEASE_GRACE_MS = 15_000;
  */
 export const DEFAULT_RESTORED_RESERVATION_GRACE_MS = 45_000;
 
+/** How long saves of a project's panels gather before its watchers are told. */
+export const PANELS_CHANGED_DELAY_MS = 200;
+
 type LeaseRegistry = Pick<EndpointRegistry, "get" | "getForProject" | "getRemote" | "onChange">;
 
 export interface DriveLeaseServiceOptions {
@@ -117,6 +120,7 @@ export class DriveLeaseService {
   private nextLeaseId = 1;
   private reconcileQueued = false;
   private publishedDriveLeases = "";
+  private readonly panelsChangedTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private disposed = false;
 
   constructor(options: DriveLeaseServiceOptions = {}) {
@@ -355,10 +359,39 @@ export class DriveLeaseService {
     return this.grant(projectId, endpoint);
   }
 
+  /**
+   * The project's saved panels changed: tell the views that watch it to read
+   * them back. A burst of saves goes out as one notice, sent a fixed delay
+   * after the first so a busy driver can't hold it back indefinitely; who
+   * watches is decided when it goes, not when the save landed.
+   */
+  notifyPanelsChanged(projectId: string): void {
+    if (this.disposed || this.panelsChangedTimers.has(projectId)) return;
+    const timer = setTimeout(() => {
+      this.panelsChangedTimers.delete(projectId);
+      if (this.disposed) return;
+      const holder = this.getHolder(projectId);
+      if (holder === null) return;
+      const event: DriveLeaseEvent = { type: "panels-changed", projectId };
+      for (const endpoint of this.registry.getForProject(projectId)) {
+        if (drives(holder, endpoint)) continue;
+        try {
+          endpoint.send({ type: "event", channel: CHANNELS.DRIVE_LEASE_EVENT, args: [event] });
+        } catch {
+          // A closing endpoint must not keep the others from hearing about it.
+        }
+      }
+    }, PANELS_CHANGED_DELAY_MS);
+    timer.unref?.();
+    this.panelsChangedTimers.set(projectId, timer);
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.offRegistry();
+    for (const timer of this.panelsChangedTimers.values()) clearTimeout(timer);
+    this.panelsChangedTimers.clear();
     for (const lease of this.leases.values()) {
       if (lease.releaseTimer) clearTimeout(lease.releaseTimer);
     }
