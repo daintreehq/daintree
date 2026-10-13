@@ -752,21 +752,17 @@ export class CliAvailabilityService {
       };
 
       if (!this.npmPrefixCache || this.npmPrefixCache.checkId !== this.checkId) {
-        const readPrefix = (npm: string | null) =>
-          new Promise<string | null>((res) => {
-            if (npm === null) {
-              res(null);
-              return;
-            }
-            let target: ReturnType<typeof cliSpawnTarget>;
-            try {
-              target = cliSpawnTarget(npm, ["config", "get", "prefix"], process.platform, {
-                env: process.env,
-              });
-            } catch {
-              res(null);
-              return;
-            }
+        const readPrefix = async (npm: string | null): Promise<string | null> => {
+          if (npm === null) return null;
+          let target: Awaited<ReturnType<typeof cliSpawnTarget>>;
+          try {
+            target = await cliSpawnTarget(npm, ["config", "get", "prefix"], process.platform, {
+              env: process.env,
+            });
+          } catch {
+            return null;
+          }
+          return new Promise<string | null>((res) => {
             execFile(
               target.command,
               target.args,
@@ -790,6 +786,7 @@ export class CliAvailabilityService {
               }
             );
           });
+        };
         this.npmPrefixCache = {
           checkId: this.checkId,
           // On Windows npm is `npm.cmd`, found in PATH only (asynchronously, so

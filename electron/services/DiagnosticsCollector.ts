@@ -159,7 +159,7 @@ async function runCommand(
   timeoutMs = SECTION_TIMEOUT_MS
 ): Promise<string | null> {
   try {
-    const target = cliSpawnTarget(cmd, args);
+    const target = await cliSpawnTarget(cmd, args);
     const { stdout } = await execFileAsync(target.command, target.args, {
       encoding: "utf8",
       timeout: timeoutMs,

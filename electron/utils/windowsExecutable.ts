@@ -1,4 +1,4 @@
-import { lstatSync, promises as fsPromises, statSync } from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import path from "node:path";
 
 // Given a bare program name, Windows process creation (and Node's spawn, which
@@ -12,6 +12,13 @@ import path from "node:path";
 // which would freeze whichever event loop made it (Main, the pty host, the
 // workspace host). Names are compared as Node reads the directory (Unicode), so
 // a profile directory such as `C:\Users\山田` is matched as written.
+//
+// Each of those calls also holds one of libuv's four threadpool threads, which
+// every other fs call, DNS lookup and zlib job in the process shares. So a
+// process keeps at most `PATH_FS_SLOTS` PATH-lookup calls outstanding, a slot
+// is given back only when its call returns (a dead share keeps its thread
+// whether or not anyone is still waiting), and finished listings are reused
+// for a few seconds rather than read again by every lookup.
 
 const SYSTEM_TOOLS = {
   "cmd.exe": ["System32", "cmd.exe"],
@@ -33,14 +40,26 @@ const LAUNCHABLE_EXTENSIONS = new Set([".com", ".exe", ".bat", ".cmd"]);
 const DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD";
 
 /**
- * How long one search waits on a PATH directory before treating it as holding
- * nothing. Local directories answer in milliseconds; this is for a share that
- * has gone away, whose listing would otherwise wait out the SMB timeout.
+ * How long one PATH-lookup call may run before its directory is treated as
+ * holding nothing. Local directories answer in milliseconds; this is for a
+ * share that has gone away, whose listing would otherwise wait out the SMB
+ * timeout.
  */
 export const WINDOWS_PATH_ENTRY_TIMEOUT_MS = 1_500;
-// A directory whose listing failed after being written off is left alone this
+// A directory whose call failed after being written off is left alone this
 // long, so every search does not pay the timeout again for a dead share.
 const STALLED_RETRY_MS = 30_000;
+// PATH-lookup calls one process keeps outstanding. While every one of them has
+// outlived its deadline (two dead shares), one more is let through so the
+// healthy entries can still be read; a third dead share then waits too.
+const PATH_FS_SLOTS = 2;
+// How long a search waits in all, queueing included, before treating the
+// directories it has not heard from as holding nothing.
+const SEARCH_DEADLINE_FACTOR = 2;
+// How long a finished directory listing answers for the directory. Startup
+// looks up every agent, git, the shell and the probes within moments of each
+// other; a registry PATH refresh drops every listing at once.
+const LISTING_TTL_MS = 3_000;
 
 const RESOLVED_CACHE_LIMIT = 64;
 
@@ -98,24 +117,6 @@ export function windowsLaunchExtensions(env: NodeJS.ProcessEnv = process.env): s
   return extensions;
 }
 
-/**
- * Synchronous check of one known file. Never used to search PATH: only for a
- * path already in hand, such as the target a shim names beside itself.
- */
-export function isWindowsLaunchFile(file: string): boolean {
-  try {
-    return statSync(file).isFile();
-  } catch {
-    // Windows Store execution aliases are reparse points: stat reports EACCES,
-    // while CreateProcess can still launch the alias by its resolved file name.
-    try {
-      return lstatSync(file).isSymbolicLink();
-    } catch {
-      return false;
-    }
-  }
-}
-
 export function windowsSystemRoot(env: NodeJS.ProcessEnv = process.env): string {
   for (const name of ["SYSTEMROOT", "WINDIR"]) {
     const value = windowsEnvValue(env, name);
@@ -155,11 +156,21 @@ const nodePathFs: WindowsPathFs = {
 
 export interface WindowsPathSearchOptions {
   fs?: WindowsPathFs;
-  /** How long to wait on one PATH directory; see `WINDOWS_PATH_ENTRY_TIMEOUT_MS`. */
+  /** How long one PATH-lookup call may run; see `WINDOWS_PATH_ENTRY_TIMEOUT_MS`. */
   timeoutMs?: number;
+  /**
+   * Read PATH with Windows rules whatever the host. For callers that only ever
+   * search on Windows; elsewhere the host's rules apply, which is what lets
+   * tests search real temporary directories.
+   */
+  win32Paths?: boolean;
 }
 
-/** The asynchronous form of `isWindowsLaunchFile`. */
+/**
+ * Whether `file` is something process creation can start: a file, or a
+ * reparse point such as a Windows Store execution alias, which stat reports as
+ * EACCES while CreateProcess still launches it by its resolved name.
+ */
 export async function isWindowsLaunchFileAsync(
   file: string,
   fs: WindowsPathFs = nodePathFs
@@ -182,121 +193,64 @@ function windowsDirectoryKey(directory: string): string {
   return /^[a-z]:$/.test(trimmed) ? `${trimmed}\\` : trimmed;
 }
 
+interface PathRules {
+  isAbsolute: (directory: string) => boolean;
+  key: (directory: string) => string;
+  join: (directory: string, file: string) => string;
+  dirname: (file: string) => string;
+}
+
+const WIN32_RULES: PathRules = {
+  isAbsolute: isWindowsAbsolutePath,
+  key: windowsDirectoryKey,
+  join: path.win32.join,
+  dirname: path.win32.dirname,
+};
+
+const POSIX_RULES: PathRules = {
+  isAbsolute: path.posix.isAbsolute,
+  key: (directory) => directory,
+  join: path.posix.join,
+  dirname: path.posix.dirname,
+};
+
 /**
  * Paths are built the host's way, which is `path.win32` wherever this runs for
  * real; the POSIX branch is what lets tests search real temporary directories.
- * A directory PATH lists twice is searched once, where it first appears.
  */
-function searchDirectories(env: NodeJS.ProcessEnv): {
-  directories: Array<{ directory: string; key: string }>;
-  join: (directory: string, file: string) => string;
-} {
-  const isWindows = process.platform === "win32";
-  const isAbsolute = isWindows ? isWindowsAbsolutePath : path.posix.isAbsolute;
+function pathRules(options: WindowsPathSearchOptions): PathRules {
+  return options.win32Paths || process.platform === "win32" ? WIN32_RULES : POSIX_RULES;
+}
+
+/** PATH's absolute directories; one PATH lists twice is searched once, where it first appears. */
+function searchDirectories(
+  env: NodeJS.ProcessEnv,
+  rules: PathRules
+): Array<{ directory: string; key: string }> {
   const seen = new Set<string>();
   const directories: Array<{ directory: string; key: string }> = [];
   for (const directory of splitWindowsPath(windowsEnvValue(env, "PATH") ?? "")) {
-    if (!isAbsolute(directory)) continue;
-    const key = isWindows ? windowsDirectoryKey(directory) : directory;
+    if (!rules.isAbsolute(directory)) continue;
+    const key = rules.key(directory);
     if (seen.has(key)) continue;
     seen.add(key);
     directories.push({ directory, key });
   }
-  return { directories, join: isWindows ? path.win32.join : path.posix.join };
+  return directories;
 }
 
 function isPathLike(name: string): boolean {
   return /[\\/:]/.test(name);
 }
 
-type Listing = Map<string, WindowsDirectoryEntry> | null;
-
-interface PathFsState {
-  /** Listings in flight, shared by every search that wants the same directory meanwhile. */
-  listings: Map<string, Promise<Listing>>;
-  /**
-   * Directories with a call that outlived its deadline. Skipped until that
-   * call returns (and for `STALLED_RETRY_MS` more when it fails), so a dead
-   * share holds one of libuv's four threadpool threads rather than one per
-   * search queued up behind it.
-   */
-  stalled: Set<string>;
-  resolved: Map<string, string>;
-  resolving: Map<string, Promise<string | null>>;
-}
-
-let pathFsStates = new WeakMap<WindowsPathFs, PathFsState>();
-let reportedStalls = new Set<string>();
-let generation = 0;
-
-function stateFor(fs: WindowsPathFs): PathFsState {
-  let state = pathFsStates.get(fs);
-  if (!state) {
-    state = { listings: new Map(), stalled: new Set(), resolved: new Map(), resolving: new Map() };
-    pathFsStates.set(fs, state);
-  }
-  return state;
-}
-
-/** Each name in the directory, keyed case-insensitively; null when it cannot be read. */
-function listDirectory(
-  state: PathFsState,
-  key: string,
-  directory: string,
-  fs: WindowsPathFs
-): Promise<Listing> {
-  const inFlight = state.listings.get(key);
-  if (inFlight) return inFlight;
-  const listing = (async (): Promise<Listing> => {
-    try {
-      const byName = new Map<string, WindowsDirectoryEntry>();
-      for (const entry of await fs.readdir(directory)) {
-        const name = entry.name.toLowerCase();
-        if (!byName.has(name)) byName.set(name, entry);
-      }
-      return byName;
-    } catch {
-      return null;
-    }
-  })();
-  state.listings.set(key, listing);
-  void listing.then(() => {
-    if (state.listings.get(key) === listing) state.listings.delete(key);
-  });
-  return listing;
-}
-
-/**
- * Write `directory` off until the call that outlived its deadline settles:
- * `answered` resolves true if it got an answer (the share was only slow), false
- * if it failed, which keeps the directory skipped a while longer.
- */
-function markStalled(
-  state: PathFsState,
-  key: string,
-  directory: string,
-  answered: Promise<boolean>,
-  timeoutMs: number
-): void {
-  if (state.stalled.has(key)) return;
-  state.stalled.add(key);
-  if (!reportedStalls.has(key)) {
-    reportedStalls.add(key);
-    console.warn(
-      `[windowsExecutable] PATH entry "${directory}" did not answer within ${timeoutMs} ms; searching without it until it does`
-    );
-  }
-  void answered.then((ok) => {
-    if (ok) {
-      state.stalled.delete(key);
-      return;
-    }
-    const retry = setTimeout(() => state.stalled.delete(key), STALLED_RETRY_MS);
-    retry.unref?.();
-  });
-}
-
 const TIMED_OUT = Symbol("timed out");
+/** A call that found its directory written off when its turn came, and so touched nothing. */
+const NOT_READ = Symbol("not read");
+/** A directory that can be traversed but not listed (no FILE_LIST_DIRECTORY right). */
+const UNLISTABLE = Symbol("unlistable");
+
+/** Each name in the directory, keyed case-insensitively; UNLISTABLE, or null when it cannot be read. */
+type Listing = Map<string, WindowsDirectoryEntry> | typeof UNLISTABLE | null;
 
 interface Deadline {
   reached: Promise<typeof TIMED_OUT>;
@@ -312,6 +266,356 @@ function startDeadline(timeoutMs: number): Deadline {
   return { reached, cancel: () => clearTimeout(timer) };
 }
 
+interface Signal {
+  next(): Promise<void>;
+  notify(): void;
+}
+
+function createSignal(): Signal {
+  let fire: () => void = () => {};
+  const arm = (): Promise<void> =>
+    new Promise<void>((resolve) => {
+      fire = resolve;
+    });
+  let pending = arm();
+  return {
+    next: () => pending,
+    notify: () => {
+      const fired = fire;
+      pending = arm();
+      fired();
+    },
+  };
+}
+
+/** One PATH-lookup call, queued or running. */
+interface LimitedCall<T> {
+  /** What the call returned, whenever that is. */
+  result: Promise<T>;
+  /**
+   * Resolves once waiting on the call is pointless: it outlived its deadline,
+   * or it is still queued while every lane is held by calls that did.
+   */
+  givenUp: Promise<typeof TIMED_OUT>;
+}
+
+interface CallSpec {
+  /** 1 for a directory that has stalled before, read after every other. */
+  priority: 0 | 1;
+  timeoutMs: number;
+  /** Run even after every waiter gave up (a listing still fills the cache). */
+  keep: boolean;
+  onOverdue(): void;
+  onSettled(overdue: boolean): void;
+}
+
+interface QueuedCall {
+  spec: CallSpec;
+  start(): void;
+  giveUp(): void;
+  givenUp: boolean;
+}
+
+/**
+ * At most `PATH_FS_SLOTS` calls outstanding, plus one while every outstanding
+ * call has outlived its deadline. A slot is freed when its call returns, not
+ * when a waiter stops waiting, because the thread is held until then.
+ */
+class PathFsLimiter {
+  private running = 0;
+  private overdue = 0;
+  private readonly queues: [QueuedCall[], QueuedCall[]] = [[], []];
+
+  constructor(private readonly changed: Signal) {}
+
+  private canStart(): boolean {
+    if (this.running < PATH_FS_SLOTS) return true;
+    return this.running === this.overdue && this.running < PATH_FS_SLOTS + 1;
+  }
+
+  /** No lane can open until a call that outlived its deadline returns. */
+  jammed(): boolean {
+    return !this.canStart() && this.running === this.overdue;
+  }
+
+  submit<T>(spec: CallSpec, call: () => Promise<T>): LimitedCall<T> {
+    let deliver!: (value: T) => void;
+    let fail!: (error: unknown) => void;
+    const result = new Promise<T>((resolve, reject) => {
+      deliver = resolve;
+      fail = reject;
+    });
+    // Waiters race this against `givenUp`; one that stopped waiting must not
+    // leave a late failure unhandled.
+    result.catch(() => undefined);
+    let giveUp!: () => void;
+    const givenUp = new Promise<typeof TIMED_OUT>((resolve) => {
+      giveUp = () => resolve(TIMED_OUT);
+    });
+    const queued: QueuedCall = {
+      spec,
+      givenUp: false,
+      giveUp: () => {
+        queued.givenUp = true;
+        giveUp();
+      },
+      start: () => {
+        this.running++;
+        let overdue = false;
+        const timer = setTimeout(() => {
+          overdue = true;
+          this.overdue++;
+          giveUp();
+          spec.onOverdue();
+          this.pump();
+        }, spec.timeoutMs);
+        timer.unref?.();
+        const settle = (finish: () => void): void => {
+          clearTimeout(timer);
+          this.running--;
+          if (overdue) this.overdue--;
+          spec.onSettled(overdue);
+          finish();
+          this.pump();
+          this.changed.notify();
+        };
+        let running: Promise<T>;
+        try {
+          running = call();
+        } catch (error) {
+          running = Promise.reject(error);
+        }
+        running.then(
+          (value) => settle(() => deliver(value)),
+          (error: unknown) => settle(() => fail(error))
+        );
+      },
+    };
+    this.queues[spec.priority].push(queued);
+    this.pump();
+    return { result, givenUp };
+  }
+
+  private pump(): void {
+    while (this.canStart()) {
+      const next = this.queues[0].shift() ?? this.queues[1].shift();
+      if (!next) return;
+      // Nobody is waiting and nothing would be kept: a probe of a file, not a listing.
+      if (next.givenUp && !next.spec.keep) continue;
+      next.start();
+    }
+    if (this.jammed()) {
+      for (const queue of this.queues) for (const waiting of queue) waiting.giveUp();
+    }
+  }
+}
+
+interface StalledDirectory {
+  /** Calls to the directory that outlived their deadline and have not returned. */
+  outstanding: number;
+  /** Whether one of them came back with an answer, so the share is only slow. */
+  answered: boolean;
+  retry?: NodeJS.Timeout;
+}
+
+interface CachedListing {
+  listing: Listing;
+  at: number;
+  generation: number;
+}
+
+interface ResolvedHit {
+  file: string;
+  /** Directories the search that found it went past without an answer. */
+  skipped: string[];
+  skippedKeys: string[];
+}
+
+interface PathFsState {
+  limiter: PathFsLimiter;
+  changed: Signal;
+  /** Listings queued or in flight, shared by every search that wants the same directory meanwhile. */
+  listings: Map<string, LimitedCall<Listing | typeof NOT_READ>>;
+  /** Finished listings, answering for their directory for `LISTING_TTL_MS`. */
+  listed: Map<string, CachedListing>;
+  /**
+   * Directories with a call that outlived its deadline. Skipped until that
+   * call returns (and for `STALLED_RETRY_MS` more when it fails), so a dead
+   * share holds one threadpool thread rather than one per search queued up
+   * behind it.
+   */
+  stalled: Map<string, StalledDirectory>;
+  /** Directories that have stalled and not answered promptly since: read last. */
+  suspect: Set<string>;
+  resolved: Map<string, ResolvedHit>;
+  resolving: Map<string, Promise<WindowsExecutableLookup>>;
+}
+
+let pathFsStates = new WeakMap<WindowsPathFs, PathFsState>();
+let reportedStalls = new Set<string>();
+let generation = 0;
+
+function stateFor(fs: WindowsPathFs): PathFsState {
+  let state = pathFsStates.get(fs);
+  if (!state) {
+    const changed = createSignal();
+    state = {
+      limiter: new PathFsLimiter(changed),
+      changed,
+      listings: new Map(),
+      listed: new Map(),
+      stalled: new Map(),
+      suspect: new Set(),
+      resolved: new Map(),
+      resolving: new Map(),
+    };
+    pathFsStates.set(fs, state);
+  }
+  return state;
+}
+
+/** Write `directory` off until the call that outlived its deadline returns. */
+function markStalled(state: PathFsState, key: string, directory: string, timeoutMs: number): void {
+  state.suspect.add(key);
+  const stalled = state.stalled.get(key);
+  if (stalled) {
+    stalled.outstanding++;
+    if (stalled.retry) clearTimeout(stalled.retry);
+    stalled.retry = undefined;
+    return;
+  }
+  state.stalled.set(key, { outstanding: 1, answered: false });
+  if (!reportedStalls.has(key)) {
+    reportedStalls.add(key);
+    console.warn(
+      `[windowsExecutable] PATH entry "${directory}" did not answer within ${timeoutMs} ms; searching without it until it does`
+    );
+  }
+}
+
+/**
+ * One of the directory's overdue calls returned. Once none is left, the
+ * directory is searched again at once if one of them got an answer (the share
+ * was only slow), or after `STALLED_RETRY_MS` if they all failed.
+ */
+function releaseStalled(state: PathFsState, key: string, answered: boolean): void {
+  const stalled = state.stalled.get(key);
+  if (!stalled) return;
+  stalled.outstanding = Math.max(0, stalled.outstanding - 1);
+  stalled.answered ||= answered;
+  if (stalled.outstanding > 0) return;
+  const clear = (): void => {
+    if (state.stalled.get(key) !== stalled) return;
+    state.stalled.delete(key);
+    state.changed.notify();
+  };
+  if (stalled.answered) {
+    clear();
+    return;
+  }
+  stalled.retry = setTimeout(clear, STALLED_RETRY_MS);
+  stalled.retry.unref?.();
+}
+
+function isFresh(cached: CachedListing): boolean {
+  const age = Date.now() - cached.at;
+  return cached.generation === generation && age >= 0 && age < LISTING_TTL_MS;
+}
+
+function settledCall<T>(value: T): LimitedCall<T> {
+  return { result: Promise.resolve(value), givenUp: new Promise<typeof TIMED_OUT>(() => {}) };
+}
+
+function isListingDenied(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EACCES" || code === "EPERM";
+}
+
+function readListing(
+  state: PathFsState,
+  key: string,
+  directory: string,
+  fs: WindowsPathFs,
+  timeoutMs: number
+): LimitedCall<Listing | typeof NOT_READ> {
+  const cached = state.listed.get(key);
+  if (cached && isFresh(cached)) return settledCall(cached.listing);
+  const inFlight = state.listings.get(key);
+  if (inFlight) return inFlight;
+  const readFor = generation;
+  let listing: Listing | typeof NOT_READ = NOT_READ;
+  const call = state.limiter.submit(
+    {
+      priority: state.suspect.has(key) ? 1 : 0,
+      timeoutMs,
+      keep: true,
+      onOverdue: () => markStalled(state, key, directory, timeoutMs),
+      onSettled: (overdue) => {
+        if (state.listings.get(key) === call) state.listings.delete(key);
+        if (listing === NOT_READ) return;
+        if (readFor === generation) {
+          state.listed.set(key, { listing, at: Date.now(), generation: readFor });
+        }
+        if (overdue) releaseStalled(state, key, listing !== null);
+        else state.suspect.delete(key);
+      },
+    },
+    async () => {
+      if (state.stalled.has(key)) return NOT_READ;
+      try {
+        const byName = new Map<string, WindowsDirectoryEntry>();
+        for (const entry of await fs.readdir(directory)) {
+          const name = entry.name.toLowerCase();
+          if (!byName.has(name)) byName.set(name, entry);
+        }
+        listing = byName;
+      } catch (error) {
+        listing = isListingDenied(error) ? UNLISTABLE : null;
+      }
+      return listing;
+    }
+  );
+  state.listings.set(key, call);
+  return call;
+}
+
+/** Whether `file` (in `directory`) is launchable, as one PATH-lookup call. */
+function checkLaunchFile(
+  state: PathFsState,
+  key: string,
+  directory: string,
+  file: string,
+  fs: WindowsPathFs,
+  timeoutMs: number
+): LimitedCall<boolean | typeof NOT_READ> {
+  return state.limiter.submit(
+    {
+      priority: state.suspect.has(key) ? 1 : 0,
+      timeoutMs,
+      keep: false,
+      onOverdue: () => markStalled(state, key, directory, timeoutMs),
+      onSettled: (overdue) => {
+        if (overdue) releaseStalled(state, key, true);
+        else state.suspect.delete(key);
+      },
+    },
+    async () => (state.stalled.has(key) ? NOT_READ : isWindowsLaunchFileAsync(file, fs))
+  );
+}
+
+function waitFor<T>(call: LimitedCall<T>, deadline: Deadline): Promise<T | typeof TIMED_OUT> {
+  return Promise.race([call.result, call.givenUp, deadline.reached]);
+}
+
+interface SearchContext {
+  state: PathFsState;
+  fs: WindowsPathFs;
+  rules: PathRules;
+  timeoutMs: number;
+  deadline: Deadline;
+  first: boolean;
+}
+
 interface DirectoryResult {
   directory: string;
   found: string[];
@@ -321,44 +625,41 @@ interface DirectoryResult {
 
 /** `files` (in priority order) that `directory` holds as launchable files. */
 async function searchDirectory(
+  context: SearchContext,
   directory: string,
   key: string,
-  files: readonly string[],
-  join: (directory: string, file: string) => string,
-  fs: WindowsPathFs,
-  deadline: Deadline,
-  timeoutMs: number
+  files: readonly string[]
 ): Promise<DirectoryResult> {
-  const state = stateFor(fs);
-  if (state.stalled.has(key)) return { directory, found: [], skipped: true };
-  const listing = listDirectory(state, key, directory, fs);
-  const entries = await Promise.race([listing, deadline.reached]);
-  if (entries === TIMED_OUT) {
-    const answered = listing.then((listed) => listed !== null);
-    markStalled(state, key, directory, answered, timeoutMs);
-    return { directory, found: [], skipped: true };
-  }
+  const { state, fs, rules, timeoutMs, deadline } = context;
   const found: string[] = [];
-  if (!entries) return { directory, found, skipped: false };
+  const skipped = (): DirectoryResult => ({ directory, found, skipped: true });
+  if (state.stalled.has(key)) return skipped();
+  const listing = await waitFor(readListing(state, key, directory, fs, timeoutMs), deadline);
+  if (listing === TIMED_OUT || listing === NOT_READ) return skipped();
+  if (listing === null) return { directory, found, skipped: false };
+  if (listing === UNLISTABLE) {
+    // Traversal without listing: ask for each candidate by name instead.
+    for (const file of files) {
+      const candidate = rules.join(directory, file);
+      const check = checkLaunchFile(state, key, directory, candidate, fs, timeoutMs);
+      const launchable = await waitFor(check, deadline);
+      if (launchable === TIMED_OUT || launchable === NOT_READ) return skipped();
+      if (!launchable) continue;
+      found.push(candidate);
+      if (context.first) break;
+    }
+    return { directory, found, skipped: false };
+  }
   for (const file of files) {
-    const entry = entries.get(file.toLowerCase());
+    const entry = listing.get(file.toLowerCase());
     if (!entry || entry.isDirectory()) continue;
     // The listing's own name, so the result reads the way `where` would list it.
-    const candidate = join(directory, entry.name);
+    const candidate = rules.join(directory, entry.name);
     if (!entry.isFile()) {
       // A reparse point: a symlink (WinGet's Links), or a Store execution alias.
-      const check = isWindowsLaunchFileAsync(candidate, fs);
-      const launchable = await Promise.race([check, deadline.reached]);
-      if (launchable === TIMED_OUT) {
-        markStalled(
-          state,
-          key,
-          directory,
-          check.then(() => true),
-          timeoutMs
-        );
-        return { directory, found, skipped: true };
-      }
+      const check = checkLaunchFile(state, key, directory, candidate, fs, timeoutMs);
+      const launchable = await waitFor(check, deadline);
+      if (launchable === TIMED_OUT || launchable === NOT_READ) return skipped();
       if (!launchable) continue;
     }
     found.push(candidate);
@@ -374,9 +675,10 @@ export interface WindowsPathSearch {
 }
 
 /**
- * Searches every absolute PATH directory at once, each bounded by `timeoutMs`,
- * and reads the results back in PATH order. With `first`, it returns as soon as
- * the earliest directory holding a match is known.
+ * Searches the absolute PATH directories through the shared slots, highest
+ * priority and earliest in PATH first, each call bounded by `timeoutMs` and the
+ * whole search by twice that, and reads the results back in PATH order. With
+ * `first`, it returns as soon as the earliest directory holding a match is known.
  */
 async function searchPath(
   files: readonly string[],
@@ -386,11 +688,20 @@ async function searchPath(
 ): Promise<WindowsPathSearch> {
   const fs = options.fs ?? nodePathFs;
   const timeoutMs = options.timeoutMs ?? WINDOWS_PATH_ENTRY_TIMEOUT_MS;
-  const { directories, join } = searchDirectories(env);
-  const deadline = startDeadline(timeoutMs);
-  const searches = directories.map(({ directory, key }) =>
-    searchDirectory(directory, key, files, join, fs, deadline, timeoutMs)
-  );
+  const rules = pathRules(options);
+  const directories = searchDirectories(env, rules);
+  const deadline = startDeadline(timeoutMs * SEARCH_DEADLINE_FACTOR);
+  const state = stateFor(fs);
+  const context: SearchContext = { state, fs, rules, timeoutMs, deadline, first };
+  // Submitted healthy-first, so a directory that stalled before does not take
+  // a free slot ahead of the rest; read back in PATH order all the same.
+  const searches: Array<Promise<DirectoryResult>> = new Array(directories.length);
+  const submitOrder = directories
+    .map((entry, index) => ({ ...entry, index, suspect: state.suspect.has(entry.key) }))
+    .sort((a, b) => Number(a.suspect) - Number(b.suspect) || a.index - b.index);
+  for (const { directory, key, index } of submitOrder) {
+    searches[index] = searchDirectory(context, directory, key, files);
+  }
   void Promise.all(searches).then(deadline.cancel, deadline.cancel);
   const paths: string[] = [];
   const skipped: string[] = [];
@@ -443,41 +754,112 @@ export async function findWindowsCommand(
   return (await searchPath(files, env, options, true)).paths[0] ?? null;
 }
 
-function resolvedKey(name: string, env: NodeJS.ProcessEnv): string {
-  return `${generation}\0${name.toLowerCase()}\0${windowsEnvValue(env, "PATH") ?? ""}`;
+/**
+ * The first of `files` (exact file names, tried in order within each
+ * directory) found in the absolute PATH directories, or null. For callers that
+ * build their own candidate list; it is not cached.
+ */
+export async function findWindowsPathFile(
+  files: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+  options: WindowsPathSearchOptions = {}
+): Promise<string | null> {
+  const names = files.filter((file) => file && !isPathLike(file) && !/[\0\r\n"*?<>|]/.test(file));
+  if (names.length === 0) return null;
+  return (await searchPath(names, env, options, true)).paths[0] ?? null;
+}
+
+function resolvedKey(name: string, env: NodeJS.ProcessEnv, rules: PathRules): string {
+  const flavour = rules === WIN32_RULES ? "w" : "p";
+  return `${generation}\0${flavour}\0${name.toLowerCase()}\0${windowsEnvValue(env, "PATH") ?? ""}`;
 }
 
 /**
  * Whether a cached hit is still there: one stat, bounded like a PATH search and
- * skipped (so a fresh search follows) while its directory is written off.
+ * skipped (so a fresh search follows) while its directory is written off. A
+ * stat that finds the file gone also drops the directory's listing, which
+ * evidently no longer describes it.
  */
 async function stillOnPath(
   file: string,
   options: WindowsPathSearchOptions,
   fs: WindowsPathFs
 ): Promise<boolean> {
-  const isWindows = process.platform === "win32";
-  const directory = (isWindows ? path.win32 : path.posix).dirname(file);
-  const key = isWindows ? windowsDirectoryKey(directory) : directory;
+  const rules = pathRules(options);
+  const directory = rules.dirname(file);
+  const key = rules.key(directory);
   const state = stateFor(fs);
   if (state.stalled.has(key)) return false;
   const timeoutMs = options.timeoutMs ?? WINDOWS_PATH_ENTRY_TIMEOUT_MS;
-  const deadline = startDeadline(timeoutMs);
+  const deadline = startDeadline(timeoutMs * SEARCH_DEADLINE_FACTOR);
   try {
-    const check = isWindowsLaunchFileAsync(file, fs);
-    const launchable = await Promise.race([check, deadline.reached]);
-    if (launchable !== TIMED_OUT) return launchable;
-    markStalled(
-      state,
-      key,
-      directory,
-      check.then(() => true),
-      timeoutMs
-    );
+    const check = checkLaunchFile(state, key, directory, file, fs, timeoutMs);
+    const launchable = await waitFor(check, deadline);
+    if (launchable === true) return true;
+    if (launchable === false) state.listed.delete(key);
     return false;
   } finally {
     deadline.cancel();
   }
+}
+
+export interface WindowsExecutableLookup {
+  file: string | null;
+  /**
+   * PATH directories the search went past without an answer. A non-empty list
+   * makes the answer provisional: one of them may hold an earlier candidate.
+   */
+  skipped: string[];
+}
+
+/**
+ * `resolveWindowsExecutable`, also reporting the PATH directories the search
+ * had to go past without an answer.
+ */
+export function lookupWindowsExecutable(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: WindowsPathSearchOptions = {}
+): Promise<WindowsExecutableLookup> {
+  if (!name || isPathLike(name)) return Promise.resolve({ file: name || null, skipped: [] });
+  const fs = options.fs ?? nodePathFs;
+  const state = stateFor(fs);
+  const rules = pathRules(options);
+  const key = resolvedKey(name, env, rules);
+  const pending = state.resolving.get(key);
+  if (pending) return pending;
+  const resolution = (async (): Promise<WindowsExecutableLookup> => {
+    const cached = state.resolved.get(key);
+    if (cached !== undefined) {
+      // A directory it went past is answering again: it may hold an earlier candidate.
+      const reachable = cached.skippedKeys.some((skipped) => !state.stalled.has(skipped));
+      if (!reachable && (await stillOnPath(cached.file, options, fs))) {
+        return { file: cached.file, skipped: cached.skipped };
+      }
+      if (state.resolved.get(key) === cached) state.resolved.delete(key);
+    }
+    const files = [
+      ...(path.win32.extname(name) ? [name] : []),
+      ...NATIVE_EXTENSIONS.map((extension) => `${name}${extension}`),
+    ];
+    const search = await searchPath(files, env, options, true);
+    const file = search.paths[0] ?? null;
+    if (file !== null && key === resolvedKey(name, env, rules)) {
+      if (state.resolved.size >= RESOLVED_CACHE_LIMIT) state.resolved.clear();
+      state.resolved.set(key, {
+        file,
+        skipped: search.skipped,
+        skippedKeys: search.skipped.map(rules.key),
+      });
+    }
+    return { file, skipped: search.skipped };
+  })();
+  state.resolving.set(key, resolution);
+  const settle = (): void => {
+    if (state.resolving.get(key) === resolution) state.resolving.delete(key);
+  };
+  void resolution.then(settle, settle);
+  return resolution;
 }
 
 /**
@@ -489,44 +871,35 @@ async function stillOnPath(
  * returned unchanged.
  *
  * Hits are cached per (name, PATH) and re-checked on every use, so a removed
- * file is searched for again; a miss is not cached. Concurrent lookups of one
- * name share a search. `invalidateWindowsExecutableCache` drops every hit when a
- * PATH refresh may have put a new candidate ahead of a cached one.
+ * file is searched for again; a miss is not cached, though the directory
+ * listings a search reads answer for a few seconds. Concurrent lookups of one
+ * name share a search. `invalidateWindowsExecutableCache` drops every hit and
+ * listing when a PATH refresh may have put a new candidate ahead of a cached one.
  */
-export function resolveWindowsExecutable(
+export async function resolveWindowsExecutable(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
   options: WindowsPathSearchOptions = {}
 ): Promise<string | null> {
-  if (!name || isPathLike(name)) return Promise.resolve(name || null);
-  const fs = options.fs ?? nodePathFs;
-  const state = stateFor(fs);
-  const key = resolvedKey(name, env);
-  const pending = state.resolving.get(key);
-  if (pending) return pending;
-  const resolution = (async (): Promise<string | null> => {
-    const cached = state.resolved.get(key);
-    if (cached !== undefined) {
-      if (await stillOnPath(cached, options, fs)) return cached;
-      if (state.resolved.get(key) === cached) state.resolved.delete(key);
-    }
-    const files = [
-      ...(path.win32.extname(name) ? [name] : []),
-      ...NATIVE_EXTENSIONS.map((extension) => `${name}${extension}`),
-    ];
-    const file = (await searchPath(files, env, options, true)).paths[0] ?? null;
-    if (file !== null && key === resolvedKey(name, env)) {
-      if (state.resolved.size >= RESOLVED_CACHE_LIMIT) state.resolved.clear();
-      state.resolved.set(key, file);
-    }
-    return file;
-  })();
-  state.resolving.set(key, resolution);
-  const settle = (): void => {
-    if (state.resolving.get(key) === resolution) state.resolving.delete(key);
-  };
-  void resolution.then(settle, settle);
-  return resolution;
+  return (await lookupWindowsExecutable(name, env, options)).file;
+}
+
+/**
+ * Resolves once one of `directories` (PATH entries a search reported as
+ * skipped) can be read again: its overdue call has returned, or the retry
+ * window after a failed one has passed, and a lookup slot can open. Never
+ * rejects; it waits as long as that takes.
+ */
+export async function windowsPathEntriesReadable(
+  directories: readonly string[],
+  options: WindowsPathSearchOptions = {}
+): Promise<void> {
+  if (directories.length === 0) return;
+  const state = stateFor(options.fs ?? nodePathFs);
+  const keys = directories.map(pathRules(options).key);
+  while (state.limiter.jammed() || keys.every((key) => state.stalled.has(key))) {
+    await state.changed.next();
+  }
 }
 
 /**
@@ -539,7 +912,7 @@ export function peekWindowsExecutable(
   env: NodeJS.ProcessEnv = process.env
 ): string | undefined {
   if (!name || isPathLike(name)) return name || undefined;
-  return stateFor(nodePathFs).resolved.get(resolvedKey(name, env));
+  return stateFor(nodePathFs).resolved.get(resolvedKey(name, env, pathRules({})))?.file;
 }
 
 /** On Windows, resolve `names` from PATH ahead of the first spawn that needs them. */
@@ -606,15 +979,18 @@ export function windowsExecutableCacheGeneration(): number {
 }
 
 /**
- * Forget every resolved path; the runtime PATH refresh calls this. Stalled
- * directories stay written off until their outstanding call returns.
+ * Forget every resolved path and directory listing; the runtime PATH refresh
+ * calls this. Stalled directories stay written off until their outstanding
+ * call returns, and calls already running keep their slots.
  */
 export function invalidateWindowsExecutableCache(): void {
   generation++;
-  stateFor(nodePathFs).resolved.clear();
+  const state = stateFor(nodePathFs);
+  state.resolved.clear();
+  state.listed.clear();
 }
 
-/** Test seam: forget every resolved path, stalled directory and logged stall. */
+/** Test seam: forget every resolved path, listing, stalled directory, slot and logged stall. */
 export function resetWindowsExecutableCache(): void {
   generation++;
   pathFsStates = new WeakMap();

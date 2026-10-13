@@ -25,6 +25,7 @@ import {
   resetInFlightInstalls,
 } from "../AgentInstallService.js";
 import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
+import { resetWindowsExecutableCache } from "../../utils/windowsExecutable.js";
 
 const NODE_DIR = "C:\\Program Files\\nodejs";
 const WINDOWS_APPS = "C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps";
@@ -95,6 +96,8 @@ describe("AgentInstallService adversarial", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setPlatform("linux");
+    // Each case swaps the whole disk at once; PATH listings must not carry over.
+    resetWindowsExecutableCache();
   });
 
   afterEach(() => {

@@ -6,6 +6,7 @@ import {
   executableForSpawn,
   findWindowsCommand,
   invalidateWindowsExecutableCache,
+  lookupWindowsExecutable,
   peekWindowsExecutable,
   prewarmWindowsExecutables,
   resetWindowsExecutableCache,
@@ -14,12 +15,13 @@ import {
   scanWindowsPath,
   splitWindowsPath,
   windowsLaunchExtensions,
+  windowsPathEntriesReadable,
   windowsSystemRoot,
   windowsSystemTool,
   type WindowsDirectoryEntry,
-  type WindowsPathFs,
 } from "../windowsExecutable.js";
 import { isMissingGitExecutableError } from "../../../shared/utils/gitOperationErrors.js";
+import { fakeWindowsPathFs, type FakeWindowsPathFs } from "./helpers/windowsPathFs.js";
 
 // Pass-through recorders for the synchronous calls a PATH search must never
 // make: one against a dead network share blocks the calling loop.
@@ -65,40 +67,64 @@ function touch(directory: string, file: string): string {
 /**
  * A disk of Windows paths for a search running as win32. A directory listed in
  * `hang` never answers, the way one on a dropped network share waits out the
- * SMB timeout.
+ * SMB timeout; one in `denyListing` can be traversed but not listed.
  */
-function windowsDisk(
+const windowsDisk = (
   files: string[],
-  options: { hang?: string[] } = {}
-): WindowsPathFs & {
-  readdir: ReturnType<typeof vi.fn<(directory: string) => Promise<WindowsDirectoryEntry[]>>>;
-} {
-  const byPath = new Map(files.map((file) => [file.toLowerCase(), file]));
-  const hang = new Set((options.hang ?? []).map((entry) => entry.toLowerCase()));
-  const entry = (name: string): WindowsDirectoryEntry => ({
-    name,
-    isFile: () => true,
-    isDirectory: () => false,
-    isSymbolicLink: () => false,
+  options: { hang?: string[]; denyListing?: string[] } = {}
+): FakeWindowsPathFs => fakeWindowsPathFs(files, options);
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: Error): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
-  const missing = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  return { promise, resolve, reject };
+}
+
+/**
+ * Directory listings that each wait to be answered or failed by the test, with
+ * a count of how many are outstanding at once.
+ */
+function controlledDisk(files: string[]) {
+  const disk = windowsDisk(files);
+  const answer = disk.readdir.getMockImplementation()!;
+  const calls = new Map<string, Deferred<WindowsDirectoryEntry[]>>();
+  const order: string[] = [];
+  let outstanding = 0;
+  let peak = 0;
+  disk.readdir.mockImplementation((directory: string) => {
+    outstanding++;
+    peak = Math.max(peak, outstanding);
+    order.push(directory);
+    const call = deferred<WindowsDirectoryEntry[]>();
+    calls.set(directory, call);
+    const settle = () => {
+      outstanding--;
+    };
+    call.promise.then(settle, settle);
+    return call.promise;
+  });
   return {
-    readdir: vi.fn(async (directory: string) => {
-      const trim = (value: string) => value.replace(/\\+$/, "").toLowerCase();
-      const key = trim(directory);
-      if (hang.has(key)) return new Promise<WindowsDirectoryEntry[]>(() => {});
-      const names = [...byPath.values()]
-        .filter((file) => trim(path.win32.dirname(file)) === key)
-        .map((file) => entry(path.win32.basename(file)));
-      if (names.length === 0) throw missing();
-      return names;
-    }),
-    stat: async (file: string) => {
-      if (!byPath.has(file.toLowerCase())) throw missing();
-      return { isFile: () => true };
+    disk,
+    order,
+    outstanding: () => outstanding,
+    peak: () => peak,
+    /** Answer `directory`'s outstanding listing with what the disk holds there. */
+    answer: async (directory: string) => {
+      const call = calls.get(directory)!;
+      await answer(directory).then(call.resolve, call.reject);
     },
-    lstat: async () => {
-      throw missing();
+    fail: (directory: string) => {
+      calls.get(directory)!.reject(Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" }));
     },
   };
 }
@@ -270,12 +296,44 @@ describe("resolveWindowsExecutable", () => {
     );
   });
 
-  it("does not cache a miss, so a tool installed later is found", async () => {
+  it("does not cache a miss, so a tool installed later is found once the listing ages out", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const tools = dir("tools");
 
     await expect(resolveWindowsExecutable("git", { PATH: tools })).resolves.toBeNull();
     const installed = touch(tools, "git.exe");
+    // The directory's listing answers for a few seconds.
+    vi.setSystemTime(Date.now() + 1_000);
+    await expect(resolveWindowsExecutable("git", { PATH: tools })).resolves.toBeNull();
+    vi.setSystemTime(Date.now() + 3_000);
     await expect(resolveWindowsExecutable("git", { PATH: tools })).resolves.toBe(installed);
+  });
+
+  it("drops every listing on a PATH re-read, so an install is found at once", async () => {
+    const tools = dir("tools");
+
+    await expect(resolveWindowsExecutable("git", { PATH: tools })).resolves.toBeNull();
+    const installed = touch(tools, "git.exe");
+    invalidateWindowsExecutableCache();
+    await expect(resolveWindowsExecutable("git", { PATH: tools })).resolves.toBe(installed);
+  });
+
+  it("reads each directory once for a burst of lookups", async () => {
+    setPlatform("win32");
+    const disk = windowsDisk([
+      "C:\\Windows\\System32\\where.exe",
+      "C:\\tools\\git.exe",
+      "C:\\npm\\claude.cmd",
+    ]);
+    const env = { PATH: "C:\\Windows\\System32;C:\\tools;C:\\npm" };
+
+    await scanWindowsPath("claude", env, { fs: disk });
+    await scanWindowsPath("codex", env, { fs: disk });
+    await resolveWindowsExecutable("git", env, { fs: disk });
+    await findWindowsCommand("gemini", env, { fs: disk });
+
+    const reads = disk.readdir.mock.calls.map(([directory]) => directory);
+    expect(reads.sort()).toEqual(["C:\\Windows\\System32", "C:\\npm", "C:\\tools"]);
   });
 
   it("reads PATH under any casing, taking the variant Node would forward", async () => {
@@ -434,6 +492,192 @@ describe("a PATH entry that does not answer", () => {
     await vi.advanceTimersByTimeAsync(1_500);
 
     await expect(result).resolves.toBeNull();
+  });
+});
+
+describe("PATH-lookup slots", () => {
+  const nas = (n: number) => `\\\\nas${n}\\x`;
+  const tick = () => vi.advanceTimersByTimeAsync(0);
+
+  beforeEach(() => {
+    setPlatform("win32");
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  it("keeps two listings outstanding at a time and still reads every directory", async () => {
+    const control = controlledDisk([
+      "C:\\a\\x.exe",
+      "C:\\b\\x.exe",
+      "C:\\c\\x.exe",
+      "C:\\d\\git.exe",
+    ]);
+    const found = resolveWindowsExecutable(
+      "git",
+      { PATH: "C:\\a;C:\\b;C:\\c;C:\\d" },
+      { fs: control.disk }
+    );
+    await tick();
+    expect(control.order).toEqual(["C:\\a", "C:\\b"]);
+    for (const directory of ["C:\\a", "C:\\b", "C:\\c", "C:\\d"]) {
+      await control.answer(directory);
+      await tick();
+    }
+
+    await expect(found).resolves.toBe("C:\\d\\git.exe");
+    expect(control.order).toEqual(["C:\\a", "C:\\b", "C:\\c", "C:\\d"]);
+    expect(control.peak()).toBe(2);
+  });
+
+  it("holds a slot until its call returns, with one more lane while both slots are overdue", async () => {
+    const control = controlledDisk(["C:\\tools\\git.exe", "C:\\tools\\gh.exe"]);
+    const env = { PATH: `${nas(1)};${nas(2)};${nas(3)};C:\\tools` };
+
+    const first = scanWindowsPath("git", env, { fs: control.disk });
+    await tick();
+    expect(control.order).toEqual([nas(1), nas(2)]);
+
+    // Both overdue: one more lane opens, and the third dead share takes it.
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(control.order).toEqual([nas(1), nas(2), nas(3)]);
+    await vi.advanceTimersByTimeAsync(1_500);
+    // Every lane is held by a call past its deadline, so nothing more is
+    // read: the search gives up on the rest instead of queueing a fourth.
+    await expect(first).resolves.toEqual({
+      paths: [],
+      skipped: [nas(1), nas(2), nas(3), "C:\\tools"],
+    });
+    expect(control.outstanding()).toBe(3);
+    expect(control.order).not.toContain("C:\\tools");
+
+    // A share's call returning gives its slot back, and the listing waiting
+    // for one runs, filling the cache for the next search.
+    control.fail(nas(1));
+    await tick();
+    expect(control.order).toContain("C:\\tools");
+    await control.answer("C:\\tools");
+    await tick();
+    await expect(scanWindowsPath("gh", env, { fs: control.disk })).resolves.toEqual({
+      paths: ["C:\\tools\\gh.exe"],
+      skipped: [nas(1), nas(2), nas(3)],
+    });
+    expect(control.peak()).toBe(3);
+  });
+
+  it("finds a tool past two dead shares on the first search", async () => {
+    const control = controlledDisk(["C:\\tools\\git.exe"]);
+    const found = resolveWindowsExecutable(
+      "git",
+      { PATH: `${nas(1)};${nas(2)};C:\\tools` },
+      { fs: control.disk }
+    );
+    await tick();
+    expect(control.order).toEqual([nas(1), nas(2)]);
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    await control.answer("C:\\tools");
+    await tick();
+    await expect(found).resolves.toBe("C:\\tools\\git.exe");
+  });
+
+  it("reads a directory that stalled before after every other", async () => {
+    const control = controlledDisk(["C:\\a\\x.exe", "C:\\b\\x.exe", "C:\\c\\git.exe"]);
+    const env = { PATH: `${nas(1)};C:\\a;C:\\b;C:\\c` };
+
+    const first = resolveWindowsExecutable("git", env, { fs: control.disk });
+    await tick();
+    for (const directory of ["C:\\a", "C:\\b", "C:\\c"]) {
+      await control.answer(directory);
+      await tick();
+    }
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(first).resolves.toBe("C:\\c\\git.exe");
+    // The share fails at last; after the retry window it is asked again.
+    control.fail(nas(1));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    control.order.length = 0;
+    void resolveWindowsExecutable("gh", env, { fs: control.disk });
+    await tick();
+    expect(control.order).toEqual(["C:\\a", "C:\\b"]);
+    await control.answer("C:\\a");
+    await tick();
+    expect(control.order).toEqual(["C:\\a", "C:\\b", "C:\\c"]);
+    await control.answer("C:\\b");
+    await tick();
+    expect(control.order).toEqual(["C:\\a", "C:\\b", "C:\\c", nas(1)]);
+  });
+
+  it("reports a hit found past a silent entry as provisional, and looks again once it answers", async () => {
+    const control = controlledDisk(["\\\\nas\\tools\\pwsh.exe", "C:\\tools\\pwsh.exe"]);
+    const env = { PATH: "\\\\nas\\tools;C:\\tools" };
+
+    const first = lookupWindowsExecutable("pwsh.exe", env, { fs: control.disk });
+    await tick();
+    await control.answer("C:\\tools");
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(first).resolves.toEqual({
+      file: "C:\\tools\\pwsh.exe",
+      skipped: ["\\\\nas\\tools"],
+    });
+
+    let readable = false;
+    void windowsPathEntriesReadable(["\\\\nas\\tools"], { fs: control.disk }).then(() => {
+      readable = true;
+    });
+    // Cached meanwhile, and still provisional.
+    await expect(lookupWindowsExecutable("pwsh.exe", env, { fs: control.disk })).resolves.toEqual({
+      file: "C:\\tools\\pwsh.exe",
+      skipped: ["\\\\nas\\tools"],
+    });
+    expect(readable).toBe(false);
+
+    // The share answers, late but whole: the earlier copy wins from now on.
+    await control.answer("\\\\nas\\tools");
+    await tick();
+    expect(readable).toBe(true);
+    await expect(lookupWindowsExecutable("pwsh.exe", env, { fs: control.disk })).resolves.toEqual({
+      file: "\\\\nas\\tools\\pwsh.exe",
+      skipped: [],
+    });
+  });
+});
+
+describe("a PATH directory that can be entered but not listed", () => {
+  beforeEach(() => setPlatform("win32"));
+
+  it("is asked for each candidate by name instead", async () => {
+    const disk = windowsDisk(
+      ["C:\\locked\\tool.exe", "C:\\locked\\tool.cmd", "C:\\open\\tool.exe"],
+      { denyListing: ["C:\\locked"] }
+    );
+    const env = { PATH: "C:\\locked;C:\\open", PATHEXT: ".EXE;.CMD" };
+
+    await expect(resolveWindowsExecutable("tool", env, { fs: disk })).resolves.toBe(
+      "C:\\locked\\tool.exe"
+    );
+    await expect(scanWindowsPath("tool", env, { fs: disk })).resolves.toEqual({
+      paths: ["C:\\locked\\tool.exe", "C:\\locked\\tool.cmd", "C:\\open\\tool.exe"],
+      skipped: [],
+    });
+    await expect(findWindowsCommand("missing", env, { fs: disk })).resolves.toBeNull();
+    // The refusal is kept with the listings; only the names are asked for again.
+    expect(
+      disk.readdir.mock.calls.filter(([directory]) => directory === "C:\\locked")
+    ).toHaveLength(1);
+    expect(disk.stat.mock.calls.map(([file]) => file)).toContain("C:\\locked\\missing.exe");
+  });
+
+  it("is written off like any other when a by-name check does not answer", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const disk = windowsDisk(["C:\\open\\tool.exe"], { denyListing: ["C:\\locked"] });
+    disk.stat.mockImplementation(() => new Promise(() => {}));
+    const env = { PATH: "C:\\locked;C:\\open", PATHEXT: ".EXE" };
+
+    const scan = scanWindowsPath("tool", env, { fs: disk });
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(scan).resolves.toEqual({ paths: ["C:\\open\\tool.exe"], skipped: ["C:\\locked"] });
   });
 });
 

@@ -210,7 +210,7 @@ async function spawnCodexAppServerSession<T>(
   let child: ChildProcess;
   try {
     const env = buildAppServerEnv(options.codexHome);
-    const target = cliSpawnTarget(
+    const target = await cliSpawnTarget(
       command,
       ["app-server", "--listen", "stdio://"],
       process.platform,

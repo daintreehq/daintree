@@ -6,10 +6,19 @@ import { describe, expect, it } from "vitest";
 import { quotePowerShellArg } from "../../../shared/utils/shellEscape.js";
 import {
   buildWindowsAgentLaunchScript,
+  isWindowsAgentExecutableFor,
   parseWindowsAgentCommand,
+  resolveWindowsAgentExecutable,
   serializeWindowsArgv,
 } from "../windowsAgentLaunch.js";
-import { resolveWindowsCli } from "../windowsCliSpawn.js";
+import { resolveWindowsCli, type WindowsCliResolveOptions } from "../windowsCliSpawn.js";
+import { fakeWindowsPathFs } from "./helpers/windowsPathFs.js";
+
+/** Resolve, then build: the two halves the terminal spawn runs apart. */
+async function launchScript(command: string, options: WindowsCliResolveOptions): Promise<string> {
+  const executable = await resolveWindowsAgentExecutable(command, options);
+  return buildWindowsAgentLaunchScript(command, executable, options.env);
+}
 
 const values = [
   "",
@@ -68,11 +77,12 @@ describe("Windows agent argv", () => {
         readFile: (file: string) =>
           Object.entries(files).find(([name]) => name.toLowerCase() === file.toLowerCase())?.[1] ??
           "",
+        pathFs: fakeWindowsPathFs(files),
       };
     }
     const lines = (script: string) => script.split("\n").map((line) => line.trim());
 
-    it("sets a pnpm shim's NODE_PATH on the child before starting it", () => {
+    it("sets a pnpm shim's NODE_PATH on the child before starting it", async () => {
       const nodePath = "C:\\tools\\global\\5\\node_modules\\.pnpm\\node_modules";
       const shim = [
         "@SETLOCAL",
@@ -90,7 +100,7 @@ describe("Windows agent argv", () => {
         "",
       ].join("\r\n");
       const script = lines(
-        buildWindowsAgentLaunchScript(
+        await launchScript(
           `agent ${quotePowerShellArg(prompt)}`,
           shims(
             {
@@ -113,9 +123,9 @@ describe("Windows agent argv", () => {
       );
     });
 
-    it("launches the hand-written wrapper the E2E fake agents use without cmd.exe", () => {
+    it("launches the hand-written wrapper the E2E fake agents use without cmd.exe", async () => {
       const script = lines(
-        buildWindowsAgentLaunchScript(
+        await launchScript(
           `claude ${quotePowerShellArg(prompt)}`,
           shims(
             {
@@ -134,29 +144,50 @@ describe("Windows agent argv", () => {
       expect(script.some((line) => line.includes("$start.Environment"))).toBe(false);
     });
 
-    it("runs an unrecognised shim through cmd.exe only with inert arguments", () => {
+    it("runs an unrecognised shim through cmd.exe only with inert arguments", async () => {
       const options = shims({ "C:\\tools\\agent.cmd": "@echo custom %*" });
-      const script = lines(
-        buildWindowsAgentLaunchScript("agent --help --listen=stdio://", options)
-      );
+      // Named as the directory lists it, the way `where` would print it.
+      const script = lines(await launchScript("agent --help --listen=stdio://", options));
       expect(script).toContain("$start.FileName = 'C:\\Windows\\System32\\cmd.exe'");
       expect(script).toContain(
-        `$start.Arguments = '/d /s /v:off /c ""C:\\tools\\agent.CMD" --help --listen=stdio://"'`
+        `$start.Arguments = '/d /s /v:off /c ""C:\\tools\\agent.cmd" --help --listen=stdio://"'`
       );
 
       for (const value of [prompt, "two words", "%PATH%"]) {
-        expect(() =>
-          buildWindowsAgentLaunchScript(`agent ${quotePowerShellArg(value)}`, options)
-        ).toThrow(
-          /^Cannot pass these launch arguments through C:\\tools\\agent\.CMD: .*Install the CLI with npm or as a native executable, or launch it without a prompt\.$/
+        await expect(launchScript(`agent ${quotePowerShellArg(value)}`, options)).rejects.toThrow(
+          /^Cannot pass these launch arguments through C:\\tools\\agent\.cmd: .*Install the CLI with npm or as a native executable, or launch it without a prompt\.$/
         );
       }
     });
 
-    it("keeps the resolution error when the shim itself cannot run", () => {
-      expect(() =>
-        buildWindowsAgentLaunchScript(`agent ${quotePowerShellArg(prompt)}`, shims({}))
-      ).toThrow(expect.objectContaining({ code: "ENOENT" }));
+    it("keeps the resolution error when the shim itself cannot run", async () => {
+      await expect(
+        launchScript(`agent ${quotePowerShellArg(prompt)}`, shims({}))
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("resolves only the executable ahead of the launch, so later arguments are free to change", async () => {
+      const options = shims({ "C:\\tools\\agent.exe": "" });
+      // A settings template is filled in after the resolution, before the build.
+      const executable = await resolveWindowsAgentExecutable(
+        "agent --token=${settings:apiToken}",
+        options
+      );
+      expect(executable.error).toBeUndefined();
+      const filled = "agent --token=abc";
+      expect(isWindowsAgentExecutableFor(executable, filled, options.env)).toBe(true);
+      expect(lines(buildWindowsAgentLaunchScript(filled, executable, options.env))).toContain(
+        `$start.Arguments = '"--token=abc"'`
+      );
+
+      // Another executable, or a PATH that moved, needs resolving again.
+      expect(isWindowsAgentExecutableFor(executable, "other --token=abc", options.env)).toBe(false);
+      expect(
+        isWindowsAgentExecutableFor(executable, filled, { ...options.env, PATH: "C:\\elsewhere" })
+      ).toBe(false);
+      expect(() => buildWindowsAgentLaunchScript("other", executable, options.env)).toThrow(
+        /was not resolved for this launch/
+      );
     });
   });
 });
@@ -165,10 +196,10 @@ describe("Windows agent argv", () => {
 for (const host of ["powershell.exe", "pwsh.exe"]) {
   describe.skipIf(process.platform !== "win32")(`received argv under ${host}`, () => {
     for (const mode of ["Legacy", "Standard"]) {
-      it(`preserves native and npm-shim arguments in ${mode} mode`, (context) => {
+      it(`preserves native and npm-shim arguments in ${mode} mode`, async (context) => {
         let shell: string;
         try {
-          shell = resolveWindowsCli(host);
+          shell = await resolveWindowsCli(host);
         } catch (error) {
           if (host === "pwsh.exe") {
             context.skip();
@@ -196,7 +227,7 @@ for (const host of ["powershell.exe", "pwsh.exe"]) {
             `& ${quotePowerShellArg(shimFile)}`,
             `& ${quotePowerShellArg(wrapperFile)}`,
           ]) {
-            const launch = buildWindowsAgentLaunchScript(
+            const launch = await launchScript(
               `${command} ${values.map(quotePowerShellArg).join(" ")}`,
               {
                 env: {
@@ -231,10 +262,10 @@ for (const host of ["powershell.exe", "pwsh.exe"]) {
       }, 30000);
     }
 
-    it("hands a pnpm shim's NODE_PATH to the agent", (context) => {
+    it("hands a pnpm shim's NODE_PATH to the agent", async (context) => {
       let shell: string;
       try {
-        shell = resolveWindowsCli(host);
+        shell = await resolveWindowsCli(host);
       } catch (error) {
         if (host === "pwsh.exe") {
           context.skip();
@@ -269,7 +300,7 @@ for (const host of ["powershell.exe", "pwsh.exe"]) {
             "",
           ].join("\r\n")
         );
-        const launch = buildWindowsAgentLaunchScript(
+        const launch = await launchScript(
           `& ${quotePowerShellArg(shimFile)} ${values.map(quotePowerShellArg).join(" ")}`,
           {
             env: {

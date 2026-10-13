@@ -6,12 +6,15 @@ import {
   getDefaultShellArgs,
   prewarmWindowsShell,
   resetWindowsShellCache,
+  waitForWindowsShell,
 } from "../terminalShell.js";
 import {
   invalidateWindowsExecutableCache,
   isWindowsLaunchFileAsync,
-  resolveWindowsExecutable,
+  lookupWindowsExecutable,
+  windowsPathEntriesReadable,
   windowsSystemTool,
+  type WindowsExecutableLookup,
 } from "../../../utils/windowsExecutable.js";
 
 vi.mock("child_process", () => ({ execFileSync: vi.fn() }));
@@ -19,13 +22,19 @@ vi.mock("child_process", () => ({ execFileSync: vi.fn() }));
 // The PATH lookup reads the host's real filesystem; each case decides what it finds.
 vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsExecutable.js")>()),
-  resolveWindowsExecutable: vi.fn(async () => null),
+  lookupWindowsExecutable: vi.fn(async () => ({ file: null, skipped: [] })),
   isWindowsLaunchFileAsync: vi.fn(async () => false),
+  windowsPathEntriesReadable: vi.fn(() => new Promise<void>(() => {})),
 }));
 
 const execFileSyncMock = vi.mocked(execFileSync);
-const resolveWindowsExecutableMock = vi.mocked(resolveWindowsExecutable);
+const resolveWindowsExecutableMock = vi.mocked(lookupWindowsExecutable);
 const isWindowsLaunchFileAsyncMock = vi.mocked(isWindowsLaunchFileAsync);
+const windowsPathEntriesReadableMock = vi.mocked(windowsPathEntriesReadable);
+
+function found(file: string | null, skipped: string[] = []): WindowsExecutableLookup {
+  return { file, skipped };
+}
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -126,8 +135,10 @@ describe("getDefaultShellArgs", () => {
 const PWSH = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
 const PATH_POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 
-function onPath(found: Record<string, string>): void {
-  resolveWindowsExecutableMock.mockImplementation(async (name: string) => found[name] ?? null);
+function onPath(shells: Record<string, string>): void {
+  resolveWindowsExecutableMock.mockImplementation(async (name: string) =>
+    found(shells[name] ?? null)
+  );
 }
 
 /** The shell `findWindowsShell` settles on once its asynchronous resolution has run. */
@@ -146,14 +157,19 @@ describe("findWindowsShell (Windows shell discovery)", () => {
 
   beforeEach(() => {
     execFileSyncMock.mockReset();
-    resolveWindowsExecutableMock.mockReset().mockImplementation(async () => null);
+    resolveWindowsExecutableMock.mockReset().mockImplementation(async () => found(null));
     isWindowsLaunchFileAsyncMock.mockReset().mockImplementation(async () => false);
+    windowsPathEntriesReadableMock.mockReset().mockImplementation(() => new Promise(() => {}));
     resetWindowsShellCache();
   });
 
   afterEach(() => {
     resetWindowsShellCache();
     vi.restoreAllMocks();
+    vi.useRealTimers();
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
     if (originalComspec === undefined) {
       delete process.env.COMSPEC;
     } else {
@@ -166,13 +182,13 @@ describe("findWindowsShell (Windows shell discovery)", () => {
   it("answers with the in-box PowerShell at once, then the PATH pwsh once resolved", async () => {
     // A PATH entry on a dead share can hold the search for the SMB timeout; a
     // terminal launched meanwhile must not wait on it.
-    let finish: (file: string | null) => void = () => {};
+    let finish: (lookup: WindowsExecutableLookup) => void = () => {};
     resolveWindowsExecutableMock.mockImplementation((name: string) =>
       name === "pwsh.exe"
-        ? new Promise<string | null>((resolve) => {
+        ? new Promise<WindowsExecutableLookup>((resolve) => {
             finish = resolve;
           })
-        : Promise.resolve(null)
+        : Promise.resolve(found(null))
     );
     // The PATH search is still pending, and the answer is already absolute.
     expect(findWindowsShell()).toBe(windowsSystemTool("powershell.exe"));
@@ -183,7 +199,7 @@ describe("findWindowsShell (Windows shell discovery)", () => {
       resolveWindowsExecutableMock.mock.calls.filter(([name]) => name === "pwsh.exe")
     ).toHaveLength(1);
 
-    finish(PWSH);
+    finish(found(PWSH));
     await prewarmWindowsShell();
     expect(findWindowsShell()).toBe(PWSH);
   });
@@ -283,6 +299,179 @@ describe("findWindowsShell (Windows shell discovery)", () => {
 
     expect(await resolvedShell()).toBe(windowsSystemTool("powershell.exe"));
   });
+
+  it("never lets an older probe that finishes late replace a newer answer", async () => {
+    const PWSH_B = "D:\\pwsh7\\pwsh.exe";
+    let finishA: (lookup: WindowsExecutableLookup) => void = () => {};
+    resolveWindowsExecutableMock.mockImplementation((name: string, env?: NodeJS.ProcessEnv) => {
+      if (env?.PATH === "C:\\A") {
+        return name === "pwsh.exe"
+          ? new Promise<WindowsExecutableLookup>((resolve) => {
+              finishA = resolve;
+            })
+          : Promise.resolve(found(null));
+      }
+      return Promise.resolve(found(name === "pwsh.exe" ? PWSH_B : null));
+    });
+
+    process.env.PATH = "C:\\A";
+    findWindowsShell();
+    // PATH changes while the first search is still out.
+    process.env.PATH = "C:\\B";
+    expect(await resolvedShell()).toBe(PWSH_B);
+
+    finishA(found(PWSH));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(findWindowsShell()).toBe(PWSH_B);
+    // Nothing went stale either: no further search was started.
+    expect(resolveWindowsExecutableMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("reads the environment as it was when the probe started", async () => {
+    let finish: (lookup: WindowsExecutableLookup) => void = () => {};
+    resolveWindowsExecutableMock.mockImplementation((name: string) =>
+      name === "pwsh.exe"
+        ? new Promise<WindowsExecutableLookup>((resolve) => {
+            finish = resolve;
+          })
+        : Promise.resolve(found(null))
+    );
+    process.env.COMSPEC = "C:\\custom\\cmd.exe";
+
+    const probe = prewarmWindowsShell();
+    process.env.COMSPEC = "C:\\other\\cmd.exe";
+    finish(found(null));
+
+    await expect(probe).resolves.toBe("C:\\custom\\cmd.exe");
+  });
+
+  describe("an answer reached past a PATH entry that did not respond", () => {
+    const NAS = "\\\\nas\\tools";
+
+    it("is provisional: resolved again once that entry can be read", async () => {
+      let readable: () => void = () => {};
+      windowsPathEntriesReadableMock.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            readable = resolve;
+          })
+      );
+      // The share holds PowerShell 7, but did not answer this time.
+      resolveWindowsExecutableMock.mockImplementation(async (name: string) =>
+        name === "pwsh.exe" ? found(null, [NAS]) : found(PATH_POWERSHELL, [NAS])
+      );
+
+      expect(await resolvedShell()).toBe(PATH_POWERSHELL);
+      expect(windowsPathEntriesReadableMock).toHaveBeenCalledWith([NAS]);
+      for (let i = 0; i < 5; i++) findWindowsShell();
+      expect(resolveWindowsExecutableMock).toHaveBeenCalledTimes(2);
+
+      // The share answers.
+      onPath({ "pwsh.exe": `${NAS}\\pwsh.exe`, "powershell.exe": PATH_POWERSHELL });
+      readable();
+      await vi.waitFor(() => expect(findWindowsShell()).toBe(`${NAS}\\pwsh.exe`));
+      expect(resolveWindowsExecutableMock).toHaveBeenCalledTimes(4);
+    });
+
+    it("stops re-resolving after a few tries while the entry stays silent", async () => {
+      windowsPathEntriesReadableMock.mockImplementation(async () => {});
+      resolveWindowsExecutableMock.mockImplementation(async (name: string) =>
+        name === "pwsh.exe" ? found(null, [NAS]) : found(PATH_POWERSHELL, [NAS])
+      );
+
+      expect(await resolvedShell()).toBe(PATH_POWERSHELL);
+      await vi.waitFor(() => expect(windowsPathEntriesReadableMock).toHaveBeenCalledTimes(3));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      // The first probe and three re-checks, two lookups each.
+      expect(resolveWindowsExecutableMock).toHaveBeenCalledTimes(8);
+      expect(findWindowsShell()).toBe(PATH_POWERSHELL);
+      expect(resolveWindowsExecutableMock).toHaveBeenCalledTimes(8);
+    });
+  });
+
+  describe("waitForWindowsShell", () => {
+    beforeEach(() => setPlatform("win32"));
+
+    it("waits for the first answer, but no longer than it is allowed", async () => {
+      vi.useFakeTimers();
+      resolveWindowsExecutableMock.mockImplementation(() => new Promise(() => {}));
+      let done = false;
+      void waitForWindowsShell(2_000).then(() => {
+        done = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+      // Still the in-box PowerShell, as before the wait existed.
+      expect(getDefaultShell()).toBe(windowsSystemTool("powershell.exe"));
+    });
+
+    it("hands back PowerShell 7 as soon as the search finds it", async () => {
+      onPath({ "pwsh.exe": PWSH });
+
+      await waitForWindowsShell(2_000);
+
+      expect(getDefaultShell()).toBe(PWSH);
+    });
+
+    it("costs nothing once the shell is settled for this PATH, even after a cache re-read", async () => {
+      process.env.PATH = "C:\\Windows\\System32";
+      onPath({ "pwsh.exe": PWSH });
+      await waitForWindowsShell(2_000);
+      resolveWindowsExecutableMock.mockClear();
+      resolveWindowsExecutableMock.mockImplementation(() => new Promise(() => {}));
+
+      invalidateWindowsExecutableCache();
+      vi.useFakeTimers();
+      let done = false;
+      void waitForWindowsShell(2_000).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(done).toBe(true);
+      expect(getDefaultShell()).toBe(PWSH);
+      // Re-resolved in the background all the same.
+      expect(resolveWindowsExecutableMock).toHaveBeenCalled();
+    });
+
+    it("waits for a PATH the shell has not been resolved against", async () => {
+      process.env.PATH = "C:\\Windows\\System32";
+      onPath({ "powershell.exe": PATH_POWERSHELL });
+      await waitForWindowsShell(2_000);
+      expect(getDefaultShell()).toBe(PATH_POWERSHELL);
+
+      // PowerShell 7 installed, its directory adopted into PATH.
+      process.env.PATH = "C:\\Program Files\\PowerShell\\7;C:\\Windows\\System32";
+      onPath({ "pwsh.exe": PWSH, "powershell.exe": PATH_POWERSHELL });
+      await waitForWindowsShell(2_000);
+
+      expect(getDefaultShell()).toBe(PWSH);
+    });
+
+    it("does not wait on a provisional answer with nothing in flight to improve it", async () => {
+      resolveWindowsExecutableMock.mockImplementation(async (name: string) =>
+        name === "pwsh.exe" ? found(null, ["\\\\nas\\x"]) : found(PATH_POWERSHELL, ["\\\\nas\\x"])
+      );
+      await waitForWindowsShell(2_000);
+      resolveWindowsExecutableMock.mockImplementation(() => new Promise(() => {}));
+
+      vi.useFakeTimers();
+      let done = false;
+      void waitForWindowsShell(2_000).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(done).toBe(true);
+    });
+
+    it("never waits off Windows", async () => {
+      setPlatform("darwin");
+      await waitForWindowsShell(2_000);
+      expect(resolveWindowsExecutableMock).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("getDefaultShell", () => {
@@ -290,7 +479,7 @@ describe("getDefaultShell", () => {
 
   beforeEach(() => {
     execFileSyncMock.mockReset();
-    resolveWindowsExecutableMock.mockReset().mockImplementation(async () => null);
+    resolveWindowsExecutableMock.mockReset().mockImplementation(async () => found(null));
     resetWindowsShellCache();
   });
 

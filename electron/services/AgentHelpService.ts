@@ -60,7 +60,7 @@ export class AgentHelpService {
     try {
       // An npm-installed agent is a `.cmd` shim on Windows (see windowsCliSpawn).
       const env = buildProbeEnv();
-      const target = cliSpawnTarget(command, args, process.platform, { env });
+      const target = await cliSpawnTarget(command, args, process.platform, { env });
       const { stdout: out, stderr: err } = await execFileWithTreeKill(target.command, target.args, {
         timeout: this.TIMEOUT_MS,
         maxBuffer: this.MAX_BUFFER,

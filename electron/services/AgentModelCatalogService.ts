@@ -454,9 +454,12 @@ export class AgentModelCatalogService {
     try {
       // An npm-installed Codex is a `.cmd` shim on Windows (see windowsCliSpawn).
       const env = buildProbeEnv();
-      const target = cliSpawnTarget(command, ["debug", "models", "--bundled"], process.platform, {
-        env,
-      });
+      const target = await cliSpawnTarget(
+        command,
+        ["debug", "models", "--bundled"],
+        process.platform,
+        { env }
+      );
       const result = await exec(target.command, target.args, {
         timeout: CODEX_TIMEOUT_MS,
         maxBuffer: MAX_CODEX_BUFFER,

@@ -1,14 +1,19 @@
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import {
-  isWindowsAbsolutePath,
-  isWindowsLaunchFile as isLaunchFile,
-  splitWindowsPath,
+  findWindowsPathFile,
+  isWindowsLaunchFileAsync,
+  resolveWindowsExecutable,
   windowsEnvKey as envKey,
-  windowsEnvValue as envValue,
   windowsLaunchExtensions,
   windowsSystemTool,
+  type WindowsPathFs,
 } from "./windowsExecutable.js";
+
+// Everything here runs on Main (agent launches, version and help probes, Codex
+// app-server queries, installs), so none of it touches the disk synchronously:
+// a bare name is found by the asynchronous PATH search, and the files a shim
+// names are checked and read asynchronously.
 
 const SHELL_INERT_TOKEN = /^[A-Za-z0-9._\-/=:]+$/;
 const LAUNCHABLE_EXTENSIONS = new Set([".exe", ".com", ".cmd", ".bat"]);
@@ -34,8 +39,11 @@ export function pickWindowsLaunchable(candidates: readonly string[]): string | u
 export interface WindowsCliResolveOptions {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
-  isFile?: (file: string) => boolean;
-  readFile?: (file: string) => string;
+  /** Whether a path already in hand is a launchable file. */
+  isFile?: (file: string) => boolean | Promise<boolean>;
+  readFile?: (file: string) => string | Promise<string>;
+  /** What PATH is searched through; a test seam. */
+  pathFs?: WindowsPathFs;
   /**
    * node.exe as already found on the caller's PATH. Stands in for the PATH
    * search a shim's bare `node` would otherwise need, unless the shim changes
@@ -48,37 +56,56 @@ function launchError(command: string, code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`Cannot launch CLI: ${command}`), { code, path: command });
 }
 
+const isLaunchFile = (file: string): Promise<boolean> => isWindowsLaunchFileAsync(file);
+const readShim = (file: string): Promise<string> => fsPromises.readFile(file, "utf8");
+
 /** Resolve a real file before spawning; cmd builtins never participate in lookup. */
-export function resolveWindowsCli(command: string, options: WindowsCliResolveOptions = {}): string {
+export async function resolveWindowsCli(
+  command: string,
+  options: WindowsCliResolveOptions = {}
+): Promise<string> {
   if (!command || /[\0\r\n]/.test(command) || /^[A-Za-z]:(?![\\/])/.test(command)) {
     throw launchError(command, "EINVAL");
   }
   const env = options.env ?? process.env;
-  const cwd = options.cwd ?? process.cwd();
-  const isFile = options.isFile ?? isLaunchFile;
   const isPath = /[\\/]/.test(command);
   if (!isPath && !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(command)) {
     throw launchError(command, "EINVAL");
   }
+  const ext = path.win32.extname(command).toLowerCase();
+  const candidates = (ext ? [""] : windowsLaunchExtensions(env))
+    .map((suffix) => command + suffix)
+    .filter((name) => LAUNCHABLE_EXTENSIONS.has(path.win32.extname(name).toLowerCase()));
+  if (isPath) {
+    const cwd = options.cwd ?? process.cwd();
+    const isFile = options.isFile ?? isLaunchFile;
+    for (const candidate of candidates) {
+      const file = path.win32.resolve(cwd, candidate);
+      if (await isFile(file)) return file;
+    }
+    throw launchError(command, "ENOENT");
+  }
   // A bare name is looked up in PATH only: relative entries (`.`,
   // `.\\node_modules\\.bin`) would make the launch directory part of the search.
-  const directories = isPath
-    ? [cwd]
-    : splitWindowsPath(envValue(env, "PATH") ?? "").filter(isWindowsAbsolutePath);
-  const ext = path.win32.extname(command).toLowerCase();
-  const extensions = ext ? [""] : windowsLaunchExtensions(env);
-  for (const directory of directories) {
-    for (const suffix of extensions) {
-      const candidate = path.win32.resolve(cwd, directory, command + suffix);
-      if (
-        LAUNCHABLE_EXTENSIONS.has(path.win32.extname(candidate).toLowerCase()) &&
-        isFile(candidate)
-      ) {
-        return candidate;
-      }
-    }
-  }
-  throw launchError(command, "ENOENT");
+  const file = await findWindowsPathFile(candidates, env, {
+    fs: options.pathFs,
+    win32Paths: true,
+  });
+  if (file === null) throw launchError(command, "ENOENT");
+  return file;
+}
+
+/** node.exe from PATH, for a shim whose bare `node` has no copy beside it. */
+async function resolveNode(
+  env: NodeJS.ProcessEnv,
+  options: WindowsCliResolveOptions
+): Promise<string> {
+  const node = await resolveWindowsExecutable("node.exe", env, {
+    fs: options.pathFs,
+    win32Paths: true,
+  });
+  if (node === null) throw launchError("node.exe", "ENOENT");
+  return node;
 }
 
 export interface CliSpawnTarget {
@@ -95,15 +122,16 @@ export interface CliSpawnTarget {
 }
 
 /** npm shims can target Node scripts or native binaries; bypass the batch boundary. */
-function unwrapNpmShim(
+async function unwrapNpmShim(
   file: string,
   options: WindowsCliResolveOptions
-): CliSpawnTarget | undefined {
-  const source = (options.readFile ?? ((name) => readFileSync(name, "utf8")))(file);
+): Promise<CliSpawnTarget | undefined> {
+  const source = await (options.readFile ?? readShim)(file);
   if (source.length > 64 * 1024) return undefined;
   const directory = path.win32.dirname(file);
   return (
-    unwrapModernNpmShim(source, directory, options) ?? unwrapClassicShim(source, directory, options)
+    (await unwrapModernNpmShim(source, directory, options)) ??
+    (await unwrapClassicShim(source, directory, options))
   );
 }
 
@@ -143,11 +171,11 @@ function isModernNpmShimSource(source: string, callLine: string): boolean {
   return calls === 1;
 }
 
-function unwrapModernNpmShim(
+async function unwrapModernNpmShim(
   source: string,
   directory: string,
   options: WindowsCliResolveOptions
-): CliSpawnTarget | undefined {
+): Promise<CliSpawnTarget | undefined> {
   const isFile = options.isFile ?? isLaunchFile;
   const native = source.match(
     /^"%dp0%[\\/]([^"\r\n]+\.(?:exe|com))"\s*((?:--?[A-Za-z0-9_-]+\s+)*)%\*\s*$/im
@@ -155,7 +183,7 @@ function unwrapModernNpmShim(
   if (native) {
     if (!isModernNpmShimSource(source, native[0].trim())) return undefined;
     const executable = path.win32.resolve(directory, native[1]);
-    if (!isFile(executable)) throw launchError(executable, "ENOENT");
+    if (!(await isFile(executable))) throw launchError(executable, "ENOENT");
     return {
       command: executable,
       args: native[2].trim().split(/\s+/).filter(Boolean),
@@ -176,11 +204,11 @@ function unwrapModernNpmShim(
   if (`${prefix}${call[0].trim()}` !== callLine) return undefined;
   if (!isModernNpmShimSource(source, callLine)) return undefined;
   const script = path.win32.resolve(directory, call[2]);
-  if (!isFile(script)) throw launchError(script, "ENOENT");
+  if (!(await isFile(script))) throw launchError(script, "ENOENT");
   const localNode = path.win32.join(directory, "node.exe");
-  const node = isFile(localNode)
+  const node = (await isFile(localNode))
     ? localNode
-    : (options.node ?? resolveWindowsCli("node.exe", options));
+    : (options.node ?? (await resolveNode(options.env ?? process.env, options)));
   return {
     command: node,
     args: [...call[1].trim().split(/\s+/).filter(Boolean), script],
@@ -289,11 +317,11 @@ function sameShimCall(a: ShimCall, b: ShimCall): boolean {
  * hand-written wrappers. Read line by line: anything outside these shapes
  * leaves the shim to the cmd.exe fallback rather than guessing what it runs.
  */
-function unwrapClassicShim(
+async function unwrapClassicShim(
   source: string,
   directory: string,
   options: WindowsCliResolveOptions
-): CliSpawnTarget | undefined {
+): Promise<CliSpawnTarget | undefined> {
   const callerEnv = options.env ?? process.env;
   const isFile = options.isFile ?? isLaunchFile;
   const lines = source
@@ -365,7 +393,7 @@ function unwrapClassicShim(
     if (!call.program.quoted) return undefined;
     const executable = shimPath(call.program.value, directory);
     if (!executable || !/\.(?:exe|com)$/i.test(executable)) return undefined;
-    if (!isFile(executable)) throw launchError(executable, "ENOENT");
+    if (!(await isFile(executable))) throw launchError(executable, "ENOENT");
     return { command: executable, args: call.args, shell: false, ...extra };
   }
 
@@ -378,19 +406,19 @@ function unwrapClassicShim(
   } else if (!/^node(?:\.exe)?$/i.test(call.program.value)) {
     return undefined;
   }
-  if (!isFile(script)) throw launchError(script, "ENOENT");
+  if (!(await isFile(script))) throw launchError(script, "ENOENT");
   if (node) {
-    if (!isFile(node)) throw launchError(node, "ENOENT");
+    if (!(await isFile(node))) throw launchError(node, "ENOENT");
   } else {
     const local = path.win32.join(directory, "node.exe");
     // A bare `node` runs after the shim's own PATH change, so look it up there.
     const pathChanged = Object.hasOwn(env, envKey(callerEnv, "PATH") ?? "PATH");
     node =
-      localNode && isFile(local)
+      localNode && (await isFile(local))
         ? local
         : !pathChanged && options.node
           ? options.node
-          : resolveWindowsCli("node.exe", { ...options, env: { ...callerEnv, ...env } });
+          : await resolveNode({ ...callerEnv, ...env }, options);
   }
   return {
     command: node,
@@ -404,35 +432,75 @@ function unwrapClassicShim(
  * What an npm-style `.cmd`/`.bat` shim (npm's cmd-shim, pnpm, Yarn) stands
  * for, spawnable with an argument vector and no cmd.exe: Node and the script
  * it runs, or the native executable it wraps. Undefined for any other batch
- * file. Throws ENOENT when the shim names a target that is not there.
+ * file. Rejects with ENOENT when the shim names a target that is not there.
  */
-export function unwrapWindowsShim(
+export async function unwrapWindowsShim(
   file: string,
   options: WindowsCliResolveOptions = {}
-): CliSpawnTarget | undefined {
+): Promise<CliSpawnTarget | undefined> {
   return isWindowsShellShim(file) ? unwrapNpmShim(file, options) : undefined;
 }
 
-export function cliSpawnTarget(
+/**
+ * A Windows command resolved as far as it can be without its arguments: what
+ * to start and the arguments that lead (an unwrapped shim's script), or a batch
+ * file only cmd.exe can run.
+ */
+export type WindowsCliResolution =
+  | { kind: "direct"; command: string; args: string[]; env?: Record<string, string> }
+  | { kind: "batch"; file: string };
+
+export async function resolveWindowsCliTarget(
   command: string,
-  args: readonly string[],
-  platform: NodeJS.Platform = process.platform,
   options: WindowsCliResolveOptions = {}
+): Promise<WindowsCliResolution> {
+  const file = await resolveWindowsCli(command, options);
+  if (!isWindowsShellShim(file)) return { kind: "direct", command: file, args: [] };
+  const unwrapped = await unwrapNpmShim(file, options);
+  if (!unwrapped) return { kind: "batch", file };
+  return {
+    kind: "direct",
+    command: unwrapped.command,
+    args: unwrapped.args,
+    ...(unwrapped.env ? { env: unwrapped.env } : {}),
+  };
+}
+
+/** The spawn target for a resolved command and its arguments; never touches the disk. */
+export function windowsCliSpawnTarget(
+  resolution: WindowsCliResolution,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv = process.env
 ): CliSpawnTarget {
-  if (platform !== "win32") return { command, args: [...args], shell: false };
-  const file = resolveWindowsCli(command, options);
-  if (!isWindowsShellShim(file)) return { command: file, args: [...args], shell: false };
-  const nodeTarget = unwrapNpmShim(file, options);
-  if (nodeTarget) return { ...nodeTarget, args: [...nodeTarget.args, ...args] };
+  if (resolution.kind === "direct") {
+    return {
+      command: resolution.command,
+      args: [...resolution.args, ...args],
+      shell: false,
+      ...(resolution.env ? { env: resolution.env } : {}),
+    };
+  }
+  const file = resolution.file;
   // Only confirmed non-Node shims with inert probe arguments reach cmd.exe.
   // Quotes protect spaces in the resolved path; expansion characters are refused.
   if (/["%^!&|<>\r\n]/.test(file) || !args.every((arg) => SHELL_INERT_TOKEN.test(arg))) {
     throw launchError(file, "EINVAL");
   }
   return {
-    command: windowsSystemTool("cmd.exe", options.env ?? process.env),
+    command: windowsSystemTool("cmd.exe", env),
     args: ["/d", "/s", "/v:off", "/c", `""${file}" ${args.join(" ")}"`],
     shell: false,
     windowsVerbatimArguments: true,
   };
+}
+
+export async function cliSpawnTarget(
+  command: string,
+  args: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+  options: WindowsCliResolveOptions = {}
+): Promise<CliSpawnTarget> {
+  if (platform !== "win32") return { command, args: [...args], shell: false };
+  const resolution = await resolveWindowsCliTarget(command, options);
+  return windowsCliSpawnTarget(resolution, args, options.env ?? process.env);
 }

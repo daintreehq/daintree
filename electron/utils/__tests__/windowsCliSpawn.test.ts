@@ -8,6 +8,7 @@ import {
   unwrapWindowsShim,
   type WindowsCliResolveOptions,
 } from "../windowsCliSpawn.js";
+import { fakeWindowsPathFs as pathFsFor } from "./helpers/windowsPathFs.js";
 
 function filesystem(files: Record<string, string>): WindowsCliResolveOptions {
   return {
@@ -19,6 +20,7 @@ function filesystem(files: Record<string, string>): WindowsCliResolveOptions {
     },
     isFile: (file) => Object.keys(files).some((name) => name.toLowerCase() === file.toLowerCase()),
     readFile: (file) => files[file] ?? "",
+    pathFs: pathFsFor(files),
   };
 }
 
@@ -34,14 +36,14 @@ describe("Windows CLI resolution", () => {
     expect(isWindowsShellShim("codex.exe")).toBe(false);
   });
 
-  it("resolves native files instead of cmd builtins", () => {
+  it("resolves native files instead of cmd builtins", async () => {
     const options = filesystem({
       "C:\\tools\\echo.EXE": "",
       "C:\\tools\\set.EXE": "",
       "C:\\tools\\start.EXE": "",
     });
     for (const command of ["echo", "set", "start"]) {
-      expect(cliSpawnTarget(command, ["a&b", "%HOME%"], "win32", options)).toEqual({
+      await expect(cliSpawnTarget(command, ["a&b", "%HOME%"], "win32", options)).resolves.toEqual({
         command: `C:\\tools\\${command}.EXE`,
         args: ["a&b", "%HOME%"],
         shell: false,
@@ -49,62 +51,58 @@ describe("Windows CLI resolution", () => {
     }
   });
 
-  it("uses the same case-insensitive environment key as Node spawning", () => {
+  it("uses the same case-insensitive environment key as Node spawning", async () => {
     const options = filesystem({ "C:\\override\\agent.EXE": "" });
     options.env = { Path: "C:\\old", PATH: "C:\\override", PATHEXT: ".EXE" };
-    expect(resolveWindowsCli("agent", options)).toBe("C:\\override\\agent.EXE");
+    await expect(resolveWindowsCli("agent", options)).resolves.toBe("C:\\override\\agent.EXE");
   });
 
-  it("looks a bare name up in absolute PATH entries only, never the launch directory", () => {
+  it("looks a bare name up in absolute PATH entries only, never the launch directory", async () => {
     const options = filesystem({
       "C:\\project\\agent.EXE": "",
       "C:\\project\\node_modules\\.bin\\agent.EXE": "",
       "C:\\tools\\agent.CMD": "",
     });
     options.env = { Path: ".;.\\node_modules\\.bin;C:tools;C:\\tools", PATHEXT: ".EXE;.CMD" };
-    expect(resolveWindowsCli("agent", options)).toBe("C:\\tools\\agent.CMD");
+    await expect(resolveWindowsCli("agent", options)).resolves.toBe("C:\\tools\\agent.CMD");
 
     options.env = { Path: ".;.\\node_modules\\.bin", PATHEXT: ".EXE;.CMD" };
-    expect(() => resolveWindowsCli("agent", options)).toThrow(
-      expect.objectContaining({ code: "ENOENT" })
-    );
+    await expect(resolveWindowsCli("agent", options)).rejects.toMatchObject({ code: "ENOENT" });
     // An explicit relative path is still the caller's choice.
-    expect(resolveWindowsCli(".\\node_modules\\.bin\\agent", options)).toBe(
+    await expect(resolveWindowsCli(".\\node_modules\\.bin\\agent", options)).resolves.toBe(
       "C:\\project\\node_modules\\.bin\\agent.EXE"
     );
   });
 
-  it("keeps a quoted semicolon inside one PATH directory", () => {
+  it("keeps a quoted semicolon inside one PATH directory", async () => {
     const options = filesystem({ "C:\\a;b\\agent.EXE": "" });
     options.env = { Path: '"C:\\a;b";C:\\tools', PATHEXT: ".EXE" };
-    expect(resolveWindowsCli("agent", options)).toBe("C:\\a;b\\agent.EXE");
+    await expect(resolveWindowsCli("agent", options)).resolves.toBe("C:\\a;b\\agent.EXE");
   });
 
-  it("preserves structured missing-file errors and rejects drive-relative commands", () => {
+  it("preserves structured missing-file errors and rejects drive-relative commands", async () => {
     const options = filesystem({});
-    expect(() => resolveWindowsCli("codex", options)).toThrow(
-      expect.objectContaining({ code: "ENOENT" })
-    );
+    await expect(resolveWindowsCli("codex", options)).rejects.toMatchObject({ code: "ENOENT" });
     for (const command of ["C:", "C:codex", ":label", "a=b", "-command", "/c"]) {
-      expect(() => resolveWindowsCli(command, options)).toThrow();
+      await expect(resolveWindowsCli(command, options)).rejects.toThrow();
     }
   });
 
-  it("uses the real Node script with arbitrary arguments for npm shims", () => {
+  it("uses the real Node script with arbitrary arguments for npm shims", async () => {
     const options = filesystem({
       "C:\\tools\\codex.CMD": shim,
       "C:\\tools\\node_modules\\codex\\cli.js": "",
       "C:\\Program Files\\node\\node.exe": "",
     });
     const args = ["app-server", "--listen", "stdio://", 'x&echo hacked%PATH%"'];
-    expect(cliSpawnTarget("codex", args, "win32", options)).toEqual({
+    await expect(cliSpawnTarget("codex", args, "win32", options)).resolves.toEqual({
       command: "C:\\Program Files\\node\\node.exe",
       args: ["C:\\tools\\node_modules\\codex\\cli.js", ...args],
       shell: false,
     });
   });
 
-  it("unwraps npm's full current template and refuses one with extra lines", () => {
+  it("unwraps npm's full current template and refuses one with extra lines", async () => {
     const head = [
       "@ECHO off",
       "GOTO start",
@@ -132,9 +130,9 @@ describe("Windows CLI resolution", () => {
         "C:\\Program Files\\node\\node.exe": "",
       });
 
-    expect(
+    await expect(
       cliSpawnTarget("codex", ["--version"], "win32", files([...head, call].join("\r\n")))
-    ).toEqual({
+    ).resolves.toEqual({
       command: "C:\\Program Files\\node\\node.exe",
       args: [script, "--version"],
       shell: false,
@@ -142,47 +140,52 @@ describe("Windows CLI resolution", () => {
 
     // cmd.exe would run C:\\other\\node_modules\\codex\\cli.js here.
     const redirected = [...head.slice(0, 8), 'SET "dp0=C:\\other\\"', ...head.slice(8), call];
-    const target = cliSpawnTarget("codex", ["--version"], "win32", files(redirected.join("\r\n")));
+    const target = await cliSpawnTarget(
+      "codex",
+      ["--version"],
+      "win32",
+      files(redirected.join("\r\n"))
+    );
     expect(target.command).not.toBe("C:\\Program Files\\node\\node.exe");
     expect(target.windowsVerbatimArguments).toBe(true);
   });
 
-  it("bypasses npm shims that invoke a bundled native executable", () => {
+  it("bypasses npm shims that invoke a bundled native executable", async () => {
     const options = filesystem({
       "C:\\tools\\claude.CMD":
         '@ECHO off\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\claude\\bin\\claude.exe"   %*\r\n',
       "C:\\tools\\node_modules\\claude\\bin\\claude.exe": "",
     });
-    expect(cliSpawnTarget("claude", ["a&b", "%PATH%"], "win32", options)).toEqual({
+    await expect(cliSpawnTarget("claude", ["a&b", "%PATH%"], "win32", options)).resolves.toEqual({
       command: "C:\\tools\\node_modules\\claude\\bin\\claude.exe",
       args: ["a&b", "%PATH%"],
       shell: false,
     });
   });
 
-  it("prefers a shim's sibling Node and retains inert shebang flags", () => {
+  it("prefers a shim's sibling Node and retains inert shebang flags", async () => {
     const options = filesystem({
       "C:\\tools\\codex.CMD": shim.replace('"%_prog%" ', '"%_prog%" --no-warnings '),
       "C:\\tools\\node_modules\\codex\\cli.js": "",
       "C:\\tools\\node.exe": "",
     });
-    expect(cliSpawnTarget("codex", ["--version"], "win32", options).args).toEqual([
+    expect((await cliSpawnTarget("codex", ["--version"], "win32", options)).args).toEqual([
       "--no-warnings",
       "C:\\tools\\node_modules\\codex\\cli.js",
       "--version",
     ]);
   });
 
-  it("allows only inert arguments for confirmed non-Node batch files", () => {
+  it("allows only inert arguments for confirmed non-Node batch files", async () => {
     const options = filesystem({ "C:\\tools\\agent.CMD": "@echo off\r\ncustom %*" });
-    const target = cliSpawnTarget("agent", ["--help", "stdio://"], "win32", options);
+    const target = await cliSpawnTarget("agent", ["--help", "stdio://"], "win32", options);
     expect(target.command).toBe("C:\\Windows\\System32\\cmd.exe");
     expect(target.shell).toBe(false);
     expect(target.windowsVerbatimArguments).toBe(true);
     for (const value of ["a&b", "%HOME%", "a b", 'say "hi"']) {
-      expect(() => cliSpawnTarget("agent", [value], "win32", options)).toThrow(
-        expect.objectContaining({ code: "EINVAL" })
-      );
+      await expect(cliSpawnTarget("agent", [value], "win32", options)).rejects.toMatchObject({
+        code: "EINVAL",
+      });
     }
   });
 
@@ -219,13 +222,13 @@ describe("Windows CLI resolution", () => {
       ...localNodeBlock(' "%~dp0\\..\\lib\\agent\\cli.js" %*')
     );
 
-    it("runs a pnpm global shim's script under Node with the shim's NODE_PATH", () => {
+    it("runs a pnpm global shim's script under Node with the shim's NODE_PATH", async () => {
       const options = filesystem({
         "C:\\tools\\agent.CMD": pnpmShim,
         [script]: "",
         [pathNode]: "",
       });
-      expect(cliSpawnTarget("agent", userArgs, "win32", options)).toEqual({
+      await expect(cliSpawnTarget("agent", userArgs, "win32", options)).resolves.toEqual({
         command: pathNode,
         args: [script, ...userArgs],
         shell: false,
@@ -233,12 +236,12 @@ describe("Windows CLI resolution", () => {
       });
 
       options.env = { ...options.env, Node_Path: "C:\\mine" };
-      expect(cliSpawnTarget("agent", [], "win32", options).env).toEqual({
+      expect((await cliSpawnTarget("agent", [], "win32", options)).env).toEqual({
         Node_Path: `${pnpmNodePath};C:\\mine`,
       });
     });
 
-    it("keeps flags and script arguments in place and applies the PATH prepend", () => {
+    it("keeps flags and script arguments in place and applies the PATH prepend", async () => {
       const source = crlf(
         "@SETLOCAL",
         '@SET "PATH=C:\\runtime\\a;C:\\runtime\\b;%PATH%"',
@@ -249,7 +252,7 @@ describe("Windows CLI resolution", () => {
         [script]: "",
         "C:\\runtime\\b\\node.exe": "",
       });
-      expect(cliSpawnTarget("agent", ["--version"], "win32", options)).toEqual({
+      await expect(cliSpawnTarget("agent", ["--version"], "win32", options)).resolves.toEqual({
         command: "C:\\runtime\\b\\node.exe",
         args: ["--no-warnings", script, "--stdio", "--version"],
         shell: false,
@@ -262,10 +265,12 @@ describe("Windows CLI resolution", () => {
         "C:\\runtime\\b\\node.exe": "",
         "C:\\tools\\node.exe": "",
       });
-      expect(cliSpawnTarget("agent", [], "win32", withLocal).command).toBe("C:\\tools\\node.exe");
+      expect((await cliSpawnTarget("agent", [], "win32", withLocal)).command).toBe(
+        "C:\\tools\\node.exe"
+      );
     });
 
-    it("unwraps with a node already found on PATH, unless the shim changes PATH first", () => {
+    it("unwraps with a node already found on PATH, unless the shim changes PATH first", async () => {
       const files: Record<string, string> = {
         "C:\\Users\\Jane & John\\npm\\agent.CMD": crlf(
           "@SETLOCAL",
@@ -280,17 +285,21 @@ describe("Windows CLI resolution", () => {
         "C:\\runtime\\b\\node.exe": "",
       };
       const checked: string[] = [];
+      const pathFs = pathFsFor(files);
       const options: WindowsCliResolveOptions = {
         ...filesystem(files),
         isFile: (file) => {
           checked.push(file);
           return Object.keys(files).some((name) => name.toLowerCase() === file.toLowerCase());
         },
+        pathFs,
         node: pathNode,
       };
 
       // A path holding `&` reaches no shell: Node and the script, by argv.
-      expect(unwrapWindowsShim("C:\\Users\\Jane & John\\npm\\agent.CMD", options)).toEqual({
+      await expect(
+        unwrapWindowsShim("C:\\Users\\Jane & John\\npm\\agent.CMD", options)
+      ).resolves.toEqual({
         command: pathNode,
         args: ["C:\\Users\\Jane & John\\lib\\agent\\cli.js"],
         shell: false,
@@ -299,14 +308,15 @@ describe("Windows CLI resolution", () => {
       expect(checked.filter((file) => /node\.exe$/i.test(file))).toEqual([
         "C:\\Users\\Jane & John\\npm\\node.exe",
       ]);
+      expect(pathFs.readdir).not.toHaveBeenCalled();
 
-      expect(unwrapWindowsShim("C:\\Users\\Jane & John\\npm\\prepends.CMD", options)?.command).toBe(
-        "C:\\runtime\\b\\node.exe"
-      );
-      expect(unwrapWindowsShim("C:\\tools\\agent.exe", options)).toBeUndefined();
+      expect(
+        (await unwrapWindowsShim("C:\\Users\\Jane & John\\npm\\prepends.CMD", options))?.command
+      ).toBe("C:\\runtime\\b\\node.exe");
+      await expect(unwrapWindowsShim("C:\\tools\\agent.exe", options)).resolves.toBeUndefined();
     });
 
-    it("applies a colon-joined PATH prepend literally, as cmd.exe does", () => {
+    it("applies a colon-joined PATH prepend literally, as cmd.exe does", async () => {
       // `C:\runtime\b:C:\tools` is one directory name to Windows, so the Node
       // behind it is as unreachable for us as for the shim.
       const source = crlf(
@@ -320,7 +330,7 @@ describe("Windows CLI resolution", () => {
         "C:\\runtime\\b\\node.exe": "",
         "C:\\Program Files\\node\\node.exe": "",
       });
-      expect(cliSpawnTarget("agent", [], "win32", options)).toEqual({
+      await expect(cliSpawnTarget("agent", [], "win32", options)).resolves.toEqual({
         command: "C:\\Program Files\\node\\node.exe",
         args: [script],
         shell: false,
@@ -328,7 +338,7 @@ describe("Windows CLI resolution", () => {
       });
     });
 
-    it("runs a baked Node path and a native target directly", () => {
+    it("runs a baked Node path and a native target directly", async () => {
       const baked = "C:\\Program Files\\nodejs\\node.exe";
       const options = filesystem({
         "C:\\tools\\agent.CMD": crlf(
@@ -340,19 +350,19 @@ describe("Windows CLI resolution", () => {
         [baked]: "",
         "C:\\lib\\agent\\bin\\agent.exe": "",
       });
-      expect(cliSpawnTarget("agent", userArgs, "win32", options)).toEqual({
+      await expect(cliSpawnTarget("agent", userArgs, "win32", options)).resolves.toEqual({
         command: baked,
         args: [script, ...userArgs],
         shell: false,
       });
-      expect(cliSpawnTarget("native", userArgs, "win32", options)).toEqual({
+      await expect(cliSpawnTarget("native", userArgs, "win32", options)).resolves.toEqual({
         command: "C:\\lib\\agent\\bin\\agent.exe",
         args: userArgs,
         shell: false,
       });
     });
 
-    it("unwraps the npm 6 and Yarn classic layout", () => {
+    it("unwraps the npm 6 and Yarn classic layout", async () => {
       const options = filesystem({
         // Their generator leaves the closing parenthesis without a line break.
         "C:\\tools\\agent.CMD": localNodeBlock(' "%~dp0\\..\\lib\\agent\\cli.js" %*', true).join(
@@ -361,14 +371,14 @@ describe("Windows CLI resolution", () => {
         [script]: "",
         [pathNode]: "",
       });
-      expect(cliSpawnTarget("agent", userArgs, "win32", options)).toEqual({
+      await expect(cliSpawnTarget("agent", userArgs, "win32", options)).resolves.toEqual({
         command: pathNode,
         args: [script, ...userArgs],
         shell: false,
       });
     });
 
-    it("reads pnpm 11's code page wrapper and escaped percent signs", () => {
+    it("reads pnpm 11's code page wrapper and escaped percent signs", async () => {
       const options = filesystem({
         "C:\\tools\\agent.CMD": crlf(
           "@SETLOCAL",
@@ -383,7 +393,7 @@ describe("Windows CLI resolution", () => {
         ),
         "C:\\tools\\José\\50% off\\agent.exe": "",
       });
-      expect(cliSpawnTarget("agent", ["%PATH%"], "win32", options)).toEqual({
+      await expect(cliSpawnTarget("agent", ["%PATH%"], "win32", options)).resolves.toEqual({
         command: "C:\\tools\\José\\50% off\\agent.exe",
         args: ["%PATH%"],
         shell: false,
@@ -395,7 +405,7 @@ describe("Windows CLI resolution", () => {
       ["\\claude.js", "C:\\tools\\claude.js"],
       [".\\claude.js", "C:\\tools\\claude.js"],
       ["..\\lib\\claude.js", "C:\\lib\\claude.js"],
-    ])("unwraps hand-written wrappers that run %%~dp0%s", (relative, resolved) => {
+    ])("unwraps hand-written wrappers that run %%~dp0%s", async (relative, resolved) => {
       const baked = "C:\\Program Files\\nodejs\\node.exe";
       const options = filesystem({
         "C:\\tools\\bare.CMD": crlf("@echo off", `node "%~dp0${relative}" %*`),
@@ -404,12 +414,12 @@ describe("Windows CLI resolution", () => {
         [baked]: "",
         [pathNode]: "",
       });
-      expect(cliSpawnTarget("bare", userArgs, "win32", options)).toEqual({
+      await expect(cliSpawnTarget("bare", userArgs, "win32", options)).resolves.toEqual({
         command: pathNode,
         args: [resolved, ...userArgs],
         shell: false,
       });
-      expect(cliSpawnTarget("baked", userArgs, "win32", options)).toEqual({
+      await expect(cliSpawnTarget("baked", userArgs, "win32", options)).resolves.toEqual({
         command: baked,
         args: [resolved, ...userArgs],
         shell: false,
@@ -428,7 +438,7 @@ describe("Windows CLI resolution", () => {
       ["a call without %*", crlf('node "%~dp0claude.js"')],
       ["a line after the call", crlf("@echo off", 'node "%~dp0claude.js" %*', "@echo done")],
       ["a native target that is not an executable", crlf('@"%~dp0\\tool.ps1" %*')],
-    ])("leaves %s to the cmd.exe fallback", (_label, source) => {
+    ])("leaves %s to the cmd.exe fallback", async (_label, source) => {
       const options = filesystem({
         "C:\\tools\\agent.CMD": source,
         "C:\\tools\\claude.js": "",
@@ -437,22 +447,23 @@ describe("Windows CLI resolution", () => {
         [pathNode]: "",
         "C:\\py\\python.exe": "",
       });
-      const target = cliSpawnTarget("agent", ["--help"], "win32", options);
+      const target = await cliSpawnTarget("agent", ["--help"], "win32", options);
       expect(target.command).toBe("C:\\Windows\\System32\\cmd.exe");
       expect(target.windowsVerbatimArguments).toBe(true);
     });
 
-    it("reports a recognised shim whose script is missing", () => {
+    it("reports a recognised shim whose script is missing", async () => {
       const options = filesystem({ "C:\\tools\\agent.CMD": pnpmShim, [pathNode]: "" });
-      expect(() => cliSpawnTarget("agent", [], "win32", options)).toThrow(
-        expect.objectContaining({ code: "ENOENT", path: script })
-      );
+      await expect(cliSpawnTarget("agent", [], "win32", options)).rejects.toMatchObject({
+        code: "ENOENT",
+        path: script,
+      });
     });
   });
 
-  it("leaves POSIX spawning unchanged", () => {
+  it("leaves POSIX spawning unchanged", async () => {
     for (const platform of ["darwin", "linux"] as const) {
-      expect(cliSpawnTarget("codex", ["--version"], platform)).toEqual({
+      await expect(cliSpawnTarget("codex", ["--version"], platform)).resolves.toEqual({
         command: "codex",
         args: ["--version"],
         shell: false,

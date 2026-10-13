@@ -152,7 +152,7 @@ async function runVersionCommand(
     });
     return stdout;
   }
-  const target = cliSpawnTarget(resolvedPath, versionArgs, "win32", { env: process.env });
+  const target = await cliSpawnTarget(resolvedPath, versionArgs, "win32", { env: process.env });
   const { stdout } = await execFileAsync(target.command, target.args, {
     encoding: "utf8",
     timeout: CHECK_TIMEOUT_MS,

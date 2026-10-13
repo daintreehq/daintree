@@ -12,24 +12,42 @@ import type * as fs from "node:fs";
  *   );
  *
  * Covers the synchronous stat/lstat/readFile calls and the `fs.promises`
- * readdir/stat/lstat a PATH search makes. A directory exists when a file sits
- * somewhere under it.
+ * readdir/stat/lstat/readFile a PATH search and a shim read make. A directory
+ * exists when a file sits somewhere under it. A directory in `hang` never
+ * answers, the way one on a dropped network share waits out the SMB timeout.
+ * Every synchronous call against a Windows path is recorded in `syncCalls`.
  */
 const files = new Map<string, { path: string; contents: string }>();
+const hung = new Set<string>();
 const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
 
 export const virtualWindowsFiles = {
   /** Replace the disk with `entries` (path → contents), matched case-insensitively. */
-  set(entries: Record<string, string>): void {
+  set(entries: Record<string, string>, options: { hang?: readonly string[] } = {}): void {
     files.clear();
+    hung.clear();
     for (const [file, contents] of Object.entries(entries)) {
       files.set(file.toLowerCase(), { path: file, contents });
     }
+    for (const directory of options.hang ?? []) hung.add(directoryPrefix(directory));
   },
   clear(): void {
     files.clear();
+    hung.clear();
   },
+  /** Synchronous calls made against Windows paths (`<syscall> <path>`), in order. */
+  syncCalls: [] as string[],
 };
+
+function isHung(file: string): boolean {
+  const prefix = directoryPrefix(file);
+  for (const directory of hung) if (prefix.startsWith(directory)) return true;
+  return false;
+}
+
+function never<T>(): Promise<T> {
+  return new Promise<T>(() => {});
+}
 
 function windowsPath(file: unknown): string | undefined {
   return typeof file === "string" && WINDOWS_PATH.test(file) ? file : undefined;
@@ -95,6 +113,7 @@ export function withVirtualWindowsFiles(actual: typeof fs): typeof fs {
     (file: fs.PathLike, options?: fs.StatSyncOptions) => {
       const win = windowsPath(file);
       if (win === undefined) return real(file, options);
+      virtualWindowsFiles.syncCalls.push(`${syscall}Sync ${win}`);
       if (files.has(win.toLowerCase())) return fileStats;
       if (options?.throwIfNoEntry === false) return undefined;
       throw notFound(syscall, win);
@@ -102,6 +121,17 @@ export function withVirtualWindowsFiles(actual: typeof fs): typeof fs {
   const readFileSync = (file: fs.PathOrFileDescriptor, options?: unknown) => {
     const win = windowsPath(file);
     if (win === undefined) return actual.readFileSync(file, options as never);
+    virtualWindowsFiles.syncCalls.push(`readFileSync ${win}`);
+    const contents = files.get(win.toLowerCase())?.contents;
+    if (contents === undefined) throw notFound("open", win);
+    return contents;
+  };
+  const readFile = async (file: fs.PathLike, options?: unknown) => {
+    const win = windowsPath(file);
+    if (win === undefined) {
+      return (actual.promises.readFile as (f: fs.PathLike, o?: unknown) => unknown)(file, options);
+    }
+    if (isHung(win)) return never();
     const contents = files.get(win.toLowerCase())?.contents;
     if (contents === undefined) throw notFound("open", win);
     return contents;
@@ -112,6 +142,7 @@ export function withVirtualWindowsFiles(actual: typeof fs): typeof fs {
       const win = windowsPath(file);
       if (win === undefined)
         return (real as (f: fs.PathLike, o?: unknown) => unknown)(file, options);
+      if (isHung(win)) return never();
       if (files.has(win.toLowerCase())) return fileStats;
       if (isVirtualDirectory(win)) return directoryStats;
       throw notFound(syscall, win);
@@ -124,6 +155,7 @@ export function withVirtualWindowsFiles(actual: typeof fs): typeof fs {
         options
       );
     }
+    if (isHung(win)) return never();
     const entries = listVirtualDirectory(win);
     if (!entries) throw notFound("scandir", win);
     const withFileTypes = (options as { withFileTypes?: boolean } | undefined)?.withFileTypes;
@@ -132,6 +164,7 @@ export function withVirtualWindowsFiles(actual: typeof fs): typeof fs {
   const promises = {
     ...actual.promises,
     readdir,
+    readFile,
     stat: asyncStat("stat", actual.promises.stat),
     lstat: asyncStat("lstat", actual.promises.lstat),
   } as unknown as typeof fs.promises;

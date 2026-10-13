@@ -1755,10 +1755,17 @@ describe("PluginProcessManager on Windows: program lookup", () => {
     await flushMicrotasks();
     expect(h.spawnConfigs.map((config) => config.command)).toEqual(["C:\\tools\\node.exe"]);
 
-    // deno installed since; node moved, but a found program keeps its path.
+    // deno installed since (after the PATH directory listings aged out); node
+    // moved, but a found program keeps its path.
     virtualWindowsFiles.set({ "C:\\tools\\deno.exe": "", "C:\\other\\node.exe": "" });
-    await missing.restart();
-    await found.restart();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 60_000);
+    try {
+      await missing.restart();
+      await found.restart();
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(h.spawnConfigs.map((config) => config.command)).toEqual([
       "C:\\tools\\node.exe",

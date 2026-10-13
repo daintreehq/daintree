@@ -94,9 +94,9 @@ async function windowsInstallSpawn(
   if (file === null) throw windowsExecutableNotFound(bin);
   if (!isWindowsShellShim(file)) return { command: file, args };
   const node = (await resolveWindowsExecutable("node.exe", env)) ?? undefined;
-  let unwrapped: ReturnType<typeof unwrapWindowsShim>;
+  let unwrapped: Awaited<ReturnType<typeof unwrapWindowsShim>>;
   try {
-    unwrapped = unwrapWindowsShim(file, { env, node });
+    unwrapped = await unwrapWindowsShim(file, { env, node });
   } catch {
     // Unreadable, or naming a script or Node that is not there: let the batch
     // file run and report that itself.

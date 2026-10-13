@@ -243,17 +243,17 @@ export class AgentVersionService {
    * empty string → `parseVersion` → null → "indeterminate" → the launch proceeds
    * rather than blocking on an outdated-CLI gate).
    */
-  private runVersionProbe(command: string, args: string[]): Promise<string> {
+  private async runVersionProbe(command: string, args: string[]): Promise<string> {
+    // An npm-installed agent is a `.cmd` shim on Windows (see windowsCliSpawn).
+    const env = buildProbeEnv();
+    const target = await cliSpawnTarget(command, args, process.platform, { env });
     return new Promise<string>((resolve, reject) => {
       // `detached` puts the child in its own process group (POSIX) so the
       // deadline can SIGKILL the entire tree, including a grandchild that
       // inherited the stdout pipe. Windows tree-kills while the root lives.
       const useGroup = process.platform !== "win32";
-      // An npm-installed agent is a `.cmd` shim on Windows (see windowsCliSpawn).
       let child: ChildProcess;
       try {
-        const env = buildProbeEnv();
-        const target = cliSpawnTarget(command, args, process.platform, { env });
         child = spawn(target.command, target.args, {
           shell: target.shell,
           windowsVerbatimArguments: target.windowsVerbatimArguments,

@@ -246,13 +246,14 @@ export function resolveWindowsRegistryPath(): Promise<string | null> {
 
 /**
  * Search the PATH just adopted for what spawns will ask for synchronously (the
- * default shell) or soon (git), so neither waits on a PATH search when it
- * comes. Each registry read drops the resolver cache, which is why this runs
- * after every adoption. Asynchronous; never throws.
+ * default shell) or soon (git, and the node.exe an npm-installed agent's shim
+ * is unwrapped to), so none waits on a PATH search when it comes. Each
+ * registry read drops the resolver cache, which is why this runs after every
+ * adoption. Asynchronous; never throws.
  */
 export function prewarmWindowsSpawnTargets(): void {
   if (process.platform !== "win32") return;
-  void prewarmWindowsExecutables(["git"]);
+  void prewarmWindowsExecutables(["git", "node.exe"]);
   // Imported on demand: this module stays a builtins-only leaf.
   void import("../services/pty/terminalShell.js")
     .then(({ prewarmWindowsShell }) => prewarmWindowsShell())

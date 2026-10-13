@@ -1,18 +1,25 @@
 import { WINDOWS_PS_UTF8_BOOTSTRAP } from "../services/pty/terminalShell.js";
 import { quotePowerShellArg } from "../../shared/utils/shellEscape.js";
 import {
-  cliSpawnTarget,
+  resolveWindowsCliTarget,
+  windowsCliSpawnTarget,
   type CliSpawnTarget,
+  type WindowsCliResolution,
   type WindowsCliResolveOptions,
 } from "./windowsCliSpawn.js";
+import { windowsEnvValue } from "./windowsExecutable.js";
 
 /** Decode generated argv literals without evaluating any PowerShell source. */
 export function parseWindowsAgentCommand(command: string): string[] {
+  return parseWords(command, Infinity);
+}
+
+function parseWords(command: string, limit: number): string[] {
   let source = command.trim();
   if (source.startsWith("& ")) source = source.slice(2).trimStart();
   const words: string[] = [];
   let offset = 0;
-  while (offset < source.length) {
+  while (offset < source.length && words.length < limit) {
     while (/\s/.test(source[offset] ?? "") && offset < source.length) offset++;
     if (offset === source.length) break;
     let word = "";
@@ -63,23 +70,23 @@ export function serializeWindowsArgv(args: readonly string[]): string {
  * because cmd.exe re-parses the line; anything else is refused with a way out.
  */
 function agentLaunchTarget(
-  file: string,
+  resolution: WindowsCliResolution,
   args: readonly string[],
-  options: WindowsCliResolveOptions
+  env: NodeJS.ProcessEnv
 ): CliSpawnTarget {
   try {
-    return cliSpawnTarget(file, args, "win32", options);
+    return windowsCliSpawnTarget(resolution, args, env);
   } catch (error) {
     // Only the arguments differ between the calls, so a bare cmd.exe target
     // means they were the reason.
     let bare: CliSpawnTarget | undefined;
     try {
-      bare = cliSpawnTarget(file, [], "win32", options);
+      bare = windowsCliSpawnTarget(resolution, [], env);
     } catch {
       // The original failure stands.
     }
-    if (!bare?.windowsVerbatimArguments) throw error;
-    const shim = (error as NodeJS.ErrnoException).path ?? file;
+    if (!bare?.windowsVerbatimArguments || resolution.kind !== "batch") throw error;
+    const shim = (error as NodeJS.ErrnoException).path ?? resolution.file;
     throw new Error(
       `Cannot pass these launch arguments through ${shim}: Daintree cannot unwrap this batch file, and cmd.exe would rewrite them. Install the CLI with npm or as a native executable, or launch it without a prompt.`,
       { cause: error }
@@ -87,13 +94,77 @@ function agentLaunchTarget(
   }
 }
 
+/** What a resolution depends on besides the executable word itself. */
+function resolutionEnvKey(env: NodeJS.ProcessEnv): string {
+  return JSON.stringify(
+    ["PATH", "PATHEXT", "NODE_PATH", "SYSTEMROOT", "WINDIR"].map(
+      (name) => windowsEnvValue(env, name) ?? null
+    )
+  );
+}
+
+/**
+ * The executable of a Windows agent command, resolved ahead of the launch: the
+ * PATH search, the shim read and the Node lookup are asynchronous, so a PATH
+ * entry on a dead share never blocks Main, and the launch script is then built
+ * synchronously. Never rejects: a failure is kept and thrown by
+ * `buildWindowsAgentLaunchScript`, where the launch would have failed anyway.
+ */
+export interface WindowsAgentExecutable {
+  /** The command's first word, as it was resolved; undefined when it did not parse. */
+  readonly file: string | undefined;
+  readonly envKey: string;
+  readonly resolution?: WindowsCliResolution;
+  readonly error?: unknown;
+}
+
+export async function resolveWindowsAgentExecutable(
+  command: string,
+  options: WindowsCliResolveOptions = {}
+): Promise<WindowsAgentExecutable> {
+  const envKey = resolutionEnvKey(options.env ?? process.env);
+  let file: string | undefined;
+  try {
+    // Only the first word: the arguments can still change before the launch.
+    [file] = parseWords(command, 1);
+    if (file === undefined) throw new Error("Missing Windows agent command");
+    return { file, envKey, resolution: await resolveWindowsCliTarget(file, options) };
+  } catch (error) {
+    return { file, envKey, error };
+  }
+}
+
+/**
+ * Whether `executable` still answers for `command` under `env`: the same first
+ * word and the same PATH, PATHEXT, NODE_PATH and SystemRoot. A command whose
+ * first word does not parse counts as matching, so the build reports it.
+ */
+export function isWindowsAgentExecutableFor(
+  executable: WindowsAgentExecutable,
+  command: string,
+  env: NodeJS.ProcessEnv
+): boolean {
+  let file: string | undefined;
+  try {
+    [file] = parseWords(command, 1);
+  } catch {
+    return true;
+  }
+  return file === executable.file && resolutionEnvKey(env) === executable.envKey;
+}
+
 /** Inherit the PTY handles while avoiding both cmd.exe and PowerShell's native binder. */
 export function buildWindowsAgentLaunchScript(
   command: string,
-  options: WindowsCliResolveOptions = {}
+  executable: WindowsAgentExecutable,
+  env: NodeJS.ProcessEnv = process.env
 ): string {
   const [file, ...args] = parseWindowsAgentCommand(command);
-  const target = agentLaunchTarget(file, args, options);
+  if (file !== executable.file) {
+    throw new Error(`The Windows agent executable ${file} was not resolved for this launch`);
+  }
+  if (!executable.resolution) throw executable.error;
+  const target = agentLaunchTarget(executable.resolution, args, env);
   // A cmd.exe target already holds its exact command line (`/d /s /v:off /c ""shim" args"`).
   const commandLine = target.windowsVerbatimArguments
     ? target.args.join(" ")
