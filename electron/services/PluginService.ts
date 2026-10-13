@@ -1236,7 +1236,8 @@ export class PluginService {
       records: this.records,
       getSettingsRoot: () => this.settings.settingsRoot(),
       loadPlugin: (root, pluginId, opts) => this.loadPlugin(root, pluginId, opts),
-      unloadPlugin: (pluginId) => this.unloadPlugin(pluginId),
+      unloadPlugin: (pluginId, options) => this.unloadPlugin(pluginId, options),
+      settlePluginReload: (pluginId) => this.settlePluginReload(pluginId),
       activatePlugin: (pluginId) => this.activatePlugin(pluginId),
       setPluginArchiveHash: (pluginId, hash) => this.setPluginArchiveHash(pluginId, hash),
       setEnabled: (pluginId, enabled) => this.setEnabled(pluginId, enabled),
@@ -5113,23 +5114,26 @@ export class PluginService {
   }
 
   private async doLoadDevPlugin(pluginId: string): Promise<void> {
-    if (this.plugins.has(pluginId)) {
-      this.unloadPlugin(pluginId);
+    const replacing = this.plugins.has(pluginId);
+    if (replacing) this.unloadPlugin(pluginId, { reload: true });
+    try {
+      // Honor the user's persisted disabled intent — the dev path must not be a
+      // trust escape hatch that force-loads a plugin the user turned off (#10518).
+      // A disabled id makes `loadPlugin` skip + return null, surfacing the clear
+      // error below to the CLI caller rather than silently activating it.
+      const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
+        isBuiltin: false,
+        disabled: this.records.getDisabledIds(),
+      });
+      if (!loaded) {
+        throw new Error(
+          `Couldn't load dev plugin "${pluginId}" from ${this.pluginsRoot} — it may be disabled in Preferences, or the symlink/plugin.json may be invalid`
+        );
+      }
+      await this.activatePlugin(pluginId);
+    } finally {
+      if (replacing) this.settlePluginReload(pluginId);
     }
-    // Honor the user's persisted disabled intent — the dev path must not be a
-    // trust escape hatch that force-loads a plugin the user turned off (#10518).
-    // A disabled id makes `loadPlugin` skip + return null, surfacing the clear
-    // error below to the CLI caller rather than silently activating it.
-    const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
-      isBuiltin: false,
-      disabled: this.records.getDisabledIds(),
-    });
-    if (!loaded) {
-      throw new Error(
-        `Couldn't load dev plugin "${pluginId}" from ${this.pluginsRoot} — it may be disabled in Preferences, or the symlink/plugin.json may be invalid`
-      );
-    }
-    await this.activatePlugin(pluginId);
   }
 
   // ----- `daintree-plugin dev` sessions (#12277) --------------------------
@@ -5620,8 +5624,9 @@ export class PluginService {
     // authoritative, and the renderer prunes persisted preferences off ones
     // that claim to be — see the broadcaster's `isReplacingPlugin`.
     this.devReplaceDepth++;
+    const replacing = this.plugins.has(pluginId);
     try {
-      if (this.plugins.has(pluginId)) this.unloadPlugin(pluginId);
+      if (replacing) this.unloadPlugin(pluginId, { reload: true });
       const loaded = await this.loadPlugin(this.pluginsRoot, pluginId, {
         isBuiltin: false,
         disabled: this.records.getDisabledIds(),
@@ -5644,6 +5649,7 @@ export class PluginService {
       }
       await this.activatePlugin(pluginId);
     } finally {
+      if (replacing) this.settlePluginReload(pluginId);
       this.devReplaceDepth--;
       // The registries are whole again, so anything the replacement held back
       // can be published for real.
@@ -6148,6 +6154,24 @@ export class PluginService {
     }
   }
 
+  /**
+   * Settle a reload that `unloadPlugin(id, { reload: true })` began. Agent
+   * credentials held across it survive only when the generation loaded now
+   * declares the agent surface they were issued against; anything else,
+   * including nothing coming back, revokes them. A disable that landed while
+   * the plugin was out of `this.plugins` found nothing to unload, so the
+   * persisted intent is read here too.
+   */
+  private settlePluginReload(pluginId: string): void {
+    const current = this.records.getDisabledIds().has(pluginId)
+      ? undefined
+      : this.plugins.get(pluginId);
+    pluginMcpGrantRegistry.releasePlugin(
+      pluginId,
+      current ? agentMcpSurfaceOf(current.manifest) : null
+    );
+  }
+
   unloadPlugin(pluginId: string, options?: { reload: true }): void {
     const unloading = this.plugins.get(pluginId);
     if (!unloading) return;
@@ -6159,8 +6183,9 @@ export class PluginService {
     // deliberately skips this: the instance is still loaded, its grants stay
     // valid, and the roster returns when the worker re-activates.
     //
-    // A reload holds them instead: they reach no plugin code until the
-    // controller settles the reload, and survive only if the generation it
+    // A reload holds them instead: a project plugin's hot reload, a dev
+    // plugin's rebuild, or an installed plugin's upgrade. They reach no plugin
+    // code until the reload settles, and survive only if the generation it
     // leaves loaded declares the same agent surface. Running agents cannot be
     // handed a new bearer, so revoking here would cut them off for good.
     runUnloadStep(pluginId, "revokeAgentMcpGrants", () => {

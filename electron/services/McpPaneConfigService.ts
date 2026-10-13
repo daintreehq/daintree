@@ -11,6 +11,7 @@ import {
   pluginMcpGrantRegistry,
   type PluginMcpGrantRegistry,
 } from "./pluginAgentMcp/grantRegistry.js";
+import { createLogger } from "../utils/logger.js";
 import { pluginMcpRoutePath, type AgentMcpToolScope } from "./pluginAgentMcp/types.js";
 import type { LaunchMcpInjection } from "../../shared/config/launchMcp.js";
 import {
@@ -21,6 +22,7 @@ import {
 import { resolveLaunchMcpBase } from "./launchMcp/resolveLaunchMcpBase.js";
 
 const CLAUDE_INJECTION: LaunchMcpInjection = { format: "claude-mcp-config" };
+const logger = createLogger("main:PluginAgentMcp");
 
 const PANE_CONFIG_DIR_NAME = "mcp-pane-configs";
 const MCP_SERVER_KEY = "daintree";
@@ -208,7 +210,7 @@ export class McpPaneConfigService {
 
     // Also revokes every plugin grant a previous launch of this pane id held,
     // so a restart never leaves the old launch's credentials live.
-    await this.revokePaneConfig(paneId);
+    await this.revokePaneConfig(paneId, "relaunched");
     const attempt = ++this.nextAttempt;
     this.attempts.set(paneId, attempt);
     const isCurrent = () => this.attempts.get(paneId) === attempt;
@@ -344,7 +346,13 @@ export class McpPaneConfigService {
       seenInstances.add(server.pluginInstanceId);
       seenKeys.add(server.serverKey);
       try {
-        if (isEligible && !isEligible(server)) continue;
+        if (isEligible && !isEligible(server)) {
+          logger.info("Skipped plugin MCP server: no longer eligible at launch", {
+            pluginInstanceId: server.pluginInstanceId,
+            terminalId: paneId,
+          });
+          continue;
+        }
         const { token } = this.pluginGrants.issue({
           pluginInstanceId: server.pluginInstanceId,
           scope: server.scope,
@@ -372,18 +380,25 @@ export class McpPaneConfigService {
     }));
   }
 
-  private revokePluginGrants(paneId: string): void {
+  private revokePluginGrants(
+    paneId: string,
+    reason: "terminal-exited" | "relaunched" = "terminal-exited"
+  ): void {
     this.grantedPanes.delete(paneId);
-    this.pluginGrants.revokeTerminal(paneId);
+    this.pluginGrants.revokeTerminal(paneId, reason);
   }
 
-  async revokePaneConfig(paneId: string): Promise<void> {
+  /** `reason` labels the plugin grants' revocation; "relaunched" when a new launch of the pane replaces them. */
+  async revokePaneConfig(
+    paneId: string,
+    reason: "terminal-exited" | "relaunched" = "terminal-exited"
+  ): Promise<void> {
     // Unconditional, and first: grants are keyed by terminal id in their own
     // registry, so they go even when this pane has no record here (a write that
     // failed, a record already torn down), and before any await so no request
     // can authenticate with them once revocation has started.
     this.attempts.delete(paneId);
-    this.revokePluginGrants(paneId);
+    this.revokePluginGrants(paneId, reason);
 
     const record = this.records.get(paneId);
     if (!record) {
