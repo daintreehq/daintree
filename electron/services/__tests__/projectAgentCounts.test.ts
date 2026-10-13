@@ -1055,7 +1055,10 @@ describe("computeProjectAgentCounts — Canopy refinements (#13239)", () => {
     ).get("p1")!;
 
   it("counts a seen hand-back Canopy read as asking something as a wait, like the fleet bands it", () => {
-    const terminals = [agent({ id: "a", agentState: "completed", lastStateChange: 500 })];
+    // Slid from `completed` into a prompt wait at 900, after stopping at 500.
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "prompt", lastStateChange: 900 }),
+    ];
     const records = { a: { stoppedAt: 500, seenAt: 600 } };
     expect(count(terminals, undefined, records)).toMatchObject({ waiting: 0, completed: 1 });
     expect(

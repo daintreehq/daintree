@@ -399,7 +399,16 @@ interface RunEntry {
    * once the screen it was of has gone. A failed read leaves it as it was, so
    * the turn tells a reading of this stop from one of the stop before.
    */
-  evidence: { turn: number; question: string | null; status: string | null } | null;
+  evidence: {
+    turn: number;
+    /** The screen it was read from (`contentHash`) and what Daintree observed then (`observedKey`). */
+    hash: string | null;
+    state: string;
+    question: string | null;
+    status: string | null;
+  } | null;
+  /** The screen now showing is blank: nothing on it to quote, whatever the card last said. */
+  cleared: boolean;
 }
 
 /**
@@ -1489,6 +1498,7 @@ export class CanopyService {
           const entry =
             existing && existing.spawnedAt === run.spawnedAt ? existing : newEntry(run.spawnedAt);
           this.entries.set(run.runId, entry);
+          entry.cleared = false;
           if (entry.contentHash !== screen.hash) {
             entry.contentChangedAt = this.now();
             entry.print = reflowPrint(screen.text);
@@ -1620,7 +1630,11 @@ export class CanopyService {
             // Deliberately a reading of this stop: the same screen, read moments
             // before Daintree saw the agent settle on it, is what the stop shows.
             if (entry.evidence !== null && entry.evidence.turn !== entry.reads.turn) {
-              entry.evidence = { ...entry.evidence, turn: entry.reads.turn };
+              entry.evidence = {
+                ...entry.evidence,
+                turn: entry.reads.turn,
+                state: entry.readState,
+              };
               this.scheduleBroadcast();
             }
             this.refreshActivity(entry, screen, run);
@@ -2024,6 +2038,8 @@ export class CanopyService {
     // Quoted only as far as the screen bears it out: a paraphrase is not evidence.
     entry.evidence = {
       turn: entry.reads.turn,
+      hash: entry.contentHash,
+      state: entry.readState,
       question: onScreen(classified.question, screen.text),
       status: onScreen(classified.status, screen.text),
     };
@@ -2346,6 +2362,7 @@ export class CanopyService {
     entry.ask = null;
     entry.classified = null;
     entry.evidence = null;
+    entry.cleared = true;
     entry.asking = false;
     // What the screen said at a glance went with it.
     entry.glance = null;
@@ -2696,6 +2713,7 @@ function newEntry(spawnedAt: number): RunEntry {
     rereadOf: null,
     refinement: null,
     evidence: null,
+    cleared: false,
   };
 }
 
@@ -2846,14 +2864,20 @@ function refinementOf(
   if (run.agentState === undefined) return null;
   if (isBusy(run)) {
     const quote = (entry.card?.activity ?? entry.card?.glance.doing ?? "").trim();
-    if (stalledSince === null || !quote) return null;
+    if (stalledSince === null || entry.cleared || !quote) return null;
     return { kind: "stalled", quote, readAt: now, stalledSince };
   }
   const classified = entry.classified;
   const evidence = entry.evidence;
-  // Only a reading made for this turn speaks for it: one kept through a failed
-  // read is about the stop before, and a pass under way is about a newer screen.
-  if (classified === null || evidence === null || evidence.turn !== entry.reads.turn) return null;
+  // Only a reading of this turn speaks for it: one kept through a failed read
+  // is about the stop before, and a pass under way is about a newer screen.
+  // A reading that landed while the turn was still being held speaks for the
+  // turn it then became, as long as the screen and the observed state are the
+  // ones it read: an unchanged screen is never sent to be read again.
+  const sameRead =
+    evidence !== null && evidence.hash === entry.contentHash && evidence.state === observedKey(run);
+  if (classified === null || evidence === null) return null;
+  if (evidence.turn !== entry.reads.turn && !sameRead) return null;
   if (entry.pending || classified.confidence < ASK_CONFIDENCE) return null;
   if (isHandBackStop(run.agentState, run.waitingReason)) {
     // Read while stopped: a reading of the run at work says nothing of what it stopped on.

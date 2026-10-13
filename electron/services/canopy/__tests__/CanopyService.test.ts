@@ -4770,6 +4770,53 @@ describe("CanopyService refining attention", () => {
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
   });
 
+  it("keeps a reading that landed while the stop was still being held", async () => {
+    let now = 1_000_000;
+    const h = await makeHarness({ classify: readScreen, now: () => now });
+    h.runs.push(run("a", { agentState: "working", since: now }));
+    h.screens.set("a", "• Running the suite (esc to interrupt)");
+    await h.service.refresh();
+    now += CANOPY_TURN_HOLD_MS + 1_000;
+    await h.service.refresh();
+
+    // Stopped on a wait the patterns took for a question, read at once —
+    // inside the hold, before the stop counts as a turn.
+    h.runs[0] = run("a", { agentState: "waiting", waitingReason: "question", since: now });
+    h.screens.set("a", "⏺ All 14 tests pass.");
+    h.service.onFleetChanged();
+    await h.service.refresh();
+    await vi.waitFor(() => expect(lastSent(h)?.cards[0]?.category).toBe("finished"));
+
+    // The hold runs out on an unchanged screen, which is never read again.
+    now += CANOPY_TURN_HOLD_MS + 1_000;
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "not-asking" })
+    );
+  });
+
+  it("never quotes a stall off a screen that has gone blank", async () => {
+    let now = 1_000_000;
+    const h = await makeHarness({ now: () => now });
+    h.runs.push(run("a", { agentState: "working" }));
+    h.screens.set("a", "• Waiting for background terminal (1m 02s • esc to interrupt)");
+    await h.service.refresh();
+    now += CANOPY_STALL_MS + 1_000;
+    await h.service.refresh();
+    await vi.waitFor(() => expect(h.service.getRefinement("a", 1)?.kind).toBe("stalled"));
+
+    h.screens.set("a", "   \n");
+    await h.service.refresh();
+    await vi.waitFor(() => expect(h.service.getRefinement("a", 1)).toBeUndefined());
+    now += CANOPY_STALL_MS + 1_000;
+    await h.service.refresh();
+    // An unchanged plan sends nothing new but still settles every run; the
+    // wait is for a settle that, rightly, has nothing to announce.
+    h.service.setPlan({ mode: "on", activated: true, tier: "priority" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+  });
+
   it("clears a question wait the screen shows asks nothing, but never an approval", async () => {
     const h = await makeHarness({ classify: async () => FINISHED_READ });
     h.runs.push(

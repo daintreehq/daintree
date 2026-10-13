@@ -460,7 +460,9 @@ export class FleetSnapshotService {
         delete rest.canopy;
         return canopy === undefined ? rest : { ...rest, canopy };
       });
-      if (!this.runsEqual(runs, previous.runs)) this.publish({ ...previous, runs });
+      if (!this.runsEqual(runs, previous.runs)) {
+        this.publish({ ...previous, runs, changedAt: Date.now() });
+      }
     }
     this.debouncedCompute();
   }

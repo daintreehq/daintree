@@ -571,7 +571,13 @@ export function computeProjectAgentCounts(
 
         // Age the wait from the transition into `waiting`. Terminals that haven't
         // recorded one yet still count toward `waiting` but can't contribute an age.
-        const since = terminal.lastStateChange;
+        // An ask Canopy read on a hand-back is as old as the stop it was asked at,
+        // as the fleet dates it, not the slide from `completed` into a prompt.
+        const askedAt =
+          asked && terminal.id !== undefined
+            ? handBackFor?.(terminal.id, terminal.spawnedAt)?.stoppedAt
+            : undefined;
+        const since = askedAt ?? terminal.lastStateChange;
         if (typeof since === "number" && since > 0) {
           entry.oldestWaitingSince =
             entry.oldestWaitingSince === null ? since : Math.min(entry.oldestWaitingSince, since);
