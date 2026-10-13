@@ -18,14 +18,16 @@ import { HybridInputBar } from "../HybridInputBar";
 const WT_ID = "/repo/wt";
 
 // jsdom has no layout: CodeMirror measures text through Range rects it lacks.
-const originalRangeRects = Range.prototype.getClientRects;
+const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
 const originalRangeBounds = Range.prototype.getBoundingClientRect;
 beforeAll(() => {
-  Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
   Range.prototype.getBoundingClientRect = () => new DOMRect();
 });
 afterAll(() => {
-  Range.prototype.getClientRects = originalRangeRects;
+  if (originalRangeRects)
+    Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
+  else delete (Range.prototype as Partial<Range>).getClientRects;
   Range.prototype.getBoundingClientRect = originalRangeBounds;
 });
 
@@ -97,8 +99,8 @@ async function hostDraft(text: string): Promise<void> {
 
 /** The document's text, without the placeholder an empty editor shows. */
 function editorText(container: HTMLElement): string {
-  const content = container.querySelector(".cm-content")?.cloneNode(true) as HTMLElement | null;
-  if (!content) return "";
+  const content = container.querySelector(".cm-content")?.cloneNode(true);
+  if (!(content instanceof HTMLElement)) return "";
   for (const placeholder of content.querySelectorAll(".cm-placeholder")) placeholder.remove();
   return content.textContent ?? "";
 }

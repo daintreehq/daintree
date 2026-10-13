@@ -365,7 +365,6 @@ describe("draftInputPersistence.rebaseProject", () => {
   });
 });
 
-
 describe("draftInputPersistence.startLiveSync — drafts watchers can follow (#13283)", () => {
   type Lease = Parameters<typeof setDriveLeaseSnapshot>[0];
   let stop: (() => void) | null = null;
@@ -373,11 +372,20 @@ describe("draftInputPersistence.startLiveSync — drafts watchers can follow (#1
   function lease(projectId: string, drivingHere: boolean, held = true): Lease {
     return {
       projectId,
-      holder: held ? { clientName: "Laptop", leaseId: 1, isHostLocal: false } : null,
+      holder: held
+        ? {
+            leaseId: 1,
+            endpointId: "e1",
+            clientId: "c1",
+            clientName: "Laptop",
+            isHostLocal: false,
+            acquiredAt: 0,
+          }
+        : null,
       drivingHere,
       isHolderEndpoint: drivingHere,
       viewerIsHostLocal: false,
-    } as unknown as Lease;
+    };
   }
 
   beforeEach(() => {
