@@ -236,17 +236,25 @@ function applyLease(lease: DriveLeaseView): void {
   setDriveLeaseSnapshot(lease);
   if (!lease.drivingHere) void followHostPanels();
   const driver = drivenElsewhereBy(lease);
+  const driverIsHostScreen = lease.holder?.isHostLocal === true;
   setLeaseInputBlock(
     driver === null
       ? null
       : {
           kind: "driven-elsewhere",
-          driverName: driver,
+          // The host's screen goes by the name this machine knows the host by,
+          // as the window banner names it, not the name it reports itself.
+          driverName: driverIsHostScreen ? hostDisplayName(driver) : driver,
           projectId: lease.projectId,
           hostLocal: lease.viewerIsHostLocal,
-          driverIsHostScreen: lease.holder?.isHostLocal === true,
+          driverIsHostScreen,
         }
   );
+}
+
+function hostDisplayName(fallback: string): string {
+  const host = useHostConnectionStore.getState();
+  return host.hostName ?? host.hostId ?? fallback;
 }
 
 /**
@@ -381,12 +389,13 @@ function claimOpenedProject(projectId: string, isLive: () => boolean): void {
 }
 
 /**
- * Takes the project unless another machine drives it: nobody holding it, the
- * host's own screen holding it, or another window of this machine holding it
- * is taken; a second laptop driving it is not silently taken from, and this
- * view opens viewing with "Take over" offered instead. A lease event landing
- * while the lease is read means the read is stale, so it is read again before
- * anything is taken. Settles either way, so the claim isn't retried.
+ * Takes the project unless someone else is using it: nobody holding it, an idle
+ * host screen holding it, or another window of this machine holding it is
+ * taken. A second laptop driving it, or the host's own screen while someone is
+ * using it there, is not silently taken from: this view opens read-only with
+ * "Take control" offered instead. A lease event landing while the lease is
+ * read means the read is stale, so it is read again before anything is taken.
+ * Settles either way, so the claim isn't retried.
  */
 async function claimUnlessAnotherMachineDrives(projectId: string): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -399,7 +408,9 @@ async function claimUnlessAnotherMachineDrives(projectId: string): Promise<void>
       !lease.drivingHere &&
       !holder.isHostLocal &&
       lease.heldByThisClient !== true;
-    if (anotherMachine) {
+    const hostScreenBusy =
+      lease.hostScreenInUse === true && (holder === null || holder.isHostLocal);
+    if (anotherMachine || hostScreenBusy) {
       leaseGeneration += 1;
       applyLease(lease);
       return;

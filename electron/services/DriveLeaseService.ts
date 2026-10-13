@@ -13,6 +13,7 @@ import {
   type LeaseTargetResolvers,
 } from "./driveLeaseTargets.js";
 import { getPtyClient } from "../window/serviceRefs.js";
+import { isLocalViewInActiveUse } from "./hostScreenActivity.js";
 import { createFileReservationStore } from "./driveLeaseReservations.js";
 import type { DriveLeaseHolder, DriveLeaseState } from "../../shared/types/remoteHosts.js";
 import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
@@ -55,6 +56,12 @@ export interface DriveLeaseServiceOptions {
    */
   reservations?: DriveLeaseReservationStore;
   restoredReservationGraceMs?: number;
+  /**
+   * Whether a window on this machine's own screen is in active use: the
+   * endpoint is the active view of a focused window, and someone has used this
+   * machine in the last few minutes. Nobody, by default.
+   */
+  isHostScreenInUse?: (endpoint: ClientEndpoint) => boolean;
 }
 
 /** A remote client that held a project's lease when this app last ran. */
@@ -110,6 +117,7 @@ export class DriveLeaseService {
   private readonly applyDriveLeases: (leases: PtyHostDriveLease[]) => void;
   private readonly reservations: DriveLeaseReservationStore | null;
   private readonly restoredReservationGraceMs: number;
+  private readonly isHostScreenInUse: (endpoint: ClientEndpoint) => boolean;
   private savedReservations = "";
   private readonly leases = new Map<string, ProjectLease>();
   private readonly clients = new Map<string, ClientRef>();
@@ -132,6 +140,7 @@ export class DriveLeaseService {
     this.reservations = options.reservations ?? null;
     this.restoredReservationGraceMs =
       options.restoredReservationGraceMs ?? DEFAULT_RESTORED_RESERVATION_GRACE_MS;
+    this.isHostScreenInUse = options.isHostScreenInUse ?? (() => false);
     this.restoreReservations();
     this.offRegistry = this.registry.onChange(() => this.queueReconcile());
     this.queueReconcile();
@@ -248,12 +257,14 @@ export class DriveLeaseService {
   }
 
   /**
-   * The project's holder, granting it to the first attached endpoint when
-   * nobody holds it. May name an endpoint that has just closed while its
+   * The project's holder. Reading never changes it: a metrics sample, a fleet
+   * check or a view looking at the lease must not make a window that merely
+   * shows the project its driver. A read only starts (or stops) the grace of a
+   * holder that has gone. May name an endpoint that has just closed while its
    * client's reservation runs; use {@link getHolderEndpoint} to reach it.
    */
   getHolder(projectId: string): DriveLeaseHolder | null {
-    this.reconcileProject(projectId);
+    this.reconcileProject(projectId, false);
     return this.leases.get(projectId)?.holder ?? null;
   }
 
@@ -327,7 +338,9 @@ export class DriveLeaseService {
    * Hand the lease to `endpoint`. Explicit and always granted: the previous
    * driver's screen shows it has been taken, with the option to take it back.
    * With `ifLeaseId`, granted only while the lease is still that one (null:
-   * nobody holds it); otherwise the current holder is returned unchanged.
+   * nobody holds it) and the Host's own screen isn't in use on the project;
+   * otherwise the holder is returned, the Host's screen holding it when it
+   * was in use with nobody holding it.
    */
   takeOver(projectId: string, endpoint: ClientEndpoint): DriveLeaseHolder;
   takeOver(
@@ -355,6 +368,14 @@ export class DriveLeaseService {
     if (options.ifLeaseId !== undefined) {
       const holder = this.getHolder(projectId);
       if ((holder?.leaseId ?? null) !== options.ifLeaseId) return holder;
+      // A conditional claim is the one a view makes on opening the project. It
+      // never takes the project from someone using the Host's own screen,
+      // whatever the claiming client decided from its read: that view opens
+      // read-only, and Take control is the explicit step.
+      if (holder === null || holder.isHostLocal) {
+        const inUse = this.presentFor(projectId).find((present) => this.hostScreenShows(present));
+        if (inUse) return holder ?? this.grant(projectId, inUse);
+      }
     }
     return this.grant(projectId, endpoint);
   }
@@ -441,6 +462,31 @@ export class DriveLeaseService {
     );
   }
 
+  /**
+   * Who a lease goes to when its holder has gone or nobody holds it: another
+   * window of the holder's own client, then the Host's own screen while it is
+   * in use, then whoever is attached.
+   */
+  private successor(projectId: string, clientId: string | null): ClientEndpoint | undefined {
+    const attached = this.presentFor(projectId);
+    return (
+      (clientId !== null
+        ? attached.find((endpoint) => endpoint.clientId === clientId)
+        : undefined) ??
+      attached.find((endpoint) => this.hostScreenShows(endpoint)) ??
+      attached[0]
+    );
+  }
+
+  private hostScreenShows(endpoint: ClientEndpoint): boolean {
+    if (endpoint.kind !== "local-view") return false;
+    try {
+      return this.isHostScreenInUse(endpoint);
+    } catch {
+      return false;
+    }
+  }
+
   private presentFor(projectId: string): ClientEndpoint[] {
     return this.registry
       .getForProject(projectId)
@@ -450,7 +496,7 @@ export class DriveLeaseService {
   /**
    * Local views read their project live and are not indexed by it, so only
    * remote endpoints announce projects here. A project only local windows
-   * show gets its lease lazily, the first time anything asks.
+   * show is held by nobody, which lets every local window drive it.
    */
   private attachedProjects(): string[] {
     const out: string[] = [];
@@ -460,13 +506,18 @@ export class DriveLeaseService {
     return out;
   }
 
-  private reconcileProject(projectId: string): void {
+  /**
+   * Settle a project's lease against who is attached. Only a change in who is
+   * attached may grant it (`mayGrant`); a read just keeps the grace of a
+   * holder that has gone running.
+   */
+  private reconcileProject(projectId: string, mayGrant = true): void {
     if (this.disposed) return;
     const lease = this.leases.get(projectId);
-    const attached = this.presentFor(projectId);
     if (!lease) {
-      const first = attached[0];
-      if (first) this.grant(projectId, first);
+      if (!mayGrant) return;
+      const next = this.successor(projectId, null);
+      if (next) this.grant(projectId, next);
       return;
     }
     if (this.holderIsPresent(projectId, lease)) {
@@ -477,7 +528,9 @@ export class DriveLeaseService {
       return;
     }
     // Another window of the same client carries on driving without a gap.
-    const sameClient = attached.find((endpoint) => endpoint.clientId === lease.holder.clientId);
+    const sameClient = mayGrant
+      ? this.presentFor(projectId).find((endpoint) => endpoint.clientId === lease.holder.clientId)
+      : undefined;
     if (sameClient) {
       this.grant(projectId, sameClient);
       return;
@@ -499,7 +552,7 @@ export class DriveLeaseService {
     if (!lease || lease.holder.leaseId !== leaseId) return;
     lease.releaseTimer = null;
     if (this.holderIsPresent(projectId, lease)) return;
-    const next = this.presentFor(projectId)[0];
+    const next = this.successor(projectId, lease.holder.clientId);
     if (next) {
       this.grant(projectId, next);
       return;
@@ -545,6 +598,7 @@ export class DriveLeaseService {
       isHolderEndpoint: holder !== null && endpoint?.endpointId === holder.endpointId,
       viewerIsHostLocal: endpoint ? endpoint.kind === "local-view" : true,
       heldByThisClient: holder !== null && holder.clientId === clientId,
+      hostScreenInUse: this.presentFor(projectId).some((present) => this.hostScreenShows(present)),
     };
   }
 
@@ -703,7 +757,10 @@ export function mayWriteProjectState(
 let service: DriveLeaseService | null = null;
 
 export function getDriveLeaseService(): DriveLeaseService {
-  service ??= new DriveLeaseService({ reservations: defaultReservationStore() });
+  service ??= new DriveLeaseService({
+    reservations: defaultReservationStore(),
+    isHostScreenInUse: isLocalViewInActiveUse,
+  });
   return service;
 }
 

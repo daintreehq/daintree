@@ -57,6 +57,9 @@ describe("driveLease handlers", () => {
     const laptop = endpoint("s1:e1", "c1", "remote-view");
     registry.add(hostWindow);
     registry.add(laptop);
+    // A remote view arriving settles the lease; a read never grants it.
+    await Promise.resolve();
+    await Promise.resolve();
 
     await expect(get.handler(ctxOf(hostWindow), { projectId: "p" })).resolves.toMatchObject({
       projectId: "p",

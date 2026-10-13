@@ -151,6 +151,11 @@ const senders: SenderLookup = {
     const win = wc ? getWindowForWebContents(wc) : null;
     return win && !win.isDestroyed() ? win.id : null;
   },
+  onGone(webContentsId, callback) {
+    const wc = resolveLiveWebContents(webContentsId);
+    if (wc) onWebContentsDestroyed(wc, callback);
+    else queueMicrotask(callback);
+  },
 };
 
 function managerFor(windowId: number) {

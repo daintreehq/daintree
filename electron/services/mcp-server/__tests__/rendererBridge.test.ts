@@ -70,7 +70,9 @@ import {
   SessionBindingError,
   WorkspaceBindingError,
   McpRouteBindingError,
+  RemoteHostWindowOnlyError,
 } from "../rendererBridge.js";
+import { registerRemoteService } from "../../../remote/runtime.js";
 import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
@@ -910,6 +912,70 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
 
     expect(wcFocused.send).toHaveBeenCalled();
     expect(wcFirst.send).not.toHaveBeenCalled();
+  });
+
+  describe("windows on a remote host (#13285)", () => {
+    let unregister: (() => void) | null = null;
+
+    function onHost(hostByView: Record<number, string>) {
+      unregister = registerRemoteService("windowHosts", {
+        windowHost: () => "local",
+        viewHost: (id: number) => hostByView[id] ?? "local",
+        hostName: (hostId: string) => (hostId === "h-1" ? "studio-01" : null),
+        switchWindowToLocal: vi.fn(),
+        openHostProjectInNewWindow: vi.fn(),
+      } as never);
+    }
+
+    afterEach(() => {
+      unregister?.();
+      unregister = null;
+    });
+
+    it("passes over a focused window on a host for the next local one", async () => {
+      const wcRemote = makeWebContents(941);
+      const wcLocal = makeWebContents(942);
+      const ctxRemote = makeContext({ activeWebContents: wcRemote });
+      const ctxLocal = makeContext({ activeWebContents: wcLocal });
+      autoRespond(wcRemote);
+      autoRespond(wcLocal);
+      onHost({ 941: "h-1" });
+
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctxLocal, ctxRemote], { current: [ctxRemote, ctxLocal] }) as never
+      );
+      bridge.setupListeners([]);
+
+      await bridge.dispatchAction("actions.list", {}, false);
+
+      expect(wcLocal.send).toHaveBeenCalled();
+      expect(wcRemote.send).not.toHaveBeenCalled();
+    });
+
+    it("refuses, naming the host, when every window is on a host", async () => {
+      const wcRemote = makeWebContents(951);
+      const ctxRemote = makeContext({ activeWebContents: wcRemote });
+      autoRespond(wcRemote);
+      onHost({ 951: "h-1" });
+
+      const bridge = createRendererBridge(
+        pendingManifests,
+        pendingDispatches,
+        () => makeRegistry([ctxRemote], { current: [ctxRemote] }) as never
+      );
+      bridge.setupListeners([]);
+
+      const failure = await bridge.dispatchAction("actions.list", {}, false).then(
+        () => null,
+        (error: unknown) => error
+      );
+
+      expect(failure).toBeInstanceOf(RemoteHostWindowOnlyError);
+      expect((failure as Error).message).toContain("studio-01");
+      expect(wcRemote.send).not.toHaveBeenCalled();
+    });
   });
 
   it("re-resolves focus on every call, so a mid-session focus change retargets", async () => {

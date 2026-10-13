@@ -109,8 +109,8 @@ describe("DriveLeaseService", () => {
     registry.add(b);
     await settle();
 
-    const holder = service.getHolder("p");
-    expect(holder).toMatchObject({ endpointId: "local:1", clientId: "local", isHostLocal: true });
+    // A project only this machine's windows show is held by nobody.
+    expect(service.getHolder("p")).toBeNull();
     expect(service.isDriving("p", a)).toBe(true);
     expect(service.isDriving("p", b)).toBe(true);
     expect(service.viewFor("p", b)).toMatchObject({
@@ -120,11 +120,37 @@ describe("DriveLeaseService", () => {
     });
     expect(leaseTables).toEqual([]);
 
-    // The holder window goes: the other window of the same client carries on.
+    // One takes it: the other window of the same client carries on when it goes.
+    service.takeOver("p", a);
+    expect(service.isDriving("p", b)).toBe(true);
     a.close();
     await settle();
     expect(service.getHolder("p")?.endpointId).toBe("local:2");
     expect(leaseTables).toEqual([]);
+  });
+
+  it("never changes the holder on a read (#13285)", async () => {
+    const hostWindow = local(1);
+    const other = local(2);
+    registry.add(hostWindow);
+    registry.add(other);
+    await settle();
+
+    for (let i = 0; i < 3; i++) {
+      expect(service.getHolder("p")).toBeNull();
+      expect(service.getDriveTarget("p")).toEqual({ kind: "vacant" });
+      service.viewFor("p", hostWindow);
+      service.drivingLeaseId("p", other);
+      service.projectsDrivenElsewhere(other);
+    }
+    expect(changes).toEqual([]);
+
+    // A held lease isn't handed to another window of its client by a read either.
+    service.takeOver("p", hostWindow);
+    changes.length = 0;
+    hostWindow.projectId = "q";
+    expect(service.getHolder("p")?.endpointId).toBe("local:1");
+    expect(changes).toEqual([]);
   });
 
   it("lists the projects someone else drives, which a caller's calls may not change", async () => {
@@ -133,7 +159,7 @@ describe("DriveLeaseService", () => {
     registry.add(hostWindow);
     registry.add(laptop);
     await settle();
-    service.getHolder("mine");
+    service.takeOver("mine", hostWindow);
 
     expect([...service.projectsDrivenElsewhere(hostWindow).keys()]).toEqual(["theirs"]);
     expect(service.projectsDrivenElsewhere(hostWindow).get("theirs")).toMatchObject({
@@ -155,7 +181,7 @@ describe("DriveLeaseService", () => {
     const b = remote("s2:e1", "shell-b");
     registry.add(hostWindow);
     await settle();
-    const seen = service.getHolder("p")!;
+    const seen = service.takeOver("p", hostWindow);
     registry.add(a);
     registry.add(b);
     await settle();
@@ -177,7 +203,7 @@ describe("DriveLeaseService", () => {
     const laptop = remote("s1:e1", "greg-mbp-id");
     registry.add(hostWindow);
     await settle();
-    const first = service.getHolder("p")!;
+    const first = service.takeOver("p", hostWindow);
 
     registry.add(laptop);
     service.noteEndpointClient(laptop.endpointId, {
@@ -233,7 +259,7 @@ describe("DriveLeaseService", () => {
     const a = local(1);
     registry.add(a);
     await settle();
-    const holder = service.getHolder("p")!;
+    const holder = service.takeOver("p", a);
     expect(service.takeOver("p", a)).toBe(holder);
   });
 
@@ -333,6 +359,7 @@ describe("DriveLeaseService", () => {
   it("names the machine once its client is noted after the grant", async () => {
     const laptop = remote("s1:e1", "c1");
     registry.add(laptop);
+    await settle();
     expect(service.getHolder("p")?.clientName).toBe("c1");
     const leaseId = service.getHolder("p")!.leaseId;
 
@@ -494,6 +521,76 @@ describe("DriveLeaseService panel notices", () => {
     vi.advanceTimersByTime(PANELS_CHANGED_DELAY_MS);
 
     expect(panelNotices(hostWindow)).toEqual([]);
+  });
+});
+
+describe("DriveLeaseService and the Host's own screen in use (#13285)", () => {
+  let inUse: Set<string>;
+
+  beforeEach(() => {
+    service.dispose();
+    inUse = new Set();
+    service = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      now: () => 1_000,
+      applyDriveLeases: (leases) => leaseTables.push(leases),
+      isHostScreenInUse: (endpoint) => inUse.has(endpoint.endpointId),
+    });
+  });
+
+  it("refuses a claim made on open while someone uses the Host's screen, but not Take control", async () => {
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "greg-mbp-id");
+    registry.add(hostWindow);
+    await settle();
+    const held = service.takeOver("p", hostWindow);
+    registry.add(laptop);
+    await settle();
+    inUse.add("local:1");
+
+    expect(service.viewFor("p", laptop)).toMatchObject({ hostScreenInUse: true });
+    expect(service.takeOver("p", laptop, { ifLeaseId: held.leaseId })).toBe(held);
+    expect(service.isDriving("p", laptop)).toBe(false);
+
+    // Stepping away from the Host lets the next open take it.
+    inUse.clear();
+    expect(service.viewFor("p", laptop)).toMatchObject({ hostScreenInUse: false });
+    expect(service.takeOver("p", laptop, { ifLeaseId: held.leaseId })?.endpointId).toBe("s1:e1");
+
+    // Take control is explicit, and always granted.
+    inUse.add("local:1");
+    const back = service.takeOver("p", hostWindow);
+    expect(service.takeOver("p", laptop).endpointId).toBe("s1:e1");
+    expect(service.getHolder("p")!.leaseId).toBeGreaterThan(back.leaseId);
+  });
+
+  it("leaves a project nobody holds with the Host's screen in use when a claim on open arrives", async () => {
+    const hostWindow = local(1);
+    registry.add(hostWindow);
+    await settle();
+    inUse.add("local:1");
+    const laptop = remote("s1:e1", "greg-mbp-id");
+    registry.add(laptop);
+    // Read before the arrival settles: nobody holds it yet.
+    expect(service.getHolder("p")).toBeNull();
+
+    const result = service.takeOver("p", laptop, { ifLeaseId: null });
+    expect(result).toMatchObject({ endpointId: "local:1", isHostLocal: true });
+    expect(service.isDriving("p", laptop)).toBe(false);
+  });
+
+  it("gives a project nobody holds to the Host's screen in use rather than whoever arrived first", async () => {
+    const laptop = remote("s1:e1", "greg-mbp-id");
+    const idle = local(1);
+    const busy = local(2);
+    registry.add(laptop);
+    registry.add(idle);
+    registry.add(busy);
+    inUse.add("local:2");
+    await settle();
+
+    expect(service.getHolder("p")).toMatchObject({ endpointId: "local:2", isHostLocal: true });
   });
 });
 

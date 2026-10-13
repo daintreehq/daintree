@@ -32,6 +32,13 @@ export interface DriveLeaseView extends DriveLeaseState {
    * than from another machine. Absent from hosts before this field.
    */
   heldByThisClient?: boolean;
+  /**
+   * A window on the Host's own screen shows the project as the active view of
+   * a focused window, and someone there has used the Host in the last few
+   * minutes. Opening the project elsewhere then leaves it with them. Absent
+   * from hosts before this field.
+   */
+  hostScreenInUse?: boolean;
 }
 
 export type DriveLeaseEvent =

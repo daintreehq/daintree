@@ -671,8 +671,10 @@ export class RemoteHostsClient {
 
   async dispose(): Promise<void> {
     for (const off of this.unsubscribe.splice(0)) off();
-    if (this.routerInstalled) this.options.installRouter(null);
-    this.routerInstalled = false;
+    // The router stays installed. This runs at quit while windows are still
+    // open, and with no router a host view's last flushes (layout, drafts)
+    // would run on this machine; with every connection gone they fail with
+    // HOST_DISCONNECTED instead, and local views are untouched.
     await this.options.manager.disposeAll();
   }
 
@@ -680,6 +682,10 @@ export class RemoteHostsClient {
   private rememberBoundViews(hostId: HostId): void {
     const views = this.options.manager.get(hostId)?.boundViews() ?? [];
     this.detached.remember(hostId, views);
+  }
+
+  hostName(hostId: HostId): string | null {
+    return this.options.registry.get(hostId)?.name ?? null;
   }
 
   /** A view's host: a project view's is in its key, and a view with no project follows its window. */

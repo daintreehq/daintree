@@ -370,7 +370,7 @@ describe("terminal stream over the link", () => {
     expect(budget.usedBytes).toBeGreaterThan(0);
   });
 
-  it("holds input typed while the link is down and sends it after reconnecting", async () => {
+  it("drops input typed while the link is down and sends only the latest size after reconnecting", async () => {
     const h = await setup();
     await h.connectLink();
     await h.dropLink();
@@ -382,10 +382,13 @@ describe("terminal stream over the link", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     await h.connectLink();
+    h.renderer().post({ type: "write", id: "t1", data: "typed online" });
     await waitFor(() => h.pty().received.length >= 2);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Keystrokes never cross into a session other than the one they were typed against.
     expect(h.pty().received).toEqual([
       { type: "resize", id: "t1", cols: 100, rows: 30 },
-      { type: "write", id: "t1", data: "typed offline" },
+      { type: "write", id: "t1", data: "typed online" },
     ]);
   });
 
