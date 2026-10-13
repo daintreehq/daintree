@@ -1293,6 +1293,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   // control in it — see `composerControlStyles.ts`.
                   className={cn(
                     "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-full font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
+                    COMPOSER_CONTROL_TEXT_CLASS,
                     COMPOSER_MARKER_TEXT_CLASS,
                     COMPOSER_CONTROL_HOVER_BG_CLASS,
                     COMPOSER_CONTROL_FOCUS_CLASS

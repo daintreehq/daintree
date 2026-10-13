@@ -309,9 +309,9 @@ function Controls() {
  * A grid pane as the composer actually sits in one: the pane's own frame
  * (`terminal-selected` on the focused pane, exactly as `ContentPanel` resolves
  * it), its title bar with the focus lift, a terminal body, then the composer.
- * The body is a focusable stand-in for xterm, so the spec can put the keyboard
- * in the selected pane's terminal rather than in its composer — the state the
- * report is about.
+ * The body is a stand-in for xterm with a focus target inside it, so the spec
+ * can put the keyboard in the selected pane's terminal rather than in its
+ * composer — the state the report is about.
  */
 function Pane({
   prefix,
@@ -343,11 +343,16 @@ function Pane({
         {PANE_TITLES[index % PANE_TITLES.length]}
       </div>
       <div
-        tabIndex={-1}
-        data-preview-terminal={id}
-        className="h-36 overflow-hidden px-3.5 py-2 font-mono text-xs leading-5 outline-hidden"
+        className="relative h-36 overflow-hidden px-3.5 py-2 font-mono text-xs leading-5"
         style={{ background: theme.background, color: theme.foreground }}
       >
+        {/* Focus lands on an invisible target, as xterm's does on its helper
+            textarea, so the body draws no ring the real terminal never shows. */}
+        <div
+          tabIndex={-1}
+          data-preview-terminal={id}
+          className="absolute top-0 left-0 size-0 opacity-0"
+        />
         {TERMINAL_LINES.map((line, i) => (
           <div key={i} className="truncate">
             {line}

@@ -19,9 +19,10 @@ export const COMPOSER_CONTROL_TEXT_CLASS =
  * The `❯` marker sits at the head of the line being typed, so it is the
  * control that says which composer is the selected one: `--ib-marker` steps up
  * on the selected composer and stays at the control ink everywhere else.
+ * Layered after `COMPOSER_CONTROL_TEXT_CLASS`, it replaces only the rest ink
+ * (`cn` keeps the later colour), so hover and focus stay the shared recipe.
  */
-export const COMPOSER_MARKER_TEXT_CLASS =
-  "text-[var(--ib-marker)] hover:text-[var(--ib-fg)] focus-visible:text-[var(--ib-fg)]";
+export const COMPOSER_MARKER_TEXT_CLASS = "text-[var(--ib-marker)]";
 
 export const COMPOSER_CONTROL_HOVER_BG_CLASS =
   "hover:bg-[color-mix(in_oklab,var(--ib-fg)_8%,transparent)]";
