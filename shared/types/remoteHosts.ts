@@ -217,6 +217,11 @@ export type HostConnectionState =
       detail: string | null;
       /** ssh reached the host and found no Daintree listening there in Host mode (no discovery file). */
       hostModeOff?: true;
+      /**
+       * Not retrying on its own: what was seen (ssh couldn't log in, Host mode
+       * is off) doesn't change by trying again, so it waits for a Connect.
+       */
+      stoppedRetrying?: true;
     }
   | { status: "version-mismatch"; mismatch: HandshakeMismatch; remote: HostHandshakeInfo }
   | { status: "driven-elsewhere"; driver: DriveLeaseHolder };

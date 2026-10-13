@@ -1,5 +1,6 @@
 import path from "node:path";
 import { app } from "electron";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { isHostModeRequested } from "../boot/hostModeLaunch.js";
 import { ensureWorkspaceClient, isWorkspaceClientStarting } from "../boot/hostServices.js";
 import { notifyRemoteViewEndpointOpened } from "../ipc/hostSendRelay.js";
@@ -56,9 +57,10 @@ export { setRemoteHostsWindowOpener } from "./client/initClient.js";
  * so Windows builds carry none of it. Services register themselves into
  * `./runtime.ts`; core code reaches them from there.
  *
- * The client side always starts but dials nothing until a window or the user
- * asks for a host; its per-view stream wiring (port overrides, relays) is
- * installed only on that first use. The host side (a listening socket) starts
+ * The client side always starts. It dials a host when something needs it (a
+ * window, a switch, an operation, a forward, the hosts overview), and at
+ * launch only the hosts whose notifications are on; its per-view stream
+ * wiring (port overrides, relays) is installed only on first use. The host side (a listening socket) starts
  * only in Host mode: here when it is on at launch, or later from its switch.
  */
 
@@ -193,12 +195,25 @@ function startClient(options: StartRemoteHostsOptions): void {
   teardowns.push(() => client.dispose());
   // Session-level services: both reach a host through its current session,
   // so they work with no local view on it and cost nothing until a host is used.
+  // Reaching a host through its session is using it: the idle release starts counting again.
+  const usedSessionFor = (hostId: string) => {
+    client.manager.touch(hostId);
+    return client.sessionFor(hostId);
+  };
   teardowns.push(
-    installHostSwitchService({ client: client.client, sessionFor: client.sessionFor })
+    installHostSwitchService({
+      client: client.client,
+      sessionFor: usedSessionFor,
+      holdHost: (hostId) => client.manager.hold(hostId),
+    })
   );
   // Plugin comparison and install-on-host, reached from Settings with no view needed.
   teardowns.push(
-    installPluginParityClient({ client: client.client, sessionFor: client.sessionFor })
+    installPluginParityClient({
+      client: client.client,
+      sessionFor: usedSessionFor,
+      holdHost: (hostId) => client.manager.hold(hostId),
+    })
   );
   const hostEntry = (hostId: string) =>
     client.client.list().find((entry) => entry.descriptor.id === hostId);
@@ -207,13 +222,15 @@ function startClient(options: StartRemoteHostsOptions): void {
       onEndpointOpened: client.onEndpointOpened,
       hostForView: (webContentsId) => hostForView(webContentsId),
       isKnownHost: (hostId) => hostEntry(hostId) !== undefined,
+      onHostsChanged: (listener) => client.registry.onChange(listener),
+      addUseCheck: (check) => client.manager.addUseCheck(check),
       onSessionOpened: (listener) => client.manager.onSessionOpened(listener),
       sessionFor: client.sessionFor,
       connectionFor: (hostId) => hostEntry(hostId)?.descriptor.connection ?? null,
       clientDir: path.join(app.getPath("userData"), "rh"),
     })
   );
-  // Summary-only links to every known host; dials nothing while the host list is empty.
+  // Host summaries and notifications: dials only hosts whose notifications are on.
   teardowns.push(
     installHostMetricsClient({
       manager: client.manager,
@@ -224,6 +241,17 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Answered only once a session exists, so registering costs nothing until then.
   teardowns.push(installViewReverseRequests());
   teardowns.push(installWorktreePortRedelivery());
+}
+
+/**
+ * Host mode couldn't start listening. Everything else is up, so a later
+ * handoff or the switch can try again: this run is not deaf for good.
+ */
+export class HostModeListenError extends Error {
+  constructor(cause: unknown) {
+    super(formatErrorMessage(cause, "Host mode couldn't start listening"), { cause });
+    this.name = "HostModeListenError";
+  }
 }
 
 export async function startRemoteHosts(options: StartRemoteHostsOptions): Promise<void> {
@@ -245,11 +273,17 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
   const hostMode = createHostModeService({ location: options.hostLocation });
   teardowns.push(registerRemoteService("hostMode", hostMode));
   teardowns.push(() => hostMode.dispose());
-  if (options.hostMode) await hostMode.startListening();
+  const listenError: { error: unknown } | null = options.hostMode
+    ? await hostMode.startListening().then(
+        () => null,
+        (error: unknown) => ({ error })
+      )
+    : null;
   // Started by its login item or unit: bring that item up to this build's text.
   if (isHostModeRequested(process.argv)) void hostMode.refreshStartAtLogin();
   // Never torn down: the updater renames an AppImage after this has stopped.
   followAppImageMoves();
+  if (listenError) throw new HostModeListenError(listenError.error);
 }
 
 export async function stopRemoteHosts(): Promise<void> {

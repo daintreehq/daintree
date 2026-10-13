@@ -61,7 +61,12 @@ const m = vi.hoisted(() => {
       return () => clientClosedListeners.delete(l);
     }),
     hostForView: (id: number) => viewHosts.get(id) ?? null,
-    manager: { onSessionOpened: vi.fn((_l: unknown) => () => {}) },
+    manager: {
+      onSessionOpened: vi.fn((_l: unknown) => () => {}),
+      touch: vi.fn((_hostId: string) => {}),
+      hold: vi.fn((_hostId: string) => () => {}),
+      addUseCheck: vi.fn((_check: unknown) => () => {}),
+    },
     router: { name: "router" },
     dispose: vi.fn(async () => record("client.dispose")),
   };
@@ -574,10 +579,18 @@ describe("startRemoteHosts", () => {
     await startRemoteHosts({ hostMode: false });
     expect(m.client.client.connect).not.toHaveBeenCalled();
 
-    expect(m.installHostSwitchService).toHaveBeenCalledWith({
-      client: m.client.client,
-      sessionFor: m.client.sessionFor,
-    });
+    const switchDeps = m.installHostSwitchService.mock.calls[0]![0] as {
+      client: unknown;
+      sessionFor(hostId: string): unknown;
+      holdHost(hostId: string): () => void;
+    };
+    expect(switchDeps.client).toBe(m.client.client);
+    // Reaching a host through its session counts as using it, and a transfer holds it.
+    switchDeps.sessionFor("studio-01");
+    expect(m.client.sessionFor).toHaveBeenCalledWith("studio-01");
+    expect(m.client.manager.touch).toHaveBeenCalledWith("studio-01");
+    switchDeps.holdHost("studio-01");
+    expect(m.client.manager.hold).toHaveBeenCalledWith("studio-01");
     expect(m.installPortForwardClient).toHaveBeenCalledTimes(1);
     const deps = m.installPortForwardClient.mock.calls[0]![0] as {
       onEndpointOpened: unknown;
@@ -613,10 +626,13 @@ describe("startRemoteHosts", () => {
   it("installs plugin parity with the client and the plugin install splits on first use, over the base ones", async () => {
     await startRemoteHosts({ hostMode: false });
     expect(m.client.client.connect).not.toHaveBeenCalled();
-    expect(m.installPluginParityClient).toHaveBeenCalledWith({
-      client: m.client.client,
-      sessionFor: m.client.sessionFor,
-    });
+    const parityDeps = m.installPluginParityClient.mock.calls[0]![0] as {
+      client: unknown;
+      sessionFor(hostId: string): unknown;
+    };
+    expect(parityDeps.client).toBe(m.client.client);
+    parityDeps.sessionFor("studio-01");
+    expect(m.client.sessionFor).toHaveBeenCalledWith("studio-01");
     expect(m.installPluginInstallSplits).not.toHaveBeenCalled();
 
     m.clientHooks.current.onFirstUse?.();
@@ -853,7 +869,9 @@ describe("startRemoteHosts", () => {
     openEndpoint(endpoint, "s1", link);
     await vi.waitFor(() => expect(m.runHistoryPush).toHaveBeenCalledWith(endpoint));
 
-    expect(m.attachTerminalBridge).toHaveBeenCalledWith(link, endpoint);
+    expect(m.attachTerminalBridge).toHaveBeenCalledWith(link, endpoint, {
+      onInput: expect.any(Function),
+    });
     expect(m.attachWorktreePortBridge).toHaveBeenCalledWith(link, endpoint);
     expect(m.statsPush).toHaveBeenCalledWith(endpoint);
     expect(m.fleetPush).toHaveBeenCalledWith(endpoint);
@@ -958,7 +976,9 @@ describe("startRemoteHosts", () => {
     // A fresh (non-resumed) session opens its endpoints anew; nothing to carry.
     for (const l of m.server.sessionListeners) l({ sessionId: "s2", resumed: false, session: {} });
 
-    expect(m.attachTerminalBridge.mock.calls).toEqual([[resumed, kept]]);
+    expect(m.attachTerminalBridge.mock.calls).toEqual([
+      [resumed, kept, { onInput: expect.any(Function) }],
+    ]);
     expect(m.attachWorktreePortBridge.mock.calls).toEqual([[resumed, kept]]);
   });
 

@@ -18,6 +18,8 @@ export interface HostSwitchClientDeps {
   client: Pick<RemoteHostsClient, "connectAndWait" | "getWindowHost" | "list">;
   /** The host's current open session, or null while it has none. */
   sessionFor(hostId: HostId): LinkSession | null;
+  /** Keep the host's connection open until released (a transfer can outlast the idle release). */
+  holdHost?(hostId: HostId): () => void;
 }
 
 function unreachable(hostId: HostId, readiness: string, hostName: string): AppError {
@@ -64,6 +66,7 @@ export function createHostSwitchService(deps: HostSwitchClientDeps): HostSwitchS
     whenReconnected: async (hostId, timeoutMs) =>
       (await deps.client.connectAndWait(hostId, timeoutMs)) === "ready" &&
       deps.sessionFor(hostId)?.isOpen === true,
+    holdHost: deps.holdHost,
   });
 }
 

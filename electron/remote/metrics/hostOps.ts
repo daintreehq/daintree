@@ -19,8 +19,13 @@ import {
   MAX_FLEET_SUBMIT_CHARS,
   MAX_FLEET_TARGETS,
   MAX_HOST_WORKTREES,
+  MAX_RESTART_IDS,
+  MAX_RESTART_PROJECTS,
   normalizeFleetOpId,
 } from "./linkMethods.js";
+import type { LocalRestartTerminals } from "./hostMetricsHost.js";
+import type { HostRestartProject } from "../../../shared/types/ipc/remoteHosts.js";
+import { getOperationRegistry } from "../../services/operations/index.js";
 
 /**
  * Who is asking to submit: a Shell attached over a link, known by the session
@@ -148,6 +153,46 @@ export async function listLocalFleetTargets(): Promise<HostFleetTargetList> {
     }
   }
   return { targets: out, complete };
+}
+
+/**
+ * Every terminal a restart of this host would end, by project, with the
+ * agents observed working or waiting among them, and the long operations
+ * still running. Incomplete when a pty-host shard didn't answer or a cap cut
+ * the list, so a Shell never reads a missing terminal as none.
+ */
+export async function listLocalRestartTerminals(): Promise<LocalRestartTerminals> {
+  const pty = getPtyClient();
+  const operations = getOperationRegistry().runningCount();
+  if (!pty) return { projects: [], complete: false, operations, terminalIds: [] };
+  const { terminals, degraded } = await pty.getAllTerminalsWithCompletenessAsync();
+  let complete = !degraded;
+  const byProject = new Map<string | null, HostRestartProject>();
+  const terminalIds: string[] = [];
+  for (const terminal of terminals) {
+    // The PTY's own life decides, never the agent's: a shell an agent exited from still runs.
+    if (terminal.hasPty === false) continue;
+    if (terminalIds.length >= MAX_RESTART_IDS) {
+      complete = false;
+      break;
+    }
+    const projectId = terminal.projectId ?? null;
+    let entry = byProject.get(projectId);
+    if (!entry) {
+      if (byProject.size >= MAX_RESTART_PROJECTS) {
+        complete = false;
+        continue;
+      }
+      const project = projectId ? projectStore.getProjectById(projectId) : null;
+      entry = { projectName: project?.name ?? null, terminals: 0, working: 0, waiting: 0 };
+      byProject.set(projectId, entry);
+    }
+    terminalIds.push(terminal.id);
+    entry.terminals++;
+    if (terminal.agentState === "working" || terminal.agentState === "directing") entry.working++;
+    else if (terminal.agentState === "waiting") entry.waiting++;
+  }
+  return { projects: [...byProject.values()], complete, operations, terminalIds };
 }
 
 function refuse(

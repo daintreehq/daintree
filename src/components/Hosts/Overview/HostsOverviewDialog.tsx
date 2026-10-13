@@ -19,6 +19,7 @@ import {
 import { HostCard } from "./HostCard";
 import { HostFleetTargets } from "./HostFleetTargets";
 import { isLive } from "./overviewModel";
+import { useOverviewConnections } from "./useOverviewConnections";
 
 const EMPTY_HISTORY: never[] = [];
 
@@ -33,6 +34,7 @@ interface HostsOverviewDialogProps {
  */
 export function HostsOverviewDialog({ onClose }: HostsOverviewDialogProps) {
   const hostList = useHostList();
+  useOverviewConnections(hostList.hosts);
   const history = useHostMetricsStore((state) => state.history);
   const [addingTo, setAddingTo] = useState<{ hostId: HostId; name: string } | null>(null);
   const windowHostId = getViewHostId() ?? LOCAL_HOST_ID;

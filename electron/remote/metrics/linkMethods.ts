@@ -19,6 +19,12 @@ export const MetricsLinkMethod = {
   SUBMIT_FLEET: "fleet.submit",
   /** Shell → Host: every worktree of the host's open projects. */
   LIST_WORKTREES: "host.list-worktrees",
+  /**
+   * Shell → Host: what restarting the host would end (terminals by project,
+   * running operations, other attached Shells). A host from before it existed
+   * answers UNSUPPORTED, and the Shell falls back to the summary's counts.
+   */
+  RESTART_IMPACT: "host.restart-impact",
 } as const;
 
 const id = z.string().min(1).max(256);
@@ -89,3 +95,39 @@ export const WorktreeListSchema = z
       .strip()
   )
   .max(MAX_HOST_WORKTREES);
+
+/** Bounds on a restart-impact answer: a list for a person to read, not an inventory. */
+export const MAX_RESTART_PROJECTS = 200;
+export const MAX_RESTART_IDS = 2000;
+export const MAX_RESTART_SHELLS = 64;
+
+const count = z.number().int().min(0).max(1_000_000);
+
+export const RestartImpactDetailSchema = z
+  .object({
+    projects: z
+      .array(
+        z
+          .object({
+            projectName: name.nullable(),
+            terminals: count,
+            working: count,
+            waiting: count,
+          })
+          .strip()
+      )
+      .max(MAX_RESTART_PROJECTS),
+    complete: z.boolean(),
+    operations: count,
+    otherShells: z.array(name).max(MAX_RESTART_SHELLS),
+    terminalIds: z.array(id).max(MAX_RESTART_IDS),
+    shellIds: z.array(id).max(MAX_RESTART_SHELLS),
+  })
+  .strip();
+
+export const RestartImpactSchema = z
+  .object({
+    detail: RestartImpactDetailSchema.nullable(),
+    agents: z.object({ working: count, waiting: count.nullable() }).strip().nullable(),
+  })
+  .strip();

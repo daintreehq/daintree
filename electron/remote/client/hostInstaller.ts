@@ -5,6 +5,7 @@ import path from "node:path";
 import { formatHostConnection, type HostId } from "../../../shared/types/remoteHosts.js";
 import type {
   HostInstallPlan,
+  HostRestartImpact,
   InstallHostPayload,
   InstallHostResult,
 } from "../../../shared/types/ipc/remoteHosts.js";
@@ -25,10 +26,11 @@ import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 
 /**
  * Carry out an install or update on a host: stage the new build next to the
- * old one, wait (or refuse) while the host reports working agents, stop
+ * old one, say what restarting would end and go on only once the user
+ * confirmed it (or, if asked, once no agent is working or waiting), stop
  * Daintree there, swap the build in, start it again the way it was running,
  * and check the host comes back on this client's build. Restarting ends the
- * host's terminals, which is why the agent gate sits right before the stop.
+ * host's terminals, which is why that check runs again right before the stop.
  */
 
 export interface InstallProgress {
@@ -43,8 +45,8 @@ export interface InstallerDeps {
   run: CommandRunner;
   client: ClientBuild;
   probe(signal: AbortSignal): Promise<ProbeOutcome>;
-  /** Agents the host reports working now; null when that can't be observed. */
-  workingAgents(hostId: HostId | null): Promise<number | null>;
+  /** What restarting the host would end, as it reports it now. */
+  restartImpact(hostId: HostId | null): Promise<HostRestartImpact>;
   download(url: string, destination: string, signal: AbortSignal): Promise<void>;
   /** The checksum the release feed publishes for an artifact URL; null when it lists none. */
   checksum(url: string, signal: AbortSignal): Promise<ArtifactChecksum | null>;
@@ -55,7 +57,66 @@ export interface InstallerDeps {
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   now?: () => number;
   idlePollMs?: number;
+  /** How long waiting for idle tolerates not hearing from the host (a reconnect) before it gives up. */
+  idleUnknownGraceMs?: number;
   comeBackTimeoutMs?: number;
+}
+
+/** Nothing would end: the host said so in full. A count alone can't say that (shells go unseen). */
+export function isRestartImpactEmpty(impact: HostRestartImpact): boolean {
+  const detail = impact.detail;
+  return (
+    detail !== null &&
+    detail.complete &&
+    detail.terminalIds.length === 0 &&
+    detail.operations === 0 &&
+    detail.shellIds.length === 0
+  );
+}
+
+/**
+ * Agents working or waiting: what "idle" must wait out. Null when that can't
+ * be seen, including a list the host couldn't complete: the missing part may
+ * be the busy one.
+ */
+export function busyAgents(impact: HostRestartImpact): number | null {
+  if (impact.detail) {
+    if (!impact.detail.complete) return null;
+    return impact.detail.projects.reduce(
+      (sum, project) => sum + project.working + project.waiting,
+      0
+    );
+  }
+  if (!impact.agents || impact.agents.waiting === null) return null;
+  return impact.agents.working + impact.agents.waiting;
+}
+
+/**
+ * Whether restarting now would end something the user didn't confirm: a
+ * terminal, a Shell or an operation that appeared since, or more agents than
+ * the counts they saw.
+ */
+export function exceedsConfirmed(now: HostRestartImpact, confirmed: HostRestartImpact): boolean {
+  if (isRestartImpactEmpty(now)) return false;
+  if (now.detail && confirmed.detail) {
+    const terminals = new Set(confirmed.detail.terminalIds);
+    const shells = new Set(confirmed.detail.shellIds);
+    return (
+      now.detail.terminalIds.some((id) => !terminals.has(id)) ||
+      now.detail.shellIds.some((id) => !shells.has(id)) ||
+      now.detail.operations > confirmed.detail.operations ||
+      (confirmed.detail.complete && !now.detail.complete)
+    );
+  }
+  // What the user saw and what is seen now can't be lined up item by item.
+  if (now.detail || confirmed.detail) return true;
+  // Known when confirmed, unknown now (the link dropped): what runs can't be checked, so ask again.
+  if (!now.agents) return confirmed.agents !== null;
+  if (!confirmed.agents) return false;
+  return (
+    now.agents.working + (now.agents.waiting ?? 0) >
+    confirmed.agents.working + (confirmed.agents.waiting ?? 0)
+  );
 }
 
 const MARK = "@@dt:";
@@ -504,24 +565,37 @@ async function waitForIdle(
   report: (p: InstallProgress) => void
 ): Promise<void> {
   const poll = deps.idlePollMs ?? 15_000;
+  const graceMs = deps.idleUnknownGraceMs ?? 2 * 60_000;
+  const now = deps.now ?? Date.now;
+  let unseenSince: number | null = null;
   for (;;) {
     if (signal.aborted) throw cancelled();
-    const working = await deps.workingAgents(hostId);
-    if (working === 0) return;
-    if (working === null) {
-      // Waiting on something that can't be seen would never end.
-      throw new AppError({
-        code: "UNSUPPORTED",
-        message: "The host's agent activity can't be observed",
-        userMessage:
-          "This host doesn't report agent activity, so Daintree can't wait for it to be idle.",
+    const busy = busyAgents(await deps.restartImpact(hostId));
+    if (busy === 0) return;
+    if (busy === null) {
+      // A reconnect blip: keep waiting a while for the host to answer again.
+      unseenSince ??= now();
+      if (now() - unseenSince >= graceMs) {
+        throw new AppError({
+          code: "UNSUPPORTED",
+          message: "The host's agent activity can't be observed",
+          userMessage:
+            "Daintree couldn't see what the host's agents are doing, so it stopped waiting for them to be idle. Nothing was changed.",
+        });
+      }
+      report({
+        stage: "waiting-for-idle",
+        fraction: null,
+        message: "Waiting to hear from the host",
+      });
+    } else {
+      unseenSince = null;
+      report({
+        stage: "waiting-for-idle",
+        fraction: null,
+        message: `Waiting for ${busy} agent${busy === 1 ? "" : "s"} working or waiting on the host`,
       });
     }
-    report({
-      stage: "waiting-for-idle",
-      fraction: null,
-      message: `Waiting for ${working} working agent${working === 1 ? "" : "s"} on the host`,
-    });
     await deps.sleep(poll, signal);
   }
 }
@@ -624,9 +698,14 @@ export async function runHostInstall(
   }
 
   const whileWorking = payload.whileWorking ?? "refuse";
-  if (plan.restartsHost && whileWorking === "refuse") {
-    const working = await deps.workingAgents(hostId);
-    if (working !== 0) return { status: "agents-working", working };
+  // What the restart may end: the user's confirmation, else what is there now.
+  let confirmed: HostRestartImpact | null = payload.confirmed ?? null;
+  if (plan.restartsHost && confirmed === null) {
+    const impact = await deps.restartImpact(hostId);
+    if (whileWorking === "refuse" && !isRestartImpactEmpty(impact)) {
+      return { status: "needs-confirmation", impact };
+    }
+    confirmed = impact;
   }
 
   const staged = await stage(deps, plan, signal, report);
@@ -676,20 +755,35 @@ export async function runHostInstall(
     }
   }
 
-  if (plan.restartsHost) {
-    if (whileWorking === "wait-for-idle") await waitForIdle(deps, hostId, signal, report);
-    else if (whileWorking === "refuse") {
-      // Checked again right before the restart: work may have started while staging.
-      const working = await deps.workingAgents(hostId);
-      if (working !== 0) {
-        await deps.shell
-          .exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 })
-          .catch(() => {});
-        return { status: "agents-working", working };
+  if (plan.restartsHost && confirmed) {
+    const dropStagedBuild = () =>
+      deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
+    for (;;) {
+      if (whileWorking === "wait-for-idle") {
+        try {
+          await waitForIdle(deps, hostId, signal, report);
+        } catch (err) {
+          // Nothing is left staged for an update that isn't going ahead.
+          await dropStagedBuild();
+          throw err;
+        }
       }
+      // Checked again right before the restart: work may have started while staging or waiting.
+      const impact = await deps.restartImpact(hostId);
+      if (exceedsConfirmed(impact, confirmed)) {
+        await dropStagedBuild();
+        return { status: "needs-confirmation", impact };
+      }
+      // An agent that went busy again since the wait saw it idle: wait for it too.
+      if (whileWorking !== "wait-for-idle" || busyAgents(impact) === 0) break;
     }
   }
-  if (signal.aborted) throw cancelled();
+  if (signal.aborted) {
+    await deps.shell
+      .exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 })
+      .catch(() => {});
+    throw cancelled();
+  }
 
   const platform = probe.platform!;
   const parsed = before.parsed;

@@ -166,15 +166,20 @@ function harness(hosts: HostDescriptor[]) {
 }
 
 describe("HostMetricsClient", () => {
-  it("dials each known host once for summaries, even with no window bound to it", () => {
-    const h = harness([descriptor("studio-01"), descriptor("studio-02")]);
+  it("dials only hosts whose notifications are on, once each", () => {
+    const h = harness([descriptor("studio-01", true), descriptor("studio-02")]);
     h.client.start();
-    expect(h.connect.mock.calls.map(([id]) => id)).toEqual(["studio-01", "studio-02"]);
+    // A saved host with nothing that needs it stays not connected.
+    expect(h.connect.mock.calls.map(([id]) => id)).toEqual(["studio-01"]);
     // A registry change (an observation, a rename) doesn't re-dial a host the user disconnected.
-    h.setHosts([descriptor("studio-01"), descriptor("studio-02")]);
+    h.setHosts([descriptor("studio-01", true), descriptor("studio-02")]);
+    expect(h.connect).toHaveBeenCalledTimes(1);
+    h.setHosts([descriptor("studio-01", true), descriptor("studio-02"), descriptor("studio-03")]);
+    expect(h.connect).toHaveBeenCalledTimes(1);
+    // Turning notifications on needs the light connection, so that dials it.
+    h.setHosts([descriptor("studio-01", true), descriptor("studio-02", true)]);
+    expect(h.connect).toHaveBeenLastCalledWith("studio-02");
     expect(h.connect).toHaveBeenCalledTimes(2);
-    h.setHosts([descriptor("studio-01"), descriptor("studio-02"), descriptor("studio-03")]);
-    expect(h.connect).toHaveBeenLastCalledWith("studio-03");
     h.client.dispose();
   });
 
@@ -207,13 +212,13 @@ describe("HostMetricsClient", () => {
     expect(snapshot!.history.map((s) => s.sampledAt)).toEqual([5, 4, 3]);
     expect(snapshot!.history.every((s) => s.hostId === "studio-01")).toBe(true);
     // The working count reaches the update gate only while the link is up.
-    expect(h.client.workingAgents("studio-01")).toBeNull();
+    expect(h.client.observedAgents("studio-01")).toBeNull();
     h.states.set("studio-01", {
       status: "connected",
       rttMs: 3,
       handshake: { version: "1", commit: "c", protocolVersion: 1, platform: "linux", arch: "x64" },
     });
-    expect(h.client.workingAgents("studio-01")).toBe(5);
+    expect(h.client.observedAgents("studio-01")).toEqual({ working: 5, waiting: 0 });
     h.client.dispose();
   });
 
@@ -287,7 +292,7 @@ describe("HostMetricsClient", () => {
     });
     await waitFor(() => h.emitted.length === 1);
     expect(h.client.latest("studio-01")?.agentsObserved).toBeNull();
-    expect(h.client.workingAgents("studio-01")).toBeNull();
+    expect(h.client.observedAgents("studio-01")).toBeNull();
     h.client.dispose();
   });
 
@@ -415,7 +420,8 @@ describe("HostMetricsClient", () => {
     expect(h.client.latest("studio-01")?.sampledAt).toBe(1);
     h.setHosts([{ ...descriptor("studio-01"), connection: { kind: "ssh", target: "elsewhere" } }]);
     expect(h.client.latest("studio-01")).toBeNull();
-    expect(h.connect).toHaveBeenCalledTimes(1);
+    // Notifications are off: nothing here dials it, before or after.
+    expect(h.connect).not.toHaveBeenCalled();
     h.client.dispose();
   });
 });

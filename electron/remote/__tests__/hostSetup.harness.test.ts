@@ -306,7 +306,11 @@ describe("host setup over the harness", () => {
         connection: { kind: "ssh", target: "studio.example" },
         hostId: HOST_ID,
       })
-    ).resolves.toEqual({ status: "agents-working", working: 2 });
+    ).resolves.toEqual({
+      status: "needs-confirmation",
+      // A refusal says how many are working, and nothing about waiting.
+      impact: { detail: null, agents: { working: 2, waiting: null } },
+    });
 
     // Waiting for idle asks again with a fresh handshake each time.
     agents.working = 0;

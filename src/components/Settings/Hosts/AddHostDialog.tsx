@@ -26,6 +26,7 @@ import type {
   DiscoveredHost,
   HostInstallPlan,
   HostProbeResult,
+  HostRestartImpact,
   InstallHostPayload,
   InstallHostResult,
   LinuxPackagePreference,
@@ -38,6 +39,10 @@ import {
   hostModeSwitchedOn,
   installLabel,
   platformLabel,
+  canWaitForIdle,
+  restartConfirmLabel,
+  restartImpactLines,
+  restartTerminalCount,
 } from "./hostLabels";
 import { pluralize } from "@/lib/pluralize";
 
@@ -202,7 +207,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       }
     );
 
-  const startInstall = (whileWorking: InstallHostPayload["whileWorking"]) => {
+  const startInstall = (
+    whileWorking: InstallHostPayload["whileWorking"],
+    confirmed?: HostRestartImpact
+  ) => {
     const id = mintOperationId();
     useRemoteHostsStore.getState().trackInstall(id, connectionFor());
     setOpId(id);
@@ -214,6 +222,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           hostId: existing?.hostId,
           linuxPackage: probe?.platform === "linux" ? linuxPackage : undefined,
           whileWorking,
+          ...(confirmed ? { confirmed } : {}),
         }),
       (result) => {
         setInstallResult(result);
@@ -532,22 +541,31 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             {progress.message ?? progress.stage}
           </div>
         )}
-        {installResult?.status === "agents-working" && (
-          <div className="space-y-2">
+        {installResult?.status === "needs-confirmation" && (
+          <div className="space-y-2" data-testid="host-restart-impact">
             <p className="text-sm text-text-primary">
-              {installResult.working === null
-                ? "Daintree is running on the host and its agent activity can't be seen from here."
-                : `The host reports ${pluralize(installResult.working, "working agent")}.`}{" "}
-              Nothing was changed.
+              Updating restarts Daintree on {hostLabel}, which ends:
+            </p>
+            <ul className="list-disc space-y-1 pl-5 text-sm text-text-secondary">
+              {restartImpactLines(installResult.impact).map((line, index) => (
+                <li key={`${index}:${line}`}>{line}</li>
+              ))}
+            </ul>
+            <p className="text-xs text-text-secondary">
+              Nothing was changed. Agent states are observed, so one shown idle may still be busy.
             </p>
             <div className="flex gap-2">
-              {installResult.working !== null && (
-                <Button variant="outline" size="sm" onClick={() => startInstall("wait-for-idle")}>
+              {canWaitForIdle(installResult.impact) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => startInstall("wait-for-idle", installResult.impact)}
+                >
                   Update when idle
                 </Button>
               )}
               <Button variant="outline" size="sm" onClick={() => setConfirmProceed(true)}>
-                Update now and end its terminals
+                Update now…
               </Button>
             </div>
           </div>
@@ -569,7 +587,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
     } else if (plan?.kind === "up-to-date") {
       primary = { label: "Continue", onClick: () => setStep("enable") };
-    } else if (plan?.kind === "install" && installResult?.status !== "agents-working") {
+    } else if (plan?.kind === "install" && installResult?.status !== "needs-confirmation") {
       primary = {
         label: probe?.install ? "Update host" : "Install on host",
         onClick: () => startInstall("refuse"),
@@ -687,6 +705,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     };
   }
 
+  const confirmImpact =
+    installResult?.status === "needs-confirmation" ? installResult.impact : null;
+  const confirmTerminals = confirmImpact ? restartTerminalCount(confirmImpact) : null;
+
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" data-testid="add-host-dialog">
       <AppDialog.Header>
@@ -704,16 +726,24 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         leadingAction={leading}
       />
       <ConfirmDialog
-        isOpen={confirmProceed}
+        isOpen={confirmProceed && confirmImpact !== null}
         onClose={() => setConfirmProceed(false)}
         zIndex="nested"
         variant="destructive"
         title={`Update '${hostLabel}' now?`}
-        description={`Daintree on ${hostLabel} restarts to update. Every terminal there ends, and the agents working in them stop mid-task.`}
-        confirmLabel="Update and end terminals"
+        description={
+          confirmTerminals === null
+            ? `Daintree on ${hostLabel} restarts to update. Every terminal there ends, and any agent in one stops mid-task.`
+            : confirmTerminals === 0
+              ? `Daintree on ${hostLabel} restarts to update, which ends everything listed. If anything new starts before the restart, the update stops and asks again.`
+              : `Daintree on ${hostLabel} restarts to update. ${pluralize(confirmTerminals, "terminal")} there ${confirmTerminals === 1 ? "ends" : "end"}, and any agent in one stops mid-task. If anything new starts before the restart, the update stops and asks again.`
+        }
+        confirmLabel={
+          confirmImpact ? restartConfirmLabel(confirmImpact) : "Update and end terminals"
+        }
         onConfirm={() => {
           setConfirmProceed(false);
-          startInstall("proceed");
+          if (confirmImpact) startInstall("proceed", confirmImpact);
         }}
       />
     </AppDialog>

@@ -16,8 +16,10 @@ import { createCommandStreamTransport, type StreamCommandChild } from "./command
 import { sshExecutable } from "./sshExecutable.js";
 import {
   HostModeOffError,
+  SshAccessError,
   TransportError,
   connectUnixSocket,
+  isSshAccessDenied,
   type LinkTransport,
   type LinkTransportConnection,
 } from "./transport.js";
@@ -179,8 +181,9 @@ function targetHash(target: string): string {
  * Changes whenever the options a master starts with change, so a master an
  * older build left running (one that may still forward the agent, say) is
  * never picked up as this build's. 1: no agent, X11 or config forwards.
+ * 2: keepalives, so a master whose connection died is noticed.
  */
-const CONTROL_PATH_PREFIX = "cm1-";
+const CONTROL_PATH_PREFIX = "cm2-";
 
 /**
  * `cm1-%C` when it fits the platform's socket path limit; otherwise a short
@@ -222,10 +225,20 @@ const NO_FORWARDING = [
   "ClearAllForwardings=yes",
 ];
 
+/**
+ * A master outlives sleeps and network changes; without keepalives a dead
+ * one is reused (ControlMaster=auto) and every command through it hangs until
+ * the kernel gives up on the TCP connection. They only act on the process
+ * that owns the connection, which is whichever of these calls becomes the
+ * master, so every call carries them.
+ */
+const KEEPALIVE = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
+
 export function sshCommonArgs(controlPath: string, controlPersist = "10m"): string[] {
   return [
     "-o",
     "BatchMode=yes",
+    ...KEEPALIVE,
     ...NO_FORWARDING,
     "-o",
     "ControlMaster=auto",
@@ -322,6 +335,7 @@ export function buildForwardArgs(
     "ForwardAgent=no",
     "-o",
     "ForwardX11=no",
+    ...KEEPALIVE,
     "-o",
     "ControlPath=none",
     "-o",
@@ -520,6 +534,8 @@ function stderrDetail(stderr: string, fallback: string): string {
 
 type StreamLocalState = "unverified" | "works" | "refused";
 
+const SSH_TIMED_OUT = "ssh did not finish in time";
+
 export class SshTransport implements LinkTransport {
   private readonly spawnSsh: SshSpawner;
   private readonly spawnStream: SshStreamSpawner;
@@ -571,7 +587,23 @@ export class SshTransport implements LinkTransport {
     // Recorded before the probe: ssh may leave a master behind even when the
     // probe itself fails or is cancelled.
     noteSshMaster(target, controlPath, (timeoutMs) => this.exitMaster(controlPath, timeoutMs));
-    const probe = await this.run(buildProbeArgs(target, controlPath, persist), signal);
+    const probe = await this.run(buildProbeArgs(target, controlPath, persist), signal).catch(
+      async (error: unknown) => {
+        // A probe that hangs is most often a master whose connection died
+        // under it: retire it so the next attempt dials afresh.
+        if (error instanceof TransportError && error.message === SSH_TIMED_OUT) {
+          await this.exitMaster(controlPath, 1_500);
+        }
+        if (
+          error instanceof TransportError &&
+          !(error instanceof SshAccessError) &&
+          isSshAccessDenied(error.detail ?? "")
+        ) {
+          throw new SshAccessError(error.detail ?? "");
+        }
+        throw error;
+      }
+    );
     const remote = parseProbeOutput(probe.stdout);
     if (!remote) {
       throw new TransportError("Unrecognised reply from the host", probe.stdout.trim() || null);
@@ -805,7 +837,7 @@ export class SshTransport implements LinkTransport {
         finish(() =>
           reject(
             new TransportError(
-              "ssh did not finish in time",
+              SSH_TIMED_OUT,
               stderrDetail(stderr(), `ssh did not finish within ${timeoutMs} ms`)
             )
           )

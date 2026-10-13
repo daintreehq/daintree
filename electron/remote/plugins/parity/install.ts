@@ -55,6 +55,8 @@ export interface PluginParityClientDeps {
   client: Pick<RemoteHostsClient, "list">;
   /** The host's current open session, or null while it has none. */
   sessionFor(hostId: HostId): LinkSession | null;
+  /** Keep the host's connection open until released, for an upload that may run long. */
+  holdHost?(hostId: HostId): () => void;
 }
 
 export function createPluginParityClient(deps: PluginParityClientDeps): ClientPluginParity {
@@ -62,6 +64,7 @@ export function createPluginParityClient(deps: PluginParityClientDeps): ClientPl
     deps.client.list().find((candidate) => candidate.descriptor.id === hostId);
   return new ClientPluginParity({
     sessionFor: deps.sessionFor,
+    holdHost: deps.holdHost,
     isKnownHost: (hostId) => entry(hostId) !== undefined,
     hostLabel: (hostId) => entry(hostId)?.descriptor.name || hostId,
     local: localPlugins,

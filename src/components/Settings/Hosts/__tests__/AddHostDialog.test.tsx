@@ -60,6 +60,19 @@ const UPDATE_PLAN: HostInstallPlan = {
   reason: null,
 };
 
+/** What the host says an update would end: one project's terminals, an operation, another Shell. */
+const IMPACT = {
+  detail: {
+    projects: [{ projectName: "api", terminals: 3, working: 1, waiting: 1 }],
+    complete: true,
+    operations: 1,
+    otherShells: ["greg-air"],
+    terminalIds: ["t1", "t2", "t3"],
+    shellIds: ["c-air"],
+  },
+  agents: null,
+};
+
 let remoteHosts: Record<string, ReturnType<typeof vi.fn>>;
 
 beforeEach(() => {
@@ -68,7 +81,7 @@ beforeEach(() => {
     discover: vi.fn(async () => []),
     probe: vi.fn(async () => probeResult()),
     planInstall: vi.fn(async () => UPDATE_PLAN),
-    install: vi.fn(async () => ({ status: "agents-working", working: 2 })),
+    install: vi.fn(async () => ({ status: "needs-confirmation", impact: IMPACT })),
     add: vi.fn(async () => ({
       id: "studio",
       name: "studio",
@@ -243,22 +256,104 @@ describe("AddHostDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
     fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
     fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
-    await screen.findByText(/The host reports 2 working agents/);
+    // What the restart ends, as the host listed it, before anything is changed.
+    await screen.findByText("api: 3 terminals (agents 1 working, 1 waiting)");
+    expect(screen.getByText("1 operation still running")).toBeTruthy();
+    expect(screen.getByText("Sessions from greg-air")).toBeTruthy();
     expect(remoteHosts.install).toHaveBeenCalledOnce();
     expect(remoteHosts.install).toHaveBeenLastCalledWith(
       expect.objectContaining({ whileWorking: "refuse" })
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Update now and end its terminals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update now…" }));
     expect(await screen.findByText("Update 'studio' now?")).toBeTruthy();
-    expect(screen.getByText(/Every terminal there ends/)).toBeTruthy();
+    expect(screen.getByText(/3 terminals there end/)).toBeTruthy();
     expect(remoteHosts.install).toHaveBeenCalledOnce();
 
-    fireEvent.click(screen.getByRole("button", { name: "Update and end terminals" }));
+    fireEvent.click(screen.getByRole("button", { name: "Update and end 3 terminals" }));
+    await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
+    // The confirmed set travels with it, so anything new stops the restart.
+    expect(remoteHosts.install).toHaveBeenLastCalledWith(
+      expect.objectContaining({ whileWorking: "proceed", hostId: "studio", confirmed: IMPACT })
+    );
+  });
+
+  it("names the operations and Sessions an update ends when no terminals are running", async () => {
+    const impact = {
+      detail: { ...IMPACT.detail, projects: [], terminalIds: [] },
+      agents: null,
+    };
+    remoteHosts.install!.mockResolvedValue({ status: "needs-confirmation", impact });
+    render(
+      <AddHostDialog
+        isOpen
+        onClose={() => {}}
+        existing={{
+          hostId: "studio",
+          name: "studio",
+          connection: { kind: "ssh", target: "greg@studio" },
+        }}
+      />
+    );
+    remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Update now…" }));
+    await screen.findByText("Update 'studio' now?");
+    expect(screen.getByText(/which ends everything listed/)).toBeTruthy();
+    expect(screen.queryByText(/\b0 terminals\b/)).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Update and end 1 operation and 1 session" })
+    );
     await waitFor(() => expect(remoteHosts.install).toHaveBeenCalledTimes(2));
     expect(remoteHosts.install).toHaveBeenLastCalledWith(
-      expect.objectContaining({ whileWorking: "proceed", hostId: "studio" })
+      expect.objectContaining({ whileWorking: "proceed", confirmed: impact })
     );
+  });
+
+  it("lists two projects that read the same as two lines", async () => {
+    const twin = { projectName: "api", terminals: 1, working: 0, waiting: 0 };
+    remoteHosts.install!.mockResolvedValue({
+      status: "needs-confirmation",
+      impact: {
+        detail: {
+          ...IMPACT.detail,
+          projects: [twin, twin],
+          operations: 0,
+          otherShells: [],
+          terminalIds: ["t1", "t2"],
+          shellIds: [],
+        },
+        agents: null,
+      },
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(
+        <AddHostDialog
+          isOpen
+          onClose={() => {}}
+          existing={{
+            hostId: "studio",
+            name: "studio",
+            connection: { kind: "ssh", target: "greg@studio" },
+          }}
+        />
+      );
+      remoteHosts.probe!.mockResolvedValue(probeResult({ matchesClient: false }));
+      fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
+      await screen.findByTestId("host-restart-impact");
+      expect(screen.getAllByText("api: 1 terminal")).toHaveLength(2);
+      expect(consoleError.mock.calls.some((call) => String(call[0]).includes("same key"))).toBe(
+        false
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("dispatches nothing when the update confirmation is cancelled", async () => {
@@ -277,9 +372,7 @@ describe("AddHostDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check host" }));
     fireEvent.click(await screen.findByRole("button", { name: "Plan update" }));
     fireEvent.click(await screen.findByRole("button", { name: "Update host" }));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Update now and end its terminals" })
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Update now…" }));
     await screen.findByText("Update 'studio' now?");
     const confirm = screen
       .getByText("Update 'studio' now?")

@@ -63,8 +63,12 @@ export interface HostListener {
 
 export { hostLocation } from "./hostLocation.js";
 
-function attachHostStreams(session: LinkSession, endpoint: RemoteViewEndpoint): void {
-  attachTerminalBridge(session, endpoint);
+function attachHostStreams(
+  session: LinkSession,
+  endpoint: RemoteViewEndpoint,
+  onInput: () => void
+): void {
+  attachTerminalBridge(session, endpoint, { onInput });
   attachWorktreePortBridge(session, endpoint);
   attachHostFiles(session, endpoint);
   attachHostUploads(session, endpoint);
@@ -228,7 +232,9 @@ async function buildHostListener(
       });
 
       const link = handle.link();
-      if (link) attachHostStreams(link, endpoint);
+      if (link) {
+        attachHostStreams(link, endpoint, () => host.sessionHost.noteActivity(handle.sessionId));
+      }
       replaySnapshots(endpoint);
       notify();
     })
@@ -243,7 +249,11 @@ async function buildHostListener(
       notify();
       if (!ctx.resumed) return;
       for (const endpoint of endpointsBySession.get(ctx.sessionId)?.values() ?? []) {
-        if (!endpoint.isClosed()) attachHostStreams(ctx.session, endpoint);
+        if (!endpoint.isClosed()) {
+          attachHostStreams(ctx.session, endpoint, () =>
+            host.sessionHost.noteActivity(ctx.sessionId)
+          );
+        }
       }
     })
   );

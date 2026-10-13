@@ -1271,9 +1271,21 @@ if (!gotTheLock) {
               });
               return id;
             });
-            await remoteHosts.startRemoteHosts({
-              hostMode: hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
-            });
+            try {
+              await remoteHosts.startRemoteHosts({
+                hostMode: hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
+              });
+            } catch (error) {
+              if (!(error instanceof remoteHosts.HostModeListenError)) throw error;
+              console.error("[MAIN] Host mode couldn't start listening:", error);
+              // A headless host is here only to listen: exiting lets its unit
+              // restart it, where staying up would leave `systemctl start` a no-op.
+              if (headlessOzone && hostModeLaunch) {
+                void (stopRemoteHosts?.() ?? Promise.resolve()).finally(() => app.exit(1));
+                return;
+              }
+            }
+            // Set even when listening failed: a later handoff or the switch tries again.
             remoteHostsStarted = true;
             // A handoff that landed while the start was in flight, or setup's enable.
             if (hostModeHandedOff || hostModeEnableRequested) listenForHandedOffHostMode();

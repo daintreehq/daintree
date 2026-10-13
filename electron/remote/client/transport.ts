@@ -34,6 +34,26 @@ export class TransportError extends Error {
   }
 }
 
+/**
+ * ssh refused to log in: authentication or the host key failed. Trying again
+ * finds the same until the user fixes it, and each try can land in the host's
+ * auth log (and its fail2ban) or ask to approve a key.
+ */
+export class SshAccessError extends TransportError {
+  constructor(detail: string) {
+    super("ssh couldn't log in to the host", detail);
+    this.name = "SshAccessError";
+  }
+}
+
+const SSH_ACCESS_DENIED =
+  /Permission denied \(|Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|No more authentication methods|Too many authentication failures|host key for .* has changed/i;
+
+/** Whether ssh's stderr says it couldn't log in, rather than couldn't reach the host. */
+export function isSshAccessDenied(stderr: string): boolean {
+  return SSH_ACCESS_DENIED.test(stderr);
+}
+
 /** ssh reached the host and found no Daintree listening there in Host mode. */
 export class HostModeOffError extends TransportError {
   constructor(detail: string) {

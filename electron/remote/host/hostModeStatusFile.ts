@@ -25,6 +25,7 @@ const ObservationSchema = z.object({
       commit: z.string().max(64),
     })
     .optional(),
+  stopped: z.literal(true).optional(),
   enabled: z.boolean(),
   startAtLogin: z.boolean(),
   startAtLoginInstalled: z.boolean().nullable(),

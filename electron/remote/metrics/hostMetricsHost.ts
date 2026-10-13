@@ -3,6 +3,7 @@ import type {
   HostWorktreeEntry,
 } from "../../../shared/types/ipc/hostMetrics.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
+import type { HostRestartImpact } from "../../../shared/types/ipc/remoteHosts.js";
 import type { HostMetricsSummary } from "../../../shared/types/remoteHosts.js";
 import { isScheduledQuietNow } from "../../../shared/utils/quietHours.js";
 import { Lane } from "../link/frames.js";
@@ -11,6 +12,7 @@ import type { LinkSession } from "../link/session.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import type { FleetCaller } from "./hostOps.js";
 import {
+  MAX_RESTART_SHELLS,
   MetricsLinkMethod,
   SubmitFleetPayloadSchema,
   type AttentionPayload,
@@ -42,6 +44,8 @@ export interface MetricsHostDeps {
     opId: string | null
   ): Promise<void>;
   listWorktrees(): Promise<HostWorktreeEntry[]>;
+  /** This host's terminals and running operations: what a restart would end here. */
+  restartTerminals(): Promise<LocalRestartTerminals>;
   /** Told when one of this host's agents goes from working to waiting. */
   onAgentWaiting(listener: (payload: WaitingEvent) => void): () => void;
   /** This host's own notification settings: its policy decides, not the Shell's window. */
@@ -56,6 +60,12 @@ export interface MetricsHostDeps {
   >;
   now(): number;
 }
+
+/** What a restart ends on this machine, before the attached Shells are added. */
+export type LocalRestartTerminals = Omit<
+  NonNullable<HostRestartImpact["detail"]>,
+  "otherShells" | "shellIds"
+>;
 
 /** A waiting agent before this host's policy has been applied. */
 export type WaitingEvent = Omit<AttentionPayload, "quiet">;
@@ -105,7 +115,7 @@ export function installHostMetricsHostWith(
   const wired = new WeakSet<LinkSession>();
   const lastAttention = new Map<string, number>();
 
-  const wire = ({ session, sessionId }: MetricsSessionContext): void => {
+  const wire = ({ session, sessionId, client }: MetricsSessionContext): void => {
     if (wired.has(session)) return;
     wired.add(session);
     session.registerCallHandler(
@@ -126,6 +136,24 @@ export function installHostMetricsHostWith(
     );
     session.registerCallHandler(MetricsLinkMethod.LIST_WORKTREES, EmptyPayloadSchema, async () =>
       (await deps.listWorktrees()).map(stripHostId)
+    );
+    session.registerCallHandler(
+      MetricsLinkMethod.RESTART_IMPACT,
+      EmptyPayloadSchema,
+      async (): Promise<HostRestartImpact> => {
+        const local = await deps.restartTerminals();
+        // Every other Shell attached now loses its session with the restart.
+        const others = new Map<string, string>();
+        for (const other of server.sessions) {
+          if (!other.session.isOpen || other.client.clientId === client.clientId) continue;
+          if (others.size >= MAX_RESTART_SHELLS) break;
+          others.set(other.client.clientId, other.client.clientName);
+        }
+        return {
+          detail: { ...local, otherShells: [...others.values()], shellIds: [...others.keys()] },
+          agents: null,
+        };
+      }
     );
     const latest = deps.loop.latest();
     if (latest) postSummary(session, latest);
@@ -206,6 +234,7 @@ export async function installHostMetricsHost(server: MetricsSessionSource): Prom
     listFleetTargets: ops.listLocalFleetTargets,
     submitFleet: ops.submitLocalFleet,
     listWorktrees: ops.listLocalWorktrees,
+    restartTerminals: ops.listLocalRestartTerminals,
     onAgentWaiting(listener) {
       return events.on("agent:state-changed", (payload) => {
         if (payload.state !== "waiting") return;

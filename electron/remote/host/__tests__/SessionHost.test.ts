@@ -151,7 +151,41 @@ describe("SessionHost", () => {
     expect(new Set(remote.map((e) => e.endpointId)).size).toBe(2);
     expect(remote.every((e) => e.handle < 0)).toBe(true);
     expect(new Set(remote.map((e) => e.handle)).size).toBe(2);
-    expect(counts).toEqual([1, 2]);
+    expect(counts).toEqual([0, 1, 2]);
+  });
+
+  it("counts a Shell toward keep-awake only while it has a view open here", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    // A summary-only link: nobody is using this host from it.
+    expect(counts).toEqual([0]);
+    open(link, "view-1", "p");
+    expect(counts.at(-1)).toBe(1);
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+    expect(counts.at(-1)).toBe(0);
+    expect(host.attachedCount).toBe(0);
+  });
+
+  it("stops holding the host awake once a window has gone unused, and resumes on input", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p");
+    expect(counts.at(-1)).toBe(1);
+
+    vi.advanceTimersByTime(5 * 60_000);
+    // Still attached and still showing a view, but nobody has touched it.
+    expect(counts.at(-1)).toBe(0);
+    expect(registry.getRemote()).toHaveLength(1);
+
+    host.noteActivity("s1");
+    expect(counts.at(-1)).toBe(1);
+    vi.advanceTimersByTime(4 * 60_000);
+    host.noteActivity("s1");
+    vi.advanceTimersByTime(4 * 60_000);
+    // Each use renews the window.
+    expect(counts.at(-1)).toBe(1);
+    vi.advanceTimersByTime(60_000);
+    expect(counts.at(-1)).toBe(0);
   });
 
   it("caps endpoints per session", () => {

@@ -15,6 +15,7 @@ import type {
   HostInstallPlan,
   HostProbeResult,
   HostSetupTarget,
+  HostRestartImpact,
   InstallHostPayload,
   InstallHostResult,
   PlanInstallPayload,
@@ -31,6 +32,7 @@ import { connectionKey, requireHostConnection, unsupportedConnection } from "./c
 import { discoverHosts } from "./discovery.js";
 import { type ArtifactChecksum, lookupArtifactChecksum } from "./clientBuild.js";
 import { runHostInstall } from "./hostInstaller.js";
+import { RestartImpactSchema } from "../metrics/linkMethods.js";
 import { bootstrapHostMode, LINUX_START_SCRIPT, MAC_START_SCRIPT } from "./hostModeBootstrap.js";
 import { probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
@@ -52,8 +54,8 @@ export interface HostSetupDeps {
   platform: NodeJS.Platform;
   knownConnections(): HostConnection[];
   clientBuild(): ClientBuild;
-  /** Agents the host reports working; null when unobservable (not connected, no summary). */
-  workingAgents(hostId: HostId | null): Promise<number | null>;
+  /** What restarting the host would end, as it reports it now (unknown parts are null). */
+  restartImpact(hostId: HostId | null): Promise<HostRestartImpact>;
   reconnect?(hostId: HostId): Promise<boolean | null>;
   download(url: string, destination: string, signal: AbortSignal): Promise<void>;
   /** The release feed's checksum for an artifact; defaults to reading the feed's update manifest. */
@@ -158,6 +160,13 @@ export class HostSetupService {
     if (payload.linuxPackage !== undefined && !["deb", "appimage"].includes(payload.linuxPackage)) {
       throw new AppError({ code: "VALIDATION", message: "linuxPackage is not valid" });
     }
+    const confirmed =
+      payload.confirmed === undefined
+        ? undefined
+        : RestartImpactSchema.safeParse(payload.confirmed);
+    if (confirmed && !confirmed.success) {
+      throw new AppError({ code: "VALIDATION", message: "confirmed is not valid" });
+    }
     if (!this.targets.has(opId)) this.targets.set(opId, connection);
     const normalized: InstallHostPayload = {
       opId,
@@ -165,6 +174,7 @@ export class HostSetupService {
       hostId: typeof payload.hostId === "string" ? payload.hostId : undefined,
       linuxPackage: payload.linuxPackage,
       whileWorking,
+      ...(confirmed ? { confirmed: confirmed.data } : {}),
     };
     return this.operations.run(
       {
@@ -190,7 +200,7 @@ export class HostSetupService {
             run: this.deps.run,
             client: this.deps.clientBuild(),
             probe: (signal) => this.probeOutcome(connection, shell, signal),
-            workingAgents: (hostId) => this.deps.workingAgents(hostId),
+            restartImpact: (hostId) => this.deps.restartImpact(hostId),
             download: (url, destination, signal) => this.deps.download(url, destination, signal),
             checksum: (url, signal) =>
               this.deps.checksum
@@ -209,8 +219,8 @@ export class HostSetupService {
       {
         // A refusal changed nothing: the record says so rather than "succeeded".
         recordResult: (result) =>
-          result.status === "agents-working"
-            ? { status: result.status, working: result.working }
+          result.status === "needs-confirmation"
+            ? { status: result.status, impact: result.impact }
             : { status: result.status },
       }
     );
@@ -265,6 +275,8 @@ export class HostSetupService {
     if (!outcome.parsed || !probe.reachable || !probe.install) return "not-startable";
     if (probe.hostModeListening) return "listening";
     if (probe.hostModeState?.enabled === false) return "not-startable";
+    // Quit there on purpose: starting it again would undo that.
+    if (probe.hostModeState?.stopped === true) return "not-startable";
     const script =
       probe.platform === "darwin" && probe.hostModeState?.enabled === true
         ? MAC_START_SCRIPT

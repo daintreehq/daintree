@@ -41,6 +41,8 @@ export interface MetricsConnection {
 export interface HostMetricsClientOptions {
   manager: {
     connect(hostId: HostId): unknown;
+    /** Mark the host's connection used, so it isn't released as idle. */
+    touch?(hostId: HostId): void;
     get(hostId: HostId): MetricsConnection | undefined;
     connectionState(hostId: HostId): HostConnectionState;
     onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
@@ -105,15 +107,18 @@ function requireString(value: unknown, field: string, max: number): string {
 }
 
 /**
- * The Shell's view of every host's load: a summary-only link to each known
- * host (dialled whether or not a window shows it), a short ring of what each
- * reported, this machine's own summary beside them, and the cross-host reads
- * the overview and fleet features make.
+ * The Shell's view of every host's load: the summaries each connected host
+ * sends, a short ring of what each reported, this machine's own summary beside
+ * them, and the cross-host reads the overview and fleet features make. Only a
+ * host whose notifications are on is dialled for this (a light connection the
+ * Shell keeps); any other reports while something else has it connected.
  */
 export class HostMetricsClient {
   private readonly rings = new Map<HostId, HostMetricsSummary[]>();
-  /** Each dialled host's address: a new address is another machine, whose history starts empty. */
-  private readonly dialled = new Map<HostId, string>();
+  /** Each known host's address: a new address is another machine, whose history starts empty. */
+  private readonly known = new Map<HostId, string>();
+  /** Hosts dialled for their notifications, so turning them on dials once, not on every change. */
+  private readonly dialledForNotifications = new Set<HostId>();
   private readonly disposers: Array<() => void> = [];
   private stopLocal: (() => void) | null = null;
   private readonly ringSize: number;
@@ -144,10 +149,11 @@ export class HostMetricsClient {
     return this.rings.get(hostId)?.[0] ?? null;
   }
 
-  /** Working agents a connected host last reported; unknown while it isn't connected. */
-  workingAgents(hostId: HostId): number | null {
+  /** Agents a connected host last reported working and waiting; unknown while it isn't connected. */
+  observedAgents(hostId: HostId): { working: number; waiting: number } | null {
     if (this.options.manager.connectionState(hostId).status !== "connected") return null;
-    return this.latest(hostId)?.agentsObserved?.working ?? null;
+    const observed = this.latest(hostId)?.agentsObserved;
+    return observed ? { working: observed.working, waiting: observed.waiting } : null;
   }
 
   async listFleetTargets(payload: unknown): Promise<HostFleetTargetList> {
@@ -279,6 +285,7 @@ export class HostMetricsClient {
   }
 
   private connection(hostId: HostId): MetricsConnection {
+    this.options.manager.touch?.(hostId);
     const connection = this.options.manager.get(hostId);
     if (!connection) {
       throw new AppError({
@@ -312,31 +319,36 @@ export class HostMetricsClient {
     });
   }
 
-  /** Dial each host once as it appears; a host the user disconnects stays disconnected. */
+  /**
+   * Dial a host whose notifications are on, once as it appears or as they're
+   * turned on: those need a light connection to be heard. A host the user
+   * then disconnects stays disconnected, and nothing else is dialled here.
+   */
   private syncHosts(): void {
     const hosts = this.options.registry.list().filter((host) => !isLocalHostId(host.id));
-    const known = new Set(hosts.map((host) => host.id));
-    for (const hostId of [...this.dialled.keys()]) {
-      if (known.has(hostId)) continue;
-      this.dialled.delete(hostId);
+    const present = new Set(hosts.map((host) => host.id));
+    for (const hostId of [...this.known.keys()]) {
+      if (present.has(hostId)) continue;
+      this.known.delete(hostId);
+      this.dialledForNotifications.delete(hostId);
       this.rings.delete(hostId);
     }
     for (const host of hosts) {
-      const dialledAs = this.dialled.get(host.id);
       const address = connectionKey(host.connection);
-      if (dialledAs !== undefined) {
-        // The host list's own update re-dials a changed address; only the history is ours to drop.
-        if (dialledAs !== address) {
-          this.dialled.set(host.id, address);
-          this.rings.delete(host.id);
-        }
+      const knownAs = this.known.get(host.id);
+      // The host list's own update re-dials a changed address; only the history is ours to drop.
+      if (knownAs !== undefined && knownAs !== address) this.rings.delete(host.id);
+      this.known.set(host.id, address);
+      if (host.notificationsEnabled !== true) {
+        this.dialledForNotifications.delete(host.id);
         continue;
       }
-      this.dialled.set(host.id, address);
+      if (this.dialledForNotifications.has(host.id)) continue;
+      this.dialledForNotifications.add(host.id);
       try {
         this.options.manager.connect(host.id);
       } catch (error) {
-        console.warn(`[HostMetrics] Couldn't dial ${host.id} for summaries:`, error);
+        console.warn(`[HostMetrics] Couldn't dial ${host.id} for notifications:`, error);
       }
     }
     if (hosts.length > 0 && !this.stopLocal && this.options.localLoop) {

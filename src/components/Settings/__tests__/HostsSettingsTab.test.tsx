@@ -190,7 +190,10 @@ describe("HostsSettingsTab", () => {
   });
 
   it("shows a failed Connect inline and retries it", async () => {
-    remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
+    // Not connected and nothing trying: a host retrying on its own offers Disconnect instead.
+    remoteHosts.list!.mockResolvedValue([
+      { ...entry("studio-03", "studio-03"), connection: { status: "disconnected" } },
+    ]);
     remoteHosts.connect!.mockRejectedValueOnce(new Error("Permission denied (publickey)"));
     render(
       <TooltipProvider>

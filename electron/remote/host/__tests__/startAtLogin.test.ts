@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CommandRunner } from "../hostCommands.js";
 import { makeTempDir, removeTempDir } from "../../link/__tests__/linkTestUtils.js";
 import {
+  APPIMAGE_STOP_SCRIPT,
   buildLaunchAgentPlist,
   buildSystemdUnit,
   createLaunchAgentController,
@@ -247,7 +248,7 @@ describe("AppImage without FUSE", () => {
     );
     expect(unit).toContain("\nEnvironment=APPIMAGE_EXTRACT_AND_RUN=1\n");
     // Daintree, the image runtime's child, is asked to quit before the runtime is.
-    expect(unit).toContain('\nExecStop="/bin/sh" "-c" "p=$$(grep -o');
+    expect(unit).toContain('\nExecStop="/bin/sh" "-c" "[ -n \\"$$MAINPID\\" ]');
     expect(systemdUnitFor({ executable: "/opt/Daintree/daintree", appPath: null })).not.toContain(
       "ExecStop"
     );
@@ -297,5 +298,34 @@ describe("runningAppImage", () => {
       runningAppImage({ APPIMAGE: "relative.AppImage", APPDIR: mount }, `${mount}/d`)
     ).toBeNull();
     expect(runningAppImage({}, `${mount}/daintree`)).toBeNull();
+  });
+});
+
+describe.runIf(process.platform === "linux")("APPIMAGE_STOP_SCRIPT", () => {
+  it("asks the main process's children to quit, with no status file to go on", async () => {
+    const { spawn, execFile } = await import("node:child_process");
+    // Stands in for the image runtime: its child is the Daintree to stop.
+    const runtime = spawn("/bin/sh", ["-c", "sleep 30 & wait"], { stdio: "ignore" });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const stopped = await new Promise<number | null>((resolve) => {
+        execFile(
+          "/bin/sh",
+          ["-c", APPIMAGE_STOP_SCRIPT],
+          { env: { ...process.env, MAINPID: String(runtime.pid), XDG_RUNTIME_DIR: home } },
+          (error) => resolve(error ? ((error as { code?: number }).code ?? 1) : 0)
+        );
+      });
+      expect(stopped).toBe(0);
+      const exited = await new Promise<boolean>((resolve) => {
+        if (runtime.exitCode !== null || runtime.signalCode !== null) resolve(true);
+        runtime.once("exit", () => resolve(true));
+        setTimeout(() => resolve(false), 5_000);
+      });
+      // Its child gone, the runtime's `wait` returns.
+      expect(exited).toBe(true);
+    } finally {
+      runtime.kill("SIGKILL");
+    }
   });
 });

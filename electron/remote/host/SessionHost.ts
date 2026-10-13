@@ -63,8 +63,17 @@ export interface SessionHostDispatcher {
 export interface SessionHostOptions {
   dispatcher: SessionHostDispatcher;
   registry: EndpointRegistry;
-  /** Attached Shells, for the power policy: a watched host stays awake. */
+  /**
+   * Shells using this host, for the power policy: a host someone is working
+   * on stays awake. Counted only while the Shell has a view open here and has
+   * done something with it (opened or switched a view, typed or resized a
+   * terminal) within {@link SessionHostOptions.activityWindowMs}. A link with
+   * no view (a Shell reading summaries, notifications or listings) never
+   * counts, and neither does a window left open and untouched.
+   */
   setAttachedFrontendCount?: (count: number) => void;
+  /** How long one use keeps the host awake; renewed by the next. */
+  activityWindowMs?: number;
   hostInfo?: () => HostInfo;
   describeProject?: (projectId: string) => ProjectDescription | null;
   listProjects?: () => HostProjectList;
@@ -95,6 +104,7 @@ export type EndpointOpenedListener = (
 export type TransportChangeListener = (endpointIds: string[], attached: boolean) => void;
 
 const DEFAULT_OVER_HIGH_WATER_GRACE_MS = 5_000;
+const DEFAULT_ACTIVITY_WINDOW_MS = 5 * 60_000;
 const DEFAULT_MAX_ENDPOINTS_PER_SESSION = 256;
 /** Shell machines whose last project a host remembers; the oldest is dropped first. */
 const MAX_REMEMBERED_CLIENTS = 64;
@@ -112,6 +122,8 @@ interface SessionState {
   staleReason: EndpointResyncReason;
   overHighWaterTimer: ReturnType<typeof setTimeout> | null;
   handle: EndpointSessionHandle;
+  /** When the Shell last used this host through a view; null until it does. */
+  lastActiveAt: number | null;
 }
 
 /**
@@ -145,6 +157,8 @@ export class SessionHost {
   private readonly graceMs: number;
   private readonly maxEndpoints: number;
   private lastFrontendCount = -1;
+  private readonly activityWindowMs: number;
+  private activityTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly lastActiveByClient = new Map<string, string>();
   private disposed = false;
 
@@ -156,6 +170,7 @@ export class SessionHost {
       options.eventsHighWaterBytes ?? DEFAULT_LANE_LIMITS[Lane.EVENTS].highWaterBytes;
     this.graceMs = options.overHighWaterGraceMs ?? DEFAULT_OVER_HIGH_WATER_GRACE_MS;
     this.maxEndpoints = options.maxEndpointsPerSession ?? DEFAULT_MAX_ENDPOINTS_PER_SESSION;
+    this.activityWindowMs = options.activityWindowMs ?? DEFAULT_ACTIVITY_WINDOW_MS;
     this.unsubscribe.push(server.onSession((ctx) => this.attach(ctx)));
     this.unsubscribe.push(server.onSessionExpired((info) => this.expire(info.sessionId)));
   }
@@ -172,11 +187,56 @@ export class SessionHost {
     return () => this.transportListeners.delete(listener);
   }
 
-  /** Shells with a live link right now. */
+  /** Shells with a live link, a view open through it, and recent use of it. */
   get attachedCount(): number {
+    const now = Date.now();
     let count = 0;
-    for (const state of this.states.values()) if (state.link && !state.link.isClosed) count++;
+    for (const state of this.states.values()) if (this.isInUse(state, now)) count++;
     return count;
+  }
+
+  /**
+   * The Shell behind `sessionId` used this host just now (typed or resized
+   * one of its terminals). Its streams report it; summaries, listings, pings
+   * and acks never do.
+   */
+  noteActivity(sessionId: string): void {
+    const state = this.states.get(sessionId);
+    if (!state || this.disposed) return;
+    state.lastActiveAt = Date.now();
+    this.publishFrontendCount();
+  }
+
+  private isInUse(state: SessionState, now: number): boolean {
+    return (
+      state.link !== null &&
+      !state.link.isClosed &&
+      state.endpoints.size > 0 &&
+      state.lastActiveAt !== null &&
+      now - state.lastActiveAt < this.activityWindowMs
+    );
+  }
+
+  /** Publish again when the soonest use runs out, so an idle window stops holding the host. */
+  private scheduleActivityExpiry(): void {
+    if (this.activityTimer) clearTimeout(this.activityTimer);
+    this.activityTimer = null;
+    if (this.disposed) return;
+    const now = Date.now();
+    let soonest = Infinity;
+    for (const state of this.states.values()) {
+      if (!this.isInUse(state, now)) continue;
+      soonest = Math.min(soonest, state.lastActiveAt! + this.activityWindowMs);
+    }
+    if (soonest === Infinity) return;
+    this.activityTimer = setTimeout(
+      () => {
+        this.activityTimer = null;
+        this.publishFrontendCount();
+      },
+      Math.max(0, soonest - now)
+    );
+    this.activityTimer.unref?.();
   }
 
   /**
@@ -221,6 +281,8 @@ export class SessionHost {
     this.openedListeners.clear();
     this.transportListeners.clear();
     this.publishFrontendCount();
+    if (this.activityTimer) clearTimeout(this.activityTimer);
+    this.activityTimer = null;
   }
 
   private attach(ctx: HostSessionContext): void {
@@ -248,6 +310,7 @@ export class SessionHost {
         staleReason: "reattached",
         overHighWaterTimer: null,
         handle: undefined as unknown as EndpointSessionHandle,
+        lastActiveAt: null,
       };
       created.handle = {
         sessionId: created.sessionId,
@@ -387,9 +450,13 @@ export class SessionHost {
       if (state.endpoints.get(clientEndpointId) === endpoint) {
         state.endpoints.delete(clientEndpointId);
         state.stale.delete(clientEndpointId);
+        this.publishFrontendCount();
       }
     });
     this.options.registry.add(endpoint);
+    // Opening a view here is using the host.
+    state.lastActiveAt = Date.now();
+    this.publishFrontendCount();
     for (const listener of [...this.openedListeners]) {
       try {
         listener(endpoint, state.handle);
@@ -404,6 +471,9 @@ export class SessionHost {
     if (!endpoint || endpoint.isClosed() || endpoint.projectId === projectId) return;
     this.options.registry.rebind(endpoint.endpointId, projectId);
     endpoint.markRebound();
+    // Switching project in a view is using the host.
+    state.lastActiveAt = Date.now();
+    this.publishFrontendCount();
   }
 
   private transportFor(state: SessionState): RemoteEndpointTransport {
@@ -534,6 +604,7 @@ export class SessionHost {
   }
 
   private publishFrontendCount(): void {
+    this.scheduleActivityExpiry();
     const count = this.attachedCount;
     if (count === this.lastFrontendCount) return;
     this.lastFrontendCount = count;

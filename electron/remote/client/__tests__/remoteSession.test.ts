@@ -760,6 +760,12 @@ describe("remote session wiring", () => {
       listFleetTargets: async () => ({ targets: [], complete: true }),
       submitFleet: async () => {},
       listWorktrees: async () => [],
+      restartTerminals: async () => ({
+        projects: [],
+        complete: true,
+        operations: 0,
+        terminalIds: [],
+      }),
       onAgentWaiting: () => () => {},
       notificationSettings: () => ({
         enabled: true,

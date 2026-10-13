@@ -29,6 +29,7 @@ export const remoteHostsClient = {
     window.electron.remoteHosts.update(payload),
   forget: (hostId: string): Promise<void> => window.electron.remoteHosts.forget({ hostId }),
   connect: (hostId: string) => window.electron.remoteHosts.connect({ hostId }),
+  disconnect: (hostId: string): Promise<void> => window.electron.remoteHosts.disconnect({ hostId }),
   discover: (): Promise<DiscoveredHost[]> => window.electron.remoteHosts.discover(),
   probe: (connection: HostConnection): Promise<HostProbeResult> =>
     window.electron.remoteHosts.probe({ connection }),

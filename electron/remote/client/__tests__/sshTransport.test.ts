@@ -31,7 +31,7 @@ import {
   type SshSpawner,
   type SshStreamSpawner,
 } from "../sshTransport.js";
-import { HostModeOffError, TransportError } from "../transport.js";
+import { HostModeOffError, SshAccessError, TransportError } from "../transport.js";
 import {
   TEST_HANDSHAKE,
   makeTempDir,
@@ -42,6 +42,10 @@ import {
 const COMMON = [
   "-o",
   "BatchMode=yes",
+  "-o",
+  "ServerAliveInterval=15",
+  "-o",
+  "ServerAliveCountMax=3",
   "-o",
   "ForwardAgent=no",
   "-o",
@@ -103,6 +107,10 @@ describe("ssh argument construction", () => {
       "-o",
       "ForwardX11=no",
       "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
       "ControlPath=none",
       "-o",
       "StreamLocalBindUnlink=yes",
@@ -157,13 +165,13 @@ describe("ssh argument construction", () => {
     expect(() => new SshTransport({ target: "-x", clientDir: "/tmp/x" })).toThrow(TransportError);
   });
 
-  it("uses cm1-%C when it fits and a short hash when it would not", () => {
+  it("uses cm2-%C when it fits and a short hash when it would not", () => {
     expect(controlPathFor("/Users/g/.config/Daintree/ssh", "studio", "darwin")).toBe(
-      "/Users/g/.config/Daintree/ssh/cm1-%C"
+      "/Users/g/.config/Daintree/ssh/cm2-%C"
     );
     const long = "/Users/somebody/Library/Application Support/Daintree/ssh";
     const hashed = controlPathFor(long, "studio", "darwin");
-    expect(hashed).toMatch(/\/cm1-[0-9a-f]{16}$/);
+    expect(hashed).toMatch(/\/cm2-[0-9a-f]{16}$/);
     expect(controlPathFor(long, "studio", "darwin")).toBe(hashed);
     expect(controlPathFor(long, "other", "darwin")).not.toBe(hashed);
   });
@@ -262,6 +270,46 @@ afterEach(async () => {
 });
 
 describe("SshTransport with an injected ssh", () => {
+  it("reports a refused login as one retrying won't fix, and never tries to start the host", async () => {
+    const calls: string[][] = [];
+    const ensureRunning = vi.fn(async () => true);
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      child.finish(255, "", "greg@studio: Permission denied (publickey).\n");
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "greg@studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+      ensureRunning,
+    });
+    const opened = transport.open(new AbortController().signal);
+    await expect(opened).rejects.toBeInstanceOf(SshAccessError);
+    await expect(opened).rejects.toMatchObject({
+      detail: "greg@studio: Permission denied (publickey).",
+    });
+    expect(ensureRunning).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("leaves an ordinary unreachable host to the usual retries", async () => {
+    const spawner: SshSpawner = () => {
+      const child = new FakeChild();
+      child.finish(255, "", "ssh: connect to host studio port 22: Connection refused\n");
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "greg@studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).not.toBeInstanceOf(SshAccessError);
+  });
+
   it("probes, reads the discovery file, forwards the socket and connects", async () => {
     const hostLoc = hostSocketLocation({ platform: "darwin", userDataDir: path.join(root, "h") });
     server = new HostServer({ location: hostLoc, handshake: TEST_HANDSHAKE, hostName: "studio" });

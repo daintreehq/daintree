@@ -80,6 +80,12 @@ export function HostDetail({
     remoteHostsClient.update({ hostId: descriptor.id, connection: sshConnection(value) })
   );
   const connected = connection.status === "connected";
+  // Up, or trying to be: Disconnect stops it. A link that gave up offers Retry instead.
+  const linked =
+    connected ||
+    connection.status === "connecting" ||
+    connection.status === "driven-elsewhere" ||
+    (connection.status === "unreachable" && connection.stoppedRetrying !== true);
   const hostModeOff = connection.status === "unreachable" && connection.hostModeOff === true;
   const buildMismatch = connected ? (connection.buildMismatch ?? null) : null;
   const agentClis = [...(summary?.agentClis ?? [])]
@@ -131,7 +137,20 @@ export function HostDetail({
       () => setConnecting(false),
       (err: unknown) => {
         setConnecting(false);
-        setConnectError(clientErrorText(err, "Couldn't connect"));
+        setConnectError(`Couldn't connect: ${clientErrorText(err, "unknown error")}`);
+      }
+    );
+  };
+
+  // Closes the link; nothing on the host stops, and Connect brings it back.
+  const disconnect = () => {
+    setConnecting(true);
+    setConnectError(null);
+    remoteHostsClient.disconnect(descriptor.id).then(
+      () => setConnecting(false),
+      (err: unknown) => {
+        setConnecting(false);
+        setConnectError(`Couldn't disconnect: ${clientErrorText(err, "unknown error")}`);
       }
     );
   };
@@ -198,28 +217,39 @@ export function HostDetail({
             label="Status"
             description={connectionLabel(connection)}
             error={
-              // Announced: it answers one press of Connect.
-              connectError ? (
-                <span role="alert">{`Couldn't connect: ${connectError}`}</span>
-              ) : undefined
+              // Announced: it answers one press of Connect or Disconnect.
+              connectError ? <span role="alert">{connectError}</span> : undefined
             }
             control={
-              connected ? undefined : hostModeOff ? (
-                // Connecting again finds the same; setting up turns Host mode on there.
-                <Button variant="outline" size="sm" onClick={() => setUpdateOpen(true)}>
-                  Set up…
-                </Button>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={connect}
-                  disabled={connecting}
-                  aria-busy={connecting || undefined}
-                >
-                  {connectError ? "Retry" : "Connect"}
-                </Button>
-              )
+              <div className="flex gap-2">
+                {hostModeOff && (
+                  // Setting up turns Host mode on there; Retry checks again as it is.
+                  <Button variant="outline" size="sm" onClick={() => setUpdateOpen(true)}>
+                    Set up…
+                  </Button>
+                )}
+                {linked ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={disconnect}
+                    disabled={connecting}
+                    aria-busy={connecting || undefined}
+                  >
+                    Disconnect
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={connect}
+                    disabled={connecting}
+                    aria-busy={connecting || undefined}
+                  >
+                    {connectError || connection.status === "unreachable" ? "Retry" : "Connect"}
+                  </Button>
+                )}
+              </div>
             }
           />
           <SettingsRow

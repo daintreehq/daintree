@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
 import {
   HostModeOffError,
+  SshAccessError,
   TransportError,
   createDirectTransport,
   type LinkTransport,
@@ -62,7 +63,7 @@ describe("LinkClient backoff", () => {
       .filter(
         (s): s is Extract<LinkClientState, { status: "unreachable" }> => s.status === "unreachable"
       )
-      .map((s) => s.retryAt - now);
+      .map((s) => (s.retryAt ?? Number.NaN) - now);
     expect(delays.slice(0, 4)).toEqual([5, 10, 20, 20]);
     expect(states[0]).toEqual({ status: "connecting", attempt: 1 });
     expect(states[1]).toMatchObject({ status: "unreachable", detail: "Connection timed out" });
@@ -89,7 +90,36 @@ describe("LinkClient backoff", () => {
       status: "unreachable",
       hostModeOff: true,
       detail: "Daintree isn't running in Host mode there (no host.json).",
+      // Trying again finds the same: it waits to be asked.
+      retryAt: null,
     });
+  });
+
+  it("stops retrying when ssh can't log in, until asked to try again", async () => {
+    const transport = {
+      opens: 0,
+      async open(): Promise<never> {
+        transport.opens++;
+        throw new SshAccessError("greg@studio: Permission denied (publickey).");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+      random: () => 0,
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({ retryAt: null });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(transport.opens).toBe(1);
+
+    client.retryNow();
+    await waitFor(() => transport.opens === 2);
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(transport.opens).toBe(2);
   });
 
   it("applies jitter below the base delay", async () => {

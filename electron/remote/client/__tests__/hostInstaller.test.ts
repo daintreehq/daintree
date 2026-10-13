@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import { probeHost } from "../hostProbe.js";
 import {
+  busyAgents,
+  exceedsConfirmed,
   runHostInstall,
   stopScript,
   type InstallProgress,
@@ -13,6 +15,25 @@ import {
 } from "../hostInstaller.js";
 import { debInstallCommand, type ClientBuild } from "../installPlan.js";
 import type { HostCommandChannel } from "../remoteShell.js";
+import type { HostRestartImpact } from "../../../../shared/types/ipc/remoteHosts.js";
+
+/** `n` terminals in one project, each with an agent working; null for a host that can't say. */
+function impactOf(value: number | null | HostRestartImpact): HostRestartImpact {
+  if (value === null) return { detail: null, agents: null };
+  if (typeof value !== "number") return value;
+  return {
+    detail: {
+      projects:
+        value > 0 ? [{ projectName: "app", terminals: value, working: value, waiting: 0 }] : [],
+      complete: true,
+      operations: 0,
+      otherShells: [],
+      terminalIds: Array.from({ length: value }, (_, i) => `t${i}`),
+      shellIds: [],
+    },
+    agents: null,
+  };
+}
 
 const CLIENT: ClientBuild = {
   platform: "darwin",
@@ -129,7 +150,8 @@ afterEach(async () => {
 function makeDeps(params: {
   shell: FakeShell;
   probes: string[];
-  working?: Array<number | null>;
+  /** What each restart-impact check reports, in turn: a count of working agents, or a full impact. */
+  working?: Array<number | null | HostRestartImpact>;
   client?: ClientBuild;
   run?: CommandRunner;
 }): InstallerDeps & { progress: InstallProgress[]; reconnect: ReturnType<typeof vi.fn> } {
@@ -158,7 +180,7 @@ function makeDeps(params: {
         client: CLIENT,
       });
     },
-    workingAgents: async () => (working.length > 1 ? working.shift()! : working[0]!),
+    restartImpact: async () => impactOf(working.length > 1 ? working.shift()! : working[0]!),
     download: async (_url, destination) => fs.writeFile(destination, ARTIFACT),
     checksum: async () => ({ sha512: ARTIFACT_SHA512, size: null }),
     cacheDir,
@@ -231,8 +253,8 @@ describe("runHostInstall", () => {
       working: [2],
     });
     await expect(install(deps, { hostId: "studio" })).resolves.toEqual({
-      status: "agents-working",
-      working: 2,
+      status: "needs-confirmation",
+      impact: impactOf(2),
     });
     expect(shell.scripts).toEqual([]);
     expect(shell.uploads).toEqual([]);
@@ -244,7 +266,10 @@ describe("runHostInstall", () => {
       probes: [macProbe({ build: OLD_BUILD, hostMode: true })],
       working: [null],
     });
-    await expect(install(deps)).resolves.toEqual({ status: "agents-working", working: null });
+    await expect(install(deps)).resolves.toEqual({
+      status: "needs-confirmation",
+      impact: impactOf(null),
+    });
   });
 
   it("updates anyway once confirmed: stops the host, swaps, restarts in Host mode and reconnects", async () => {
@@ -284,14 +309,15 @@ describe("runHostInstall", () => {
         macProbe({ build: OLD_BUILD, hostMode: true }),
         macProbe({ build: NEW_BUILD, hostMode: true }),
       ],
-      working: [2, 1, 0],
+      // The first answer is what the user is shown before staging.
+      working: [2, 2, 1, 0],
     });
     const result = await install(deps, { hostId: "studio", whileWorking: "wait-for-idle" });
     expect(result.status).toBe("installed");
     const waits = deps.progress.filter((p) => p.stage === "waiting-for-idle");
     expect(waits.map((p) => p.message)).toEqual([
-      "Waiting for 2 working agents on the host",
-      "Waiting for 1 working agent on the host",
+      "Waiting for 2 agents working or waiting on the host",
+      "Waiting for 1 agent working or waiting on the host",
     ]);
     const stagedAt = deps.progress.findIndex((p) => p.stage === "copying");
     const waitedAt = deps.progress.findIndex((p) => p.stage === "waiting-for-idle");
@@ -548,6 +574,129 @@ describe("runHostInstall", () => {
       code: "UNSUPPORTED",
     });
     expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+    // Nothing is left staged on the host for an update that didn't go ahead.
+    expect(shell.scripts.at(-1)).toMatch(/^rm -rf /);
+  });
+
+  it("counts a waiting agent as busy while waiting for idle", async () => {
+    const waiting: HostRestartImpact = {
+      detail: {
+        projects: [{ projectName: "app", terminals: 1, working: 0, waiting: 1 }],
+        complete: true,
+        operations: 0,
+        otherShells: [],
+        terminalIds: ["t0"],
+        shellIds: [],
+      },
+      agents: null,
+    };
+    const idle: HostRestartImpact = {
+      detail: { ...waiting.detail!, projects: [{ ...waiting.detail!.projects[0]!, waiting: 0 }] },
+      agents: null,
+    };
+    const deps = makeDeps({
+      shell: fakeShell(),
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({ build: NEW_BUILD, hostMode: true }),
+      ],
+      working: [waiting, waiting, idle],
+    });
+    const result = await install(deps, { hostId: "studio", whileWorking: "wait-for-idle" });
+    expect(result.status).toBe("installed");
+    expect(
+      deps.progress.filter((p) => p.stage === "waiting-for-idle").map((p) => p.message)
+    ).toEqual(["Waiting for 1 agent working or waiting on the host"]);
+  });
+
+  it("keeps waiting for idle through a moment it can't hear from the host", async () => {
+    const deps = makeDeps({
+      shell: fakeShell(),
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({ build: NEW_BUILD, hostMode: true }),
+      ],
+      working: [1, 1, null, 0],
+    });
+    const result = await install(deps, { hostId: "studio", whileWorking: "wait-for-idle" });
+    expect(result.status).toBe("installed");
+  });
+
+  it("waits again when an agent went busy between the idle wait and the restart", async () => {
+    const deps = makeDeps({
+      shell: fakeShell(),
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({ build: NEW_BUILD, hostMode: true }),
+      ],
+      // Shown, idle, busy again at the last look, then idle.
+      working: [1, 0, 1, 1, 0, 0],
+    });
+    const result = await install(deps, { hostId: "studio", whileWorking: "wait-for-idle" });
+    expect(result.status).toBe("installed");
+    expect(
+      deps.progress.filter((p) => p.stage === "waiting-for-idle").map((p) => p.message)
+    ).toEqual(["Waiting for 1 agent working or waiting on the host"]);
+  });
+
+  it("never reads a list the host couldn't complete as idle", () => {
+    const partial: HostRestartImpact = {
+      detail: { ...impactOf(0).detail!, complete: false },
+      agents: null,
+    };
+    expect(busyAgents(partial)).toBeNull();
+    expect(busyAgents(impactOf(0))).toBe(0);
+  });
+
+  it("asks again when an older host's counts can't be read right before the restart", () => {
+    const counted: HostRestartImpact = { detail: null, agents: { working: 0, waiting: 0 } };
+    const unknown: HostRestartImpact = { detail: null, agents: null };
+    expect(exceedsConfirmed(unknown, counted)).toBe(true);
+    // Confirmed as unknown, still unknown: the user already agreed to that.
+    expect(exceedsConfirmed(unknown, unknown)).toBe(false);
+    expect(exceedsConfirmed(counted, counted)).toBe(false);
+  });
+
+  it("stops before the restart when a terminal appeared after the user confirmed", async () => {
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [macProbe({ build: OLD_BUILD, hostMode: true })],
+      working: [2],
+    });
+    const result = await install(deps, {
+      hostId: "studio",
+      whileWorking: "proceed",
+      confirmed: impactOf(1),
+    });
+    expect(result).toEqual({ status: "needs-confirmation", impact: impactOf(2) });
+    expect(shell.scripts.some((s) => s.includes("@@dt:stopped"))).toBe(false);
+    expect(shell.scripts.at(-1)).toMatch(/^rm -rf /);
+  });
+
+  it("asks before an update even when the only thing it ends is a plain shell", async () => {
+    const shellOnly: HostRestartImpact = {
+      detail: {
+        projects: [{ projectName: "app", terminals: 1, working: 0, waiting: 0 }],
+        complete: true,
+        operations: 0,
+        otherShells: [],
+        terminalIds: ["t0"],
+        shellIds: [],
+      },
+      agents: null,
+    };
+    const shell = fakeShell();
+    const deps = makeDeps({
+      shell,
+      probes: [macProbe({ build: OLD_BUILD, hostMode: true })],
+      working: [shellOnly],
+    });
+    await expect(install(deps, { hostId: "studio" })).resolves.toEqual({
+      status: "needs-confirmation",
+      impact: shellOnly,
+    });
+    expect(shell.scripts).toEqual([]);
   });
 
   it("refuses a staged Mac build from another commit", async () => {

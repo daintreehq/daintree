@@ -7,7 +7,7 @@ import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
-import { setHostWorkingAgentsSource } from "../client/initClient.js";
+import { setHostAgentsSource } from "../client/initClient.js";
 import { registerRemoteService } from "../runtime.js";
 import { HostMetricsClient, type HostMetricsClientOptions } from "./client.js";
 import { listLocalFleetTargets, listLocalWorktrees, submitLocalFleet } from "./hostOps.js";
@@ -80,9 +80,9 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
   });
   client.start();
   const unregister = registerRemoteService("hostMetrics", client);
-  setHostWorkingAgentsSource((hostId) => client.workingAgents(hostId));
+  setHostAgentsSource((hostId) => client.observedAgents(hostId));
   return () => {
-    setHostWorkingAgentsSource(null);
+    setHostAgentsSource(null);
     unregister();
     client.dispose();
   };
