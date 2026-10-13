@@ -17,5 +17,12 @@
     <true/>
     <key>com.apple.security.device.camera</key>
     <false/>
+
+    <!-- Lets programs run in Daintree terminals ask to control other apps
+         (osascript, `tell app "Finder"`), like other macOS terminal apps. Without it
+         TCC refuses their Apple Events with -1743 and never prompts. Pairs
+         with NSAppleEventsUsageDescription in electron-builder.config.cjs. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
 </dict>
 </plist>
