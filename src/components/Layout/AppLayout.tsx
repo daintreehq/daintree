@@ -36,6 +36,11 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import {
+  resizeCappedPreference,
+  useViewportCappedWidth,
+  viewportAttainableWidth,
+} from "@/hooks/useViewportCappedWidth";
+import {
   getPerformanceModeFloor,
   PANEL_MINIMIZE_DURATION,
   PANEL_MINIMIZE_EASING,
@@ -162,6 +167,9 @@ interface AppLayoutProps {
 export const MIN_SIDEBAR_WIDTH = 200;
 export const MAX_SIDEBAR_WIDTH = 600;
 export const DEFAULT_SIDEBAR_WIDTH = 350;
+// What the sidebar leaves for the panel grid when the window is too narrow for
+// its saved width (a Linux tiling window manager can go below 800px).
+const MIN_MAIN_WIDTH = 240;
 
 // #10827: upper bound on how long the grid-measurement hydration lock stays
 // armed if the persisted-width restore IPC neither resolves nor rejects. After
@@ -802,8 +810,15 @@ export function AppLayout({
   }, [layout.portalOpen]);
 
   const handleSidebarResize = useCallback((newWidth: number) => {
-    const clampedWidth = Math.min(Math.max(newWidth, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH);
-    setSidebarWidth(clampedWidth);
+    const attainable = viewportAttainableWidth(MIN_SIDEBAR_WIDTH, MIN_MAIN_WIDTH);
+    setSidebarWidth((current) =>
+      resizeCappedPreference(newWidth, current, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH, attainable)
+    );
+  }, []);
+
+  // A reset is a new preference whatever the window can show right now.
+  const handleSidebarResetWidth = useCallback(() => {
+    setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
   }, []);
 
   // While a sidebar/assistant divider is dragged, `<main flex:1>` reflows every
@@ -892,7 +907,12 @@ export function AppLayout({
     onSettings?.();
   }, [onSettings]);
 
-  const effectiveSidebarWidth = showSidebar ? sidebarWidth : 0;
+  const displayedSidebarWidth = useViewportCappedWidth(
+    sidebarWidth,
+    MIN_SIDEBAR_WIDTH,
+    MIN_MAIN_WIDTH
+  );
+  const effectiveSidebarWidth = showSidebar ? displayedSidebarWidth : 0;
 
   const [bannerEl, setBannerEl] = useState<HTMLDivElement | null>(null);
 
@@ -1025,12 +1045,13 @@ export function AppLayout({
               zIndex: 1,
             }}
           >
-            <div className="absolute top-0 left-0 h-full" style={{ width: sidebarWidth }}>
+            <div className="absolute top-0 left-0 h-full" style={{ width: displayedSidebarWidth }}>
               {hasWorkspace && (
                 <ErrorBoundary variant="section" componentName="Sidebar">
                   <Sidebar
-                    width={sidebarWidth}
+                    width={displayedSidebarWidth}
                     onResize={handleSidebarResize}
+                    onResetWidth={handleSidebarResetWidth}
                     onResizeStart={handleSidebarResizeStart}
                     onResizeEnd={handleSidebarResizeEnd}
                     isVisible={showSidebar}
