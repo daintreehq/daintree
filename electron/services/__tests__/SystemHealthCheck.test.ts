@@ -202,13 +202,21 @@ describe("runSystemHealthCheck", () => {
     gh: "gh version 2.40.0 (2024-01-15)\nhttps://github.com/cli/cli\n",
   };
 
+  // These cases drive the `which` probe, so they run as Linux whatever the
+  // host: on a Windows host the lookup would search that host's PATH instead
+  // (empty on the virtual disk). The Windows and macOS cases below set their
+  // platform themselves.
+  const hostPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
   beforeEach(() => {
     vi.clearAllMocks();
     resetSystemHealthCheckCache();
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    Object.defineProperty(process, "platform", hostPlatform);
   });
 
   it("refreshes PATH before spawning any probe", async () => {

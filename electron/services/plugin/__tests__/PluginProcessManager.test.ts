@@ -28,6 +28,36 @@ vi.mock("node:fs", async (importOriginal) =>
   )
 );
 
+// Most cases run as the host and are about process management, not program
+// lookup. On a Windows host their bare names must not reach that host's PATH
+// (which the virtual disk above hides anyway), so the lookup answers with a
+// fixed absolute path. The program-lookup cases at the end search the virtual
+// disk for real.
+const programLookup = vi.hoisted(() => ({
+  searchVirtualDisk: false,
+  /** Where a bare name resolves on a Windows host in the host-platform cases. */
+  hostResolved: (name: string) => `C:\\bin\\${name}.exe`,
+}));
+vi.mock("../../../utils/windowsExecutable.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../utils/windowsExecutable.js")>();
+  return {
+    ...actual,
+    resolveExecutableForSpawn: (
+      name: string,
+      env?: NodeJS.ProcessEnv,
+      platform?: NodeJS.Platform
+    ): Promise<string> =>
+      programLookup.searchVirtualDisk || platform !== "win32" || /[\\/:]/.test(name)
+        ? actual.resolveExecutableForSpawn(name, env, platform)
+        : Promise.resolve(programLookup.hostResolved(name)),
+  };
+});
+
+/** The program a host-platform case expects started for a bare `name`. */
+function expectedProgram(name: string): string {
+  return process.platform === "win32" ? programLookup.hostResolved(name) : name;
+}
+
 async function flushMicrotasks(): Promise<void> {
   await new Promise((r) => setImmediate(r));
 }
@@ -924,7 +954,7 @@ describe("PluginProcessManager", () => {
       expect(handle.mode).toBe("pty");
       expect(h.ptyConfigs).toHaveLength(1);
       expect(h.ptyConfigs[0]!.config).toMatchObject({
-        command: "flutter",
+        command: expectedProgram("flutter"),
         args: ["daemon", "--machine"],
         cwd: "/repo",
         cols: 120,
@@ -998,6 +1028,8 @@ describe("PluginProcessManager", () => {
         },
       });
       const pending = manager.spawn("acme.tool", ptyConfig());
+      // On Windows the allocation starts only once the program lookup answers.
+      await vi.waitFor(() => expect(h.ptyConfigs).toHaveLength(1));
       // The plugin resizes while the allocation is still in flight. The spawn
       // message is already gone, so this CANNOT become the initial size — it
       // has to land as a real SIGWINCH the moment the PTY comes up, and exactly
@@ -1154,6 +1186,8 @@ describe("PluginProcessManager", () => {
       });
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const pending = manager.spawn("acme.tool", ptyConfig());
+      // On Windows the allocation starts only once the program lookup answers.
+      await vi.waitFor(() => expect(release).toBeDefined());
       manager.killAll("acme.tool");
       release?.(new Error("host gone"));
       const handle = await pending;
@@ -1182,6 +1216,8 @@ describe("PluginProcessManager", () => {
           }),
       });
       const pending = manager.spawn("acme.tool", ptyConfig());
+      // On Windows the allocation starts only once the program lookup answers.
+      await vi.waitFor(() => expect(release).toBeDefined());
       // Unload tears everything down while the PTY is still allocating.
       manager.killAll("acme.tool");
       const fake = makeFakePty();
@@ -1686,6 +1722,7 @@ describe("PluginProcessManager on Windows: program lookup", () => {
 
   beforeEach(() => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    programLookup.searchVirtualDisk = true;
     virtualWindowsFiles.set({
       "C:\\tools\\flutter.exe": "",
       "C:\\tools\\node.exe": "",
@@ -1695,6 +1732,7 @@ describe("PluginProcessManager on Windows: program lookup", () => {
 
   afterEach(() => {
     Object.defineProperty(process, "platform", originalPlatform);
+    programLookup.searchVirtualDisk = false;
     virtualWindowsFiles.clear();
   });
 

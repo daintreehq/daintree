@@ -69,9 +69,15 @@ import { simpleGit } from "simple-git";
 import { resetWindowsExecutableCache } from "../windowsExecutable.js";
 import { isMissingGitExecutableError } from "../../../shared/utils/gitOperationErrors.js";
 
-/** A git.exe on PATH while `run` builds a Windows instance, which now requires one. */
-async function withWindowsGitOnPath<T>(run: () => Promise<T>): Promise<T> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-win-git-"));
+/**
+ * A git.exe on PATH while `run` builds a Windows instance, which now requires
+ * one; under `subdir` of a temp directory when given, such as a spaced
+ * `Program Files/Git/cmd`.
+ */
+async function withWindowsGitOnPath<T>(run: () => Promise<T>, subdir = ""): Promise<T> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-win-git-"));
+  const dir = path.join(root, subdir);
+  fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "git.exe"), "");
   const originalPath = process.env.PATH;
   process.env.PATH = dir;
@@ -81,9 +87,25 @@ async function withWindowsGitOnPath<T>(run: () => Promise<T>): Promise<T> {
   } finally {
     process.env.PATH = originalPath;
     resetWindowsExecutableCache();
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+/** The unsafe overrides every profile needs for the config keys it pins. */
+const PINNED_CONFIG_UNSAFE_FLAGS = {
+  allowUnsafeAskPass: true,
+  allowUnsafeCredentialHelper: true,
+  allowUnsafeProtocolOverride: true,
+  allowUnsafeFsMonitor: true,
+  allowUnsafePager: true,
+  allowUnsafeSshCommand: true,
+  allowUnsafeGitProxy: true,
+  allowUnsafeHooksPath: true,
+  allowUnsafeEditor: true,
+};
+
+/** A spaced default-install location, which simple-git's binary rule refuses. */
+const SPACED_GIT_DIR = path.join("Program Files", "Git", "cmd");
 
 // The authenticated profile honours the user's own core.sshCommand; keep the
 // developer's git config out of these tests (hardenedGit.userSsh.test.ts covers it).
@@ -236,20 +258,26 @@ describe("createHardenedGit", () => {
     expect(options.config).toContain("credential.helper=");
   });
 
+  // Platform-explicit: on a Windows host the default would look up that host's
+  // own git, whose install path decides the flag set (the Windows case below).
   it("enables allowUnsafe flags for overriding blocked config keys", async () => {
-    await createHardenedGit("/test/repo");
+    await createHardenedGit("/test/repo", undefined, "linux");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(options.unsafe).toEqual(PINNED_CONFIG_UNSAFE_FLAGS);
+  });
+
+  it("on Windows, adds only the custom-binary flag when git's resolved path has a space", async () => {
+    await withWindowsGitOnPath(
+      () => createHardenedGit("/test/repo", undefined, "win32"),
+      SPACED_GIT_DIR
+    );
+
+    const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(options.binary).toContain(SPACED_GIT_DIR);
     expect(options.unsafe).toEqual({
-      allowUnsafeAskPass: true,
-      allowUnsafeCredentialHelper: true,
-      allowUnsafeProtocolOverride: true,
-      allowUnsafeFsMonitor: true,
-      allowUnsafePager: true,
-      allowUnsafeSshCommand: true,
-      allowUnsafeGitProxy: true,
-      allowUnsafeHooksPath: true,
-      allowUnsafeEditor: true,
+      ...PINNED_CONFIG_UNSAFE_FLAGS,
+      allowUnsafeCustomBinary: true,
     });
   });
 
@@ -626,19 +654,23 @@ describe("createAuthenticatedGit", () => {
   });
 
   it("enables allowUnsafe flags", async () => {
-    await createAuthenticatedGit("/test/repo");
+    await createAuthenticatedGit("/test/repo", { platform: "linux" });
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(options.unsafe).toEqual(PINNED_CONFIG_UNSAFE_FLAGS);
+  });
+
+  it("on Windows, adds only the custom-binary flag when git's resolved path has a space", async () => {
+    await withWindowsGitOnPath(
+      () => createAuthenticatedGit("/test/repo", { platform: "win32" }),
+      SPACED_GIT_DIR
+    );
+
+    const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(options.binary).toContain(SPACED_GIT_DIR);
     expect(options.unsafe).toEqual({
-      allowUnsafeAskPass: true,
-      allowUnsafeCredentialHelper: true,
-      allowUnsafeProtocolOverride: true,
-      allowUnsafeFsMonitor: true,
-      allowUnsafePager: true,
-      allowUnsafeSshCommand: true,
-      allowUnsafeGitProxy: true,
-      allowUnsafeHooksPath: true,
-      allowUnsafeEditor: true,
+      ...PINNED_CONFIG_UNSAFE_FLAGS,
+      allowUnsafeCustomBinary: true,
     });
   });
 

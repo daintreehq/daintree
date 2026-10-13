@@ -807,8 +807,11 @@ describe("executableForSpawn / resolveExecutableForSpawn", () => {
     const env = { PATH: tools };
     syncFs.calls.length = 0;
 
-    // Off Windows there is nothing to prewarm.
+    // Off Windows there is nothing to prewarm. Only this call runs as Linux:
+    // the lookups below search a real temp directory, read by the host's rules.
+    setPlatform("linux");
     await prewarmWindowsExecutables(["git"], env);
+    Object.defineProperty(process, "platform", originalPlatform);
     expect(peekWindowsExecutable("git", env)).toBeUndefined();
     // Cold: a miss for now (never a bare name), with the lookup started.
     expect(() => executableForSpawn("git", env, "win32")).toThrow(
