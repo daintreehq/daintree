@@ -4,11 +4,14 @@ import {
   validateRegexTerm,
   buildSearchOptions,
   getSearchDecorationColors,
+  describeRegexError,
 } from "../terminalSearchUtils";
 
 afterEach(() => {
   document.documentElement.style.removeProperty("--theme-search-highlight-background");
   document.documentElement.style.removeProperty("--theme-search-highlight-text");
+  document.documentElement.style.removeProperty("--theme-terminal-background");
+  document.documentElement.style.removeProperty("--theme-terminal-foreground");
 });
 
 describe("validateRegexTerm", () => {
@@ -139,7 +142,45 @@ describe("getSearchDecorationColors", () => {
     expect(colors.activeMatchColorOverviewRuler).toMatch(/^#[0-9a-fA-F]{6}$/);
   });
 
-  it("converts rgba search-highlight-background to solid hex for matchBackground", () => {
+  it("flattens a translucent match wash over the terminal background", () => {
+    document.documentElement.style.setProperty(
+      "--theme-search-highlight-background",
+      "rgba(54, 206, 148, 0.20)"
+    );
+    document.documentElement.style.setProperty("--theme-terminal-background", "#000000");
+    document.documentElement.style.setProperty("--theme-search-highlight-text", "#36CE94");
+    const colors = getSearchDecorationColors();
+    // 20% of each channel over black — distinct from the active match's full colour.
+    expect(colors.matchBackground).toBe("#0b291e");
+    expect(colors.matchBackground).not.toBe(colors.activeMatchBackground?.toLowerCase());
+    expect(colors.matchOverviewRuler).toBe("#36ce94");
+  });
+
+  it("keeps the current match's outline at its own hue when it already reads", () => {
+    document.documentElement.style.setProperty("--theme-terminal-background", "#000000");
+    document.documentElement.style.setProperty("--theme-terminal-foreground", "#ffffff");
+    document.documentElement.style.setProperty("--theme-search-highlight-text", "#36CE94");
+    expect(getSearchDecorationColors().activeMatchBorder).toBe("#36ce94");
+  });
+
+  it("steps a low-contrast outline toward the terminal ink until it clears 3:1", () => {
+    document.documentElement.style.setProperty("--theme-terminal-background", "#16242B");
+    document.documentElement.style.setProperty("--theme-terminal-foreground", "#ffffff");
+    document.documentElement.style.setProperty("--theme-search-highlight-text", "#2F5D86");
+    const border = getSearchDecorationColors().activeMatchBorder ?? "";
+    expect(border).toMatch(/^#[0-9a-f]{6}$/);
+    expect(border).not.toBe("#2f5d86");
+    const lum = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((i) => {
+        const v = parseInt(hex.slice(i, i + 2), 16) / 255;
+        return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+      }) as [number, number, number];
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    expect((lum(border) + 0.05) / (lum("#16242b") + 0.05)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps the wash's own colour when the terminal background is unreadable", () => {
     document.documentElement.style.setProperty(
       "--theme-search-highlight-background",
       "rgba(54, 206, 148, 0.20)"
@@ -147,7 +188,6 @@ describe("getSearchDecorationColors", () => {
     document.documentElement.style.setProperty("--theme-search-highlight-text", "#5F8B6D");
     const colors = getSearchDecorationColors();
     expect(colors.matchBackground).toBe("#36ce94");
-    expect(colors.matchOverviewRuler).toBe("#36ce94");
   });
 
   it("reads search-highlight-text directly as active match color", () => {
@@ -206,5 +246,17 @@ describe("getSearchDecorationColors", () => {
     document.documentElement.style.setProperty("--theme-search-highlight-text", "#000000");
     const colors = getSearchDecorationColors();
     expect(colors.matchBackground).toBe("#ff0080");
+  });
+});
+
+describe("describeRegexError", () => {
+  it("keeps only the reason from the engine's message", () => {
+    expect(describeRegexError("Invalid regular expression: /error(TS/gi: Unterminated group")).toBe(
+      "Unterminated group"
+    );
+  });
+
+  it("leaves a message in any other shape alone", () => {
+    expect(describeRegexError("Invalid regex pattern")).toBe("Invalid regex pattern");
   });
 });
