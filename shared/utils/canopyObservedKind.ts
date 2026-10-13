@@ -19,7 +19,9 @@ export function observedCanopyKind(state: {
     case "waiting":
       if (state.waitingReason === "approval") return "approval";
       if (state.waitingReason === "error") return "error";
-      if (state.waitingReason === "question") return "question";
+      // Only a prompt with no more specific reason is a stop; a reason this
+      // does not know yet is still the agent asking, as Pilot reads it.
+      if (state.waitingReason != null && state.waitingReason !== "prompt") return "question";
       return state.handBack !== undefined ? "finished" : "idle";
     case "working":
     case "directing":

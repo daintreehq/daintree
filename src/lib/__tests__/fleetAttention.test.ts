@@ -75,8 +75,14 @@ describe("parked runs", () => {
   });
 
   it("never counts a parked run as a demand", () => {
-    const band = bandForRun(run({ agentState: "waiting", park: { parkedAt: NOW } }));
-    expect(isDemandBand(band)).toBe(false);
+    const asking = run({ agentState: "waiting", waitingReason: "question" });
+    const handedBack = run({ agentState: "waiting", handBack: { stoppedAt: NOW - 60_000 } });
+    for (const row of [asking, handedBack]) {
+      expect(isDemandBand(bandForRun(row))).toBe(true);
+      const band = bandForRun({ ...row, park: { parkedAt: NOW } });
+      expect(band).toBe("parked");
+      expect(isDemandBand(band)).toBe(false);
+    }
   });
 
   it("ranks parked below every live band but above idle", () => {
@@ -257,8 +263,15 @@ describe("bandForRun — snooze", () => {
   it("keeps a snoozed run out of every demand band", () => {
     // The whole point: a snoozed run must stop counting as a demand no matter
     // how urgent its underlying state looks.
-    for (const state of ["waiting", "completed", "working"] as const) {
-      const band = bandForRun(run({ agentState: state, snooze }));
+    const unseen = { stoppedAt: NOW - 60_000 };
+    for (const row of [
+      run({ agentState: "waiting", waitingReason: "question" }),
+      run({ agentState: "waiting", handBack: unseen }),
+      run({ agentState: "completed", handBack: unseen }),
+    ]) {
+      expect(isDemandBand(bandForRun(row))).toBe(true);
+      const band = bandForRun({ ...row, snooze });
+      expect(band).toBe("snoozed");
       expect(isDemandBand(band)).toBe(false);
     }
   });

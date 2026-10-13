@@ -240,6 +240,24 @@ describe("PilotView", () => {
     expect(screen.getByRole("option", { name: /Idle/ }).textContent).toContain("two");
   });
 
+  it("files an agent at its prompt with no watched work as idle, not as waiting on the user", () => {
+    seed([
+      run({ runId: "a", agentState: "waiting", title: "at prompt", since: NOW - 60_000 }),
+      run({
+        runId: "b",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        title: "also at prompt",
+        since: NOW - 60_000,
+      }),
+    ]);
+    render(<PilotView />);
+
+    expect(screen.queryByRole("option", { name: /Waiting/ })).toBeNull();
+    expect(screen.getAllByRole("option", { name: /Idle/ })).toHaveLength(2);
+    expect(screen.queryByTestId("pilot-demand-action")).toBeNull();
+  });
+
   it("names a row as a sentence rather than a run of jammed-together facts", () => {
     // Left to the name-from-content computation the row's inline spans
     // concatenate with no separators — "Fix auth2m". Naming the parts is what

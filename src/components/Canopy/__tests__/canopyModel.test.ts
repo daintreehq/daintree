@@ -152,7 +152,11 @@ describe("observedKind", () => {
 describe("buildCanopyInbox", () => {
   it("is one list, most blocked first, before anything is read — a long-unseen working agent included", () => {
     const result = inbox([
-      run("finished", { agentState: "completed", since: NOW - 900_000 }),
+      run("finished", {
+        agentState: "completed",
+        since: NOW - 900_000,
+        handBack: { stoppedAt: NOW - 900_000 },
+      }),
       run("approval-new", {
         agentState: "waiting",
         waitingReason: "approval",
