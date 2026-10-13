@@ -3,17 +3,19 @@ import { InlineError } from "@/components/ui/field";
 import type { KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { cn } from "@/lib/utils";
-import { Input } from "@/components/ui/input";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import {
+  PARK_GATE_NONE,
+  RunParkFields,
+  resolveParkGateId,
+  type ParkGateCandidate,
+} from "@/components/Fleet/RunParkFields";
 import { PilotFooterHint } from "./PilotFooterHint";
-import { PilotRunState } from "./PilotRunState";
 import type { PilotProjectGroup, PilotRow } from "./pilotRows";
-import { MAX_PARK_NOTE_LENGTH, type RunParkRecord } from "@shared/types/ipc/fleet";
+import type { RunParkRecord } from "@shared/types/ipc/fleet";
 
 /**
  * A run another run's park can gate on, carried with enough of its identity
@@ -31,8 +33,6 @@ export interface PilotParkTarget {
   existingPark: RunParkRecord | undefined;
 }
 
-const GATE_NONE = "__none__";
-
 /** Where "this is taking a while" stops being noise and starts being news. */
 const PARK_STILL_WORKING_MS = 5_000;
 
@@ -41,22 +41,17 @@ const GATE_GROUP_NAME = "pilot-park-gate";
 
 type PendingVerb = "park" | "unpark";
 
-/**
- * What will lift the park, for the choice as it stands — never gated parks in
- * general, so the default cannot read as if something releases it by itself.
- *
- * An exited run is a legal gate (a restart keeps its terminal id, and the
- * release waits for the next busy-to-ready edge), but its release is
- * conditional on it running again, so the copy says "if" rather than "when".
- * One clause either way: a two-sentence helper under a list reads as a
- * warning, which this is not.
- */
-function gateHelpText(gate: PilotGateCandidate | null, hasNote: boolean): string {
-  if (gate === null) return "Stays parked until you unpark it";
-  const withNote = hasNote ? " with your note" : "";
-  return gate.row.run.agentState === "exited"
-    ? `Returns to Waiting${withNote} if ${gate.row.title} runs again and finishes`
-    : `Returns to Waiting${withNote} when ${gate.row.title} next finishes working`;
+function toParkGateCandidate({ row, group }: PilotGateCandidate): ParkGateCandidate {
+  return {
+    runId: row.run.runId,
+    title: row.title,
+    chrome: row.chrome,
+    presetColor: row.presetColor,
+    band: row.band,
+    agentState: row.run.agentState,
+    statusLabel: row.statusLabel,
+    contextLabel: group.name,
+  };
 }
 
 /**
@@ -72,14 +67,10 @@ function gateHelpText(gate: PilotGateCandidate | null, hasNote: boolean): string
  * can. Enter commits from anywhere except the buttons that mean something
  * else.
  *
- * The gate list is native radios, the house pattern for a keyboard-driven
- * single choice (`RadioChoice`): arrows move focus and selection together and
- * wrap, the group is one tab stop, and the checked dot is painted by the user
- * agent — which is the one selection mark that survives `forced-colors`. The
- * row fill it used to rely on alone measured about 1.04:1 against the list.
- *
- * Its verbs live in the dialog footer in the footer's own key-hint grammar
- * (`PilotFooterHint`), the same "↵ Open" / "⌥↵ Park" the list shows there.
+ * The fields themselves are `RunParkFields`, shared with the sidebar's park
+ * dialog. Its verbs live in the dialog footer in the footer's own key-hint
+ * grammar (`PilotFooterHint`), the same "↵ Open" / "⌥↵ Park" the list shows
+ * there.
  */
 export function PilotParkEditor({
   target,
@@ -101,18 +92,13 @@ export function PilotParkEditor({
   footerSlot: HTMLElement | null;
 }) {
   const [note, setNote] = useState(target.existingPark?.note ?? "");
-  const [gateId, setGateId] = useState<string>(target.existingPark?.gateRunId ?? GATE_NONE);
+  const [gateId, setGateId] = useState<string>(target.existingPark?.gateRunId ?? PARK_GATE_NONE);
   const [pending, setPending] = useState<PendingVerb | null>(null);
   /** The failure, with the verb it belongs to so the alert describes that button. */
   const [error, setError] = useState<{ verb: PendingVerb; message: string } | null>(null);
-  /** Set when the chosen gate's run closed under the editor and the park fell back to manual. */
-  const [gateLost, setGateLost] = useState(false);
   const busy = pending !== null;
 
   const ids = useId();
-  const noteId = `${ids}-note`;
-  const gateLabelId = `${ids}-gate-label`;
-  const gateHelpId = `${ids}-gate-help`;
   const errorId = `${ids}-error`;
   const targetId = `${ids}-target`;
 
@@ -132,9 +118,7 @@ export function PilotParkEditor({
   const showBusy = useDeferredLoading(busy, UI_DOHERTY_THRESHOLD);
   const showStillWorking = useDeferredLoading(busy, PARK_STILL_WORKING_MS);
 
-  const rootRef = useRef<HTMLDivElement>(null);
   const noteRef = useRef<HTMLInputElement>(null);
-  const gateRefs = useRef(new Map<string, HTMLInputElement | null>());
   /**
    * Disabling the form blurs whatever held focus, so a rejected submit would
    * otherwise leave the keyboard on `document.body` — outside the dialog's
@@ -146,45 +130,8 @@ export function PilotParkEditor({
     noteRef.current?.focus();
   }, []);
 
-  // A gate that stopped existing (its run closed while the editor was open)
-  // degrades to "no gate" rather than submitting an id the handler will
-  // reject — and says so, because that silently changes what will unpark it.
-  const gateOptions = useMemo<Array<{ id: string; candidate: PilotGateCandidate | null }>>(
-    () => [
-      { id: GATE_NONE, candidate: null },
-      ...candidates.map((candidate) => ({ id: candidate.row.run.runId, candidate })),
-    ],
-    [candidates]
-  );
-  useEffect(() => {
-    if (gateId !== GATE_NONE && !candidates.some((c) => c.row.run.runId === gateId)) {
-      setGateId(GATE_NONE);
-      setGateLost(true);
-      // The removed radio took focus with it if it held it.
-      const focus = document.activeElement;
-      if (!rootRef.current?.contains(focus) && !footerSlot?.contains(focus)) {
-        gateRefs.current.get(GATE_NONE)?.focus();
-      }
-    }
-  }, [gateId, candidates, footerSlot]);
-  /**
-   * What the radiogroup RENDERS from, never the raw state: the sync effect
-   * above lands one commit late, and a frame whose checked id points at a
-   * removed option is a radiogroup with no checked radio and no tab stop.
-   */
-  const effectiveGateId = gateOptions.some((option) => option.id === gateId) ? gateId : GATE_NONE;
-  const chosenGate = gateOptions.find((option) => option.id === effectiveGateId)?.candidate ?? null;
-
-  // An existing park's gate can sit below the list's fold; the choice being
-  // edited has to be on screen when the editor opens. Mount only — later
-  // selection changes move focus, which scrolls natively.
-  const openingGateRef = useRef(effectiveGateId);
-  useEffect(() => {
-    gateRefs.current
-      .get(openingGateRef.current)
-      ?.closest("label")
-      ?.scrollIntoView?.({ block: "nearest" });
-  }, []);
+  const gateCandidates = useMemo(() => candidates.map(toParkGateCandidate), [candidates]);
+  const effectiveGateId = resolveParkGateId(gateId, gateCandidates);
 
   useEffect(() => {
     if (pending !== null) return;
@@ -217,7 +164,7 @@ export function PilotParkEditor({
       () =>
         window.electron.fleet.parkRun(target.row.run.runId, {
           ...(trimmed.length > 0 ? { note: trimmed } : {}),
-          ...(effectiveGateId !== GATE_NONE ? { gateRunId: effectiveGateId } : {}),
+          ...(effectiveGateId !== null ? { gateRunId: effectiveGateId } : {}),
         }),
       "Couldn't park the run"
     );
@@ -253,50 +200,11 @@ export function PilotParkEditor({
     [confirm]
   );
 
-  const selectGate = useCallback((id: string) => {
-    setGateId(id);
-    setGateLost(false);
-  }, []);
-
-  /**
-   * Native radios already own the arrows. Home and End are added on top, and
-   * every navigation key stops here so the palette body's own list handling
-   * never sees a key the group consumed.
-   */
-  const handleGateKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      let to: string | undefined;
-      switch (event.key) {
-        case "ArrowDown":
-        case "ArrowUp":
-        case "ArrowLeft":
-        case "ArrowRight":
-          event.stopPropagation();
-          return;
-        case "Home":
-          to = gateOptions[0]?.id;
-          break;
-        case "End":
-          to = gateOptions[gateOptions.length - 1]?.id;
-          break;
-        default:
-          return;
-      }
-      if (to === undefined) return;
-      event.preventDefault();
-      event.stopPropagation();
-      selectGate(to);
-      gateRefs.current.get(to)?.focus();
-    },
-    [gateOptions, selectGate]
-  );
-
   const isReparking = target.existingPark !== undefined;
   const primaryLabel = isReparking ? "Update park" : "Park";
 
   return (
     <div
-      ref={rootRef}
       data-testid="pilot-park-editor"
       // The body scroller pads by 8px; 4 more puts the form on the same 12px
       // column as the dialog's header label and the footer's Park button.
@@ -324,127 +232,19 @@ export function PilotParkEditor({
         </div>
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={noteId} className={PALETTE_SECTION_LABEL_CLASS}>
-          Note (optional)
-        </label>
-        <Input
-          id={noteId}
-          ref={noteRef}
-          type="text"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          maxLength={MAX_PARK_NOTE_LENGTH}
-          disabled={busy}
-          placeholder="Why is this parked?"
-          data-testid="pilot-park-note"
-          // Focus lands here first, so this is where a screen reader learns
-          // which run the form is about.
-          aria-describedby={targetId}
-        />
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <span id={gateLabelId} className={PALETTE_SECTION_LABEL_CLASS}>
-          Park until
-        </span>
-        <ScrollShadow
-          compact
-          className="max-h-56 rounded-[var(--radius-md)] border border-border-default"
-        >
-          <div
-            role="radiogroup"
-            aria-labelledby={gateLabelId}
-            aria-describedby={gateHelpId}
-            data-testid="pilot-park-gates"
-            onKeyDown={handleGateKeyDown}
-            // Right inset clears the overlay scrollbar, which otherwise sits on
-            // the focused row's ring.
-            className="flex flex-col gap-px p-1 pr-2"
-          >
-            {gateOptions.map(({ id, candidate }) => {
-              const checked = id === effectiveGateId;
-              return (
-                <label
-                  key={id}
-                  className={cn(
-                    "flex min-h-8 items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-sm transition-colors",
-                    busy ? "cursor-not-allowed" : "cursor-pointer",
-                    "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary",
-                    checked
-                      ? "bg-overlay-raised text-text-primary"
-                      : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name={GATE_GROUP_NAME}
-                    value={id}
-                    checked={checked}
-                    onChange={() => selectGate(id)}
-                    disabled={busy}
-                    ref={(el) => {
-                      gateRefs.current.set(id, el);
-                    }}
-                    data-testid={candidate === null ? "pilot-park-gate-none" : undefined}
-                    // The glyph and brand icon are decoration, so the radio
-                    // spells its whole identity out: two same-titled runs on
-                    // different agents or in different states must not be one
-                    // string to a screen reader.
-                    {...(candidate !== null
-                      ? {
-                          "aria-label": `${candidate.row.title}, ${candidate.row.chrome.label}, ${candidate.row.statusLabel}, ${candidate.group.name}`,
-                        }
-                      : {})}
-                    // The row carries the visible ring; the control's own is
-                    // neutralised with a transparent outline (see RadioChoice),
-                    // which forced-colors repaints to a system ring.
-                    className="shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-transparent"
-                  />
-                  {candidate === null ? (
-                    <span className="min-w-0 flex-1 truncate">{"I'll unpark it myself"}</span>
-                  ) : (
-                    <>
-                      <span
-                        aria-hidden="true"
-                        className="flex size-3.5 shrink-0 items-center justify-center"
-                      >
-                        <PilotRunState
-                          band={candidate.row.band}
-                          agentState={candidate.row.run.agentState}
-                        />
-                      </span>
-                      <TerminalIcon
-                        chrome={candidate.row.chrome}
-                        className="h-4 w-4 shrink-0"
-                        brandColor={candidate.row.presetColor ?? candidate.row.chrome.color}
-                      />
-                      <span className="min-w-0 flex-1 truncate">{candidate.row.title}</span>
-                      <span className="shrink-0 text-xs text-text-secondary">
-                        {candidate.group.name}
-                      </span>
-                    </>
-                  )}
-                </label>
-              );
-            })}
-          </div>
-        </ScrollShadow>
-        {/* Describes the CURRENT choice, so the default never reads as if
-            something will lift the park automatically. */}
-        <p id={gateHelpId} className="text-xs leading-snug text-text-secondary">
-          {gateHelpText(chosenGate, note.trim().length > 0)}
-        </p>
-        {gateLost && (
-          <p
-            role="status"
-            data-testid="pilot-park-gate-lost"
-            className="text-xs text-text-secondary"
-          >
-            The gate run closed, so this run now stays parked until you unpark it
-          </p>
-        )}
-      </div>
+      <RunParkFields
+        note={note}
+        onNoteChange={setNote}
+        noteRef={noteRef}
+        noteDescribedBy={targetId}
+        gateId={gateId}
+        onGateChange={setGateId}
+        candidates={gateCandidates}
+        disabled={busy}
+        labelClassName={PALETTE_SECTION_LABEL_CLASS}
+        testIdPrefix="pilot-park"
+        gateGroupName={GATE_GROUP_NAME}
+      />
 
       {error !== null && (
         <InlineError id={errorId} role="alert">

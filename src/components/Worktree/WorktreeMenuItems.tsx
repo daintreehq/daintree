@@ -18,6 +18,7 @@ import {
   ArrowDown,
   ArrowUp,
   ArrowUpFromLine,
+  Bell,
   CheckSquare,
   CircleStop,
   Clock,
@@ -56,6 +57,7 @@ import {
 import {
   ArrowUpDown,
   CircleDot,
+  CirclePause,
   FolderOpen,
   Folders,
   FolderTree,
@@ -155,6 +157,13 @@ export interface WorktreeMenuItemsProps {
     waiting: number;
     working: number;
   };
+  /**
+   * The worktree's agents by park state, as the fleet snapshot sees them.
+   * Absent where there is no snapshot to read (a workspace root).
+   */
+  parking?: { parked: number; unparked: number };
+  onParkAgents?: () => void;
+  onUnparkAgents?: () => void;
   onLaunchAgent?: (agentId: string) => void;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
@@ -271,6 +280,9 @@ export function WorktreeMenuItems({
   runningRecipeId,
   isPinned,
   counts,
+  parking,
+  onParkAgents,
+  onUnparkAgents,
   onLaunchAgent,
   onMoveUp,
   onMoveDown,
@@ -748,6 +760,33 @@ export function WorktreeMenuItems({
               <Zap className={ICON} />
               Select working agents
               <C.Meta>{counts.working}</C.Meta>
+            </C.Item>
+          </>
+        )}
+
+        {/* Park is local and reversible with Unpark right beside it, so
+            neither asks first. Each row counts only the agents it would
+            change, so the pair reads as the worktree's split. */}
+        {parking !== undefined && parking.parked + parking.unparked > 0 && (
+          <>
+            <C.Label>Parking</C.Label>
+            <C.Item
+              onSelect={onParkAgents}
+              disabled={parking.unparked === 0 || !onParkAgents}
+              {...counted("Park agents", parking.unparked)}
+            >
+              <CirclePause className={ICON} />
+              Park agents
+              <C.Meta>{parking.unparked}</C.Meta>
+            </C.Item>
+            <C.Item
+              onSelect={onUnparkAgents}
+              disabled={parking.parked === 0 || !onUnparkAgents}
+              {...counted("Unpark agents", parking.parked)}
+            >
+              <Bell className={ICON} />
+              Unpark agents
+              <C.Meta>{parking.parked}</C.Meta>
             </C.Item>
           </>
         )}

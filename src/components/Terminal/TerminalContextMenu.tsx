@@ -80,6 +80,7 @@ import {
   TerminalHandOverMenuItems,
   useOrchestratorCandidates,
 } from "./TerminalHandOver";
+import { ParkRunDialog } from "@/components/Fleet/ParkRunDialog";
 import {
   ArrowDownFromLine,
   Bell,
@@ -117,7 +118,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { FolderGit2, FolderOpen, FolderTree } from "@/components/icons";
+import { CirclePause, FolderGit2, FolderOpen, FolderTree } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -393,6 +394,14 @@ function TerminalContextMenuBody({
   if (handOverRequest !== null && handOverRequest.terminalId !== terminalId) {
     setHandOverRequest(null);
   }
+  // "Park…" opens its dialog the same way, and is dropped the same way when
+  // the dock hands this menu another terminal.
+  const [parkRequestId, setParkRequestId] = useState<string | null>(null);
+  if (parkRequestId !== null && parkRequestId !== terminalId) {
+    setParkRequestId(null);
+  }
+  const pendingParkRef = useRef<string | null>(null);
+  const closeParkRequest = useCallback(() => setParkRequestId(null), []);
   // Picking a pane records the request and the root content's close hook
   // opens the dialog — the same handoff as the move picker, so the menu's own
   // focus return can't land after the dialog has taken focus.
@@ -438,6 +447,7 @@ function TerminalContextMenuBody({
         if (cachedHomeDir !== homeDir) setHomeDir(cachedHomeDir);
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
+        pendingParkRef.current = null;
         pendingMenuDispatchRef.current = null;
         // Only a PTY can be handed over; the other kinds' menus never ask.
         if (terminal !== undefined && panelKindHasPty(terminal.kind ?? "terminal")) {
@@ -579,6 +589,24 @@ function TerminalContextMenuBody({
       }
     );
   }, [handBackState, terminalId]);
+
+  // Presence on the snapshot IS "parked", exactly as for snoozes.
+  const isParked = useFleetSnapshotStore(
+    (s) =>
+      isMenuLive &&
+      (s.snapshot?.runs.some((run) => run.runId === terminalId && run.park !== undefined) ??
+        false)
+  );
+
+  const handleRequestPark = useCallback(() => {
+    pendingParkRef.current = terminalId;
+  }, [terminalId]);
+
+  const handleUnpark = useCallback(() => {
+    safeFireAndForget(window.electron.fleet.unparkRun(terminalId), {
+      context: "TerminalContextMenu unparkRun",
+    });
+  }, [terminalId]);
 
   const handleUnsnooze = useCallback(() => {
     safeFireAndForget(window.electron.fleet.unsnoozeRun(terminalId), {
@@ -1083,6 +1111,14 @@ function TerminalContextMenuBody({
             source: pendingDispatch.source,
           });
         }, AFTER_MENU_FOCUS_RESTORE_MS);
+        return;
+      }
+      const pendingPark = pendingParkRef.current;
+      pendingParkRef.current = null;
+      if (pendingPark !== null && pendingPark === terminalId) {
+        // Restoration is left to run, so the dialog records the pane as where
+        // to return focus — the hand-over's handoff, for the same reason.
+        setParkRequestId(pendingPark);
         return;
       }
       const pendingHandOver = pendingHandOverRef.current;
@@ -1600,6 +1636,14 @@ function TerminalContextMenuBody({
           restoreFocusTo={movePickerReturnFocusRef}
         />
       )}
+      {parkRequestId !== null && (
+        <ParkRunDialog
+          key={parkRequestId}
+          runId={parkRequestId}
+          onClose={closeParkRequest}
+          restoreFocusTo={movePickerReturnFocusRef}
+        />
+      )}
       <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
           {(value) => {
@@ -1766,6 +1810,22 @@ function TerminalContextMenuBody({
                     )}
                   </ContextMenuSubContent>
                 </ContextMenuSub>
+              )}
+              {/* One label whatever the state: the dialog's own title says
+                  whether it is a new park or an edit. Unpark sits beside it
+                  only once there is a park to lift — the discoverable inverse
+                  that lets parking skip a confirm. */}
+              {isKnownRun && (
+                <ContextMenuItem onSelect={handleRequestPark}>
+                  <CirclePause className={ICON_CLASS} aria-hidden="true" />
+                  Park…
+                </ContextMenuItem>
+              )}
+              {isParked && (
+                <ContextMenuItem onSelect={handleUnpark}>
+                  <Bell className={ICON_CLASS} aria-hidden="true" />
+                  Unpark
+                </ContextMenuItem>
               )}
               {handBackState !== "none" && (
                 <ContextMenuItem onSelect={handleToggleHandBackRead}>

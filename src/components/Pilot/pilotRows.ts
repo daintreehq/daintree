@@ -179,7 +179,7 @@ export interface PilotWorktreeGroup extends PilotGroupCore {
 
 export type PilotDisplayGroup = PilotProjectGroup | PilotWorktreeGroup;
 
-function directoryLabel(cwd: string): string | null {
+export function directoryLabel(cwd: string): string | null {
   const cleaned = cwd.replace(/[/\\]+$/, "");
   if (!cleaned) return null;
   const segments = cleaned.split(/[/\\]/);

@@ -78,6 +78,8 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { deriveWorktreeAgentBuckets, isWorktreeMergedForCleanup } from "@/lib/worktreeAgentBuckets";
 import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { bulkParkAgents, selectParkTargets, type BulkParkVerb } from "@/lib/parkWorktreeAgents";
 import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
@@ -325,6 +327,24 @@ export function WorktreeCard({
     [worktreeTerminals]
   );
   const receiptKey = useInputReceiptKey(pingedId, pingSeq, worktreeTerminalIds);
+  // Parking reads the fleet snapshot, not the panels: only a run the snapshot
+  // carries can be parked, and a plain shell never appears there.
+  const parking = useFleetSnapshotStore(
+    useShallow((state) => ({
+      parked: selectParkTargets(state.snapshot, worktreeTerminalIds, "unpark").length,
+      unparked: selectParkTargets(state.snapshot, worktreeTerminalIds, "park").length,
+    }))
+  );
+  const handleBulkPark = (verb: BulkParkVerb) => {
+    const targets = selectParkTargets(
+      useFleetSnapshotStore.getState().snapshot,
+      worktreeTerminalIds,
+      verb
+    );
+    safeFireAndForget(bulkParkAgents(verb, targets, { worktreeId: worktree.id }), {
+      context: `WorktreeCard bulk ${verb}`,
+    });
+  };
 
   const setFocused = usePanelStore((state) => state.setFocused);
   const pingTerminal = usePanelStore((state) => state.pingTerminal);
@@ -955,6 +975,9 @@ export function WorktreeCard({
     onSelectAllAgents: handleSelectAllAgents,
     onSelectWaitingAgents: handleSelectWaitingAgents,
     onSelectWorkingAgents: handleSelectWorkingAgents,
+    parking,
+    onParkAgents: () => handleBulkPark("park"),
+    onUnparkAgents: () => handleBulkPark("unpark"),
     onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
     hasResourceConfig,
     worktreeMode: worktree.worktreeMode,
