@@ -779,12 +779,19 @@ interface AppDialogBodyProps {
    * Omit it and nothing changes.
    */
   resetScrollKey?: string | number;
+  /**
+   * The 16px scroll fade rather than the 32px one, for a body that is a list
+   * of short rows: the full fade covers most of a row, so a live row at the
+   * edge reads as disabled.
+   */
+  compactShadow?: boolean;
 }
 
 AppDialog.Body = function AppDialogBody({
   children,
   className,
   resetScrollKey,
+  compactShadow,
 }: AppDialogBodyProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -813,6 +820,7 @@ AppDialog.Body = function AppDialogBody({
       ref={scrollRef}
       className="flex-1 min-h-0"
       scrollClassName={cn("py-6 dialog-body-inset", className)}
+      compact={compactShadow}
     >
       <InsetSurface>{children}</InsetSurface>
     </ScrollShadow>

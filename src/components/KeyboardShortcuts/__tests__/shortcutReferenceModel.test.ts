@@ -112,6 +112,26 @@ describe("buildShortcutEntries", () => {
   });
 });
 
+describe("buildShortcutEntries with overrides", () => {
+  it("lists every key of an override that holds several", () => {
+    const [entry] = buildShortcutEntries(
+      [
+        {
+          actionId: "terminal.watch",
+          scope: "global",
+          description: "Toggle watch",
+          category: "Terminal",
+          effectiveCombo: "Ctrl+Alt+W",
+          effectiveCombos: ["Ctrl+Alt+W", "Ctrl+Alt+Shift+W"],
+        },
+      ],
+      () => true
+    );
+    expect(entry!.alternatives.map((alt) => alt.combo)).toEqual(["Ctrl+Alt+W", "Ctrl+Alt+Shift+W"]);
+    expect(searchShortcuts([entry!], "ctrl+alt+shift+w", true)).toEqual([entry]);
+  });
+});
+
 describe("collapseNumberedSeries", () => {
   const series = (digits: number[], custom?: number) =>
     buildShortcutEntries(
