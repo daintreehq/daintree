@@ -18,6 +18,11 @@ const scratchStoreMock = vi.hoisted(() => ({
   getCurrentScratchId: vi.fn<() => string | null>(() => null),
 }));
 
+// The Shell's remote hosts client: absent until a host is first used.
+const remoteHosts = vi.hoisted(() => ({
+  client: null as { list: () => Array<{ descriptor: { id: string } }> } | null,
+}));
+
 const scopedProjectMock = vi.hoisted(() =>
   vi.fn<() => { project: { id: string } | null; workspaceId: string | null } | null>(() => null)
 );
@@ -38,6 +43,9 @@ vi.mock("electron", () => ({
 }));
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 vi.mock("../../../services/ScratchStore.js", () => ({ scratchStore: scratchStoreMock }));
+vi.mock("../../../remote/runtime.js", () => ({
+  getRemoteService: (name: string) => (name === "remoteHostsClient" ? remoteHosts.client : null),
+}));
 vi.mock("../../projectContext.js", () => ({
   resolveScopedProjectForIpcContext: scopedProjectMock,
 }));
@@ -53,6 +61,7 @@ import {
   resetProjectHistory,
 } from "../../../services/ProjectHistoryService.js";
 import type { HandlerDependencies } from "../../types.js";
+import { toHostScopedKey } from "../../../../shared/types/remoteHosts.js";
 import { getIpcDispatcher } from "../../dispatcher.js";
 import type { ClientEndpoint } from "../../endpoint.js";
 
@@ -118,6 +127,7 @@ describe("projectHistory IPC", () => {
     vi.clearAllMocks();
     existingProjectIds.clear();
     existingScratchIds.clear();
+    remoteHosts.client = null;
     // Reset, not dispose: disposing tombstones the id, and the tombstone is
     // exactly what stops a closed window's history from recording again.
     resetProjectHistory(WINDOW_ID);
@@ -427,5 +437,34 @@ describe("projectHistory IPC", () => {
     } finally {
       getIpcDispatcher().setInvokeEnveloper(null);
     }
+  });
+
+  describe("workspaces on another host", () => {
+    const REMOTE_HOST = "studio-02";
+    const REMOTE_PROJECT = toHostScopedKey(REMOTE_HOST, PROJECT_OLDER);
+
+    it("keeps them while the remote hosts client isn't running", async () => {
+      inProject(PROJECT_A);
+      getProjectHistory(WINDOW_ID).record(REMOTE_PROJECT);
+
+      // No client means nothing is known about the host, not that it's gone.
+      await expect(peek()).resolves.toEqual({ workspaceId: REMOTE_PROJECT });
+    });
+
+    it("keeps them while the host is in this machine's list", async () => {
+      remoteHosts.client = { list: () => [{ descriptor: { id: REMOTE_HOST } }] };
+      inProject(PROJECT_A);
+      getProjectHistory(WINDOW_ID).record(REMOTE_PROJECT);
+
+      await expect(peek()).resolves.toEqual({ workspaceId: REMOTE_PROJECT });
+    });
+
+    it("drops them once the host has been removed", async () => {
+      remoteHosts.client = { list: () => [] };
+      inProject(PROJECT_A);
+      getProjectHistory(WINDOW_ID).record(REMOTE_PROJECT);
+
+      await expect(peek()).resolves.toBeNull();
+    });
   });
 });

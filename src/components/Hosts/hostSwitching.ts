@@ -37,6 +37,43 @@ export function followSwitchResult(result: SwitchWindowHostResult | null | undef
   });
 }
 
+/**
+ * The one way a failed switch to another host reads, whichever control started
+ * it: the host's own words for what went wrong (never the IPC wire prefix), and
+ * the one recovery that gets that host back — an update for a host on another
+ * build, setting up Host mode where it's off, otherwise trying the same switch
+ * again.
+ */
+export function notifyHostSwitchFailure(hostId: HostId, error: unknown, retry: () => void): void {
+  // Refused for its build: the update is what gets this host back, so it is
+  // offered right here as well as in the host menu.
+  const entry =
+    isClientAppError(error) && error.code === "HOST_VERSION_MISMATCH"
+      ? getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId)
+      : undefined;
+  // Host mode off there: setting it up is what gets this host working.
+  const update = entry
+    ? hostUpdateOffer(entry)
+    : isClientAppError(error) && error.code === "HOST_MODE_OFF"
+      ? { hostId, target: "host" as const, label: "Set up…" }
+      : null;
+  notify({
+    type: "error",
+    context: { eventKind: "connectivity" },
+    title: `Couldn't switch to ${hostName(hostId)}`,
+    message: clientErrorText(error, "The window stayed on its current host."),
+    actions: update
+      ? [
+          {
+            label: update.label,
+            variant: "primary",
+            onClick: () => runHostUpdate(update.target, update.hostId),
+          },
+        ]
+      : [{ label: "Retry", variant: "primary", onClick: retry }],
+  });
+}
+
 /** Switch this window (or a new one) to a host, optionally straight into one of its projects. */
 export async function switchToHost(
   hostId: HostId,
@@ -49,38 +86,6 @@ export async function switchToHost(
     );
     followSwitchResult(result);
   } catch (error) {
-    // Refused for its build: the update is what gets this host back, so it is
-    // offered right here as well as in the host menu.
-    const entry =
-      isClientAppError(error) && error.code === "HOST_VERSION_MISMATCH"
-        ? getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId)
-        : undefined;
-    // Host mode off there: setting it up is what gets this host working.
-    const update = entry
-      ? hostUpdateOffer(entry)
-      : isClientAppError(error) && error.code === "HOST_MODE_OFF"
-        ? { hostId, target: "host" as const, label: "Set up…" }
-        : null;
-    notify({
-      type: "error",
-      context: { eventKind: "connectivity" },
-      title: `Couldn't switch to ${hostName(hostId)}`,
-      message: clientErrorText(error, "The window stayed on its current host."),
-      actions: update
-        ? [
-            {
-              label: update.label,
-              variant: "primary",
-              onClick: () => runHostUpdate(update.target, update.hostId),
-            },
-          ]
-        : [
-            {
-              label: "Retry",
-              variant: "primary",
-              onClick: () => void switchToHost(hostId, newWindow, projectId),
-            },
-          ],
-    });
+    notifyHostSwitchFailure(hostId, error, () => void switchToHost(hostId, newWindow, projectId));
   }
 }

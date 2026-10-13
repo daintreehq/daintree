@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { HostDescriptor, HostConnectionState } from "../../../../shared/types/remoteHosts.js";
+import {
+  toHostScopedKey,
+  type HostDescriptor,
+  type HostConnectionState,
+} from "../../../../shared/types/remoteHosts.js";
+import {
+  disposeProjectHistory,
+  getProjectHistory,
+  resetProjectHistory,
+} from "../../../services/ProjectHistoryService.js";
 import type { RemoteHostsEvent } from "../../../../shared/types/ipc/remoteHosts.js";
 import type { IpcContext } from "../../../ipc/types.js";
 import type { RemoteRouter } from "../../../ipc/endpoint.js";
@@ -269,6 +278,27 @@ describe("RemoteHostsClient", () => {
     });
     failLookup();
     await expect(slow).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+  });
+
+  it("gives way to a navigation made in the window while the host is still answering", async () => {
+    let releaseSlow!: (value: string) => void;
+    manager
+      .connect("studio-01")
+      .whenReady.mockImplementationOnce(
+        () => new Promise<string>((resolve) => (releaseSlow = resolve))
+      );
+    const slow = client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    // A local project picked in that window meanwhile.
+    client.supersedePendingSwitch(1);
+    releaseSlow("ready");
+
+    await expect(slow).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    expect(bindings.get(1)).toBe("local");
   });
 
   it("moves the window for the latest request only, whatever order the hosts answer in", async () => {
@@ -1038,6 +1068,8 @@ describe("RemoteHostsClient", () => {
         projectId: "gone",
       })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // A lookup the link dropped is the host being unreachable, not the project
+    // being gone: Retry is what helps, and nothing is forgotten.
     connection.describeProject.mockRejectedValueOnce(new Error("link dropped"));
     await expect(
       client.switchWindowHost(ctxFor(5, 1), {
@@ -1045,8 +1077,40 @@ describe("RemoteHostsClient", () => {
         newWindow: false,
         projectId: "proj-1",
       })
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
     expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
+  it("forgets a project in the toggle's history only once the host says it's gone", async () => {
+    const history = getProjectHistory(1);
+    const gone = toHostScopedKey("studio-01", "gone");
+    const dropped = toHostScopedKey("studio-01", "proj-1");
+    history.record(gone);
+    history.record(dropped);
+    history.record("local-a");
+    const connection = manager.connect("studio-01");
+
+    connection.describeProject.mockRejectedValueOnce(new Error("link dropped"));
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      })
+    ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(history.snapshot().entries).toEqual(["local-a", dropped, gone]);
+
+    connection.describeProject.mockResolvedValueOnce(null);
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "gone",
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(history.snapshot().entries).toEqual(["local-a", dropped]);
+    disposeProjectHistory(1);
+    resetProjectHistory(1);
   });
 
   describe("after an explicit disconnect", () => {

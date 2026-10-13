@@ -18,6 +18,7 @@ import { activateScratchInWindow } from "./activation.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
+import { supersedePendingHostSwitch } from "../../../window/windowHost.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
@@ -132,6 +133,8 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // pointed at the previous state so an app restart hydrates a coherent
           // workspace. Mirrors the project:switch flow where `setCurrentProject` is
           // only called after `pvm.switchTo()` resolves.
+          supersedePendingHostSwitch(senderWindow?.id);
+
           let activeView: WebContentsView | null = null;
           if (pvm) {
             // Recorded BEFORE switchTo, matching project:switch: the cached-view

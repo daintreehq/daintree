@@ -131,7 +131,7 @@ interface PreSwitchState {
 
 /**
  * Settle a switch or reopen that main sent to the window already owning the
- * project (#12596). This renderer stays on screen and nothing will detach it, so
+ * project (#12596), or that a newer navigation in this window overtook. This renderer stays on screen and nothing will detach it, so
  * unlike a real switch — whose busy flags are left for the reveal to clear — it
  * has to come back to exactly where it was: busy flags down, and what the start
  * of the switch cleared put back. Only into state still empty, since anything set
@@ -143,7 +143,12 @@ function settleRedirectedTransition(
   get: () => ProjectState,
   before: PreSwitchState
 ): void {
-  if (result?.outcome !== "focused-elsewhere" && result?.outcome !== "activated-elsewhere") return;
+  if (
+    result?.outcome !== "focused-elsewhere" &&
+    result?.outcome !== "activated-elsewhere" &&
+    result?.outcome !== "superseded"
+  )
+    return;
   get().clearSwitching();
   set((state) => ({
     error: state.error ?? before.error,

@@ -32,11 +32,14 @@ const workspaceExists = (workspaceId: string): boolean => {
 /**
  * A workspace on another host is kept while that host is in this machine's
  * list. Whether the host still has it can't be asked synchronously; the switch
- * back asks, and says so if it's gone.
+ * back asks, and drops the entry only when the host answers that it's gone.
+ *
+ * A client that isn't running knows nothing about the host either way, so the
+ * entry stays: "can't tell" is not "removed".
  */
 function remoteHostIsKnown(hostId: string): boolean {
   const client = getRemoteService("remoteHostsClient");
-  if (!client) return false;
+  if (!client) return true;
   return client.list().some((entry) => entry.descriptor.id === hostId);
 }
 

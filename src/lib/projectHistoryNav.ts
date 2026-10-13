@@ -1,5 +1,6 @@
 import { notify } from "./notify";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { clientErrorText } from "@/utils/clientAppError";
+import { followSwitchResult, notifyHostSwitchFailure } from "@/components/Hosts/hostSwitching";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -45,11 +46,18 @@ export async function switchToLastWorkspace(): Promise<void> {
     const { hostId: targetHostId, projectId: workspaceId } = parseHostScopedKey(target.workspaceId);
     const viewHostId = window.__DAINTREE_HOST_ID__?.id ?? LOCAL_HOST_ID;
     if (targetHostId !== viewHostId) {
-      await window.electron.remoteHosts.switchWindowHost({
-        hostId: targetHostId,
-        newWindow: false,
-        projectId: workspaceId,
-      });
+      // A failure here reads exactly as it does from the host chip or palette:
+      // same words, same recovery.
+      try {
+        const result = await window.electron.remoteHosts.switchWindowHost({
+          hostId: targetHostId,
+          newWindow: false,
+          projectId: workspaceId,
+        });
+        followSwitchResult(result);
+      } catch (error) {
+        notifyHostSwitchFailure(targetHostId, error, () => void switchToLastWorkspace());
+      }
       return;
     }
 
@@ -90,7 +98,7 @@ export async function switchToLastWorkspace(): Promise<void> {
     notify({
       type: "error",
       title: "Couldn't switch workspace",
-      message: formatErrorMessage(error, "Couldn't switch workspace"),
+      message: clientErrorText(error, "Couldn't switch workspace"),
       actions: [
         {
           label: "Try again",

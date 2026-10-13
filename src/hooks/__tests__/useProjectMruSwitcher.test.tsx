@@ -19,7 +19,26 @@ const { actionDispatchMock, keybindingServiceMock } = vi.hoisted(() => {
     clearPendingChord: vi.fn(),
     popPendingChord: vi.fn(),
     getEffectiveCombo: vi.fn<() => string | undefined>(() => undefined),
-    matchesEvent: vi.fn(() => false),
+    getEffectiveCombos: vi.fn<(actionId: string) => string[]>(() => ["Cmd+Alt+="]),
+    // A macOS-shaped stand-in for the real matcher: exact modifiers, key by physical code.
+    matchesEvent: vi.fn((event: KeyboardEvent, combo: string) => {
+      const parts = combo.split("+");
+      const key = parts.pop();
+      const has = (name: string) => parts.includes(name);
+      const codeKey =
+        event.code === "Equal"
+          ? "="
+          : event.code.startsWith("Digit")
+            ? event.code.slice(5)
+            : event.key;
+      return (
+        event.metaKey === has("Cmd") &&
+        event.altKey === has("Alt") &&
+        event.shiftKey === has("Shift") &&
+        event.ctrlKey === has("Ctrl") &&
+        codeKey === key
+      );
+    }),
     isCapturingShortcut: vi.fn(() => false),
     subscribe: vi.fn(() => () => {}),
     setWhenContextProvider: vi.fn(),
@@ -82,7 +101,7 @@ import { useProjectMruSwitcher } from "../useProjectMruSwitcher";
 import { useGlobalKeybindings } from "../useGlobalKeybindings";
 
 function keyDown(
-  code: "Minus" | "Equal" | "NumpadAdd" | "NumpadSubtract",
+  code: "Minus" | "Equal" | "NumpadAdd" | "NumpadSubtract" | "Digit0",
   opts: {
     repeat?: boolean;
     isComposing?: boolean;
@@ -92,7 +111,14 @@ function keyDown(
     altKey?: boolean;
   } = {}
 ) {
-  const key = code === "Minus" || code === "NumpadSubtract" ? "-" : opts.shiftKey ? "+" : "=";
+  const key =
+    code === "Digit0"
+      ? "0"
+      : code === "Minus" || code === "NumpadSubtract"
+        ? "-"
+        : opts.shiftKey
+          ? "+"
+          : "=";
   const event = new KeyboardEvent("keydown", {
     key,
     code,
@@ -126,6 +152,7 @@ function AppLikeKeybindingHost() {
 describe("useProjectMruSwitcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    keybindingServiceMock.getEffectiveCombos.mockImplementation(() => ["Cmd+Alt+="]);
     peekMock.mockResolvedValue(null);
     (window as unknown as { electron: unknown }).electron = {
       projectHistory: { peek: peekMock },
@@ -324,6 +351,36 @@ describe("useProjectMruSwitcher", () => {
       keyDown("Equal", { altKey: false });
     });
 
+    expect(peekMock).not.toHaveBeenCalled();
+  });
+
+  it("follows a rebind instead of the default keys", () => {
+    keybindingServiceMock.getEffectiveCombos.mockImplementation(() => ["Cmd+Alt+0"]);
+    renderHook(() => useProjectMruSwitcher());
+
+    let defaultKeys: KeyboardEvent | undefined;
+    act(() => {
+      defaultKeys = keyDown("Equal");
+    });
+    expect(defaultKeys?.defaultPrevented).toBe(false);
+    expect(peekMock).not.toHaveBeenCalled();
+
+    act(() => {
+      keyDown("Digit0");
+    });
+    expect(peekMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing once the toggle is unbound", () => {
+    keybindingServiceMock.getEffectiveCombos.mockImplementation(() => []);
+    renderHook(() => useProjectMruSwitcher());
+
+    let event: KeyboardEvent | undefined;
+    act(() => {
+      event = keyDown("Equal");
+    });
+
+    expect(event?.defaultPrevented).toBe(false);
     expect(peekMock).not.toHaveBeenCalled();
   });
 });

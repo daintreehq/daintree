@@ -187,11 +187,22 @@ const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   const cacheHit = hasLiveProjectView(pvm, key);
   // Before the swap, as a local switch records it: the view consumes it on activation.
   if (options.focusIntent) pvm?.setPendingFocusIntent(key, options.focusIntent);
-  await client.switchWindowHost(senderContext(webContentsId), {
+  const shown = await client.switchWindowHost(senderContext(webContentsId), {
     hostId,
     projectId,
     newWindow: false,
   });
+  // The asking view is still on screen unless this window really moved: a
+  // window that already had the project came forward, or a newer navigation
+  // here won. Reporting `switched` for those left the view busy for good.
+  if (shown.outcome === "focused-elsewhere") {
+    return {
+      outcome: "focused-elsewhere",
+      project: result.project,
+      targetWindowId: shown.targetWindowId,
+    };
+  }
+  if (shown.outcome !== "switched") return { outcome: "superseded", project: result.project };
   const view = pvm?.getActiveProjectId() === key ? pvm.getActiveView() : null;
   const wc = view?.webContents;
   if (wc && !wc.isDestroyed()) {

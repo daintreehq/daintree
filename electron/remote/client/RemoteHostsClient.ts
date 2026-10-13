@@ -24,6 +24,7 @@ import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { rememberRemoteWorkspaceTitle } from "../../window/windowTitle.js";
+import { discardFromAllProjectHistories } from "../../services/ProjectHistoryService.js";
 import { getRemoteService } from "../runtime.js";
 import type { HostRegistry } from "./HostRegistry.js";
 import { parseHostConnection } from "./connection.js";
@@ -512,10 +513,28 @@ export class RemoteHostsClient {
           projectName = last.name;
         }
       } else {
-        const description = await connection.describeProject(projectId).catch(() => null);
+        // Only the host saying it has no such project means it's gone: a link
+        // that dropped or timed out mid-lookup is the host being unreachable,
+        // and Retry is what helps there.
+        let description: Awaited<ReturnType<typeof connection.describeProject>>;
+        try {
+          description = await connection.describeProject(projectId);
+        } catch (error) {
+          const staleFailure = superseded();
+          if (staleFailure) return staleFailure;
+          throw new AppError({
+            code: "HOST_DISCONNECTED",
+            message: `Host ${hostId} could not be asked for project ${projectId}`,
+            userMessage: "Couldn't reach this host. Check that it is on and try again.",
+            cause: error instanceof Error ? error : undefined,
+          });
+        }
         const staleLookup = superseded();
         if (staleLookup) return staleLookup;
         if (!description?.path) {
+          // It won't come back on a later press, so the toggle stops offering it.
+          const key = toHostScopedKey(hostId, projectId);
+          discardFromAllProjectHistories((workspaceId) => workspaceId === key);
           throw new AppError({
             code: "NOT_FOUND",
             message: `Host ${hostId} has no project ${projectId}`,
@@ -673,6 +692,16 @@ export class RemoteHostsClient {
     if (stale) return stale;
     this.options.windows.revealWindow?.(owner.windowId);
     return { outcome: "focused-elsewhere", hostId, projectId, targetWindowId: owner.windowId };
+  }
+
+  /**
+   * A navigation in the window that didn't come through here (a local project
+   * or scratch picked, File › Open Recent): a host switch still waiting there
+   * gives way to it rather than pulling the window to the host when it answers.
+   */
+  supersedePendingSwitch(windowId: number): void {
+    const seq = this.switchSeq.get(windowId);
+    if (seq !== undefined) this.switchSeq.set(windowId, seq + 1);
   }
 
   /** A window's newest switch request; any earlier one still in flight is superseded. */

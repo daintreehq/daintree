@@ -412,13 +412,31 @@ export class HostConnection {
     }
   }
 
-  /** The host's own path for a project, before a view for it is opened. */
+  /**
+   * The host's own path for a project, before a view for it is opened. Null
+   * only when the host answered that it has no such project; a link that is
+   * down, drops mid-call or sends something unreadable rejects instead, so a
+   * blip is never reported as the project being gone.
+   */
   async describeProject(projectId: string): Promise<ProjectDescription | null> {
     const session = this.session;
-    if (!session || !session.isOpen) return null;
+    if (!session || !session.isOpen) {
+      throw new AppError({
+        code: "HOST_DISCONNECTED",
+        message: `Host ${this.hostId} is not connected`,
+        userMessage: "Couldn't reach this host. Check that it is on and try again.",
+      });
+    }
     const answer = await session.call(LinkMethod.DESCRIBE_PROJECT, { projectId });
+    if (answer == null) return null;
     const parsed = ProjectDescriptionSchema.safeParse(answer);
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: `Host ${this.hostId} sent an invalid project description`,
+      });
+    }
+    return parsed.data;
   }
 
   /**
