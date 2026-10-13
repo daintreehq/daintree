@@ -66,7 +66,7 @@ class DraftInputPersistence {
    * answer was lost). A clear of one still has to go up as a removal, though
    * the acknowledged baseline never had it.
    */
-  private readonly unackedByProject = new Map<string, Set<string>>();
+  private readonly unackedByProject = new Map<string, { hostEpoch: number; ids: Set<string> }>();
   private liveTimer: ReturnType<typeof setTimeout> | null = null;
   private liveMaxWaitTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -154,7 +154,7 @@ class DraftInputPersistence {
           this.persistedByProject.get(projectId) ?? {},
           snapshot
         );
-        for (const id of this.unackedByProject.get(projectId) ?? []) {
+        for (const id of this.getUnacked(projectId) ?? []) {
           if (!(id in snapshot) && !removedIds.includes(id)) removedIds.push(id);
         }
         if (changedIds.length === 0 && removedIds.length === 0) {
@@ -173,9 +173,9 @@ class DraftInputPersistence {
               )
           );
           // Not acknowledged: the baseline stays for the replay to diff against.
-          if (outcome === "deferred") this.markUnacked(projectId, changedIds);
+          if (outcome === "deferred") this.markUnacked(projectId, hostEpoch, changedIds);
           if (outcome !== "sent") return;
-          const unacked = this.unackedByProject.get(projectId);
+          const unacked = this.getUnacked(projectId);
           for (const id of [...changedIds, ...removedIds]) unacked?.delete(id);
           if (unacked?.size === 0) this.unackedByProject.delete(projectId);
           // The store merged exactly this delta, so apply it to the baseline as
@@ -188,7 +188,7 @@ class DraftInputPersistence {
         } catch (error) {
           // Leave the baseline untouched so the next flush resends the
           // unacknowledged delta.
-          this.markUnacked(projectId, changedIds);
+          this.markUnacked(projectId, hostEpoch, changedIds);
           logError("Failed to persist draft inputs", error);
           throw error;
         }
@@ -257,11 +257,25 @@ class DraftInputPersistence {
     this.liveMaxWaitTimer = null;
   }
 
-  private markUnacked(projectId: string, ids: readonly string[]): void {
-    if (ids.length === 0) return;
-    const unacked = this.unackedByProject.get(projectId) ?? new Set<string>();
+  /**
+   * The project's possibly-saved drafts, while this view still holds what it
+   * held when it saved them. Once another screen has driven the project, the
+   * host's drafts are that screen's, and a removal sent for one would delete
+   * its newer draft.
+   */
+  private getUnacked(projectId: string): Set<string> | undefined {
+    const entry = this.unackedByProject.get(projectId);
+    if (!entry) return undefined;
+    if (entry.hostEpoch === getHostOwnedStateEpoch()) return entry.ids;
+    this.unackedByProject.delete(projectId);
+    return undefined;
+  }
+
+  private markUnacked(projectId: string, hostEpoch: number, ids: readonly string[]): void {
+    if (ids.length === 0 || hostEpoch !== getHostOwnedStateEpoch()) return;
+    const unacked = this.getUnacked(projectId) ?? new Set<string>();
     for (const id of ids) unacked.add(id);
-    this.unackedByProject.set(projectId, unacked);
+    this.unackedByProject.set(projectId, { hostEpoch, ids: unacked });
   }
 
   /** Await all in-flight per-project writes. Primarily for tests. */

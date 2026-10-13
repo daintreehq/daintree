@@ -459,6 +459,25 @@ describe("refreshHostDrafts — following the driver's drafts (#13283)", () => {
     expect(draftInputPersistence.getBaseline("proj-1")).toEqual({ t1: "newer" });
   });
 
+  it("lets a takeover's answer land after a later merge-style resync's", async () => {
+    drafts.local = { t1: "stale here" };
+    let answerTakeover!: (value: unknown) => void;
+    hydrate.mockImplementationOnce(() => new Promise((resolve) => (answerTakeover = resolve)));
+    const takingOver = rehydrateHostProjectState("proj-1", {
+      isCurrent: current,
+      authoritative: true,
+    });
+    await vi.waitFor(() => expect(hydrate).toHaveBeenCalledTimes(1));
+    hydrate.mockResolvedValueOnce(hostSaved({ draftInputs: { t1: "host latest" } }));
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: false });
+    expect(drafts.local).toEqual({ t1: "stale here" });
+
+    answerTakeover(hostSaved({ draftInputs: { t1: "host latest" } }));
+    await takingOver;
+
+    expect(drafts.local).toEqual({ t1: "host latest" });
+  });
+
   it("applies nothing once overtaken", async () => {
     getDraftInputs.mockResolvedValue({ t1: "stale" });
     let live = true;

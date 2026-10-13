@@ -152,6 +152,22 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
   });
 
+  it("sends no removal for an unacknowledged save once another screen has driven (#13283)", async () => {
+    const projectId = freshProjectId();
+    setDraft(projectId, "t1", "maybe saved");
+    setDraftInputsMock.mockImplementationOnce(() => Promise.reject(new Error("answer lost")));
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    // Another screen drove meanwhile: t1 on the host may be its newer draft.
+    dropDeferredHostOwnedWrites("another screen took the project");
+    useTerminalInputStore.getState().clearDraftInput("t1", projectId);
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("drops a flush queued before another screen drove the project (#13283)", async () => {
     const projectId = freshProjectId();
     let release!: () => void;

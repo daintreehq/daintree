@@ -16,7 +16,7 @@ import { logWarn } from "@/utils/logger";
  * one, would put back a draft the newer one cleared and rebase onto it.
  */
 let draftReadTicket = 0;
-/** The newest read applied so far. */
+/** The newest authoritative read applied so far. */
 let appliedDraftRead = 0;
 
 export interface HostProjectRehydrateOptions {
@@ -206,7 +206,10 @@ function applyHostDrafts(
   context: ApplyHostDraftsContext
 ): void {
   if (context.read < appliedDraftRead) return;
-  appliedDraftRead = context.read;
+  // Only an authoritative answer takes the host's drafts whole: a merge-style
+  // one (a fresh session's resync) mustn't keep a takeover's answer, asked
+  // before it, from landing.
+  if (context.authoritative) appliedDraftRead = context.read;
   const { draftsBefore, baselineBefore, draftInputPersistence } = context;
   const input = context.useTerminalInputStore.getState();
   const local = input.getProjectDraftInputs(projectId);
