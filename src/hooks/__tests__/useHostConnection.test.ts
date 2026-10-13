@@ -1376,4 +1376,32 @@ describe("following the driver's navigation (#13281)", () => {
     expect(reporter.mayReport()).toBe(true);
     stop();
   });
+
+  it("still starts from where the driver was when a claim's answer is lost but the host granted it", async () => {
+    const { electron, emitLease } = installElectron();
+    let fail!: (error: Error) => void;
+    // The claim on open, from a view that never watched.
+    electron.driveLease.takeOver.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject))
+    );
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(electron.driveLease.takeOver).toHaveBeenCalled());
+    const reporter = reporters.at(-1)!;
+    const granted = {
+      ...leaseView(holder({ endpointId: "me", leaseId: 7 }), true),
+      isHolderEndpoint: true,
+      driverNavigation: navigation("wt-2"),
+    };
+    // The lease read again after the failed claim says the same.
+    electron.driveLease.get.mockResolvedValue(granted);
+
+    emitLease({ type: "changed", state: granted });
+    fail(new Error("answer lost"));
+
+    await vi.waitFor(() => expect(applyNavigation).toHaveBeenCalledTimes(1));
+    expect(applyNavigation.mock.calls[0]![0]).toEqual(navigation("wt-2"));
+    await vi.waitFor(() => expect(reporter.reportNow).toHaveBeenCalled());
+    stop();
+  });
 });

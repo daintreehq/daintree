@@ -460,6 +460,9 @@ export async function takeOverDrive(
 ): Promise<void> {
   const settling = Symbol("take-over");
   takeOversSettling.add(settling);
+  // Whatever this view showed before, a takeover starts from where the
+  // driver was; an answer lost on the way leaves the lease event to say where.
+  handoffOwed = true;
   let view: DriveLeaseView;
   try {
     view = await window.electron.driveLease.takeOver(
@@ -496,6 +499,10 @@ export async function takeOverDrive(
   // Where the previous driver was: this view starts from it, and reports its
   // own navigation only once it has moved there.
   const navigation = view.driverNavigation ?? null;
+  const leaseId = view.holder?.leaseId ?? null;
+  // Lost and won back meanwhile, the project's navigation is a later driver's.
+  const stillThisLease = () => (getDriveLeaseSnapshot()?.holder?.leaseId ?? null) === leaseId;
+  let handedOver = navigation === null;
   void (async () => {
     try {
       await resyncHostTerminals(projectId, { isCurrent, follow: true });
@@ -517,7 +524,10 @@ export async function takeOverDrive(
     }
     // Even without the saved state: what this view showed while displaced is
     // not where the driver was.
-    if (navigation && isCurrent()) await applyDriverNavigation(navigation, isCurrent);
+    if (navigation && isCurrent() && stillThisLease()) {
+      await applyDriverNavigation(navigation, isCurrent);
+      handedOver = isCurrent() && stillThisLease();
+    }
   })()
     .catch((error: unknown) => {
       logWarn("[HostConnection] Couldn't move to where the driver was after taking over", {
@@ -525,8 +535,11 @@ export async function takeOverDrive(
       });
     })
     .finally(() => {
-      // A later takeover settles for itself; this one only lets go.
-      if (generation === takeOverGeneration) handoffOwed = false;
+      // A later takeover settles for itself, and one overtaken by another
+      // driver leaves the handoff to the lease as it now stands.
+      if (generation === takeOverGeneration && handedOver && stillThisLease()) {
+        handoffOwed = false;
+      }
       settleTakeOver(settling, projectId);
     });
 }
