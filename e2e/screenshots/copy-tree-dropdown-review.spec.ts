@@ -473,6 +473,12 @@ test("copy-tree dropdown review — recents panel states", async () => {
       }
       await page.keyboard.press("ArrowDown");
       await settle(page, 400);
+      const focusedRole = await page.evaluate(() => document.activeElement?.getAttribute("role"));
+      if (focusedRole !== "menuitem") {
+        throw new Error(
+          `[copytree-shots] ArrowDown after Retry focused ${focusedRole ?? "nothing"}, not a menu row`
+        );
+      }
       await snap(page, "66-retry-recovered", panel(page));
       await closePanel(page);
     });

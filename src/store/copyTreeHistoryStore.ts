@@ -36,19 +36,27 @@ let unsubscribe: (() => void) | null = null;
 // asynchronously and can land AFTER a fresher push — when that happens the
 // stale snapshot must not overwrite it.
 let receivedPush = false;
+// Bumped by every pull and by reset. Only the newest pull may settle the
+// store, so an older request finishing late — a slow first pull behind a
+// retry, or a pull from before a reset — cannot overwrite what a newer one
+// already said.
+let pullGeneration = 0;
 
-export const useCopyTreeHistoryStore = create<CopyTreeHistoryState>((set) => {
+export const useCopyTreeHistoryStore = create<CopyTreeHistoryState>((set, get) => {
   const pull = () => {
+    const generation = ++pullGeneration;
     window.electron.copyTreeHistory
       .getRecords()
-      .then((records) =>
+      .then((records) => {
+        if (generation !== pullGeneration) return;
         set(
           receivedPush
             ? { loading: false, error: false }
             : { records, loading: false, error: false }
-        )
-      )
+        );
+      })
       .catch((err) => {
+        if (generation !== pullGeneration) return;
         logError("Failed to load copy-tree history", err);
         // A push that landed first already holds the truth; the failed pull
         // has nothing to add to it.
@@ -72,7 +80,9 @@ export const useCopyTreeHistoryStore = create<CopyTreeHistoryState>((set) => {
       pull();
     },
     retry: () => {
-      if (!initialized) return;
+      // One pull at a time: a second Retry while the first is out would only
+      // race it.
+      if (!initialized || get().loading) return;
       set({ loading: true, error: false });
       pull();
     },
@@ -85,5 +95,6 @@ export function _resetCopyTreeHistoryStoreForTest(): void {
   unsubscribe = null;
   initialized = false;
   receivedPush = false;
+  pullGeneration++;
   useCopyTreeHistoryStore.setState({ records: [], loading: true, error: false });
 }

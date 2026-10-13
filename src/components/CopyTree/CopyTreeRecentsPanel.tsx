@@ -205,7 +205,12 @@ function CopyTreeMenuItems({
   // the Doherty gate they wait silently. A local history read should never
   // take long enough to show this. Once shown, the floor keeps the bones from
   // flashing for a single frame when the read lands just past the gate.
-  const showLoading = useSkeletonDisplayFloor(useDohertyGate(loading));
+  // `gated ||` covers the commit where the gate has just opened and the floor
+  // has not caught up yet; without it that frame renders the empty or list
+  // body and then swaps the skeleton in over it.
+  const gated = useDohertyGate(loading);
+  const floored = useSkeletonDisplayFloor(gated);
+  const showLoading = gated || floored;
   const stillWorking = useDeferredLoading(loading, UI_STILL_WORKING_MS);
 
   let recentBody: ReactNode;

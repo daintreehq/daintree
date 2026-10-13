@@ -90,10 +90,13 @@ const noop = () => {};
  * Mounted open inside a real menu root: the content is a Radix
  * `DropdownMenuContent`, which only exists while its root is open.
  */
-function renderMenu(props: Partial<React.ComponentProps<typeof CopyTreeMenuContent>> = {}) {
+function renderMenu(
+  props: Partial<React.ComponentProps<typeof CopyTreeMenuContent>> = {},
+  onOpenChange?: (open: boolean) => void
+) {
   return render(
     <TooltipProvider>
-      <DropdownMenu open>
+      <DropdownMenu open onOpenChange={onOpenChange}>
         <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
         <CopyTreeMenuContent
           onCopyFullContext={noop}
@@ -189,14 +192,23 @@ describe("CopyTreeMenuContent", () => {
     act(() => {
       useCopyTreeHistoryStore.setState({ records: [], loading: false, error: true });
     });
-    renderMenu();
+    const onOpenChange = vi.fn();
+    renderMenu({}, onOpenChange);
     expect(screen.queryByText(/copy a folder to reuse/i)).toBeNull();
     screen.getByText(/couldn.t load recent copies/i);
     const retry = screen.getByRole("menuitem", { name: /retry/i });
-    fireEvent.click(retry);
+    retrySpy.mockImplementationOnce(() => {
+      useCopyTreeHistoryStore.setState({ loading: true, error: false });
+    });
+    act(() => {
+      fireEvent.click(retry);
+    });
     expect(retrySpy).toHaveBeenCalledTimes(1);
-    // The menu stays open for the answer.
-    expect(screen.getByRole("menuitem", { name: /copy full context/i })).toBeTruthy();
+    // The menu asks to stay open for the answer: a plain select would close it.
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(screen.queryByRole("menuitem", { name: /retry/i })).toBeNull();
+    // Focus goes to the menu, not to a row that no longer exists.
+    expect(document.activeElement?.getAttribute("role")).toBe("menu");
   });
 
   it("lists recents under a group named by its label", () => {
@@ -424,6 +436,12 @@ describe("splitRecentName", () => {
       head: "src/components",
       leaf: "/Layout",
     });
+  });
+
+  it("does not split on a trailing or leading slash alone", () => {
+    expect(splitRecentName("src/")).toEqual({ head: "src/", leaf: "" });
+    expect(splitRecentName("/root")).toEqual({ head: "/root", leaf: "" });
+    expect(splitRecentName("a/b/")).toEqual({ head: "a", leaf: "/b/" });
   });
 
   it("leaves names without a path leaf whole", () => {
