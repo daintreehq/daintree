@@ -16,6 +16,7 @@ import {
 import { LinkSession, type LinkSessionOptions } from "../link/session.js";
 import {
   HostModeOffError,
+  SshAccessError,
   TransportError,
   type LinkTransport,
   type LinkTransportConnection,
@@ -56,8 +57,12 @@ export type LinkClientState =
       detail: string | null;
       /** ssh reached the host and found no Daintree listening there in Host mode. */
       hostModeOff?: true;
-      /** Epoch ms of the next attempt. */
-      retryAt: number;
+      /**
+       * Epoch ms of the next attempt; null when retrying can't help (ssh
+       * couldn't log in, Host mode is off there) and the link waits for
+       * {@link LinkClient.retryNow}.
+       */
+      retryAt: number | null;
     }
   | {
       status: "version-mismatch";
@@ -193,10 +198,11 @@ export class LinkClient {
     } catch (err) {
       if (this.attemptAbort === abort) this.attemptAbort = null;
       if (stale()) return;
-      this.fail(
-        err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"),
-        err instanceof HostModeOffError
-      );
+      this.fail(err instanceof TransportError ? err.detail : formatErrorMessage(err, "failed"), {
+        hostModeOff: err instanceof HostModeOffError,
+        // Nothing a later attempt does differently would change these.
+        parked: err instanceof HostModeOffError || err instanceof SshAccessError,
+      });
       return;
     }
     if (stale()) {
@@ -219,6 +225,7 @@ export class LinkClient {
       if (mismatch && isBlockingMismatch(mismatch)) {
         session.close("version mismatch");
         await this.release(connection);
+        if (stale()) return;
         this.mismatch(mismatch, outcome.welcome.handshake, null);
         return;
       }
@@ -227,6 +234,8 @@ export class LinkClient {
     }
 
     await this.release(connection);
+    // Another attempt (a retryNow while this one was releasing) owns the link now.
+    if (stale()) return;
     if (outcome.kind === "reject") {
       const { reject } = outcome;
       const mismatch = reject.handshake
@@ -403,19 +412,23 @@ export class LinkClient {
     });
   }
 
-  private fail(detail: string | null, hostModeOff = false): void {
+  private fail(
+    detail: string | null,
+    options: { hostModeOff?: boolean; parked?: boolean } = {}
+  ): void {
     this.failures++;
     const { initialMs = 500, maxMs = 30_000, jitter = 0.3 } = this.options.backoff ?? {};
     const base = Math.min(maxMs, initialMs * 2 ** Math.min(this.failures - 1, 30));
     const delay = Math.max(0, Math.round(base * (1 - jitter * this.random())));
+    this.clearRetry();
     this.setState({
       status: "unreachable",
       lastSeenAt: this.lastSeenAt,
       detail,
-      ...(hostModeOff ? { hostModeOff: true as const } : {}),
-      retryAt: this.now() + delay,
+      ...(options.hostModeOff ? { hostModeOff: true as const } : {}),
+      retryAt: options.parked ? null : this.now() + delay,
     });
-    this.clearRetry();
+    if (options.parked) return;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       if (this.running) void this.connect();

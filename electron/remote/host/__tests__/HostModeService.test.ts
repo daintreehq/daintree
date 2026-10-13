@@ -651,6 +651,59 @@ describe("HostModeService enabling from host setup", () => {
     expect(new Set(texts).size).toBe(texts.length);
   });
 
+  it("records Host mode off before the goodbye drain, so a Shell reconnecting meanwhile reads off", async () => {
+    const order: string[] = [];
+    const { service } = makeService({
+      startListener: async (signal) => {
+        const listener = await realListener(signal);
+        return {
+          ...listener,
+          stop: async () => {
+            order.push("socket closed");
+            await listener.stop();
+          },
+        };
+      },
+      writeStatus: async (observation) => {
+        order.push(`status enabled=${String(observation.enabled)}`);
+      },
+    });
+    await service.setEnabled({ enabled: true });
+    await waitFor(() => order.includes("status enabled=true"));
+    order.length = 0;
+    await service.setEnabled({ enabled: false });
+    expect(order.indexOf("status enabled=false")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("status enabled=false")).toBeLessThan(order.indexOf("socket closed"));
+  });
+
+  it("records a deliberate quit before the socket closes, so a Shell doesn't start it again", async () => {
+    const order: string[] = [];
+    const recorded: Array<{ enabled: boolean; stopped?: true }> = [];
+    const { service } = makeService({
+      startListener: async (signal) => {
+        const listener = await realListener(signal);
+        return {
+          ...listener,
+          stop: async () => {
+            order.push("socket closed");
+            await listener.stop();
+          },
+        };
+      },
+      writeStatus: async (observation) => {
+        recorded.push(observation);
+        order.push(observation.stopped ? "status stopped" : "status");
+      },
+    });
+    await service.setEnabled({ enabled: true });
+    await waitFor(() => recorded.length > 0);
+    order.length = 0;
+    await service.dispose();
+    expect(order).toEqual(["status stopped", "socket closed"]);
+    // The setting stays on: the next login brings the host back and rewrites this.
+    expect(recorded.at(-1)).toMatchObject({ enabled: true, stopped: true });
+  });
+
   it("records nothing for a user who never touches Host mode", async () => {
     const writeStatus = vi.fn(async () => {});
     const { service } = makeService({ writeStatus });

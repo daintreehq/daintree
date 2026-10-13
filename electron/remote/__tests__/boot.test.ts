@@ -853,7 +853,9 @@ describe("startRemoteHosts", () => {
     openEndpoint(endpoint, "s1", link);
     await vi.waitFor(() => expect(m.runHistoryPush).toHaveBeenCalledWith(endpoint));
 
-    expect(m.attachTerminalBridge).toHaveBeenCalledWith(link, endpoint);
+    expect(m.attachTerminalBridge).toHaveBeenCalledWith(link, endpoint, {
+      onInput: expect.any(Function),
+    });
     expect(m.attachWorktreePortBridge).toHaveBeenCalledWith(link, endpoint);
     expect(m.statsPush).toHaveBeenCalledWith(endpoint);
     expect(m.fleetPush).toHaveBeenCalledWith(endpoint);
@@ -958,7 +960,9 @@ describe("startRemoteHosts", () => {
     // A fresh (non-resumed) session opens its endpoints anew; nothing to carry.
     for (const l of m.server.sessionListeners) l({ sessionId: "s2", resumed: false, session: {} });
 
-    expect(m.attachTerminalBridge.mock.calls).toEqual([[resumed, kept]]);
+    expect(m.attachTerminalBridge.mock.calls).toEqual([
+      [resumed, kept, { onInput: expect.any(Function) }],
+    ]);
     expect(m.attachWorktreePortBridge.mock.calls).toEqual([[resumed, kept]]);
   });
 

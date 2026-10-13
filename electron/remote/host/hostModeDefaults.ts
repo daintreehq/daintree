@@ -119,7 +119,8 @@ export function createHostModeService(
       ? (observation) => {
           const { version, commit } = getLocalHandshakeInfo();
           return writeHostModeStatusFile(statusDir, {
-            pid: process.pid,
+            // No pid once stopped: nothing may signal or wait on a process that has gone.
+            pid: observation.stopped ? 0 : process.pid,
             build: { version, commit },
             ...observation,
           });

@@ -66,7 +66,8 @@ function messageOf(error: unknown): string {
  * consent) start at login is installed. Off: the socket closes, every
  * attached Shell's session is dropped, the discovery file goes, and the
  * start-at-login unit is removed. Quitting the app stops listening but keeps
- * the setting and the unit, so the next login brings the host back.
+ * the setting and the unit, so the next login brings the host back; it
+ * records that it quit, so a Shell doesn't start it again before then.
  */
 export class HostModeService {
   private readonly advertiser: HostModeAdvertiser;
@@ -224,6 +225,9 @@ export class HostModeService {
     // A change in flight sees `disposed` at its next step and stops there.
     await this.queue;
     await this.starting?.catch(() => {});
+    // Before the socket closes: a Shell that sees the drop and looks finds a
+    // host that quit on purpose, and doesn't start it again.
+    if (this.recordedStatus !== null) await this.recordStatus({ stopped: true });
     const listener = this.listener;
     this.listener = null;
     this.offListener?.();
@@ -251,6 +255,9 @@ export class HostModeService {
         return this.snapshot();
       }
       this.deps.writeSettings({ enabled: false, startAtLogin: false, advertise });
+      // Recorded before the goodbye drain: a Shell that reconnects meanwhile
+      // must read off, or it starts the host straight back up.
+      await this.recordStatus();
       await this.stopListening();
       // A unit left behind would bring the host back at the next login, so
       // this one is reported rather than swallowed.
@@ -331,13 +338,14 @@ export class HostModeService {
     this.observed ??= Promise.resolve();
   }
 
-  private recordStatus(): void {
+  private recordStatus(extra: { stopped?: true } = {}): Promise<void> {
     const write = this.deps.writeStatus;
-    if (!write) return;
+    if (!write) return Promise.resolve();
     const settings = this.deps.readSettings();
     const keychain =
       this.keychainCheck ?? classifyKeychainWithoutTrial(this.deps.platform, this.deps.keychain);
     const observation: Omit<HostModeObservation, "pid"> = {
+      ...extra,
       enabled: settings.enabled,
       startAtLogin: settings.startAtLogin,
       startAtLoginInstalled: this.observation?.installed ?? null,
@@ -349,7 +357,7 @@ export class HostModeService {
       },
     };
     const text = JSON.stringify(observation);
-    if (text === this.recordedStatus) return;
+    if (text === this.recordedStatus) return this.statusWrite;
     this.recordedStatus = text;
     this.statusWrite = this.statusWrite
       .then(() => write(observation))
@@ -358,6 +366,7 @@ export class HostModeService {
         this.recordedStatus = null;
         console.warn("[RemoteHosts] Recording Host mode status failed:", messageOf(error));
       });
+    return this.statusWrite;
   }
 
   private snapshot(): HostModeStatus {
@@ -410,7 +419,7 @@ export class HostModeService {
       } catch (error) {
         console.warn("[RemoteHosts] Host mode status push failed:", messageOf(error));
       }
-      this.recordStatus();
+      void this.recordStatus();
     });
   }
 

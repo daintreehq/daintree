@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { app, type WebContents } from "electron";
-import type { RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
+import type { HostRestartImpact, RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
+import { MetricsLinkMethod, RestartImpactSchema } from "../metrics/linkMethods.js";
 import {
   isLocalHostId,
   parseHostScopedKey,
@@ -82,9 +83,9 @@ declare module "../runtime.js" {
   }
 }
 
-type WorkingAgentsSource = (hostId: HostId) => number | null;
+type AgentsSource = (hostId: HostId) => { working: number; waiting: number } | null;
 
-let workingAgentsSource: WorkingAgentsSource | null = null;
+let agentsSource: AgentsSource | null = null;
 
 /**
  * Every check before a restart asks the host afresh: a count from an earlier
@@ -93,13 +94,17 @@ let workingAgentsSource: WorkingAgentsSource | null = null;
 const MISMATCH_OBSERVATION_MAX_AGE_MS = 0;
 
 /**
- * Where "agents working on this host" comes from for the update gate. Until a
- * source is set the host list's summary frame is read; with no summary the
- * count is unknown, and an update then needs the user's confirmation.
+ * Where a host's agent counts come from for the update gate when the host
+ * can't list what a restart ends (one from before it could). Until a source
+ * is set the host list's summary frame is read; with no summary the count is
+ * unknown, and the update says so.
  */
-export function setHostWorkingAgentsSource(source: WorkingAgentsSource | null): void {
-  workingAgentsSource = source;
+export function setHostAgentsSource(source: AgentsSource | null): void {
+  agentsSource = source;
 }
+
+/** How long an update waits for a host it has to dial before asking it what a restart ends. */
+const RESTART_IMPACT_CONNECT_MS = 15_000;
 
 /** `onRegistered` runs synchronously, before window setup awaits anything. */
 type WindowOpener = (options?: { onRegistered?: (windowId: number) => void }) => Promise<number>;
@@ -521,7 +526,8 @@ function transportFor(
 
 /**
  * Start the Shell side of Remote Hosts: the host list, per-host connections
- * (dialled only when a window or the user asks), window bindings and the
+ * (dialled when something needs the host, kept for one whose notifications
+ * are on, and closed again once unused), window bindings and the
  * dispatcher's router (installed on first use, so a user with no hosts runs
  * every call exactly as before).
  */
@@ -640,24 +646,48 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
         }),
       };
     },
-    async workingAgents(hostId) {
-      if (!hostId) return null;
-      // A host on another build refuses the link, and with it the summaries
-      // that carry this count; its refusal says what its agents are doing.
+    async restartImpact(hostId): Promise<HostRestartImpact> {
+      const unknown: HostRestartImpact = { detail: null, agents: null };
+      if (!hostId || !registry.get(hostId)) return unknown;
+      // Nothing dials a host on its own any more: asking what a restart ends is a use,
+      // and an update waiting for idle keeps its connection from being released.
+      manager.touch(hostId);
+      if (manager.connectionState(hostId).status !== "connected") {
+        await client.connectAndWait(hostId, RESTART_IMPACT_CONNECT_MS);
+      }
       const connection = manager.get(hostId);
+      // A host on another build refuses the link, and with it everything below;
+      // its refusal says how many agents are working, and nothing about waiting.
       if (connection?.linkState.status === "version-mismatch") {
-        return connection.workingAgentsWhileMismatched({
+        const working = await connection.workingAgentsWhileMismatched({
           maxAgeMs: MISMATCH_OBSERVATION_MAX_AGE_MS,
           timeoutMs: 15_000,
         });
+        return { detail: null, agents: working === null ? null : { working, waiting: null } };
       }
-      if (workingAgentsSource) return workingAgentsSource(hostId);
-      const entry = client.list().find((host) => host.descriptor.id === hostId);
-      return entry?.summary?.agentsObserved?.working ?? null;
+      const session = connection?.currentSession ?? null;
+      if (session) {
+        try {
+          const parsed = RestartImpactSchema.safeParse(
+            await session.call(MetricsLinkMethod.RESTART_IMPACT, null, { timeoutMs: 10_000 })
+          );
+          if (parsed.success && parsed.data.detail) return parsed.data;
+        } catch {
+          // A host from before it could say (UNSUPPORTED), or one that didn't answer: counts below.
+        }
+      }
+      const agents =
+        agentsSource?.(hostId) ??
+        (() => {
+          const observed = client.list().find((host) => host.descriptor.id === hostId)
+            ?.summary?.agentsObserved;
+          return observed ? { working: observed.working, waiting: observed.waiting } : null;
+        })();
+      return { detail: null, agents };
     },
     async reconnect(hostId) {
-      const existing = manager.get(hostId);
-      if (!existing) return null;
+      // Dialled whether or not a link was up: an update can follow a Disconnect.
+      if (!registry.get(hostId)) return null;
       const readiness: HostReadiness = await client.connectAndWait(hostId, 30_000);
       if (readiness === "version-mismatch") return false;
       if (readiness !== "ready") return null;

@@ -9,7 +9,9 @@ import type {
   HostInstallInfo,
   HostInstallPlan,
   HostProbeResult,
+  HostRestartImpact,
 } from "@shared/types/ipc/remoteHosts";
+import { pluralize } from "@/lib/pluralize";
 
 export function platformLabel(platform: HostPlatform | null, arch: HostArch | null): string {
   if (!platform) return "Platform not seen yet";
@@ -84,9 +86,12 @@ export function connectionLabel(state: HostConnectionState): string {
     case "unreachable":
       if (state.hostModeOff) return "Daintree isn't running in Host mode there";
       // What was seen, when there is something: ssh's own words for why it couldn't reach it.
-      return state.detail
-        ? `Unreachable · ${formatSeen(state.lastSeenAt)} · ${state.detail}`
-        : `Unreachable · ${formatSeen(state.lastSeenAt)}`;
+      return [
+        "Unreachable",
+        formatSeen(state.lastSeenAt),
+        ...(state.stoppedRetrying ? ["not retrying until you connect"] : []),
+        ...(state.detail ? [state.detail] : []),
+      ].join(" · ");
     case "version-mismatch":
       // Exact builds are the Build row's; here, what it means for connecting.
       return "Can't connect · needs a compatible build";
@@ -151,4 +156,54 @@ export function hostModeSwitchedOn(probe: HostProbeResult | null): boolean {
     state.startAtLoginInstalled === true &&
     probe.advice.startAtLoginInstalled === true
   );
+}
+
+/**
+ * What restarting a host ends, a line per item, in the host's own counts.
+ * Agent states are what was observed, never a claim that the rest is idle.
+ */
+export function restartImpactLines(impact: HostRestartImpact): string[] {
+  const detail = impact.detail;
+  if (detail) {
+    const lines = detail.projects.map((project) => {
+      const agents = [
+        project.working > 0 ? `${project.working} working` : null,
+        project.waiting > 0 ? `${project.waiting} waiting` : null,
+      ].filter((part) => part !== null);
+      const name = project.projectName ?? "Outside any project";
+      const terminals = pluralize(project.terminals, "terminal");
+      return agents.length > 0
+        ? `${name}: ${terminals} (agents ${agents.join(", ")})`
+        : `${name}: ${terminals}`;
+    });
+    if (!detail.complete) lines.push("Possibly more terminals: the host couldn't list them all");
+    if (detail.operations > 0) {
+      lines.push(`${pluralize(detail.operations, "operation")} still running`);
+    }
+    if (detail.otherShells.length > 0) {
+      lines.push(`Sessions from ${detail.otherShells.join(", ")}`);
+    }
+    return lines;
+  }
+  const agents = impact.agents;
+  if (!agents) return ["Every terminal there: the host couldn't say what is running"];
+  const waiting =
+    agents.waiting === null
+      ? "whether any agents are waiting can't be seen"
+      : pluralize(agents.waiting, "agent") + " waiting";
+  return [
+    `${pluralize(agents.working, "agent")} working, ${waiting}`,
+    "Every other terminal there too: plain shells and dev servers aren't reported by this host",
+  ];
+}
+
+/** Terminals the restart ends, when the host counted them; null when it couldn't. */
+export function restartTerminalCount(impact: HostRestartImpact): number | null {
+  if (!impact.detail) return null;
+  return impact.detail.projects.reduce((sum, project) => sum + project.terminals, 0);
+}
+
+/** Whether waiting for idle can be watched: the host reports both working and waiting agents. */
+export function canWaitForIdle(impact: HostRestartImpact): boolean {
+  return impact.detail !== null || (impact.agents !== null && impact.agents.waiting !== null);
 }

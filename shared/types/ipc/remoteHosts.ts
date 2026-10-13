@@ -158,8 +158,14 @@ export interface HostProbeResult {
  * check. Written by the host process; read over SSH, so it needs no link.
  */
 export interface HostModeObservation {
-  /** The Daintree process that wrote it. */
+  /** The Daintree process that wrote it; 0 once it has quit. */
   pid: number;
+  /**
+   * The host quit on purpose (the person quit it, or turned Host mode off):
+   * a Shell must not start it again. The next launch there rewrites it.
+   * Absent in files written before it existed, and while the host runs.
+   */
+  stopped?: true;
   /**
    * The build that process runs, which is what a link handshake compares.
    * It can differ from the installed app (a build run from elsewhere, or an
@@ -261,17 +267,59 @@ export interface InstallHostPayload {
   hostId?: HostId;
   linuxPackage?: LinuxPackagePreference;
   /**
-   * When the host reports working agents: stop and say so (default), go ahead
-   * because the user confirmed, or stage now and restart once none are working.
+   * When the update restarts the host: stop and say what it would end
+   * (default), go ahead because the user confirmed that, or stage now and
+   * restart once no agent is working or waiting.
    */
   whileWorking?: "refuse" | "proceed" | "wait-for-idle";
+  /**
+   * What the user confirmed ending, as last reported. Checked again right
+   * before the restart: anything that appeared since stops the update.
+   */
+  confirmed?: HostRestartImpact;
+}
+
+/** One project's terminals that a restart of the host ends. */
+export interface HostRestartProject {
+  /** Null for terminals outside any project. */
+  projectName: string | null;
+  terminals: number;
+  /** Agents observed working or waiting among them: observations, not a promise they're idle. */
+  working: number;
+  waiting: number;
+}
+
+/** What restarting a host would end. */
+export interface HostRestartImpact {
+  /**
+   * What the host itself reported; null when it couldn't (a host from before
+   * it could say, or one that didn't answer).
+   */
+  detail: {
+    projects: HostRestartProject[];
+    /** False when some terminals couldn't be listed: there may be more. */
+    complete: boolean;
+    /** Long operations still running there (clones, worktree changes). */
+    operations: number;
+    /** Other Shells attached to the host, by machine name. */
+    otherShells: string[];
+    /** Ids behind the counts, so a re-check can tell what is new. */
+    terminalIds: string[];
+    shellIds: string[];
+  } | null;
+  /**
+   * Agent counts the host last reported, for when there's no detail; null
+   * when unknown. `waiting` is null from a host on another build, whose
+   * refusal says only how many are working.
+   */
+  agents: { working: number; waiting: number | null } | null;
 }
 
 export type InstallHostResult =
   | { status: "installed"; probe: HostProbeResult; reconnected: boolean | null }
   | { status: "up-to-date"; probe: HostProbeResult }
-  /** Nothing was changed: the host reported agents working (null: it couldn't be seen). */
-  | { status: "agents-working"; working: number | null }
+  /** Nothing was changed: restarting the host would end this, and needs the user's yes. */
+  | { status: "needs-confirmation"; impact: HostRestartImpact }
   | {
       status: "needs-user-command";
       command: { label: string; command: string };

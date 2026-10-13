@@ -339,6 +339,59 @@ export class PortForwardManager {
     this.emit();
   }
 
+  /** Whether any forward to `hostId` is held or waiting to be added again: its connection is in use. */
+  hasForwardsFor(hostId: HostId): boolean {
+    for (const forward of this.forwards.values()) if (forward.info.hostId === hostId) return true;
+    for (const spec of this.lapsed.values()) if (spec.hostId === hostId) return true;
+    return false;
+  }
+
+  /** Forget every host with forwards here that is no longer in the host list. */
+  async pruneUnknownHosts(): Promise<void> {
+    const hostIds = new Set<HostId>();
+    for (const forward of this.forwards.values()) hostIds.add(forward.info.hostId);
+    for (const spec of this.lapsed.values()) hostIds.add(spec.hostId);
+    await Promise.all(
+      [...hostIds].filter((id) => !this.deps.isKnownHost(id)).map((id) => this.forgetHost(id))
+    );
+  }
+
+  /**
+   * A host left the list: its forwards go now. Left alone they kept their
+   * local ports, vanished from the list (nothing listed them, so nothing could
+   * stop them) and still counted against the forward limit.
+   */
+  async forgetHost(hostId: HostId): Promise<void> {
+    for (const [key, spec] of this.lapsed) {
+      if (spec.hostId === hostId) this.lapsed.delete(key);
+    }
+    const prefix = keyOf(hostId, 0).slice(0, -1);
+    for (const [key, recreation] of this.recreating) {
+      if (key.startsWith(prefix)) recreation.stopped = true;
+    }
+    // One still being added lands in the map once it settles; collect it too.
+    await Promise.allSettled(
+      [...this.pending].filter(([key]) => key.startsWith(prefix)).map(([, creating]) => creating)
+    );
+    const gone = [...this.forwards].filter(([, forward]) => forward.info.hostId === hostId);
+    if (gone.length === 0) return;
+    for (const [key] of gone) this.forwards.delete(key);
+    for (const [subdomain, id] of this.previewForwards) {
+      if (gone.some(([, forward]) => forward.info.forwardId === id)) {
+        this.previewForwards.delete(subdomain);
+      }
+    }
+    this.previewCache.clear();
+    // Its master may be gone with it: cancelling is only a courtesy, the local side always closes.
+    await Promise.all(gone.map(([, forward]) => this.teardown(forward).catch(() => false)));
+    await Promise.all(
+      gone.map(async ([, forward]) => {
+        if (forward.driver.kind === "ssh") await forward.driver.relay?.close();
+      })
+    );
+    this.emit();
+  }
+
   async listHostPorts(hostId: HostId): Promise<HostListeningPort[]> {
     if (typeof hostId !== "string" || !isValidRemoteHostId(hostId)) {
       throw invalid("Ports are listed for a remote host");

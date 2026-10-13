@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 
@@ -115,10 +116,23 @@ async function release(lockPath: string, ino: number): Promise<void> {
 }
 
 /**
- * When `pid` started, as the kernel counts it, where that is cheap to read
- * (Linux's /proc). Null elsewhere: the pid alone then decides.
+ * When `pid` started, as the kernel counts it: Linux's /proc, or `ps` on
+ * macOS (where a pid is reused soon enough to strand a lock on a stranger).
+ * Null where neither answers: the pid alone then decides.
  */
 export function processStartTime(pid: number): string | null {
+  if (process.platform === "darwin") {
+    try {
+      const started = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+        encoding: "utf8",
+        timeout: 2_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      return started.length > 0 ? started : null;
+    } catch {
+      return null;
+    }
+  }
   if (process.platform !== "linux") return null;
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -143,7 +157,9 @@ function ownerIsGone(pid: unknown, start: unknown): boolean | null {
   try {
     process.kill(pid, 0);
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH";
+    const code = (err as NodeJS.ErrnoException).code;
+    // EPERM: the pid now belongs to another user, and only this user writes the lock.
+    return code === "ESRCH" || code === "EPERM";
   }
   // Alive under that pid. It is still the owner unless the pid was reused.
   if (typeof start === "string") {

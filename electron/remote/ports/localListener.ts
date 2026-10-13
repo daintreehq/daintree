@@ -152,8 +152,17 @@ export async function probeFreeLoopbackPort(preferredPort: number): Promise<numb
  * Null on a machine without IPv6 loopback; rejects when the port is taken.
  */
 export async function listenIpv6Relay(port: number): Promise<LoopbackListener | null> {
+  // A server's close waits for every connection it accepted, and a preview's
+  // HMR socket can stay open for hours: closing destroys them instead.
+  const sockets = new Set<net.Socket>();
+  const track = (socket: net.Socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  };
   const server = makeServer((inbound) => {
     const outbound = net.connect({ port, host: IPV4 });
+    track(inbound);
+    track(outbound);
     const fail = () => {
       inbound.destroy();
       outbound.destroy();
@@ -171,5 +180,14 @@ export async function listenIpv6Relay(port: number): Promise<LoopbackListener | 
     if (code === "EADDRNOTAVAIL" || code === "EAFNOSUPPORT") return null;
     throw error;
   }
-  return { port, servers: [server], close: () => close(server) };
+  return {
+    port,
+    servers: [server],
+    close: () => {
+      const closed = close(server);
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+      return closed;
+    },
+  };
 }

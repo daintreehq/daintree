@@ -184,6 +184,8 @@ export class RemoteHostsClient {
         this.options.emit({ type: "resync-required", hostId, reason: "reconnected" }),
     });
     this.unsubscribe.push(
+      // A window on the host is using it, whether or not its view has called through yet.
+      options.manager.addUseCheck((hostId) => options.bindings.windowsOn(hostId).length > 0),
       options.registry.onChange(() =>
         this.options.emit({ type: "hosts-changed", hosts: this.list() })
       ),

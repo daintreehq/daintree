@@ -104,6 +104,8 @@ export type HostReadiness =
   | "version-mismatch"
   /** ssh reached the host and found no Daintree in Host mode there: waiting won't change it. */
   | "host-mode-off"
+  /** Gave up until asked again (ssh couldn't log in): waiting won't change it either. */
+  | "stopped-retrying"
   | "timeout"
   | "stopped";
 
@@ -163,6 +165,11 @@ export class HostConnection {
 
   get isStarted(): boolean {
     return this.started;
+  }
+
+  /** A local view has an endpoint on this host: someone is using it from a window. */
+  get hasViews(): boolean {
+    return this.endpoints.size > 0;
   }
 
   get linkState(): LinkClientState {
@@ -257,6 +264,7 @@ export class HostConnection {
     const link = this.link.getState();
     if (link.status === "version-mismatch") return "version-mismatch";
     if (link.status === "unreachable" && link.hostModeOff) return "host-mode-off";
+    if (link.status === "unreachable" && link.retryAt === null) return "stopped-retrying";
     return this.unavailableEnvelope() === null ? "ready" : null;
   }
 
@@ -350,6 +358,7 @@ export class HostConnection {
           lastSeenAt: state.lastSeenAt ?? this.descriptor()?.lastSeenAt ?? null,
           detail: state.detail,
           ...(state.hostModeOff ? { hostModeOff: true as const } : {}),
+          ...(state.retryAt === null ? { stoppedRetrying: true as const } : {}),
         };
       case "version-mismatch":
         return { status: "version-mismatch", mismatch: state.mismatch, remote: state.remote };
@@ -729,11 +738,19 @@ export interface RemoteHostManagerOptions {
   session?: Omit<LinkSessionOptions, "role">;
   backoff?: LinkClientOptions["backoff"];
   now?: () => number;
+  /** How long a connection nothing uses stays up before it is closed; 0 never closes one. */
+  idleReleaseMs?: number;
 }
 
+/** Long enough to cover a quick switch away and back, or a pause in the overview. */
+export const IDLE_RELEASE_MS = 5 * 60_000;
+const IDLE_SWEEP_MS = 30_000;
+
 /**
- * One {@link HostConnection} per host the user connected to. Connections are
- * created on demand, so nothing is dialled for a host nobody opened.
+ * One {@link HostConnection} per host something asked for. Connections are
+ * created on demand, so nothing is dialled for a host nobody opened, and one
+ * nothing has used for {@link IDLE_RELEASE_MS} (no window on it, no forward,
+ * notifications off, no recent call) is closed again.
  */
 export class RemoteHostManager {
   private readonly connections = new Map<HostId, HostConnection>();
@@ -747,6 +764,10 @@ export class RemoteHostManager {
   >();
   private readonly sessionListeners = new Set<(hostId: HostId, session: LinkSession) => void>();
   private readonly now: () => number;
+  /** When each connection was last asked for or found in use. */
+  private readonly lastUsed = new Map<HostId, number>();
+  private readonly useChecks = new Set<(hostId: HostId) => boolean>();
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly options: RemoteHostManagerOptions) {
     this.now = options.now ?? Date.now;
@@ -759,6 +780,58 @@ export class RemoteHostManager {
 
   get(hostId: HostId): HostConnection | undefined {
     return this.connections.get(hostId);
+  }
+
+  /**
+   * Something that keeps a host's connection open while it says so (a
+   * window bound to it, a port forward). Asked on every idle sweep.
+   */
+  addUseCheck(check: (hostId: HostId) => boolean): () => void {
+    this.useChecks.add(check);
+    return () => this.useChecks.delete(check);
+  }
+
+  /** Mark the host's connection used now, so the idle release starts counting again. */
+  touch(hostId: HostId): void {
+    if (this.connections.has(hostId)) this.lastUsed.set(hostId, this.now());
+  }
+
+  private inUse(hostId: HostId): boolean {
+    // A host whose notifications are on keeps its light connection.
+    if (this.options.registry.get(hostId)?.notificationsEnabled === true) return true;
+    if (this.connections.get(hostId)?.hasViews) return true;
+    for (const check of this.useChecks) {
+      try {
+        if (check(hostId)) return true;
+      } catch (error) {
+        console.error("[RemoteHostManager] use check failed:", error);
+      }
+    }
+    return false;
+  }
+
+  /** Close the connections nothing has used for the release window. */
+  sweepIdle(): void {
+    const releaseMs = this.options.idleReleaseMs ?? IDLE_RELEASE_MS;
+    if (releaseMs <= 0) return;
+    const now = this.now();
+    for (const hostId of [...this.connections.keys()]) {
+      if (this.inUse(hostId)) {
+        this.lastUsed.set(hostId, now);
+        continue;
+      }
+      if (now - (this.lastUsed.get(hostId) ?? now) < releaseMs) continue;
+      console.log(`[RemoteHosts] Closing the unused connection to ${hostId}`);
+      void this.disconnect(hostId).catch((error: unknown) => {
+        console.warn(`[RemoteHosts] Closing the unused connection to ${hostId} failed:`, error);
+      });
+    }
+  }
+
+  private ensureSweep(): void {
+    if (this.sweepTimer || (this.options.idleReleaseMs ?? IDLE_RELEASE_MS) <= 0) return;
+    this.sweepTimer = setInterval(() => this.sweepIdle(), IDLE_SWEEP_MS);
+    this.sweepTimer.unref?.();
   }
 
   connectionState(hostId: HostId): HostConnectionState {
@@ -883,6 +956,8 @@ export class RemoteHostManager {
         this.emit(hostId, conn.state());
       });
     }
+    this.lastUsed.set(hostId, this.now());
+    this.ensureSweep();
     if (connection.isStarted) connection.retryNow();
     else connection.start();
     return connection;
@@ -892,6 +967,11 @@ export class RemoteHostManager {
     const connection = this.connections.get(hostId);
     if (!connection) return;
     this.connections.delete(hostId);
+    this.lastUsed.delete(hostId);
+    if (this.connections.size === 0 && this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
     if (connection.linkState.status === "connected") {
       this.options.registry.recordObservation(hostId, { lastSeenAt: this.now() });
     }

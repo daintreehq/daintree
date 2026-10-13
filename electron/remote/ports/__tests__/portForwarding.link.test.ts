@@ -89,6 +89,29 @@ afterEach(async () => {
 });
 
 describe("stream forwarding over the link", () => {
+  it("closes a removed host's forwards, freeing their ports and the forward limit", async () => {
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await listen(upstream);
+    cleanups.push(() => upstream.close());
+    let known = true;
+    const m = manager({ isKnownHost: (hostId) => known && hostId === HOST });
+    const forward = await m.forward({ hostId: HOST, remotePort });
+    expect(m.hasForwardsFor(HOST)).toBe(true);
+
+    // The host's session ends with it, so its forward stops counting as live.
+    client.close("host removed");
+    known = false;
+    await m.pruneUnknownHosts();
+
+    expect(m.hasForwardsFor(HOST)).toBe(false);
+    const free = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      free.once("error", reject);
+      free.listen(forward.localPort, "127.0.0.1", () => resolve());
+    });
+    free.close();
+  });
+
   it("forwards the host's actual port and carries HTTP with Host, cookies and redirects intact", async () => {
     const seen: Array<{ host?: string; cookie?: string }> = [];
     const upstream = http.createServer((req, res) => {

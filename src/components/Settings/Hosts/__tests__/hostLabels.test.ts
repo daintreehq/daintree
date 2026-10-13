@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { connectionLabel, localNameSuggestion } from "../hostLabels";
+import {
+  canWaitForIdle,
+  connectionLabel,
+  localNameSuggestion,
+  restartImpactLines,
+  restartTerminalCount,
+} from "../hostLabels";
 
 const unresolved = (name: string) =>
   `ssh: Could not resolve hostname ${name}: nodename nor servname provided, or not known`;
@@ -45,5 +51,65 @@ describe("connectionLabel", () => {
         hostModeOff: true,
       })
     ).toBe("Daintree isn't running in Host mode there");
+  });
+
+  it("says when a link has stopped retrying until the user connects", () => {
+    expect(
+      connectionLabel({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "greg@studio: Permission denied (publickey).",
+        stoppedRetrying: true,
+      })
+    ).toBe(
+      "Unreachable · never seen · not retrying until you connect · greg@studio: Permission denied (publickey)."
+    );
+  });
+});
+
+describe("restart impact", () => {
+  const detail = {
+    projects: [
+      { projectName: "api", terminals: 3, working: 1, waiting: 2 },
+      { projectName: null, terminals: 1, working: 0, waiting: 0 },
+    ],
+    complete: false,
+    operations: 2,
+    otherShells: ["greg-air", "ci-box"],
+    terminalIds: ["a", "b", "c", "d"],
+    shellIds: ["1", "2"],
+  };
+
+  it("lists what a restart ends from the host's own inventory", () => {
+    const impact = { detail, agents: null };
+    expect(restartImpactLines(impact)).toEqual([
+      "api: 3 terminals (agents 1 working, 2 waiting)",
+      "Outside any project: 1 terminal",
+      "Possibly more terminals: the host couldn't list them all",
+      "2 operations still running",
+      "Sessions from greg-air, ci-box",
+    ]);
+    expect(restartTerminalCount(impact)).toBe(4);
+    expect(canWaitForIdle(impact)).toBe(true);
+  });
+
+  it("falls back to an older host's counts, naming what it can't see", () => {
+    const counts = { detail: null, agents: { working: 2, waiting: 1 } };
+    expect(restartImpactLines(counts)[0]).toBe("2 agents working, 1 agent waiting");
+    expect(restartTerminalCount(counts)).toBeNull();
+    expect(canWaitForIdle(counts)).toBe(true);
+
+    const refusal = { detail: null, agents: { working: 1, waiting: null } };
+    expect(restartImpactLines(refusal)[0]).toBe(
+      "1 agent working, whether any agents are waiting can't be seen"
+    );
+    // Waiting can't be seen, so "idle" can't be either.
+    expect(canWaitForIdle(refusal)).toBe(false);
+
+    const unknown = { detail: null, agents: null };
+    expect(restartImpactLines(unknown)).toEqual([
+      "Every terminal there: the host couldn't say what is running",
+    ]);
+    expect(canWaitForIdle(unknown)).toBe(false);
   });
 });

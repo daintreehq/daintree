@@ -75,7 +75,10 @@ function service(
     platform: "darwin",
     knownConnections: () => [],
     clientBuild: () => CLIENT,
-    workingAgents: async (hostId) => (hostId ? 1 : null),
+    restartImpact: async (hostId) => ({
+      detail: null,
+      agents: hostId ? { working: 1, waiting: 0 } : null,
+    }),
     download: async () => {},
     emit: (event) => events.push(event),
     sleep: async () => {},
@@ -113,12 +116,16 @@ describe("HostSetupService", () => {
       opId: "op-7",
       connection: { kind: "ssh", target: "studio" },
     });
-    expect(result).toEqual({ status: "agents-working", working: null });
+    const unknown = { detail: null, agents: null };
+    expect(result).toEqual({ status: "needs-confirmation", impact: unknown });
     expect(events.at(-1)).toMatchObject({
       type: "install-settled",
       opId: "op-7",
       connection: { kind: "ssh", target: "studio" },
-      outcome: { status: "succeeded", result: { status: "agents-working", working: null } },
+      outcome: {
+        status: "succeeded",
+        result: { status: "needs-confirmation", impact: unknown },
+      },
     });
     expect(events.some((e) => e.type === "install-progress")).toBe(true);
     expect(setup.installStatus({ opId: "op-7" })).toMatchObject({ status: "succeeded" });
@@ -137,6 +144,14 @@ describe("HostSetupService", () => {
         whileWorking: "yolo" as never,
       })
     ).toThrow(/whileWorking/);
+    expect(() =>
+      setup.install({
+        opId: "op-2",
+        connection: { kind: "ssh", target: "studio" },
+        whileWorking: "proceed",
+        confirmed: { detail: "everything" } as never,
+      })
+    ).toThrow(/confirmed/);
   });
 
   it("bootstraps a fresh Linux host over ssh: the unit on stdin, then a handoff that never starts a backend", async () => {
@@ -323,6 +338,19 @@ describe("HostSetupService", () => {
         "not-startable"
       );
       expect(started(never.scripts)).toBe(false);
+    });
+
+    it("leaves alone a host its user quit on purpose", async () => {
+      const quit = recording([
+        MAC_STOPPED(true).replace(
+          `@@dt:hostmodestate ${hostState(true)}`,
+          `@@dt:hostmodestate ${JSON.stringify({ ...JSON.parse(hostState(true)), pid: 0, stopped: true })}`
+        ),
+      ]);
+      await expect(service("", { run: quit.run }).setup.ensureHostRunning(studio)).resolves.toBe(
+        "not-startable"
+      );
+      expect(started(quit.scripts)).toBe(false);
     });
 
     it("never installs: a host without Daintree is left as it is", async () => {

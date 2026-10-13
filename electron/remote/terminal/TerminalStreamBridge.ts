@@ -67,6 +67,8 @@ export interface TerminalStreamBridgeOptions {
    * while it waited in the port. Absent means always, unstamped.
    */
   driveLease?(): number | null | false;
+  /** Input or a resize from the client went to a PTY: someone is using the host. */
+  onInput?(): void;
   budget?: RingBudget;
   ringBytesPerTerminal?: number;
   /**
@@ -780,6 +782,7 @@ export class TerminalStreamBridge {
     const leaseId = this.opts.driveLease ? this.opts.driveLease() : null;
     if (leaseId === false) return;
     safePost(this.port, leaseId === null ? message : { ...message, leaseId });
+    this.opts.onInput?.();
   }
 
   private settleOutstanding(stream: StreamState): void {

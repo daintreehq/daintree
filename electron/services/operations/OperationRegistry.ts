@@ -365,7 +365,8 @@ export class OperationRegistry {
     return this.resolve(opId)?.record.outcome.status === "running";
   }
 
-  private runningCount(): number {
+  /** Operations still running: what a restart of this process would cut short. */
+  runningCount(): number {
     let count = 0;
     for (const entry of this.entries.values()) {
       if (entry.record.outcome.status === "running") count++;

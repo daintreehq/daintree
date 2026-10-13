@@ -58,6 +58,10 @@ export interface PortForwardClientDeps {
   /** The host and project (the host's own id for it) a view shows, or null for none. */
   projectForView?(webContentsId: number): ViewProject | null;
   isKnownHost(hostId: HostId): boolean;
+  /** Keep a host's connection open while this says so (it has forwards). */
+  addUseCheck?(check: (hostId: HostId) => boolean): () => void;
+  /** The host list changed: a removed host's forwards are closed. */
+  onHostsChanged?(listener: () => void): () => void;
   /**
    * The host's open session whether or not a local view has an endpoint on
    * it, so a port can be forwarded from a host no window is showing.
@@ -226,6 +230,8 @@ export function installPortForwardClient(deps: PortForwardClientDeps): () => Pro
       void manager.reestablish(hostId);
     }),
     deps.onSessionOpened?.((hostId) => void manager.reestablish(hostId)) ?? (() => {}),
+    deps.onHostsChanged?.(() => void manager.pruneUnknownHosts()) ?? (() => {}),
+    deps.addUseCheck?.((hostId) => manager.hasForwardsFor(hostId)) ?? (() => {}),
     registerRemoteService("portForwards", service),
     observeForwardedInvokes(({ hostId, hostProjectId, channel, args }) => {
       if (channel !== CHANNELS.DEV_PREVIEW_ENSURE || !hostProjectId) return;
