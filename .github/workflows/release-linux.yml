@@ -112,6 +112,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
+      fail-fast: false
       matrix:
         include:
           # Both stay on 22.04: native modules link against the build host's
@@ -251,6 +252,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x64
