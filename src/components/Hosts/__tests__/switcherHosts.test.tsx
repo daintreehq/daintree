@@ -218,7 +218,9 @@ describe("Other hosts band", () => {
     );
     const onChosen = vi.fn();
     render(<Band query="" onChosen={onChosen} />);
-    const retry = await screen.findByRole("option", { name: "Retry listing projects on studio-01" });
+    const retry = await screen.findByRole("option", {
+      name: "Retry listing projects on studio-01",
+    });
     expect(screen.getByText(/Couldn't list projects/)).toBeTruthy();
 
     fail = false;
@@ -266,7 +268,9 @@ describe("Other hosts band", () => {
     list.mockResolvedValue([host("studio-01")]);
     setHostProjectsLoader(loader);
     render(<Band query="" onChosen={() => {}} />);
-    const row = await screen.findByRole("option", { name: /^api on studio-01, \/home\/greg\/api$/ });
+    const row = await screen.findByRole("option", {
+      name: /^api on studio-01, \/home\/greg\/api$/,
+    });
     expect(row.textContent).toContain("studio-01");
     expect(row.textContent).toContain("/home/greg/api");
   });

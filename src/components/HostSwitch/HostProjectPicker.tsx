@@ -16,7 +16,6 @@ import { matchesTokens, queryTokens } from "@/components/Hosts/hostProjectSearch
 // Past this the list says how many it isn't showing; the rest stay a search away.
 const MAX_RESULTS = 100;
 
-
 type LoadState =
   | { status: "loading" }
   | { status: "loaded"; projects: HostProjectSummary[] }

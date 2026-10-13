@@ -2699,7 +2699,11 @@ function ProjectPaletteInner({
         e.stopPropagation();
         const step = pageStep();
         const from =
-          hostCursor !== null ? results.length + hostCursor : selectedIndex >= 0 ? selectedIndex : 0;
+          hostCursor !== null
+            ? results.length + hostCursor
+            : selectedIndex >= 0
+              ? selectedIndex
+              : 0;
         moveCursorTo(
           e.key === "PageDown" ? Math.min(total - 1, from + step) : Math.max(0, from - step)
         );

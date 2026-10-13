@@ -231,7 +231,8 @@ export function useOtherHostTargets(localPlatform: ClientPlatform): OtherHostTar
 
   useEffect(() => {
     const now = Date.now();
-    if (reachableKey !== "") for (const id of reachableKey.split("\n")) requestHostProjects(id, now);
+    if (reachableKey !== "")
+      for (const id of reachableKey.split("\n")) requestHostProjects(id, now);
   }, [reachableKey, revision]);
 
   return hosts.map((host) => ({

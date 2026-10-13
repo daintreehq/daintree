@@ -427,7 +427,12 @@ describe("ProjectSwitcherPalette other-host rows", () => {
   });
 
   it("tells the same project id on two hosts apart", () => {
-    const twin = { ...WEB, key: "project:studio-03:s2-web", hostId: "studio-03", hostName: "studio-03" };
+    const twin = {
+      ...WEB,
+      key: "project:studio-03:s2-web",
+      hostId: "studio-03",
+      hostName: "studio-03",
+    };
     hostOptions.value = band([API, WEB, twin]);
     render(<Harness />);
     press("ArrowUp");
