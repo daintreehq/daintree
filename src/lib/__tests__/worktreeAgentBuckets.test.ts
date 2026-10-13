@@ -48,13 +48,19 @@ describe("deriveWorktreeAgentBuckets", () => {
   });
 
   it("puts a single agent idle at its prompt in Finished, unseen until looked at", () => {
-    expect(buckets([atPrompt("a")])).toMatchObject({
+    const unseen = atPrompt("a", { handBack: { stoppedAt: NOW - 1000 } });
+    expect(buckets([unseen])).toMatchObject({
       finished: true,
       finishedUnseen: true,
       attention: false,
     });
     const seen = atPrompt("a", { handBack: { stoppedAt: NOW - 1000, seenAt: NOW } });
     expect(buckets([seen])).toMatchObject({ finished: true, finishedUnseen: false });
+  });
+
+  it("puts an agent at its prompt with no hand-back record in Finished, never unseen", () => {
+    // Main saw no work stop, and nothing could ever mark it seen.
+    expect(buckets([atPrompt("a")])).toMatchObject({ finished: true, finishedUnseen: false });
   });
 
   it("lets Working and Attention overlap", () => {
@@ -76,13 +82,30 @@ describe("deriveWorktreeAgentBuckets", () => {
     }
   });
 
-  it("drops parked and snoozed agents out of every bucket", () => {
+  it("drops parked and snoozed asks out of Attention", () => {
     const parked = run("a", { ...asking("a"), park: { parkedAt: NOW } });
     const snoozed = run("b", {
-      agentState: "working",
+      ...asking("b"),
       snooze: { snoozedAt: NOW, until: NOW + 60_000 },
     } as Partial<FleetRunRow>);
     expect(buckets([parked, snoozed])).toEqual(decodeWorktreeAgentBuckets(0));
+  });
+
+  it("keeps a parked or snoozed agent that is still working in Working", () => {
+    // A park shelves demands, not work: a merged worktree must not read as
+    // ready for cleanup while an agent in it is running.
+    const snoozed = run("a", {
+      agentState: "working",
+      snooze: { snoozedAt: NOW, until: NOW + 60_000 },
+    } as Partial<FleetRunRow>);
+    const parked = run("b", { agentState: "directing", park: { parkedAt: NOW } });
+    for (const r of [snoozed, parked]) {
+      expect(buckets([r], { merged: true })).toMatchObject({
+        working: true,
+        finished: false,
+        cleanup: false,
+      });
+    }
   });
 
   it("counts a quiet agent as Working", () => {
@@ -121,8 +144,8 @@ describe("deriveWorktreeAgentBuckets", () => {
     });
   });
 
-  it("dates an unrecorded stop against the watermark", () => {
-    const stop = atPrompt("a", { since: NOW - 60_000 });
+  it("dates an unrecorded completion against the watermark", () => {
+    const stop = run("a", { agentState: "completed", since: NOW - 60_000 });
     expect(buckets([stop], { acknowledgedAt: NOW }).finishedUnseen).toBe(false);
     expect(buckets([stop], { acknowledgedAt: NOW - 120_000 }).finishedUnseen).toBe(true);
   });

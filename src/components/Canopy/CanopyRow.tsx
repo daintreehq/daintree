@@ -262,8 +262,10 @@ export function CanopyRow({
     !item.stale &&
     // A screen that moved and has not been classified again yet.
     !card.priorityFromEarlierRead &&
-    // Never over the blocked mark: an observed error keeps its own shape.
-    row.band === "needs-you" &&
+    // Never over the blocked mark: an observed error keeps its own shape. A
+    // hand-back band is no bar: the passive classifier's fallback prompt is
+    // exactly the screen the describer can tell is a question.
+    (row.band === "needs-you" || row.band === "review" || row.band === "done") &&
     row.run.agentState === "waiting";
 
   const looksDone = itemLooksDone(item);

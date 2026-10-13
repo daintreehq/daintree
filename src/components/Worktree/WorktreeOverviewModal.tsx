@@ -262,7 +262,7 @@ export function WorktreeOverviewModal({
         waiting: 0,
         finished: 0,
       };
-      let finishedUnseen = 0;
+      const unseen = { finished: 0 };
 
       const filtered = worktrees.filter((worktree) => {
         const derived = derivedMetaMap.get(worktree.id) ?? EMPTY_META;
@@ -279,7 +279,7 @@ export function WorktreeOverviewModal({
           if (matchesQuickStateFilter("working", derived)) counts.working++;
           if (matchesQuickStateFilter("waiting", derived)) counts.waiting++;
           if (matchesQuickStateFilter("finished", derived)) counts.finished++;
-          if (derived.buckets.finishedUnseen) finishedUnseen++;
+          if (derived.buckets.finishedUnseen) unseen.finished++;
         }
 
         const bypassesNarrowing =
@@ -304,7 +304,7 @@ export function WorktreeOverviewModal({
           ? groupByType(sorted, orderBy, validPinnedWorktrees)
           : null,
         quickStateCounts: counts,
-        finishedUnseenCount: finishedUnseen,
+        finishedUnseenCount: unseen.finished,
       };
     }, [
       worktrees,

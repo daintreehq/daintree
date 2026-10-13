@@ -363,6 +363,14 @@ describe("CanopyRow", () => {
     expect(description(container)).toContain("asking you a question");
   });
 
+  it("rings a question Daintree's own classifier saw only as a prompt (#13234)", () => {
+    for (const waitingReason of ["prompt", "question"] as const) {
+      const { container, unmount } = renderRow(itemFor("question", {}, { waitingReason }));
+      expect(container.querySelector("[data-asking]")).not.toBeNull();
+      unmount();
+    }
+  });
+
   it("names a row by its agent alone, and says what it wants and where it is after that", () => {
     const { container } = renderRow(itemFor("question"), { unread: true });
     const name = option(container).getAttribute("aria-label")!;
@@ -563,7 +571,7 @@ describe("CanopyRow", () => {
   });
 
   it("gives the leading column the time, never a score or a word the glyph already says", () => {
-    const { container } = renderRow(itemFor("question"));
+    const { container } = renderRow(itemFor("question", {}, { waitingReason: "question" }));
     const column = leadingColumn(container);
     expect(column.textContent).toContain("1m");
     expect(column.textContent).not.toContain("88");

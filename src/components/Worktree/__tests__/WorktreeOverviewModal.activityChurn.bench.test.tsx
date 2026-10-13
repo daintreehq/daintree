@@ -33,7 +33,7 @@ import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { WorktreeOverviewModal } from "../WorktreeOverviewModal";
 
@@ -57,6 +57,25 @@ function panelId(w: number, a: number) {
 }
 
 let worktrees: WorktreeState[];
+
+function fleetRow(
+  panel: Pick<PtyPanelData, "id" | "worktreeId" | "agentState">,
+  overrides: Partial<FleetRunRow> = {}
+): FleetRunRow {
+  return {
+    runId: panel.id,
+    workspaceId: "p1",
+    spawnedAt: 0,
+    cwd: panel.worktreeId ?? ROOT,
+    agentState: panel.agentState,
+    ...(panel.agentState === "waiting" ? { waitingReason: "prompt" as const } : {}),
+    ...overrides,
+  };
+}
+
+function fleet(runs: FleetRunRow[]): FleetSnapshot {
+  return { runs } as unknown as FleetSnapshot;
+}
 
 beforeEach(async () => {
   initBuiltInPanelKinds();
@@ -108,6 +127,9 @@ beforeEach(async () => {
     panelIds: panels.map((p) => p.id),
     panelIdsByWorktreeId,
   });
+  // Every agent has a fleet run, so the bucket join does real work on each
+  // selector pass rather than missing on an empty index.
+  useFleetSnapshotStore.getState().applySnapshot(fleet(panels.map((p) => fleetRow(p))));
 
   render(
     <TooltipProvider>
@@ -171,19 +193,18 @@ describe("WorktreeOverviewModal under activity-headline churn", () => {
 
   // Proves the counter sees real recomputes, so the zero above is not vacuous.
   it("still recomputes when an agent starts asking for something", async () => {
+    // Worktree 0's prompt waits are hand-backs, so nothing in it is asking until
+    // one of its agents starts to.
+    expect(chipStateCalls.attention).toEqual([]);
+    const runs = useFleetSnapshotStore
+      .getState()
+      .snapshot!.runs.map((run) =>
+        run.runId === panelId(0, 1)
+          ? { ...run, agentState: "waiting" as const, waitingReason: "approval" as const }
+          : run
+      );
     act(() => {
-      useFleetSnapshotStore.getState().applySnapshot({
-        runs: [
-          {
-            runId: panelId(0, 0),
-            workspaceId: "p1",
-            spawnedAt: 0,
-            cwd: worktreeId(0),
-            agentState: "waiting",
-            waitingReason: "approval",
-          },
-        ],
-      } as unknown as FleetSnapshot);
+      useFleetSnapshotStore.getState().applySnapshot(fleet(runs));
     });
     await settle();
     expect(chipStateCalls.count).toBe(WORKTREES);

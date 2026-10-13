@@ -339,6 +339,7 @@ function Gallery() {
           value={quick}
           onChange={setQuick}
           counts={{ all: 6, working: 2, waiting: 1, finished: 3 }}
+          finishedUnseen={1}
           trailing={
             <QuickStateArmButton label="Arm all 2 agents" disabled={false} onArm={() => {}} />
           }

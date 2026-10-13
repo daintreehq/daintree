@@ -29,6 +29,8 @@ type Counts = Record<QuickStateFilter, number>;
 interface Fixture {
   value: QuickStateFilter;
   counts?: Counts;
+  /** Finished worktrees holding an unseen hand-back; the glyph is hued only then. */
+  finishedUnseen?: number;
   armDisabled?: boolean;
 }
 
@@ -37,7 +39,13 @@ const FIXTURES: Record<string, Fixture> = {
   default: { value: "all", counts: { all: 3, working: 2, waiting: 1, finished: 0 } },
   "working-active": { value: "working", counts: { all: 3, working: 2, waiting: 1, finished: 0 } },
   "waiting-active": { value: "waiting", counts: { all: 3, working: 2, waiting: 1, finished: 0 } },
-  "finished-active": { value: "finished", counts: { all: 6, working: 1, waiting: 1, finished: 4 } },
+  "finished-active": {
+    value: "finished",
+    counts: { all: 6, working: 1, waiting: 1, finished: 4 },
+    finishedUnseen: 1,
+  },
+  /** Every hand-back already looked at: Finished stays neutral. */
+  "finished-seen": { value: "all", counts: { all: 6, working: 1, waiting: 1, finished: 4 } },
   /** Nothing running: every status bucket empty, nothing to arm. */
   idle: {
     value: "all",
@@ -45,7 +53,11 @@ const FIXTURES: Record<string, Fixture> = {
     armDisabled: true,
   },
   /** Every bucket populated, the most glyph colour the bar ever carries. */
-  mixed: { value: "all", counts: { all: 9, working: 3, waiting: 2, finished: 4 } },
+  mixed: {
+    value: "all",
+    counts: { all: 9, working: 3, waiting: 2, finished: 4 },
+    finishedUnseen: 2,
+  },
   /** Two-digit counts — the width case. */
   busy: { value: "all", counts: { all: 42, working: 17, waiting: 12, finished: 13 } },
   /** Counts not yet derived. */
@@ -102,6 +114,7 @@ function Preview({ initial }: { initial: Fixture }) {
           value={value}
           onChange={setValue}
           counts={initial.counts}
+          finishedUnseen={initial.finishedUnseen}
           trailing={
             <QuickStateArmButton
               label={initial.armDisabled ? "No agents to arm" : "Arm all 3 agents"}

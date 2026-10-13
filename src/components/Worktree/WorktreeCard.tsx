@@ -75,6 +75,7 @@ import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
 import { computeChipState } from "./utils/computeChipState";
 import { isAgentTerminal } from "@/utils/terminalType";
+import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { deriveWorktreeAgentBuckets, isWorktreeMergedForCleanup } from "@/lib/worktreeAgentBuckets";
 import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
 import { devServerMenuState } from "./utils/devServerMenuState";
@@ -84,6 +85,7 @@ import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTi
 const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
 const MAX_CONCURRENT_REVALIDATES = 3;
+const NO_WORKTREE_IDS: Set<string> = new Set();
 const inFlightRevalidates = new Set<string>();
 
 function isRevalidationAllowed(worktreeId: string): boolean {
@@ -679,10 +681,17 @@ export function WorktreeCard({
 
   // The same buckets the sidebar filter counts this worktree under, so the mark
   // and the filter cannot disagree.
+  // Membership through `isTerminalVisible`, like the sidebar, the overview and
+  // cycling: a backgrounded agent is not counted there, so it must not mark
+  // the card either. Every terminal here already belongs to this (existing)
+  // worktree, so the orphan check has nothing to do.
   const { runsById, acknowledgedAt } = useWorktreeAgentBucketInputs();
+  const isInTrash = usePanelStore((state) => state.isInTrash);
   const chipState = computeChipState(
     deriveWorktreeAgentBuckets(
-      worktreeTerminals.filter(isAgentTerminal).map((t) => t.id),
+      worktreeTerminals
+        .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
+        .map((t) => t.id),
       runsById,
       acknowledgedAt,
       isWorktreeMergedForCleanup(worktree)

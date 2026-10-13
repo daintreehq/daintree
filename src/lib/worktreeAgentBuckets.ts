@@ -2,12 +2,7 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { Project } from "@shared/types/project";
 import type { Scratch } from "@shared/types/scratch";
 import type { WorktreeState } from "@shared/types/worktree";
-import {
-  ATTENTION_FILTER_BANDS,
-  bandForRun,
-  FINISHED_FILTER_BANDS,
-  WORKING_FILTER_BANDS,
-} from "@/lib/fleetAttention";
+import { ATTENTION_FILTER_BANDS, bandForRun, FINISHED_FILTER_BANDS } from "@/lib/fleetAttention";
 
 /**
  * Which quick-state buckets a worktree belongs to, from the bands of its agents.
@@ -17,8 +12,8 @@ import {
  * over the same band sets Pilot's segments read, so one word means one set of
  * agents everywhere.
  *
- * - `working`: an agent is working (`running`, or `quiet` — silent but still
- *   working; the sidebar has no Quiet bucket of its own).
+ * - `working`: an agent is working — including a quiet one, and one that is
+ *   parked or snoozed; the sidebar has no Quiet bucket of its own.
  * - `attention`: an agent that isn't parked or snoozed is asking for something —
  *   an approval, a question, or an error. Seeing it answers nothing.
  * - `finished`: nothing is working or asking, and either an agent handed work
@@ -28,7 +23,8 @@ import {
  * - `cleanup`: finished by way of a merged PR.
  *
  * Working and Attention can overlap; Finished excludes both. A worktree whose
- * agents are only parked, snoozed, idle or exited is in none of them.
+ * agents are only idle, exited, or parked or snoozed while stopped is in none
+ * of them.
  */
 export interface WorktreeAgentBuckets {
   working: boolean;
@@ -104,9 +100,15 @@ export function deriveWorktreeAgentBuckets(
   for (const id of agentPanelIds) {
     const run = runsById.get(id);
     if (!run) continue;
+    // Working is read off the state, not the band: a park or snooze shelves an
+    // agent's demands, not its work, and a snoozed agent still running must
+    // never let its worktree read as finished.
+    if (run.agentState === "working" || run.agentState === "directing") {
+      working = true;
+      continue;
+    }
     const band = bandForRun(run, acknowledgedAt);
-    if (WORKING_FILTER_BANDS.has(band) || band === "quiet") working = true;
-    else if (ATTENTION_FILTER_BANDS.has(band)) attention = true;
+    if (ATTENTION_FILTER_BANDS.has(band)) attention = true;
     else if (FINISHED_FILTER_BANDS.has(band)) {
       handedBack = true;
       if (band === "review") unseen = true;
