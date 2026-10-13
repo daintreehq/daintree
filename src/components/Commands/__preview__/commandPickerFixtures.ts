@@ -82,7 +82,7 @@ const STRESS: CommandManifestEntry[] = [
   },
 ];
 
-const FIXTURES = ["shipped", "no-forge", "wide", "loading", "empty"] as const;
+const FIXTURES = ["shipped", "no-forge", "wide", "loading", "empty", "load-error"] as const;
 export type CommandPickerFixture = (typeof FIXTURES)[number];
 
 export function isCommandPickerFixture(value: string | null): value is CommandPickerFixture {
@@ -103,6 +103,7 @@ export function commandsFor(fixture: CommandPickerFixture): CommandManifestEntry
       return [CREATE_ISSUE, { ...WORK_ISSUE, enabled: false, disabledReason: NO_FORGE }, ...STRESS];
     case "loading":
     case "empty":
+    case "load-error":
       return [];
   }
 }

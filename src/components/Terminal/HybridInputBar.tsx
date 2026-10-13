@@ -331,6 +331,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const applyEditorValueRef = useRef<ApplyEditorValue>(() => {});
 
     const openPicker = useCommandStore((s) => s.openPicker);
+    // Every agent pane mounts a picker host on the one command store; this
+    // composer's id is what keeps the others' palettes closed when it opens one.
+    const pickerOwnerId = useId();
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
@@ -1245,7 +1248,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 <button
                   ref={pickerRef}
                   type="button"
-                  onClick={openPicker}
+                  onClick={() => openPicker(pickerOwnerId)}
                   disabled={disabled}
                   // `h-6 w-6` is the WCAG 2.5.8 floor on both axes: at `leading-5`
                   // the button was 20px tall, and at its old `pl-2 pr-1` it was
@@ -1458,7 +1461,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         >
           {barContent}
         </div>
-        <CommandPickerHost context={commandContext} onCommandExecuted={handleCommandExecuted} />
+        <CommandPickerHost
+          ownerId={pickerOwnerId}
+          context={commandContext}
+          onCommandExecuted={handleCommandExecuted}
+        />
         {isRemote && <LazyUploadConfirmHost />}
         <AppDialog
           isOpen={isExpanded}

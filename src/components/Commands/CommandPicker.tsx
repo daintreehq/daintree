@@ -1,17 +1,21 @@
 import { useState, useMemo, useEffect, useCallback, useDeferredValue } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { paletteSummary } from "@/lib/paletteSummary";
 import type { CommandManifestEntry, CommandCategory } from "@shared/types/commands";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 interface CommandPickerProps {
   isOpen: boolean;
   commands: CommandManifestEntry[];
   isLoading?: boolean;
+  /** Why the command list couldn't be read. Shown only when nothing is cached. */
+  loadError?: string | null;
+  onRetryLoad?: () => void;
   onSelect: (command: CommandManifestEntry) => void;
   onDismiss: () => void;
   filter?: CommandCategory[];
@@ -125,6 +129,10 @@ export function matchRanges(text: string, query: string, allowScattered: boolean
   return ranges;
 }
 
+const LOAD_ERROR_TITLE = "Couldn't load commands";
+const LOAD_ERROR_DETAIL_ID = "command-load-error-detail";
+const LOAD_ERROR_HINT_ID = "command-load-error-hint";
+
 function firstEnabledIndex(commands: CommandManifestEntry[]): number {
   const index = commands.findIndex((cmd) => cmd.enabled);
   return index === -1 ? 0 : index;
@@ -142,6 +150,8 @@ export function CommandPicker({
   isOpen,
   commands,
   isLoading = false,
+  loadError = null,
+  onRetryLoad,
   onSelect,
   onDismiss,
   filter,
@@ -220,9 +230,43 @@ export function CommandPicker({
     [isStale, onSelect]
   );
 
+  // A failed list with nothing cached reads as an empty catalogue unless it says
+  // otherwise; a cached list stays usable through a failed refresh.
+  const showLoadError = loadError !== null && commands.length === 0 && !isLoading;
+
+  const loadErrorContent = showLoadError ? (
+    <div className="mt-2 flex flex-col items-center gap-3">
+      <p id={LOAD_ERROR_DETAIL_ID} className="max-w-md text-xs text-text-secondary">
+        {loadError}
+      </p>
+      {/* The footer shows this to the eye; the field reads it out, since focus
+          never leaves it and the empty state announces only its title. */}
+      <span id={LOAD_ERROR_HINT_ID} className="sr-only">
+        Press Enter to retry
+      </span>
+      {onRetryLoad && (
+        <Button
+          size="sm"
+          variant="outline"
+          // Keeps focus in the search field: the button leaves with this state
+          // the moment the retry starts, and Enter there retries again.
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={onRetryLoad}
+        >
+          Retry
+        </Button>
+      )}
+    </div>
+  ) : null;
+
   const handleConfirm = useCallback(() => {
+    // Focus stays in the search field, so Enter is the keyboard's Retry.
+    if (showLoadError) {
+      onRetryLoad?.();
+      return;
+    }
     activate(flatCommands[selectedIndex]);
-  }, [activate, flatCommands, selectedIndex]);
+  }, [activate, flatCommands, selectedIndex, showLoadError, onRetryLoad]);
 
   const setSize = flatCommands.length;
 
@@ -248,6 +292,8 @@ export function CommandPicker({
         const titleId = `command-${cmd.id}-title`;
         const summaryId = `command-${cmd.id}-summary`;
         const reasonId = `command-${cmd.id}-reason`;
+        const formId = `command-${cmd.id}-form`;
+        const opensForm = cmd.hasBuilder && cmd.enabled;
         const reason = !cmd.enabled ? cmd.disabledReason : undefined;
         const summary = paletteSummary(cmd.description);
         return (
@@ -276,8 +322,12 @@ export function CommandPicker({
               aria-posinset={index + 1}
               aria-setsize={setSize}
               aria-labelledby={titleId}
-              aria-describedby={reason ? `${summaryId} ${reasonId}` : summaryId}
-              aria-haspopup={cmd.hasBuilder && cmd.enabled ? "dialog" : undefined}
+              // The badge is described, not hidden: it is the only thing that
+              // separates a command that asks for more from one that runs now.
+              aria-describedby={[summaryId, opensForm && formId, reason && reasonId]
+                .filter(Boolean)
+                .join(" ")}
+              aria-haspopup={opensForm ? "dialog" : undefined}
               onPointerDown={(e) => e.preventDefault()}
               onPointerMove={() => onHoverIndex(index)}
               onClick={() => activate(cmd)}
@@ -305,8 +355,8 @@ export function CommandPicker({
                   />
                 </span>
                 {/* Only where it is true: an unavailable row opens nothing. */}
-                {cmd.hasBuilder && cmd.enabled && (
-                  <Badge size="xs" aria-hidden="true">
+                {opensForm && (
+                  <Badge id={formId} size="xs" className="shrink-0">
                     Opens form
                   </Badge>
                 )}
@@ -330,10 +380,22 @@ export function CommandPicker({
       ariaLabel="Command picker"
       searchPlaceholder="Search commands"
       searchAriaLabel="Search commands"
+      searchAriaDescribedBy={
+        showLoadError ? `${LOAD_ERROR_DETAIL_ID} ${LOAD_ERROR_HINT_ID}` : undefined
+      }
       listId="command-list"
       itemIdPrefix="command"
-      emptyMessage="No commands available"
-      emptyContent={<EmptyHint />}
+      emptyMessage={showLoadError ? LOAD_ERROR_TITLE : "No commands available"}
+      emptyContent={showLoadError ? loadErrorContent : <EmptyHint />}
+      // A query typed while the list was loading must not turn the failure
+      // into "No matches": nothing was searched.
+      noMatchMessage={showLoadError ? LOAD_ERROR_TITLE : undefined}
+      noMatchContent={showLoadError ? loadErrorContent : undefined}
+      footer={
+        showLoadError ? (
+          <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to retry" }} />
+        ) : undefined
+      }
     />
   );
 }

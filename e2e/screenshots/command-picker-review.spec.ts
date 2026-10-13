@@ -72,7 +72,7 @@ test.afterAll(async () => {
   await server?.close();
 });
 
-type Fixture = "shipped" | "no-forge" | "wide" | "loading" | "empty";
+type Fixture = "shipped" | "no-forge" | "wide" | "loading" | "empty" | "load-error";
 
 async function loadPicker(page: Page, theme: string, fixture: Fixture): Promise<void> {
   await stubViteHmrClient(page);
@@ -263,6 +263,17 @@ test("Command picker — states and themes", async ({ page }) => {
     await loadPicker(page, theme, "empty");
     written.push(await snap(page, `11-empty--${theme}.png`, "none"));
 
+    // The list request failed with nothing cached: Enter retries from the field.
+    await loadPicker(page, theme, "load-error");
+    await expect(dialog(page).getByText("Couldn't load commands")).toBeVisible();
+    written.push(await snap(page, `17-load-error--${theme}.png`, "none"));
+    await page.keyboard.press("Enter");
+    await expect(page.locator("body[data-retried-load]")).toBeAttached();
+    // A query typed over the failure still names the failure, not "No matches".
+    await input(page).fill("git");
+    await expect(dialog(page).getByText("Couldn't load commands")).toBeVisible();
+    written.push(await snap(page, `18-load-error-query--${theme}.png`, "none"));
+
     written.push(await snapTrigger(page, theme, false));
     written.push(await snapTrigger(page, theme, true));
     written.push(await snapComposer(page, theme, null));
@@ -279,6 +290,6 @@ test("Command picker — states and themes", async ({ page }) => {
   expect(pageErrors, `page errors: ${pageErrors.join(" | ")}`).toEqual([]);
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(written.length).toBe(THEMES.length * 15 + 1);
+  expect(written.length).toBe(THEMES.length * 17 + 1);
   console.log(`[command-picker-shots] wrote ${written.length} captures to ${OUT_DIR}`);
 });
