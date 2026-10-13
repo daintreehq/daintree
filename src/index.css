@@ -2476,6 +2476,10 @@ body[data-performance-mode="true"] .surface-toolbar {
   background-color: var(--color-surface-toolbar) !important;
 }
 
+body[data-performance-mode="true"] .surface-toolbar[data-remote-window] {
+  background-color: var(--remote-toolbar-surface) !important;
+}
+
 /* Disable terminal glow in performance mode */
 body[data-performance-mode="true"] .terminal-selected,
 body[data-performance-mode="true"] .terminal-focused,
@@ -2582,9 +2586,12 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
      on the white canvas at ~2.6:1. The glyph's shape carries the severity here;
      its stroke only has to be seen. The attribute marks glyphs coloured inline;
      the class match catches every icon tinted with a status utility directly,
-     which is most of them. */
+     which is most of them. A category hue is an identity, not a severity, but
+     its stroke fails the same way — the remote host's server glyph kept its
+     purple at ~2.5:1 — and its shape carries it just as well. */
   [data-severity-glyph],
-  svg[class*="-status-"] {
+  svg[class*="-status-"],
+  svg[class*="-category-"] {
     color: CanvasText !important;
   }
 

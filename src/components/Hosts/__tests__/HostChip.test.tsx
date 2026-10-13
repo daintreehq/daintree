@@ -200,10 +200,10 @@ describe("HostChip", () => {
       expect(chip.textContent).toContain("studio-01");
       expect(chip.textContent).toContain("unreachable");
       expect(chip.getAttribute("aria-label")).toBe("Working on SSH · studio-01, unreachable");
-      // A different place reads as one, on the toolbar's neutral pill surface:
-      // a bordered chip, never a status fill or an accent, in every remote state.
+      // A different place reads as one: a chip edged in the remote window's
+      // organisational hue, never a status fill or an accent, in every remote state.
       expect(chip.getAttribute("data-host-location")).toBe("remote");
-      expect(chip.className).toMatch(/\bborder-border-default\b/);
+      expect(chip.className).toMatch(/\bborder-category-/);
       expect(chip.className).not.toMatch(/status-info/);
       expect(chip.className).not.toMatch(/accent/);
     } finally {

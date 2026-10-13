@@ -20,6 +20,30 @@
   backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
 }
 
+/* ── Remote window ──
+ * A window working on another machine wears it across the whole strip: a wash
+ * of one organisational hue, never a status colour, so it reads as a different
+ * place rather than something wrong, and peripherally, before the host chip's
+ * label is read. A thin edge line read as a stalled progress bar and went
+ * unnoticed. Higher specificity than every `.surface-toolbar` fallback below,
+ * so reduced transparency and increased contrast keep the wash. */
+.surface-toolbar[data-remote-window] {
+  --remote-toolbar-mix: 26%;
+  /* oklab, not oklch: a hue-interpolated mix from a warm toolbar (serengeti's
+   * amber) swings through red on its way and lands peach. */
+  --remote-toolbar-surface: color-mix(
+    in oklab,
+    var(--color-category-purple) var(--remote-toolbar-mix),
+    var(--theme-surface-toolbar)
+  );
+  background-color: var(--remote-toolbar-surface);
+}
+
+/* Over a near-white strip the same share is a louder step; light themes take less. */
+:where(.light, [data-color-mode="light"]) .surface-toolbar[data-remote-window] {
+  --remote-toolbar-mix: 18%;
+}
+
 /* ── backdrop-filter fallbacks ──
  * The translucent material relies on GPU compositing and ignores the OS
  * "reduce transparency" accessibility preference. Engines without

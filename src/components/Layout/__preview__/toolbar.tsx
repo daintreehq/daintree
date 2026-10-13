@@ -25,8 +25,12 @@ import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useAppThemeStore } from "@/store/appThemeStore";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { useProjectSwitcherPalette } from "@/hooks/useProjectSwitcherPalette";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
+import { DndContext } from "@dnd-kit/core";
+import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsStore";
+import { SidebarContent } from "@/components/Sidebar/SidebarContent";
 import { Toolbar } from "../Toolbar";
 import "@/index.css";
 
@@ -52,6 +56,10 @@ import "@/index.css";
  *   ?fullscreen=1            macOS fullscreen: no traffic lights, no spacer
  *   ?name=<text>             project name on the pill (default Daintree)
  *   ?branch=<text>           branch on the pill's chip (default develop)
+ *   ?host=<name>             a window working on that host over SSH
+ *   ?link=connected|connecting|quiet|disconnected   the host link's state (default connected)
+ *   ?hosts=1                 a local window with hosts added (the host chip shows)
+ *   ?sidebar=1               the real worktree sidebar in the left column
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -59,19 +67,36 @@ const themeId = params.get("theme") ?? "daintree";
 const fixtureName = params.get("fixture") ?? "owner";
 const platform = params.get("platform") === "windows" ? "windows" : "mac";
 const branchName = params.get("branch") || "develop";
+const hostName = params.get("host");
+const linkState = params.get("link") ?? "connected";
+const showSidebar = !!params.get("sidebar");
 
 const PROJECT = PREVIEW_PROJECT;
 
+const WORKTREE_ROOT = hostName ? "/home/greg/Projects/daintree" : "/Users/greg/Projects/daintree";
 const WORKTREES: WorktreeSnapshot[] = [
   {
     id: "wt-main",
     worktreeId: "wt-main",
-    path: "/Users/greg/Projects/daintree",
+    path: WORKTREE_ROOT,
     name: "main",
     branch: branchName,
     isCurrent: true,
     isMainWorktree: true,
   },
+  ...(showSidebar
+    ? [
+        ["issue-12931-pane-toolbars", "feature/issue-12931-pane-toolbars"],
+        ["design-remote-session", "design/remote-session-indication"],
+      ].map(([name, branch], i): WorktreeSnapshot => ({
+        id: `wt-${i}`,
+        worktreeId: `wt-${i}`,
+        path: `${WORKTREE_ROOT}-worktrees/${name}`,
+        name: name!,
+        branch: branch!,
+        isCurrent: false,
+      }))
+    : []),
 ];
 
 const OWNER_PINS: readonly BuiltInAgentId[] = ["claude", "antigravity", "codex", "grok"];
@@ -167,7 +192,13 @@ function seedStores(): void {
   useAppThemeStore.setState({ selectedSchemeId: themeId });
 
   worktreeStore = createWorktreeStore();
-  worktreeStore.setState({ worktrees: new Map(WORKTREES.map((w) => [w.id, w])) });
+  worktreeStore.setState({
+    worktrees: new Map(WORKTREES.map((w) => [w.id, w])),
+    isLoading: false,
+    isInitialized: true,
+    error: null,
+  });
+  usePluginContextMenuItemsStore.setState({ entries: [], init: () => undefined });
   setCurrentViewStore(worktreeStore);
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-main" });
   useProjectStore.setState({ currentProject: PROJECT });
@@ -213,6 +244,29 @@ function seedStores(): void {
     panelIds: panels.map((p) => p.id),
     panelIdsByWorktreeId: { "wt-main": panels.map((p) => p.id) },
   });
+
+  if (hostName) {
+    const handshake = {
+      version: "0.43.0",
+      commit: "preview",
+      protocolVersion: 1,
+      platform: "linux" as const,
+      arch: "x64" as const,
+    };
+    useHostConnectionStore.setState({
+      hostId: hostName,
+      hostName,
+      everConnected: true,
+      connection:
+        linkState === "connecting"
+          ? { status: "connecting", attempt: 2 }
+          : linkState === "disconnected"
+            ? { status: "disconnected" }
+            : linkState === "quiet"
+              ? { status: "connected", rttMs: 12, handshake, quietSince: 1_764_000_000_000 }
+              : { status: "connected", rttMs: 12, handshake },
+    });
+  }
 
   if (fixture.unread > 0) {
     useNotificationHistoryStore.setState({ unreadCount: fixture.unread });
@@ -312,7 +366,16 @@ function App() {
           />
           {platform === "mac" ? <TrafficLights /> : <WindowsCaption />}
           <div className="flex flex-1">
-            <div className="w-[320px] shrink-0 border-r border-divider bg-surface-sidebar" />
+            <div
+              data-preview-sidebar=""
+              className="sidebar-root w-[320px] shrink-0 overflow-hidden border-r border-divider surface-chrome"
+            >
+              {showSidebar && (
+                <DndContext>
+                  <SidebarContent onOpenOverview={noop} />
+                </DndContext>
+              )}
+            </div>
             <div className="flex-1 bg-surface-canvas" />
           </div>
         </div>

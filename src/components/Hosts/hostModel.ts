@@ -33,14 +33,23 @@ export function localHostLabel(platform: ClientPlatform): string {
 }
 
 /**
- * A host name short enough for the chip, keeping its end: "build-east-01" and
- * "build-east-02" differ only there. The full name stays in the tooltip and
- * accessible name.
+ * A host name in the chip's three truncation parts. The machine's own label is
+ * what tells two hosts apart, so with a domain after it the label's last eight
+ * characters are kept and the domain goes first. An IP address has no label.
  */
-export function shortHostName(name: string, max = 24): string {
-  if (name.length <= max) return name;
-  const tail = 8;
-  return `${name.slice(0, max - tail - 1)}…${name.slice(-tail)}`;
+export function splitHostName(name: string): {
+  nameHead: string;
+  nameTail: string;
+  nameDomain: string;
+} {
+  const dot = name.indexOf(".");
+  const isAddress = /^[\d.:]+$/.test(name) || name.includes(":");
+  const label = dot > 0 && !isAddress ? name.slice(0, dot) : name;
+  return {
+    nameHead: label.slice(0, -8),
+    nameTail: label.slice(-8),
+    nameDomain: name.slice(label.length),
+  };
 }
 
 export interface HostMenuRow {
