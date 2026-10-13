@@ -36,6 +36,8 @@ export type LinkClientState =
   | {
       status: "connected";
       rttMs: number | null;
+      /** When the reply behind `rttMs` arrived; null until the first ping answers. */
+      rttSampledAt: number | null;
       handshake: HostHandshakeInfo;
       hostName: string;
       sessionId: string;
@@ -302,10 +304,12 @@ export class LinkClient {
     this.lastSeenAt = this.now();
     const establishedAt = this.now();
     let rttMs: number | null = null;
+    let rttSampledAt: number | null = null;
     let quietSince: number | null = null;
     const connected = (): LinkClientState => ({
       status: "connected",
       rttMs,
+      rttSampledAt,
       handshake: welcome.handshake,
       hostName: welcome.hostName,
       sessionId: welcome.sessionId,
@@ -317,6 +321,7 @@ export class LinkClient {
       if (this.current === session) {
         this.lastSeenAt = this.now();
         rttMs = rtt;
+        rttSampledAt = this.now();
         quietSince = null;
         this.setState(connected());
       }

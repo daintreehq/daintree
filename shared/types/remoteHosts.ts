@@ -194,6 +194,12 @@ export type HostConnectionState =
   | {
       status: "connected";
       rttMs: number | null;
+      /**
+       * When the reply behind `rttMs` arrived. A state that changes for any
+       * other reason carries the same stamp, so a reader can tell a fresh ping
+       * from a repeat of the last one even when both took the same time.
+       */
+      rttSampledAt?: number;
       handshake: HostHandshakeInfo;
       /** Connected anyway with a different version or commit; absent when the builds match. */
       buildMismatch?: HandshakeMismatch;

@@ -66,6 +66,7 @@ export {
   Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert
   ScreenShare, // other machines connected to this one — the host's connected-machines pill
   Server, // a machine a window runs on — the toolbar's host switcher, beside the project pill
+  ServerOff, // the window's host with its link down — the same machine, crossed out, never an alarm
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
   Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas

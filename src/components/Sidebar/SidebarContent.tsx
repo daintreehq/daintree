@@ -47,6 +47,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { WorktreesReconnectingBadge } from "./WorktreesReconnectingBadge";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
+import { Server } from "@/components/icons";
+import { getViewHostId } from "@/hooks/useHostConnection";
+import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { splitHostName } from "@/components/Hosts/hostModel";
 import { Button } from "@/components/ui/button";
 import { SIDEBAR_HEADER_ACTION, SIDEBAR_HEADER_ROW } from "./sidebarHeader";
 import { useDispatchedSidebarRefresh } from "./useDispatchedSidebarRefresh";
@@ -395,6 +399,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const overviewAriaShortcut = useAriaKeyshortcuts("worktree.overview");
   const refreshAriaShortcut = useAriaKeyshortcuts("worktree.refresh");
   const createWorktreeAriaShortcut = useAriaKeyshortcuts("worktree.createDialog.open");
+  // Static per view: a project view is bound to one host for its life.
+  const viewHostId = getViewHostId();
+  const storeHostName = useHostConnectionStore((s) => s.hostName);
+  const remoteHostName = viewHostId === null ? null : (storeHostName ?? viewHostId);
+  const remoteHostParts = remoteHostName === null ? null : splitHostName(remoteHostName);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const scrollerElementRef = useRef<HTMLElement | null>(null);
   // Latest dragStartOrder + sort-disabled state captured in refs so the
@@ -1884,9 +1893,41 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         )}
       >
         <div className="flex min-w-0 items-baseline gap-1.5">
-          <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
+          <h2 className="shrink-0 text-text-primary font-semibold text-sm tracking-wide">
             Worktrees
           </h2>
+          {remoteHostParts && !showReconnecting && (
+            // These checkouts live on the host, not here: the list says where,
+            // in the remote hue the toolbar above it wears. It repeats the host
+            // chip, so it is the first thing to go — when the header is too
+            // narrow for the name's distinguishing end, or "Reconnecting…"
+            // needs the room.
+            <span
+              data-testid="sidebar-remote-host"
+              className="hidden min-w-0 items-center gap-1 self-center text-xs text-text-secondary @[18rem]/header:flex"
+            >
+              <Server className="h-3 w-3 shrink-0 text-category-slate-text" aria-hidden="true" />
+              {/* One gapless run, so the name's parts never read as separate words. */}
+              <span className="flex min-w-0">
+                <span className="shrink-0 whitespace-pre">on </span>
+                {/* A few characters of a long head always show: "g…" names nothing. */}
+                <span
+                  className={cn(
+                    "truncate",
+                    remoteHostParts.nameHead.length > 4 ? "min-w-[4ch]" : "shrink-0"
+                  )}
+                >
+                  {remoteHostParts.nameHead}
+                </span>
+                <span className="shrink-0">{remoteHostParts.nameTail}</span>
+                {remoteHostParts.nameDomain && (
+                  <span className="min-w-0 shrink-[100] truncate">
+                    {remoteHostParts.nameDomain}
+                  </span>
+                )}
+              </span>
+            </span>
+          )}
           {showReconnecting && (
             <WorktreesReconnectingBadge
               escalatedSince={showReconnectingEscalated ? reconnectingAt : null}

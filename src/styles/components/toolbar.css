@@ -20,6 +20,46 @@
   backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
 }
 
+/* ── Remote window ──
+ * A window working on another machine wears it across the whole strip: a cool
+ * slate wash, near-neutral and never a status colour, so it reads as a
+ * different place rather than something wrong, and peripherally, before the
+ * host chip's label is read. A thin edge line read as a stalled progress bar
+ * and went unnoticed. Higher specificity than every `.surface-toolbar`
+ * fallback below, so reduced transparency and increased contrast keep it. */
+.surface-toolbar[data-remote-window] {
+  --remote-toolbar-mix: 30%;
+  --remote-toolbar-hue: var(--color-category-slate);
+  /* oklab, not oklch: a hue-interpolated mix from a warm toolbar (serengeti's
+   * amber) swings through red on its way and lands peach. */
+  --remote-toolbar-surface: color-mix(
+    in oklab,
+    var(--remote-toolbar-hue) var(--remote-toolbar-mix),
+    var(--theme-surface-toolbar)
+  );
+  /* The chip's quieter words (round trip, state, domain) sit on the tinted
+   * strip and the chip's own lift: secondary ink alone dipped under 4.5:1. */
+  --remote-chip-quiet-ink: color-mix(
+    in oklab,
+    var(--theme-text-secondary) 70%,
+    var(--theme-text-primary)
+  );
+  background-color: var(--remote-toolbar-surface);
+}
+
+/* Over a near-white strip the same share is a louder step, so light themes take
+ * less. Slate's own chroma is low enough that over a cream toolbar (bondi,
+ * table-mountain) it only cancels the warmth and leaves putty grey, which
+ * reads as disabled; carrying more of slate's blue keeps the cast cool. */
+:where(.light, [data-color-mode="light"]) .surface-toolbar[data-remote-window] {
+  --remote-toolbar-mix: 22%;
+  --remote-toolbar-hue: oklch(from var(--color-category-slate) l calc(c * 3) h);
+}
+
+.host-chip-quiet-ink {
+  color: var(--remote-chip-quiet-ink, var(--theme-text-secondary));
+}
+
 /* ── backdrop-filter fallbacks ──
  * The translucent material relies on GPU compositing and ignores the OS
  * "reduce transparency" accessibility preference. Engines without
