@@ -47,6 +47,12 @@ export async function resyncHostTerminals(
       continue;
     }
     terminalInstanceService.setAgentState(info.id, info.agentState);
+    // Same guard as the live state listener: a waiting report never overwrites
+    // the renderer's directing, which the controller only writes on entry and
+    // so could not restore on later keystrokes.
+    if (!newIncarnation && panel.agentState === "directing" && info.agentState === "waiting") {
+      continue;
+    }
     store.updateAgentState(
       info.id,
       info.agentState,

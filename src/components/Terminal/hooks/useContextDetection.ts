@@ -77,7 +77,14 @@ export function useContextDetection({
         const nextValue = update.state.doc.toString();
         applyDocChange(nextValue);
 
-        if (!consumeExternalValueFlag()) {
+        if (consumeExternalValueFlag()) {
+          // A programmatic empty (the reset after a send) ends the draft hold
+          // without the user having cleared anything.
+          const terminalId = latestRef.current?.terminalId;
+          if (terminalId && nextValue.trim().length === 0) {
+            terminalInstanceService.releaseComposerDraft(terminalId);
+          }
+        } else {
           const latest = latestRef.current;
           if (latest?.isInHistoryMode) {
             latest.resetHistoryIndex(latest.terminalId, latest.projectId);
@@ -96,7 +103,7 @@ export function useContextDetection({
               if (nextValue.trim().length === 0) {
                 terminalInstanceService.clearDirectingState(terminalId);
               } else {
-                terminalInstanceService.notifyUserInput(terminalId);
+                terminalInstanceService.notifyComposerDraft(terminalId);
               }
             }
           }

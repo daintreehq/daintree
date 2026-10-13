@@ -1677,7 +1677,11 @@ export function HelpPanel({
                     }}
                     onSendKey={(key) => {
                       if (terminalPty?.isInputLocked === true) return;
-                      terminalInstanceService.notifyUserInput(terminalId);
+                      if (key === "escape") {
+                        terminalInstanceService.clearDirectingState(terminalId, "escape-key");
+                      } else {
+                        terminalInstanceService.notifyUserInput(terminalId);
+                      }
                       if (key === "enter") reportCanopySent(terminalId);
                       terminalClient.sendKey(terminalId, key);
                     }}

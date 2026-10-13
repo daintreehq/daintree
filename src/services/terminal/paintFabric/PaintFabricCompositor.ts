@@ -585,6 +585,14 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).notifyUserInput(id, data);
   }
 
+  notifyComposerDraft(id: string): void {
+    this.plane(id).notifyComposerDraft(id);
+  }
+
+  releaseComposerDraft(id: string): void {
+    this.plane(id).releaseComposerDraft(id);
+  }
+
   notifyEnterPressed(id: string): void {
     this.plane(id).notifyEnterPressed(id);
   }
@@ -613,8 +621,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).openHoveredLink(id, event);
   }
 
-  clearDirectingState(id: string): void {
-    this.plane(id).clearDirectingState(id);
+  clearDirectingState(id: string, trigger?: string): void {
+    this.plane(id).clearDirectingState(id, trigger);
   }
 
   async prewarmTerminal(

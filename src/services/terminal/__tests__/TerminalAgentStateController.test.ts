@@ -787,7 +787,6 @@ describe("TerminalAgentStateController", () => {
 
       controller.onUserInput("t1", "a");
 
-      const original = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");
       Object.defineProperty(document, "visibilityState", {
         configurable: true,
         get: () => "hidden",
@@ -798,12 +797,122 @@ describe("TerminalAgentStateController", () => {
         document.dispatchEvent(new Event("visibilitychange"));
         expect(managed.agentState).toBe("directing");
       } finally {
-        if (original) {
-          Object.defineProperty(Document.prototype, "visibilityState", original);
-        } else {
-          delete (document as { visibilityState?: unknown }).visibilityState;
-        }
+        // The override lives on the instance; deleting it re-exposes the
+        // prototype getter, so later suites see "visible" again.
+        delete (document as { visibilityState?: unknown }).visibilityState;
       }
+    });
+  });
+
+  describe("composer draft hold", () => {
+    function waitingAgent(id = "t1"): ManagedTerminal {
+      const managed = makeMockManaged({ canonicalAgentState: "waiting", agentState: "waiting" });
+      instances.set(id, managed);
+      return managed;
+    }
+
+    it("holds directing through a thinking pause with an unsent draft", () => {
+      const managed = waitingAgent();
+
+      controller.onComposerDraft("t1");
+      expect(managed.agentState).toBe("directing");
+
+      vi.advanceTimersByTime(60_000);
+      expect(managed.agentState).toBe("directing");
+    });
+
+    it("each edit restarts the abandonment ceiling, which then clears an abandoned draft", () => {
+      const managed = waitingAgent();
+
+      controller.onComposerDraft("t1");
+      vi.advanceTimersByTime(100_000);
+      controller.onComposerDraft("t1");
+      vi.advanceTimersByTime(100_000);
+      expect(managed.agentState).toBe("directing");
+
+      vi.advanceTimersByTime(20_000);
+      expect(managed.agentState).toBe("waiting");
+      expect(mockUpdateAgentState).toHaveBeenLastCalledWith("t1", "waiting");
+    });
+
+    it("visibility sweep spares a held draft past the 15s cap but not past the ceiling", () => {
+      const managed = waitingAgent();
+      const t0 = Date.now();
+      controller.onComposerDraft("t1");
+
+      vi.setSystemTime(t0 + 30_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(managed.agentState).toBe("directing");
+
+      vi.setSystemTime(t0 + 130_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(managed.agentState).toBe("waiting");
+    });
+
+    it("xterm input during a held draft does not shorten the hold", () => {
+      const managed = waitingAgent();
+      controller.onComposerDraft("t1");
+
+      controller.onUserInput("t1", "");
+      vi.advanceTimersByTime(30_000);
+      expect(managed.agentState).toBe("directing");
+    });
+
+    it("releasing the draft falls back to the short bridge", () => {
+      const managed = waitingAgent();
+      controller.onComposerDraft("t1");
+      vi.advanceTimersByTime(30_000);
+
+      controller.releaseComposerDraft("t1");
+      vi.advanceTimersByTime(1499);
+      expect(managed.agentState).toBe("directing");
+      vi.advanceTimersByTime(1);
+      expect(managed.agentState).toBe("waiting");
+    });
+
+    it("release is a no-op without a hold", () => {
+      const managed = waitingAgent();
+      controller.onUserInput("t1", "hello");
+
+      controller.releaseComposerDraft("t1");
+      vi.advanceTimersByTime(1500);
+      expect(managed.agentState).toBe("directing");
+    });
+
+    it.each([
+      ["escape", (c: TerminalAgentStateController) => c.clearDirectingState("t1", "escape-key")],
+      ["enter", (c: TerminalAgentStateController) => c.onEnterPressed("t1")],
+      ["canonical change", (c: TerminalAgentStateController) => c.setAgentState("t1", "working")],
+    ])("%s ends the hold so the next spell uses the keystroke debounce", (_label, end) => {
+      const managed = waitingAgent();
+      controller.onComposerDraft("t1");
+      end(controller);
+      expect(managed.agentState).not.toBe("directing");
+
+      controller.setAgentState("t1", "waiting");
+      controller.onUserInput("t1", "a");
+      expect(managed.agentState).toBe("directing");
+      vi.advanceTimersByTime(1500);
+      expect(managed.agentState).toBe("waiting");
+    });
+
+    it("destroy drops the hold", () => {
+      const managed = waitingAgent();
+      controller.onComposerDraft("t1");
+      controller.destroy("t1");
+
+      managed.agentState = "waiting";
+      controller.onUserInput("t1", "a");
+      vi.advanceTimersByTime(1500);
+      expect(managed.agentState).toBe("waiting");
+    });
+
+    it("does not enter directing while the agent is working", () => {
+      const managed = makeMockManaged({ canonicalAgentState: "working", agentState: "working" });
+      instances.set("t1", managed);
+
+      controller.onComposerDraft("t1");
+      expect(managed.agentState).toBe("working");
     });
   });
 

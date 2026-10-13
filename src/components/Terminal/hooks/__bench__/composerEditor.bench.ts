@@ -12,7 +12,11 @@ import { useCompartmentDriver } from "../useCompartmentDriver";
 import { useContextDetection } from "../useContextDetection";
 
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { clearDirectingState: () => {}, notifyUserInput: () => {} },
+  terminalInstanceService: {
+    clearDirectingState: () => {},
+    notifyComposerDraft: () => {},
+    releaseComposerDraft: () => {},
+  },
 }));
 
 const THEME: ITheme = { background: "#000000", foreground: "#ffffff" };
