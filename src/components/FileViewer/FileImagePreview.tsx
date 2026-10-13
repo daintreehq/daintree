@@ -29,38 +29,41 @@ interface FileImagePreviewProps {
 
 /**
  * SVG markup is shown as an `<img>` of its own data URL, never inserted into
- * this document. An SVG image loads no subresources and runs no script, and
- * its styles stay inside it, so CSS the regex sanitizer misses (`u\72l(…)`,
- * `image-set("…")`) cannot make this machine fetch a `daintree-file://load` URL
- * of its own disk. A remote view's SVG, and the agent asking to show it, come
- * from another machine.
+ * this document. An SVG image fetches nothing but `data:` URLs, runs no script
+ * and keeps its styles to itself, so CSS the regex sanitizer misses
+ * (`u\72l(…)`, `image-set("…")`) cannot make this machine fetch a
+ * `daintree-file://load` URL of its own disk. A remote view's SVG, and the
+ * agent asking to show it, come from another machine.
  */
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 /**
- * The markup to render, or null if it isn't usable.
+ * The markup to render and whether it sets its own width, or null if it isn't
+ * usable. An SVG without a `width` has no intrinsic size as an image, so it is
+ * stretched to the stage as it was when inlined; one with a size keeps it.
  *
  * `image/svg+xml` is namespace-strict: a root `<svg>` that omits `xmlns` (common
  * in hand-written and tool-exported files) renders blank. `sanitizeSvg` only
  * requires the string to contain `<svg`, so declare the namespace when it's
  * absent rather than silently showing nothing.
  */
-function renderableSvgMarkup(sanitizedSvg: string): string | null {
-  const parses = (markup: string): boolean => {
+function renderableSvg(sanitizedSvg: string): { markup: string; sized: boolean } | null {
+  const parse = (markup: string): { markup: string; sized: boolean } | null => {
     const parsed = new DOMParser().parseFromString(markup, "image/svg+xml");
     // A parse failure yields a <parsererror> document rather than throwing.
-    if (parsed.querySelector("parsererror")) return false;
+    if (parsed.querySelector("parsererror")) return null;
     const root = parsed.documentElement;
-    return !!root && root.localName === "svg" && root.namespaceURI === SVG_NAMESPACE;
+    if (!root || root.localName !== "svg" || root.namespaceURI !== SVG_NAMESPACE) return null;
+    return { markup, sized: root.hasAttribute("width") };
   };
 
-  if (parses(sanitizedSvg)) return sanitizedSvg;
+  const direct = parse(sanitizedSvg);
+  if (direct) return direct;
 
   // Retry once with the namespace declared on the root element. Only rewrites
   // the opening tag, so sanitized content is otherwise untouched.
   if (!/\sxmlns\s*=/.test(sanitizedSvg)) {
-    const declared = sanitizedSvg.replace(/<svg\b/i, `<svg xmlns="${SVG_NAMESPACE}"`);
-    if (parses(declared)) return declared;
+    return parse(sanitizedSvg.replace(/<svg\b/i, `<svg xmlns="${SVG_NAMESPACE}"`));
   }
   return null;
 }
@@ -81,16 +84,16 @@ export function FileImagePreview({
   onError,
   maxHeightClassName = "max-h-[70vh]",
 }: FileImagePreviewProps) {
-  const svgMarkup = sanitizedSvg ? renderableSvgMarkup(sanitizedSvg) : null;
+  const svg = sanitizedSvg ? renderableSvg(sanitizedSvg) : null;
 
   return (
     <div className="flex items-center justify-center p-6 min-h-[300px]">
       {sanitizedSvg ? (
-        svgMarkup && (
+        svg && (
           <img
-            src={svgToDataUrl(svgMarkup)}
+            src={svgToDataUrl(svg.markup)}
             alt={alt}
-            className={`max-w-full ${maxHeightClassName} object-contain`}
+            className={`max-w-full ${maxHeightClassName} object-contain${svg.sized ? "" : " w-full h-auto"}`}
             draggable={false}
             onError={onError}
           />

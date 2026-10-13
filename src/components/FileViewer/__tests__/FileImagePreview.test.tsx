@@ -74,10 +74,21 @@ describe("FileImagePreview SVG", () => {
       `<rect style="fill:u\\72l('daintree-file://load?path=%2Fetc%2Fhosts&amp;root=%2Fetc')" /></svg>`;
     const container = renderSvg(payload);
 
+    const shown = shownSvg(container);
+    expect(shown).not.toBeNull();
+    expect(shown?.querySelector("rect")).not.toBeNull();
     expect(container.querySelector("svg")).toBeNull();
     expect(container.querySelector("style")).toBeNull();
     expect(container.querySelector("[style]")).toBeNull();
-    expect(shownSvg(container)?.querySelector("rect")).not.toBeNull();
+  });
+
+  it("stretches an SVG without its own width to the stage, and leaves a sized one alone", () => {
+    const unsized = renderSvg(`<svg xmlns="${SVG_NS}" viewBox="0 0 400 100"><rect /></svg>`);
+    expect(unsized.querySelector("img")?.classList.contains("w-full")).toBe(true);
+    cleanup();
+
+    const sized = renderSvg(`<svg xmlns="${SVG_NS}" width="24" height="24"><rect /></svg>`);
+    expect(sized.querySelector("img")?.classList.contains("w-full")).toBe(false);
   });
 
   it("falls back to an img when no SVG markup is supplied", () => {
