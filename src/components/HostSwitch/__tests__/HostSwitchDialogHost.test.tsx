@@ -8,6 +8,9 @@ vi.mock("../HostProjectPicker", () => ({
   HostProjectPicker: ({ hostId }: { hostId: string }) => <div>Projects on {hostId}</div>,
 }));
 vi.mock("../HostSwitchDialog", () => ({ HostSwitchDialog: () => null }));
+vi.mock("../HostSwitcherPalette", () => ({
+  HostSwitcherPalette: () => <div data-testid="host-switcher-palette" />,
+}));
 vi.mock("../HostSetupRecipeConfirm", () => ({ HostSetupRecipeConfirm: () => null }));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: { currentProject: null }) => unknown) =>
@@ -66,6 +69,13 @@ describe("HostSwitchDialogHost", () => {
     act(() => listeners.forEach((listener) => listener({ type: "project-offer" })));
     expect(await screen.findByText("Projects on studio-01")).toBeTruthy();
     expect(takeProjectOffer).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the host switcher palette mounted for Switch host to open", async () => {
+    takeProjectOffer.mockResolvedValue(null);
+    render(<HostSwitchDialogHost />);
+    await act(async () => {});
+    expect(screen.getByTestId("host-switcher-palette")).toBeTruthy();
   });
 
   it("shows nothing in a window with no offer", async () => {

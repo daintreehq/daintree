@@ -56,6 +56,7 @@ import {
   isKeybindingOwnedAction,
   rendererMenuAccelerator,
   resetRendererOwnedAccelerators,
+  trackHostSwitchAccelerator,
 } from "./services/menuAccelerators.js";
 
 // The About panel's build-version slot shows the release channel for
@@ -142,6 +143,7 @@ export function createApplicationMenu(
   // DevTools (which app renderers never see keys from) fall back to native
   // execution instead of the shortcut going dead.
   resetRendererOwnedAccelerators();
+  trackHostSwitchAccelerator();
 
   const getTargetBrowserWindow = (
     browserWindow: Electron.BaseWindow | undefined

@@ -3,6 +3,7 @@ import type { TerminalRecipe } from "@shared/types/project";
 import { useProjectStore } from "@/store/projectStore";
 import { HostSwitchDialog } from "./HostSwitchDialog";
 import { HostProjectPicker } from "./HostProjectPicker";
+import { HostSwitcherPalette } from "./HostSwitcherPalette";
 import {
   currentHostProjectPickerRequest,
   dismissHostProjectPicker,
@@ -21,9 +22,10 @@ import {
 } from "./hostSwitchRequests";
 
 /**
- * Shows the switch dialog when an action asks for it, a host's project list
- * when a switch to that host had nothing to return to, and runs a setup
- * recipe left behind by a clone onto this view's host. Mount once per view.
+ * Shows the switch dialog when an action asks for it, the host switcher
+ * palette, a host's project list when a switch to that host had nothing to
+ * return to, and runs a setup recipe left behind by a clone onto this view's
+ * host. Mount once per view.
  */
 export function HostSwitchDialogHost() {
   const request = useSyncExternalStore(
@@ -104,6 +106,7 @@ export function HostSwitchDialogHost() {
 
   return (
     <>
+      <HostSwitcherPalette />
       {request && (
         <HostSwitchDialog
           key={request.id}

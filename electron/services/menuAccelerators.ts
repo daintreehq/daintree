@@ -1,5 +1,7 @@
 import { buildDefaultKeybindings } from "../../shared/config/defaultKeybindings.js";
 import { getValidatedOverrides } from "./keybindingOverridesStore.js";
+import { isRemoteShellSupported } from "../remote/buildGate.js";
+import { store } from "../store.js";
 
 /**
  * Native menu accelerators derived from the same source the renderer resolves
@@ -43,6 +45,8 @@ interface ParsedAccelerator {
   shift: boolean;
   alt: boolean;
   key: string;
+  /** Consulted per keystroke: the renderer owns the combo only while this holds. */
+  when?: () => boolean;
 }
 
 /**
@@ -173,10 +177,37 @@ export function rendererMenuAccelerator(actionId: string): string | undefined {
   return accelerator;
 }
 
-export function trackRendererOwnedAccelerator(accelerator: string | undefined): void {
+/**
+ * `when` makes the claim conditional, for a renderer binding that shares its
+ * combo with a native role it should only displace sometimes (host.switch's
+ * Cmd+Alt+H and macOS Hide Others).
+ */
+export function trackRendererOwnedAccelerator(
+  accelerator: string | undefined,
+  when?: () => boolean
+): void {
   if (!accelerator) return;
   const parsed = parseAccelerator(accelerator);
-  if (parsed) rendererOwnedAccelerators.push(parsed);
+  if (!parsed) return;
+  if (when) parsed.when = when;
+  rendererOwnedAccelerators.push(parsed);
+}
+
+function hasHostToSwitchTo(): boolean {
+  if (!isRemoteShellSupported()) return false;
+  const hosts = store.get("remoteHosts")?.hosts;
+  return Array.isArray(hosts) && hosts.length > 0;
+}
+
+/**
+ * Switch host has no menu item, but its default Cmd+Alt+H is macOS Hide
+ * Others, whose native key equivalent would take the keydown before the
+ * renderer saw it. The renderer claims the combo only while there is a host to
+ * switch to; with none, Cmd+Alt+H stays Hide Others. Read per keystroke, so
+ * adding or forgetting a host needs no menu rebuild.
+ */
+export function trackHostSwitchAccelerator(): void {
+  trackRendererOwnedAccelerator(getMenuAccelerator("host.switch"), hasHostToSwitchTo);
 }
 
 /**
@@ -202,17 +233,26 @@ export function isRendererOwnedShortcut(input: Electron.Input): boolean {
     if (acc.alt !== input.alt) continue;
     if (mac && !acc.primary && input.meta) continue;
 
-    const accKey = acc.key.length === 1 ? acc.key.toUpperCase() : acc.key;
-    if (inputKey === accKey) return true;
-    // Physical digit-row parity with the renderer matcher: on layouts that
-    // shift their number row, input.key for Digit1 is "&" — match by code.
-    if (/^[0-9]$/.test(accKey) && input.code === `Digit${accKey}`) return true;
-    // Option-modified letters on macOS produce transformed characters
-    // (Option+T → "†"), mirroring the renderer's code-based normalization for
-    // mac Alt combos — match the physical letter key instead.
-    if (mac && input.alt && /^[A-Z]$/.test(accKey) && input.code === `Key${accKey}`) return true;
-    // Arrow keys arrive as "ArrowUp" etc. on Input; accelerators store "Up".
-    if (input.key === `Arrow${accKey}`) return true;
+    if (keyMatches(acc, input, inputKey, mac) && (!acc.when || acc.when())) return true;
   }
   return false;
+}
+
+function keyMatches(
+  acc: ParsedAccelerator,
+  input: Electron.Input,
+  inputKey: string,
+  mac: boolean
+): boolean {
+  const accKey = acc.key.length === 1 ? acc.key.toUpperCase() : acc.key;
+  if (inputKey === accKey) return true;
+  // Physical digit-row parity with the renderer matcher: on layouts that
+  // shift their number row, input.key for Digit1 is "&" — match by code.
+  if (/^[0-9]$/.test(accKey) && input.code === `Digit${accKey}`) return true;
+  // Option-modified letters on macOS produce transformed characters
+  // (Option+T → "†"), mirroring the renderer's code-based normalization for
+  // mac Alt combos — match the physical letter key instead.
+  if (mac && input.alt && /^[A-Z]$/.test(accKey) && input.code === `Key${accKey}`) return true;
+  // Arrow keys arrive as "ArrowUp" etc. on Input; accelerators store "Up".
+  return input.key === `Arrow${accKey}`;
 }

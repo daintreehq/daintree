@@ -4,7 +4,7 @@ import type { ActionContext } from "@shared/types/actions";
 import { requestHostSwitch } from "@/components/HostSwitch/hostSwitchRequests";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { isSettingsTab } from "@/components/Settings/settingsTabIds";
-import { requestHostMenu } from "@/components/Hosts/hostMenuRequests";
+import { usePaletteStore } from "@/store/paletteStore";
 import { HOSTS_OVERVIEW_ACTION_ID, HOSTS_SETTINGS_TAB } from "@/components/Hosts/hostModel";
 import { requestHostsOverview } from "@/components/Hosts/Overview/hostsOverviewRequests";
 import { ClientAppError } from "@/utils/clientAppError";
@@ -93,7 +93,7 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     id: "host.switch",
     title: "Switch host…",
     description:
-      'Move this window to another Daintree host. No args opens the host menu; hostId ("local" or from the list) opens its last project here, else its project list.',
+      'Move this window to another Daintree host. No args opens the host switcher palette; hostId ("local" or from the list) opens its last project here, else its project list.',
     category: "workspace",
     kind: "command",
     // Moves the window the person is looking at to another machine: an agent
@@ -109,7 +109,9 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     run: async (args: unknown) => {
       const parsed = switchArgsSchema.parse(args);
       if (!parsed?.hostId) {
-        if (!requestHostMenu()) openHostsSettings(callbacks);
+        // With only this machine there is nowhere to switch to; adding a host is the next step.
+        if (anyRemoteHost()) usePaletteStore.getState().openPalette("host-switcher");
+        else openHostsSettings(callbacks);
         return;
       }
       await assertKnownHost(parsed.hostId);
