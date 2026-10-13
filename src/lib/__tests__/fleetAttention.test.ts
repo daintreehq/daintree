@@ -369,7 +369,12 @@ describe("watched hand-backs", () => {
 
 describe("Canopy refinements", () => {
   const ASKED = { kind: "asked", quote: "Want me to update the tests too?", readAt: NOW } as const;
-  const NOT_ASKING = { kind: "not-asking", quote: "All 14 tests pass.", readAt: NOW } as const;
+  const NOT_ASKING = {
+    kind: "not-asking",
+    quote: "All 14 tests pass.",
+    readAt: NOW,
+    seen: false,
+  } as const;
   const STALLED = {
     kind: "stalled",
     quote: "Waiting for background terminal",
@@ -400,13 +405,49 @@ describe("Canopy refinements", () => {
     expect(bandForRun(run({ agentState: "working", canopy: ASKED }))).toBe("running");
   });
 
-  it("clears a question wait that asks nothing, back to the free rules for a stop", () => {
+  it("clears a question wait that asks nothing into a stop of its own, unseen until its turn is read", () => {
+    // A question wait is never recorded as a hand-back: on a run's first turn
+    // there is no record at all, and that is not a stop that handed nothing back.
+    const wait = {
+      agentState: "waiting",
+      waitingReason: "question",
+      since: NOW - 2_000,
+      canopy: NOT_ASKING,
+    } as const;
+    expect(bandForRun(run(wait))).toBe("review");
+    expect(bandTimestamp(run(wait), "review")).toBe(NOW - 2_000);
+    const read = run({ ...wait, canopy: { ...NOT_ASKING, seen: true } });
+    expect(bandForRun(read)).toBe("done");
+    expect(bandTimestamp(read, "done")).toBe(NOW - 2_000);
+  });
+
+  it("never lets an earlier stop's read mark speak for a question wait that asks nothing", () => {
+    // Later turns carry the record of the stop before, seen before this wait began.
+    const earlier = { stoppedAt: NOW - 60 * 60_000, seenAt: NOW - 50 * 60_000 };
+    const wait = run({
+      agentState: "waiting",
+      waitingReason: "question",
+      since: NOW - 2_000,
+      handBack: earlier,
+      canopy: NOT_ASKING,
+    });
+    expect(bandForRun(wait)).toBe("review");
+    // Dated from this wait, not the old stop.
+    expect(bandTimestamp(wait, "review")).toBe(NOW - 2_000);
+    // Nor does an earlier stop left unseen hold back a turn the user has read.
+    const read = run({
+      agentState: "waiting",
+      waitingReason: "question",
+      handBack: { stoppedAt: NOW - 60 * 60_000 },
+      canopy: { ...NOT_ASKING, seen: true },
+    });
+    expect(bandForRun(read)).toBe("done");
+  });
+
+  it("leaves the user's own decisions above a question wait that asks nothing", () => {
     const wait = { agentState: "waiting", waitingReason: "question", canopy: NOT_ASKING } as const;
-    expect(bandForRun(run(wait))).toBe("idle");
-    expect(bandForRun(run({ ...wait, handBack: { stoppedAt: NOW - 1_000 } }))).toBe("review");
-    expect(
-      bandForRun(run({ ...wait, handBack: { stoppedAt: NOW - 1_000, seenAt: NOW - 500 } }))
-    ).toBe("done");
+    expect(bandForRun(run({ ...wait, park: { parkedAt: NOW } }))).toBe("parked");
+    expect(bandForRun(run({ ...wait, snooze: { snoozedAt: NOW } }))).toBe("snoozed");
   });
 
   it("never clears an approval or an error Daintree observed itself", () => {

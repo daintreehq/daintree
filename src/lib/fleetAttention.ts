@@ -119,10 +119,10 @@ export function bandForRun(run: FleetRunRow): FleetBand {
   const canopy = runCanopyPlacement(run);
   if (canopy?.kind === "asked") return "needs-you";
   if (canopy?.kind === "not-asking") {
-    // Only a stop Daintree watched work before is a hand-back; a reading that
-    // nothing is being asked does not make one.
-    if (run.handBack === undefined) return "idle";
-    return isHandBackUnseen(run.handBack) ? "review" : "done";
+    // A question wait is never recorded as a hand-back, so the run's record is
+    // from an earlier stop and says nothing about this one. The wait is the
+    // stop, and whether the user has read it is Canopy's mark for its turn.
+    return canopy.seen ? "done" : "review";
   }
   // A stop main watched the run make after work it saw is a hand-back, and
   // whether the user has had it in front of them since is main's to say — so
@@ -228,7 +228,10 @@ export function bandTimestamp(run: FleetRunRow, band: FleetBand): number | undef
     }
     case "review":
     case "done":
-      // Dated from the stop itself, not the slide into `waiting` after it.
+      // Dated from the stop itself, not the slide into `waiting` after it. A
+      // question wait Canopy read as asking nothing is its own stop; the
+      // record, if any, is an earlier one.
+      if (runCanopyPlacement(run)?.kind === "not-asking") return run.since;
       return run.handBack?.stoppedAt ?? run.since;
     case "needs-you":
       // An ask Canopy read on a hand-back is as old as the stop it was asked

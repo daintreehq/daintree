@@ -501,5 +501,7 @@ function sameCanopyRefinement(
 ): boolean {
   if (a === undefined || b === undefined) return a === b;
   if (a.kind !== b.kind || a.quote !== b.quote || a.readAt !== b.readAt) return false;
-  return a.kind !== "stalled" || b.kind !== "stalled" || a.stalledSince === b.stalledSince;
+  if (a.kind === "stalled" && b.kind === "stalled") return a.stalledSince === b.stalledSince;
+  if (a.kind === "not-asking" && b.kind === "not-asking") return a.seen === b.seen;
+  return true;
 }

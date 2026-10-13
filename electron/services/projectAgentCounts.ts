@@ -469,8 +469,9 @@ export function computeProjectAgentCounts(
   /**
    * Canopy's refinement for a run's incarnation, when it has one —
    * `canopyRefinementFor` is the intended source. An ask it read counts as a
-   * wait and a question it read as asking nothing does not, as the fleet bands
-   * them; a stall changes no tally here. Omitted, the free rules alone.
+   * wait, and a question it read as asking nothing as a hand-back of its own,
+   * as the fleet bands them; a stall changes no tally here. Omitted, the free
+   * rules alone.
    */
   canopyFor?: (terminalId: string, spawnedAt: number) => RunCanopyRefinement | undefined
 ): Map<string, ProjectAgentCounts> {
@@ -544,16 +545,24 @@ export function computeProjectAgentCounts(
           )
         : undefined;
     const asked = canopy?.kind === "asked";
-    const notAsking = canopy?.kind === "not-asking";
+    const notAsking = canopy?.kind === "not-asking" ? canopy : undefined;
     const handBack =
       terminal.id !== undefined &&
       terminal.agentState !== undefined &&
       !asked &&
-      (notAsking || isHandBackStop(terminal.agentState, terminal.waitingReason))
+      isHandBackStop(terminal.agentState, terminal.waitingReason)
         ? handBackFor?.(terminal.id, terminal.spawnedAt)
         : undefined;
 
-    if (handBack !== undefined) {
+    if (notAsking !== undefined) {
+      // A question wait is never recorded as a hand-back, so a record the run
+      // carries is from an earlier stop. The wait is the stop, unseen until
+      // Canopy's read mark covers its turn, as the fleet bands it.
+      entry.completed += 1;
+      const at = usableTimestamp(terminal.lastStateChange);
+      if (at > 0) entry.latestCompletionAt = Math.max(entry.latestCompletionAt ?? 0, at);
+      if (!isShelved && !notAsking.seen) noteUnacknowledged(entry, at);
+    } else if (handBack !== undefined) {
       entry.completed += 1;
       const at = usableTimestamp(handBack.stoppedAt) || usableTimestamp(terminal.lastStateChange);
       if (at > 0) entry.latestCompletionAt = Math.max(entry.latestCompletionAt ?? 0, at);
@@ -562,7 +571,7 @@ export function computeProjectAgentCounts(
       // A shelved wait is withheld from every attention tally — waiting, its
       // blocked subset, and the age that dates them. The run is still there and
       // still waiting; the user has said it does not need them yet.
-      if (!isShelved && !notAsking) {
+      if (!isShelved) {
         entry.waiting += 1;
         // `"error"` means the agent settled after a blocking failure, where input
         // may not unblock it — a materially different ask than an empty prompt.

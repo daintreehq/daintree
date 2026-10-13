@@ -200,16 +200,18 @@ describe("deriveWorktreeAgentBuckets with Canopy's readings", () => {
   });
 
   it("clears a question wait the reading shows asks nothing out of Attention", () => {
+    // The record is the stop before, already seen: a question wait never makes one.
     const wait = run("a", {
       agentState: "waiting",
       waitingReason: "question",
-      handBack: { stoppedAt: NOW - 1000 },
+      handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 50_000 },
     });
     expect(buckets([wait]).attention).toBe(true);
-    const cleared = buckets([
-      { ...wait, canopy: { kind: "not-asking", quote: "All tests pass.", readAt: NOW } },
-    ]);
+    const NOT_ASKING = { kind: "not-asking", quote: "All tests pass.", readAt: NOW } as const;
+    const cleared = buckets([{ ...wait, canopy: { ...NOT_ASKING, seen: false } }]);
     expect(cleared).toMatchObject({ attention: false, finished: true, finishedUnseen: true });
+    const read = buckets([{ ...wait, canopy: { ...NOT_ASKING, seen: true } }]);
+    expect(read).toMatchObject({ attention: false, finished: true, finishedUnseen: false });
   });
 
   it("keeps a stalled agent in Working: the sidebar has no Quiet bucket", () => {

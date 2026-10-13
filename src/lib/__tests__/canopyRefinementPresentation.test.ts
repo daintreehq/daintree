@@ -18,7 +18,10 @@ describe("canopyEvidence", () => {
       { kind: "stalled", quote: "Running tests", readAt: NOW, stalledSince: NOW - 600_000 },
       NOW
     );
-    const notAsking = canopyEvidence({ kind: "not-asking", quote: "Done.", readAt: NOW }, NOW);
+    const notAsking = canopyEvidence(
+      { kind: "not-asking", quote: "Done.", readAt: NOW, seen: false },
+      NOW
+    );
     expect(stalled.startsWith('Screen unchanged: "Running tests"')).toBe(true);
     expect(notAsking.startsWith('Not asking: "Done."')).toBe(true);
     expect(notAsking.endsWith("read by Canopy just now")).toBe(true);

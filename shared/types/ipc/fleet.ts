@@ -77,6 +77,13 @@ export type RunCanopyRefinement =
       /** The screen's own line that says what the run is doing instead, verbatim. */
       quote: string;
       readAt: number;
+      /**
+       * The user has read the turn this wait is, by Canopy's own read mark for
+       * it. A question wait is never recorded as a hand-back, so a `handBack`
+       * the run carries is from an earlier stop and can't say whether this one
+       * was seen.
+       */
+      seen: boolean;
     }
   | {
       kind: "stalled";

@@ -374,20 +374,6 @@ function openedAt(value: number | undefined): number {
  * ago did I shelve this". A quiet row is dated from the silence for the same
  * reason: the silence is the thing that might need a hand.
  */
-/**
- * The attribution for a row Canopy placed. A park or snooze outranks the
- * reading, and a row the user shelved must not claim a reading moved it.
- */
-function canopyEvidenceFor(
-  run: FleetRunRow,
-  band: FleetBand,
-  nowMs: number
-): CanopyEvidenceParts | null {
-  if (band === "parked" || band === "snoozed") return null;
-  const placement = runCanopyPlacement(run);
-  return placement === undefined ? null : canopyEvidenceParts(placement, nowMs);
-}
-
 function ageOf(
   run: FleetRunRow,
   band: FleetBand,
@@ -414,6 +400,20 @@ function ageOf(
   }
 
   return { age, ageLabel: null, agePhrase: AGE_VERB[band](age), secondaryPhrase: null };
+}
+
+/**
+ * The attribution for a row Canopy placed. A park or snooze outranks the
+ * reading, and a row the user shelved must not claim a reading moved it.
+ */
+function canopyEvidenceFor(
+  run: FleetRunRow,
+  band: FleetBand,
+  nowMs: number
+): CanopyEvidenceParts | null {
+  if (band === "parked" || band === "snoozed") return null;
+  const placement = runCanopyPlacement(run);
+  return placement === undefined ? null : canopyEvidenceParts(placement, nowMs);
 }
 
 /**

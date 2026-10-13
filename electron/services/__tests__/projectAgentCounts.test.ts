@@ -1070,18 +1070,65 @@ describe("computeProjectAgentCounts — Canopy refinements (#13239)", () => {
     ).toMatchObject({ waiting: 1, completed: 0, oldestWaitingSince: 500 });
   });
 
-  it("withdraws a question wait Canopy read as asking nothing from the waiting tally", () => {
+  const NOT_ASKING = {
+    kind: "not-asking",
+    quote: "All tests pass.",
+    readAt: 700,
+    seen: false,
+  } as const;
+
+  it("counts a question wait Canopy read as asking nothing as an unseen hand-back of its own", () => {
+    // A first turn: a question wait is never recorded as a hand-back.
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "question", lastStateChange: 900 }),
+    ];
+    expect(count(terminals, undefined)).toMatchObject({ waiting: 1, completed: 0 });
+    expect(count(terminals, NOT_ASKING)).toMatchObject({
+      waiting: 0,
+      completed: 1,
+      unacknowledgedCompleted: 1,
+      latestCompletionAt: 900,
+      oldestUnacknowledgedCompletionAt: 900,
+    });
+    expect(count(terminals, { ...NOT_ASKING, seen: true })).toMatchObject({
+      waiting: 0,
+      completed: 1,
+      unacknowledgedCompleted: 0,
+    });
+  });
+
+  it("never lets an earlier stop's read mark speak for a question wait that asks nothing", () => {
+    // The record is the stop before this wait, seen before this wait began.
+    const terminals = [
+      agent({ id: "a", agentState: "waiting", waitingReason: "question", lastStateChange: 900 }),
+    ];
+    const records = { a: { stoppedAt: 300, seenAt: 400 } };
+    expect(count(terminals, NOT_ASKING, records)).toMatchObject({
+      completed: 1,
+      unacknowledgedCompleted: 1,
+      latestCompletionAt: 900,
+      oldestUnacknowledgedCompletionAt: 900,
+    });
+  });
+
+  it("withholds a shelved question wait that asks nothing from the unseen tally", () => {
     const terminals = [agent({ id: "a", agentState: "waiting", waitingReason: "question" })];
-    expect(count(terminals, undefined).waiting).toBe(1);
-    expect(
-      count(terminals, { kind: "not-asking", quote: "All tests pass.", readAt: 700 })
-    ).toMatchObject({ waiting: 0 });
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      terminals.map((t) => ({ detectedAgentId: "claude", spawnedAt: 1, ...t })),
+      undefined,
+      new Map(),
+      undefined,
+      undefined,
+      () => undefined,
+      new Map([["a", {}]]),
+      () => NOT_ASKING
+    ).get("p1")!;
+    expect(counts).toMatchObject({ waiting: 0, unacknowledgedCompleted: 0 });
   });
 
   it("never lets a reading clear an approval Daintree observed", () => {
     const terminals = [agent({ id: "a", agentState: "waiting", waitingReason: "approval" })];
-    expect(
-      count(terminals, { kind: "not-asking", quote: "All tests pass.", readAt: 700 }).waiting
-    ).toBe(1);
+    expect(count(terminals, NOT_ASKING).waiting).toBe(1);
   });
 });

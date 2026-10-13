@@ -4835,6 +4835,29 @@ describe("CanopyService refining attention", () => {
     expect(h.service.getRefinement("y", 1)).toBeUndefined();
   });
 
+  it("says whether the user has read the question wait it cleared, by that turn's read mark", async () => {
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: async () => FINISHED_READ,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("q", { agentState: "waiting", waitingReason: "question" }));
+    h.screens.set("q", "⏺ All 14 tests pass.");
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("q", 1)).toMatchObject({ kind: "not-asking", seen: false })
+    );
+
+    changed.mockClear();
+    h.service.setRead("q", 1, true);
+    expect(h.service.getRefinement("q", 1)).toMatchObject({ kind: "not-asking", seen: true });
+    // The sidebar hears of the read with no panel open, like any other refinement change.
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+
+    h.service.setRead("q", 1, false);
+    expect(h.service.getRefinement("q", 1)).toMatchObject({ kind: "not-asking", seen: false });
+  });
+
   it("drops a live refinement when Canopy goes off, and tells the fleet", async () => {
     const changed = vi.fn();
     const h = await makeHarness({ classify: readScreen, onRefinementsChanged: changed });

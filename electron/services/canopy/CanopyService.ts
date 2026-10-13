@@ -2578,7 +2578,12 @@ export class CanopyService {
     // and it outranks what the reader made of it.
     if (!entry || entry.spawnedAt !== spawnedAt || entry.disposition !== null) return undefined;
     const held = entry.refinement;
-    return held !== null && held.turn === entry.reads.turn ? held.value : undefined;
+    if (held === null || held.turn !== entry.reads.turn) return undefined;
+    // The verdict is held for the turn; whether the user has read that turn
+    // is not, and every read or mark since settles through here.
+    return held.value.kind === "not-asking"
+      ? { ...held.value, seen: !isUnread(entry.reads) }
+      : held.value;
   }
 
   /** Readings refine attention only for a user who turned Canopy on and pays for it. */
@@ -2846,15 +2851,15 @@ function observedKey(run: FleetRunRow): string {
   return `${run.agentState ?? ""}:${run.waitingReason ?? ""}`;
 }
 
+/** An `observedKey` taken while the run was at work. */
+const BUSY_READ_STATE = /^(working|directing):/;
+
 /**
  * What a run's reading refines of where it lands, or null when it refines
  * nothing. The classifier's category is the verdict and its verbatim words the
  * evidence; no score or priority places a run, so a finished turn with loose
  * ends — which can score high — stays where the free rules put it.
  */
-/** An `observedKey` taken while the run was at work. */
-const BUSY_READ_STATE = /^(working|directing):/;
-
 function refinementOf(
   entry: RunEntry,
   run: FleetRunRow,
@@ -2891,7 +2896,9 @@ function refinementOf(
     if (classified.category !== "finished" && classified.category !== "idle") return null;
     if (classified.question !== null && classified.question.trim() !== "") return null;
     const quote = (evidence.status ?? entry.card?.activity ?? "").trim();
-    return quote ? { kind: "not-asking", quote, readAt: entry.readAt } : null;
+    return quote
+      ? { kind: "not-asking", quote, readAt: entry.readAt, seen: !isUnread(entry.reads) }
+      : null;
   }
   return null;
 }
