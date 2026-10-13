@@ -40,7 +40,6 @@ vi.mock("@/utils/logger", () => ({
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { HostChip } from "../HostChip";
 import { _resetHostListForTesting } from "../hostList";
-import { requestHostMenu } from "../hostMenuRequests";
 import { takePendingHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -139,9 +138,7 @@ async function renderWithHosts(hosts: HostListEntry[]) {
 }
 
 async function openMenu() {
-  await act(async () => {
-    expect(requestHostMenu()).toBe(true);
-  });
+  fireEvent.keyDown(screen.getByTestId("host-chip"), { key: "Enter" });
   return screen.findByRole("menu");
 }
 
@@ -149,7 +146,6 @@ describe("HostChip", () => {
   it("stays hidden until a host other than this machine exists", async () => {
     const { container } = await renderWithHosts([]);
     expect(container.querySelector("[data-testid='host-chip']")).toBeNull();
-    expect(requestHostMenu()).toBe(false);
 
     act(() => emit?.({ type: "hosts-changed", hosts: [host("h1", "studio-01")] }));
     expect(container.querySelector("[data-testid='host-chip']")).not.toBeNull();

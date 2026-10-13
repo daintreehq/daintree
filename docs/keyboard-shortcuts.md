@@ -23,7 +23,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Repeat last action | `⌘+⇧+.` | `Ctrl+Shift+.` |
 | Toggle sidebar | `⌘+B` | `Ctrl+B` |
 | Toggle focus mode (hide sidebar and assistant) | `⌘+K ⌘+F` | `Ctrl+K Ctrl+F` |
-| Switch host | `⌘+⇧+⌥+H` | `Ctrl+F4` (Windows), `Ctrl+Shift+Alt+H` (Linux) |
+| Switch host | `⌘+⌥+H` | `Ctrl+F4` (Windows), `Ctrl+Alt+H` (Linux) |
 
 ## Terminal
 

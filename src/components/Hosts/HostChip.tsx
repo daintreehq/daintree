@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import {
@@ -30,7 +30,6 @@ import { PlatformGlyph } from "./PlatformGlyph";
 import { isNewWindowClick, switchToHost } from "./hostSwitching";
 import { hostUpdateOffer, runHostUpdate, type HostUpdateOffer } from "./hostUpdate";
 import { hasRemoteHosts, useHostList } from "./hostList";
-import { onHostMenuRequest } from "./hostMenuRequests";
 import { openHostsSettingsTab } from "@/components/Settings/Hosts/hostSettingsRequests";
 import {
   HOSTS_OVERVIEW_ACTION_ID,
@@ -168,11 +167,6 @@ export function HostChip() {
   // Forwards riding on the link when Disconnect asked first; null while not asking.
   const [disconnectAsk, setDisconnectAsk] = useState<number | null>(null);
   const visible = supported && hasRemoteHosts(hostList);
-
-  useEffect(() => {
-    if (!visible) return;
-    return onHostMenuRequest(() => setOpen(true));
-  }, [visible]);
 
   if (!visible) return null;
 

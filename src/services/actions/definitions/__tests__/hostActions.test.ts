@@ -4,9 +4,9 @@ import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import type { HostListEntry } from "@shared/types/remoteHosts";
 
-const { supported, menuAnswers } = vi.hoisted(() => ({
+const { supported, remoteHosts } = vi.hoisted(() => ({
   supported: { value: true },
-  menuAnswers: { value: false },
+  remoteHosts: { value: [] as HostListEntry[] },
 }));
 
 vi.mock("@/lib/remoteHosts", () => ({
@@ -14,14 +14,15 @@ vi.mock("@/lib/remoteHosts", () => ({
   isRemoteHostSupported: () => supported.value,
   isEitherRemoteRoleSupported: () => supported.value,
 }));
-vi.mock("@/components/Hosts/hostMenuRequests", () => ({
-  requestHostMenu: vi.fn(() => menuAnswers.value),
+vi.mock("@/components/Hosts/hostList", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/Hosts/hostList")>()),
+  getHostListSnapshot: () => ({ hosts: remoteHosts.value, localSummary: null }),
 }));
 
 import { createActionDefinitions } from "../../actionDefinitions";
 import { registerHostActions } from "../hostActions";
 import { registerPortActions } from "../portActions";
-import { requestHostMenu } from "@/components/Hosts/hostMenuRequests";
+import { usePaletteStore } from "@/store/paletteStore";
 import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import {
   _resetHostSwitchRequestsForTesting,
@@ -102,8 +103,8 @@ const switchWindowHost = vi.fn(() => Promise.resolve());
 
 beforeEach(() => {
   supported.value = true;
-  menuAnswers.value = false;
-  vi.mocked(requestHostMenu).mockClear();
+  remoteHosts.value = [];
+  usePaletteStore.setState({ activePaletteId: null });
   list.mockClear();
   switchWindowHost.mockClear();
   Object.defineProperty(window, "electron", {
@@ -160,26 +161,27 @@ describe("Switch host keybinding", () => {
 });
 
 describe("host.switch", () => {
-  it("opens the host menu when called with no host", async () => {
-    menuAnswers.value = true;
+  it("opens the host switcher palette when called with no host", async () => {
+    remoteHosts.value = [host("studio-01")];
     const onOpenSettings = vi.fn();
     const onOpenSettingsTab = vi.fn();
     const registry: ActionRegistry = new Map();
     registerHostActions(registry, callbacks({ onOpenSettings, onOpenSettingsTab }));
     await run(registry, "host.switch");
-    expect(requestHostMenu).toHaveBeenCalledTimes(1);
+    expect(usePaletteStore.getState().activePaletteId).toBe("host-switcher");
     expect(onOpenSettings).not.toHaveBeenCalled();
     expect(onOpenSettingsTab).not.toHaveBeenCalled();
     expect(switchWindowHost).not.toHaveBeenCalled();
   });
 
-  it("falls through to adding a host when there is no host menu to open", async () => {
+  it("falls through to adding a host while there is no other host to switch to", async () => {
     const onOpenSettings = vi.fn();
     const onOpenSettingsTab = vi.fn();
     const registry: ActionRegistry = new Map();
     registerHostActions(registry, callbacks({ onOpenSettings, onOpenSettingsTab }));
     await run(registry, "host.switch");
     expect(onOpenSettings.mock.calls.length + onOpenSettingsTab.mock.calls.length).toBe(1);
+    expect(usePaletteStore.getState().activePaletteId).toBeNull();
   });
 
   it("switches directly to a named host, in a new window when asked", async () => {

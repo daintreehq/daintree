@@ -14,6 +14,8 @@ import {
   isRendererOwnedShortcut,
   rendererMenuAccelerator,
   resetRendererOwnedAccelerators,
+  trackHostSwitchAccelerator,
+  trackRendererOwnedAccelerator,
 } from "../menuAccelerators.js";
 import { buildDefaultKeybindings } from "../../../shared/config/defaultKeybindings.js";
 
@@ -172,6 +174,64 @@ describe("isRendererOwnedShortcut", () => {
     rendererMenuAccelerator("nav.toggleSidebar");
     resetRendererOwnedAccelerators();
     expect(isRendererOwnedShortcut(input({ key: "b", meta: true }))).toBe(false);
+  });
+
+  // Switch host's default is macOS Hide Others: the renderer may only take
+  // the keystroke while there is a host to switch to.
+  it("claims a conditional accelerator only while its condition holds, read per keystroke", () => {
+    setProcessPlatform("darwin");
+    let hostsExist = false;
+    trackRendererOwnedAccelerator(getMenuAccelerator("host.switch"), () => hostsExist);
+    const optionH = input({ key: "˙", code: "KeyH", meta: true, alt: true });
+    expect(isRendererOwnedShortcut(optionH)).toBe(false);
+    hostsExist = true;
+    expect(isRendererOwnedShortcut(optionH)).toBe(true);
+  });
+
+  it("keeps matching an unconditional accelerator that shares no combo with a failing condition", () => {
+    setProcessPlatform("darwin");
+    trackRendererOwnedAccelerator(getMenuAccelerator("host.switch"), () => false);
+    rendererMenuAccelerator("nav.toggleSidebar");
+    expect(isRendererOwnedShortcut(input({ key: "b", meta: true }))).toBe(true);
+  });
+
+  it("hands Cmd+Alt+H to Switch host only while another host is in the list", () => {
+    setProcessPlatform("darwin");
+    const hosts: unknown[] = [];
+    storeMock.get.mockImplementation(((key: string) =>
+      key === "remoteHosts" ? { hosts } : {}) as () => unknown);
+    trackHostSwitchAccelerator();
+    const optionH = input({ key: "˙", code: "KeyH", meta: true, alt: true });
+    expect(isRendererOwnedShortcut(optionH)).toBe(false);
+    hosts.push({ id: "studio-01" });
+    expect(isRendererOwnedShortcut(optionH)).toBe(true);
+  });
+
+  it("follows a rebound Switch host, leaving Cmd+Alt+H to Hide Others", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockImplementation(((key: string) =>
+      key === "remoteHosts"
+        ? { hosts: [{ id: "studio-01" }] }
+        : { "host.switch": ["Cmd+Shift+Alt+H"] }) as () => unknown);
+    trackHostSwitchAccelerator();
+    expect(isRendererOwnedShortcut(input({ key: "˙", code: "KeyH", meta: true, alt: true }))).toBe(
+      false
+    );
+    expect(
+      isRendererOwnedShortcut(input({ key: "Ó", code: "KeyH", meta: true, alt: true, shift: true }))
+    ).toBe(true);
+  });
+
+  it("claims every combo a Switch host override lists, not just the first", () => {
+    setProcessPlatform("darwin");
+    storeMock.get.mockImplementation(((key: string) =>
+      key === "remoteHosts"
+        ? { hosts: [{ id: "studio-01" }] }
+        : { "host.switch": ["Cmd+Shift+Alt+H", "Cmd+Alt+H"] }) as () => unknown);
+    trackHostSwitchAccelerator();
+    expect(isRendererOwnedShortcut(input({ key: "˙", code: "KeyH", meta: true, alt: true }))).toBe(
+      true
+    );
   });
 
   it("ignores non-keyDown input", () => {
