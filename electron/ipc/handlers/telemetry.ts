@@ -21,6 +21,7 @@ import type {
 import { typedBroadcast } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { TELEMETRY_METHOD_CHANNELS } from "./telemetry.preload.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
 const ALLOWED_EVENTS = new Set<string>(ANALYTICS_EVENTS);
 
@@ -150,11 +151,10 @@ export function registerTelemetryHandlers(): () => void {
     if (sender.isDestroyed()) return;
     if (previewSubscribers.has(sender)) return;
 
-    const destroyListener = () => {
-      previewSubscribers.delete(sender);
-    };
-    previewSubscribers.set(sender, destroyListener);
-    sender.once("destroyed", destroyListener);
+    previewSubscribers.set(
+      sender,
+      onWebContentsDestroyed(sender, () => previewSubscribers.delete(sender))
+    );
   };
   ipcMain.on(CHANNELS.TELEMETRY_PREVIEW_SUBSCRIBE, handleSubscribe);
   cleanups.push(() =>
@@ -163,9 +163,9 @@ export function registerTelemetryHandlers(): () => void {
 
   const handleUnsubscribe = (event: Electron.IpcMainEvent) => {
     const sender = event.sender;
-    const destroyListener = previewSubscribers.get(sender);
-    if (destroyListener) {
-      sender.removeListener("destroyed", destroyListener);
+    const unwatch = previewSubscribers.get(sender);
+    if (unwatch) {
+      unwatch();
       previewSubscribers.delete(sender);
     }
   };
@@ -177,11 +177,7 @@ export function registerTelemetryHandlers(): () => void {
   return () => {
     cleanups.forEach((c) => c());
     flushPreviewBatch();
-    for (const [webContents, destroyListener] of previewSubscribers.entries()) {
-      if (!webContents.isDestroyed()) {
-        webContents.removeListener("destroyed", destroyListener);
-      }
-    }
+    for (const unwatch of previewSubscribers.values()) unwatch();
     previewSubscribers.clear();
     pendingBatch = [];
     if (batchTimeout) {

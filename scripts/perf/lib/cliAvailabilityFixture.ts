@@ -12,22 +12,23 @@ import { createPerfTempRoot } from "./tempRoots";
  * `useAgentSetupPoll` calls `cliAvailabilityClient.refresh()` on a **3-second
  * interval** for as long as the agent setup wizard is open, and `refresh()` is
  * the cache-BYPASSING entry point: it bumps `checkId`, drops any in-flight
- * check, and re-probes all 18 agents from scratch. Every probe that misses runs
- * `which -a <cmd>` and then, because a non-zero exit is indistinguishable from
- * a `which` that rejects `-a`, `which <cmd>` again — so the first-run
- * worst case is 37 subprocess starts every three seconds, happening exactly
- * while a brand-new user watches the app decide what they have installed.
- * Nothing measured it.
+ * check, and re-probes all 18 agents from scratch. It used to spawn `which -a`
+ * per agent, and `which` again on every miss — 37 subprocess starts every three
+ * seconds on a first run, happening exactly while a brand-new user watches the
+ * app decide what they have installed. On POSIX the PATH probe now walks PATH
+ * in-process, so a refresh's only start there is `npm config get prefix`; on
+ * Windows it is one `where.exe` per agent.
  *
  * WHAT IS REAL
  *   - `electron/services/CliAvailabilityService.ts` unmodified, driven through
  *     its shipped `checkAvailability()` and `refresh()` entry points: the real
  *     `Promise.allSettled` fan-out over the real `getEffectiveRegistry()`, the
- *     real layered `probeCommand` ladder (prepended-path → `which`/`where` →
+ *     real layered `probeCommand` ladder (prepended-path → PATH →
  *     `nativePaths` → synthesised PyPI paths → npm-global shim → WSL), the real
- *     `checkAuth` credential discovery, the real `dedupePathsByDirectory`
- *     duplicate detection and the real `notifyDuplicateInstalls` persistence.
- *   - Real `which` / `where` subprocesses against a real PATH, and a real
+ *     `checkAuth` credential discovery, the real duplicate detection and the
+ *     real `notifyDuplicateInstalls` persistence.
+ *   - The real PATH probe against a real PATH (the in-process `findAllOnPath`
+ *     walk on POSIX, `where` subprocesses on Windows), and a real
  *     `npm config get prefix` attempt. Every start is counted through the
  *     harness's existing spawn observer in `lib/gitPipelineFixture.ts`, which
  *     validates itself before each measurement window.
@@ -74,9 +75,9 @@ import { createPerfTempRoot } from "./tempRoots";
  *   user's REAL WSL installation — which this fixture must not do. So on
  *   win32 those two agents are planted in every arm, which keeps the probe
  *   hermetic and makes the "all miss" arm an "all but the WSL-capable two"
- *   arm. The shell probe also differs (`where.exe`, and no `-a` retry, so a
- *   miss costs one start rather than two), and the expected-spawn arithmetic
- *   below accounts for it — but it has not been executed on Windows.
+ *   arm. The PATH probe also differs (a `where.exe` start per agent, where
+ *   POSIX spawns nothing), and the expected-spawn arithmetic below accounts
+ *   for it — but it has not been executed on Windows.
  *
  * TEMP-DIR HYGIENE
  *   One `mkdtemp` root holds the synthetic HOME, every per-arm bin directory
@@ -562,18 +563,15 @@ function hasNpmPackage(config: AgentConfig): boolean {
  * Subprocess starts one cache-bypassing `refresh()` costs, computed from this
  * fixture's own planting decisions and the registry's declared package data.
  *
- * Never derived by running the subject. On POSIX:
+ * Never derived by running the subject:
  *   - a hit found through `DAINTREE_CLI_PATH_PREPEND` costs 0 — the prepended
- *     probe is an `access()` and returns before any subprocess
- *   - a hit found on PATH costs 1: `which -a <cmd>`
- *   - a miss costs 2: `which -a <cmd>` exits non-zero, and the service cannot
- *     tell "not installed" from "this `which` rejects `-a`", so it runs
- *     `which <cmd>` again
+ *     probe is an `access()` and returns before the PATH probe
+ *   - on POSIX the PATH probe is an in-process walk (`findAllOnPath`), so a
+ *     PATH hit and a PATH miss both cost 0
+ *   - on Windows the PATH probe is one `where.exe` start per agent, hit or miss
  *   - plus 1 for `npm config get prefix`, once per refresh (it is cached
  *     against `checkId`, which `refresh()` bumps), if any MISSING agent
  *     declares an npm package
- * On Windows `where.exe` already prints every match, so there is no retry and a
- * miss costs 1.
  */
 export function expectedSpawnsFor(
   registry: Record<string, AgentConfig>,
@@ -581,16 +579,16 @@ export function expectedSpawnsFor(
   viaPrepend: boolean
 ): number {
   const planted = new Set(plantedIds);
-  const missPerAgent = isWindows ? 1 : 2;
+  const pathProbeStarts = isWindows ? 1 : 0;
   let total = 0;
   let missingDeclaresNpm = false;
 
   for (const [id, config] of Object.entries(registry)) {
     if (planted.has(id)) {
-      total += viaPrepend ? 0 : 1;
+      total += viaPrepend ? 0 : pathProbeStarts;
       continue;
     }
-    total += missPerAgent;
+    total += pathProbeStarts;
     if (hasNpmPackage(config)) missingDeclaresNpm = true;
   }
 
@@ -644,7 +642,7 @@ function buildArms(modules: CliModules): Map<CliArmLabel, CliArm> {
       plantShim(binDir, registry[id]!.command as string);
     }
     // Everything on PATH is either an empty planting directory of this
-    // fixture's own or a system directory holding `which`/`where` itself.
+    // fixture's own or a system directory (holding `where` itself on Windows).
     const pathDirs = definition.viaPrepend
       ? [join(root, `bin-empty-${definition.label}`), ...system]
       : [binDir, ...(definition.duplicate ? [duplicateDir] : []), ...system];

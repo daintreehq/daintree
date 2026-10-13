@@ -11,8 +11,9 @@ import { waitForTerminalPty, waitForTerminalReady, waitForTerminalText } from ".
 import { getGridPanelIds, getPanelById, openTerminal } from "./panels";
 import { SEL } from "./selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "./timeouts";
+import { NEW_TERMINAL_CHORD } from "./shortcuts";
 
-const terminalShortcut = process.platform === "darwin" ? "Meta+Alt+t" : "Control+Alt+t";
+const terminalShortcut = NEW_TERMINAL_CHORD;
 
 export async function openProjectSwitcherPalette(window: Page): Promise<Locator> {
   const trigger = window.locator(SEL.toolbar.projectSwitcherTrigger);

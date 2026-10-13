@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import path from "path";
 import Module from "module";
 import { Arch } from "electron-builder";
-import { APP_ASAR_ROOT_ENTRIES, MAX_APP_ASAR_BYTES } from "./afterPack.cjs";
+import { readFileSync } from "fs";
+import { createRequire } from "module";
+import { APP_ASAR_ROOT_ENTRIES, MAX_APP_ASAR_BYTES, applyPlatformFuses } from "./afterPack.cjs";
 
 const mockExistsSync = vi.fn();
 const mockReaddirSync = vi.fn();
@@ -112,6 +114,17 @@ describe("afterPack", () => {
 
   describe("macOS", () => {
     const unpackedBase = "/build/mac/Daintree.app/Contents/Resources/app.asar.unpacked";
+
+    it("keeps cookie encryption on in the configured fuses", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const context = createContext("darwin", "/build/mac");
+      const electronFuses = { enableCookieEncryption: false };
+      Object.assign(context.packager, { config: { electronFuses } });
+
+      await afterPack(context);
+
+      expect(electronFuses.enableCookieEncryption).toBe(true);
+    });
 
     it("should succeed when node-pty and better-sqlite3 exist", async () => {
       mockExistsSync.mockReturnValue(true);
@@ -327,6 +340,18 @@ describe("afterPack", () => {
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, `node_modules/better-sqlite3/prebuilds/linux-${process.arch}.node`)
       );
+    });
+
+    // The hook itself must apply the per-platform fuse, not just the helper.
+    it("turns cookie encryption off in the configured fuses", async () => {
+      mockExistsSync.mockReturnValue(true);
+      const context = createContext("linux", "/build/linux");
+      const electronFuses = { runAsNode: false, enableCookieEncryption: true };
+      Object.assign(context.packager, { config: { electronFuses } });
+
+      await afterPack(context);
+
+      expect(electronFuses).toEqual({ runAsNode: false, enableCookieEncryption: false });
     });
 
     it("should not log signing message on Linux", async () => {
@@ -1118,5 +1143,51 @@ describe("afterPack", () => {
         /onnxruntime-node not found/
       );
     });
+  });
+});
+
+describe("applyPlatformFuses", () => {
+  const packagerWith = (enableCookieEncryption: boolean) => ({
+    config: { electronFuses: { runAsNode: false, enableCookieEncryption } },
+  });
+
+  it("turns cookie encryption off for Linux and leaves the other fuses alone", () => {
+    const packager = packagerWith(true);
+    applyPlatformFuses(packager, "linux");
+    expect(packager.config.electronFuses).toEqual({
+      runAsNode: false,
+      enableCookieEncryption: false,
+    });
+  });
+
+  it("keeps cookie encryption on for macOS and Windows, even after a Linux pack", () => {
+    const packager = packagerWith(true);
+    applyPlatformFuses(packager, "linux");
+    applyPlatformFuses(packager, "darwin");
+    expect(packager.config.electronFuses.enableCookieEncryption).toBe(true);
+    applyPlatformFuses(packager, "linux");
+    applyPlatformFuses(packager, "win32");
+    expect(packager.config.electronFuses.enableCookieEncryption).toBe(true);
+  });
+
+  it("does nothing when no fuses are configured", () => {
+    expect(() => applyPlatformFuses({ config: {} }, "linux")).not.toThrow();
+    expect(() => applyPlatformFuses({}, "linux")).not.toThrow();
+  });
+
+  // The per-platform value only lands because electron-builder reads
+  // config.electronFuses after running afterPack for the same pack. Pin that
+  // order so an upgrade that moves the fuse flip fails here instead of shipping
+  // Linux with the keyring prompt again.
+  it("relies on electron-builder flipping config.electronFuses after afterPack", () => {
+    const req = createRequire(import.meta.url);
+    const source = readFileSync(req.resolve("app-builder-lib/out/platformPackager.js"), "utf8");
+    const afterPackAt = source.indexOf("await this.info.emitAfterPack(packContext)");
+    const fusesAt = source.indexOf("await this.doAddElectronFuses(packContext)");
+    expect(afterPackAt).toBeGreaterThan(-1);
+    expect(fusesAt).toBeGreaterThan(afterPackAt);
+    expect(source).toMatch(
+      /async doAddElectronFuses\(packContext\) \{[^}]*this\.config\.electronFuses/
+    );
   });
 });

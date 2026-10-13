@@ -27,11 +27,24 @@ type FakeWebContents = {
   on: ReturnType<typeof vi.fn>;
   once: ReturnType<typeof vi.fn>;
   isDestroyed: () => boolean;
+  isCrashed: ReturnType<typeof vi.fn>;
+  isLoading: ReturnType<typeof vi.fn>;
 };
 
 function makeWebContents(id: number): FakeWebContents {
-  return { id, send: vi.fn(), on: vi.fn(), once: vi.fn(), isDestroyed: () => false };
+  return {
+    id,
+    send: vi.fn(),
+    on: vi.fn(),
+    once: vi.fn(),
+    isDestroyed: () => false,
+    isCrashed: vi.fn(() => false),
+    isLoading: vi.fn(() => false),
+  };
 }
+
+// Settling a cancelled navigation is decided a turn after did-stop-loading.
+const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 
 // The registry resolves the primary window to whichever webContents
 // `getAppWebContents` is mocked to return.
@@ -219,6 +232,154 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
     expect(secondary.send).not.toHaveBeenCalled();
   });
 
+  it("keeps delivering after a subframe or same-document navigation in a painted view", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const wc = makeWebContents(6);
+    registryMock.getAppWebContents.mockReturnValue(wc);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+
+    mod.notifyAppViewPainted(wc as never);
+    const didStartNavigation = wc.on.mock.calls.find(
+      ([evt]) => evt === "did-start-navigation"
+    )?.[1] as (details: { isMainFrame: boolean; isSameDocument: boolean }) => void;
+
+    // A browser panel's <webview> or an iframe loading, then an in-page route
+    // change: the page and its listener are still there.
+    didStartNavigation({ isMainFrame: false, isSameDocument: false });
+    didStartNavigation({ isMainFrame: true, isSameDocument: true });
+
+    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
+    expect(wc.send).toHaveBeenCalledTimes(1);
+  });
+
+  function handlerFor(wc: FakeWebContents, event: string) {
+    return wc.on.mock.calls.find(([evt]) => evt === event)?.[1] as (...args: unknown[]) => void;
+  }
+
+  it("delivers again once a cancelled navigation stops loading with the page still there", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const wc = makeWebContents(7);
+    registryMock.getAppWebContents.mockReturnValue(wc);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+    const flushed = vi.fn();
+    mod.registerPaintedFlushListener(flushed);
+    mod.notifyAppViewPainted(wc as never);
+    flushed.mockClear();
+
+    // A file dropped on the window: the navigation starts, the guard cancels it,
+    // and Electron 42 reports nothing but the loading stopping.
+    handlerFor(wc, "did-start-navigation")({ isMainFrame: true, isSameDocument: false });
+    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
+    expect(wc.send).not.toHaveBeenCalled();
+
+    handlerFor(wc, "did-stop-loading")();
+    await nextTurn();
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    // The .dntr queue shares the painted bookkeeping and is flushed too.
+    expect(flushed).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for a fresh paint after a navigation commits", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const wc = makeWebContents(8);
+    registryMock.getAppWebContents.mockReturnValue(wc);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+    mod.notifyAppViewPainted(wc as never);
+
+    const start = handlerFor(wc, "did-start-navigation");
+    start({ isMainFrame: true, isSameDocument: false });
+    start({ isMainFrame: true, isSameDocument: false });
+    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
+    handlerFor(wc, "did-navigate")({}, "app://daintree/index.html");
+    handlerFor(wc, "did-stop-loading")();
+    await nextTurn();
+    expect(wc.send).not.toHaveBeenCalled();
+
+    mod.notifyAppViewPainted(wc as never);
+    expect(wc.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a committed error page as a replacement, not a cancelled navigation", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const wc = makeWebContents(10);
+    registryMock.getAppWebContents.mockReturnValue(wc);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+    mod.notifyAppViewPainted(wc as never);
+
+    handlerFor(wc, "did-start-navigation")({ isMainFrame: true, isSameDocument: false });
+    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
+    // Electron 42 emits this only for an error page that committed; no did-navigate.
+    handlerFor(wc, "did-fail-provisional-load")(
+      {},
+      -102,
+      "ERR_CONNECTION_REFUSED",
+      "http://localhost:5173/",
+      true
+    );
+    handlerFor(wc, "did-stop-loading")();
+    await nextTurn();
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("does not settle into a renderer that died while its navigation was cancelled", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const wc = makeWebContents(11);
+    registryMock.getAppWebContents.mockReturnValue(wc);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+    mod.notifyAppViewPainted(wc as never);
+
+    handlerFor(wc, "did-start-navigation")({ isMainFrame: true, isSameDocument: false });
+    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
+    // Teardown stops loading before Electron's render-process-gone arrives.
+    wc.isCrashed.mockReturnValue(true);
+    handlerFor(wc, "did-stop-loading")();
+    await nextTurn();
+    handlerFor(wc, "render-process-gone")({}, { reason: "crashed", exitCode: 139 });
+    expect(wc.send).not.toHaveBeenCalled();
+
+    wc.isCrashed.mockReturnValue(false);
+    mod.notifyAppViewPainted(wc as never);
+    expect(wc.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps holding when a newer load has started by the time loading settles", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const wc = makeWebContents(12);
+    registryMock.getAppWebContents.mockReturnValue(wc);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+    mod.notifyAppViewPainted(wc as never);
+
+    handlerFor(wc, "did-start-navigation")({ isMainFrame: true, isSameDocument: false });
+    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
+    handlerFor(wc, "did-stop-loading")();
+    wc.isLoading.mockReturnValue(true);
+    await nextTurn();
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("holds intents from a renderer crash until the reloaded page paints", async () => {
+    const mod = await import("../deepLinkInstall.js");
+    mod._resetDeepLinkStateForTest();
+    const wc = makeWebContents(9);
+    registryMock.getAppWebContents.mockReturnValue(wc);
+    mod.activateDeepLinkHandler(makeRegistry(true) as never);
+    mod.notifyAppViewPainted(wc as never);
+
+    handlerFor(wc, "render-process-gone")({}, { reason: "crashed", exitCode: 139 });
+    mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");
+    handlerFor(wc, "did-stop-loading")();
+    expect(wc.send).not.toHaveBeenCalled();
+
+    mod.notifyAppViewPainted(wc as never);
+    expect(wc.send).toHaveBeenCalledTimes(1);
+  });
+
   it("re-holds the intent after a reload drops the painted id", async () => {
     const mod = await import("../deepLinkInstall.js");
     mod._resetDeepLinkStateForTest();
@@ -226,14 +387,16 @@ describe("handleDaintreeUrl / notifyAppViewPainted", () => {
     registryMock.getAppWebContents.mockReturnValue(wc);
     mod.activateDeepLinkHandler(makeRegistry(true) as never);
 
-    // Paint, then capture the `did-start-loading` handler wired on first paint.
+    // Paint, then capture the navigation handler wired on first paint.
     mod.notifyAppViewPainted(wc as never);
-    const didStartLoading = wc.on.mock.calls.find(([evt]) => evt === "did-start-loading")?.[1] as
-      (() => void) | undefined;
-    expect(didStartLoading).toBeTypeOf("function");
+    const didStartNavigation = wc.on.mock.calls.find(
+      ([evt]) => evt === "did-start-navigation"
+    )?.[1] as ((details: { isMainFrame: boolean; isSameDocument: boolean }) => void) | undefined;
+    expect(didStartNavigation).toBeTypeOf("function");
 
-    // Reload: the renderer's listener unmounts; the id leaves the painted set.
-    didStartLoading?.();
+    // Reload: the navigation starts (held from here) and commits a new document.
+    didStartNavigation?.({ isMainFrame: true, isSameDocument: false });
+    handlerFor(wc, "did-navigate")({}, "app://daintree/index.html");
 
     // A deep link now is held (not delivered to the unmounted renderer)…
     mod.handleDaintreeUrl("daintree://plugin/open?id=acme.notes");

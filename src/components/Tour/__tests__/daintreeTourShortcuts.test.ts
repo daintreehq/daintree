@@ -1,8 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as platform from "@/lib/platform";
 import { fleetExitChordLabel } from "@/components/Fleet/fleetKeys";
 import { pilotParkKeys } from "@/components/Pilot/pilotKeys";
 import { daintreeTourShortcuts } from "../daintreeTourShortcuts";
-import { tourKeycaps, tourShortcutHint } from "../tourKeys";
+import { tourCombo, tourKeycaps, tourShortcutHint } from "../tourKeys";
+
+vi.mock("@/lib/platform", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platform")>()),
+  isLinux: vi.fn(() => false),
+}));
+
+afterEach(() => {
+  vi.mocked(platform.isLinux).mockReturnValue(false);
+});
 
 describe("daintreeTourShortcuts", () => {
   it("draws the app's own labels for the chrome shortcuts it has no keybinding for", () => {
@@ -24,5 +34,17 @@ describe("daintreeTourShortcuts", () => {
         tourKeycaps("action.palette.open", keyboard)
       );
     }
+  });
+
+  // Linux replaces New terminal's Ctrl+Alt+T, which the desktop opens its own
+  // terminal on. The keycaps follow; the spoken "pc" recording can't.
+  it("draws Linux's own default on Linux, leaving the spoken combo shared", () => {
+    const shared = tourShortcutHint("terminal.new", "pc");
+    const mac = tourKeycaps("terminal.new", "mac");
+    vi.mocked(platform.isLinux).mockReturnValue(true);
+    expect(tourKeycaps("terminal.new", "pc")).toEqual(["Ctrl", "Shift", "Alt", "T"]);
+    expect(tourShortcutHint("terminal.new", "pc")).not.toBe(shared);
+    expect(tourKeycaps("terminal.new", "mac")).toEqual(mac);
+    expect(tourCombo("terminal.new")).toBe("Cmd+Alt+T");
   });
 });

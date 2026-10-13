@@ -5,7 +5,11 @@ import { store } from "../store.js";
 import { readCanopyMode } from "./canopy/canopyMode.js";
 import { projectStore } from "./ProjectStore.js";
 import { filterRestorableTerminalSnapshots } from "./projectStateRestore.js";
-import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../utils/gpuDetection.js";
+import {
+  getGpuFeatureStatus,
+  getWebGLFeatureStatus,
+  isWebGLHardwareAccelerated,
+} from "../utils/gpuDetection.js";
 import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
 import { isGpuDisabledByFlag, isGpuAngleFallbackApplied } from "./GpuCrashMonitorService.js";
 import { readGpuDisabledFlagData } from "./gpuDisabledFlag.js";
@@ -128,8 +132,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     mruList: mruListToUse,
   };
 
-  const gpuStatus = getGpuFeatureStatus();
-  const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
+  const gpuWebGLHardware = isWebGLHardwareAccelerated(getWebGLFeatureStatus(getGpuFeatureStatus()));
 
   return {
     appState: appState as import("../../shared/types/ipc/app.js").AppState,

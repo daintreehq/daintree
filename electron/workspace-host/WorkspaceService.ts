@@ -1,4 +1,5 @@
 import os from "os";
+import type { InotifyLimit } from "../../shared/types/workspace-host.js";
 import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
@@ -642,9 +643,9 @@ export class WorkspaceService {
   private fetchCoordinator: RepoFetchCoordinator;
   private _shutdownController = new AbortController();
   readonly resourceActionExecutor: ResourceActionExecutor;
-  /** Session-scoped guard so we notify the user about Linux inotify limits
-   *  only once, even if many worktrees hit ENOSPC concurrently. */
-  private inotifyLimitNotified = false;
+  /** Session-scoped guard so we notify the user about each Linux inotify
+   *  limit only once, even if many worktrees hit it concurrently. */
+  private readonly inotifyLimitsNotified = new Set<InotifyLimit>();
   /** Session-scoped guard so we notify the user about the macOS FSEvents file
    *  descriptor ceiling only once, even if many worktrees hit EMFILE concurrently. */
   private emfileLimitNotified = false;
@@ -1916,7 +1917,7 @@ export class WorkspaceService {
             { origin: "auto-poll" }
           );
         },
-        onInotifyLimitReached: () => this.handleInotifyLimitReached(),
+        onInotifyLimitReached: (_worktreeId, limit) => this.handleInotifyLimitReached(limit),
         onEmfileLimitReached: () => this.handleEmfileLimitReached(),
         onWatcherRecovered: () => this.handleWatcherRecovered(),
         onGitConfigChanged: () => this.scheduleForgeRemoteReprobe({ observedConfigWrite: true }),
@@ -2697,11 +2698,11 @@ export class WorkspaceService {
     this.scheduleForgeReselect();
   }
 
-  private handleInotifyLimitReached(): void {
+  private handleInotifyLimitReached(limit: InotifyLimit): void {
     if (process.platform !== "linux") return;
-    if (this.inotifyLimitNotified) return;
-    this.inotifyLimitNotified = true;
-    this.sendEvent({ type: "inotify-limit-reached" });
+    if (this.inotifyLimitsNotified.has(limit)) return;
+    this.inotifyLimitsNotified.add(limit);
+    this.sendEvent({ type: "inotify-limit-reached", limit });
   }
 
   private handleEmfileLimitReached(): void {
@@ -2719,7 +2720,7 @@ export class WorkspaceService {
    * — firing when nothing was degraded is a harmless no-op downstream.
    */
   private handleWatcherRecovered(): void {
-    this.inotifyLimitNotified = false;
+    this.inotifyLimitsNotified.clear();
     this.emfileLimitNotified = false;
     this.sendEvent({ type: "watcher-recovered" });
   }
@@ -2749,7 +2750,7 @@ export class WorkspaceService {
    * for a live event.
    */
   isWatcherDegraded(): boolean {
-    return this.inotifyLimitNotified || this.emfileLimitNotified;
+    return this.inotifyLimitsNotified.size > 0 || this.emfileLimitNotified;
   }
 
   /**

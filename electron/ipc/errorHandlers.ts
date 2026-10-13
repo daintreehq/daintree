@@ -1,7 +1,8 @@
 // eager-import-allow: reads error-reporting config via store.get synchronously while handling IPC errors
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { ipcMain, BrowserWindow, shell } from "electron";
+import { ipcMain, BrowserWindow } from "electron";
+import { openWithDefaultApp } from "../utils/openPath.js";
 import { CHANNELS } from "./channels.js";
 import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
 import { broadcastToRenderer, typedHandle } from "./utils.js";
@@ -499,9 +500,9 @@ class ErrorService {
       // Ignore mkdir errors
     }
 
-    const openResult = await shell.openPath(logPath);
+    const openResult = await openWithDefaultApp(logPath);
     if (openResult) {
-      await shell.openPath(logDir);
+      await openWithDefaultApp(logDir);
     }
   }
 }

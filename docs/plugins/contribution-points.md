@@ -614,16 +614,17 @@ Keybindings map a key combination to an action.
 
 **`when` context keys:**
 
-| Key               | Type    | Meaning                                                        |
-| ----------------- | ------- | -------------------------------------------------------------- |
-| `terminalFocused` | boolean | Keyboard focus is inside an xterm terminal.                    |
-| `modalOpen`       | boolean | A modal dialog (`aria-modal`) is open.                         |
-| `paletteOpen`     | boolean | Any palette (command palette, quick switcher, …) is open.      |
-| `paletteId`       | string  | Identifier of the open palette, or `""` when none.             |
-| `fleetArmed`      | boolean | At least one terminal is armed for fleet broadcast.            |
-| `fleetWaiting`    | boolean | At least one armed terminal's agent is in the `waiting` state. |
-| `sidebarVisible`  | boolean | The worktree sidebar is currently visible.                     |
-| `canopyHidden`    | boolean | The user hid Canopy; its panel cannot open.                    |
+| Key                | Type    | Meaning                                                        |
+| ------------------ | ------- | -------------------------------------------------------------- |
+| `terminalFocused`  | boolean | Keyboard focus is inside an xterm terminal.                    |
+| `textInputFocused` | boolean | Keyboard focus is in a text field or editor (not a terminal).  |
+| `modalOpen`        | boolean | A modal dialog (`aria-modal`) is open.                         |
+| `paletteOpen`      | boolean | Any palette (command palette, quick switcher, …) is open.      |
+| `paletteId`        | string  | Identifier of the open palette, or `""` when none.             |
+| `fleetArmed`       | boolean | At least one terminal is armed for fleet broadcast.            |
+| `fleetWaiting`     | boolean | At least one armed terminal's agent is in the `waiting` state. |
+| `sidebarVisible`   | boolean | The worktree sidebar is currently visible.                     |
+| `canopyHidden`     | boolean | The user hid Canopy; its panel cannot open.                    |
 
 Note: this context applies to keybinding `when` clauses, which resolve in the renderer. Native menu-item `when` clauses (the `menuItems` contribution) are evaluated once at menu build time against an empty context — only literal/negation expressions are useful there.
 

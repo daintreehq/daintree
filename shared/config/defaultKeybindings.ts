@@ -1176,6 +1176,9 @@ const REMOTE_HOSTS_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
+// Ctrl+F4 is Windows-only on purpose: XFCE binds Ctrl+F1–F12 to workspaces and
+// KDE binds Ctrl+F1–F4 to desktops, so on Linux the window manager takes it
+// before a focused terminal could.
 const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "terminal.close",
@@ -1215,6 +1218,19 @@ const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
 // Replacements, not additions: each entry displaces the core row with the same
 // actionId and scope. Ctrl+. is the IBus emoji picker on GNOME, and Ctrl+Alt+.
 // is taken by agent.focusNextWorking once Cmd folds to Ctrl.
+//
+// The desktop grabs these Ctrl+Alt defaults before Daintree sees them: Ctrl+Alt+T
+// opens the system terminal (GNOME, XFCE, KDE), Ctrl+Alt+L locks the screen (XFCE,
+// KDE, Cinnamon, MATE) and Ctrl+Alt+F opens Thunar (XFCE). Adding Shift keeps the
+// letter and the Ctrl a focused terminal needs to hand a key to a binding.
+//
+// GNOME and XFCE also switch workspaces on every Ctrl+Alt+arrow, so directional
+// focus moves to Ctrl+Shift+arrows, WezTerm's pane-focus keys, which GNOME,
+// XFCE, KDE, Cinnamon and MATE leave unbound. They stay "select by word" in a
+// text field and Shift-extend selection in a dialog such as the worktree
+// overview; a TUI in a focused terminal (nano, micro) loses them, as under
+// WezTerm. Ctrl+Shift+Alt+arrows move the window to a workspace on those
+// desktops, so "move terminal" has no free Ctrl combo and keeps its default.
 const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "voiceInput.toggle",
@@ -1223,6 +1239,66 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Toggle voice dictation",
     category: "Voice",
+  },
+  {
+    actionId: "terminal.new",
+    combo: "Ctrl+Shift+Alt+T",
+    scope: "global",
+    priority: 0,
+    description: "New terminal",
+    category: "Terminal",
+  },
+  {
+    actionId: "terminal.scrollToLastActivity",
+    combo: "Ctrl+Shift+Alt+L",
+    scope: "global",
+    priority: 0,
+    description: "Scroll to last activity",
+    category: "Terminal",
+  },
+  {
+    actionId: "worktree.openFileBrowserPanel",
+    combo: "Ctrl+Shift+Alt+F",
+    scope: "global",
+    priority: 0,
+    description: "Open file browser panel for focused worktree",
+    category: "Worktrees",
+  },
+  {
+    actionId: "terminal.focusUp",
+    combo: "Ctrl+Shift+ArrowUp",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal above",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
+  },
+  {
+    actionId: "terminal.focusDown",
+    combo: "Ctrl+Shift+ArrowDown",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal below",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
+  },
+  {
+    actionId: "terminal.focusLeft",
+    combo: "Ctrl+Shift+ArrowLeft",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal to the left",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
+  },
+  {
+    actionId: "terminal.focusRight",
+    combo: "Ctrl+Shift+ArrowRight",
+    scope: "global",
+    priority: 0,
+    description: "Focus terminal to the right",
+    category: "Terminal",
+    when: "!textInputFocused && !modalOpen",
   },
 ];
 

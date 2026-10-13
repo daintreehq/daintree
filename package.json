@@ -38,7 +38,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:fresh": "cross-env DAINTREE_RESET_DATA=1 node scripts/dev.mjs",
     "dev:perf": "cross-env DAINTREE_PERF_CAPTURE=1 DAINTREE_PERF_METRICS_FILE=perf-metrics.ndjson node scripts/dev.mjs",
-    "dev:electron": "cross-env NODE_ENV=development electron .",
+    "dev:electron": "cross-env NODE_ENV=development node scripts/dev-electron.mjs",
     "build:main": "cross-env NODE_ENV=production node scripts/build-main.mjs",
     "watch:main": "node scripts/build-main.mjs --watch",
     "build": "cross-env NODE_OPTIONS=--max-old-space-size=8192 npm run build:app",

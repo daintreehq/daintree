@@ -148,6 +148,7 @@ import {
   type PanelLifecycleSourceHandle,
 } from "./plugin/PluginPanelLifecycleBroker.js";
 import { PLUGIN_VIEW_GENERATION_PREFIX } from "../../shared/utils/pluginViewUrl.js";
+import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import { PluginRendererDispatcher } from "./plugin/PluginRendererDispatcher.js";
 import { PluginPanelReloadDispatcher } from "./plugin/PluginPanelReloadDispatcher.js";
 import { PluginUIPromptDispatcher } from "./plugin/PluginUIPromptDispatcher.js";
@@ -1328,20 +1329,14 @@ export class PluginService {
       // to prevent.
       this.panelLifecycleBroker.clearSource(sourceId);
     };
+    let unwatch: () => void;
     try {
-      sender.once("destroyed", onDestroyed);
+      unwatch = onWebContentsDestroyed(sender, onDestroyed);
     } catch {
       // An already-torn-down WebContents can throw; nothing to track then.
       return;
     }
-    this.panelLifecycleSourceCleanups.set(sourceId, () => {
-      try {
-        sender.removeListener("destroyed", onDestroyed);
-      } catch {
-        // Electron throws if the WebContents is already gone — the listener
-        // died with it.
-      }
-    });
+    this.panelLifecycleSourceCleanups.set(sourceId, unwatch);
   }
 
   /**

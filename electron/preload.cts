@@ -2157,6 +2157,9 @@ function buildElectronApi(): ElectronAPI {
       saveSettings: (projectId: string, settings: ProjectSettings) =>
         _unwrappingInvoke(CHANNELS.PROJECT_SAVE_SETTINGS, { projectId, settings }),
 
+      addBrowserAllowedHost: (projectId: string, hostname: string) =>
+        _unwrappingInvoke(CHANNELS.PROJECT_ADD_BROWSER_ALLOWED_HOST, { projectId, hostname }),
+
       detectRunners: (projectId: string) =>
         _unwrappingInvoke(CHANNELS.PROJECT_DETECT_RUNNERS, projectId),
 

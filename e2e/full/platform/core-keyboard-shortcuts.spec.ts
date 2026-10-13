@@ -6,6 +6,7 @@ import { getGridPanelCount } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import { expectTerminalFocused } from "../../helpers/focus";
+import { NEW_TERMINAL_CHORD } from "../../helpers/shortcuts";
 
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
@@ -57,7 +58,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       const { window } = ctx;
       for (let press = 0; press < 2; press++) {
         const before = await getGridPanelCount(window);
-        await window.keyboard.press(`${mod}+Alt+t`);
+        await window.keyboard.press(NEW_TERMINAL_CHORD);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
       }
     });
@@ -104,7 +105,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       // Keep a second panel around so Cmd+W never closes the last one (which quits).
       if ((await getGridPanelCount(window)) < 3) {
         const before = await getGridPanelCount(window);
-        await window.keyboard.press(`${mod}+Alt+t`);
+        await window.keyboard.press(NEW_TERMINAL_CHORD);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
       }
 
@@ -190,7 +191,7 @@ test.describe.serial("Core: Keyboard Shortcuts", () => {
       // Ensure at least one terminal panel exists
       const count = await getGridPanelCount(window);
       if (count === 0) {
-        await window.keyboard.press(`${mod}+Alt+t`);
+        await window.keyboard.press(NEW_TERMINAL_CHORD);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBeGreaterThan(0);
       }
 

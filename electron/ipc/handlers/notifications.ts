@@ -17,6 +17,7 @@ import {
 import { store } from "../../store.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import { getIpcDispatcher } from "../dispatcher.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import { typedHandle } from "../utils.js";
 import { sanitizeNotificationSettingsPatch } from "../../utils/notificationSettingsPatch.js";
@@ -113,7 +114,7 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     // evicted under memory pressure (eviction closes it). A *deactivated*
     // (cached, still-alive) view fires nothing — which is exactly right: its
     // watched panels and waiting count must survive until the user returns.
-    sender.once("destroyed", () => purgeOwner(ownerId));
+    onWebContentsDestroyed(sender, () => purgeOwner(ownerId));
 
     // Belt and braces for window teardown, where the view's "destroyed" event
     // can race the registry's own unwinding.

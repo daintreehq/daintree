@@ -74,6 +74,12 @@ export const config: AgentConfig = {
           label: "npm",
           commands: ["npm install -g @github/copilot"],
         },
+        // GitHub's install script: run without sudo it installs to
+        // ~/.local/bin, so it needs neither npm nor root.
+        {
+          label: "curl",
+          commands: ["curl -fsSL https://gh.io/copilot-install | bash"],
+        },
       ],
       windows: [
         {

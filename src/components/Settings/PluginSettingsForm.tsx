@@ -160,6 +160,8 @@ interface SettingFieldProps {
   secretIsSet: boolean;
   /** At-rest tier new secret writes use right now, for honest disclosure (#9167). */
   secretTier: PluginSecretStorageTier;
+  /** A failed secret save found the keychain missing or locked for this session. */
+  onSecretTier?: (tier: PluginSecretStorageTier) => void;
   /** Whether the stored secret value is still legacy plaintext, awaiting migration. */
   secretIsPlaintext: boolean;
   /** Whether this field's scope values have finished loading. */
@@ -197,6 +199,20 @@ export function unavailableSecretStorageText(
 }
 
 /**
+ * The keychain is there but gave Daintree no key this session. Why isn't known:
+ * on Linux a dismissed unlock prompt and a keyring service that isn't running
+ * end the same way, and Chromium reports a Keychain refusal like any other
+ * Keychain error. Electron asks once per run, so retrying a save can't get past
+ * it; a restart is what tries again.
+ */
+export function lockedSecretStorageText(host: { name: string } | null, platform: string): string {
+  const store = platform === "darwin" ? "Keychain" : "Keyring";
+  return host === null
+    ? `${store} not available this session — restart Daintree to try again`
+    : `${store} on ${host.name} not available this session — restart Daintree there to try again`;
+}
+
+/**
  * One generated field. Owns its own draft/validation/reveal state. Project-scoped
  * fields are remounted by the parent on project switch (keyed on projectId), so
  * the draft re-initializes from the new project's stored value.
@@ -208,6 +224,7 @@ function SettingField({
   storedValue,
   secretIsSet,
   secretTier,
+  onSecretTier,
   secretIsPlaintext,
   loaded,
   failed,
@@ -229,6 +246,7 @@ function SettingField({
   const [overridden, setOverridden] = useState(false);
   const tierId = useId();
   const secretHost = useSecretStorageHost();
+  const { platform } = useHostPlatform();
   const [error, setError] = useState<string | null>(null);
   // Set only when `error` is a failed write; a draft rejected before any write
   // (not a number, not JSON) is fixed by editing, so it offers no Retry.
@@ -326,15 +344,25 @@ function SettingField({
         onSaved?.();
         return true;
       } catch (err) {
+        // A keychain that is missing, or gave no key this session, refuses a
+        // retry exactly as it refused this save, so ask which before offering one.
+        const tier = isSecret
+          ? await window.electron.plugin.getSettingValues(pluginId, scope, projectId).then(
+              (res) => res.secretTier,
+              () => null
+            )
+          : null;
+        const retryable = tier !== "locked" && tier !== "unavailable";
+        if (!retryable) onSecretTier?.(tier);
         setError(formatErrorMessage(err, "Couldn't save setting"));
-        setFailedWrite({ kind: "write", value, onSaved });
+        setFailedWrite(retryable ? { kind: "write", value, onSaved } : null);
         logError(`Failed to save plugin setting ${pluginId}.${def.id}`, err);
         return false;
       } finally {
         setSaving(false);
       }
     },
-    [pluginId, def.id, scope, projectId]
+    [pluginId, def.id, scope, projectId, isSecret, onSecretTier]
   );
 
   const handleReset = useCallback(async () => {
@@ -722,13 +750,15 @@ function SettingField({
     const tierText =
       secretTier === "unavailable"
         ? unavailableSecretStorageText(secretHost)
-        : hasStored && secretIsPlaintext && !migratedToKeychain
-          ? "Stored as plaintext — re-save to move it into the OS keychain"
-          : // Nothing stored yet is not "stored": say where a new value goes,
-            // without implying it saves as it is typed.
-            hasStored
-            ? "Stored in OS keychain"
-            : "New secrets are stored in the OS keychain";
+        : secretTier === "locked"
+          ? lockedSecretStorageText(secretHost, platform)
+          : hasStored && secretIsPlaintext && !migratedToKeychain
+            ? "Stored as plaintext — re-save to move it into the OS keychain"
+            : // Nothing stored yet is not "stored": say where a new value goes,
+              // without implying it saves as it is typed.
+              hasStored
+              ? "Stored in OS keychain"
+              : "New secrets are stored in the OS keychain";
     return (
       <>
         <SettingsRow
@@ -863,6 +893,9 @@ export function PluginSettingsForm({
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
 
   const [reloadKey, setReloadKey] = useState(0);
+  // What a failed secret save learned about the keychain since the scopes
+  // loaded. The keychain is the whole app's, so every secret row says the same.
+  const [learnedSecretTier, setLearnedSecretTier] = useState<PluginSecretStorageTier | null>(null);
   const [userScope, setUserScope] = useState<ScopeValues>(UNLOADED_SCOPE);
   const [projectScope, setProjectScope] = useState<ScopeValues>(UNLOADED_SCOPE);
   const [localScope, setLocalScope] = useState<ScopeValues>(UNLOADED_SCOPE);
@@ -980,7 +1013,8 @@ export function PluginSettingsForm({
                 projectId={projectId}
                 storedValue={values?.[def.id]}
                 secretIsSet={secrets.has(def.id)}
-                secretTier={secretInfo.tier}
+                secretTier={learnedSecretTier ?? secretInfo.tier}
+                onSecretTier={setLearnedSecretTier}
                 secretIsPlaintext={secretInfo.plaintext.has(def.id)}
                 loaded={loaded}
                 failed={state.failed === true}

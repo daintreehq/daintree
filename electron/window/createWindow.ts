@@ -1,16 +1,18 @@
 // eager-import-allow: reads persisted window state via store.get synchronously when creating the window
 import { app, BrowserWindow, WebContentsView, dialog, ipcMain, session } from "electron";
 import {
+  getAppView,
   getWindowForWebContents,
   registerWebContents,
   registerAppView,
 } from "./webContentsRegistry.js";
+import { attachActiveViewFocus } from "./activeViewFocus.js";
 import { getWindowRegistry } from "./windowRef.js";
 import { routeNewWindowRequest } from "./windowHost.js";
 import { toggleWindowFullscreen } from "./fullscreen.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
-import { createWindowWithState } from "../windowState.js";
+import { createWindowWithState, disposeWindowStateTracking } from "../windowState.js";
 import { store } from "../store.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
@@ -41,9 +43,12 @@ import {
   INITIAL_COLOR_SCHEME_ARG,
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
-import { getPlatformWindowOptions } from "./platformWindowOptions.js";
+import { getMinimumWindowSize, getPlatformWindowOptions } from "./platformWindowOptions.js";
+import { getLinuxWindowIconOption } from "./linuxWindowIcon.js";
+import { showWindowInactive } from "./showWindowInactive.js";
 import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
+import { appWindowStateTracking, resolveBoundsProjectPath } from "./windowStateTracking.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
@@ -164,7 +169,13 @@ export function setupBrowserWindow(
   dirname: string,
   options: SetupBrowserWindowOptions = {}
 ): CreateWindowResult {
-  const { onRecreateWindow, onCreateWindow, projectPath, revealMode = "show" } = options;
+  const {
+    onRecreateWindow,
+    onCreateWindow,
+    projectPath,
+    initialProjectId,
+    revealMode = "show",
+  } = options;
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   let _smokeRendererUnresponsive = false;
 
@@ -220,12 +231,13 @@ export function setupBrowserWindow(
   const win = createWindowWithState(
     {
       show: false,
-      minWidth: 800,
-      minHeight: 600,
+      ...getMinimumWindowSize(),
       ...getPlatformWindowOptions(windowBg),
+      ...getLinuxWindowIconOption(),
       backgroundColor: windowBg,
     },
-    projectPath ?? undefined
+    resolveBoundsProjectPath(projectPath, initialProjectId),
+    appWindowStateTracking
   );
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
 
@@ -249,7 +261,7 @@ export function setupBrowserWindow(
       // before the renderer loads, so a restored background window would
       // otherwise take focus here and never reach its showInactive().
       if (revealMode === "showInactive") {
-        win.showInactive();
+        showWindowInactive(win);
       } else {
         win.show();
       }
@@ -312,6 +324,14 @@ export function setupBrowserWindow(
   // content area reveal a single colour when the window is shown before the
   // first paint; WebContentsView defaults to white otherwise.
   appView.setBackgroundColor(windowBg);
+
+  // Attached before the reveal so the first activation is never missed. The
+  // registry's app view is whatever the window is showing — the startup view,
+  // the welcome view, or the project view a switch last revealed.
+  const activeViewFocus = attachActiveViewFocus(win, {
+    getActiveView: () => getAppView(win),
+    isSwitchBridged: () => getProjectViewManagerFor(win)?.isSwitchBridged() ?? false,
+  });
 
   if (isSmokeTest) {
     win.on("unresponsive", () => {
@@ -432,9 +452,12 @@ export function setupBrowserWindow(
       if (!win.isDestroyed()) {
         markPerformance(PERF_MARKS.MAIN_WINDOW_SHOWN, viaFallback ? { fallback: true } : undefined);
         if (revealMode === "showInactive") {
-          win.showInactive();
+          showWindowInactive(win);
         } else {
           win.show();
+          // For a platform that activates inside show(); on Linux activation
+          // arrives later as the `focus` event, which runs the same check.
+          activeViewFocus.schedule();
         }
       }
     };
@@ -617,6 +640,8 @@ export function setupBrowserWindow(
   });
 
   win.once("closed", () => {
+    activeViewFocus.dispose();
+    disposeWindowStateTracking(win);
     if (reclaimTimer) {
       clearTimeout(reclaimTimer);
       reclaimTimer = null;

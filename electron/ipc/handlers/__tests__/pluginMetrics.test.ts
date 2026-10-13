@@ -46,6 +46,7 @@ import {
 } from "../../../schemas/pluginMetrics.js";
 import { PluginMetricsService } from "../../../services/plugin/PluginMetricsService.js";
 import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
+import { onWebContentsDestroyed } from "../../../window/webContentsDestroyed.js";
 
 const PROJECT_A_PLUGIN = makeProjectPluginInstanceKey("proj-a", "acme.local");
 const senderProjects = new Map<number, string>();
@@ -366,6 +367,18 @@ describe("perf snapshot subscription", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // App views already carry most of their 10-listener budget from other
+  // subsystems; an unpackaged build exits on the eleventh `destroyed` listener.
+  it("watches a subscriber's destruction through the shared per-view listener", async () => {
+    const view = makeSender();
+    const unwatch = onWebContentsDestroyed(view, () => {});
+    expect(view.listenerCount("destroyed")).toBe(1);
+    emit(CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, view);
+    await Promise.resolve();
+    expect(view.listenerCount("destroyed")).toBe(1);
+    unwatch();
   });
 
   it("holds worker memory sampling only while someone subscribes", async () => {

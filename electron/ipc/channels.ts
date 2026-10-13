@@ -239,6 +239,7 @@ export const CHANNELS = {
   PROJECT_BACKGROUND_RESIZE: "project:background-resize",
   PROJECT_GET_SETTINGS: "project:get-settings",
   PROJECT_SAVE_SETTINGS: "project:save-settings",
+  PROJECT_ADD_BROWSER_ALLOWED_HOST: "project:add-browser-allowed-host",
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",

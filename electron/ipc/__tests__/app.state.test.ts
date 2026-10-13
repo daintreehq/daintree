@@ -110,7 +110,11 @@ vi.mock("../../services/ProjectStore.js", () => ({
 
 vi.mock("../../utils/gpuDetection.js", () => ({
   getGpuFeatureStatus: vi.fn(() => ({ webgl2: "hardware" })),
+  getWebGLFeatureStatus: vi.fn((status: { webgl?: string; webgl2?: string } | null) =>
+    status ? (status.webgl2 ?? status.webgl) : undefined
+  ),
   isWebGLHardwareAccelerated: vi.fn(() => true),
+  whenGpuReported: vi.fn(async (_timeoutMs: number) => {}),
 }));
 
 vi.mock("../../services/GpuCrashMonitorService.js", () => ({
@@ -742,6 +746,32 @@ describe("app:boot handler", () => {
 
     expect(result.databaseRecovery).toEqual(recovery);
     expect(consumePrefetchedHydrateResult).toHaveBeenCalledWith("p1");
+  });
+
+  it("waits for the GPU report, then answers the GPU half fresh even on the prefetch cache-hit path", async () => {
+    // A cold-start prefetch can run before the GPU process reports, when the
+    // feature status is still the provisional all-disabled one.
+    const gpu = await import("../../utils/gpuDetection.js");
+    vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+      appState: { terminals: [], sidebarWidth: 350 },
+      terminalConfig: { scrollbackLines: 3000 },
+      project: null,
+      gpuWebGLHardware: false,
+    } as unknown as ReturnType<typeof consumePrefetchedHydrateResult>);
+    const projectStoreModule = await import("../../services/ProjectStore.js");
+    vi.mocked(projectStoreModule.projectStore.getCurrentProject).mockReturnValue({
+      id: "p1",
+      name: "P",
+      path: "/p",
+    } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
+    legacyOwnerRef.current = "p1";
+    vi.mocked(gpu.isWebGLHardwareAccelerated).mockReturnValue(true);
+
+    const result = (await invokeBoot()) as Record<string, unknown>;
+
+    expect(gpu.whenGpuReported).toHaveBeenCalledWith(1_500);
+    expect(consumePrefetchedHydrateResult).toHaveBeenCalledWith("p1");
+    expect(result.gpuWebGLHardware).toBe(true);
   });
 
   it("hydrates the project bound to the sending project view instead of the stale global current project", async () => {

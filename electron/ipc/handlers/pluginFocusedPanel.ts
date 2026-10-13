@@ -13,6 +13,7 @@ import {
   getFocusedPanelTracker,
   type FocusedPanelTracker,
 } from "../../services/FocusedPanelTracker.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
 /**
  * Wire the fire-and-forget channel through which each project view reports the
@@ -74,7 +75,7 @@ export function registerPluginFocusedPanelHandlers(
     const senderId = sender.id;
     if (!watched.has(sender)) {
       watched.add(sender);
-      sender.once("destroyed", () => {
+      onWebContentsDestroyed(sender, () => {
         relayed.delete(senderId);
         crashed.delete(senderId);
         tracker.removeSender(senderId);

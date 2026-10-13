@@ -53,3 +53,18 @@ export function getPlatformWindowOptions(windowBg: string): PlatformWindowOption
 
   return { autoHideMenuBar: true };
 }
+
+/**
+ * The smallest a window may be resized to. On Linux a tiling window manager
+ * (sway, i3, Hyprland, KDE and GNOME tiling) sizes windows itself and ignores
+ * the minimum, so 800x600 there only made Daintree lay out at 800px inside a
+ * narrower tile and lose its right side; a small minimum lets it fit the tile.
+ */
+export function getMinimumWindowSize(platform: NodeJS.Platform = process.platform): {
+  minWidth: number;
+  minHeight: number;
+} {
+  return platform === "linux"
+    ? { minWidth: 400, minHeight: 300 }
+    : { minWidth: 800, minHeight: 600 };
+}

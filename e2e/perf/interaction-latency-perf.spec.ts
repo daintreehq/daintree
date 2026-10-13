@@ -22,6 +22,7 @@ import {
   probeResult,
   type DoneCondition,
 } from "../helpers/interactionProbe";
+import { NEW_TERMINAL_CHORD } from "../helpers/shortcuts";
 
 // Everyday-interaction latency benchmark. Each scenario drives one thing a
 // user does many times a day — open a dropdown, switch a worktree, type into a
@@ -1223,7 +1224,7 @@ function scenarios(): Scenario[] {
         await spawnCooldown();
         await snapshotPanels();
       },
-      trigger: () => page.keyboard.press(`${MOD}+Alt+t`),
+      trigger: () => page.keyboard.press(NEW_TERMINAL_CHORD),
       cond: () => ({ kind: "newPanel", bufferText: "ilat%" }),
       after: killNewPanels,
     },

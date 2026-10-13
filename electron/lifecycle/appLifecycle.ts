@@ -8,11 +8,15 @@ import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
+import { finishIfGroupStop } from "./groupStop.js";
 import { isWindowRecreating } from "./windowRecreationState.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
 import { dispatchOpenDirPath, hasOpenDirConsumer } from "../setup/environment.js";
 import { isHostModeRequested } from "../boot/hostModeLaunch.js";
+
+const DISABLE_GPU_CRASH_LIMIT_SWITCH = "disable-gpu-process-crash-limit";
+const SIGNAL_ECHO_WINDOW_MS = 100;
 
 const CLI_PATH_FLAG = "--cli-path";
 const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
@@ -300,15 +304,34 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   // bypasses all Node.js shutdown hooks; that case is handled by
   // CrashRecoveryService on next startup.
   let firstSignalTime: number | null = null;
-  const signalHandler = () => {
+  let firstSignal: NodeJS.Signals | undefined;
+  // When the first signal's dispatch finished; until then, and briefly after,
+  // a repeat of the same signal is an echo. when-exit and signal-exit re-raise
+  // the signal at this process from their own listeners, so the echo is queued
+  // during that dispatch — however long app.quit()'s synchronous prefix takes.
+  let echoUntil: number | null = null;
+  const signalHandler = (signal?: NodeJS.Signals) => {
     if (firstSignalTime !== null) {
-      if (Date.now() - firstSignalTime < 2000) {
+      const echo = signal === firstSignal && (echoUntil === null || Date.now() < echoUntil);
+      if (!echo && Date.now() - firstSignalTime < 2000) {
         process.exit(1);
       }
       return;
     }
     firstSignalTime = Date.now();
+    firstSignal = signal;
+    setImmediate(() => {
+      echoUntil = Date.now() + SIGNAL_ECHO_WINDOW_MS;
+    });
     setSignalShutdown();
+    // Chromium aborts the browser ("GPU process isn't usable. Goodbye.") once
+    // relaunches of a lost GPU process have used up every fallback mode, and a
+    // signal sent to the whole group leaves no zygote to launch one from.
+    // Chromium reads this switch, on this thread, at each GPU crash it records,
+    // so from here on a lost GPU process is relaunched without falling back
+    // (gpu_process_host.cc RecordProcessCrash). Nothing is rendered past this
+    // point that a fallback would help.
+    app.commandLine.appendSwitch(DISABLE_GPU_CRASH_LIMIT_SWITCH);
     const handle = setTimeout(() => {
       setSafetyBeltTimer(null);
       app.exit(1);
@@ -316,13 +339,36 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     handle.unref();
     setSafetyBeltTimer(handle);
     app.quit();
+    // The quit has claimed the shutdown and run its synchronous prefix. If the
+    // same signal reached Chromium's own processes, this is a group stop and
+    // the rest of the chain cannot outrun Chromium (see groupStop.ts).
+    finishIfGroupStop();
   };
-  process.on("SIGTERM", signalHandler);
-  process.on("SIGINT", signalHandler);
   process.on("SIGUSR2", signalHandler);
-  if (!app.isPackaged) {
-    process.on("SIGHUP", signalHandler);
-  }
+  // Electron installs its own SIGTERM/SIGINT/SIGHUP handlers while it starts
+  // (POSIX), replacing the one libuv set up for a listener added before then:
+  // on Electron 42 (Linux and macOS) a SIGTERM listener added at load never ran,
+  // and Electron's handler quit with none of the above. libuv installs its
+  // handler only when a signal goes from no listeners to one, and dependencies
+  // (signal-exit) add theirs at load, so once the app is ready each signal's
+  // listeners are taken off and put back, ours first: that reinstalls libuv's
+  // handler after Electron's. SIGUSR2 is Node's alone.
+  const takeSignal = (signal: NodeJS.Signals) => {
+    // rawListeners keeps `once` wrappers, so one-shot listeners stay one-shot.
+    const existing = process.rawListeners(signal) as ((...args: unknown[]) => void)[];
+    process.removeAllListeners(signal);
+    process.on(signal, signalHandler);
+    for (const listener of existing) process.on(signal, listener);
+  };
+  const registerTerminationSignals = () => {
+    takeSignal("SIGTERM");
+    takeSignal("SIGINT");
+    if (!app.isPackaged) {
+      takeSignal("SIGHUP");
+    }
+  };
+  if (app.isReady()) registerTerminationSignals();
+  else void app.whenReady().then(registerTerminationSignals);
 
   // A second launch that arrived before the first had anything on screen.
   // `plainRelaunch` is true if any of them was a plain relaunch.

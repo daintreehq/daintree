@@ -75,6 +75,9 @@ const registryMock = vi.hoisted(() => ({
 
 vi.mock("../../window/webContentsRegistry.js", () => registryMock);
 
+const iconMock = vi.hoisted(() => ({ getLinuxWindowIcon: vi.fn(() => undefined as unknown) }));
+vi.mock("../../window/linuxWindowIcon.js", () => iconMock);
+
 import { sendToRenderer } from "../../ipc/utils.js";
 import { notificationService } from "../NotificationService.js";
 import type { ProjectTitleLookup, ProjectTitleRow } from "../../window/windowTitle.js";
@@ -257,6 +260,16 @@ describe("NotificationService", () => {
     notificationService.dispose();
 
     expect(() => notificationService.updateNotifications(11, { waitingCount: 1 })).not.toThrow();
+  });
+
+  it("carries the app icon when there is one, so Linux daemons don't draw a generic one", () => {
+    const icon = { isEmpty: () => false };
+    iconMock.getLinuxWindowIcon.mockReturnValueOnce(icon);
+    notificationService.showNativeNotification("Agent waiting", "a");
+    expect(electronMock.notificationInstances.at(-1)!.options).toMatchObject({ icon });
+
+    notificationService.showNativeNotification("Agent waiting", "b");
+    expect(electronMock.notificationInstances.at(-1)!.options).not.toHaveProperty("icon");
   });
 
   describe("project-aware titles", () => {

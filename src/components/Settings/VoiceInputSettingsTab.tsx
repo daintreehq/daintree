@@ -369,8 +369,12 @@ export function VoiceInputSettingsTab() {
     }
   };
 
-  const handleOpenMicSettings = () => {
-    window.electron?.voiceInput?.openMicSettings();
+  const handleOpenMicSettings = async () => {
+    setMicNote(null);
+    const opened = await window.electron?.voiceInput?.openMicSettings().catch(() => false);
+    if (opened === false) {
+      setMicNote("Couldn't open the settings app. Open it yourself, then re-check.");
+    }
   };
 
   const handleRefreshMicPermission = async () => {
@@ -1033,7 +1037,12 @@ function MicPermissionRow({
         };
       case "denied":
       case "restricted": {
-        const settingsLabel = isWindows ? "Windows Settings" : "System Settings";
+        // Linux opens whichever sound settings app the desktop has.
+        const settingsLabel = isWindows
+          ? "Windows Settings"
+          : isMac
+            ? "System Settings"
+            : "sound settings";
         const settingsPath = isMac
           ? `Allow ${appName} under Privacy & Security → Microphone, then re-check.`
           : isWindows

@@ -27,6 +27,7 @@ import { getPluginMcpSupervisor } from "../PluginMcpSupervisor.js";
 import { getPluginMcpConsentService, getPluginMcpRateLimiter } from "../plugin-mcp/instances.js";
 import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
 import { clearProjectPluginVisibilityForPlugin } from "./projectPluginVisibility.js";
+import { wipeSettingsFile } from "../PluginSettingsStore.js";
 import type {
   PluginManifest,
   PluginInstallError,
@@ -1209,14 +1210,13 @@ export class PluginInstaller {
         await fs.rm(pluginDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       }
 
-      // Optionally delete user-scope stored settings/secrets. `force` is a safe
-      // no-op when the file doesn't exist; the retry options mirror the plugin
-      // dir deletion so a still-closing settings writer on Windows doesn't strand
-      // the uninstall. The in-memory store was already dropped by
-      // `unloadPlugin`'s clearPluginSettingsState step.
+      // Optionally delete user-scope stored settings/secrets. The in-memory store
+      // was already dropped by `unloadPlugin`'s clearPluginSettingsState step, but
+      // a write it queued can still be waiting on a keychain prompt, so the file
+      // is deleted through the stores' own write queue, which also keeps any
+      // such write from putting it back.
       if (wipeSettings) {
-        const settingsFile = path.join(this.deps.getSettingsRoot(), `${pluginId}.json`);
-        await fs.rm(settingsFile, { force: true, maxRetries: 5, retryDelay: 100 });
+        await wipeSettingsFile(path.join(this.deps.getSettingsRoot(), `${pluginId}.json`));
       }
 
       // Bookkeeping runs only after the filesystem deletion succeeds — if `fs.rm`

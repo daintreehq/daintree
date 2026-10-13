@@ -54,7 +54,14 @@ import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { stopPerformanceTraceIfActive } from "../utils/performanceTrace.js";
+import { getProcessDeathLogger } from "../services/ProcessDeathLogger.js";
 import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
+import {
+  noteChildProcessGone,
+  noteRendererGone,
+  rememberChromiumZygotes,
+  setGroupStopFinisher,
+} from "./groupStop.js";
 import {
   CAPTURE_DELIVERY_BUDGET_MS,
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
@@ -110,6 +117,18 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
   // before Electron emits `before-quit` — so this listener never usefully fires
   // for an update and the chain has to be reachable without it (issue #11104).
   setShutdownRunner(() => runShutdownChain(deps));
+
+  // A signal sent to the whole process group must end the process before
+  // Chromium does (groupStop.ts). Registered at startup, while the zygotes it
+  // watches can still be recognised.
+  rememberChromiumZygotes();
+  setGroupStopFinisher(finishGroupStop);
+  app.on("child-process-gone", (_event, details) => {
+    noteChildProcessGone(details);
+  });
+  app.on("render-process-gone", () => {
+    noteRendererGone();
+  });
 
   app.on("before-quit", async (event) => {
     if (isSmokeTest) {
@@ -167,10 +186,83 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
 
     // The quit is committed. Claim the coordinator and own the terminal action:
     // app.exit() with the code the chain's outcome dictates.
-    startShutdown("app-quit", (outcome) => {
-      app.exit(outcome === "clean" ? 0 : 1);
-    });
+    startShutdown("app-quit", exitWithOutcome);
   });
+}
+
+// Set once a group stop has exited. The abandoned chain may still settle in the
+// turns before the message loop quits, and its app.exit must not replace the
+// exit code.
+let exitedForGroupStop = false;
+
+// What the running chain has established, for a group stop that cuts it short:
+// whether its synchronous persistence finished, and its own verdict once it
+// has reached one.
+let chainPrefixPersisted = false;
+let chainOutcome: ShutdownOutcome | null = null;
+
+function exitWithOutcome(outcome: ShutdownOutcome): void {
+  if (exitedForGroupStop) return;
+  app.exit(outcome === "clean" ? 0 : 1);
+}
+
+// The termination signal reached the whole process group (see groupStop.ts).
+// The chain's synchronous prefix — open-window manifest, crash-recovery backup,
+// compile cache — ran when the quit was claimed. What it would still await is
+// being killed by the same signal (the PTY host runs its own SIGTERM teardown),
+// and on Linux Chromium aborts the browser within milliseconds of losing its
+// GPU process, so this is all the persistence there is time for. That exit is
+// clean: nothing crashed, the app was told to stop. A chain that had already
+// failed, or whose prefix threw, still exits dirty, and a crash before this
+// point still leaves the markers dirty.
+function finishGroupStop(): boolean {
+  if (isSmokeTest) return false;
+  if (!getActiveShutdown()) {
+    // A quit confirmation was still open, so no chain had claimed the process.
+    startShutdown("app-quit", exitWithOutcome);
+  }
+  const active = getActiveShutdown();
+  // An update install or a relaunch keeps its own terminal action.
+  if (active?.initiator !== "app-quit" || active.phase !== "cleaning") return false;
+
+  const outcome = chainOutcome ?? (chainPrefixPersisted ? "clean" : "dirty");
+  console.warn(
+    `[MAIN] The termination signal reached Chromium's own processes too — exiting now (${outcome}) instead of waiting on the shutdown chain`
+  );
+  getProcessDeathLogger()?.flush();
+  // Detached check runs lead their own process group, so a group signal can
+  // miss them. Synchronous, like the rest of this path.
+  try {
+    projectCheckService.dispose();
+  } catch (err) {
+    console.warn("[MAIN] projectCheckService.dispose failed:", err);
+  }
+  // A chain that settled clean has written the markers already.
+  if (outcome === "clean" && chainOutcome === null) writeCleanExitMarkers();
+  clearSafetyBeltTimer();
+  exitedForGroupStop = true;
+  app.exit(outcome === "clean" ? 0 : 1);
+  return true;
+}
+
+// Independent try blocks so a failure in one marker write doesn't skip the
+// others (lesson #7158).
+function writeCleanExitMarkers(): void {
+  try {
+    getCrashRecoveryService().cleanupOnExit();
+  } catch (err) {
+    console.warn("[MAIN] CrashRecoveryService.cleanupOnExit failed:", err);
+  }
+  try {
+    getCrashLoopGuard().markCleanExit();
+  } catch (err) {
+    console.warn("[MAIN] CrashLoopGuard.markCleanExit failed:", err);
+  }
+  try {
+    getPanelSuspectLedger().markCleanLaunch();
+  } catch (err) {
+    console.warn("[MAIN] PanelSuspectLedger.markCleanLaunch failed:", err);
+  }
 }
 
 // The graceful-shutdown chain, shared by every path that ends the process: the
@@ -227,6 +319,7 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   } catch (err) {
     console.warn("[MAIN] flushCompileCache at quit failed:", err);
   }
+  chainPrefixPersisted = true;
 
   console.log("[MAIN] Starting graceful shutdown...");
   // Guarded like every other dynamic import in this chain, and for a sharper
@@ -877,27 +970,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     console.log("[MAIN] Graceful shutdown complete");
     // Mark the exit clean BEFORE telemetry — telemetry is best-effort and
     // a closeTelemetry failure must never make the next launch think we crashed.
-    // Independent try blocks so a failure in one marker write doesn't skip the other.
     //
     // These three markers are the ONLY thing the update-install path used to
     // write (hand-copied into AutoUpdaterService, issue #9638). They live here
     // now, and only here: a marker written before the chain settles is a lie
-    // about state that was never actually persisted (lesson #7158).
-    try {
-      getCrashRecoveryService().cleanupOnExit();
-    } catch (err) {
-      console.warn("[MAIN] CrashRecoveryService.cleanupOnExit failed:", err);
-    }
-    try {
-      getCrashLoopGuard().markCleanExit();
-    } catch (err) {
-      console.warn("[MAIN] CrashLoopGuard.markCleanExit failed:", err);
-    }
-    try {
-      getPanelSuspectLedger().markCleanLaunch();
-    } catch (err) {
-      console.warn("[MAIN] PanelSuspectLedger.markCleanLaunch failed:", err);
-    }
+    // about state that was never actually persisted (lesson #7158). The one
+    // exception is a group stop, where the chain cannot settle at all.
+    writeCleanExitMarkers();
   } catch (error) {
     clearTimeout(hardTimer);
     outcome = "dirty";
@@ -908,6 +987,7 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     // but the next boot gets a truthful dirty marker and its recovery flow
     // rather than a false "everything was saved".
   }
+  chainOutcome = outcome;
 
   // Defuse the signal-handler safety-belt the moment the outcome is decided, so
   // it can't fire during the tail below and clobber the terminal action.

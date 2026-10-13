@@ -7,6 +7,7 @@ import type { ClientEndpoint, Disposable } from "../endpoint.js";
 import { onWithContext } from "../utils.js";
 import type { FilterOptions } from "../../services/EventBuffer.js";
 import type { EventFilterOptions, EventRecord } from "../../../shared/types/index.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
 const subscribedWebContents = new Map<WebContents, () => void>();
 // Views attached over a link have no WebContents here; they are keyed by
@@ -160,13 +161,13 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
       return;
     }
 
-    const destroyListener = () => {
-      subscribedWebContents.delete(sender);
-      releaseBufferIfIdle();
-    };
-
-    subscribedWebContents.set(sender, destroyListener);
-    sender.once("destroyed", destroyListener);
+    subscribedWebContents.set(
+      sender,
+      onWebContentsDestroyed(sender, () => {
+        subscribedWebContents.delete(sender);
+        releaseBufferIfIdle();
+      })
+    );
 
     ensureBufferSubscription();
   };
@@ -178,10 +179,10 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
       return;
     }
     const sender = ctx.event.sender;
-    const destroyListener = subscribedWebContents.get(sender);
+    const unwatch = subscribedWebContents.get(sender);
 
-    if (destroyListener) {
-      sender.removeListener("destroyed", destroyListener);
+    if (unwatch) {
+      unwatch();
       subscribedWebContents.delete(sender);
     }
 
@@ -194,10 +195,8 @@ export function registerEventInspectorHandlers(deps: HandlerDependencies): () =>
 
     flushBatch();
 
-    for (const [webContents, destroyListener] of subscribedWebContents.entries()) {
-      if (!webContents.isDestroyed()) {
-        webContents.removeListener("destroyed", destroyListener);
-      }
+    for (const unwatch of subscribedWebContents.values()) {
+      unwatch();
     }
     subscribedWebContents.clear();
     for (const closeListener of subscribedEndpoints.values()) closeListener.dispose();

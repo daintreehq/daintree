@@ -59,6 +59,12 @@ export const config: AgentConfig = {
           label: "npm",
           commands: ["npm install -g @openai/codex"],
         },
+        // OpenAI's standalone installer (a POSIX sh script): the binary goes to
+        // ~/.local/bin without npm or root.
+        {
+          label: "curl",
+          commands: ["curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
+        },
       ],
     },
     troubleshooting: [

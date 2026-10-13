@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { dispatchEscape, registerEscape } from "@/lib/escapeStack";
 import { createContext, use } from "react";
 import type { ReactNode } from "react";
-import { PluginSettingsForm } from "../PluginSettingsForm";
+import { PluginSettingsForm, lockedSecretStorageText } from "../PluginSettingsForm";
 import type {
   LoadedPluginInfo,
   PluginSettingsUiValues,
@@ -480,6 +480,65 @@ describe("PluginSettingsForm", () => {
 
     expect(await screen.findByText(/wasn't saved/)).toBeTruthy();
     expect(input.value).toBe("sk-typed");
+    // With no keychain at all, another try is refused the same way.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  // Electron asks for the keychain once per run: after a dismissed unlock prompt
+  // every save this session is refused, and only a restart asks again.
+  it("says the keychain is locked for the session instead of offering a Retry that can't work", async () => {
+    pluginApi.getSettingValues
+      .mockResolvedValueOnce(uiValues({ secretTier: "keychain" }))
+      .mockResolvedValue(uiValues({ secretTier: "locked" }));
+    pluginApi.setSettingValue.mockRejectedValue(
+      new Error(
+        `The keyring wasn't available this session, so the secret "token" wasn't saved — restart Daintree to try again`
+      )
+    );
+    render(
+      <PluginSettingsForm
+        plugin={makePlugin([
+          { id: "token", type: "secret", label: "Token" },
+          { id: "other", type: "secret", label: "Other" },
+        ])}
+      />
+    );
+
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    expect(screen.getAllByText("New secrets are stored in the OS keychain")).toHaveLength(2);
+    fireEvent.change(input, { target: { value: "sk-typed" } });
+    fireEvent.blur(input);
+
+    expect(await screen.findByText(/wasn't saved — restart Daintree/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    // Every secret row now says so, not just the one that tried.
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/not available this session — restart Daintree to try again$/)
+      ).toHaveLength(2)
+    );
+    expect(screen.queryByText("New secrets are stored in the OS keychain")).toBeNull();
+    expect(input.value).toBe("sk-typed");
+  });
+
+  it("still offers Retry when the keychain is there and only this save failed", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ secretTier: "keychain" }));
+    pluginApi.setSettingValue.mockRejectedValueOnce(
+      new Error("Secure storage didn't answer within 60 s. It may be waiting on a password prompt.")
+    );
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "sk-typed" } });
+    fireEvent.blur(input);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(pluginApi.setSettingValue).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Stored in OS keychain")).toBeTruthy();
   });
 
   it("nudges re-saving a secret still in plaintext while a keychain is now available", async () => {
@@ -832,5 +891,31 @@ describe("PluginSettingsForm", () => {
     const input = (await screen.findByLabelText("Storage folder")) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("/Users/x/notes"));
     expect(pluginApi.pathExists).not.toHaveBeenCalled();
+  });
+});
+
+// The no-key result can't say why, so neither do the words.
+describe("a keychain that gave no key this session", () => {
+  // A dismissed unlock prompt and a keyring service that isn't running end alike.
+  it("claims no more than an unavailable keyring on Linux", () => {
+    expect(lockedSecretStorageText(null, "linux")).toBe(
+      "Keyring not available this session — restart Daintree to try again"
+    );
+  });
+
+  // Chromium reports a refusal and any other Keychain error alike.
+  it("claims no more than an unavailable Keychain on macOS", () => {
+    expect(lockedSecretStorageText(null, "darwin")).toBe(
+      "Keychain not available this session — restart Daintree to try again"
+    );
+  });
+
+  it("names the host and restarts Daintree there for a remote window", () => {
+    expect(lockedSecretStorageText({ name: "studio-01" }, "linux")).toBe(
+      "Keyring on studio-01 not available this session — restart Daintree there to try again"
+    );
+    expect(lockedSecretStorageText({ name: "studio-01" }, "darwin")).toBe(
+      "Keychain on studio-01 not available this session — restart Daintree there to try again"
+    );
   });
 });

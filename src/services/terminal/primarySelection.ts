@@ -19,6 +19,12 @@ export interface PrimarySelectionDeps {
 //
 // Write-on-mouseup avoids Chromium's per-mousemove selection spam during drag.
 // auxclick uses capture phase because xterm.js 6.0 stopPropagation()s on bubble.
+//
+// Chromium pastes PRIMARY on a middle-button release by itself (Blink's
+// PasteGlobalSelection, run after auxclick unless the mouseup was cancelled),
+// into whatever editable element holds focus — xterm's helper textarea when
+// the terminal is focused, which xterm then pastes too. Cancelling the
+// middle-button mouseup leaves the auxclick read below as the only paste.
 export function installLinuxPrimarySelectionListeners(deps: PrimarySelectionDeps): () => void {
   const {
     hostElement,
@@ -45,6 +51,10 @@ export function installLinuxPrimarySelectionListeners(deps: PrimarySelectionDeps
     });
   };
 
+  const onMiddleMouseUp = (event: MouseEvent) => {
+    if (event.button === 1) event.preventDefault();
+  };
+
   const onAuxClick = async (event: MouseEvent) => {
     if (event.button !== 1) return;
     if (isInputLocked()) return;
@@ -69,10 +79,12 @@ export function installLinuxPrimarySelectionListeners(deps: PrimarySelectionDeps
   };
 
   hostElement.addEventListener("mouseup", onMouseUp);
+  hostElement.addEventListener("mouseup", onMiddleMouseUp, { capture: true });
   hostElement.addEventListener("auxclick", onAuxClick, { capture: true });
 
   return () => {
     hostElement.removeEventListener("mouseup", onMouseUp);
+    hostElement.removeEventListener("mouseup", onMiddleMouseUp, { capture: true });
     hostElement.removeEventListener("auxclick", onAuxClick, { capture: true });
   };
 }

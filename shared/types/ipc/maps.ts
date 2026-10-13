@@ -1190,7 +1190,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "voice-input:open-mic-settings": {
     args: [];
-    result: void;
+    result: boolean;
   };
   "voice-input:validate-api-key": {
     args: [apiKey: string];

@@ -958,6 +958,18 @@ export async function initGlobalServices(
     },
   });
 
+  // An updater rename this process never saw (an older build's, which had no
+  // handlers) leaves the installed `daintree` command on a deleted AppImage.
+  if (process.platform === "linux") {
+    registerDeferredTask({
+      name: "appimage-references",
+      run: async () => {
+        const { reconcileAppImageReferences } = await import("../services/appImageRelocation.js");
+        reconcileAppImageReferences();
+      },
+    });
+  }
+
   // Windows Store update notifier — parallel path to electron-updater for
   // builds where the Store owns the install but the user still wants to know
   // a newer version is available.

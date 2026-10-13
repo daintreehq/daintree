@@ -22,8 +22,8 @@ import { allScenarios } from "../scenarios";
 /**
  * The stub experiment for the availability family, written down.
  *
- * The scenarios drive the real service against real `which` subprocesses, which
- * needs the module-resolution hooks Vitest does not run. What is pinned here is
+ * The scenarios drive the real service against a real PATH, which needs the
+ * module-resolution hooks Vitest does not run. What is pinned here is
  * the half that matters for review: the spawn arithmetic the oracle compares
  * against, and that each predicate goes non-zero for the specific way its
  * operation breaks — including the two cheap wrong answers, "everything is
@@ -91,20 +91,20 @@ function gradeAgainst(
 }
 
 describe("perf cli-availability spawn arithmetic", () => {
-  it("prices a POSIX miss at two starts and a PATH hit at one", () => {
-    // On POSIX `which -a` exiting non-zero cannot be told apart from a `which`
-    // that rejects `-a`, so the service runs the probe a second time.
-    const perMiss = process.platform === "win32" ? 1 : 2;
+  // POSIX walks PATH in-process, so a PATH hit or miss starts nothing there;
+  // Windows still starts one `where.exe` per agent, hit or miss.
+  const perPathProbe = process.platform === "win32" ? 1 : 0;
+
+  it("prices each PATH probe at its platform's subprocess cost", () => {
     // beta declares an npm package, so a refresh in which beta misses also
     // pays one `npm config get prefix`.
-    expect(expectedSpawnsFor(REGISTRY, [], false)).toBe(3 * perMiss + 1);
-    expect(expectedSpawnsFor(REGISTRY, ["alpha"], false)).toBe(1 + 2 * perMiss + 1);
-    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], false)).toBe(2 + perMiss);
+    expect(expectedSpawnsFor(REGISTRY, [], false)).toBe(3 * perPathProbe + 1);
+    expect(expectedSpawnsFor(REGISTRY, ["alpha"], false)).toBe(3 * perPathProbe + 1);
+    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], false)).toBe(3 * perPathProbe);
   });
 
   it("prices a prepended-path hit at zero starts", () => {
-    const perMiss = process.platform === "win32" ? 1 : 2;
-    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], true)).toBe(perMiss);
+    expect(expectedSpawnsFor(REGISTRY, ["alpha", "beta"], true)).toBe(perPathProbe);
     expect(expectedSpawnsFor(REGISTRY, Object.keys(REGISTRY), true)).toBe(0);
   });
 });
@@ -131,8 +131,9 @@ describe("perf cli-availability graders", () => {
     const grade = gradeAgainst(arm, availabilityWhere([]), 0);
     expect(grade.foundSetMisses).toBe(2);
     // Signed: positive means the ladder did LESS work than it is supposed to.
+    // On POSIX a PATH hit is free, so here the found-set term is the one that
+    // catches it.
     expect(grade.spawnCountMisses).toBe(arm.expectedSpawns);
-    expect(grade.spawnCountMisses).toBeGreaterThan(0);
   });
 
   it("catches a probe that answers ready for everything", () => {

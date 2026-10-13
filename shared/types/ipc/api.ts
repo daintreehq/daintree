@@ -722,6 +722,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRemoved(callback: (projectId: string) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
+    /**
+     * Add a host to the browser panel's allow-list, merged into the settings on
+     * disk in Main rather than saved over them. Resolves to the list as saved.
+     */
+    addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]>;
     detectRunners(projectId: string): Promise<RunCommand[]>;
     /**
      * List all git remotes for a working directory, with an optional parsed
@@ -2060,8 +2065,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * getUserMedia is the real gate on those platforms.
      */
     requestMicPermission(): Promise<boolean>;
-    /** Best-effort: opens the OS microphone settings. Failures are logged, never surfaced. */
-    openMicSettings(): Promise<void>;
+    /**
+     * Opens the OS microphone settings (on Linux, the desktop's sound settings).
+     * Resolves false when no settings app could be opened.
+     */
+    openMicSettings(): Promise<boolean>;
     validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
     /** Run a whole-passage AI cleanup pass over the dictated text after recording stops. */
     correct(request: {

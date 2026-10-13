@@ -62,6 +62,7 @@ import {
   originPolicyAllows,
   type GuestOriginPolicy,
 } from "./sitePreview/originPolicy.js";
+import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 
 const DEV_PREVIEW_PANEL_KIND = "dev-preview";
 
@@ -727,15 +728,15 @@ export class SitePreviewBridge {
     // It need not be: a second window on the same project can bind to a preview
     // hosted in the first. When that view goes, the binding has no consumer left
     // — every push is addressed to it — so the runtime in the page would keep
-    // observing the user's site with nothing listening. `once`, because the
-    // subscriber can be the guest's own host and a second teardown is a no-op.
+    // observing the user's site with nothing listening. Through the shared
+    // per-view watcher: a view can subscribe to several previews, and a listener
+    // each would run its `destroyed` count past the dev build's limit.
     const subscriber = this.deps.getWebContents(binding.subscriberWebContentsId);
     if (subscriber && subscriber !== wc) {
       const onSubscriberDestroyed = (): void => {
         void this.teardown(binding, "subscriber-destroyed").catch(() => undefined);
       };
-      subscriber.once("destroyed", onSubscriberDestroyed);
-      binding.disposers.push(() => subscriber.off("destroyed", onSubscriberDestroyed));
+      binding.disposers.push(onWebContentsDestroyed(subscriber, onSubscriberDestroyed));
     }
   }
 

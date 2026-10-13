@@ -9,7 +9,11 @@ let mockWatcherStartResult = false;
 let mockRecursiveStartResult: boolean | undefined;
 let mockGitOnlyStartResult: boolean | undefined;
 let mockWatcherStartFiresFailure = false;
-let capturedOnInotifyLimitReached: (() => void) | undefined;
+// Whether a recursive start that resolves true also gets its subscription
+// live, as the real watcher reports through onWorktreeWatcherReady. False
+// models a subscription that fails after start() has resolved.
+let mockRecursiveSubscriptionGoesLive = true;
+let capturedOnInotifyLimitReached: ((limit: "watches" | "instances") => void) | undefined;
 let capturedOnEmfileLimitReached: (() => void) | undefined;
 let capturedWatcherOptions: Record<string, unknown> | undefined;
 let watcherStartCallCount = 0;
@@ -18,16 +22,19 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
       private readonly onWatcherFailed?: () => void;
+      private readonly onWorktreeWatcherReady?: () => void;
       private readonly watchWorktree: boolean;
       constructor(
         opts: {
           onWatcherFailed?: () => void;
-          onInotifyLimitReached?: () => void;
+          onInotifyLimitReached?: (limit: "watches" | "instances") => void;
           onEmfileLimitReached?: () => void;
+          onWorktreeWatcherReady?: () => void;
           watchWorktree?: boolean;
         } & Record<string, unknown>
       ) {
         this.onWatcherFailed = opts.onWatcherFailed;
+        this.onWorktreeWatcherReady = opts.onWorktreeWatcherReady;
         this.watchWorktree = opts.watchWorktree === true;
         capturedOnInotifyLimitReached = opts.onInotifyLimitReached;
         capturedOnEmfileLimitReached = opts.onEmfileLimitReached;
@@ -40,6 +47,12 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
           : (mockGitOnlyStartResult ?? mockWatcherStartResult);
         if (this.watchWorktree && mockWatcherStartFiresFailure && !result) {
           this.onWatcherFailed?.();
+        }
+        if (this.watchWorktree && result && mockRecursiveSubscriptionGoesLive) {
+          // The real subscription settles after start() has resolved.
+          void Promise.resolve()
+            .then(() => Promise.resolve())
+            .then(() => this.onWorktreeWatcherReady?.());
         }
         return Promise.resolve(result);
       }
@@ -106,6 +119,7 @@ describe("WatcherController", () => {
     mockRecursiveStartResult = undefined;
     mockGitOnlyStartResult = undefined;
     mockWatcherStartFiresFailure = false;
+    mockRecursiveSubscriptionGoesLive = true;
     watcherStartCallCount = 0;
     capturedOnInotifyLimitReached = undefined;
     capturedOnEmfileLimitReached = undefined;
@@ -204,6 +218,27 @@ describe("WatcherController", () => {
 
     await settle();
     expect(ctrl.currentMode).toBe("recursive");
+    expect(host.onWatcherRecovered).not.toHaveBeenCalled();
+  });
+
+  it("doesn't signal recovery when a retried recursive arm resolves but its subscription then fails", async () => {
+    mockRecursiveStartResult = false;
+    mockGitOnlyStartResult = true;
+    const host = makeHost({ isElevated: true });
+    const ctrl = new WatcherController(host as WatcherControllerHost);
+
+    ctrl.start();
+    await settle();
+    expect(ctrl.currentMode).toBe("git-only");
+
+    // start() resolves, but the subscription never goes live: the inotify
+    // limit is still hit, and that arrives after the arm has resolved.
+    mockRecursiveStartResult = true;
+    mockRecursiveSubscriptionGoesLive = false;
+    await vi.advanceTimersByTimeAsync(31_000);
+    capturedOnInotifyLimitReached?.("watches");
+    await settle();
+
     expect(host.onWatcherRecovered).not.toHaveBeenCalled();
   });
 
@@ -595,9 +630,9 @@ describe("WatcherController", () => {
     ctrl.start();
     await settle();
 
-    capturedOnInotifyLimitReached?.();
+    capturedOnInotifyLimitReached?.("instances");
     capturedOnEmfileLimitReached?.();
-    expect(host.onInotifyLimitReached).toHaveBeenCalledWith("/test/worktree");
+    expect(host.onInotifyLimitReached).toHaveBeenCalledWith("/test/worktree", "instances");
     expect(host.onEmfileLimitReached).toHaveBeenCalledWith("/test/worktree");
   });
 

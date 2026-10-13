@@ -375,7 +375,9 @@ class StubWebContentsView {
 }
 
 /** Chromium's child stack: last child is on top, and re-adding moves a view. */
-class StubContentView {
+// An EventEmitter like Electron's View: ProjectViewManager listens for its
+// `bounds-changed` to regrow views after the Linux menu bar hides.
+class StubContentView extends EventEmitter {
   readonly children: StubWebContentsView[] = [];
 
   addChildView(view: StubWebContentsView, index?: number): void {

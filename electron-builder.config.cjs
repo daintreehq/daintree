@@ -190,6 +190,7 @@ module.exports = async function () {
     ],
     electronFuses: {
       runAsNode: false,
+      // Off for Linux: afterPack.cjs (applyPlatformFuses) explains why.
       enableCookieEncryption: true,
       enableNodeOptionsEnvironmentVariable: false,
       enableNodeCliInspectArguments: false,
@@ -200,6 +201,17 @@ module.exports = async function () {
     },
     afterPack: "./scripts/afterPack.cjs",
     afterSign: "./scripts/notarize-macos.cjs",
+    // The AppImage ships AppImage's static type2 runtime (20251108) instead of
+    // the legacy one, which dlopens libfuse.so.2: Ubuntu 22.04+ and most
+    // current distros ship only fuse3, so the legacy image wouldn't start
+    // until the user installed libfuse2. The static runtime mounts through any
+    // setuid fusermount/fusermount3 and keeps the same APPIMAGE/APPDIR/ARGV0/
+    // OWD variables, `--appimage-extract [pattern]`, APPIMAGE_EXTRACT_AND_RUN
+    // and AppRun, so the updater, the packaged smoke and Remote Hosts behave
+    // as before. 1.0.3 is the toolset whose mksquashfs builds on newer glibc
+    // hosts (electron-builder #9598). It compresses with zstd rather than
+    // gzip, so the first update across this change downloads in full.
+    toolsets: { appimage: "1.0.3" },
     mac: {
       // No `beforePack` hook and no `singleArchFiles` allowList: both were
       // added to keep node-gyp's per-arch build metadata out of the macOS
@@ -373,7 +385,10 @@ module.exports = async function () {
       include: "build/installer.nsh",
     },
     linux: {
-      icon: "build/icon.png",
+      // A directory holding only icon.png, so electron-builder renders the hicolor
+      // size set from it. Given the PNG itself it installs that one file, and
+      // 1024x1024 is not a size hicolor indexes: menus showed a broken icon.
+      icon: "build",
       // Foreign-platform better-sqlite3 prebuilds — see the mac.files note.
       // Electron only runs on glibc, so the linuxmusl variants go too.
       // The other glibc arch is pruned in afterPack.cjs (#11829).
@@ -404,15 +419,24 @@ module.exports = async function () {
       extraResources: [
         { from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" },
         { from: "build/linux/daintree.apparmor", to: "daintree.apparmor" },
+        // The window icon (electron/window/linuxWindowIcon.ts)
+        { from: "build/icon.png", to: "icon.png" },
       ],
     },
     deb: {
       packageName: "daintree",
       depends: [
-        "libc6 (>= 2.31)",
+        // node-pty and better-sqlite3 need glibc 2.34 as the release workflow
+        // builds them (ubuntu-22.04); on 2.31 the app installed and every
+        // terminal failed to start.
+        "libc6 (>= 2.34)",
         "libgtk-3-0",
         "libnss3",
-        "libasound2",
+        // The real ALSA library first: since the 64-bit time_t transition,
+        // `libasound2` is only a virtual package that liboss4-salsa-asound2
+        // also provides, and apt picked that OSS shim on a clean Ubuntu 24.04,
+        // which lacks ALSA symbols Electron needs, so Daintree couldn't start.
+        "libasound2t64 | libasound2",
         "libgbm1",
         "libxkbcommon0",
         "libxrandr2",

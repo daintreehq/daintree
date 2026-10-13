@@ -1,7 +1,6 @@
 import os from "node:os";
 import { app, safeStorage } from "electron";
 import { CHANNELS } from "../../ipc/channels.js";
-import { safeStorageCipher } from "../../services/plugin/secretCipher.js";
 import { store } from "../../store.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import type { HostModeEvent, HostModeStatus } from "../../../shared/types/ipc/hostMode.js";
@@ -109,7 +108,6 @@ export function createHostModeService(
         onChange,
       }),
     keychain: {
-      secretTier: () => safeStorageCipher.tier(),
       getSelectedStorageBackend: () => safeStorage.getSelectedStorageBackend(),
       isAsyncEncryptionAvailable: () => safeStorage.isAsyncEncryptionAvailable(),
       encryptStringAsync: (text) => safeStorage.encryptStringAsync(text),

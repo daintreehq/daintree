@@ -3,6 +3,8 @@ import { windowStatesStore, type WindowStateEntry } from "./store.js";
 
 const LEGACY_KEY = "__legacy__";
 const MRU_OFFSET_PX = 30;
+// How many cascade steps a new window takes off windows it would land on.
+const MAX_CASCADE_STEPS = 10;
 
 // Cap on how many per-project window-state entries `window-states.json` retains.
 // Without it the map grows one entry per project ever opened, is never pruned,
@@ -15,6 +17,7 @@ interface DebouncedFunction<T extends (...args: unknown[]) => void> {
   (...args: Parameters<T>): void;
   cancel: () => void;
   flush: () => void;
+  pending: () => boolean;
 }
 
 function debounce<T extends (...args: unknown[]) => void>(
@@ -24,8 +27,12 @@ function debounce<T extends (...args: unknown[]) => void>(
   let timeout: ReturnType<typeof setTimeout> | null = null;
   const debounced = (...args: Parameters<T>) => {
     if (timeout) clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), wait);
+    timeout = setTimeout(() => {
+      timeout = null;
+      func(...args);
+    }, wait);
   };
+  debounced.pending = () => timeout !== null;
   debounced.cancel = () => {
     if (timeout) {
       clearTimeout(timeout);
@@ -131,12 +138,17 @@ function clampToDisplay(bounds: { x: number; y: number; width: number; height: n
   };
 }
 
-function resolveWindowBounds(projectPath: string | null | undefined): WindowStateBounds {
+interface ResolvedWindowBounds extends WindowStateBounds {
+  /** The project's own saved bounds, as opposed to ones borrowed from another window. */
+  ownSaved: boolean;
+}
+
+function resolveWindowBounds(projectPath: string | null | undefined): ResolvedWindowBounds {
   // 1. Try per-project state
   const windowStates = windowStatesStore.get("windowStates") ?? {};
   if (projectPath) {
     if (windowStates[projectPath]) {
-      return { isFullScreen: false, ...windowStates[projectPath] };
+      return { isFullScreen: false, ...windowStates[projectPath], ownSaved: true };
     }
 
     // 2. MRU cascade for new project windows
@@ -152,6 +164,7 @@ function resolveWindowBounds(projectPath: string | null | undefined): WindowStat
         ...offset,
         isMaximized: false,
         isFullScreen: false,
+        ownSaved: false,
       };
     }
   }
@@ -161,12 +174,63 @@ function resolveWindowBounds(projectPath: string | null | undefined): WindowStat
   if (!projectPath) {
     const mru = getMruBounds();
     if (mru) {
-      return mru;
+      return { ...mru, ownSaved: false };
     }
   }
 
   // 4. Defaults
-  return { width: 1200, height: 800, isMaximized: false, isFullScreen: false };
+  return { width: 1200, height: 800, isMaximized: false, isFullScreen: false, ownSaved: false };
+}
+
+/**
+ * Whether a window placed at `bounds` would sit on one of `occupied`. Matching
+ * origins are what matter: a window opened there hides the other's title bar,
+ * whatever the two sizes are.
+ */
+function coversOccupied(
+  bounds: Electron.Rectangle,
+  occupied: readonly Electron.Rectangle[]
+): boolean {
+  const near = MRU_OFFSET_PX / 2;
+  return occupied.some(
+    (other) => Math.abs(other.x - bounds.x) < near && Math.abs(other.y - bounds.y) < near
+  );
+}
+
+/**
+ * The nearest cascade step from `start` that lands on no open window: down and
+ * right first, then up and left. A window clamped into the work area's
+ * bottom-right corner can't step further down-right, and stopping there would
+ * leave it exactly over a window already in that corner.
+ */
+function findFreeCascadeSpot(
+  start: Electron.Rectangle,
+  occupied: readonly Electron.Rectangle[]
+): Electron.Rectangle | null {
+  for (const direction of [1, -1]) {
+    let candidate = start;
+    for (let step = 0; step < MAX_CASCADE_STEPS; step++) {
+      const next = clampToDisplay({
+        x: candidate.x + direction * MRU_OFFSET_PX,
+        y: candidate.y + direction * MRU_OFFSET_PX,
+        width: candidate.width,
+        height: candidate.height,
+      });
+      // Pinned against the work area's edges: this direction has no room left.
+      if (next.x === candidate.x && next.y === candidate.y) break;
+      if (!coversOccupied(next, occupied)) return next;
+      candidate = next;
+    }
+  }
+  return null;
+}
+
+/** Move a window off any open window it would land on, when a cascade step has room. */
+function cascadeOffOccupied(win: BrowserWindow, occupied: readonly Electron.Rectangle[]): void {
+  const bounds = win.getBounds();
+  if (!coversOccupied(bounds, occupied)) return;
+  const spot = findFreeCascadeSpot(bounds, occupied);
+  if (spot) win.setBounds(spot);
 }
 
 // Mirror the store's own entry type (isFullScreen optional) so the map read back
@@ -245,9 +309,49 @@ export function rekeyWindowStateForPath(oldPath: string, newPath: string): void 
   }
 }
 
+/**
+ * What a window needs from its owner to keep its bounds under the right project
+ * across project switches, and to stay clear of the other windows.
+ */
+export interface WindowStateTracking {
+  /**
+   * The folder of the project the window is showing now, or null when it shows
+   * none (the picker, a scratch, a host's project). Bounds are saved under it
+   * because it is the project the open-window manifest reopens the window on.
+   * The process-global current project is no stand-in: it names whichever
+   * window switched last (#11101), so with two windows open every move of one
+   * was saved over the other's bounds.
+   */
+  getShownProjectPath: (win: BrowserWindow) => string | null;
+  /** Subscribe to windows changing what they show. Returns the unsubscribe. */
+  onShownProjectChange?: (listener: () => void) => () => void;
+  /**
+   * The bounds of the app's other open windows. A window that cannot go back to
+   * its own saved spot cascades off any of them it would land on.
+   */
+  getOccupiedBounds?: () => Electron.Rectangle[];
+}
+
+const stopTrackingOnClose = new WeakMap<BrowserWindow, () => void>();
+
+/**
+ * Stop following the window's project switches. Called from the window's own
+ * "closed" handler: a listener of its own was the eleventh on every app window,
+ * and an unpackaged build exits on Node's MaxListenersExceededWarning.
+ */
+export function disposeWindowStateTracking(win: BrowserWindow): void {
+  stopTrackingOnClose.get(win)?.();
+  stopTrackingOnClose.delete(win);
+}
+
+/**
+ * Create a window at the bounds saved for `projectPath` — or, without them, at
+ * the most recent window's bounds — and keep its bounds saved as it moves.
+ */
 export function createWindowWithState(
   options: Electron.BrowserWindowConstructorOptions,
-  projectPath?: string | null
+  projectPath?: string | null,
+  tracking?: WindowStateTracking
 ): BrowserWindow {
   const windowState = resolveWindowBounds(projectPath);
 
@@ -261,6 +365,10 @@ export function createWindowWithState(
 
   let bounds = win.getBounds();
   const hasSavedPosition = windowState.x !== undefined && windowState.y !== undefined;
+  // Back exactly where this project's window was. Every other placement —
+  // borrowed bounds, saved bounds the displays no longer fit, a centred
+  // fallback — can land squarely on another open window.
+  let atOwnSavedSpot = false;
   // When the saved state has no x/y (cold-start / first-run / defaults), getBounds() on a
   // show:false window returns placeholder coordinates, so getDisplayMatching would route to
   // the primary display anyway — call it directly to make the intent explicit (#10076).
@@ -286,7 +394,8 @@ export function createWindowWithState(
     // Always run the size clamp — the bug (#10076) was that the coordinate-less path
     // short-circuited to win.center() and skipped this entirely, leaving an oversized
     // default window off-screen on small displays (1366x768 taskbar, 1280x720, RDP, VMs).
-    if (clampedWidth !== bounds.width || clampedHeight !== bounds.height) {
+    const sizeClamped = clampedWidth !== bounds.width || clampedHeight !== bounds.height;
+    if (sizeClamped) {
       win.setSize(clampedWidth, clampedHeight);
       bounds = win.getBounds();
     }
@@ -302,11 +411,22 @@ export function createWindowWithState(
         height: bounds.height,
       });
       win.setBounds(clamped);
+      atOwnSavedSpot =
+        windowState.ownSaved && !sizeClamped && clamped.x === bounds.x && clamped.y === bounds.y;
     } else {
       win.center();
     }
   }
 
+  if (!atOwnSavedSpot && tracking?.getOccupiedBounds) {
+    cascadeOffOccupied(win, tracking.getOccupiedBounds());
+  }
+
+  // Electron's maximize() on a hidden window shows it, maximized, and on Linux
+  // that show activates it: the window maps before its reveal gate, and a
+  // restored background window takes focus and the top of the stack from the
+  // window the user is in. On Linux the maximize waits for the reveal instead.
+  let maximizeOnShow = false;
   if (windowState.isFullScreen) {
     win.once("show", () => {
       if (!win.isDestroyed()) {
@@ -314,13 +434,40 @@ export function createWindowWithState(
       }
     });
   } else if (windowState.isMaximized) {
-    win.maximize();
+    if (process.platform === "linux" && options.show === false) {
+      maximizeOnShow = true;
+      win.once("show", () => {
+        maximizeOnShow = false;
+        if (!win.isDestroyed()) {
+          win.maximize();
+        }
+      });
+    } else {
+      win.maximize();
+    }
   }
 
-  const saveState = () => {
+  // The project this window's bounds belong to: the one it opened on until it
+  // shows one, then the one it shows. A switch saves them again under the
+  // project switched to, so the window the manifest reopens on it comes back here.
+  let boundsKey: string | null = projectPath ?? null;
+  let hasShownProject = false;
+  const readShownProjectPath = (): string | null => {
+    const shown = tracking?.getShownProjectPath(win) ?? null;
+    if (shown) hasShownProject = true;
+    return shown;
+  };
+  const resolveSaveKey = (): string | null => {
+    if (!tracking) return projectPath ?? getCurrentProjectPath();
+    // Before the window shows any project, it is still the window for the one
+    // it opened on. Once it has shown one, showing none saves nothing per project.
+    return readShownProjectPath() ?? (hasShownProject ? null : (projectPath ?? null));
+  };
+
+  const saveState = (saveKey: string | null = resolveSaveKey()) => {
     if (win.isDestroyed()) return;
 
-    const isMaximized = win.isMaximized();
+    const isMaximized = win.isMaximized() || maximizeOnShow;
     const isFullScreen = win.isFullScreen();
 
     const normalBounds = win.getNormalBounds();
@@ -334,18 +481,37 @@ export function createWindowWithState(
       isFullScreen,
     };
 
-    const resolvedPath = projectPath ?? getCurrentProjectPath();
-    saveWindowStates(resolvedPath, entry);
+    saveWindowStates(saveKey, entry);
+    boundsKey = saveKey;
   };
 
-  const debouncedSaveState = debounce(saveState, 500);
+  // Wrapped so the event Electron passes a handler never reaches saveState as a key.
+  const debouncedSaveState = debounce(() => saveState(), 500);
 
-  win.on("resize", debouncedSaveState);
-  win.on("move", debouncedSaveState);
+  win.on("resize", () => debouncedSaveState());
+  win.on("move", () => debouncedSaveState());
   win.on("close", () => {
     debouncedSaveState.cancel();
     saveState();
   });
+
+  if (tracking?.onShownProjectChange) {
+    const unsubscribe = tracking.onShownProjectChange(() => {
+      if (win.isDestroyed()) return;
+      const shown = readShownProjectPath();
+      // Nothing shown yet is a window still coming up, not one that left its project.
+      if (shown === boundsKey || (!shown && !hasShownProject)) return;
+      // A move still waiting to save was made under the project shown before
+      // the switch, so it saves there first.
+      if (debouncedSaveState.pending()) {
+        debouncedSaveState.cancel();
+        saveState(boundsKey);
+      }
+      boundsKey = shown;
+      if (shown) debouncedSaveState();
+    });
+    stopTrackingOnClose.set(win, unsubscribe);
+  }
 
   return win;
 }

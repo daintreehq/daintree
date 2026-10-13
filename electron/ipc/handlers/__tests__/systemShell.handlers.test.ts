@@ -16,6 +16,13 @@ const appMock = vi.hoisted(() => ({
   getPath: vi.fn((name: string) => `/userdata/${name}`),
 }));
 
+// On Linux the default app opens through xdg-open rather than shell.openPath;
+// these tests check what reaches the OS opener, so route it to the shell mock.
+vi.mock("../../../utils/openPath.js", async () => {
+  const { shell } = await import("electron");
+  return { openWithDefaultApp: (target: string) => shell.openPath(target) };
+});
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   shell: shellMock,
@@ -79,6 +86,20 @@ const openExternalUrlMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../../../utils/openExternal.js", () => ({
   openExternalUrl: openExternalUrlMock,
+}));
+
+const findOnPathMock = vi.hoisted(() =>
+  vi.fn<(command: string, options?: unknown) => Promise<string | null>>(() => Promise.resolve(null))
+);
+
+vi.mock("../../../utils/findOnPath.js", () => ({
+  findOnPath: findOnPathMock,
+}));
+
+const execFileMock = vi.hoisted(() => vi.fn());
+
+vi.mock("child_process", () => ({
+  execFile: execFileMock,
 }));
 
 // Bypass the IPC security guard + perf wrapper — register the raw handler.
@@ -829,6 +850,57 @@ describe("system:show-item-in-folder-unconfined (out-of-root reveal recovery)", 
     const handler = getHandler(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER_UNCONFINED);
     await handler(fakeEvent, { path: link });
     expect(shellMock.showItemInFolder).toHaveBeenCalledWith(resolved);
+  });
+});
+
+describe("system:check-command", () => {
+  let cleanup: () => void;
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    cleanup = registerSystemShellHandlers({} as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    cleanup();
+    Object.defineProperty(process, "platform", originalPlatform);
+  });
+
+  // Minimal Fedora and Arch installs have no `which`; spawning it made every
+  // command — including the package manager the install banner probes — read
+  // as absent.
+  it("answers from the in-process PATH lookup on linux, spawning nothing", async () => {
+    findOnPathMock.mockImplementation((command) =>
+      Promise.resolve(command === "dnf" ? "/usr/bin/dnf" : null)
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
+
+    expect(await handler(fakeEvent, "dnf")).toBe(true);
+    expect(await handler(fakeEvent, "apt-get")).toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a command with path or shell characters before looking anything up", async () => {
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
+
+    expect(await handler(fakeEvent, "../bin/sh")).toBe(false);
+    expect(await handler(fakeEvent, "git;rm")).toBe(false);
+    expect(findOnPathMock).not.toHaveBeenCalled();
+  });
+
+  it("still asks where.exe on windows", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    execFileMock.mockImplementation(
+      (_file: string, _args: string[], _options: unknown, callback: (err: Error | null) => void) =>
+        callback(null)
+    );
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_COMMAND);
+
+    expect(await handler(fakeEvent, "winget")).toBe(true);
+    expect(execFileMock.mock.calls[0]?.slice(0, 2)).toEqual(["where", ["winget"]]);
+    expect(findOnPathMock).not.toHaveBeenCalled();
   });
 });
 

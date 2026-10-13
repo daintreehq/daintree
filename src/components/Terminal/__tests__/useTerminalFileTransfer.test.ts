@@ -1714,9 +1714,69 @@ describe("useTerminalFileTransfer hook", () => {
     });
   });
 
-  it("registers no Ctrl+V image paster in a window on this machine", () => {
-    renderFileTransferHook({ detectedAgentId: "claude" });
-    expect(getClipboardImagePaster("term-1")).toBeNull();
+  // The Windows/Linux paste keys reach the clipboard image through this paster
+  // in a local window too; only the Ctrl+V takeover stays remote-only, which
+  // `isClipboardImageCtrlV` decides.
+  describe("clipboard-image paster in a window on this machine", () => {
+    afterEach(() => {
+      _resetCtrlVImagePasteForTests();
+    });
+
+    it("saves the clipboard image locally and types its path", async () => {
+      renderFileTransferHook();
+      const paster = getClipboardImagePaster("term-1");
+      expect(paster).not.toBeNull();
+
+      await act(async () => {
+        await expect(paster!()).resolves.toBe("inserted");
+      });
+
+      expect(window.electron.clipboard.saveImage).toHaveBeenCalledTimes(1);
+      expect(terminalClient.write).toHaveBeenCalledWith(
+        "term-1",
+        `${escapeShellArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
+      );
+    });
+
+    it("reports an empty clipboard as empty and writes nothing", async () => {
+      vi.mocked(window.electron.clipboard.saveImage).mockRejectedValue(
+        Object.assign(new Error("No image in clipboard"), {
+          name: "AppError",
+          code: "CLIPBOARD_EMPTY",
+        })
+      );
+      renderFileTransferHook({ detectedAgentId: "claude" });
+
+      await expect(getClipboardImagePaster("term-1")!()).resolves.toBe("empty");
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when input locks while the image is saved", async () => {
+      let finishSave!: (value: SavedImage) => void;
+      vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
+        new Promise<SavedImage>((resolve) => {
+          finishSave = resolve;
+        })
+      );
+      const { rerender } = renderFileTransferHook({ isInputLocked: false });
+      const pasted = getClipboardImagePaster("term-1")!();
+      rerender({ isInputLocked: true });
+
+      await act(async () => {
+        finishSave({
+          filePath: "/tmp/daintree-clipboard/clipboard-123-abc.png",
+          thumbnailDataUrl: "data:image/png;base64,abc",
+        });
+        await expect(pasted).resolves.toBe("failed");
+      });
+      expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    it("unregisters the paster on unmount", () => {
+      const { unmount } = renderFileTransferHook();
+      unmount();
+      expect(getClipboardImagePaster("term-1")).toBeNull();
+    });
   });
 
   // --- Cleanup test ---

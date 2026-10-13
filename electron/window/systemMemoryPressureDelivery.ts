@@ -3,6 +3,7 @@ import type { SystemMemoryPressurePayload } from "../../shared/types/ipc/system.
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
+import { onMainFrameNavigationStart } from "../utils/mainFrameNavigation.js";
 
 let openEpisode: SystemMemoryPressurePayload | null = null;
 /**
@@ -23,8 +24,10 @@ function deliver(win: BrowserWindow, wc: WebContents, viewReady: boolean): void 
   if (wc.isDestroyed() || notifiedWebContentsIds.has(wc.id)) return;
   // A view still loading drops the send before its preload is listening, so it
   // waits for its own did-finish-load. That event fires before Chromium clears
-  // the loading state, so the ready path must not consult isLoading() itself.
-  if (!viewReady && wc.isLoading()) return;
+  // the loading state, so the ready path must not consult the loading state
+  // itself. Main frame only: did-finish-load never fires for an iframe or a
+  // browser panel's <webview>, so waiting on one of those dropped the notice.
+  if (!viewReady && wc.isLoadingMainFrame()) return;
   try {
     wc.send(CHANNELS.EVENTS_PUSH, envelope(openEpisode));
     notifiedWebContentsIds.add(wc.id);
@@ -33,7 +36,7 @@ function deliver(win: BrowserWindow, wc: WebContents, viewReady: boolean): void 
     // because neither runs before that load has started.
     if (!latchedWebContents.has(wc)) {
       latchedWebContents.add(wc);
-      wc.on("did-start-loading", () => notifiedWebContentsIds.delete(wc.id));
+      onMainFrameNavigationStart(wc, () => notifiedWebContentsIds.delete(wc.id));
     }
   } catch {
     // Retried on the window's next view load.

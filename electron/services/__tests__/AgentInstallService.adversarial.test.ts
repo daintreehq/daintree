@@ -174,7 +174,7 @@ describe("AgentInstallService adversarial", () => {
       ];
       expect(bin).toBe("npm");
       for (const flag of [
-        "--silent",
+        "--loglevel=error",
         "--no-progress",
         "--no-audit",
         "--no-fund",
@@ -182,6 +182,9 @@ describe("AgentInstallService adversarial", () => {
       ]) {
         expect(args).toContain(flag);
       }
+      // --silent would swallow npm's own error report, the only stderr the
+      // install step shows when the command fails.
+      expect(args).not.toContain("--silent");
       expect(opts.shell).toBe(true);
       expect(opts.windowsHide).toBe(true);
       expect(opts.env.CI).toBe("1");

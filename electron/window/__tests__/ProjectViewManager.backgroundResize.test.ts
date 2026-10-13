@@ -139,6 +139,8 @@ function createMockWindow() {
     removeListener: vi.fn(),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
     contentView: {
+      on: vi.fn(),
+      removeListener: vi.fn(),
       children: [] as unknown[],
       addChildView: vi.fn(),
       removeChildView: vi.fn(),
@@ -352,5 +354,77 @@ describe("ProjectViewManager — background resize forwarding", () => {
     vi.advanceTimersByTime(300);
 
     expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+  });
+});
+
+describe("ProjectViewManager — content area changes without a window resize", () => {
+  let manager: ProjectViewManager;
+  let win: ReturnType<typeof createMockWindow>;
+  let view: {
+    webContents: ReturnType<typeof createMockWebContents>;
+    setBounds: ReturnType<typeof vi.fn>;
+    getBounds: () => { x: number; y: number; width: number; height: number };
+  };
+
+  const handlerFor = (target: { on: ReturnType<typeof vi.fn> }, event: string) => {
+    const call = target.on.mock.calls.find(([name]) => name === event);
+    if (!call) throw new Error(`${event} handler not registered`);
+    return call[1] as () => void;
+  };
+  // The Linux menu bar opening or closing re-lays out the content view only.
+  const contentAreaChanged = () => handlerFor(win.contentView, "bounds-changed")();
+  const windowResized = () => handlerFor(win, "resize")();
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    win = createMockWindow();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+    });
+    let bounds = { x: 0, y: 0, width: 800, height: 600 };
+    view = {
+      webContents: createMockWebContents(),
+      setBounds: vi.fn((next: typeof bounds) => {
+        bounds = next;
+      }),
+      getBounds: () => bounds,
+    };
+    manager.registerInitialView(view as never, "proj-a", "/path/a");
+    view.setBounds.mockClear();
+  });
+
+  afterEach(() => {
+    manager.dispose();
+    vi.useRealTimers();
+  });
+
+  it("leaves the view at full size while the menu bar is open, rather than resizing every pane", () => {
+    win.getContentBounds.mockReturnValue({ x: 0, y: 25, width: 800, height: 575 });
+    contentAreaChanged();
+    expect(view.setBounds).not.toHaveBeenCalled();
+
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 800, height: 600 });
+    contentAreaChanged();
+    expect(view.setBounds).not.toHaveBeenCalled();
+  });
+
+  it("grows a view sized while the menu bar was open back over the whole area once it closes", () => {
+    win.getContentBounds.mockReturnValue({ x: 0, y: 25, width: 1440, height: 875 });
+    windowResized();
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1440, height: 875 });
+
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 1440, height: 900 });
+    contentAreaChanged();
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1440, height: 900 });
+  });
+
+  it("stops listening to the content view once disposed", () => {
+    const handler = handlerFor(win.contentView, "bounds-changed");
+    manager.dispose();
+    expect(win.contentView.removeListener).toHaveBeenCalledWith("bounds-changed", handler);
   });
 });

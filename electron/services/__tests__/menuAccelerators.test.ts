@@ -154,6 +154,19 @@ describe("isRendererOwnedShortcut", () => {
     );
   });
 
+  // The Linux replacement defaults are spelled with Ctrl, which converts to an
+  // explicit Control rather than CommandOrControl; off macOS that is still the
+  // primary key, so the native item must yield to the renderer.
+  it("matches a Linux Ctrl-spelled default via control", () => {
+    setProcessPlatform("linux");
+    rendererMenuAccelerator("terminal.new"); // Ctrl+Shift+Alt+T on Linux
+    expect(
+      isRendererOwnedShortcut(input({ key: "T", control: true, shift: true, alt: true }))
+    ).toBe(true);
+    expect(isRendererOwnedShortcut(input({ key: "T", shift: true, alt: true }))).toBe(false);
+    expect(isRendererOwnedShortcut(input({ key: "T", control: true, alt: true }))).toBe(false);
+  });
+
   it("resets between menu builds", () => {
     setProcessPlatform("darwin");
     rendererMenuAccelerator("nav.toggleSidebar");

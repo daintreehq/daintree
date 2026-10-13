@@ -32,9 +32,21 @@ get_version() {
     fi
   fi
 
-  # Try reading from package.json (development / Linux)
   local script_dir
   script_dir="$(dirname "$SCRIPT_PATH")"
+
+  # Packaged Linux: the script sits in resources/ beside app.asar, which carries
+  # the build stamp uncompressed (scripts/build-main.mjs).
+  if [[ -f "$script_dir/app.asar" ]]; then
+    local stamp=""
+    stamp="$(grep -a -o -m 1 -E '[{]"daintreeBuildInfo":1,"version":"[0-9A-Za-z.+-]+"' "$script_dir/app.asar" 2>/dev/null | head -1)"
+    if [[ -n "$stamp" ]]; then
+      echo "${stamp##*\"version\":\"}" | tr -d '"'
+      return
+    fi
+  fi
+
+  # Try reading from package.json (development)
   for candidate in "$script_dir/../package.json" "$script_dir/../../package.json"; do
     if [[ -f "$candidate" ]]; then
       # Lightweight JSON parse — avoids dependency on jq/python
@@ -79,10 +91,18 @@ USAGE
         exit 0
       fi
     else
-      if pgrep -f "(/|^)daintree([[:space:]]|$)" &>/dev/null || pgrep -f "daintree-app" &>/dev/null; then
-        echo "Daintree is running"
-        exit 0
-      fi
+      # The pattern also matches this script (run as /usr/bin/daintree) and any
+      # shell whose command line names it; only the app's own binary counts.
+      for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)|daintree-app"); do
+        exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue
+        exe="${exe% (deleted)}"
+        case "${exe##*/}" in
+          daintree|daintree-app)
+            echo "Daintree is running"
+            exit 0
+            ;;
+        esac
+      done
     fi
     echo "Daintree is not running"
     exit 1

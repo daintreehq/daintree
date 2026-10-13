@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 import { getAgentConfig, type AgentInstallBlock } from "../../shared/config/agentRegistry.js";
-import { BASELINE_PREREQUISITES } from "./baselinePrerequisites.js";
+import { getBaselinePrerequisites } from "./baselinePrerequisites.js";
 import type {
   AgentInstallPayload,
   AgentInstallResult,
@@ -15,8 +15,8 @@ function isManualOnlyCommand(command: string): boolean {
   }
   // A leading `sudo` has no pipe to catch it, but spawning it with piped stdio
   // hangs forever on a password prompt the user can never see. The baseline
-  // Linux blocks (`sudo apt-get install git`) are exactly this shape, so they
-  // stay copy-paste only.
+  // Linux blocks (`sudo apt-get install git`, `sudo dnf install git`, …) are
+  // exactly this shape, so they stay copy-paste only.
   return /^\s*sudo\b/i.test(command);
 }
 
@@ -35,8 +35,11 @@ function parseCommand(command: string): { bin: string; args: string[]; useShell:
   const isWindows = process.platform === "win32";
 
   if (bin === "npm" || (isWindows && bin === "npm.cmd")) {
+    // `--loglevel=error`, not `--silent`: silent drops npm's error report too,
+    // and the stderr it leaves behind is the failure the user sees — an
+    // EACCES on a root-owned global prefix was only ever "exit code 243".
     const suppressFlags = [
-      "--silent",
+      "--loglevel=error",
       "--no-progress",
       "--no-audit",
       "--no-fund",
@@ -114,7 +117,7 @@ function resolveInstallBlocks(
   payload: AgentInstallPayload
 ): { blocks: AgentInstallBlock[]; error?: never } | { blocks?: never; error: string } {
   if (payload.prerequisiteTool !== undefined) {
-    const spec = BASELINE_PREREQUISITES.find((s) => s.tool === payload.prerequisiteTool);
+    const spec = getBaselinePrerequisites().find((s) => s.tool === payload.prerequisiteTool);
     if (!spec) {
       return { error: `Unknown prerequisite: ${payload.prerequisiteTool}` };
     }

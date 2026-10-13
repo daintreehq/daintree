@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog, shell } from "electron";
+import { openWithDefaultApp } from "../../utils/openPath.js";
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
 import { CHANNELS } from "../channels.js";
@@ -117,7 +118,7 @@ export function registerRecoveryHandlers(deps: HandlerDependencies): () => void 
       const attempts: string[] = [];
 
       const tryOpen = async (target: string): Promise<boolean> => {
-        const result = await shell.openPath(target);
+        const result = await openWithDefaultApp(target);
         if (result) {
           attempts.push(`${target}: ${result}`);
           return false;

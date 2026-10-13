@@ -757,7 +757,7 @@ function SettingsDialogInner({
       // control, so every open painted a focus ring on "Global" and typing did nothing.
       initialFocus="none"
       maxHeight="h-[75vh]"
-      className="settings-shell min-h-[500px] max-h-[800px]"
+      className="settings-shell min-h-[min(500px,100dvh_-_2rem)] max-h-[800px]"
     >
       <div className="flex h-full overflow-hidden">
         <div

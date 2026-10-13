@@ -3,6 +3,8 @@ import fs from "fs/promises";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import {
   safeStorageCipher,
+  secretWriteRefusal,
+  SecretStorageTimeoutError,
   type SecretCipher,
   type SecretStorageTier,
 } from "./plugin/secretCipher.js";
@@ -22,6 +24,24 @@ interface SecretEnvelope {
   __daintreeSecret: typeof SECRET_ENVELOPE_TAG;
   /** Base64 ciphertext from {@link SecretCipher.encrypt}. */
   cipher: string;
+  /**
+   * Set when Electron's async `safeStorage` API wrote `cipher`. An envelope
+   * without it came from the sync API, under a key the async API doesn't always
+   * hold (KWallet keeps the two apart), so it is read as legacy and rewritten
+   * on its next write. The tag stays `v1`: an older build still reads the
+   * envelope, and the sync API decrypts async ciphertext everywhere but KWallet.
+   */
+  async?: true;
+}
+
+function asyncEnvelope(cipher: string): SecretEnvelope {
+  return { __daintreeSecret: SECRET_ENVELOPE_TAG, cipher, async: true };
+}
+
+/** Whether `cache` still holds `envelope` at `key`, identified by its ciphertext. */
+function storesEnvelope(cache: Map<string, unknown>, key: string, envelope: SecretEnvelope) {
+  const current = cache.get(key);
+  return isSecretEnvelope(current) && current.cipher === envelope.cipher;
 }
 
 function isSecretEnvelope(value: unknown): value is SecretEnvelope {
@@ -31,6 +51,74 @@ function isSecretEnvelope(value: unknown): value is SecretEnvelope {
     (value as { __daintreeSecret?: unknown }).__daintreeSecret === SECRET_ENVELOPE_TAG &&
     typeof (value as { cipher?: unknown }).cipher === "string"
   );
+}
+
+/**
+ * Writes queued per settings file and shared by every store over it, so no two
+ * read-modify-writes of one file interleave. Stores belong to a plugin instance
+ * and are dropped when it unloads, but a dropped store can still be partway
+ * through a write, waiting on a keychain prompt, and it reloads the file only
+ * once the keychain answers: without one queue its older value would commit over
+ * whatever the replacement store saved meanwhile.
+ */
+const writeQueues = new Map<string, Promise<void>>();
+
+/**
+ * How many times each file has been wiped. A write remembers the count it was
+ * queued under and is dropped if a wipe came after: it was meant for settings
+ * that no longer exist, and landing would bring a deleted secret back.
+ */
+const wipeCounts = new Map<string, number>();
+
+/** Which wipe of its file a queued write belongs to. */
+interface WriteTicket {
+  file: string;
+  wipes: number;
+}
+
+function assertNotWiped(ticket: WriteTicket): void {
+  if ((wipeCounts.get(ticket.file) ?? 0) !== ticket.wipes) {
+    throw new Error(
+      "The plugin's settings were deleted before this change landed, so it wasn't saved"
+    );
+  }
+}
+
+function enqueue<T>(file: string, step: () => Promise<T>): Promise<T> {
+  const result = (writeQueues.get(file) ?? Promise.resolve()).then(step);
+  // A failed step must not stall the ones queued behind it.
+  const tail = result.then(
+    () => undefined,
+    () => undefined
+  );
+  writeQueues.set(file, tail);
+  void tail.then(() => {
+    if (writeQueues.get(file) === tail) writeQueues.delete(file);
+  });
+  return result;
+}
+
+function queueWrite<T>(file: string, write: (ticket: WriteTicket) => Promise<T>): Promise<T> {
+  const ticket: WriteTicket = { file, wipes: wipeCounts.get(file) ?? 0 };
+  return enqueue(file, () => {
+    // Checked again before the write touches the file; this one spares a
+    // keychain prompt for a write that can no longer land.
+    assertNotWiped(ticket);
+    return write(ticket);
+  });
+}
+
+/**
+ * Delete a plugin's settings file for good, as an uninstall that wipes settings
+ * does. Queued behind the file's writes, and every write queued before it is
+ * dropped rather than written, even one that lands later because it was waiting
+ * on a keychain prompt; a background re-encrypt from a store the unload dropped
+ * is one of those. Writes queued after it are new settings and land as usual.
+ */
+export async function wipeSettingsFile(filePath: string): Promise<void> {
+  const file = path.resolve(filePath);
+  wipeCounts.set(file, (wipeCounts.get(file) ?? 0) + 1);
+  await enqueue(file, () => fs.rm(filePath, { force: true, maxRetries: 5, retryDelay: 100 }));
 }
 
 /** Per-call hint: when a key is declared `type: "secret"`, route it through the cipher. */
@@ -51,7 +139,7 @@ export type StoredSecretTier = "keychain" | "plaintext";
  * (POSIX only).
  *
  * Values for keys declared `type: "secret"` are routed through an injected
- * {@link SecretCipher} (Electron `safeStorage`) and persisted as a tagged
+ * {@link SecretCipher} (Electron's async `safeStorage`) and persisted as a tagged
  * ciphertext envelope (#9167). When no OS keychain is available the write is
  * refused — a secret is never written in plaintext (#12613). The `secret` flag
  * is supplied per call by the caller (the manager knows the declared type), so
@@ -71,15 +159,16 @@ export class PluginSettingsStore {
    * would swap in the pre-write contents under the write.
    */
   private persisting = false;
-  /** Serializes writes so concurrent `set` calls can't interleave read-modify-write. */
-  private writeChain: Promise<void> = Promise.resolve();
   private readonly cipher: SecretCipher;
+  /** This file's entry in {@link writeQueues}. */
+  private readonly queueKey: string;
 
   constructor(
     private readonly filePath: string,
     cipher: SecretCipher = safeStorageCipher
   ) {
     this.cipher = cipher;
+    this.queueKey = path.resolve(filePath);
   }
 
   /**
@@ -109,7 +198,11 @@ export class PluginSettingsStore {
     if (raw === undefined) return undefined;
     if (options?.secret && isSecretEnvelope(raw)) {
       // Decrypt on read; the decrypted plaintext is the plugin-visible value.
-      return this.cipher.decrypt(raw.cipher) as T;
+      const { plaintext, reencrypt } = await this.cipher.decrypt(raw.cipher, {
+        legacy: raw.async !== true,
+      });
+      if (reencrypt) this.reencryptInBackground(key, raw, plaintext);
+      return plaintext as T;
     }
     // Return a detached copy so a caller mutating the result can't reach into
     // the in-memory cache and diverge it from disk. A legacy secret stored as
@@ -124,34 +217,40 @@ export class PluginSettingsStore {
    * the error rethrown.
    */
   async set<T = unknown>(key: string, value: T, options?: SecretOptions): Promise<boolean> {
-    const result = this.writeChain.then(() => this.doSet(key, value, options));
-    // Keep the chain alive even when this write rejects, so queued writes run.
-    this.writeChain = result.then(
-      () => undefined,
-      () => undefined
-    );
-    return result;
+    return queueWrite(this.queueKey, (ticket) => this.doSet(key, value, ticket, options));
   }
 
-  private async doSet<T>(key: string, value: T, options?: SecretOptions): Promise<boolean> {
+  private async doSet<T>(
+    key: string,
+    value: T,
+    ticket: WriteTicket,
+    options?: SecretOptions
+  ): Promise<boolean> {
+    if (options?.secret) return this.doSetSecret(key, value, ticket);
+
     const cache = await this.load();
-    const had = cache.has(key);
-    const prev = cache.get(key);
-
-    if (options?.secret) {
-      return this.doSetSecret(cache, key, value, had, prev);
-    }
-
     // Detect a no-op before touching disk: an idempotent set should neither
     // write nor fail (e.g. on a read-only directory).
-    if (had && valuesEqual(prev, value)) return false;
+    if (cache.has(key) && valuesEqual(cache.get(key), value)) return false;
     // Store a detached, JSON-faithful copy so (a) a caller mutating the original
     // object can't diverge the cache from disk, and (b) the cache reflects what
     // actually persists (e.g. NaN/Infinity coerce to null under JSON, in memory
     // and on disk alike).
-    cache.set(key, cloneValue(value));
+    return this.commit(cache, key, cloneValue(value), ticket);
+  }
+
+  /** Set `key` in `cache` and persist it, rolling the cache back if the write fails. */
+  private async commit(
+    cache: Map<string, unknown>,
+    key: string,
+    next: unknown,
+    ticket: WriteTicket
+  ): Promise<true> {
+    const had = cache.has(key);
+    const prev = cache.get(key);
+    cache.set(key, next);
     try {
-      await this.persist(cache);
+      await this.persist(cache, ticket);
     } catch (err) {
       if (had) cache.set(key, prev);
       else cache.delete(key);
@@ -166,85 +265,91 @@ export class PluginSettingsStore {
    * memory or on disk: a plaintext secret written here would be
    * indistinguishable from an ordinary setting, and nothing would ever tell the
    * user it was exposed (#12613). Migration is implicit: a legacy plaintext
-   * value is rewritten as an envelope on its next write, never silently dropped.
+   * value, or an envelope the sync API wrote, is rewritten on its next write,
+   * never silently dropped.
    *
    * No-op detection decrypts the stored value first so an idempotent re-set of an
    * already-encrypted secret skips the write (ciphertext is non-deterministic, so
    * comparing raw envelopes would always look "changed").
    */
-  private async doSetSecret<T>(
-    cache: Map<string, unknown>,
-    key: string,
-    value: T,
-    had: boolean,
-    prev: unknown
-  ): Promise<boolean> {
+  private async doSetSecret<T>(key: string, value: T, ticket: WriteTicket): Promise<boolean> {
     const stored = cloneValue(value);
     // The plaintext that actually gets encrypted: strings as-is, everything else
     // JSON-encoded (mirrors how the manager stringifies non-string secrets).
     const plaintext = typeof stored === "string" ? stored : JSON.stringify(stored);
-    const ciphertext = this.cipher.encrypt(plaintext);
-    if (ciphertext === null) {
-      throw new Error(
-        `Secure storage is unavailable on this device, so the secret "${key}" wasn't saved`
-      );
+    const prev = (await this.load()).get(key);
+    if (
+      isSecretEnvelope(prev) &&
+      prev.async === true &&
+      (await this.holds(prev, plaintext)) &&
+      // The decrypt can wait on a keychain prompt; the file may have moved on.
+      storesEnvelope(await this.load(), key, prev)
+    ) {
+      return false;
     }
-    const next: SecretEnvelope = { __daintreeSecret: SECRET_ENVELOPE_TAG, cipher: ciphertext };
-
-    if (had) {
-      const prevPlain = this.decodeSecretPlaintext(prev);
-      // Skip only when the plaintext is unchanged AND it is already an
-      // envelope — a legacy plaintext secret must still write so the on-disk
-      // representation is corrected.
-      if (isSecretEnvelope(prev) && prevPlain === plaintext) return false;
-    }
-
-    cache.set(key, next);
-    try {
-      await this.persist(cache);
-    } catch (err) {
-      if (had) cache.set(key, prev);
-      else cache.delete(key);
-      throw err;
-    }
-    return true;
+    const ciphertext = await this.cipher.encrypt(plaintext);
+    // The refused encrypt is what tells the tier whether the keychain is absent
+    // or just gave no key this session, so it is read after, not before.
+    if (ciphertext === null) throw new Error(secretWriteRefusal(key, this.cipher.tier()));
+    // The keychain can take a while to answer, so write into the snapshot as it
+    // is now rather than the one read before it.
+    return this.commit(await this.load(), key, asyncEnvelope(ciphertext), ticket);
   }
 
   /**
-   * Reduce a stored secret to the same plaintext form {@link doSetSecret} would
-   * encrypt, for no-op comparison: an envelope decrypts; a plaintext-stored
-   * string passes through; a plaintext-stored non-string is JSON-encoded.
+   * Whether `envelope` already holds `plaintext` under a current key. One that
+   * can't be read counts as different, so a new value replaces it; a keychain
+   * that didn't answer wouldn't answer the encrypt either, so that ends the write.
    */
-  private decodeSecretPlaintext(stored: unknown): string | undefined {
-    if (isSecretEnvelope(stored)) return this.cipher.decrypt(stored.cipher);
-    if (stored === undefined) return undefined;
-    if (typeof stored === "string") return stored;
-    return JSON.stringify(stored);
+  private async holds(envelope: SecretEnvelope, plaintext: string): Promise<boolean> {
+    try {
+      const decrypted = await this.cipher.decrypt(envelope.cipher);
+      return !decrypted.reencrypt && decrypted.plaintext === plaintext;
+    } catch (error) {
+      if (error instanceof SecretStorageTimeoutError) throw error;
+      return false;
+    }
+  }
+
+  /**
+   * Rewrite a secret a read found under a superseded key, or readable only by
+   * the sync API, so it outlives that API. Queued behind the writes like any
+   * other, and dropped when the key no longer holds the envelope that was read:
+   * a write since has replaced it. Best effort: when the keychain won't encrypt
+   * now, the old ciphertext stays and still reads.
+   */
+  private reencryptInBackground(key: string, read: SecretEnvelope, plaintext: string): void {
+    void queueWrite(this.queueKey, async (ticket) => {
+      if (!storesEnvelope(await this.load(), key, read)) return;
+      const ciphertext = await this.cipher.encrypt(plaintext);
+      if (ciphertext === null) return;
+      // Checked against the very snapshot that is committed, with no await
+      // between, so nothing can replace the envelope after the check.
+      const cache = await this.load();
+      if (storesEnvelope(cache, key, read)) {
+        await this.commit(cache, key, asyncEnvelope(ciphertext), ticket);
+      }
+    }).catch(() => undefined);
   }
 
   /**
    * Remove `key`. Resolves to `true` when a stored value was actually deleted
    * (so the caller can fire change subscribers with `undefined`), `false` when
    * the key was already absent. On write failure the optimistic in-memory delete
-   * is rolled back and the error rethrown. Serialized through the same write
-   * chain as {@link set} so a concurrent set/delete can't interleave.
+   * is rolled back and the error rethrown. Queued with {@link set} so a
+   * concurrent set/delete can't interleave.
    */
   async delete(key: string): Promise<boolean> {
-    const result = this.writeChain.then(() => this.doDelete(key));
-    this.writeChain = result.then(
-      () => undefined,
-      () => undefined
-    );
-    return result;
+    return queueWrite(this.queueKey, (ticket) => this.doDelete(key, ticket));
   }
 
-  private async doDelete(key: string): Promise<boolean> {
+  private async doDelete(key: string, ticket: WriteTicket): Promise<boolean> {
     const cache = await this.load();
     if (!cache.has(key)) return false;
     const prev = cache.get(key);
     cache.delete(key);
     try {
-      await this.persist(cache);
+      await this.persist(cache, ticket);
     } catch (err) {
       cache.set(key, prev);
       throw err;
@@ -326,7 +431,10 @@ export class PluginSettingsStore {
     return { map: new Map(Object.entries(parsed as Record<string, unknown>)), signature };
   }
 
-  private async persist(cache: Map<string, unknown>): Promise<void> {
+  private async persist(cache: Map<string, unknown>, ticket: WriteTicket): Promise<void> {
+    // Last check before the file is written: the keychain answering a write
+    // queued before a wipe must not put the wiped file back.
+    assertNotWiped(ticket);
     // Null-prototype target so a literal `__proto__` key (a valid storage key,
     // since storage keys are undeclared) becomes an own enumerable property
     // instead of silently mutating Object.prototype — which would drop the value

@@ -1,8 +1,10 @@
+import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { load } from "js-yaml";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateUpdateMetadata } from "./generate-update-metadata.mjs";
 
 const tempDirs = [];
@@ -28,7 +30,7 @@ describe("generate-update-metadata", () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  it("writes Linux metadata for the AppImage artifact", async () => {
+  it("writes Linux metadata for the AppImage and the .deb", async () => {
     const dir = await tempDir();
     const releaseDir = path.join(dir, "release");
     await mkdir(releaseDir);
@@ -49,11 +51,121 @@ describe("generate-update-metadata", () => {
     expect(fromFile).toEqual(metadata);
     expect(metadata.version).toBe("2.0.0");
     expect(metadata.path).toBe("Daintree-2.0.0.AppImage");
-    expect(metadata.files).toHaveLength(1);
-    expect(metadata.files[0]).toMatchObject({
-      url: "Daintree-2.0.0.AppImage",
-      size: 8,
+    expect(metadata.files.map((file) => file.url)).toEqual([
+      "Daintree-2.0.0.AppImage",
+      "daintree_2.0.0_amd64.deb",
+    ]);
+    expect(metadata.files[0]).toMatchObject({ url: "Daintree-2.0.0.AppImage", size: 8 });
+    expect(metadata.files[1]).toMatchObject({ url: "daintree_2.0.0_amd64.deb", size: 3 });
+  });
+
+  it("fails when Linux packaging did not produce exactly one .deb", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir);
+    await writeArtifact(releaseDir, "Daintree-1.2.3.AppImage", "appimage");
+
+    await expect(
+      generateUpdateMetadata({
+        platform: "linux",
+        releaseDir,
+        metadataPath: path.join(releaseDir, "latest-linux.yml"),
+        packagePath,
+      })
+    ).rejects.toThrow("Expected exactly 1 Linux .deb artifact");
+  });
+
+  // electron-updater's AppImageUpdater downloads differentially only when the
+  // feed lists `blockMapSize`: it reads the new image's blockmap from
+  // `size - (blockMapSize + 4)`. electron-builder embeds that blockmap in the
+  // AppImage rather than writing a sidecar, so it has to be read from the image.
+  it("lists the blockmap electron-builder embeds in the AppImage", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir, "2.0.0");
+    const image = path.join(releaseDir, "Daintree-2.0.0.AppImage");
+    await writeFile(image, randomBytes(256 * 1024));
+    const { buildBlockMap } = await import("app-builder-lib/out/targets/blockmap/blockmap.js");
+    const built = await buildBlockMap(image, "deflate");
+    await writeArtifact(releaseDir, "daintree_2.0.0_amd64.deb", "deb");
+
+    const metadata = await generateUpdateMetadata({
+      platform: "linux",
+      releaseDir,
+      metadataPath: path.join(releaseDir, "latest-linux.yml"),
+      packagePath,
     });
+
+    const entry = metadata.files.find((file) => file.url === "Daintree-2.0.0.AppImage");
+    // What electron-builder itself would have written to latest-linux.yml.
+    expect(entry).toMatchObject({ size: built.size, sha512: built.sha512 });
+    expect(entry.blockMapSize).toBe(built.blockMapSize);
+    const bytes = await readFile(image);
+    const start = entry.size - (entry.blockMapSize + 4);
+    const blockMap = JSON.parse(inflateRawSync(bytes.subarray(start, entry.size - 4)).toString());
+    expect(blockMap.files[0].sizes.reduce((sum, n) => sum + n, 0)).toBe(256 * 1024);
+  });
+
+  it("lists no blockMapSize for an AppImage without an embedded blockmap", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir, "2.0.0");
+    // Trailing bytes that read as a plausible length but aren't a blockmap.
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(16, 0);
+    await writeFile(
+      path.join(releaseDir, "Daintree-2.0.0.AppImage"),
+      Buffer.concat([randomBytes(64), tail])
+    );
+    await writeArtifact(releaseDir, "daintree_2.0.0_amd64.deb", "deb");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const metadata = await generateUpdateMetadata({
+      platform: "linux",
+      releaseDir,
+      metadataPath: path.join(releaseDir, "latest-linux.yml"),
+      packagePath,
+    });
+
+    expect(metadata.files[0].blockMapSize).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("no embedded blockmap"));
+    warn.mockRestore();
+  });
+
+  it("lists no blockMapSize when the trailing stream inflates past the cap", async () => {
+    const dir = await tempDir();
+    const releaseDir = path.join(dir, "release");
+    await mkdir(releaseDir);
+    const packagePath = await writePackageJson(dir, "2.0.0");
+    // A well-formed blockmap padded to 80 MB deflates to ~80 KB: small on disk,
+    // and only the inflate cap keeps it from being accepted.
+    const padded = JSON.stringify({
+      version: "2",
+      files: [{ name: "file", offset: 0, checksums: [], sizes: [] }],
+      pad: "a".repeat(80 * 1024 * 1024),
+    });
+    const bomb = deflateRawSync(Buffer.from(padded));
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(bomb.length, 0);
+    await writeFile(
+      path.join(releaseDir, "Daintree-2.0.0.AppImage"),
+      Buffer.concat([randomBytes(64), bomb, tail])
+    );
+    await writeArtifact(releaseDir, "daintree_2.0.0_amd64.deb", "deb");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const metadata = await generateUpdateMetadata({
+      platform: "linux",
+      releaseDir,
+      metadataPath: path.join(releaseDir, "latest-linux.yml"),
+      packagePath,
+    });
+
+    expect(metadata.files[0].blockMapSize).toBeUndefined();
+    warn.mockRestore();
   });
 
   // electron-updater's MacUpdater.ts picks the first entry whose URL passes the

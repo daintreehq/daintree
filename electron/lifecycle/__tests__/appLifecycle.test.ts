@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const appMock = vi.hoisted(() => ({
   isPackaged: false as boolean,
   isReady: vi.fn(() => true),
+  whenReady: vi.fn(() => Promise.resolve()),
   on: vi.fn(),
   quit: vi.fn(),
   exit: vi.fn(),
+  commandLine: { appendSwitch: vi.fn() },
 }));
 
 const browserWindowMock = vi.hoisted(() => ({
@@ -33,6 +35,11 @@ const setSafetyBeltTimerMock = vi.fn();
 vi.mock("../signalShutdownState.js", () => ({
   setSignalShutdown: setSignalShutdownMock,
   setSafetyBeltTimer: setSafetyBeltTimerMock,
+}));
+
+const finishIfGroupStopMock = vi.hoisted(() => vi.fn(() => false));
+vi.mock("../groupStop.js", () => ({
+  finishIfGroupStop: finishIfGroupStopMock,
 }));
 
 const isWindowRecreatingMock = vi.fn(() => false);
@@ -83,12 +90,19 @@ function makeOpts(overrides?: Partial<AppLifecycleOptions>): AppLifecycleOptions
 
 describe("registerAppLifecycleHandlers – signal handling", () => {
   let processOnSpy: ReturnType<typeof vi.spyOn>;
+  let processListenersSpy: ReturnType<typeof vi.spyOn>;
+  let removeAllListenersSpy: ReturnType<typeof vi.spyOn>;
   let processExitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     processOnSpy = vi.spyOn(process, "on").mockImplementation(() => process);
+    // The runner's own signal listeners must survive the re-arm.
+    processListenersSpy = vi.spyOn(process, "rawListeners").mockReturnValue([]);
+    removeAllListenersSpy = vi
+      .spyOn(process, "removeAllListeners")
+      .mockImplementation(() => process);
     processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   });
 
@@ -104,13 +118,51 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
         ["SIGTERM", "SIGINT", "SIGUSR2"].includes(sig)
       );
       expect(signalCalls).toHaveLength(3);
-      expect(signalCalls[0][0]).toBe("SIGTERM");
-      expect(signalCalls[1][0]).toBe("SIGINT");
       // SIGUSR2 is nodemon's restart signal; without this handler every dev-mode
       // rebuild exited ungracefully, never ran `markCleanExit`, and tripped the
       // CrashLoopGuard into safe mode. Keep it registered even in packaged.
-      expect(signalCalls[2][0]).toBe("SIGUSR2");
+      expect(signalCalls.map(([sig]: string[]) => sig)).toEqual(["SIGUSR2", "SIGTERM", "SIGINT"]);
     }
+  });
+
+  // Electron installs its own termination-signal handlers while it starts and
+  // replaces the one libuv set up for an earlier listener, so the handler only
+  // runs if it is registered once the app is ready.
+  it("waits for ready before taking SIGTERM and SIGINT from Electron", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    let ready!: () => void;
+    appMock.isReady.mockReturnValueOnce(false);
+    appMock.whenReady.mockReturnValueOnce(new Promise<void>((resolve) => (ready = resolve)));
+    appMock.isPackaged = true;
+    registerAppLifecycleHandlers(makeOpts());
+
+    const registered = () => processOnSpy.mock.calls.map(([sig]: string[]) => sig);
+    expect(registered()).toContain("SIGUSR2");
+    expect(registered()).not.toContain("SIGTERM");
+    expect(registered()).not.toContain("SIGINT");
+
+    ready();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(registered()).toEqual(expect.arrayContaining(["SIGTERM", "SIGINT"]));
+  });
+
+  // Dependencies such as signal-exit listen from load, and libuv only installs
+  // its handler when a signal goes from no listeners to one.
+  it("re-arms each termination signal with its earlier listeners kept after ours", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    // rawListeners hands back a `once` listener's wrapper; re-adding that same
+    // wrapper keeps it one-shot.
+    const earlier = vi.fn();
+    processListenersSpy.mockImplementation((sig: string) => (sig === "SIGTERM" ? [earlier] : []));
+    appMock.isPackaged = true;
+    registerAppLifecycleHandlers(makeOpts());
+
+    expect(removeAllListenersSpy).toHaveBeenCalledWith("SIGTERM");
+    expect(removeAllListenersSpy).toHaveBeenCalledWith("SIGINT");
+    const sigterm = processOnSpy.mock.calls.filter(([sig]: string[]) => sig === "SIGTERM");
+    expect(sigterm).toHaveLength(2);
+    expect(sigterm[1][1]).toBe(earlier);
   });
 
   it("registers SIGHUP only when !isPackaged", async () => {
@@ -155,6 +207,44 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(processExitSpy).not.toHaveBeenCalledWith(0);
   });
 
+  it("checks for a group stop only once the quit has claimed the shutdown", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as () => void;
+
+    handler();
+
+    // The quit runs the chain's synchronous persistence; a group stop that
+    // finished first would exit without it.
+    expect(finishIfGroupStopMock).toHaveBeenCalledOnce();
+    expect(appMock.quit.mock.invocationCallOrder[0]).toBeLessThan(
+      finishIfGroupStopMock.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("stops Chromium's GPU fallback count before the quit starts, once", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as () => void;
+
+    handler();
+    vi.setSystemTime(Date.now() + 5_000);
+    handler();
+
+    // Relaunching a GPU process lost to the same signal must not exhaust the
+    // fallback modes and abort the browser mid-quit.
+    expect(appMock.commandLine.appendSwitch).toHaveBeenCalledExactlyOnceWith(
+      "disable-gpu-process-crash-limit"
+    );
+    expect(appMock.commandLine.appendSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+      appMock.quit.mock.invocationCallOrder[0]
+    );
+  });
+
   it("safety-belt nulls the stored handle when it fires", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
@@ -172,20 +262,44 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(setSafetyBeltTimerMock).toHaveBeenCalledWith(null);
   });
 
-  it("rapid second signal within 2s force-exits with status 1", async () => {
+  it("a second signal within 2s force-exits with status 1", async () => {
+    vi.setSystemTime(new Date(1_000_000));
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
 
     const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
-    const handler = sigTermCall![1] as () => void;
+    const handler = sigTermCall![1] as (signal: string) => void;
 
-    handler();
-    // Same tick — Date.now() delta is ~0ms, well within the 2000ms force-exit window.
-    handler();
+    handler("SIGTERM");
+    vi.advanceTimersByTime(1); // the first dispatch has finished
+    vi.setSystemTime(new Date(1_000_200));
+    handler("SIGTERM");
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
     expect(processExitSpy).toHaveBeenCalledWith(1);
+  });
+
+  // signal-exit and when-exit re-raise the signal at this process from their
+  // own listeners; live, that made every SIGTERM exit with status 1.
+  it("ignores the same signal echoed back, however long the quit's synchronous part took", async () => {
+    vi.setSystemTime(new Date(1_000_000));
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const handler = sigTermCall![1] as (signal: string) => void;
+
+    handler("SIGTERM");
+    // Still inside the first dispatch, 800 ms of synchronous persistence later.
+    vi.setSystemTime(new Date(1_000_800));
+    handler("SIGTERM");
+    // And just after it.
+    vi.advanceTimersByTime(1);
+    handler("SIGTERM");
+
+    expect(appMock.quit).toHaveBeenCalledOnce();
+    expect(processExitSpy).not.toHaveBeenCalled();
   });
 
   it("second signal at 1999ms force-exits (boundary inside window)", async () => {
@@ -194,13 +308,14 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     registerAppLifecycleHandlers(makeOpts());
 
     const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
-    const handler = sigTermCall![1] as () => void;
+    const handler = sigTermCall![1] as (signal: string) => void;
 
-    handler();
+    handler("SIGTERM");
+    vi.advanceTimersByTime(1);
     // 1ms inside the 2000ms exclusive boundary — must force-exit. Pins the
     // `<` boundary so an accidental change to `<=` would surface here.
     vi.setSystemTime(new Date(1_001_999));
-    handler();
+    handler("SIGTERM");
 
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
@@ -229,11 +344,12 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
 
     const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
     const sigIntCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGINT");
-    const termHandler = sigTermCall![1] as () => void;
-    const intHandler = sigIntCall![1] as () => void;
+    const termHandler = sigTermCall![1] as (signal: string) => void;
+    const intHandler = sigIntCall![1] as (signal: string) => void;
 
-    termHandler();
-    intHandler();
+    // Node passes each listener its signal; a different one is never an echo.
+    termHandler("SIGTERM");
+    intHandler("SIGINT");
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();

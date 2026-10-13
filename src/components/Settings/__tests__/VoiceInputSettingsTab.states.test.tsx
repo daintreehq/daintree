@@ -325,3 +325,33 @@ describe("VoiceInputSettingsTab key operations", () => {
     expect(save.hasAttribute("disabled")).toBe(true);
   });
 });
+
+describe("VoiceInputSettingsTab mic settings button", () => {
+  // jsdom's user agent is neither macOS nor Windows, so the row takes its Linux shape.
+  async function openSettings(opened: boolean) {
+    const api = install(
+      { openaiApiKey: "sk-proj-abcdefghijklmnop6789" },
+      {
+        checkMicPermission: vi.fn().mockResolvedValue("denied"),
+        openMicSettings: vi.fn().mockResolvedValue(opened),
+      }
+    );
+    const { container } = render(<VoiceInputSettingsTab />);
+    fireEvent.click(await screen.findByRole("button", { name: /Open sound settings/ }));
+    await waitFor(() => expect(api.openMicSettings).toHaveBeenCalledTimes(1));
+    return container;
+  }
+
+  it("says so in the row when no settings app could be opened", async () => {
+    const container = await openSettings(false);
+    await waitFor(() => expect(container.textContent).toContain("Couldn't open the settings app"));
+  });
+
+  it("stays quiet when the settings app opened", async () => {
+    const container = await openSettings(true);
+    // Long enough for the resolved open to reach the handler's state update.
+    const SETTLE_MS = 20;
+    await new Promise((r) => setTimeout(r, SETTLE_MS));
+    expect(container.textContent).not.toContain("Couldn't open the settings app");
+  });
+});

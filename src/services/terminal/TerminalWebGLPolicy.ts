@@ -11,6 +11,8 @@ export interface TerminalWebGLPolicyDeps {
    * (#12798). Vetoes every want.
    */
   isViewSuppressed?: () => boolean;
+  /** Whether hardware WebGL is available at all (TerminalWebGLManager). */
+  isHardwareAvailable?: () => boolean;
 }
 
 /**
@@ -95,6 +97,10 @@ export class TerminalWebGLPolicy {
    * what lets a later focus change pin and attach it immediately.
    */
   shouldHaveActiveWebGL(managed: ManagedTerminal): boolean {
+    // Without hardware WebGL (no GPU, a blocklisted driver, the hydrate's
+    // software verdict) the manager never attaches a context, so a missing one
+    // is the expected state, not a fault to repair every tick.
+    if (this.deps.isHardwareAvailable?.() === false) return false;
     if (!this.shouldRestoreWebGL(managed)) return false;
     // In DOM mode the manager only keeps contexts on pinned panes (the focus
     // pin and alt-buffer pins). A non-pinned pane can never have an active

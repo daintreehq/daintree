@@ -192,11 +192,12 @@ export function isRendererOwnedShortcut(input: Electron.Input): boolean {
 
   for (const acc of rendererOwnedAccelerators) {
     const primaryDown = mac ? input.meta : input.control;
-    if (acc.primary !== primaryDown) continue;
-    // Explicit Control is only distinct from primary on macOS; on other
-    // platforms it folded into `primary` at parse time via CommandOrControl.
+    // Explicit Control is only distinct from primary on macOS. Elsewhere it is
+    // the primary key, whether spelled CommandOrControl or, as the Windows and
+    // Linux replacement defaults are ("Ctrl+Shift+O"), Control.
+    const accPrimary = mac ? acc.primary : acc.primary || acc.ctrl;
+    if (accPrimary !== primaryDown) continue;
     if (mac && acc.ctrl !== input.control) continue;
-    if (!mac && !acc.primary && acc.ctrl && !input.control) continue;
     if (acc.shift !== input.shift) continue;
     if (acc.alt !== input.alt) continue;
     if (mac && !acc.primary && input.meta) continue;

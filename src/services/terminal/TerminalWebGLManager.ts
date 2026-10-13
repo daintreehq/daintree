@@ -588,6 +588,10 @@ export class TerminalWebGLManager {
     return this.pinnedId;
   }
 
+  isHardwareAvailable(): boolean {
+    return this.hardwareAvailable;
+  }
+
   onTerminalDestroyed(id: string): void {
     if (this.pinnedId === id) {
       this.pinnedId = null;

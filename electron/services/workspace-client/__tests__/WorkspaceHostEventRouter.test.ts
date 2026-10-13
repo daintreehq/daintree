@@ -387,6 +387,47 @@ describe("WorkspaceHostEventRouter", () => {
     });
   });
 
+  describe("inotify-limit-reached by limit", () => {
+    it.each([
+      ["watches", "Linux inotify watch limit", "sudo sysctl fs.inotify.max_user_watches=524288"],
+      [
+        "instances",
+        "Linux inotify instance limit",
+        "sudo sysctl fs.inotify.max_user_instances=1024",
+      ],
+    ] as const)("names the %s limit and offers its own fix", (limit, message, command) => {
+      router.routeHostEvent(makeEntry(), { type: "inotify-limit-reached", limit });
+
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          message: expect.stringContaining(message),
+          action: expect.objectContaining({ data: command }),
+        })
+      );
+    });
+
+    it("toasts each limit once, so an instance limit still shows after a watch limit", () => {
+      const entry = makeEntry();
+      router.routeHostEvent(entry, { type: "inotify-limit-reached", limit: "watches" });
+      router.routeHostEvent(entry, { type: "inotify-limit-reached", limit: "watches" });
+      router.routeHostEvent(entry, { type: "inotify-limit-reached", limit: "instances" });
+
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
+    });
+
+    it("reads an event from an older host without a limit as the watch limit", () => {
+      router.routeHostEvent(makeEntry(), { type: "inotify-limit-reached" });
+
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          action: expect.objectContaining({ data: expect.stringContaining("max_user_watches") }),
+        })
+      );
+    });
+  });
+
   describe("emfile-limit-reached dedup", () => {
     it("fires toast on first emit", () => {
       const entry = makeEntry();

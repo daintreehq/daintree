@@ -13,6 +13,7 @@ import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
 import { getWindowRegistry } from "./window/windowRef.js";
 import { toggleWindowFullscreen } from "./window/fullscreen.js";
+import { getLinuxAppIconPath } from "./window/linuxWindowIcon.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -60,14 +61,17 @@ import {
 // The About panel's build-version slot shows the release channel for
 // prerelease builds (Nightly/Beta/RC) and stays blank for stable releases —
 // an empty string suppresses the secondary line rather than falling back to
-// CFBundleVersion (which would duplicate the version on macOS).
+// CFBundleVersion (which would duplicate the version on macOS). Linux's GTK
+// About dialog has no app icon of its own to fall back on, so it gets the file.
 export function buildAboutPanelOptions(version: string): Electron.AboutPanelOptionsOptions {
+  const iconPath = getLinuxAppIconPath();
   return {
     applicationName: PRODUCT_NAME,
     applicationVersion: version,
     version: getBuildChannelLabel(version) ?? "",
     copyright: `© ${new Date().getFullYear()} ${PRODUCT_COPYRIGHT_ORG}`,
     website: PRODUCT_WEBSITE,
+    ...(iconPath ? { iconPath } : {}),
   };
 }
 
@@ -696,10 +700,13 @@ export function createApplicationMenu(
     },
     {
       label: "Window",
+      // Off macOS the minimize role registers a hidden Ctrl+M accelerator that
+      // fires whenever the focused page leaves the key unhandled (any text field).
+      // Ctrl+M is Enter to a terminal and means nothing like minimize there.
       submenu:
         process.platform === "darwin"
           ? [{ role: "minimize" }, { role: "zoom" }, { type: "separator" }, { role: "front" }]
-          : [{ role: "minimize" }, { role: "close" }],
+          : [{ role: "minimize", registerAccelerator: false }, { role: "close" }],
     },
     {
       role: "help",

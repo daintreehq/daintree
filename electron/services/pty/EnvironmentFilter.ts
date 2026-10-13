@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
+import { stripAppDirPathLists } from "../../utils/appImage.js";
+
 /**
  * Environment variable filtering for terminal spawning.
  *
@@ -77,6 +81,59 @@ export interface DaintreeTerminalMetadata {
  * their shell profile or a project's terminal env.
  */
 const HOST_RUNTIME_VARS = new Set(["NODE_ENV"]);
+
+/**
+ * Set on Linux by how Daintree itself was launched, not by the user. Chromium
+ * exports `CHROME_DESKTOP` naming Daintree's desktop entry, which another
+ * Chromium or Electron app started from a terminal takes as its own (window
+ * grouping, Wayland app id). Under an AppImage the runtime adds `APPDIR`,
+ * `APPIMAGE`, `ARGV0` and `OWD`, and AppRun prefixes `PATH` and the library and
+ * data path lists with the image's mount, which vanishes when Daintree exits; `LD_LIBRARY_PATH` would
+ * also load the image's bundled libraries into the user's own tools.
+ */
+const LINUX_LAUNCHER_VARS = ["CHROME_DESKTOP"];
+const APPIMAGE_RUNTIME_VARS = ["APPDIR", "APPIMAGE", "ARGV0", "OWD"];
+
+function stripLinuxLauncherEnv(env: Record<string, string | undefined>): void {
+  for (const name of LINUX_LAUNCHER_VARS) delete env[name];
+  let appDir: string | undefined;
+  if (env.APPIMAGE) {
+    appDir = env.APPDIR;
+    for (const name of APPIMAGE_RUNTIME_VARS) delete env[name];
+  } else {
+    // An extracted image run through its AppRun exports the prefixed lists
+    // without APPIMAGE, and sets APPDIR only when its launcher did.
+    appDir = env.APPDIR ?? extractedAppRunDir();
+    delete env.APPDIR;
+  }
+  if (appDir) stripAppDirPathLists(env, appDir);
+}
+
+/**
+ * The environment for a desktop app Daintree starts on the user's behalf (an
+ * editor, the default app for a file, the sound settings), or undefined off
+ * Linux. Without what Daintree's own launcher added: such an app must not take
+ * Daintree's desktop entry as its own (a Chromium or Electron editor would be
+ * grouped under Daintree's icon) or load an AppImage's bundled libraries.
+ */
+export function linuxDesktopAppEnv(
+  env: NodeJS.ProcessEnv = process.env
+): Record<string, string | undefined> | undefined {
+  if (process.platform !== "linux") return undefined;
+  const copy: Record<string, string | undefined> = { ...env };
+  stripLinuxLauncherEnv(copy);
+  return copy;
+}
+
+/** The AppDir this binary runs from when it was started through an AppRun. */
+function extractedAppRunDir(): string | undefined {
+  try {
+    const dir = path.dirname(process.execPath);
+    return fs.existsSync(path.join(dir, "AppRun")) ? dir : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function isSensitiveVar(name: string): boolean {
   return SENSITIVE_EXACT.has(name.toUpperCase()) || SENSITIVE_PATTERN.test(name);
@@ -169,8 +226,9 @@ export function mergeEnvVars(
 }
 
 /**
- * Filter an environment object, removing sensitive variables, DAINTREE_* vars and
- * Daintree's own runtime mode (`NODE_ENV`).
+ * Filter an environment object, removing sensitive variables, DAINTREE_* vars,
+ * Daintree's own runtime mode (`NODE_ENV`) and, on Linux, what Daintree's own
+ * launcher set (`CHROME_DESKTOP`, the AppImage runtime's variables and mount).
  * Undefined values are also stripped (node-pty requires Record<string, string>).
  *
  * Use this on **inherited `process.env`** to defend against spoofing — DAINTREE_*
@@ -192,6 +250,7 @@ export function filterEnvironment(env: Record<string, string | undefined>): Reco
     if (isSensitiveVar(key)) continue;
     setEnvVar(result, key, value);
   }
+  if (process.platform === "linux") stripLinuxLauncherEnv(result);
   return result;
 }
 
@@ -244,15 +303,22 @@ export function shouldInjectForceColor(env: Record<string, string>): boolean {
 const UTF8_PATTERN = /utf-?8/i;
 
 /**
- * Ensure the environment has a UTF-8 locale set in LANG.
+ * Ensure the environment has a UTF-8 locale set in LANG. The fallback is
+ * per platform, as in `getGitLocaleEnv`: macOS has no `C.UTF-8`, and a Linux
+ * system without locale packages (Debian, Fedora, Ubuntu and Arch containers,
+ * a fresh Arch install, minimal servers) has only `C.UTF-8`, so `en_US.UTF-8`
+ * failed every `setlocale` there and left the shell and its tools ASCII-only.
  */
-export function ensureUtf8Locale(env: Record<string, string>): Record<string, string> {
+export function ensureUtf8Locale(
+  env: Record<string, string>,
+  platform: NodeJS.Platform = process.platform
+): Record<string, string> {
   const result = { ...env };
   const lang = getEnvVar(result, "LANG");
   if (lang && UTF8_PATTERN.test(lang)) {
     return result;
   }
-  setEnvVar(result, "LANG", "en_US.UTF-8");
+  setEnvVar(result, "LANG", platform === "linux" ? "C.UTF-8" : "en_US.UTF-8");
   return result;
 }
 

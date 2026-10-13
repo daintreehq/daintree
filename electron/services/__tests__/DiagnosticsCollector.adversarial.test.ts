@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const shared = vi.hoisted(() => ({
   execFileHandler: vi.fn(),
+  findOnPathHandler: vi.fn(),
   logEntries: [] as Array<{
     level: string;
     message: string;
@@ -69,6 +70,10 @@ vi.mock("os", () => ({
     freemem: vi.fn(() => 8_000),
     loadavg: vi.fn(() => [0.1, 0.2, 0.3]),
   },
+}));
+
+vi.mock("../../utils/findOnPath.js", () => ({
+  findOnPath: (command: string, options?: unknown) => shared.findOnPathHandler(command, options),
 }));
 
 vi.mock("child_process", () => ({
@@ -146,15 +151,16 @@ function createDeps(eventBuffer?: { getAll: () => unknown[] }) {
 }
 
 function setDefaultExecFile(): void {
+  shared.findOnPathHandler.mockImplementation(async (command: string) => `/usr/bin/${command}`);
   shared.execFileHandler.mockImplementation(
     (
       file: string,
-      _args: string[],
+      args: string[],
       _options: Record<string, unknown>,
       callback: (error: Error | null, stdout: string, stderr: string) => void
     ) => {
-      if (file === "which") {
-        callback(null, `/usr/bin/${file}`, "");
+      if (file === "where") {
+        callback(null, `C:\\tools\\${args[0]}.exe`, "");
         return;
       }
       callback(null, `${file} version\n`, "");
@@ -348,6 +354,31 @@ describe("DiagnosticsCollector adversarial", () => {
 
     expect(payload.tools).toEqual({ error: "timed out" });
     expect(payload.metadata.appName).toBe("Daintree");
+  });
+
+  it("TOOLS_RESOLVED_WITHOUT_WHICH_ON_LINUX", async () => {
+    // Minimal Fedora and Arch installs have no `which`; spawning it reported
+    // every tool missing from the diagnostics bundle.
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      shared.findOnPathHandler.mockImplementation(async (command: string) =>
+        command === "gh" ? null : `/usr/bin/${command}`
+      );
+
+      const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+        tools: Array<{ tool: string; available: boolean; path: string | null }>;
+      };
+
+      const byTool = new Map(payload.tools.map((entry) => [entry.tool, entry]));
+      expect(byTool.get("git")).toMatchObject({ available: true, path: "/usr/bin/git" });
+      expect(byTool.get("gh")).toMatchObject({ available: false, path: null });
+      const spawned = shared.execFileHandler.mock.calls.map((call) => call[0]);
+      expect(spawned).not.toContain("which");
+      expect(spawned).not.toContain("gh");
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
   });
 
   it("EVENT_BUFFER_THROW_CONTAINED", async () => {

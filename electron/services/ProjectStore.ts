@@ -1821,6 +1821,10 @@ export class ProjectStore {
     return this.settingsManager.saveProjectSettings(projectId, settings);
   }
 
+  async addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]> {
+    return this.settingsManager.addBrowserAllowedHost(projectId, hostname);
+  }
+
   getEffectiveNotificationSettings(): NotificationSettings {
     return this.settingsManager.getEffectiveNotificationSettings(this.getCurrentProjectId());
   }

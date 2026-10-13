@@ -26,9 +26,28 @@ import {
   broadcastToRenderer,
 } from "../../utils.js";
 import { validateFolderName } from "../../../../shared/utils/folderName.js";
+import { defineIpcNamespace, opValidated } from "../../define.js";
 import { ProjectSettingsSaveSchema } from "../../../services/projectSettingsCodec.js";
 import type { ProjectSettings } from "../../../types/index.js";
 import type { HandlerDependencies } from "../../types.js";
+
+const ProjectAddBrowserAllowedHostPayloadSchema = z.object({
+  projectId: z.string().min(1),
+  hostname: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(1)
+    .max(253)
+    .regex(/^[^\s/\\?#@]+$/),
+});
+
+async function handleProjectAddBrowserAllowedHost(payload: {
+  projectId: string;
+  hostname: string;
+}): Promise<string[]> {
+  return projectStore.addBrowserAllowedHost(payload.projectId, payload.hostname);
+}
 
 export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}): () => void {
   const handlers: Array<() => void> = [];
@@ -222,6 +241,21 @@ export function registerProjectSettingsHandlers(deps: HandlerDependencies = {}):
     return result;
   };
   handlers.push(typedHandle(CHANNELS.PROJECT_LIST_REMOTES, handleProjectListRemotes));
+
+  // The browser panel's approvals go through their own field-level write so
+  // they merge into the settings on disk, where a whole-settings save from
+  // the renderer would revert whatever else changed since it last read them.
+  const browserAllowedHostsNamespace = defineIpcNamespace({
+    name: "projectBrowserAllowedHosts",
+    ops: {
+      add: opValidated(
+        CHANNELS.PROJECT_ADD_BROWSER_ALLOWED_HOST,
+        ProjectAddBrowserAllowedHostPayloadSchema,
+        handleProjectAddBrowserAllowedHost
+      ),
+    },
+  });
+  handlers.push(browserAllowedHostsNamespace.register());
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

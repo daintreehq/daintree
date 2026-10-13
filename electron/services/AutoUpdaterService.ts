@@ -16,6 +16,15 @@ import type { PendingUpdateInstallStage } from "../utils/updateInstallStages.js"
 import { PRODUCT_NAME, PRODUCT_WEBSITE } from "../utils/productBranding.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
+import { notifyAppImageRelocated } from "./appImageRelocation.js";
+import { armRelaunch } from "../lifecycle/armRelaunch.js";
+import { stripLaunchTargets } from "../lifecycle/launchIntent.js";
+import { routeAppImageRelaunchThroughWaiter } from "./appImageUpdateRelaunch.js";
+import {
+  isLinuxPackageUpdater,
+  runLinuxPackageInstall,
+  type LinuxPackageInstallOutcome,
+} from "./linuxPackageUpdateInstall.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -120,6 +129,30 @@ const CHECKING_MENU_DELAY_MS = 400;
 // many times it retries — a fresh download is the only way out (issue #11481).
 const MANUAL_DOWNLOAD_URL = `${PRODUCT_WEBSITE}/download`;
 
+// electron-updater picks DebUpdater, RpmUpdater or PacmanUpdater from the
+// package-type file a Linux package ships, and all three install through
+// pkexec or sudo (LinuxUpdater.runCommandWithSudoIfNeeded).
+function linuxPackageInstallNeedsPassword(): boolean {
+  if (process.platform !== "linux") return false;
+  try {
+    const type = readFileSync(path.join(process.resourcesPath, "package-type"), "utf-8").trim();
+    return type === "deb" || type === "rpm" || type === "pacman";
+  } catch {
+    return false;
+  }
+}
+
+// Those packages never install on a plain quit. electron-updater's quit
+// handler would run pkexec synchronously, so quitting — or logging out, or
+// shutting down — would stop on an administrator password prompt with the main
+// thread blocked, and a process killed while the prompt is up leaves pkexec
+// holding Daintree's descriptors, which keeps its GPU and network processes
+// alive. They install from "Restart to update" alone, where the user asked
+// for it; a staged update is offered again on the next launch.
+function installsOnQuit(): boolean {
+  return !linuxPackageInstallNeedsPassword() && !isLinuxPackageUpdater(autoUpdater);
+}
+
 export type UpdateMenuState = "idle" | "checking" | "ready";
 
 // Renderer-facing snapshot of the update the user should currently be told
@@ -137,6 +170,9 @@ export type LatestUpdateState = { version: string; downloaded: boolean };
 type UpdateAvailableSuppressionReason = "session-dedup" | "dismiss-cooldown";
 
 class AutoUpdaterService {
+  // Outlives dispose(), unlike every other listener here: see initialize().
+  private appImageRelocationListenerAttached = false;
+  private downloadedVersion: string | null = null;
   private checkInterval: NodeJS.Timeout | null = null;
   private startupJitterTimeout: NodeJS.Timeout | null = null;
   private retryTimeout: NodeJS.Timeout | null = null;
@@ -289,12 +325,33 @@ class AutoUpdaterService {
   // remains the right move, and it's the only thing standing between a failed
   // install and a torn-down zombie process. The `app.exit(0)` inside the watchdog
   // is wrapped so a shutdown-time throw doesn't become an unhandled rejection.
+  //
+  // From an AppImage, the new image is started by the relaunch waiter once this
+  // process has exited, not by the updater from inside it.
   private executeQuitAndInstall(): void {
+    let packageInstall: LinuxPackageInstallOutcome | null = null;
     try {
-      autoUpdater.quitAndInstall();
+      packageInstall = runLinuxPackageInstall(autoUpdater, () =>
+        routeAppImageRelaunchThroughWaiter(autoUpdater, () => autoUpdater.quitAndInstall())
+      );
     } catch (err) {
       console.error("[MAIN] autoUpdater.quitAndInstall() threw:", err);
       this.recordInstallStage("handoff-threw");
+      if (isLinuxPackageUpdater(autoUpdater)) packageInstall = "failed";
+    }
+    // A Linux package that didn't go in (most often a cancelled password
+    // prompt) leaves this process torn down. Start this version again rather
+    // than leave the user with no Daintree; the next boot says what happened.
+    // Without the launch targets, so it restores every window, not the one
+    // project this session was opened on.
+    if (packageInstall === "failed") {
+      try {
+        armRelaunch({ args: stripLaunchTargets(process.argv.slice(1)) });
+        app.exit(0);
+      } catch (err) {
+        console.error("[MAIN] Relaunch after a failed package install failed:", err);
+      }
+      return;
     }
     this.watchdogTimeout = setTimeout(() => {
       this.watchdogTimeout = null;
@@ -419,11 +476,17 @@ class AutoUpdaterService {
 
     // Deliberately does not name a cause. The updater surfaces no way to tell a
     // Squirrel requirement mismatch from a permissions failure or a package
-    // manager refusing the install, and every platform reaches this line.
+    // manager refusing the install, and every platform reaches this line. A
+    // Linux package install states what it always needs instead: the
+    // administrator password its pkexec/sudo prompt asks for, which a cancel,
+    // a missing polkit agent or a sudo with no terminal all fail on.
+    const message = linuxPackageInstallNeedsPassword()
+      ? `${PRODUCT_NAME} ${expected} was downloaded but not installed, so you're still on ${actual}. Package updates need your administrator password; if the prompt was cancelled or didn't open, install the update from the download page.`
+      : `${PRODUCT_NAME} ${expected} was downloaded but couldn't be installed, so you're still on ${actual}. Reinstalling from a fresh download will get you onto the latest version.`;
     broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
       type: "error",
       title: "Update didn't install",
-      message: `${PRODUCT_NAME} ${expected} was downloaded but couldn't be installed, so you're still on ${actual}. Reinstalling from a fresh download will get you onto the latest version.`,
+      message,
       action: {
         label: "Download manually",
         ipcChannel: CHANNELS.SYSTEM_OPEN_EXTERNAL,
@@ -857,7 +920,7 @@ class AutoUpdaterService {
 
     try {
       autoUpdater.autoDownload = true;
-      autoUpdater.autoInstallOnAppQuit = true;
+      autoUpdater.autoInstallOnAppQuit = installsOnQuit();
       autoUpdater.disableWebInstaller = true;
 
       const initialChannel = store.get("updateChannel") ?? "stable";
@@ -1011,7 +1074,7 @@ class AutoUpdaterService {
         // hand a late-mounting renderer an actionable "Restart to update" for a
         // payload this service will not install.
         this.latestUpdate = { version: info.version, downloaded: true };
-        autoUpdater.autoInstallOnAppQuit = true;
+        autoUpdater.autoInstallOnAppQuit = installsOnQuit();
         // Persist the staged version so the next boot can detect a silent
         // install failure (issue #9261). Write before broadcasting so a crash
         // between event delivery and the IPC frame still leaves the marker on
@@ -1051,6 +1114,25 @@ class AutoUpdaterService {
         broadcastToRenderer(CHANNELS.UPDATE_DOWNLOADED, { version: info.version });
       };
       autoUpdater.on("update-downloaded", this.downloadedHandler);
+
+      // AppImageUpdater installs a versioned image under the new version's
+      // name and deletes the old one, then emits this from inside the install —
+      // after the shutdown chain has disposed this service, which is why it is
+      // attached once and never detached. Whatever names the old path follows.
+      if (process.platform === "linux" && !this.appImageRelocationListenerAttached) {
+        this.appImageRelocationListenerAttached = true;
+        // Also never detached: a download that lands during shutdown replaces the
+        // staged installer, and the rename below must carry that version.
+        autoUpdater.on("update-downloaded", (info: { version: string }) => {
+          this.downloadedVersion = info.version;
+        });
+        autoUpdater.on("appimage-filename-updated", (next: string) => {
+          const previous = process.env.APPIMAGE;
+          if (!previous || previous === next) return;
+          // The image now at `next` is the downloaded update, not this process.
+          notifyAppImageRelocated({ previous, next, version: this.downloadedVersion ?? undefined });
+        });
+      }
 
       // Handle quit-and-install request from renderer. Validates the sender origin
       // synchronously (matches the UPDATE_DISMISS_TOAST pattern), then delegates to

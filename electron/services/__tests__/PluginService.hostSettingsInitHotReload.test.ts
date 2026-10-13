@@ -44,9 +44,15 @@ const safeStorageMock = vi.hoisted(() => {
     state,
     isEncryptionAvailable: () => state.available,
     // Linux gates the keychain tier on the backend; name a real keychain one.
-    getSelectedStorageBackend: () => "gnome_libsecret",
-    encryptString: (plaintext: string) => Buffer.from(`enc:${plaintext}`, "utf-8"),
-    decryptString: (cipher: Buffer) => cipher.toString("utf-8").slice("enc:".length),
+    getSelectedStorageBackend: () => (state.available ? "gnome_libsecret" : "basic_text"),
+    encryptStringAsync: async (plaintext: string) => {
+      if (!state.available) throw new Error("Error while encrypting");
+      return Buffer.from(`enc:${plaintext}`, "utf-8");
+    },
+    decryptStringAsync: async (cipher: Buffer) => ({
+      result: cipher.toString("utf-8").slice("enc:".length),
+      shouldReEncrypt: false,
+    }),
   };
 });
 const storeMock = vi.hoisted(() => {
@@ -244,6 +250,7 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 
 import { PluginService } from "../PluginService.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { _resetSecretStorageSessionForTests } from "../plugin/secretCipher.js";
 
 let tmpDir: string;
 
@@ -252,6 +259,9 @@ beforeEach(async () => {
   vi.clearAllMocks();
   storeMock._state.clear();
   safeStorageMock.state.available = false;
+  // The real cipher remembers a keychain that gave no key for the process;
+  // each test here is a fresh run.
+  _resetSecretStorageSessionForTests();
 });
 
 afterEach(async () => {
@@ -388,8 +398,10 @@ describe("createHost — settings", () => {
     const cb = vi.fn();
     await host.settings.onDidChange("token", cb, "project");
 
+    // Linux has no keyring backend here; macOS reads an encrypt with no key as
+    // a Keychain unavailable this session. Either way the secret isn't saved.
     await expect(host.settings.set("token", "sk-host", "project")).rejects.toThrow(
-      /Secure storage is unavailable/
+      /so the secret "token" wasn't saved/
     );
 
     await expect(fs.access(path.join(projectDir, ".daintree"))).rejects.toThrow();

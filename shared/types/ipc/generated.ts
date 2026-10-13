@@ -1877,6 +1877,10 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("../projectRelocation.js").RelocationRequest];
     result: import("../projectRelocation.js").RelocationPreview;
   };
+  "project:add-browser-allowed-host": {
+    args: [payload: { projectId: string; hostname: string }];
+    result: string[];
+  };
   "project:clone-cancel": {
     args: [payload?: import("./gitClone.js").CloneCancelPayload | undefined];
     result: void;

@@ -204,6 +204,9 @@ vi.mock("../window/fullscreen.js", () => ({
   toggleWindowFullscreen: toggleWindowFullscreenMock,
 }));
 
+const linuxIconPathMock = vi.hoisted(() => vi.fn<() => string | undefined>(() => undefined));
+vi.mock("../window/linuxWindowIcon.js", () => ({ getLinuxAppIconPath: linuxIconPathMock }));
+
 const autoUpdaterServiceMock = vi.hoisted(() => {
   let menuState: "idle" | "checking" | "ready" = "idle";
   return {
@@ -330,6 +333,14 @@ describe("About panel build channel (#11121)", () => {
         expect(options.version).toBe(getBuildChannelLabel(version));
         expect(options.version).toBeTruthy();
       }
+    });
+
+    it("gives the dialog the app icon where one is shipped as a file (Linux)", () => {
+      linuxIconPathMock.mockReturnValueOnce("/opt/Daintree/resources/icon.png");
+      expect(buildAboutPanelOptions("1.0.0").iconPath).toBe("/opt/Daintree/resources/icon.png");
+
+      linuxIconPathMock.mockReturnValueOnce(undefined);
+      expect(buildAboutPanelOptions("1.0.0")).not.toHaveProperty("iconPath");
     });
   });
 });
@@ -1139,6 +1150,25 @@ describe("update menu lifecycle", () => {
 
       const items = findSubmenu(capturedTemplate, "Window");
       expect(items.map((i) => i.role ?? i.type)).toEqual(["minimize", "close"]);
+    });
+
+    it.each(["win32", "linux"] as const)(
+      "on %s never lets Minimize take Ctrl+M from the focused page",
+      (platform) => {
+        Object.defineProperty(process, "platform", { value: platform, configurable: true });
+        createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+        const minimize = findSubmenu(capturedTemplate, "Window").find((i) => i.role === "minimize");
+        expect(minimize?.registerAccelerator).toBe(false);
+      }
+    );
+
+    it("on darwin keeps Cmd+M minimizing the window", () => {
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+      createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+
+      const minimize = findSubmenu(capturedTemplate, "Window").find((i) => i.role === "minimize");
+      expect(minimize?.registerAccelerator).not.toBe(false);
     });
   });
 

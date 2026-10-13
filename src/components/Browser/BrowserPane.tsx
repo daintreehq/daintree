@@ -42,8 +42,9 @@ import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useProjectStore } from "@/store";
-import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { patchCachedProjectSettings, useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
+import { projectClient } from "@/clients";
 import { useFindInPage } from "@/hooks/useFindInPage";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { logError } from "@/utils/logger";
@@ -113,6 +114,16 @@ function loadWebviewUrl(webview: Electron.WebviewTag, url: string): void {
   }
 }
 
+/**
+ * Adds a host the user allowed to the project's saved settings. Main merges
+ * it into the file as it stands, so nothing else written since this view last
+ * read the settings is reverted; the cache then takes the list as saved.
+ */
+async function rememberApprovedHost(projectId: string, hostname: string): Promise<void> {
+  const hosts = await projectClient.addBrowserAllowedHost(projectId, hostname);
+  patchCachedProjectSettings(projectId, { browserAllowedHosts: hosts });
+}
+
 export function BrowserPane({
   id,
   title,
@@ -162,10 +173,13 @@ export function BrowserPane({
     (state) => state.settings?.devServerLoadTimeout
   );
   const loadTimeoutMs = Math.min(Math.max(devServerLoadTimeout ?? 30, 1), 120) * 1000;
-  const { settings: projectSettings, saveSettings: saveProjectSettings } = useProjectSettings();
+  const { settings: projectSettings } = useProjectSettings();
+  // Hosts allowed in this pane. The decision holds from the click, not from
+  // when — or whether — the save reaches the settings.
+  const [paneAllowedHosts, setPaneAllowedHosts] = useState<string[]>([]);
   const allowedHosts = useMemo(
-    () => projectSettings?.browserAllowedHosts ?? [],
-    [projectSettings?.browserAllowedHosts]
+    () => [...(projectSettings?.browserAllowedHosts ?? []), ...paneAllowedHosts],
+    [projectSettings?.browserAllowedHosts, paneAllowedHosts]
   );
 
   // Seed history from the `initialHistory` prop (threaded by buildPanelProps from
@@ -584,50 +598,44 @@ export function BrowserPane({
     [allowedHosts, commitNavigation]
   );
 
-  const handleApproveHost = useCallback(async () => {
-    if (!pendingApproval) return;
-    // Guard against save silently no-oping when projectId is transiently null
-    // (startup, project switch) — without this, the banner would clear and the
-    // webview would load without the hostname ever being persisted.
-    if (!projectId) {
-      console.warn("[BrowserPane] Cannot approve host without an active project");
-      return;
-    }
-    const { url, hostname } = pendingApproval;
-    const baseSettings = projectSettings ?? { runCommands: [] };
-    const nextAllowed = Array.from(
-      new Set([...(baseSettings.browserAllowedHosts ?? []), hostname])
-    );
-    try {
-      await saveProjectSettings({ ...baseSettings, browserAllowedHosts: nextAllowed });
-    } catch (err) {
-      logError("[BrowserPane] Failed to save approved host", err);
-      return;
-    }
-    if (pendingApproval.historyIndex !== undefined) {
+  const goToApprovedHistoryEntry = useCallback(
+    async (index: number, url: string) => {
       const webview = webviewRef.current;
       if (webview && isWebviewReady) {
         try {
           const wcId = (webview as unknown as { getWebContentsId(): number }).getWebContentsId();
-          await window.electron.webview.goToHistoryIndex(wcId, pendingApproval.historyIndex);
-          setPendingApproval(null);
+          await window.electron.webview.goToHistoryIndex(wcId, index);
           void refreshNavigationHistory();
           return;
         } catch {
           // Fall through to loadURL if goToHistoryIndex fails
         }
       }
+      commitNavigation(url);
+    },
+    [commitNavigation, isWebviewReady, refreshNavigationHistory]
+  );
+
+  const handleApproveHost = useCallback(() => {
+    if (!pendingApproval) return;
+    const { url, hostname, historyIndex } = pendingApproval;
+    // The navigation the user approved goes ahead now; remembering the host
+    // is a settings round-trip that must not hold it up or swallow it.
+    setPaneAllowedHosts((prev) => (prev.includes(hostname) ? prev : [...prev, hostname]));
+    if (projectId) {
+      rememberApprovedHost(projectId, hostname).catch((err: unknown) => {
+        logError("[BrowserPane] Failed to save approved host", err);
+      });
+    } else {
+      console.warn("[BrowserPane] No active project: host allowed for this pane only");
+    }
+    if (historyIndex !== undefined) {
+      setPendingApproval(null);
+      void goToApprovedHistoryEntry(historyIndex, url);
+      return;
     }
     commitNavigation(url);
-  }, [
-    pendingApproval,
-    projectId,
-    projectSettings,
-    saveProjectSettings,
-    commitNavigation,
-    isWebviewReady,
-    refreshNavigationHistory,
-  ]);
+  }, [pendingApproval, projectId, commitNavigation, goToApprovedHistoryEntry]);
 
   const handleDismissApproval = useCallback(() => {
     setPendingApproval(null);
@@ -1068,7 +1076,7 @@ export function BrowserPane({
         {pendingApproval && (
           <BrowserHostApprovalBar
             hostname={pendingApproval.hostname}
-            onAllow={() => void handleApproveHost()}
+            onAllow={handleApproveHost}
             onDismiss={handleDismissApproval}
           />
         )}

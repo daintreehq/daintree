@@ -208,6 +208,21 @@ describe("electron-builder config — OS folder context menus (#11406)", () => {
   });
 });
 
+describe("electron-builder config — .deb dependencies", () => {
+  it("asks apt for the real ALSA library before the virtual name an OSS shim also provides", async () => {
+    const config = await buildConfig();
+    // On a clean Ubuntu 24.04 a bare `libasound2` was satisfied by
+    // liboss4-salsa-asound2, which lacks ALSA symbols Electron needs.
+    const alsa = config.deb.depends.find((dep) => dep.includes("libasound2"));
+    expect(alsa).toBe("libasound2t64 | libasound2");
+  });
+
+  it("declares the glibc the packaged native modules need", async () => {
+    const config = await buildConfig();
+    expect(config.deb.depends).toContain("libc6 (>= 2.34)");
+  });
+});
+
 describe("NSIS installer — folder context-menu verbs (#11406)", () => {
   const SELECTED_VERB = "Directory\\shell";
   const BACKGROUND_VERB = "Directory\\Background\\shell";
@@ -293,5 +308,30 @@ describe("daintree CLI — macOS app lookup (#11406)", () => {
     const script = await repoFile("scripts/daintree-cli.sh");
     // The fallback silently never matched while this drifted from `appId`.
     expect(script).toContain(`kMDItemCFBundleIdentifier == "${config.appId}"`);
+  });
+});
+
+describe("electron-builder config — AppImage runtime", () => {
+  it("builds the AppImage on a static-runtime toolset this electron-builder can fetch", async () => {
+    const config = await buildConfig();
+    const version = config.toolsets?.appimage;
+    // Unset and "0.0.0" select the legacy runtime, which needs libfuse2 — absent
+    // from a stock Ubuntu 22.04+ install, so the AppImage wouldn't start.
+    expect(version).toBeTruthy();
+    expect(version).not.toBe("0.0.0");
+    const scheme = JSON.parse(
+      await readFile(
+        new URL("../../node_modules/app-builder-lib/scheme.json", import.meta.url),
+        "utf8"
+      )
+    );
+    const accepted = scheme.definitions.ToolsetConfig.properties.appimage.anyOf.flatMap(
+      (option) => option.enum ?? []
+    );
+    expect(accepted).toContain(version);
+    // electron-builder verifies the toolset download against a pinned checksum;
+    // a version it has none for fails the Linux build at packaging time.
+    const { appimageChecksums } = await import("app-builder-lib/out/toolsets/linux.js");
+    expect(Object.keys(appimageChecksums[version] ?? {})).not.toHaveLength(0);
   });
 });

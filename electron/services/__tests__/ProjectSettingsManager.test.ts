@@ -545,4 +545,118 @@ describe("ProjectSettingsManager caching", () => {
     const [, payload] = broadcastSpy.mock.calls[0];
     expect(payload).toMatchObject({ type: "error", title: "Settings file too new" });
   });
+
+  it("never caches a read that overlapped a write", async () => {
+    await manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      devServerCommand: "npm start",
+    });
+
+    const save = manager.saveProjectSettings(projectId, {
+      runCommands: [],
+      devServerCommand: "pnpm dev",
+    });
+    const overlapping = manager.getProjectSettings(projectId);
+    await Promise.all([save, overlapping]);
+
+    expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("pnpm dev");
+  });
+
+  describe("addBrowserAllowedHost", () => {
+    const readFromDisk = () =>
+      new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);
+
+    it("merges the host into the settings on disk", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [{ id: "npm-dev", name: "dev", command: "npm run dev" }],
+        devServerCommand: "npm run dev",
+        browserAllowedHosts: ["internal.corp.test"],
+      });
+
+      const hosts = await manager.addBrowserAllowedHost(projectId, "example.com");
+
+      expect(hosts).toEqual(["internal.corp.test", "example.com"]);
+      const saved = await readFromDisk();
+      expect(saved.browserAllowedHosts).toEqual(["internal.corp.test", "example.com"]);
+      expect(saved.devServerCommand).toBe("npm run dev");
+      expect(saved.runCommands).toHaveLength(1);
+    });
+
+    it("keeps a write that lands while the host is being added", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "npm start",
+      });
+      // Warm the cache with the settings as they were before the next write.
+      await manager.getProjectSettings(projectId);
+
+      const save = manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "pnpm dev",
+      });
+      const add = manager.addBrowserAllowedHost(projectId, "example.com");
+      await Promise.all([save, add]);
+
+      const saved = await readFromDisk();
+      expect(saved.devServerCommand).toBe("pnpm dev");
+      expect(saved.browserAllowedHosts).toEqual(["example.com"]);
+    });
+
+    it("keeps the host through a save built from a copy read before the approval", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "npm start",
+      });
+      // Another settings control holds this copy, which predates the approval.
+      const copyBeforeApproval = await manager.getProjectSettings(projectId);
+
+      const add = manager.addBrowserAllowedHost(projectId, "example.com");
+      const staleSave = manager.saveProjectSettings(projectId, {
+        ...copyBeforeApproval,
+        devServerCommand: "pnpm dev",
+      });
+      await Promise.all([add, staleSave]);
+
+      const saved = await readFromDisk();
+      expect(saved.devServerCommand).toBe("pnpm dev");
+      expect(saved.browserAllowedHosts).toEqual(["example.com"]);
+    });
+
+    it("lets a whole save add hosts, keeping the ones already saved", async () => {
+      await manager.addBrowserAllowedHost(projectId, "example.com");
+
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        browserAllowedHosts: ["EXAMPLE.com", "docs.example"],
+      });
+
+      expect((await readFromDisk()).browserAllowedHosts).toEqual(["example.com", "docs.example"]);
+    });
+
+    it("keeps every host when several are added at once", async () => {
+      await Promise.all([
+        manager.addBrowserAllowedHost(projectId, "a.example"),
+        manager.addBrowserAllowedHost(projectId, "b.example"),
+        manager.addBrowserAllowedHost(projectId, "c.example"),
+      ]);
+
+      expect((await readFromDisk()).browserAllowedHosts).toEqual([
+        "a.example",
+        "b.example",
+        "c.example",
+      ]);
+    });
+
+    it("returns the list unchanged when the host is already allowed", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        browserAllowedHosts: ["Example.com"],
+      });
+
+      expect(await manager.addBrowserAllowedHost(projectId, "example.com")).toEqual([
+        "Example.com",
+      ]);
+      expect((await readFromDisk()).browserAllowedHosts).toEqual(["Example.com"]);
+    });
+  });
 });

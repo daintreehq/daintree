@@ -80,6 +80,13 @@ export const config: AgentConfig = {
           label: "npm",
           commands: ["npm install -g @anthropic-ai/claude-code"],
         },
+        // Anthropic's native installer: a standalone binary in ~/.local/bin,
+        // no npm and no root, so it works where a system Node (apt,
+        // NodeSource) keeps its global packages in a root-owned folder.
+        {
+          label: "curl",
+          commands: ["curl -fsSL https://claude.ai/install.sh | bash"],
+        },
       ],
     },
     troubleshooting: [

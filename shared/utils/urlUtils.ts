@@ -136,6 +136,28 @@ export function normalizeBrowserUrl(
   };
 }
 
+/**
+ * Two copies of the browser panel's allow-list, combined. The list only grows
+ * (nothing removes an approved host), so a copy lacking a host the other has
+ * is older, not a removal. Keeps `kept` in order, then the hosts from
+ * `incoming` it lacks, compared case-insensitively.
+ */
+export function mergeBrowserAllowedHosts(
+  kept: readonly string[] | undefined,
+  incoming: readonly string[] | undefined
+): string[] | undefined {
+  if (!kept?.length) return incoming ? [...incoming] : undefined;
+  const merged = [...kept];
+  const seen = new Set(kept.map((host) => host.toLowerCase()));
+  for (const host of incoming ?? []) {
+    const key = host.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(host);
+  }
+  return merged;
+}
+
 export function isLocalhostUrl(url: string): boolean {
   try {
     const parsed = new URL(url);

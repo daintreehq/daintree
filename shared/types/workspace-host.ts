@@ -37,6 +37,9 @@ import type {
 import type { ProjectPulse, PulseRangeDays } from "./pulse.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 
+/** Which Linux inotify limit a watcher ran into: per-user watches or instances. */
+export type InotifyLimit = "watches" | "instances";
+
 /**
  * Worker-governance snapshot for one workspace host: the copytree worker's
  * state plus the host process's own memory usage (the copytree worker is a
@@ -967,7 +970,7 @@ export type WorkspaceHostEvent =
     }
   // Linux-only: fired once per host-process lifetime when the recursive file
   // watcher hits the inotify watch limit (ENOSPC).
-  | { type: "inotify-limit-reached" }
+  | { type: "inotify-limit-reached"; limit?: InotifyLimit }
   // macOS-only: fired once per host-process lifetime when the recursive file
   // watcher hits the FSEvents file descriptor ceiling (EMFILE).
   | { type: "emfile-limit-reached" }

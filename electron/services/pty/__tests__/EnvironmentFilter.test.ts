@@ -130,6 +130,67 @@ describe("isSensitiveVar", () => {
   });
 });
 
+describe("filterEnvironment on Linux", () => {
+  const originalPlatform = process.platform;
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  const mount = "/tmp/.mount_DaintrA1b2C3";
+  // What electron-builder's AppRun and the AppImage runtime hand Daintree.
+  const appImageEnv = {
+    HOME: "/home/u",
+    APPDIR: mount,
+    APPIMAGE: "/home/u/Applications/Daintree.AppImage",
+    ARGV0: "/home/u/Applications/Daintree.AppImage",
+    OWD: "/home/u",
+    CHROME_DESKTOP: "daintree.desktop",
+    PATH: `${mount}:${mount}/usr/sbin:/home/u/.local/bin:/usr/bin`,
+    LD_LIBRARY_PATH: `${mount}/usr/lib:/opt/cuda/lib64`,
+    XDG_DATA_DIRS: `${mount}/usr/share/:/usr/local/share:/usr/share:/usr/share/gnome:/usr/local/share/:/usr/share/`,
+    GSETTINGS_SCHEMA_DIR: `${mount}/usr/share/glib-2.0/schemas`,
+  };
+
+  it("leaves nothing of the AppImage's mount or runtime in a terminal", () => {
+    const result = filterEnvironment(appImageEnv);
+    expect(result).toEqual({
+      HOME: "/home/u",
+      PATH: "/home/u/.local/bin:/usr/bin",
+      LD_LIBRARY_PATH: "/opt/cuda/lib64",
+      XDG_DATA_DIRS: "/usr/local/share:/usr/share:/usr/share/gnome:/usr/local/share/:/usr/share/",
+    });
+  });
+
+  it("drops a path list the mount filled entirely", () => {
+    const result = filterEnvironment({ ...appImageEnv, LD_LIBRARY_PATH: `${mount}/usr/lib` });
+    expect(result).not.toHaveProperty("LD_LIBRARY_PATH");
+    expect(result).not.toHaveProperty("GSETTINGS_SCHEMA_DIR");
+  });
+
+  it("cleans an extracted image run through its AppRun, which exports no APPIMAGE", () => {
+    const dir = "/home/u/squashfs-root";
+    const result = filterEnvironment({
+      APPDIR: dir,
+      PATH: `${dir}:${dir}/usr/sbin:/usr/bin`,
+      LD_LIBRARY_PATH: `${dir}/usr/lib`,
+    });
+    expect(result).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("drops only CHROME_DESKTOP outside an AppImage", () => {
+    const result = filterEnvironment({
+      PATH: "/usr/bin",
+      CHROME_DESKTOP: "daintree.desktop",
+      OWD: "/home/u/kept",
+      LD_LIBRARY_PATH: "/opt/lib",
+    });
+    expect(result).toEqual({ PATH: "/usr/bin", OWD: "/home/u/kept", LD_LIBRARY_PATH: "/opt/lib" });
+  });
+});
+
 describe("filterEnvironment", () => {
   it("removes sensitive vars and keeps safe vars", () => {
     const env = {
@@ -258,23 +319,38 @@ describe("ensureUtf8Locale", () => {
   });
 
   it("falls back to en_US.UTF-8 when LANG is missing", () => {
-    expect(ensureUtf8Locale({}).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({}, "darwin").LANG).toBe("en_US.UTF-8");
   });
 
   it("falls back to en_US.UTF-8 when LANG is empty", () => {
-    expect(ensureUtf8Locale({ LANG: "" }).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({ LANG: "" }, "darwin").LANG).toBe("en_US.UTF-8");
   });
 
   it("falls back to en_US.UTF-8 when LANG is C", () => {
-    expect(ensureUtf8Locale({ LANG: "C" }).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({ LANG: "C" }, "darwin").LANG).toBe("en_US.UTF-8");
   });
 
   it("falls back to en_US.UTF-8 when LANG is POSIX", () => {
-    expect(ensureUtf8Locale({ LANG: "POSIX" }).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({ LANG: "POSIX" }, "darwin").LANG).toBe("en_US.UTF-8");
+  });
+
+  it.each(["", "C", "POSIX", "en_US.ISO-8859-1"])(
+    "falls back to C.UTF-8 on Linux, the one UTF-8 locale every tested distribution ships, for LANG=%j",
+    (lang) => {
+      expect(ensureUtf8Locale({ LANG: lang }, "linux").LANG).toBe("C.UTF-8");
+    }
+  );
+
+  it("keeps a UTF-8 LANG the user set on Linux", () => {
+    expect(ensureUtf8Locale({ LANG: "de_DE.UTF-8" }, "linux").LANG).toBe("de_DE.UTF-8");
+  });
+
+  it("falls back to en_US.UTF-8 on Windows", () => {
+    expect(ensureUtf8Locale({}, "win32").LANG).toBe("en_US.UTF-8");
   });
 
   it("falls back when LANG has non-UTF-8 encoding", () => {
-    expect(ensureUtf8Locale({ LANG: "en_US.ISO-8859-1" }).LANG).toBe("en_US.UTF-8");
+    expect(ensureUtf8Locale({ LANG: "en_US.ISO-8859-1" }, "darwin").LANG).toBe("en_US.UTF-8");
   });
 
   it("preserves C.UTF-8 (common Linux locale)", () => {
@@ -296,7 +372,7 @@ describe("ensureUtf8Locale", () => {
   });
 
   it("preserves other env vars", () => {
-    const result = ensureUtf8Locale({ PATH: "/usr/bin", HOME: "/home/test" });
+    const result = ensureUtf8Locale({ PATH: "/usr/bin", HOME: "/home/test" }, "darwin");
     expect(result.PATH).toBe("/usr/bin");
     expect(result.HOME).toBe("/home/test");
     expect(result.LANG).toBe("en_US.UTF-8");

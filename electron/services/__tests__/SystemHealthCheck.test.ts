@@ -5,9 +5,10 @@ import {
   resolvePrerequisites,
   resetSystemHealthCheckCache,
   checkPrerequisite,
-  BASELINE_PREREQUISITES,
+  getBaselinePrerequisites,
 } from "../SystemHealthCheck.js";
 import { refreshPath } from "../../setup/environment.js";
+import { findOnPath } from "../../utils/findOnPath.js";
 import { setUserRegistry, type AgentConfig } from "../../../shared/config/agentRegistry.js";
 
 vi.mock("child_process", () => ({
@@ -19,7 +20,17 @@ vi.mock("../../setup/environment.js", () => ({
   refreshPath: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../../utils/findOnPath.js", () => ({
+  findOnPath: vi.fn(),
+}));
+
 const mockedExecFile = vi.mocked(execFile);
+const mockedFindOnPath = vi.mocked(findOnPath);
+
+/** Where the POSIX PATH lookup resolves each command; null is "not on PATH". */
+function mockPathLookup(resolve: (command: string) => string | null) {
+  mockedFindOnPath.mockImplementation(async (command) => resolve(command));
+}
 
 type ExecCallback = (err: Error | null, result?: { stdout: string; stderr: string }) => void;
 
@@ -44,13 +55,17 @@ function mockExec(handler: (cmd: string, args: string[]) => string) {
   }) as never);
 }
 
-/** Commands the tool-presence probe should report as found. */
+/**
+ * Commands the tool-presence probe should report as found — through the
+ * in-process lookup on POSIX and `where` on Windows.
+ */
 function mockLookup(found: string[], versions: Record<string, string>) {
+  mockPathLookup((command) => (found.includes(command) ? `/usr/local/bin/${command}` : null));
   mockExec((cmd, args) => {
-    if (cmd === "which" || cmd === "where") {
+    if (cmd === "where") {
       const target = args[0] ?? "";
       if (!found.includes(target)) throw new Error(`${target} not found`);
-      return `/usr/local/bin/${target}\n`;
+      return `C:\\tools\\${target}.exe\r\n`;
     }
     const version = versions[cmd];
     if (version === undefined) throw new Error(`${cmd} failed`);
@@ -153,7 +168,7 @@ describe("resolvePrerequisites", () => {
 
   it("ignores unknown agent IDs gracefully", () => {
     const specs = resolvePrerequisites(["nonexistent"]);
-    expect(specs.length).toBe(BASELINE_PREREQUISITES.length);
+    expect(specs.length).toBe(getBaselinePrerequisites().length);
   });
 });
 
@@ -180,7 +195,8 @@ describe("runSystemHealthCheck", () => {
     // since launch, which is the whole point of the mid-session re-check.
     let refreshedBeforeFirstProbe: boolean | null = null;
     vi.mocked(refreshPath).mockImplementation(async () => {
-      refreshedBeforeFirstProbe ??= mockedExecFile.mock.calls.length === 0;
+      refreshedBeforeFirstProbe ??=
+        mockedExecFile.mock.calls.length === 0 && mockedFindOnPath.mock.calls.length === 0;
     });
     mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
@@ -333,16 +349,25 @@ describe("runSystemHealthCheck", () => {
     expect(result.prerequisites.find((p) => p.tool === "gh")?.version).toBe("2.40.0");
   });
 
-  it("uses 'which' on unix-like systems", async () => {
+  it("resolves tools in-process on linux and never spawns which", async () => {
+    // Fedora containers and Arch's base set have no `which`: spawning it read
+    // every installed tool as missing.
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
     try {
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
-      await runSystemHealthCheck();
+      const result = await runSystemHealthCheck();
 
-      expect(mockedExecFile.mock.calls.some((c) => c[0] === "which")).toBe(true);
-      expect(mockedExecFile.mock.calls.some((c) => c[0] === "where")).toBe(false);
+      expect(result.allRequired).toBe(true);
+      expect(mockedFindOnPath.mock.calls.map((c) => c[0]).sort()).toEqual(
+        resolvePrerequisites()
+          .map((s) => s.command ?? s.tool)
+          .sort()
+      );
+      expect(mockedExecFile.mock.calls.some((c) => c[0] === "which" || c[0] === "where")).toBe(
+        false
+      );
     } finally {
       Object.defineProperty(process, "platform", originalPlatform);
     }
@@ -357,7 +382,7 @@ describe("runSystemHealthCheck", () => {
       await runSystemHealthCheck();
 
       expect(mockedExecFile.mock.calls.some((c) => c[0] === "where")).toBe(true);
-      expect(mockedExecFile.mock.calls.some((c) => c[0] === "which")).toBe(false);
+      expect(mockedFindOnPath).not.toHaveBeenCalled();
     } finally {
       Object.defineProperty(process, "platform", originalPlatform);
     }
@@ -424,36 +449,37 @@ describe("runSystemHealthCheck", () => {
       // The post-install re-check: a focus probe is already running with the
       // tool absent when the install finishes. Joining it would report the tool
       // still missing.
-      let releaseFirstProbe: () => void = () => {};
-      const firstProbeStarted = new Promise<void>((started) => {
-        mockedExecFile.mockImplementation(((
-          cmd: string,
-          args: string[],
-          _options: unknown,
-          callback: ExecCallback
-        ) => {
-          if ((cmd === "which" || cmd === "where") && args[0] === "git") {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      try {
+        let releaseFirstProbe: () => void = () => {};
+        mockExec(() => "v20.11.0\n");
+        const firstProbeStarted = new Promise<void>((started) => {
+          mockedFindOnPath.mockImplementation(async (command) => {
+            if (command !== "git") return `/usr/local/bin/${command}`;
             started();
-            void new Promise<void>((release) => {
+            await new Promise<void>((release) => {
               releaseFirstProbe = () => release();
-            }).then(() => callback(new Error("git not found")));
-            return undefined;
-          }
-          callback(null, { stdout: "v20.11.0\n", stderr: "" });
-          return undefined;
-        }) as never);
-      });
+            });
+            return null;
+          });
+        });
 
-      const slowProbe = runSystemHealthCheck({ fatalOnly: true });
-      await firstProbeStarted;
+        const slowProbe = runSystemHealthCheck({ fatalOnly: true });
+        await firstProbeStarted;
 
-      // Git gets installed while that probe is still in flight.
-      mockLookup(ALL_TOOLS, ALL_VERSIONS);
-      const forced = runSystemHealthCheck({ fatalOnly: true, force: true });
-      releaseFirstProbe();
+        // Git gets installed while that probe is still in flight.
+        mockLookup(ALL_TOOLS, ALL_VERSIONS);
+        const forced = runSystemHealthCheck({ fatalOnly: true, force: true });
+        releaseFirstProbe();
 
-      expect((await slowProbe).prerequisites.find((p) => p.tool === "git")?.available).toBe(false);
-      expect((await forced).prerequisites.find((p) => p.tool === "git")?.available).toBe(true);
+        expect((await slowProbe).prerequisites.find((p) => p.tool === "git")?.available).toBe(
+          false
+        );
+        expect((await forced).prerequisites.find((p) => p.tool === "git")?.available).toBe(true);
+      } finally {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
     }, 30_000);
 
     it("a forced check arriving after the queued probe started gets its own", async () => {
@@ -592,8 +618,8 @@ describe("runSystemHealthCheck", () => {
     it.skipIf(process.platform !== "darwin")(
       "never executes the shim when the tools are absent",
       async () => {
-        mockExec((cmd, args) => {
-          if (cmd === "which") return `/usr/bin/${args[0]}\n`;
+        mockPathLookup((command) => `/usr/bin/${command}`);
+        mockExec((cmd) => {
           if (cmd === "xcode-select") throw new Error("unable to get active developer directory");
           if (cmd === "git") throw new Error("git should never be executed here");
           return "1.0.0\n";
@@ -609,8 +635,8 @@ describe("runSystemHealthCheck", () => {
     );
 
     it("runs the version command when the tools are present", async () => {
-      mockExec((cmd, args) => {
-        if (cmd === "which") return `/usr/bin/${args[0]}\n`;
+      mockPathLookup((command) => `/usr/bin/${command}`);
+      mockExec((cmd) => {
         if (cmd === "xcode-select") return "/Library/Developer/CommandLineTools\n";
         if (cmd === "git") return "git version 2.43.0\n";
         return "v20.11.0\n";
@@ -624,8 +650,8 @@ describe("runSystemHealthCheck", () => {
     it("skips the tools probe when git resolves outside /usr/bin", async () => {
       // A Homebrew git is a real binary and works whether or not the Command
       // Line Tools are installed, so it must not be gated behind them.
-      mockExec((cmd, args) => {
-        if (cmd === "which") return `/opt/homebrew/bin/${args[0]}\n`;
+      mockPathLookup((command) => `/opt/homebrew/bin/${command}`);
+      mockExec((cmd) => {
         if (cmd === "xcode-select") throw new Error("unable to get active developer directory");
         if (cmd === "git") return "git version 2.43.0\n";
         return "v20.11.0\n";
@@ -638,8 +664,8 @@ describe("runSystemHealthCheck", () => {
     });
 
     it("does not probe the tools for prerequisites that aren't CLT-provided", async () => {
-      mockExec((cmd, args) => {
-        if (cmd === "which") return args[0] === "node" ? "/usr/bin/node\n" : "/opt/bin/git\n";
+      mockPathLookup((command) => (command === "node" ? "/usr/bin/node" : "/opt/bin/git"));
+      mockExec((cmd) => {
         if (cmd === "xcode-select") throw new Error("unable to get active developer directory");
         if (cmd === "git") return "git version 2.43.0\n";
         return "v20.11.0\n";

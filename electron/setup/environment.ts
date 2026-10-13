@@ -328,11 +328,93 @@ export function getUnixFallbackPaths(): string[] {
   });
 }
 
+function expandHomePrefix(value: string, home: string): string {
+  if (value === "~") return home;
+  return value.startsWith("~/") ? path.join(home, value.slice(2)) : value;
+}
+
+/**
+ * npm's global prefix when the user moved it somewhere they own — the fix npm's
+ * own docs give for EACCES on a system Node (apt, NodeSource), whose default
+ * prefix is root-owned. `NPM_CONFIG_PREFIX` first, then `prefix=` in
+ * `~/.npmrc` (last one wins, as in npm's ini reader, with `${VAR}` expanded).
+ */
+function readNpmUserPrefix(home: string): string | null {
+  let value = process.env["NPM_CONFIG_PREFIX"] || process.env["npm_config_prefix"] || null;
+  if (!value) {
+    let npmrc: string;
+    try {
+      npmrc = fs.readFileSync(path.join(home, ".npmrc"), "utf8");
+    } catch {
+      return null;
+    }
+    for (const line of npmrc.split(/\r?\n/)) {
+      const match = /^\s*prefix\s*=\s*(.*?)\s*$/.exec(line);
+      if (match?.[1]) value = match[1];
+    }
+    if (!value) return null;
+    value = value
+      .replace(/^(["'])(.*)\1$/, "$2")
+      .replace(/\$\{([^}]+)\}/g, (_match, name: string) => process.env[name] ?? "");
+  }
+  const expanded = expandHomePrefix(value, home);
+  return path.isAbsolute(expanded) ? expanded : null;
+}
+
+/**
+ * Linux-only bin dirs where agent CLIs and their runtimes commonly land, for
+ * when the login-shell read fails and Daintree is left with the session's
+ * PATH. Appended, never prepended: each only makes a CLI findable, so none can
+ * shadow a binary the user's own PATH already resolves. Gated by `existsSync`
+ * like the list above.
+ */
+export function getLinuxFallbackPaths(): string[] {
+  const home = os.homedir();
+  const env = process.env;
+  const candidates: string[] = [];
+
+  // npm with a user-owned global prefix: whatever ~/.npmrc names, then the
+  // directory npm's EACCES guide tells people to create.
+  const npmPrefix = readNpmUserPrefix(home);
+  if (npmPrefix) candidates.push(path.join(npmPrefix, "bin"));
+  candidates.push(path.join(home, ".npm-global/bin"));
+
+  // rustup/cargo, Bun and Deno installers, each with its env override.
+  candidates.push(path.join(env["CARGO_HOME"] || path.join(home, ".cargo"), "bin"));
+  candidates.push(path.join(env["BUN_INSTALL"] || path.join(home, ".bun"), "bin"));
+  candidates.push(path.join(env["DENO_INSTALL_ROOT"] || path.join(home, ".deno"), "bin"));
+
+  // Homebrew on Linux: the shared prefix its installer prefers, and the
+  // in-home prefix it falls back to without sudo.
+  if (env["HOMEBREW_PREFIX"]) candidates.push(path.join(env["HOMEBREW_PREFIX"], "bin"));
+  candidates.push("/home/linuxbrew/.linuxbrew/bin");
+  candidates.push(path.join(home, ".linuxbrew/bin"));
+
+  // Debian/Ubuntu's default ~/.profile puts ~/bin on PATH when it exists.
+  candidates.push(path.join(home, "bin"));
+
+  // snapd's profile.d script appends this, so a snap never shadows a deb.
+  candidates.push("/snap/bin");
+
+  return [...new Set(candidates)].filter((p) => {
+    try {
+      return existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+}
+
 function applyUnixFallbackPaths(currentPath: string): string {
   const extraPaths = getUnixFallbackPaths();
   const existingEntries = currentPath.split(path.delimiter);
   const missing = extraPaths.filter((p) => !existingEntries.includes(p));
-  return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
+  const appended =
+    process.platform === "linux"
+      ? getLinuxFallbackPaths().filter((p) => !existingEntries.includes(p) && !missing.includes(p))
+      : [];
+  if (missing.length === 0 && appended.length === 0) return currentPath;
+  return [...missing, currentPath, ...appended].join(path.delimiter);
 }
 
 function parseMarkeredPath(stdout: string, marker: string): string | null {

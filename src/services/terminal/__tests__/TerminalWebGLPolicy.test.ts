@@ -154,3 +154,25 @@ describe("cached project view (#12514)", () => {
     expect(policy.wantsWebGLAtTier(makeManaged(), TerminalRefreshTier.FOCUSED)).toBe(true);
   });
 });
+
+describe("TerminalWebGLPolicy.shouldHaveActiveWebGL without hardware WebGL", () => {
+  it("never reports a missing context as a fault the watchdog must repair", () => {
+    const managed = makeManaged({ lastAppliedTier: TerminalRefreshTier.VISIBLE });
+    expect(makePolicy().shouldHaveActiveWebGL(managed)).toBe(true);
+    expect(makePolicy({ isHardwareAvailable: () => false }).shouldHaveActiveWebGL(managed)).toBe(
+      false
+    );
+    expect(makePolicy({ isHardwareAvailable: () => true }).shouldHaveActiveWebGL(managed)).toBe(
+      true
+    );
+  });
+
+  it("follows the manager's availability as it changes", () => {
+    let available = false;
+    const policy = makePolicy({ isHardwareAvailable: () => available });
+    const managed = makeManaged({ lastAppliedTier: TerminalRefreshTier.VISIBLE });
+    expect(policy.shouldHaveActiveWebGL(managed)).toBe(false);
+    available = true;
+    expect(policy.shouldHaveActiveWebGL(managed)).toBe(true);
+  });
+});

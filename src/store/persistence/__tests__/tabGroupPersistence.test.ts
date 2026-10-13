@@ -20,6 +20,7 @@ const createMockProjectClient = () => ({
   onWorktreeLoadStatus: vi.fn().mockReturnValue(() => {}),
   getSettings: vi.fn().mockResolvedValue({}),
   saveSettings: vi.fn().mockResolvedValue(undefined),
+  addBrowserAllowedHost: vi.fn().mockResolvedValue([]),
   detectRunners: vi.fn().mockResolvedValue([]),
   close: vi.fn().mockResolvedValue({ success: true }),
   sleepProject: vi

@@ -336,6 +336,7 @@ class TerminalInstanceService {
       getPinnedId: () => this.webGLManager.getPinnedId(),
       isAltBufferPinned: (id) => this.webGLManager.isAltBufferPinned(id),
       isViewSuppressed,
+      isHardwareAvailable: () => this.webGLManager.isHardwareAvailable(),
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({

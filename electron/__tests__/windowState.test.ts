@@ -155,6 +155,8 @@ describe("createWindowWithState", () => {
       });
 
       createWindowWithState({ show: false });
+      // Linux maximizes a hidden window at its reveal; elsewhere at once.
+      fireShow();
 
       expect(winInstance.maximize).toHaveBeenCalled();
     });
@@ -220,6 +222,7 @@ describe("createWindowWithState", () => {
       });
 
       createWindowWithState({ show: false }, "/home/user/project");
+      fireShow();
 
       expect(winInstance.maximize).toHaveBeenCalled();
       expect(winInstance.setFullScreen).not.toHaveBeenCalled();
@@ -359,6 +362,7 @@ describe("createWindowWithState", () => {
       winInstance.getBounds.mockReturnValue({ x: 100, y: 100, width: 1200, height: 800 });
 
       createWindowWithState({ show: false }, "/home/user/project");
+      fireShow();
 
       expect(winInstance.setSize).not.toHaveBeenCalled();
       expect(winInstance.maximize).toHaveBeenCalled();
@@ -398,6 +402,7 @@ describe("createWindowWithState", () => {
       winInstance.getBounds.mockReturnValue({ x: 0, y: 0, width: 3840, height: 2160 });
 
       createWindowWithState({ show: false }, "/home/user/project");
+      fireShow();
 
       expect(winInstance.setSize).toHaveBeenCalledWith(1920, 1080);
       expect(winInstance.setBounds).toHaveBeenCalled();
