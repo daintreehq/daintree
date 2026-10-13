@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { WorktreeState } from "@shared/types/worktree";
+import type { NormalizedPRState } from "@shared/types/forge";
 import {
   decodeWorktreeAgentBuckets,
   deriveWorktreeAgentBuckets,
@@ -160,22 +161,35 @@ describe("encodeWorktreeAgentBuckets", () => {
 });
 
 describe("isWorktreeMergedForCleanup", () => {
-  const base = {
-    isMainWorktree: false,
-    worktreeChanges: { changes: [] },
-    linked: { pr: { state: "merged" } },
-  } as unknown as WorktreeState;
+  type MergeFacts = Pick<WorktreeState, "isMainWorktree" | "worktreeChanges" | "linked">;
+
+  function facts(prState: NormalizedPRState, overrides: Partial<MergeFacts> = {}): MergeFacts {
+    return {
+      isMainWorktree: false,
+      worktreeChanges: { worktreeId: "/wt", rootPath: "/wt", changes: [], changedFileCount: 0 },
+      linked: {
+        providerId: "github",
+        pr: {
+          ref: { providerId: "github", owner: "o", repo: "r", number: 7, rawData: {} },
+          url: "https://example.test/pull/7",
+          state: prState,
+        },
+      },
+      ...overrides,
+    };
+  }
 
   it("is true for a merged non-main worktree with loaded git status", () => {
-    expect(isWorktreeMergedForCleanup(base)).toBe(true);
+    expect(isWorktreeMergedForCleanup(facts("merged"))).toBe(true);
   });
 
-  it("is false for the main worktree, unloaded status, or an open PR", () => {
-    expect(isWorktreeMergedForCleanup({ ...base, isMainWorktree: true })).toBe(false);
-    expect(isWorktreeMergedForCleanup({ ...base, worktreeChanges: null })).toBe(false);
-    expect(
-      isWorktreeMergedForCleanup({ ...base, linked: { pr: { state: "open" } } } as WorktreeState)
-    ).toBe(false);
+  it("is false for the main worktree, unloaded status, or an unmerged PR", () => {
+    expect(isWorktreeMergedForCleanup(facts("merged", { isMainWorktree: true }))).toBe(false);
+    expect(isWorktreeMergedForCleanup(facts("merged", { worktreeChanges: null }))).toBe(false);
+    expect(isWorktreeMergedForCleanup(facts("merged", { linked: null }))).toBe(false);
+    for (const state of ["open", "closed", "declined"] as const) {
+      expect(isWorktreeMergedForCleanup(facts(state))).toBe(false);
+    }
   });
 });
 

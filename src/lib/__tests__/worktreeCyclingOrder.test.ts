@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeSnapshot } from "@shared/types";
-import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 
 const mocks = vi.hoisted(() => {
   let worktreeViewState: { worktrees: Map<string, WorktreeSnapshot> } = {
@@ -31,7 +31,10 @@ function setFleetRuns(runs: RunSeed[]): void {
   useFleetSnapshotStore.setState({
     snapshot: {
       runs: runs.map((r) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...r })),
-    } as unknown as FleetSnapshot,
+      changedAt: 0,
+      degraded: false,
+      lastSuccessfulAt: 0,
+    },
   });
 }
 
@@ -78,14 +81,16 @@ function setWorktrees(snaps: WorktreeSnapshot[]): void {
   });
 }
 
-// Parks a single working-agent terminal on `worktreeId` so that worktree
-// derives `hasWorkingAgent` and satisfies the "working" quick-state filter.
-function setWorkingAgentPanel(worktreeId: string): void {
-  const panelId = `term-${worktreeId}`;
-  usePanelStore.setState({
-    panelsById: {
-      [panelId]: {
-        id: panelId,
+// Parks agent terminals on each worktree, all in the given panel state.
+function setAgentPanels(
+  byWorktree: Record<string, string[]>,
+  agentState: "working" | "waiting" = "working"
+): void {
+  const panelsById: Record<string, unknown> = {};
+  for (const [worktreeId, ids] of Object.entries(byWorktree)) {
+    for (const id of ids) {
+      panelsById[id] = {
+        id,
         kind: "terminal",
         type: "terminal",
         title: "T",
@@ -96,13 +101,23 @@ function setWorkingAgentPanel(worktreeId: string): void {
         location: "grid",
         hasPty: true,
         isVisible: true,
-        agentState: "working",
+        agentState,
         detectedAgentId: "claude",
-      } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
-    },
-    panelIds: [panelId],
-    panelIdsByWorktreeId: { [worktreeId]: [panelId] },
+      };
+    }
+  }
+  usePanelStore.setState({
+    panelsById,
+    panelIds: Object.keys(panelsById),
+    panelIdsByWorktreeId: byWorktree,
   } as never);
+}
+
+// Parks a single working-agent terminal on `worktreeId` so that worktree
+// derives `hasWorkingAgent` and satisfies the "working" quick-state filter.
+function setWorkingAgentPanel(worktreeId: string): void {
+  const panelId = `term-${worktreeId}`;
+  setAgentPanels({ [worktreeId]: [panelId] });
   setFleetRuns([{ runId: panelId, agentState: "working" }]);
 }
 
@@ -498,33 +513,6 @@ describe("getVisibleWorktreesForCycling", () => {
   });
 
   describe("buckets from the agents' fleet bands (#13234)", () => {
-    function agentPanel(id: string, worktreeId: string) {
-      return {
-        id,
-        kind: "terminal",
-        type: "terminal",
-        title: "T",
-        cwd: "/repo",
-        worktreeId,
-        location: "grid",
-        hasPty: true,
-        agentState: "waiting",
-        detectedAgentId: "claude",
-      };
-    }
-
-    function setAgents(byWorktree: Record<string, string[]>): void {
-      const panelsById: Record<string, unknown> = {};
-      for (const [worktreeId, ids] of Object.entries(byWorktree)) {
-        for (const id of ids) panelsById[id] = agentPanel(id, worktreeId);
-      }
-      usePanelStore.setState({
-        panelsById,
-        panelIds: Object.keys(panelsById),
-        panelIdsByWorktreeId: byWorktree,
-      } as never);
-    }
-
     beforeEach(() => {
       setWorktrees([
         createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
@@ -532,11 +520,14 @@ describe("getVisibleWorktreesForCycling", () => {
         createSnapshot({ id: "wt-idle", name: "idle", branch: "feature/idle" }),
         createSnapshot({ id: "wt-asking", name: "asking", branch: "feature/asking" }),
       ]);
-      setAgents({
-        "wt-mixed": ["a-working", "a-seen"],
-        "wt-idle": ["a-prompt"],
-        "wt-asking": ["a-approval"],
-      });
+      setAgentPanels(
+        {
+          "wt-mixed": ["a-working", "a-seen"],
+          "wt-idle": ["a-prompt"],
+          "wt-asking": ["a-approval"],
+        },
+        "waiting"
+      );
       setFleetRuns([
         { runId: "a-working", agentState: "working" },
         {

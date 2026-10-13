@@ -43,7 +43,9 @@ export const EMPTY_WORKTREE_AGENT_BUCKETS: WorktreeAgentBuckets = {
 };
 
 /** Merged, or merged with its issue still linked — the route to cleanup. */
-export function isWorktreeMergedForCleanup(worktree: WorktreeState): boolean {
+export function isWorktreeMergedForCleanup(
+  worktree: Pick<WorktreeState, "isMainWorktree" | "worktreeChanges" | "linked">
+): boolean {
   return (
     !worktree.isMainWorktree &&
     worktree.worktreeChanges !== null &&

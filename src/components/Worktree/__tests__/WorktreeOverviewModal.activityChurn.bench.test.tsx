@@ -74,7 +74,7 @@ function fleetRow(
 }
 
 function fleet(runs: FleetRunRow[]): FleetSnapshot {
-  return { runs } as unknown as FleetSnapshot;
+  return { runs, changedAt: 0, degraded: false, lastSuccessfulAt: 0 };
 }
 
 beforeEach(async () => {
