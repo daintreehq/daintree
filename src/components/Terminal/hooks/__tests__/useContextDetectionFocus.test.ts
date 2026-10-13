@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useRef } from "react";
 import { EditorState } from "@codemirror/state";
 import type { ViewUpdate } from "@codemirror/view";
 import type { CompletionTrigger } from "@shared/types";
+
+const service = vi.hoisted(() => ({
+  notifyComposerDraft: vi.fn(),
+  releaseComposerDraft: vi.fn(),
+  clearDirectingState: vi.fn(),
+}));
+vi.mock("@/services/TerminalInstanceService", () => ({ terminalInstanceService: service }));
+
 import { useContextDetection } from "../useContextDetection";
 import { getActiveCompletionContext } from "../../hybridInputParsing";
 
@@ -41,14 +49,14 @@ function makeUpdate(opts: {
   } as unknown as ViewUpdate;
 }
 
-function setupHook(activeTriggers: CompletionTrigger[] = ["/", "$", "@"]) {
+function setupHook(activeTriggers: CompletionTrigger[] = ["/", "$", "@"], external = false) {
   const setIsEditorFocused = vi.fn();
   const setActiveCompletionContext = vi.fn();
   const applyDocChange = vi.fn(() => false);
-  const consumeExternalValueFlag = vi.fn(() => false);
+  const consumeExternalValueFlag = vi.fn(() => external);
   const onUserType = vi.fn();
 
-  const { result } = renderHook(() => {
+  const { result, unmount } = renderHook(() => {
     const latestRef = useRef<LatestRefShape | null>({
       isInHistoryMode: false,
       terminalId: "t1",
@@ -65,7 +73,7 @@ function setupHook(activeTriggers: CompletionTrigger[] = ["/", "$", "@"]) {
     });
   });
 
-  return { result, setIsEditorFocused, setActiveCompletionContext, onUserType };
+  return { result, unmount, setIsEditorFocused, setActiveCompletionContext, onUserType };
 }
 
 describe("useContextDetection focus tracking", () => {
@@ -251,5 +259,76 @@ describe("useContextDetection multi-line drafts", () => {
         expect(current).toEqual(getActiveCompletionContext(flat, caret, new Set(triggers)));
       }
     }
+  });
+});
+
+describe("useContextDetection directing signals", () => {
+  beforeEach(() => {
+    service.notifyComposerDraft.mockClear();
+    service.releaseComposerDraft.mockClear();
+    service.clearDirectingState.mockClear();
+  });
+
+  function edit(text: string, userEvents: string[]) {
+    return makeUpdate({ focusChanged: false, hasFocus: true, docChanged: true, text, userEvents });
+  }
+
+  it("holds directing while the user edits a non-empty draft", () => {
+    const { result } = setupHook();
+    result.current.handleUpdateRef.current(edit("hel", ["input.type"]));
+    result.current.handleUpdateRef.current(edit("he", ["delete.backward"]));
+    expect(service.notifyComposerDraft).toHaveBeenCalledTimes(2);
+    expect(service.notifyComposerDraft).toHaveBeenCalledWith("t1");
+    expect(service.clearDirectingState).not.toHaveBeenCalled();
+  });
+
+  it("clears directing when the user empties the draft", () => {
+    const { result } = setupHook();
+    result.current.handleUpdateRef.current(edit("  ", ["delete.backward"]));
+    expect(service.clearDirectingState).toHaveBeenCalledWith("t1");
+    expect(service.notifyComposerDraft).not.toHaveBeenCalled();
+  });
+
+  it("releases the hold when the draft is emptied programmatically, as after a send", () => {
+    const { result } = setupHook(undefined, true);
+    result.current.handleUpdateRef.current(edit("", []));
+    expect(service.releaseComposerDraft).toHaveBeenCalledWith("t1");
+    expect(service.clearDirectingState).not.toHaveBeenCalled();
+  });
+
+  it("releases the hold when an unannotated edit empties the draft", () => {
+    const { result } = setupHook();
+    result.current.handleUpdateRef.current(edit("", []));
+    expect(service.releaseComposerDraft).toHaveBeenCalledWith("t1");
+    expect(service.clearDirectingState).not.toHaveBeenCalled();
+  });
+
+  it("a programmatic non-empty value neither holds nor releases", () => {
+    const { result } = setupHook(undefined, true);
+    result.current.handleUpdateRef.current(edit("restored draft", []));
+    expect(service.notifyComposerDraft).not.toHaveBeenCalled();
+    expect(service.releaseComposerDraft).not.toHaveBeenCalled();
+  });
+
+  it("releases a held draft when the composer unmounts", () => {
+    const { result, unmount } = setupHook();
+    result.current.handleUpdateRef.current(edit("draft", ["input.type"]));
+    unmount();
+    expect(service.releaseComposerDraft).toHaveBeenCalledWith("t1");
+  });
+
+  it("does not release on unmount once the draft was emptied", () => {
+    const { result, unmount } = setupHook();
+    result.current.handleUpdateRef.current(edit("draft", ["input.type"]));
+    result.current.handleUpdateRef.current(edit("", ["delete.backward"]));
+    service.releaseComposerDraft.mockClear();
+    unmount();
+    expect(service.releaseComposerDraft).not.toHaveBeenCalled();
+  });
+
+  it("does not release on unmount when nothing was held", () => {
+    const { unmount } = setupHook();
+    unmount();
+    expect(service.releaseComposerDraft).not.toHaveBeenCalled();
   });
 });

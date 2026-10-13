@@ -653,6 +653,14 @@ class TerminalInstanceService {
     this.onUserInput(id, data);
   }
 
+  notifyComposerDraft(id: string): void {
+    this.onUserInput(id, "", true);
+  }
+
+  releaseComposerDraft(id: string): void {
+    this.agentStateController.releaseComposerDraft(id);
+  }
+
   notifyEnterPressed(id: string): void {
     this.onEnterPressed(id);
   }
@@ -813,7 +821,7 @@ class TerminalInstanceService {
     }
   }
 
-  private onUserInput(id: string, data: string): void {
+  private onUserInput(id: string, data: string, composerDraft = false): void {
     const managed = this.instances.get(id);
     if (!managed) return;
 
@@ -849,15 +857,19 @@ class TerminalInstanceService {
       this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
     }, 1000);
 
-    this.agentStateController.onUserInput(id, data);
+    if (composerDraft) {
+      this.agentStateController.onComposerDraft(id);
+    } else {
+      this.agentStateController.onUserInput(id, data);
+    }
   }
 
   private onEnterPressed(id: string): void {
     this.agentStateController.onEnterPressed(id);
   }
 
-  clearDirectingState(id: string): void {
-    this.agentStateController.clearDirectingState(id);
+  clearDirectingState(id: string, trigger?: string): void {
+    this.agentStateController.clearDirectingState(id, trigger);
   }
 
   async prewarmTerminal(

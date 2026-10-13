@@ -71,6 +71,30 @@ beforeEach(() => {
 const current = { isCurrent: () => true };
 
 describe("resyncHostTerminals", () => {
+  it("keeps a directing pane directing over a newer waiting report", async () => {
+    panel("t-draft", { agentState: "directing", lastStateChange: 100, agentIncarnation: 1 });
+    panel("t-run", { agentState: "directing", lastStateChange: 100, agentIncarnation: 1 });
+    getForProject.mockResolvedValue([
+      { id: "t-draft", agentState: "waiting", lastStateChange: 200, agentIncarnation: 1 },
+      { id: "t-run", agentState: "working", lastStateChange: 200, agentIncarnation: 1 },
+    ]);
+
+    await resyncHostTerminals("proj-1", current);
+
+    // The controller still learns the canonical state; only the store write is held back.
+    expect(setAgentState).toHaveBeenCalledWith("t-draft", "waiting");
+    expect(store.updateAgentState.mock.calls.map((call) => call[0])).toEqual(["t-run"]);
+    expect(store.updateAgentState).toHaveBeenCalledWith(
+      "t-run",
+      "working",
+      undefined,
+      200,
+      undefined,
+      undefined,
+      undefined
+    );
+  });
+
   it("adopts a terminal the host started while this view was away", async () => {
     setWorktreePathIndexAccessor(() => new Map([["wt-feature", "/repo/feature"]]));
     setWorktreeSelectionAccessor(() => ({ activeWorktreeId: "wt-main", restoreWorktreeId: null }));

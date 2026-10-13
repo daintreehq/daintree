@@ -1751,7 +1751,11 @@ function TerminalPaneComponent({
                     }}
                     onSendKey={(key) => {
                       if (!isInputLocked && !isRestarting) {
-                        terminalInstanceService.notifyUserInput(id);
+                        if (key === "escape") {
+                          terminalInstanceService.clearDirectingState(id, "escape-key");
+                        } else {
+                          terminalInstanceService.notifyUserInput(id);
+                        }
                         if (key === "enter") reportCanopySent(id);
                         terminalClient.sendKey(id, key);
                       }
