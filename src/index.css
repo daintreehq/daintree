@@ -2699,6 +2699,50 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border-color: Highlight;
   }
 
+  /* The agent composer's three states, which normally live in fills and
+     terminal-palette mixes the UA throws away. Rest is the plain system edge;
+     the selected composer doubles it; the composer holding the keyboard takes
+     the app's Highlight ring, clear of the edge like every field's. The
+     editor inside would otherwise wear a second Highlight ring of its own. */
+  [data-composer-state] {
+    border-color: ButtonText;
+  }
+
+  [data-composer-state="selected"] {
+    outline: 1px solid CanvasText;
+    outline-offset: 0;
+  }
+
+  [data-composer-state]:has(.cm-content:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  [data-composer-state] .cm-content:focus-visible {
+    outline: none !important;
+  }
+
+  /* The UA forces the placeholder to CanvasText, the same ink as a typed
+     draft, so an empty composer read as a filled one. GrayText is what a
+     native field's placeholder takes here. */
+  [data-composer-state] .cm-placeholder {
+    color: GrayText;
+  }
+
+  /* Highlight follows the keyboard. A selected pane wears it because its
+     terminal holds the keys; once its own composer takes them, the composer's
+     ring says so and the pane edge steps down to the system ink, rather than
+     two Highlight perimeters nesting. */
+  .terminal-selected:has([data-composer-state] .cm-content:focus-visible) {
+    outline-color: CanvasText;
+    border-color: CanvasText;
+  }
+
+  .assistant-focused:has([data-composer-state] .cm-content:focus-visible) {
+    outline-color: CanvasText;
+    border-left-color: CanvasText;
+  }
+
   .assistant-focused {
     outline: 2px solid Highlight;
     outline-offset: -2px;
@@ -3287,6 +3331,21 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   .terminal-selected:focus-visible {
     outline-width: 2px;
     outline-offset: -2px;
+  }
+
+  /* The agent composer: placeholder ink steps up, the selected composer's
+     edge doubles with a matching hairline outside it, and the typing ring
+     thickens. The edge stays 1px so nothing in the bar moves. */
+  [data-composer-state] {
+    --ib-placeholder: var(--ib-placeholder-more);
+  }
+
+  [data-composer-state="selected"] {
+    box-shadow: 0 0 0 1px var(--ib-border);
+  }
+
+  [data-composer-state]:has(.cm-content:focus-visible) {
+    outline-width: 3px;
   }
 
   /* Segmented toggles have the same shape of problem as those filter chips, and

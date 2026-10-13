@@ -31,6 +31,7 @@ import type { CompletionTrigger } from "@shared/types";
 import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
@@ -47,6 +48,7 @@ import {
   COMPOSER_CONTROL_FOCUS_CLASS,
   COMPOSER_CONTROL_HOVER_BG_CLASS,
   COMPOSER_CONTROL_TEXT_CLASS,
+  COMPOSER_MARKER_TEXT_CLASS,
 } from "./composerControlStyles";
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
@@ -162,6 +164,12 @@ export interface HybridInputBarProps {
    * only once it resolves `true`, so a refused send leaves the text in place.
    */
   submitText?: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+  /**
+   * Whether this composer's surface is the selected one, for a host whose
+   * selection is not the grid's (the Assistant sidebar). Grid panes leave it
+   * unset and follow the pane frame's own rule.
+   */
+  selected?: boolean;
 }
 
 /** The draft and history scope of an isolated composer, apart from every project's. */
@@ -265,6 +273,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       className,
       isolated = false,
       submitText,
+      selected,
     },
     ref
   ) => {
@@ -290,6 +299,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const stashEditorState = useTerminalInputStore((s) => s.stashEditorState);
     const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
     const isFocusedTerminal = usePanelStore((s) => !isolated && s.focusedId === terminalId);
+    // The selected look follows the pane frame (`ContentPanel`): it releases
+    // while the Assistant holds the keyboard, though `focusedId` stays pinned.
+    // Routing and fleet keep reading `isFocusedTerminal`.
+    const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
+    const showSelectedChrome = selected ?? (isFocusedTerminal && !isAssistantActive);
     const canopyOpen = useCanopyStore((s) => s.isOpen);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
@@ -1096,15 +1110,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isExpanded,
     });
 
+    // Three looks: rest; selected (the pane is the one, the keyboard is in its
+    // terminal or elsewhere), a neutral lift; and typing, which adds the accent
+    // outline on top of the selected look. Hover on a selected shell keeps it.
     const shellVars = {
-      "--ib-bg": inputBarColors.shellBg,
-      "--ib-border": inputBarColors.shellBorder,
-      "--ib-border-hover": inputBarColors.shellBorderHover,
-      "--ib-border-focus": inputBarColors.shellBorderFocus,
+      "--ib-bg": showSelectedChrome ? inputBarColors.shellSelectedBg : inputBarColors.shellBg,
+      "--ib-border": showSelectedChrome
+        ? inputBarColors.shellBorderSelected
+        : inputBarColors.shellBorder,
+      "--ib-border-hover": showSelectedChrome
+        ? inputBarColors.shellBorderSelected
+        : inputBarColors.shellBorderHover,
+      "--ib-hover-bg": showSelectedChrome
+        ? inputBarColors.shellSelectedBg
+        : inputBarColors.shellHoverBg,
       "--ib-shadow": inputBarColors.shellShadow,
       "--ib-focus-ring": inputBarColors.shellFocusRing,
-      "--ib-hover-bg": inputBarColors.shellHoverBg,
-      "--ib-focus-bg": inputBarColors.shellFocusBg,
+      "--ib-marker": showSelectedChrome ? inputBarColors.markerSelected : inputBarColors.marker,
+      "--ib-placeholder": showSelectedChrome
+        ? inputBarColors.placeholderSelected
+        : inputBarColors.placeholder,
+      "--ib-placeholder-more": inputBarColors.placeholderMore,
       "--ib-accent": inputBarColors.accent,
       "--ib-fg": inputBarColors.foreground,
     } as React.CSSProperties;
@@ -1159,11 +1185,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               // canvas midpoint, so the attach target sat at a different height
               // for every draft length. `flex-wrap` is what lets the canvas take
               // a row of its own once the draft wraps (see the track below).
-              "flex w-full flex-wrap items-end gap-x-1.5 gap-y-1 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150",
+              "flex w-full flex-wrap items-end gap-x-1.5 gap-y-1 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150 ease-out",
               !isSpecialState && [
                 "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
-                "focus-within:border-[var(--ib-border-focus)] focus-within:ring-1 focus-within:ring-[var(--ib-focus-ring)] focus-within:bg-[var(--ib-focus-bg)]",
+                // The field family's focus: an outline added clear of the
+                // edge, the border left as it was. Keyed to the editor, not
+                // `focus-within` — a Tab onto attach or the mic is that
+                // control's own ring, not the composer taking the keyboard.
+                "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:outline-offset-2 has-[.cm-content:focus-visible]:outline-[var(--ib-focus-ring)]",
               ],
               // The one dim for an unavailable composer. Its controls take
               // `disabled` and add no opacity of their own: a second dim inside
@@ -1173,6 +1203,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             )}
             data-voice-active={isVoiceListeningChrome ? "true" : undefined}
             data-fleet-armed={isFleetPrimary ? "true" : undefined}
+            // The high-contrast blocks in index.css key off this; the special
+            // states above paint their own shell and take no part.
+            data-composer-state={
+              isSpecialState ? undefined : showSelectedChrome ? "selected" : "rest"
+            }
             style={specialStyle}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
@@ -1258,7 +1293,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   // control in it — see `composerControlStyles.ts`.
                   className={cn(
                     "flex h-6 w-6 shrink-0 items-center justify-center select-none rounded-full font-mono text-xs font-semibold leading-5 transition-colors cursor-pointer",
-                    COMPOSER_CONTROL_TEXT_CLASS,
+                    COMPOSER_MARKER_TEXT_CLASS,
                     COMPOSER_CONTROL_HOVER_BG_CLASS,
                     COMPOSER_CONTROL_FOCUS_CLASS
                   )}

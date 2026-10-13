@@ -1660,6 +1660,9 @@ export function HelpPanel({
                     agentHasLifecycleEvent={terminalPty?.stateChangeTrigger !== undefined}
                     agentState={terminalPty?.agentState}
                     disabled={terminalPty?.isInputLocked === true}
+                    // The aside's own focus state, the one its edge shows: the
+                    // grid's selection never names the Assistant's terminal.
+                    selected={isHighlighted}
                     onSend={({ text, imagePaths }) => {
                       if (terminalPty?.isInputLocked === true) return;
                       terminalInstanceService.notifyUserInput(terminalId);
