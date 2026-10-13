@@ -4,9 +4,15 @@ import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import type { HostListEntry } from "@shared/types/remoteHosts";
 
-const { supported, remoteHosts } = vi.hoisted(() => ({
+const { supported, remoteHosts, notify } = vi.hoisted(() => ({
   supported: { value: true },
   remoteHosts: { value: [] as HostListEntry[] },
+  notify: vi.fn((_payload: unknown) => "toast"),
+}));
+
+vi.mock("@/lib/notify", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/notify")>()),
+  notify,
 }));
 
 vi.mock("@/lib/remoteHosts", () => ({
@@ -20,6 +26,7 @@ vi.mock("@/components/Hosts/hostList", async (importOriginal) => ({
 }));
 
 import { createActionDefinitions } from "../../actionDefinitions";
+import { ClientAppError } from "@/utils/clientAppError";
 import { registerHostActions } from "../hostActions";
 import { registerPortActions } from "../portActions";
 import { usePaletteStore } from "@/store/paletteStore";
@@ -100,7 +107,7 @@ async function run(registry: ActionRegistry, id: string, args?: unknown) {
 }
 
 const list = vi.fn(() => Promise.resolve([host("studio-01")]));
-const switchWindowHost = vi.fn(() => Promise.resolve());
+const switchWindowHost = vi.fn((_payload: unknown): Promise<unknown> => Promise.resolve());
 
 beforeEach(() => {
   supported.value = true;
@@ -192,6 +199,23 @@ describe("host.switch", () => {
     expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "studio-01", newWindow: true });
     await run(registry, "host.switch", { hostId: "local" });
     expect(switchWindowHost).toHaveBeenLastCalledWith({ hostId: "local", newWindow: false });
+  });
+
+  it("presents a failed switch the way the host chip does, and still fails the dispatch", async () => {
+    remoteHosts.value = [host("studio-01")];
+    switchWindowHost.mockRejectedValueOnce(
+      new ClientAppError("HOST_DISCONNECTED", "gone", "Couldn't reach this host.")
+    );
+    notify.mockClear();
+    const registry: ActionRegistry = new Map();
+    registerHostActions(registry, callbacks());
+
+    // Automation still hears that the window didn't move.
+    await expect(run(registry, "host.switch", { hostId: "studio-01" })).rejects.toThrow();
+    const toast = notify.mock.calls[0]![0] as { title: string; actions: Array<{ label: string }> };
+    expect(toast.title).toBe("Couldn't switch to studio-01");
+    expect(toast.actions.map((action) => action.label)).toEqual(["Retry"]);
+    expect(registry.get("host.switch")!().selfNotifiesOnExecutionError).toBe(true);
   });
 
   it("refuses a host that isn't in the list", async () => {

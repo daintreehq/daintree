@@ -28,7 +28,8 @@ const ACTION_ID = "project.mruCycleOlder";
  * binding names.
  */
 function asMainRowEqual(event: KeyboardEvent): KeyboardEvent {
-  if (event.code !== "NumpadAdd") return event;
+  // AltGr types characters; the copy below would lose that and read as Ctrl+Alt.
+  if (event.code !== "NumpadAdd" || event.getModifierState?.("AltGraph")) return event;
   return new KeyboardEvent("keydown", {
     key: "=",
     code: "Equal",
@@ -39,9 +40,18 @@ function asMainRowEqual(event: KeyboardEvent): KeyboardEvent {
   });
 }
 
+/**
+ * Claimed ahead of the terminal only with a modifier held, as the default is:
+ * a toggle rebound to a bare key goes through the normal dispatcher, which
+ * leaves typing in a terminal to the terminal.
+ */
+const MODIFIED_COMBO = /(^|\+)(Cmd|Ctrl|Alt)\+/;
+
 /** The binding is the only owner: a rebound or unbound toggle no longer fires on the default keys. */
 function matchesToggleBinding(event: KeyboardEvent): boolean {
-  const combos = keybindingService.getEffectiveCombos(ACTION_ID);
+  const combos = keybindingService
+    .getEffectiveCombos(ACTION_ID)
+    .filter((combo) => MODIFIED_COMBO.test(combo));
   if (combos.length === 0) return false;
   const candidate = asMainRowEqual(event);
   return combos.some((combo) => keybindingService.matchesEvent(candidate, combo));

@@ -655,7 +655,12 @@ export class RemoteHostsClient {
     // second endpoint, the two claiming the lease from each other). The window
     // that has it comes forward instead.
     if (projectId !== undefined && !asOwner) {
-      const redirected = await this.redirectToOwner(hostId, projectId, sourceWindowId, superseded);
+      // Raced like every other wait: an owner holding the project only in its
+      // cache is switched to it first, and Cancel here doesn't wait for that.
+      const redirected = await untilAbandoned(
+        this.redirectToOwner(hostId, projectId, sourceWindowId, superseded)
+      );
+      if (redirected === ABANDONED) return { outcome: "superseded", hostId };
       if (redirected) return redirected;
     }
 
@@ -709,16 +714,7 @@ export class RemoteHostsClient {
       const previousHost = this.options.bindings.get(windowId);
       const nextHost = remote ? hostId : LOCAL_HOST_ID;
       this.options.bindings.set(windowId, nextHost);
-      if (!this.watchedWindows.has(windowId)) {
-        this.watchedWindows.add(windowId);
-        this.options.windows.watchWindow(windowId, () => {
-          this.watchedWindows.delete(windowId);
-          this.switchTickets.get(windowId)?.abandon();
-          this.switchTickets.delete(windowId);
-          this.pendingSwitches.delete(windowId);
-          this.options.bindings.release(windowId);
-        });
-      }
+      this.watchClosing(windowId);
 
       try {
         if (!remote) {
@@ -844,6 +840,9 @@ export class RemoteHostsClient {
    * superseded, and whatever it was waiting on stops being waited for.
    */
   private takeSwitchTicket(windowId: number): SwitchTicket {
+    // From its first request, so one that closes mid-switch drops its ticket
+    // (and whatever was waiting on it) even if it never got as far as binding.
+    this.watchClosing(windowId);
     const previous = this.switchTickets.get(windowId);
     previous?.abandon();
     const seq = (previous?.seq ?? 0) + 1;
@@ -857,6 +856,19 @@ export class RemoteHostsClient {
       isCurrent: () => this.switchTickets.get(windowId)?.seq === seq,
       abandoned,
     };
+  }
+
+  /** Forget a window's binding, switch tickets and pending switch when it closes. */
+  private watchClosing(windowId: number): void {
+    if (this.watchedWindows.has(windowId)) return;
+    this.watchedWindows.add(windowId);
+    this.options.windows.watchWindow(windowId, () => {
+      this.watchedWindows.delete(windowId);
+      this.switchTickets.get(windowId)?.abandon();
+      this.switchTickets.delete(windowId);
+      this.pendingSwitches.delete(windowId);
+      this.options.bindings.release(windowId);
+    });
   }
 
   /** Tell a window's views where its switch is, and remember it for one that asks. */

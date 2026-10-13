@@ -178,4 +178,12 @@ describe("switchToHost", () => {
     await switchToHost("h1", false, undefined, { onStayed });
     expect(onStayed).toHaveBeenCalledTimes(2);
   });
+
+  it("offers a retry, not the project list, for a host that is no longer listed", async () => {
+    m.hosts = [];
+    m.switchWindowHost.mockRejectedValue(new ClientAppError("NOT_FOUND", "Unknown host h1"));
+    await switchToHost("h1", false, "p");
+    const toast = m.notify.mock.calls[0]![0] as { actions: Array<{ label: string }> };
+    expect(toast.actions.map((action) => action.label)).toEqual(["Retry"]);
+  });
 });

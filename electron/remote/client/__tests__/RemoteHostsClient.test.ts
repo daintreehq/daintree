@@ -386,6 +386,24 @@ describe("RemoteHostsClient", () => {
       await expect(switching).resolves.toMatchObject({ outcome: "switched" });
     });
 
+    it("settles a first switch whose window closes before it ever bound", async () => {
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>(() => {}));
+      const switching = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(client.getPendingSwitch(ctxFor(5, 1))).not.toBeNull());
+
+      const closed = vi.mocked(windows.watchWindow).mock.calls.find(([id]) => id === 1)![1];
+      closed();
+
+      await expect(switching).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    });
+
     it("says nothing for a switch that opens a new window", async () => {
       await client.switchWindowHost(ctxFor(5, 1), {
         hostId: "studio-01",

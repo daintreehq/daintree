@@ -57,8 +57,13 @@ export function notifyHostSwitchFailure(hostId: HostId, error: unknown, retry: (
     : isClientAppError(error) && error.code === "HOST_MODE_OFF"
       ? { hostId, target: "host" as const, label: "Set up…" }
       : null;
-  // The host said the project is gone: trying again can't help, picking another can.
-  const missing = !update && isClientAppError(error) && error.code === "NOT_FOUND";
+  // The host said the project is gone: trying again can't help, picking another
+  // can. A host that is itself gone from the list is a different miss.
+  const missing =
+    !update &&
+    isClientAppError(error) &&
+    error.code === "NOT_FOUND" &&
+    getHostListSnapshot().hosts.some((candidate) => candidate.descriptor.id === hostId);
   notify({
     type: "error",
     context: { eventKind: "connectivity" },

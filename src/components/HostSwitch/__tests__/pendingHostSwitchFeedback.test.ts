@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PendingHostSwitch, RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 
@@ -154,5 +155,33 @@ describe("watchPendingHostSwitch", () => {
     await flushMicrotasks();
     expect(usePendingHostSwitchStore.getState().pending).toBeNull();
     second.stop();
+  });
+
+  it("shows a notice held back in the background once the window is looked at again", () => {
+    const { send, stop } = harness();
+    m.notify.mockReturnValueOnce("");
+    send(pending());
+    vi.advanceTimersByTime(400);
+    expect(m.notify).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new Event("focus"));
+    expect(m.notify).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("ignores a snapshot that answers after it was torn down", async () => {
+    let answer!: (pending: PendingHostSwitch | null) => void;
+    const api = {
+      onEvent: vi.fn(() => () => {}),
+      getPendingSwitch: vi.fn(
+        () => new Promise<PendingHostSwitch | null>((resolve) => (answer = resolve))
+      ),
+    };
+    const stop = watchPendingHostSwitch(api);
+    stop();
+    answer(pending({ switchId: "late" }));
+    await flushMicrotasks();
+
+    expect(usePendingHostSwitchStore.getState().pending).toBeNull();
   });
 });

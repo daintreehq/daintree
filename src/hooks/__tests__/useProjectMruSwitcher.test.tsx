@@ -383,4 +383,22 @@ describe("useProjectMruSwitcher", () => {
     expect(event?.defaultPrevented).toBe(false);
     expect(peekMock).not.toHaveBeenCalled();
   });
+
+  it("leaves a toggle rebound to an unmodified key to the normal dispatcher", () => {
+    keybindingServiceMock.getEffectiveCombos.mockImplementation(() => ["="]);
+    renderHook(() => useProjectMruSwitcher());
+    const term = document.createElement("div");
+    term.className = "xterm";
+    document.body.appendChild(term);
+
+    let event: KeyboardEvent | undefined;
+    act(() => {
+      event = keyDown("Equal", { metaKey: false, altKey: false, target: term });
+    });
+
+    // Typing "=" in a terminal stays the terminal's.
+    expect(event?.defaultPrevented).toBe(false);
+    expect(peekMock).not.toHaveBeenCalled();
+    term.remove();
+  });
 });

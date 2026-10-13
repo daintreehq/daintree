@@ -40,8 +40,9 @@ interface RemoteHostsSwitchApi {
 export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
   const store = usePendingHostSwitchStore;
   let heardEvent = false;
+  let disposed = false;
   const stopEvents = api.onEvent?.((event) => {
-    if (event.type !== "switch-pending") return;
+    if (disposed || event.type !== "switch-pending") return;
     heardEvent = true;
     store.getState().setPending(event.pending);
   });
@@ -49,7 +50,7 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
   // event that arrived meanwhile is newer than this answer.
   void api.getPendingSwitch?.().then(
     (pending) => {
-      if (!heardEvent) store.getState().setPending(pending);
+      if (!disposed && !heardEvent) store.getState().setPending(pending);
     },
     () => {}
   );
@@ -59,6 +60,16 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
   let stillWorking = false;
   let onsetTimer: ReturnType<typeof setTimeout> | null = null;
   let stillWorkingTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // A notice held back while the window was in the background (it goes to
+  // no inbox: it is only worth seeing while the switch is on its way) shows
+  // when the window is looked at again.
+  const showWhenFocused = () => {
+    const current = store.getState().pending;
+    if (!notificationId && current && current.switchId === shownFor) show(current);
+  };
+  const focusSource = typeof window === "undefined" ? null : window;
+  focusSource?.addEventListener("focus", showWhenFocused);
 
   const withdraw = () => {
     if (onsetTimer) clearTimeout(onsetTimer);
@@ -72,6 +83,7 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
   };
 
   const show = (pending: PendingHostSwitch) => {
+    if (stillWorkingTimer) clearTimeout(stillWorkingTimer);
     notificationId =
       notify({
         type: "info",
@@ -91,6 +103,14 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
           },
         ],
       }) || null;
+    if (stillWorking) {
+      if (notificationId) {
+        useNotificationStore.getState().updateNotification(notificationId, {
+          message: STILL_WORKING_MESSAGE,
+        });
+      }
+      return;
+    }
     stillWorkingTimer = setTimeout(() => {
       stillWorkingTimer = null;
       stillWorking = true;
@@ -129,6 +149,8 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
   });
 
   return () => {
+    disposed = true;
+    focusSource?.removeEventListener("focus", showWhenFocused);
     stopEvents?.();
     stopStore();
     withdraw();

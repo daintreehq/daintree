@@ -428,7 +428,7 @@ export class HostConnection {
       });
     }
     const answer = await session.call(LinkMethod.DESCRIBE_PROJECT, { projectId });
-    if (answer == null) return null;
+    if (answer === null) return null;
     const parsed = ProjectDescriptionSchema.safeParse(answer);
     if (!parsed.success) {
       throw new AppError({
