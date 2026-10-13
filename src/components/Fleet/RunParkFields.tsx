@@ -141,8 +141,7 @@ export function RunParkFields({
    * removed option is a radiogroup with no checked radio and no tab stop.
    */
   const effectiveGateId = resolveParkGateId(gateId, candidates) ?? PARK_GATE_NONE;
-  const chosenGate =
-    gateOptions.find((option) => option.id === effectiveGateId)?.candidate ?? null;
+  const chosenGate = gateOptions.find((option) => option.id === effectiveGateId)?.candidate ?? null;
 
   // An existing park's gate can sit below the list's fold; the choice being
   // edited has to be on screen when the form opens. Mount only — later
