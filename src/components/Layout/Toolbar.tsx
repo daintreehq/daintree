@@ -2460,6 +2460,9 @@ export function Toolbar({
             aria-label="Main toolbar"
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
+            // A window working on another machine wears it across the whole strip
+            // (toolbar.css), so the difference reads before anything is read.
+            data-remote-window={remoteWindow ? "" : undefined}
             className={cn(
               "@container/toolbar relative z-[var(--z-toolbar)] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider",
               // macOS paints its window-rim highlight over our top pixel row, and
@@ -2469,15 +2472,6 @@ export function Toolbar({
             )}
           >
             {!isLinux() && <div className="window-resize-strip" />}
-            {remoteWindow && (
-              // A window working on another machine carries the host's colour
-              // along its top edge: a different place, never a warning.
-              <div
-                aria-hidden="true"
-                data-testid="remote-window-strip"
-                className="pointer-events-none absolute inset-x-0 top-0 h-[3px] bg-status-info"
-              />
-            )}
 
             {/* LEFT GROUP */}
             <div

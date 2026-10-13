@@ -339,6 +339,7 @@ export class HostConnection {
         return {
           status: "connected",
           rttMs: state.rttMs,
+          ...(state.rttSampledAt !== null ? { rttSampledAt: state.rttSampledAt } : {}),
           handshake: state.handshake,
           ...(state.buildMismatch ? { buildMismatch: state.buildMismatch } : {}),
           ...(state.quietSince !== null ? { quietSince: state.quietSince } : {}),
