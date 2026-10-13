@@ -6,6 +6,7 @@ import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
 import type { SimpleGit } from "simple-git";
+import { windowsSystemTool } from "../../utils/windowsExecutable.js";
 
 const n = (p: string) => (p as string).replace(/\\/g, "/");
 
@@ -1974,12 +1975,14 @@ describe("WorkspaceService — repository command approval", () => {
 
     expect(retrySpy).toHaveBeenCalledWith("/test/worktree");
     await vi.waitFor(() => expect(monitor.setupStatus?.state).toBe("ready"));
-    // On Windows the tree-kill helper (`powershell.exe`) that an earlier test's
-    // abort started shares this mock, and its spawn can land here.
+    // On Windows the tree-kill helper that an earlier test's abort started
+    // shares this mock, and its spawn can land here. It starts PowerShell by
+    // its absolute `%SystemRoot%` path, never by a bare name.
+    const treeKillHelper = windowsSystemTool("powershell.exe");
     const spawns = vi
       .mocked(childProcessModule.spawn)
       .mock.calls.map(([command]) => command)
-      .filter((command) => process.platform !== "win32" || command !== "powershell.exe");
+      .filter((command) => process.platform !== "win32" || command !== treeKillHelper);
     expect(spawns).toEqual(["npm install"]);
     expect(runResourceActionSpy).toHaveBeenCalledWith(
       "auto-provision-/test/worktree",

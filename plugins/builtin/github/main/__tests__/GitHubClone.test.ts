@@ -28,13 +28,36 @@ vi.mock("node:fs", async (importOriginal) =>
   ).withVirtualWindowsFiles(await importOriginal())
 );
 
+// The host-platform cases are about the probe and the clone, not program
+// lookup. On a Windows host their gh must not be looked up on that host's PATH
+// (which the virtual disk above hides anyway), so the lookup answers with a
+// fixed absolute path. The simulated-Windows cases search the virtual disk.
+const ghLookup = vi.hoisted(() => ({
+  searchVirtualDisk: false,
+  /** Where gh resolves on a Windows host in the host-platform cases. */
+  hostGh: "C:\\tools\\gh\\gh.exe",
+}));
+vi.mock("../../../../../electron/utils/windowsExecutable.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../../electron/utils/windowsExecutable.js")>();
+  return {
+    ...actual,
+    resolveExecutableForSpawn: (
+      name: string,
+      env?: NodeJS.ProcessEnv,
+      platform: NodeJS.Platform = process.platform
+    ): Promise<string> =>
+      ghLookup.searchVirtualDisk || platform !== "win32"
+        ? actual.resolveExecutableForSpawn(name, env, platform)
+        : Promise.resolve(ghLookup.hostGh),
+  };
+});
+
 import { cloneCapability } from "../GitHubClone.js";
-import { executableForSpawn } from "../../../../../electron/utils/windowsExecutable.js";
 import { virtualWindowsFiles } from "../../../../../electron/utils/__tests__/helpers/virtualWindowsFs.js";
 
-// On Windows gh is spawned by its absolute PATH location; deriving the expected
-// command the same way keeps these assertions correct on every host.
-const GH = executableForSpawn("gh");
+// On Windows gh is spawned by the absolute path its PATH lookup found, bare elsewhere.
+const GH = process.platform === "win32" ? ghLookup.hostGh : "gh";
 
 class FakeChildProcess extends EventEmitter {
   pid = 12345;
@@ -203,7 +226,8 @@ describe("GitHubClone — cloneRepository", () => {
       { signal: controller.signal }
     );
 
-    await new Promise((r) => setTimeout(r, 5));
+    // On Windows the spawn follows an asynchronous PATH lookup.
+    await vi.waitFor(() => expect(capturedChild).toBeDefined());
     controller.abort();
     capturedChild?.emit("close", null);
 
@@ -226,6 +250,7 @@ describe("GitHubClone — cloneRepository", () => {
     // Windows starts gh from PATH by absolute path.
     process.env.PATH = "C:\\Program Files\\GitHub CLI";
     virtualWindowsFiles.set({ "C:\\Program Files\\GitHub CLI\\gh.exe": "" });
+    ghLookup.searchVirtualDisk = true;
     try {
       let treeGone: (value: null) => void = () => {};
       treeKillMock.mockImplementationOnce(() => new Promise((resolve) => (treeGone = resolve)));
@@ -244,7 +269,8 @@ describe("GitHubClone — cloneRepository", () => {
         settled = true;
       });
 
-      await new Promise((r) => setTimeout(r, 5));
+      // The spawn follows an asynchronous PATH lookup.
+      await vi.waitFor(() => expect(capturedChild).toBeDefined());
       controller.abort();
       controller.abort();
       capturedChild?.emit("close", null);
@@ -260,6 +286,7 @@ describe("GitHubClone — cloneRepository", () => {
       treeGone(null);
       await expect(clonePromise).rejects.toThrow(/Clone cancelled/);
     } finally {
+      ghLookup.searchVirtualDisk = false;
       Object.defineProperty(process, "platform", original);
       if (originalPath === undefined) delete process.env.PATH;
       else process.env.PATH = originalPath;
@@ -272,12 +299,14 @@ describe("GitHubClone — cloneRepository", () => {
     const originalPath = process.env.PATH;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     process.env.PATH = ".;C:\\empty";
+    ghLookup.searchVirtualDisk = true;
     try {
       const probe = await cloneCapability.probeAuth();
 
       expect(probe.authenticated).toBe(false);
       expect(childProcessMock.execFile).not.toHaveBeenCalled();
     } finally {
+      ghLookup.searchVirtualDisk = false;
       Object.defineProperty(process, "platform", original);
       if (originalPath === undefined) delete process.env.PATH;
       else process.env.PATH = originalPath;

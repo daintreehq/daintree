@@ -196,11 +196,16 @@ describe("IssuePickerDialog error recovery", () => {
     renderDialog();
 
     const retry = await screen.findByRole("button", { name: "Retry" });
+    // The search takes focus a beat after opening. Let that land first, so the
+    // only thing that can put focus back on it below is the Retry handoff.
+    await waitFor(() => expect(document.activeElement).toBe(input()));
     retry.focus();
     fireEvent.click(retry);
 
     await waitFor(() => screen.getByText("Recovered issue", VISIBLE));
-    expect(document.activeElement).toBe(input());
+    // The handoff runs in an effect after the commit that removes Retry, which
+    // can trail the recovered row's appearance.
+    await waitFor(() => expect(document.activeElement).toBe(input()));
   });
 });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const { execFileMock, findAllOnPathMock, createApplicationMenuMock, pluginInit } = vi.hoisted(
-  () => {
+const { execFileMock, findAllOnPathMock, pathScanMock, createApplicationMenuMock, pluginInit } =
+  vi.hoisted(() => {
     const pluginInit = {
       promise: Promise.resolve(),
       resolve: () => {},
@@ -20,12 +20,15 @@ const { execFileMock, findAllOnPathMock, createApplicationMenuMock, pluginInit }
         queueMicrotask(() => callback?.(err));
         return {} as never;
       }),
+      // POSIX walks PATH in-process; every agent misses.
       findAllOnPathMock: vi.fn(async () => [] as string[]),
+      // Windows probes PATH by reading its directories rather than running
+      // `where`; every agent misses there too.
+      pathScanMock: vi.fn(async () => ({ paths: [] as string[], skipped: [] as string[] })),
       createApplicationMenuMock: vi.fn(),
       pluginInit,
     };
-  }
-);
+  });
 
 vi.mock("child_process", () => ({ execFile: execFileMock, execFileSync: vi.fn() }));
 vi.mock("../../utils/findOnPath.js", () => ({
@@ -46,6 +49,12 @@ vi.mock("../../store.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
 vi.mock("../../utils/wsl.js", () => ({ getDefaultWslDistro: vi.fn(async () => null) }));
+// The host's own PATH never answers a probe: no agent and no npm is found there.
+vi.mock("../../utils/windowsExecutable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/windowsExecutable.js")>()),
+  scanWindowsPath: pathScanMock,
+  findWindowsCommand: vi.fn(async () => null),
+}));
 
 vi.mock("electron", () => ({
   BrowserWindow: { getFocusedWindow: vi.fn(() => null) },
@@ -137,9 +146,16 @@ interface WindowWork {
   menuWindowIds: number[];
 }
 
-/** PATH lookups run in-process on POSIX and through `where.exe` on Windows. */
+/**
+ * CLI PATH probes so far: in-process walks on POSIX, PATH directory scans on
+ * Windows, plus any subprocess probe that still spawns.
+ */
 function probeCount(): number {
-  return execFileMock.mock.calls.length + findAllOnPathMock.mock.calls.length;
+  return (
+    execFileMock.mock.calls.length +
+    findAllOnPathMock.mock.calls.length +
+    pathScanMock.mock.calls.length
+  );
 }
 
 async function openWindow(id: number, opts: { settlePlugins?: boolean } = {}): Promise<WindowWork> {
@@ -173,6 +189,7 @@ describe("initPerWindowServices repeated work across windows", () => {
     setPtyClientRef({} as PtyClient);
     execFileMock.mockClear();
     findAllOnPathMock.mockClear();
+    pathScanMock.mockClear();
     createApplicationMenuMock.mockClear();
   });
 
