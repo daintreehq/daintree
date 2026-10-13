@@ -30,11 +30,15 @@ export const FIND_BAR_ICON_CLASS = PANE_TOOLBAR_ICON_CLASS;
  * The match count. "No results" steps up in ink rather than into status red:
  * the words already say what happened, and severity-coloured prose is a
  * settled no here.
+ *
+ * The slot keeps one width whatever it says, empty included. The bar is
+ * anchored on its right edge, so a count that grew and shrank with its text
+ * ("", "2 of 5", "No results") slid the field and its caret sideways on every
+ * keystroke. The width fits "1000 of 1000+" and "Invalid regex".
  */
 export function findBarCountClass(hasMatches: boolean): string {
   return cn(
-    // An empty count keeps its live region mounted but takes no room.
-    "px-1 empty:px-0 text-xs tabular-nums whitespace-nowrap",
+    "w-24 shrink-0 px-1 text-xs tabular-nums whitespace-nowrap",
     hasMatches ? "text-text-secondary" : "text-text-primary"
   );
 }

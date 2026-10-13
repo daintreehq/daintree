@@ -6,7 +6,12 @@ import { SearchField } from "@/components/ui/SearchField";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { SEARCH_HIGHLIGHT_LIMIT } from "@/services/terminal/TerminalAddonManager";
 import { useTerminalSearchHistoryStore } from "@/store/terminalSearchHistoryStore";
-import { validateRegexTerm, buildSearchOptions, type SearchStatus } from "./terminalSearchUtils";
+import {
+  validateRegexTerm,
+  buildSearchOptions,
+  describeRegexError,
+  type SearchStatus,
+} from "./terminalSearchUtils";
 import {
   FIND_BAR_CLASS,
   FIND_BAR_ICON_CLASS,
@@ -134,7 +139,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
           setMatchResults(null);
           if (effectiveRegexEnabled && error instanceof Error) {
-            setRegexError(error.message);
+            setRegexError(describeRegexError(error.message));
           }
           terminalInstanceService.get(terminalId)?.searchAddon?.clearDecorations();
         });
@@ -173,7 +178,9 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         return;
       }
 
-      setSearchStatus("idle");
+      // The last result stays up until the new one lands rather than blanking
+      // for the debounce: blanking flickered the count on every keystroke and
+      // re-announced it to screen readers each time.
       debounceRef.current = setTimeout(() => {
         performSearch(term, "next");
       }, 150);
@@ -241,6 +248,9 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       if (e.key === "Enter" && inField) {
         e.preventDefault();
         e.stopPropagation();
+        // A search still queued from typing would land after this step and
+        // undo it (a Shift+Enter followed by a forward search).
+        cancelPendingSearch();
         performSearch(searchTerm, e.shiftKey ? "prev" : "next");
         addSearch(searchTerm);
         historyIndexRef.current = -1;
@@ -252,7 +262,15 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         onClose();
       }
     },
-    [searchTerm, performSearch, clearSearch, onClose, addSearch]
+    [searchTerm, performSearch, clearSearch, cancelPendingSearch, onClose, addSearch]
+  );
+
+  const step = useCallback(
+    (direction: "next" | "prev") => {
+      cancelPendingSearch();
+      performSearch(searchTerm, direction);
+    },
+    [searchTerm, performSearch, cancelPendingSearch]
   );
 
   const handleClose = useCallback(() => {
@@ -332,6 +350,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   })();
 
   const regexErrorId = useId();
+  const limitNoteId = useId();
 
   // Nothing to step through with no query, no matches or a pattern that does
   // not compile — the same rule the browser's find bar applies.
@@ -342,9 +361,30 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     matchResults !== null &&
     matchResults.resultCount >= SEARCH_HIGHLIGHT_LIMIT;
 
+  const limitNote = `Highlights and stepping stop at ${SEARCH_HIGHLIGHT_LIMIT} matches`;
+
+  // Radix describes the wrapper it anchors to, not the input, so the invalid
+  // reason travels to the input explicitly; the cap note goes the same way,
+  // since its tooltip hangs off the count, which takes no focus.
+  const describedBy =
+    [
+      searchStatus === "invalidRegex" && regexError ? regexErrorId : null,
+      atHighlightLimit ? limitNoteId : null,
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined;
+
+  const countClass = findBarCountClass(searchStatus === "found");
+
   return (
     <div
-      className={cn("absolute top-2 right-2 z-20", FIND_BAR_CLASS, className)}
+      // The width cap keeps the bar inside a narrow pane: the field is the one
+      // part that shrinks, and every control keeps its full target.
+      className={cn(
+        "absolute top-2 right-2 z-20 max-w-[calc(100%-1rem)]",
+        FIND_BAR_CLASS,
+        className
+      )}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={handleKeyDown}
     >
@@ -353,21 +393,17 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           {/* The trigger wraps the field rather than being it: SearchField has
               no ref of its own to hand Radix, and the tooltip anchors to the
               whole field, which is also the edge that turns red. */}
-          <div className="flex">
+          <div className="flex min-w-0 shrink">
             <SearchField
               size="compact"
-              fieldClassName="w-44"
+              fieldClassName="w-44 min-w-16"
               inputRef={inputRef}
               value={searchTerm}
               onChange={handleInputChange}
               placeholder="Find in terminal"
               aria-label="Find in terminal"
               invalid={searchStatus === "invalidRegex"}
-              // Radix describes the wrapper it anchors to, not this input, so
-              // the reason travels to the input explicitly.
-              aria-describedby={
-                searchStatus === "invalidRegex" && regexError ? regexErrorId : undefined
-              }
+              aria-describedby={describedBy}
               data-terminal-search-input
             />
           </div>
@@ -379,10 +415,13 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       <span id={regexErrorId} className="sr-only">
         {regexError}
       </span>
+      <span id={limitNoteId} className="sr-only">
+        {atHighlightLimit ? limitNote : ""}
+      </span>
 
       <FindBarToggle
         pressed={caseSensitive}
-        label="Toggle case sensitivity"
+        label="Match case"
         tooltip="Match case"
         onToggle={handleCaseSensitiveToggle}
       >
@@ -390,51 +429,45 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       </FindBarToggle>
 
       <FindBarToggle
+        pressed={wholeWord}
+        label="Match whole word"
+        tooltip="Match whole word"
+        onToggle={handleWholeWordToggle}
+      >
+        <span className="underline underline-offset-2 decoration-1">ab</span>
+      </FindBarToggle>
+
+      <FindBarToggle
         pressed={regexEnabled}
-        label="Toggle regex mode"
-        tooltip="Regex"
+        label="Use regular expression"
+        tooltip="Use regular expression"
         onToggle={handleRegexToggle}
         className="font-mono"
       >
         .*
       </FindBarToggle>
 
-      <FindBarToggle
-        pressed={wholeWord}
-        label="Toggle whole word"
-        tooltip="Whole word"
-        onToggle={handleWholeWordToggle}
-      >
-        <span className="underline underline-offset-2 decoration-1">ab</span>
-      </FindBarToggle>
-
-      {statusText &&
-        (atHighlightLimit ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                data-terminal-search-status
-                className={cn(
-                  // "No results" and "Invalid regex" step up in ink, not into
-                  // status red: severity-coloured prose is a settled no here, the
-                  // words already say what happened, and the invalid case marks
-                  // the field's own border.
-                  findBarCountClass(searchStatus === "found"),
-                  "cursor-help underline decoration-dotted underline-offset-2"
-                )}
-              >
-                {statusText}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              Highlighting and navigation limited to first {SEARCH_HIGHLIGHT_LIMIT} matches
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          <span data-terminal-search-status className={findBarCountClass(searchStatus === "found")}>
-            {statusText}
-          </span>
-        ))}
+      {/* The slot is always mounted at one width, so the field never moves. */}
+      {atHighlightLimit ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              data-terminal-search-status
+              className={cn(
+                countClass,
+                "cursor-help underline decoration-dotted underline-offset-2"
+              )}
+            >
+              {statusText}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{limitNote}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <span data-terminal-search-status className={countClass}>
+          {statusText}
+        </span>
+      )}
 
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {statusText}
@@ -443,7 +476,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       <FindBarButton
         label="Previous match"
         tooltip="Previous match (Shift+Enter)"
-        onClick={() => performSearch(searchTerm, "prev")}
+        onClick={() => step("prev")}
         disabled={!canStep}
         keepFieldFocus
       >
@@ -453,14 +486,14 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       <FindBarButton
         label="Next match"
         tooltip="Next match (Enter)"
-        onClick={() => performSearch(searchTerm, "next")}
+        onClick={() => step("next")}
         disabled={!canStep}
         keepFieldFocus
       >
         <ChevronDown className={FIND_BAR_ICON_CLASS} />
       </FindBarButton>
 
-      <FindBarButton label="Close search" tooltip="Close (Esc)" onClick={handleClose}>
+      <FindBarButton label="Close find bar" tooltip="Close (Esc)" onClick={handleClose}>
         <X className={FIND_BAR_ICON_CLASS} />
       </FindBarButton>
     </div>

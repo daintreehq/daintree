@@ -59,13 +59,13 @@ export function FindBar({ find }: FindBarProps) {
     ? ""
     : matchCount > 0
       ? `${activeMatch} of ${matchCount}`
-      : "No results";
+      : "No matches";
 
   return (
     // `z-40`: above a dev preview tool drawer floating over the page (`z-30`),
     // which otherwise covers this corner while Find has the focus.
     <div
-      className={`absolute top-2 right-2 z-40 ${FIND_BAR_CLASS}`}
+      className={`absolute top-2 right-2 z-40 max-w-[calc(100%-1rem)] ${FIND_BAR_CLASS}`}
       onKeyDown={(e) => {
         if (isComposingRef.current || e.key !== "Escape") return;
         e.preventDefault();
@@ -75,7 +75,7 @@ export function FindBar({ find }: FindBarProps) {
     >
       <SearchField
         size="compact"
-        fieldClassName="w-44"
+        fieldClassName="w-44 min-w-16"
         inputRef={inputRef}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
