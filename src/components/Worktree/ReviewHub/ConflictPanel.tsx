@@ -66,6 +66,20 @@ interface ConflictPanelProps {
   onCheckoutOursTheirs: (filePath: string, side: "ours" | "theirs") => Promise<void> | void;
   onAbort: () => Promise<void>;
   onContinue: () => Promise<void>;
+  /**
+   * `operation` (default) owns the whole pane during a merge, rebase,
+   * cherry-pick or revert: the operation header, the worklist, the resolved
+   * disclosure and Continue. `worklist` is the conflicted files alone, for
+   * conflicts with no operation behind them (a stash pop): there is nothing to
+   * abort or continue, and the staged section below already lists what was
+   * resolved, but the files still need a row each to be found and resolved.
+   */
+  variant?: "operation" | "worklist";
+  /**
+   * Worklist only: the last conflict was just resolved from this panel. There
+   * is no Continue to hand focus to, so the host names where it goes next.
+   */
+  onWorklistCleared?: () => void;
 }
 
 type ScanCache = Map<string, ConflictMarkerScanEntry>;
@@ -220,7 +234,10 @@ export function ConflictPanel({
   onCheckoutOursTheirs,
   onAbort,
   onContinue,
+  variant = "operation",
+  onWorklistCleared,
 }: ConflictPanelProps) {
+  const isWorklist = variant === "worklist";
   const [isAbortOpen, setIsAbortOpen] = useState(false);
   const [pendingCheckout, setPendingCheckout] = useState<{
     filePath: string;
@@ -288,6 +305,11 @@ export function ConflictPanel({
   useEffect(() => {
     const pending = pendingFocusRef.current;
     if (pending === undefined) return;
+    if (pending.path === null && isWorklist) {
+      pendingFocusRef.current = undefined;
+      onWorklistCleared?.();
+      return;
+    }
     const target =
       pending.path !== null
         ? rowRefs.current.get(pending.path)?.querySelector<HTMLButtonElement>("button")
@@ -306,7 +328,7 @@ export function ConflictPanel({
         target.focus({ preventScroll: true });
       }
     }, DIALOG_EXIT_SETTLE_MS);
-  }, [liveConflicts]);
+  }, [liveConflicts, isWorklist, onWorklistCleared]);
 
   useEffect(
     () => () => {
@@ -521,69 +543,71 @@ export function ConflictPanel({
         : `Continue to finish the ${operationNoun}`;
 
   return (
-    <div data-testid="conflict-panel">
+    <div data-testid={isWorklist ? "conflict-worklist" : "conflict-panel"}>
       {/* Region 1: Operation chrome. Warning-tinted only while something still
           needs the user; once nothing does, it steps down to a neutral band. */}
-      <div
-        className={cn(
-          "px-3 py-3 border-b border-divider",
-          conflictCount > 0 ? "bg-status-warning/10" : "bg-overlay-subtle"
-        )}
-      >
-        <div className="flex items-start gap-2">
-          <GitMerge
-            className={cn(
-              "w-4 h-4 mt-0.5 shrink-0",
-              conflictCount > 0 ? "text-status-warning" : "text-text-secondary"
-            )}
-            aria-hidden
-          />
-          <div className="flex-1 min-w-0">
-            <div className="flex items-baseline gap-2 flex-wrap">
-              <h3 className="text-sm font-semibold text-text-primary">
-                {conflictCount > 0
-                  ? `Resolve ${operationNoun} conflicts`
-                  : `Ready to continue ${operationNoun}`}
-              </h3>
-              {operationState === "REBASING" &&
-                status.rebaseStep != null &&
-                status.rebaseTotalSteps != null && (
-                  <Badge
-                    size="xs"
-                    tone="outline"
-                    className="text-2xs tabular-nums"
-                    data-testid="conflict-rebase-progress"
-                  >
-                    Step {status.rebaseStep} of {status.rebaseTotalSteps}
-                  </Badge>
-                )}
+      {!isWorklist && (
+        <div
+          className={cn(
+            "px-3 py-3 border-b border-divider",
+            conflictCount > 0 ? "bg-status-warning/10" : "bg-overlay-subtle"
+          )}
+        >
+          <div className="flex items-start gap-2">
+            <GitMerge
+              className={cn(
+                "w-4 h-4 mt-0.5 shrink-0",
+                conflictCount > 0 ? "text-status-warning" : "text-text-secondary"
+              )}
+              aria-hidden
+            />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <h3 className="text-sm font-semibold text-text-primary">
+                  {conflictCount > 0
+                    ? `Resolve ${operationNoun} conflicts`
+                    : `Ready to continue ${operationNoun}`}
+                </h3>
+                {operationState === "REBASING" &&
+                  status.rebaseStep != null &&
+                  status.rebaseTotalSteps != null && (
+                    <Badge
+                      size="xs"
+                      tone="outline"
+                      className="text-2xs tabular-nums"
+                      data-testid="conflict-rebase-progress"
+                    >
+                      Step {status.rebaseStep} of {status.rebaseTotalSteps}
+                    </Badge>
+                  )}
+              </div>
+              <p
+                id={summaryId}
+                className="text-xs text-text-secondary mt-0.5"
+                role="status"
+                aria-live="polite"
+              >
+                {summary}
+              </p>
             </div>
-            <p
-              id={summaryId}
-              className="text-xs text-text-secondary mt-0.5"
-              role="status"
-              aria-live="polite"
+            <Button
+              variant="ghost-danger"
+              size="xs"
+              onClick={() => setIsAbortOpen(true)}
+              disabled={isAborting || isContinuing}
+              className="shrink-0"
+              data-testid="conflict-abort"
             >
-              {summary}
-            </p>
+              Abort {operationNoun}
+            </Button>
           </div>
-          <Button
-            variant="ghost-danger"
-            size="xs"
-            onClick={() => setIsAbortOpen(true)}
-            disabled={isAborting || isContinuing}
-            className="shrink-0"
-            data-testid="conflict-abort"
-          >
-            Abort {operationNoun}
-          </Button>
         </div>
-      </div>
+      )}
 
       {/* Rebase commit sequence (merge backend only) — surfaced between the
           operation chrome and the worklist so operators see which commit
           they're inside before they touch files. */}
-      {operationState === "REBASING" && status.rebaseSequence != null && (
+      {!isWorklist && operationState === "REBASING" && status.rebaseSequence != null && (
         <RebaseSequenceRail entries={status.rebaseSequence.entries} />
       )}
 
@@ -700,7 +724,7 @@ export function ConflictPanel({
         )}
 
         {/* Resolved disclosure — recedes when conflicts remain, collapsed by default. */}
-        {hasStagedResolutions && (
+        {!isWorklist && hasStagedResolutions && (
           <div className="border-t border-divider/50">
             <button
               type="button"
@@ -761,21 +785,23 @@ export function ConflictPanel({
       </div>
 
       {/* Region 3: Continue action */}
-      <div ref={continueRef} className="p-3 border-t border-divider">
-        <Button
-          variant="default"
-          size="sm"
-          onClick={() => void handleContinue()}
-          aria-disabled={continueBlocked || undefined}
-          aria-describedby={summaryId}
-          loading={isContinuing}
-          className={cn("w-full", !isContinuing && REVIEW_HUB_DISABLED_CTA)}
-          data-testid="conflict-continue"
-        >
-          <Play aria-hidden />
-          Continue {operationNoun}
-        </Button>
-      </div>
+      {!isWorklist && (
+        <div ref={continueRef} className="p-3 border-t border-divider">
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => void handleContinue()}
+            aria-disabled={continueBlocked || undefined}
+            aria-describedby={summaryId}
+            loading={isContinuing}
+            className={cn("w-full", !isContinuing && REVIEW_HUB_DISABLED_CTA)}
+            data-testid="conflict-continue"
+          >
+            <Play aria-hidden />
+            Continue {operationNoun}
+          </Button>
+        </div>
+      )}
 
       <ConfirmDialog
         isOpen={isAbortOpen}

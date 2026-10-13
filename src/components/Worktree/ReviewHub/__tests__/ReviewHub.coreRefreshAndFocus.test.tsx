@@ -768,12 +768,13 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("package-lock.json"));
 
       const baseSpan = screen.getByTestId("file-stage-row-base");
-      // Dimming applied to the base name span.
-      expect(baseSpan.className).toMatch(/text-daintree-text\/40/);
+      // The base name steps down the ink hierarchy rather than to primary.
+      expect(baseSpan.className).toMatch(/text-text-secondary/);
+      expect(baseSpan.className).not.toMatch(/text-text-primary/);
 
-      // Stage toggle stays at full opacity — no /40 dimming applied to it.
+      // Stage toggle stays at full strength — no dimming applied to it.
       const stageBtn = screen.getByRole("button", { name: /^Stage package-lock\.json/i });
-      expect(stageBtn.className).not.toMatch(/text-daintree-text\/40/);
+      expect(stageBtn.className).not.toMatch(/opacity-60/);
     });
 
     it("does not dim hand-written source files", async () => {
@@ -790,7 +791,7 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("component.tsx"));
 
       const baseSpan = screen.getByTestId("file-stage-row-base");
-      expect(baseSpan.className).not.toMatch(/text-daintree-text\/40/);
+      expect(baseSpan.className).toMatch(/text-text-primary/);
     });
   });
 

@@ -4,7 +4,7 @@ import { Callout } from "@/components/ui/Callout";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
 import type { GitPushDestination } from "@shared/types/git";
 import { cn } from "@/lib/utils";
-import { GitCommit, ArrowUpFromLine, AlertTriangle } from "lucide-react";
+import { GitCommit, ArrowUpFromLine, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,8 +14,11 @@ import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { REVIEW_HUB_DISABLED_CTA } from "./reviewHubUtils";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
-import { RefChip } from "@/components/Git/GitOperationPreview";
+import { CommitRows, RefChip, type PreviewCommit } from "@/components/Git/GitOperationPreview";
+import { PREVIEW_COMMIT_LIMIT } from "@/components/Git/gitRemoteOperationPreview";
 import { pluralize } from "@/lib/pluralize";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { PathTail } from "@/components/ui/PathTail";
 
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
@@ -86,6 +89,17 @@ function describeBlockers({
 
 interface CommitPanelProps {
   stagedCount: number;
+  /**
+   * The staged paths themselves. The push confirm is a D2 preview, and a count
+   * alone is not one: it lists what the commit about to be pushed contains.
+   */
+  stagedPaths?: readonly string[];
+  /**
+   * Commits already on this branch and not on the remote. Commit & push
+   * publishes them too, so the confirm says so rather than implying the new
+   * commit is the whole push. `null` when the divergence isn't known.
+   */
+  unpushedCount?: number | null;
   isDetachedHead: boolean;
   hasConflicts: boolean;
   hasRemote: boolean;
@@ -120,6 +134,8 @@ interface CommitPanelProps {
 
 export function CommitPanel({
   stagedCount,
+  stagedPaths = [],
+  unpushedCount = null,
   isDetachedHead,
   hasConflicts,
   hasRemote,
@@ -149,6 +165,46 @@ export function CommitPanel({
     ? `${pushDestination.remote}/${pushDestination.branch}`
     : null;
   const [dontAskChecked, setDontAskChecked] = useState(false);
+  // The commits already on this branch that the push will publish alongside
+  // the new one, read for the open confirm from the same range main measures
+  // for every other push preview. `null` while the read is in flight; a failed
+  // read says so (with Retry) rather than falling silent about the range.
+  const [outgoing, setOutgoing] = useState<
+    { status: "ready"; commits: PreviewCommit[]; total: number } | { status: "error" } | null
+  >(null);
+  const [outgoingAttempt, setOutgoingAttempt] = useState(0);
+  useEffect(() => {
+    if (!pushConfirmOpen || !currentBranch || pushDestination === null) return;
+    let cancelled = false;
+    // Inside the chain so a failure to even start the read lands in `catch`.
+    Promise.resolve()
+      .then(() =>
+        window.electron.git.listPushCommits(worktreePath, currentBranch, PREVIEW_COMMIT_LIMIT)
+      )
+      .then((preview) => {
+        if (cancelled) return;
+        setOutgoing({
+          status: "ready",
+          commits: preview.commits.map((c) => ({
+            hash: c.hash,
+            message: c.message,
+            author: c.author,
+          })),
+          total: preview.total,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setOutgoing({ status: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pushConfirmOpen, worktreePath, currentBranch, pushDestination, outgoingAttempt]);
+
+  // Doherty-gated: a range read that lands within 400ms shows no interim line.
+  const showOutgoingChecking = useDohertyGate(
+    pushConfirmOpen && pushDestination !== null && outgoing === null
+  );
 
   const isProtected = isProtectedBranch(currentBranch?.toLowerCase());
 
@@ -326,12 +382,14 @@ export function CommitPanel({
     onSetSkipPushConfirm(dontAskChecked);
     setPushConfirmOpen(false);
     setDontAskChecked(false);
+    setOutgoing(null);
     void handleCommitAndPush();
   }, [dontAskChecked, onSetSkipPushConfirm, handleCommitAndPush]);
 
   const handleClosePushConfirm = useCallback(() => {
     setPushConfirmOpen(false);
     setDontAskChecked(false);
+    setOutgoing(null);
   }, []);
 
   const progressEntries = [...pushProgress.values()];
@@ -485,13 +543,18 @@ export function CommitPanel({
   } else if (isVerifying) {
     statusContent = "Checking staged changes…";
   } else if (hasRemote) {
+    // A push with nowhere to go will be refused, so it carries the warning mark
+    // the other blockers on this line do.
+    if (!destinationLabel) statusTone = "warning";
     statusContent = destinationLabel ? (
       <>
         {stagedSummary} · pushes to{" "}
         <span className="font-mono text-text-primary">{destinationLabel}</span>
       </>
     ) : (
-      `${stagedSummary} · no push destination set`
+      // Names the fix, in the same words as the commit history dropdown's push
+      // footer, which describes this exact situation.
+      `${stagedSummary} · no push destination · set an upstream to push`
     );
     statusTitle = destinationLabel ? `${stagedSummary} · pushes to ${destinationLabel}` : undefined;
   } else {
@@ -662,10 +725,10 @@ export function CommitPanel({
           isProtected ? (
             <span>
               <span className="font-mono">{currentBranch ?? ""}</span> is a protected branch. Most
-              teams use pull requests instead. Review your commit message before pushing:
+              teams use pull requests instead. Review the commit before pushing:
             </span>
           ) : (
-            <span>Review your commit message before pushing:</span>
+            <span>Review the commit before pushing:</span>
           )
         }
         confirmLabel={`Push to ${destinationLabel ?? currentBranch ?? "branch"}`}
@@ -698,6 +761,89 @@ export function CommitPanel({
           >
             {commitMessage}
           </pre>
+          {stagedPaths.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <p className="text-xs text-text-secondary">
+                {pluralize(stagedPaths.length, "file")} in this commit
+              </p>
+              {/* Focusable because it scrolls and holds nothing else that can
+                  take focus (WCAG 2.1.1). */}
+              <ul
+                tabIndex={0}
+                aria-label="Files in this commit"
+                data-testid="commit-panel-push-confirm-files"
+                className={cn(
+                  "max-h-28 overflow-y-auto rounded-[var(--radius-md)] border border-divider",
+                  "bg-surface-inset px-3 py-2 text-xs font-mono text-text-primary",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                )}
+              >
+                {stagedPaths.map((path) => {
+                  // The directory gives way first, as in the file rows: the
+                  // name is what identifies the file, so it never clips.
+                  const slash = path.lastIndexOf("/");
+                  const dir = slash === -1 ? "" : path.slice(0, slash + 1);
+                  const base = slash === -1 ? path : path.slice(slash + 1);
+                  return (
+                    <li key={path} className="flex min-w-0" title={path}>
+                      {dir && <PathTail className="min-w-0 text-text-secondary">{dir}</PathTail>}
+                      <span className="shrink-0 max-w-full truncate">{base}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+          {outgoing?.status === "ready" ? (
+            outgoing.total > 0 && (
+              <div className="flex flex-col gap-1" data-testid="commit-panel-push-confirm-unpushed">
+                <p className="text-xs text-text-secondary">
+                  Also pushes {pluralize(outgoing.total, "earlier commit")} that{" "}
+                  {outgoing.total === 1 ? "isn't" : "aren't"} on the remote yet
+                </p>
+                <div className="overflow-hidden rounded-[var(--radius-md)] border border-divider bg-surface-inset text-xs">
+                  <CommitRows
+                    commits={outgoing.commits}
+                    total={outgoing.total}
+                    label="Earlier commits in this push"
+                    compact
+                  />
+                </div>
+              </div>
+            )
+          ) : outgoing?.status === "error" ? (
+            <Callout severity="warning" data-testid="commit-panel-push-confirm-unpushed-error">
+              <p>
+                Couldn&apos;t list the earlier commits this push includes
+                {unpushedCount !== null && unpushedCount > 0
+                  ? ` (${pluralize(unpushedCount, "commit")} not on the remote)`
+                  : ""}
+                .
+              </p>
+              <Button
+                variant="outline"
+                size="xs"
+                className="mt-1.5"
+                onClick={() => {
+                  setOutgoing(null);
+                  setOutgoingAttempt((n) => n + 1);
+                }}
+              >
+                <RefreshCw aria-hidden="true" />
+                Retry
+              </Button>
+            </Callout>
+          ) : (
+            showOutgoingChecking && (
+              <p
+                role="status"
+                className="text-xs text-text-secondary"
+                data-testid="commit-panel-push-confirm-unpushed-loading"
+              >
+                Checking for earlier commits in this push…
+              </p>
+            )
+          )}
           <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
             <Checkbox
               data-testid="commit-panel-push-confirm-dont-ask"

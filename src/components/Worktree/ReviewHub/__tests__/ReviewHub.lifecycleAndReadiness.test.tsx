@@ -245,6 +245,21 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    "aria-label": ariaLabel,
+  }: {
+    children: ReactNode;
+    onSelect?: () => void;
+    destructive?: boolean;
+    "aria-label"?: string;
+  }) => (
+    <div role="menuitem" tabIndex={-1} aria-label={ariaLabel} onClick={() => onSelect?.()}>
+      {children}
+    </div>
+  ),
+  DropdownMenuMeta: ({ children }: { children: ReactNode }) => <span>{children}</span>,
 }));
 
 vi.mock("@/components/ui/EmptyState", () => ({

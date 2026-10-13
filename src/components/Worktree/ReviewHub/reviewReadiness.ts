@@ -369,9 +369,11 @@ export function deriveReviewReadiness(input: ReviewReadinessInput): ReviewReadin
     status.staged.length > 0 && !status.isDetachedHead && conflictCount === 0 && !isOperationState;
 
   // behindCount must affirmatively be 0 — an unknown divergence state must
-  // never read as pushable.
+  // never read as pushable. Nor can a branch with no push destination: the
+  // push handler refuses it, so offering Push would only lead to that refusal.
   const pushReady =
     status.hasRemote &&
+    status.pushDestination !== null &&
     blockers.length === 0 &&
     aheadCount !== null &&
     aheadCount > 0 &&

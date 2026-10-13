@@ -203,7 +203,7 @@ describe("CommitPanel — push confirm", () => {
     fireEvent.click(screen.getByRole("button", { name: /Commit & push/ }));
     const description = screen.getByTestId("confirm-description");
     expect(description.textContent).not.toContain("protected branch");
-    expect(description.textContent).toContain("Review your commit message");
+    expect(description.textContent).toContain("Review the commit before pushing");
   });
 
   it("when skipPushConfirm is true, pushes directly without opening the dialog", () => {
