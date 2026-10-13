@@ -29,6 +29,10 @@ describe("metadataFilename", () => {
     expect(metadataFilename("rc", "-linux")).toBe("rc-linux.yml");
   });
 
+  it("constructs Linux arm64 filename", () => {
+    expect(metadataFilename("latest", "-linux-arm64")).toBe("latest-linux-arm64.yml");
+  });
+
   it("constructs Windows filename (empty suffix)", () => {
     expect(metadataFilename("beta", "")).toBe("beta.yml");
   });
@@ -41,6 +45,10 @@ describe("validateMetadataSuffix", () => {
 
   it("accepts -linux", () => {
     expect(validateMetadataSuffix("-linux").ok).toBe(true);
+  });
+
+  it("accepts -linux-arm64", () => {
+    expect(validateMetadataSuffix("-linux-arm64").ok).toBe(true);
   });
 
   it("accepts empty string (Windows)", () => {

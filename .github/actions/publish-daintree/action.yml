@@ -9,11 +9,11 @@ inputs:
     description: Space-separated glob patterns for binary R2 upload (e.g. "*.dmg *.zip *.blockmap")
     required: true
   metadata_suffix:
-    description: YAML metadata filename fragment (e.g. "-mac", "-linux", or "" for Windows)
+    description: YAML metadata filename fragment (e.g. "-mac", "-linux", "-linux-arm64", or "" for Windows)
     required: false
     default: ""
   release_platforms:
-    description: Comma-separated platform list for check-version-monotonic.mjs (e.g. "mac", "linux", "win")
+    description: Comma-separated platform list for check-version-monotonic.mjs (e.g. "mac", "linux", "linux-arm64", "win")
     required: true
   node_version:
     description: Node.js version

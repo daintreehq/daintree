@@ -197,17 +197,19 @@ describe("verifyWithRetries", () => {
 });
 
 describe("findMetadataFiles", () => {
-  it("returns mac, linux, and Windows (no-suffix) files when all present, ignoring other artifacts", async () => {
+  it("returns mac, linux, linux-arm64, and Windows (no-suffix) files when all present, ignoring other artifacts", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "verify-r2-test-"));
     try {
       await writeFile(path.join(dir, "latest-mac.yml"), "x: 1");
       await writeFile(path.join(dir, "latest-linux.yml"), "x: 1");
+      await writeFile(path.join(dir, "latest-linux-arm64.yml"), "x: 1");
       // electron-updater on Windows polls `<prefix>.yml` (no platform suffix).
       await writeFile(path.join(dir, "latest.yml"), "x: 1");
       await writeFile(path.join(dir, "Daintree-1.0.0.zip"), "binary");
 
       const result = await findMetadataFiles(dir, "latest");
       expect(result.map((p) => path.basename(p)).sort()).toEqual([
+        "latest-linux-arm64.yml",
         "latest-linux.yml",
         "latest-mac.yml",
         "latest.yml",
@@ -231,6 +233,19 @@ describe("findMetadataFiles", () => {
         "rc-mac.yml",
         "rc.yml",
       ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finds an arm64-only Linux release dir", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "verify-r2-test-"));
+    try {
+      await writeFile(path.join(dir, "rc-linux-arm64.yml"), "x: 1");
+      await writeFile(path.join(dir, "Daintree-1.0.0-arm64.AppImage"), "binary");
+
+      const result = await findMetadataFiles(dir, "rc");
+      expect(result.map((p) => path.basename(p))).toEqual(["rc-linux-arm64.yml"]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

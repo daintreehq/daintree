@@ -1,8 +1,11 @@
 name: Release (Linux)
 
 # Per-OS release workflow (#8052) — see release-macos.yml for the rationale.
-# Linux owns `*.AppImage`, `*.deb`, and `latest-linux.yml` on R2; nothing it
-# uploads can touch macOS or Windows metadata.
+# Linux owns `*.AppImage`, `*.deb`, `latest-linux.yml` and
+# `latest-linux-arm64.yml` on R2; nothing it uploads can touch macOS or Windows
+# metadata. x64 and arm64 build on their own native runners and publish to
+# separate feeds: electron-updater on arm64 polls `-linux-arm64`, so neither
+# arch can ever be offered the other's image.
 
 on:
   push:
@@ -105,9 +108,21 @@ jobs:
 
   build-daintree:
     needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
-    name: Build Daintree (Linux)
-    runs-on: ubuntu-22.04
+    name: Build Daintree (Linux ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both stay on 22.04: native modules link against the build host's
+          # glibc, and the .deb declares `libc6 (>= 2.34)`.
+          - arch: x64
+            runner: ubuntu-22.04
+            metadata_suffix: "-linux"
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+            metadata_suffix: "-linux-arm64"
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -161,17 +176,20 @@ jobs:
             echo "::warning::Dry run — skipping publish to electron-builder targets"
             PUBLISH_FLAG="never"
           fi
-          npx electron-builder --config electron-builder.config.cjs --publish "$PUBLISH_FLAG"
+          npx electron-builder --config electron-builder.config.cjs --linux --${{ matrix.arch }} --publish "$PUBLISH_FLAG"
 
       - name: Validate update metadata (Linux)
         shell: bash
+        env:
+          METADATA_SUFFIX: ${{ matrix.metadata_suffix }}
         run: |
-          node scripts/ci/generate-update-metadata.mjs linux "release/${UPDATE_METADATA_PREFIX}-linux.yml"
-          if [ ! -f "release/${UPDATE_METADATA_PREFIX}-linux.yml" ]; then
-            echo "::error::Missing release/${UPDATE_METADATA_PREFIX}-linux.yml - Linux auto-update metadata was not generated"
+          METADATA_FILE="release/${UPDATE_METADATA_PREFIX}${METADATA_SUFFIX}.yml"
+          node scripts/ci/generate-update-metadata.mjs linux "$METADATA_FILE"
+          if [ ! -f "$METADATA_FILE" ]; then
+            echo "::error::Missing $METADATA_FILE - Linux ${{ matrix.arch }} auto-update metadata was not generated"
             exit 1
           fi
-          node scripts/ci/validate-update-metadata.mjs "release/${UPDATE_METADATA_PREFIX}-linux.yml"
+          node scripts/ci/validate-update-metadata.mjs "$METADATA_FILE"
 
       - name: Install Linux runtime dependencies (packaged smoke)
         run: |
@@ -214,7 +232,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: release-daintree-ubuntu-22.04
+          name: release-daintree-linux-${{ matrix.arch }}
           path: |
             release/*.AppImage
             release/*.deb
@@ -230,9 +248,17 @@ jobs:
   # missing for the build's arch) fails the release instead of shipping.
   smoke-packaged:
     needs: [build-daintree]
-    name: Smoke (packaged AppImage)
-    runs-on: ubuntu-22.04
+    name: Smoke (packaged AppImage ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -262,7 +288,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v7
         with:
-          name: release-daintree-ubuntu-22.04
+          name: release-daintree-linux-${{ matrix.arch }}
           path: ${{ runner.temp }}/release-artifact
 
       - name: Extract AppImage
@@ -312,13 +338,30 @@ jobs:
           clean: true
           fetch-depth: 1
 
-      - name: Publish Daintree (Linux)
+      # One feed per arch, published in sequence. Each run of the action
+      # re-checks-out with `clean: true`, so the second download starts from an
+      # empty release/ and the monotonic gate skips per feed — a rerun after an
+      # interrupted publish completes whichever feed is still behind.
+      - name: Publish Daintree (Linux x64)
         uses: ./.github/actions/publish-daintree
         with:
-          artifact_name: release-daintree-ubuntu-22.04
+          artifact_name: release-daintree-linux-x64
           include_globs: "*.AppImage *.deb *.blockmap"
           metadata_suffix: "-linux"
           release_platforms: linux
+          r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2_endpoint: ${{ secrets.R2_ENDPOINT }}
+          r2_bucket: ${{ secrets.DAINTREE_R2_BUCKET }}
+          website_webhook_secret: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}
+
+      - name: Publish Daintree (Linux arm64)
+        uses: ./.github/actions/publish-daintree
+        with:
+          artifact_name: release-daintree-linux-arm64
+          include_globs: "*.AppImage *.deb *.blockmap"
+          metadata_suffix: "-linux-arm64"
+          release_platforms: linux-arm64
           r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
           r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           r2_endpoint: ${{ secrets.R2_ENDPOINT }}

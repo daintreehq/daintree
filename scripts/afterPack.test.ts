@@ -531,7 +531,7 @@ describe("afterPack", () => {
     const unlinked = () => mockUnlinkSync.mock.calls.map((c) => String(c[0]));
 
     // Every single-arch target the build actually ships (electron-builder.config.cjs:
-    // mac dmg/zip x64 + arm64, win nsis x64 + arm64, linux x64). appx x64 shares
+    // mac dmg/zip x64 + arm64, win nsis x64 + arm64, linux x64 + arm64). appx x64 shares
     // the nsis x64 pack — app-builder-lib packs once per arch, then builds both
     // distributables from that tree — so it needs no row of its own.
     it.each([
@@ -540,6 +540,7 @@ describe("afterPack", () => {
       ["win32", "/build/win", Arch.x64, "win32-x64.node", "win32-arm64.node"],
       ["win32", "/build/win-arm64", Arch.arm64, "win32-arm64.node", "win32-x64.node"],
       ["linux", "/build/linux", Arch.x64, "linux-x64.node", "linux-arm64.node"],
+      ["linux", "/build/linux-arm64-unpacked", Arch.arm64, "linux-arm64.node", "linux-x64.node"],
     ] as const)(
       "removes the other CPU arch's prebuild from a standalone %s package at %s",
       async (platform, outDir, arch, keep, drop) => {
