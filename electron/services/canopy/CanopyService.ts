@@ -393,6 +393,13 @@ interface RunEntry {
    * while nothing has qualified this turn.
    */
   refinement: { turn: number; value: RunCanopyRefinement } | null;
+  /**
+   * What the classifier's newest reading quoted that is really on the screen
+   * it read, and the turn that reading speaks for; null before a reading, or
+   * once the screen it was of has gone. A failed read leaves it as it was, so
+   * the turn tells a reading of this stop from one of the stop before.
+   */
+  evidence: { turn: number; question: string | null; status: string | null } | null;
 }
 
 /**
@@ -580,6 +587,7 @@ export class CanopyService {
         entry.cardStreams = false;
         entry.rereadOf = null;
         entry.refinement = null;
+        entry.evidence = null;
         // No view tells main a look ended once reading stops, so the looks go
         // now: one left to its lease would read the next turn after reading
         // comes back on.
@@ -1609,6 +1617,12 @@ export class CanopyService {
             ) {
               this.scheduleBroadcast();
             }
+            // Deliberately a reading of this stop: the same screen, read moments
+            // before Daintree saw the agent settle on it, is what the stop shows.
+            if (entry.evidence !== null && entry.evidence.turn !== entry.reads.turn) {
+              entry.evidence = { ...entry.evidence, turn: entry.reads.turn };
+              this.scheduleBroadcast();
+            }
             this.refreshActivity(entry, screen, run);
             this.announce(run.runId, entry);
             return;
@@ -2007,6 +2021,12 @@ export class CanopyService {
       observedWhenRead,
     };
     entry.classified = classified;
+    // Quoted only as far as the screen bears it out: a paraphrase is not evidence.
+    entry.evidence = {
+      turn: entry.reads.turn,
+      question: onScreen(classified.question, screen.text),
+      status: onScreen(classified.status, screen.text),
+    };
     const kind = blockedOn(classified, run);
     entry.ask = kind === null ? null : { kind, question: classified.question };
     this.announce(run.runId, entry);
@@ -2325,6 +2345,7 @@ export class CanopyService {
     // The prompt is gone with the screen: whatever it asks next is a new ask.
     entry.ask = null;
     entry.classified = null;
+    entry.evidence = null;
     entry.asking = false;
     // What the screen said at a glance went with it.
     entry.glance = null;
@@ -2572,13 +2593,13 @@ export class CanopyService {
         const turn = entry.reads.turn;
         const held = entry.refinement;
         // A stall is an observation of a still screen: once it moves, there is
-        // nothing left to quote, whatever turn it is.
-        const stallEnded =
-          held !== null &&
-          held.value.kind === "stalled" &&
-          (entry.card?.stalledSince ?? null) === null;
+        // nothing left to quote, whatever turn it is. Checked live rather than
+        // off the card, which keeps the stall it last showed through a cleared
+        // screen or a read still under way.
+        const stalledSince = this.stalledSince(run, entry);
+        const stallEnded = held !== null && held.value.kind === "stalled" && stalledSince === null;
         if (held === null || held.turn !== turn || stallEnded) {
-          const value = refinementOf(entry, run, this.now());
+          const value = refinementOf(entry, run, stalledSince, this.now());
           entry.refinement = value === null ? null : { turn, value };
         }
       }
@@ -2674,6 +2695,7 @@ function newEntry(spawnedAt: number): RunEntry {
     reads: newReadTrack(),
     rereadOf: null,
     refinement: null,
+    evidence: null,
   };
 }
 
@@ -2815,21 +2837,28 @@ function observedKey(run: FleetRunRow): string {
 /** An `observedKey` taken while the run was at work. */
 const BUSY_READ_STATE = /^(working|directing):/;
 
-function refinementOf(entry: RunEntry, run: FleetRunRow, now: number): RunCanopyRefinement | null {
+function refinementOf(
+  entry: RunEntry,
+  run: FleetRunRow,
+  stalledSince: number | null,
+  now: number
+): RunCanopyRefinement | null {
   if (run.agentState === undefined) return null;
   if (isBusy(run)) {
-    const stalledSince = entry.card?.stalledSince ?? null;
     const quote = (entry.card?.activity ?? entry.card?.glance.doing ?? "").trim();
     if (stalledSince === null || !quote) return null;
     return { kind: "stalled", quote, readAt: now, stalledSince };
   }
   const classified = entry.classified;
-  // A pass for a newer screen is under way: what is held is about the old one.
-  if (classified === null || entry.pending || classified.confidence < ASK_CONFIDENCE) return null;
+  const evidence = entry.evidence;
+  // Only a reading made for this turn speaks for it: one kept through a failed
+  // read is about the stop before, and a pass under way is about a newer screen.
+  if (classified === null || evidence === null || evidence.turn !== entry.reads.turn) return null;
+  if (entry.pending || classified.confidence < ASK_CONFIDENCE) return null;
   if (isHandBackStop(run.agentState, run.waitingReason)) {
     // Read while stopped: a reading of the run at work says nothing of what it stopped on.
     if (classified.category !== "question" || BUSY_READ_STATE.test(entry.readState)) return null;
-    const quote = classified.question?.trim();
+    const quote = evidence.question?.trim();
     return quote ? { kind: "asked", quote, readAt: entry.readAt } : null;
   }
   if (run.agentState === "waiting" && run.waitingReason === "question") {
@@ -2837,7 +2866,7 @@ function refinementOf(entry: RunEntry, run: FleetRunRow, now: number): RunCanopy
     if (entry.readState !== observedKey(run)) return null;
     if (classified.category !== "finished" && classified.category !== "idle") return null;
     if (classified.question !== null && classified.question.trim() !== "") return null;
-    const quote = (classified.status ?? entry.card?.activity ?? "").trim();
+    const quote = (evidence.status ?? entry.card?.activity ?? "").trim();
     return quote ? { kind: "not-asking", quote, readAt: entry.readAt } : null;
   }
   return null;

@@ -1761,9 +1761,10 @@ describe("buildPilotGroups — Canopy attribution", () => {
     );
     const row = group!.rows[0]!;
     expect(row.band).toBe("needs-you");
-    expect(row.canopyEvidence).toBe(
-      'Asked: "Should I also migrate the tests?" · read by Canopy 2m ago'
-    );
+    expect(row.canopyEvidence).toEqual({
+      claim: 'Asked: "Should I also migrate the tests?"',
+      attribution: "read by Canopy 2m ago",
+    });
   });
 
   it("carries no attribution where the free rules placed the row, or the user shelved it", () => {

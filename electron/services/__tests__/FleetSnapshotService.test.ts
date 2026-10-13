@@ -767,6 +767,32 @@ describe("FleetSnapshotService", () => {
     }
   });
 
+  it("withdraws Canopy's refinements from a degraded fleet without waiting for the host", async () => {
+    const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
+    const refinement = { kind: "asked", quote: "Ship it?", readAt: NOW } as const;
+    setCanopyRefinementSource(() => refinement);
+    const service = new FleetSnapshotService(client as never);
+    try {
+      service.start();
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
+
+      client.setFleet([], true);
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().degraded).toBe(true);
+
+      setCanopyRefinementSource(null);
+      expect(lastSnapshot()).toMatchObject({ degraded: true });
+      expect(lastSnapshot().runs[0].canopy).toBeUndefined();
+      expect(lastSnapshot().runs[0].runId).toBe("t1");
+    } finally {
+      setCanopyRefinementSource(null);
+      service.stop();
+    }
+  });
+
   it("never prunes hand-backs from a degraded read", async () => {
     const client = makePtyClient([terminal()]);
     const retain = vi.fn();

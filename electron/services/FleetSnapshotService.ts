@@ -121,7 +121,7 @@ export class FleetSnapshotService {
     subscribe("terminal:worktree-changed");
     // A refinement is a decoration, like a park: nothing on the host moved, so
     // the recompute reuses its inventory rather than asking it again.
-    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.debouncedCompute()));
+    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.onCanopyChanged()));
   }
 
   updatePollInterval(ms: number): void {
@@ -445,6 +445,26 @@ export class FleetSnapshotService {
    * snapshot the runs are empty AND `lastSuccessfulAt` is null, which is the
    * renderer's cue to say it cannot tell rather than to render an empty fleet.
    */
+  /**
+   * Canopy's refinements moved. A degraded fleet keeps its last good rows, and
+   * those must not keep a reading Canopy has since withdrawn — turned off, or
+   * the tier lapsed — until the host recovers: the retained rows are decorated
+   * afresh and sent, still marked degraded.
+   */
+  private onCanopyChanged(): void {
+    const previous = this.lastBroadcast;
+    if (previous?.degraded === true) {
+      const runs = previous.runs.map((run) => {
+        const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
+        const rest = { ...run };
+        delete rest.canopy;
+        return canopy === undefined ? rest : { ...rest, canopy };
+      });
+      if (!this.runsEqual(runs, previous.runs)) this.publish({ ...previous, runs });
+    }
+    this.debouncedCompute();
+  }
+
   private publishDegraded(): void {
     const previous = this.lastBroadcast;
     if (previous?.degraded === true) return;

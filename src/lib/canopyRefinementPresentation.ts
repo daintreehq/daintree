@@ -12,6 +12,14 @@ const EVIDENCE_LEAD: Record<RunCanopyRefinement["kind"], string> = {
   stalled: "Screen unchanged",
 };
 
+/** The two halves of a Canopy attribution: what was read, and who read it when. */
+export interface CanopyEvidenceParts {
+  /** `Asked: "…"` — the reading, in the screen's own words. */
+  claim: string;
+  /** `read by Canopy 2m ago` — kept whole wherever the claim has to be cut short. */
+  attribution: string;
+}
+
 /**
  * The attribution a row placed by Canopy carries: what was read, in the
  * screen's own words, and who read it when — `Asked: "…" · read by Canopy 2m
@@ -19,11 +27,28 @@ const EVIDENCE_LEAD: Record<RunCanopyRefinement["kind"], string> = {
  * which is the whole reason a reading may move a run at all.
  */
 export function canopyEvidence(refinement: RunCanopyRefinement, nowMs: number): string {
+  const { claim, attribution } = canopyEvidenceParts(refinement, nowMs);
+  return `${claim} · ${attribution}`;
+}
+
+/**
+ * The same attribution in halves, for a row too narrow for all of it: the quote
+ * may truncate, but "read by Canopy" must never be what the ellipsis eats —
+ * a placement nobody can tell came from a reading is an interpretation passing
+ * as an observation.
+ */
+export function canopyEvidenceParts(
+  refinement: RunCanopyRefinement,
+  nowMs: number
+): CanopyEvidenceParts {
   const quote =
     refinement.quote.length > MAX_QUOTE_LENGTH
       ? `${refinement.quote.slice(0, MAX_QUOTE_LENGTH - 1).trimEnd()}…`
       : refinement.quote;
-  return `${EVIDENCE_LEAD[refinement.kind]}: "${quote}" · read by Canopy ${formatTimeAgo(refinement.readAt, nowMs)}`;
+  return {
+    claim: `${EVIDENCE_LEAD[refinement.kind]}: "${quote}"`,
+    attribution: `read by Canopy ${formatTimeAgo(refinement.readAt, nowMs)}`,
+  };
 }
 
 const indexCache = new WeakMap<FleetSnapshot, Map<string, RunCanopyRefinement>>();

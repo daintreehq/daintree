@@ -19,7 +19,7 @@ import { isFilterMatch } from "@/lib/projectSwitcherSearch";
 import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { worktreeLabels } from "@/lib/worktreeLabels";
-import { canopyEvidence } from "@/lib/canopyRefinementPresentation";
+import { canopyEvidenceParts, type CanopyEvidenceParts } from "@/lib/canopyRefinementPresentation";
 
 export interface PilotRow {
   run: FleetRunRow;
@@ -90,7 +90,7 @@ export interface PilotRow {
    * the free rules alone placed it. A reading is a suggestion, so a row it
    * moved has to say so and show the words it moved on.
    */
-  canopyEvidence: string | null;
+  canopyEvidence: CanopyEvidenceParts | null;
   /**
    * How long the run has been WORKING, on a row whose clock is measuring
    * something else. Only a quiet row has one, and it exists purely for the
@@ -378,10 +378,14 @@ function openedAt(value: number | undefined): number {
  * The attribution for a row Canopy placed. A park or snooze outranks the
  * reading, and a row the user shelved must not claim a reading moved it.
  */
-function canopyEvidenceFor(run: FleetRunRow, band: FleetBand, nowMs: number): string | null {
+function canopyEvidenceFor(
+  run: FleetRunRow,
+  band: FleetBand,
+  nowMs: number
+): CanopyEvidenceParts | null {
   if (band === "parked" || band === "snoozed") return null;
   const placement = runCanopyPlacement(run);
-  return placement === undefined ? null : canopyEvidence(placement, nowMs);
+  return placement === undefined ? null : canopyEvidenceParts(placement, nowMs);
 }
 
 function ageOf(

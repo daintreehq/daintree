@@ -430,3 +430,23 @@ describe("Canopy refinements", () => {
     expect(bandTimestamp(row, "quiet")).toBe(NOW - 5 * 60_000);
   });
 });
+
+describe("Canopy asks keep their age", () => {
+  it("dates an ask on a hand-back from the stop, through the slide into a prompt wait", () => {
+    const canopy = { kind: "asked", quote: "Ship it?", readAt: NOW } as const;
+    const handBack = { stoppedAt: NOW - 10 * 60_000 };
+    const completed = run({ agentState: "completed", since: NOW - 10 * 60_000, handBack, canopy });
+    const slid = run({
+      agentState: "waiting",
+      waitingReason: "prompt",
+      since: NOW,
+      handBack,
+      canopy,
+    });
+    expect(bandTimestamp(completed, "needs-you")).toBe(handBack.stoppedAt);
+    expect(bandTimestamp(slid, "needs-you")).toBe(handBack.stoppedAt);
+    // An ask Daintree observed itself keeps its own clock.
+    const observed = run({ agentState: "waiting", waitingReason: "question", since: NOW - 5_000 });
+    expect(bandTimestamp(observed, "needs-you")).toBe(NOW - 5_000);
+  });
+});

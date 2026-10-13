@@ -4685,13 +4685,19 @@ describe("CanopyService refining attention", () => {
     question: null,
     status: "All 14 tests pass.",
   };
+  /** Questions where the screen asks one, a finished turn where it doesn't. */
+  const readScreen = async (input: CanopyScreenInput): Promise<Reading> =>
+    input.screen.includes("Want me")
+      ? QUESTION_READ
+      : input.screen.includes("esc to interrupt")
+        ? { category: "working", confidence: 0.99, attention: 0.05, question: null }
+        : FINISHED_READ;
+  /** The newest snapshot sent: refinements settle just before each one. */
+  const lastSent = (h: Harness) => h.snapshots[h.snapshots.length - 1];
 
   it("reads a stop that asks something as an ask, quoted, and says so", async () => {
     const changed = vi.fn();
-    const h = await makeHarness({
-      classify: async () => QUESTION_READ,
-      onRefinementsChanged: changed,
-    });
+    const h = await makeHarness({ classify: readScreen, onRefinementsChanged: changed });
     h.runs.push(run("a", { agentState: "completed" }));
     h.screens.set("a", ASK_SCREEN);
     await h.service.refresh();
@@ -4711,9 +4717,18 @@ describe("CanopyService refining attention", () => {
     h.runs.push(run("a", { agentState: "completed" }));
     h.screens.set("a", ASK_SCREEN);
     await h.service.refresh();
-    await settle();
-    await vi.waitFor(() => expect(h.service.getSnapshot().cards[0]?.priority).toBeGreaterThan(55));
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await vi.waitFor(() => expect(lastSent(h)?.cards[0]?.priority).toBeGreaterThan(55));
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+  });
+
+  it("never quotes a question the screen doesn't show", async () => {
+    const h = await makeHarness({
+      classify: async () => ({ ...QUESTION_READ, question: "Should I drop the database?" }),
+    });
+    h.runs.push(run("a", { agentState: "completed" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() => expect(lastSent(h)?.cards[0]?.category).toBe("question"));
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
   });
 
@@ -4726,10 +4741,33 @@ describe("CanopyService refining attention", () => {
     await vi.waitFor(() => expect(h.service.getRefinement("a", 1)?.kind).toBe("asked"));
 
     reading = FINISHED_READ;
-    h.screens.set("a", `${ASK_SCREEN}\n`);
     await h.service.reread("a", 1);
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await vi.waitFor(() => expect(lastSent(h)?.cards[0]?.category).toBe("finished"));
     expect(h.service.getRefinement("a", 1)?.kind).toBe("asked");
+  });
+
+  it("reads afresh once the agent works and stops again", async () => {
+    let now = 1_000_000;
+    const h = await makeHarness({ classify: readScreen, now: () => now });
+    h.runs.push(run("a", { agentState: "completed", since: now }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() => expect(h.service.getRefinement("a", 1)?.kind).toBe("asked"));
+
+    h.runs[0] = run("a", { agentState: "working", since: now });
+    h.screens.set("a", "• Updating the tests (esc to interrupt)");
+    h.service.onFleetChanged();
+    await h.service.refresh();
+    now += CANOPY_TURN_HOLD_MS + 1_000;
+    await h.service.refresh();
+
+    h.runs[0] = run("a", { agentState: "completed", since: now });
+    h.screens.set("a", "⏺ Tests updated.");
+    h.service.onFleetChanged();
+    now += CANOPY_TURN_HOLD_MS + 1_000;
+    await h.service.refresh();
+    await vi.waitFor(() => expect(lastSent(h)?.cards[0]?.category).toBe("finished"));
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
   });
 
   it("clears a question wait the screen shows asks nothing, but never an approval", async () => {
@@ -4750,12 +4788,23 @@ describe("CanopyService refining attention", () => {
     expect(h.service.getRefinement("y", 1)).toBeUndefined();
   });
 
-  it("drops every refinement when the tier lapses or Canopy goes off, and tells the fleet", async () => {
+  it("drops a live refinement when Canopy goes off, and tells the fleet", async () => {
     const changed = vi.fn();
-    const h = await makeHarness({
-      classify: async () => QUESTION_READ,
-      onRefinementsChanged: changed,
-    });
+    const h = await makeHarness({ classify: readScreen, onRefinementsChanged: changed });
+    h.runs.push(run("a", { agentState: "completed" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() => expect(h.service.getRefinement("a", 1)).toBeDefined());
+    changed.mockClear();
+
+    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+  });
+
+  it("drops a live refinement when the tier lapses, with reading still on", async () => {
+    const changed = vi.fn();
+    const h = await makeHarness({ classify: readScreen, onRefinementsChanged: changed });
     h.runs.push(run("a", { agentState: "completed" }));
     h.screens.set("a", ASK_SCREEN);
     await h.service.refresh();
@@ -4765,27 +4814,26 @@ describe("CanopyService refining attention", () => {
     h.service.setPlan({ mode: "on", activated: true, tier: "free" });
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
     await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
-
-    h.service.setPlan({ mode: "unset", activated: false, tier: "priority" });
-    expect(h.service.getRefinement("a", 1)).toBeUndefined();
   });
 
-  it("gives way to the user archiving the run", async () => {
-    const h = await makeHarness({ classify: async () => QUESTION_READ });
+  it("gives way to the user archiving the run, and comes back with an unarchive", async () => {
+    const h = await makeHarness({ classify: readScreen });
     h.runs.push(run("a", { agentState: "completed" }));
     h.screens.set("a", ASK_SCREEN);
     await h.service.refresh();
     await vi.waitFor(() => expect(h.service.getRefinement("a", 1)).toBeDefined());
     h.service.archive("a", 1);
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
+    h.service.unarchive("a", 1);
+    expect(h.service.getRefinement("a", 1)?.kind).toBe("asked");
   });
 
   it("reads an ask with the panel closed", async () => {
     const BG = 20_000;
-    const h = await makeHarness({ backgroundPollMs: BG, classify: async () => QUESTION_READ });
+    const h = await makeHarness({ backgroundPollMs: BG, classify: readScreen });
     // The opening scan's broadcast was armed on the real clock: let it go
     // before the fake one takes over, or every later one waits behind it.
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await vi.waitFor(() => expect(h.snapshots.length).toBeGreaterThan(0));
     vi.useFakeTimers();
     try {
       h.service.setActive(false);
@@ -4806,7 +4854,7 @@ describe("CanopyService refining attention", () => {
     h.runs.push(run("a", { agentState: "working" }));
     h.screens.set("a", "• Waiting for background terminal (1m 02s • esc to interrupt)");
     await h.service.refresh();
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await vi.waitFor(() => expect(lastSent(h)?.cards).toHaveLength(1));
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
 
     now += CANOPY_STALL_MS + 1_000;

@@ -22,7 +22,7 @@ import { useRunParkState } from "@/hooks/useRunParkState";
 import { CirclePause } from "@/components/icons";
 import { useRunCanopyPlacement } from "@/hooks/useRunCanopyPlacement";
 import { useWallClock } from "@/hooks/useWallClock";
-import { canopyEvidence } from "@/lib/canopyRefinementPresentation";
+import { canopyEvidenceParts } from "@/lib/canopyRefinementPresentation";
 import type { RunCanopyRefinement } from "@shared/types/ipc/fleet";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
@@ -81,20 +81,24 @@ interface CanopyEvidenceLineProps {
  */
 function CanopyEvidenceLine({ refinement, id, pointer }: CanopyEvidenceLineProps) {
   const now = useWallClock(refinement.readAt, nextEvidenceTick);
-  const text = canopyEvidence(refinement, now);
+  const { claim, attribution } = canopyEvidenceParts(refinement, now);
   return (
     <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <span
           id={id}
           data-canopy-evidence={refinement.kind}
-          className="truncate text-2xs text-text-secondary"
+          className="flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary"
           {...pointer}
         >
-          {text}
+          {/* The quote truncates; who read it never does. */}
+          <span className="min-w-0 truncate">{claim}</span>
+          <span className="shrink-0">· {attribution}</span>
         </span>
       </TooltipTrigger>
-      <TooltipContent side="bottom">{text}</TooltipContent>
+      <TooltipContent side="bottom">
+        {claim} · {attribution}
+      </TooltipContent>
     </Tooltip>
   );
 }

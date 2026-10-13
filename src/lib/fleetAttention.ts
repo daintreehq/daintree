@@ -230,6 +230,13 @@ export function bandTimestamp(run: FleetRunRow, band: FleetBand): number | undef
     case "done":
       // Dated from the stop itself, not the slide into `waiting` after it.
       return run.handBack?.stoppedAt ?? run.since;
+    case "needs-you":
+      // An ask Canopy read on a hand-back is as old as the stop it was asked
+      // at: the slide from `completed` into a prompt wait would otherwise make
+      // an outstanding question look new and sort it under fresher demands.
+      return runCanopyPlacement(run)?.kind === "asked"
+        ? (run.handBack?.stoppedAt ?? run.since)
+        : run.since;
     default:
       return run.since;
   }
