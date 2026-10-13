@@ -200,7 +200,7 @@ describe("AgentNotificationService adversarial", () => {
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-      "Agent completed",
+      "Agent finished",
       "agent-1 finished its task",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",
@@ -213,7 +213,7 @@ describe("AgentNotificationService adversarial", () => {
     const internal = agentNotificationService as unknown as AgentNotificationServiceInternal;
     internal.notificationQueue.push(
       {
-        title: "Agent completed",
+        title: "Agent finished",
         body: "agent-1 finished its task",
         terminalId: "term-1",
         agentId: "agent-1",
@@ -222,7 +222,7 @@ describe("AgentNotificationService adversarial", () => {
         soundFile: "complete.wav",
       },
       {
-        title: "Agent completed",
+        title: "Agent finished",
         body: "agent-2 finished its task",
         terminalId: "term-2",
         agentId: "agent-2",
@@ -266,7 +266,7 @@ describe("AgentNotificationService adversarial", () => {
     vi.advanceTimersByTime(2001);
 
     expect(notificationServiceMock.showWatchNotification.mock.calls.map((call) => call[0])).toEqual(
-      ["Agent waiting", "Agent completed"]
+      ["Agent waiting", "Agent finished"]
     );
     expect(notificationServiceMock.showWatchNotification).toHaveBeenNthCalledWith(
       1,
@@ -278,7 +278,7 @@ describe("AgentNotificationService adversarial", () => {
     );
     expect(notificationServiceMock.showWatchNotification).toHaveBeenNthCalledWith(
       2,
-      "Agent completed",
+      "Agent finished",
       "agent-1 finished its task",
       expect.objectContaining({ panelId: "term-1" }),
       "notification:watch-navigate",

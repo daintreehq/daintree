@@ -69,12 +69,12 @@ describe("ProjectNotificationsTab", () => {
     // Keys the effective-settings resolver lets a project override
     // (ProjectSettingsManager.getEffectiveNotificationSettings).
     const overridable = [
-      "Agent completed",
+      "Agent finished",
       "Agent waiting for input",
       "Escalate if still waiting",
       "Escalation delay",
       "Play sound",
-      "Completed sound",
+      "Finished sound",
       "Waiting sound",
       "Escalation sound",
       "Working pulse",

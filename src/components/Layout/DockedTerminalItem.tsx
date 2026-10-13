@@ -19,6 +19,7 @@ import {
   getEffectiveStateLabel,
   SESSION_COLORS,
   SESSION_ICONS,
+  SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
 import { useSessionPresentation } from "@/hooks/useRunHandBackState";
 import { TerminalRefreshTier } from "@/types";
@@ -335,6 +336,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // The glyph is smoothed (idle/missing shows as waiting); the words are not.
   // Name and tooltip say what was observed, and nothing when nothing was.
   const observedStateLabel = agentState ? getEffectiveStateLabel(agentState) : undefined;
+  // A hand-back is named for what it is drawn as; the observation rides along.
+  const stateLabel =
+    isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
   const isDeprioritized = !isOpen && isDockAgentStateDeprioritized(agentState);
 
@@ -387,7 +391,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                   e.stopPropagation();
                   handleMoveToGrid();
                 }}
-                aria-label={`${terminal.title}${displayAgentState ? (observedStateLabel ? ` — agent ${observedStateLabel}` : "") : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
+                aria-label={`${terminal.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
                   <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
@@ -435,8 +439,10 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                       </div>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                      {observedStateLabel
-                        ? `Agent ${observedStateLabel}`
+                      {stateLabel
+                        ? isHandBack
+                          ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
+                          : `Agent ${stateLabel}`
                         : "No agent state observed"}
                     </TooltipContent>
                   </Tooltip>

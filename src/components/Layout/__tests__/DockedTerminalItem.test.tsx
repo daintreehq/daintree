@@ -96,6 +96,7 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => ({
   getEffectiveStateLabel: (state: string) => state,
   SESSION_ICONS: {},
   SESSION_COLORS: {},
+  SESSION_LABELS: {},
 }));
 
 // The hand-back join reads the fleet snapshot store; these suites draw the

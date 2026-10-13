@@ -670,7 +670,7 @@ export const SETTINGS_REGISTRY = [
       {
         id: "notifications-completed",
         section: "Agent notifications",
-        title: "Agent completed notification",
+        title: "Agent finished notification",
         description: "Send an OS notification when an agent finishes its task",
         keywords: ["notification", "alert", "complete", "done", "agent", "finish"],
       },

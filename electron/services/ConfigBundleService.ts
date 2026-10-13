@@ -147,7 +147,7 @@ const NOTIFICATION_FIELD_LABELS: Record<string, string> = {
   completedEnabled: "Completed alerts",
   waitingEnabled: "Waiting alerts",
   soundEnabled: "Sounds",
-  completedSoundFile: "Completed sound",
+  completedSoundFile: "Finished sound",
   waitingSoundFile: "Waiting sound",
   escalationSoundFile: "Escalation sound",
   waitingEscalationEnabled: "Waiting escalation",

@@ -27,7 +27,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AgentStateChip } from "@/components/Terminal/TerminalAgentIndicator";
 import { SESSION_LABELS } from "@/components/Worktree/terminalStateConfig";
 import { resolveSessionPresentation, type HandBackSeenState } from "@/lib/handBackPresentation";
-import { isHandBackUnseen } from "@shared/utils/runHandBack";
+import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { isMac } from "@/lib/platform";
@@ -490,7 +490,10 @@ export function CanopyCard({
     run.waitingReason,
     handBack
   );
-  const isHandBack = agentState !== run.agentState;
+  const isHandBack =
+    handBack !== "none" &&
+    run.agentState !== undefined &&
+    isHandBackStop(run.agentState, run.waitingReason);
   const showState =
     agentState !== undefined &&
     agentState !== "idle" &&

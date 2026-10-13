@@ -104,6 +104,7 @@ import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
 import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+import { isAskingWait } from "@/lib/handBackPresentation";
 import { SortableTabButton } from "./SortableTabButton";
 import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
 import {
@@ -927,9 +928,16 @@ function PanelHeaderComponent({
   // the same waiting mark the hidden tab would, so the strip never hides an
   // agent that needs input behind a bare chevron.
   // A hand-back is not asking for anything, so it does not mark the chevron.
-  const hiddenWaitingCount = hiddenTabs.filter(
-    (t) => t.agentState === "waiting" && !handBackRunIds.has(t.id)
-  ).length;
+  // Read off the panels themselves: an approval the renderer has just observed
+  // must count even while the fleet still holds the earlier hand-back.
+  const hiddenWaitingCount = usePanelStore((state) => {
+    let count = 0;
+    for (const tab of hiddenTabs) {
+      const panel = state.panelsById[tab.id];
+      if (panel && isPtyPanel(panel) && isAskingWait(handBackRunIds, panel)) count++;
+    }
+    return count;
+  });
   const hiddenTabsLabel =
     hiddenWaitingCount > 0
       ? `Show ${hiddenTabs.length} hidden tabs, ${hiddenWaitingCount} waiting for input`

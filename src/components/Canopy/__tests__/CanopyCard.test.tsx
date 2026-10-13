@@ -606,4 +606,42 @@ describe("CanopyCard", () => {
     rerender(<CanopyCard item={itemFor("idle", { revision: 2 })} {...PROPS} {...h} />);
     expect(container.querySelector("button[data-armed]")).toBeNull();
   });
+  describe("the pane's state chip", () => {
+    function withRun(overrides: Partial<FleetRunRow>): CanopyItem {
+      const base = itemFor("finished");
+      return { ...base, row: { ...base.row, run: { ...base.row.run, ...overrides } } };
+    }
+    const chip = (container: HTMLElement) =>
+      container.querySelector('[role="status"][aria-label^="Agent state"]');
+
+    it("draws a hand-back as unread, then as finished once read, from a prompt or a completion", () => {
+      for (const agentState of ["waiting", "completed"] as const) {
+        const unread = renderCard(withRun({ agentState, handBack: { stoppedAt: NOW - 1 } }));
+        expect(chip(unread.container)?.getAttribute("aria-label")).toBe("Agent state: unread");
+        unread.unmount();
+
+        const read = renderCard(
+          withRun({ agentState, handBack: { stoppedAt: NOW - 2, seenAt: NOW - 1 } })
+        );
+        expect(chip(read.container)?.getAttribute("aria-label")).toBe("Agent state: finished");
+        read.unmount();
+      }
+    });
+
+    it("keeps an approval wait on the waiting chip whatever the hand-back says", () => {
+      const { container } = renderCard(
+        withRun({
+          agentState: "waiting",
+          waitingReason: "approval",
+          handBack: { stoppedAt: NOW - 2, seenAt: NOW - 1 },
+        })
+      );
+      expect(chip(container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
+    });
+
+    it("draws nothing for a completion with no hand-back", () => {
+      const { container } = renderCard(withRun({ agentState: "completed" }));
+      expect(chip(container)).toBeNull();
+    });
+  });
 });

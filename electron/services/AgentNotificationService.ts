@@ -679,7 +679,7 @@ class AgentNotificationService {
       if (settings.enabled === false || !settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
       this.completionBurstBuffer.push({
-        title: "Agent completed",
+        title: "Agent finished",
         body: `${label} finished its task`,
         worktreeId,
         terminalId,
