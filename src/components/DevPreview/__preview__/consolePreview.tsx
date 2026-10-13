@@ -47,12 +47,13 @@ function seedRows(): void {
       ...row,
       id: i + 1,
       paneId: CONSOLE_PANE_ID,
-      groupDepth: 0,
+      groupDepth: row.groupDepth ?? 0,
       navigationGeneration: 0,
       timestamp: base + i * 1_437,
     });
   });
   flushConsoleCaptureBuffer();
+  if (fixture.stale) useConsoleCaptureStore.getState().markStale(CONSOLE_PANE_ID, 1);
 }
 
 function App() {

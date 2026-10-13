@@ -78,7 +78,10 @@ const LONG_URL_FRAMES: CdpStackFrame[] = [
   frame("invokeGuardedCallbackImpl", dep("chunk-RPCDYKBN.js"), 3699, 24),
 ];
 
-type Row = Omit<SerializedConsoleRow, "id" | "paneId" | "navigationGeneration" | "groupDepth">;
+type Row = Omit<SerializedConsoleRow, "id" | "paneId" | "navigationGeneration" | "groupDepth"> & {
+  /** Nesting under `console.group`, as the main-process mapper assigns it. */
+  groupDepth?: number;
+};
 
 const str = (value: string) => ({ type: "primitive" as const, kind: "string" as const, value });
 
@@ -179,6 +182,26 @@ const ROW_LONG = uncaught(
   LONG_URL_FRAMES
 );
 
+const at = (row: Row, groupDepth: number): Row => ({ ...row, groupDepth });
+const header = (label: string, collapsed: boolean, groupDepth = 0): Row => ({
+  level: "log",
+  cdpType: collapsed ? "startGroupCollapsed" : "startGroup",
+  args: [str(label)],
+  summaryText: label,
+  timestamp: 0,
+  groupDepth,
+});
+const GROUPS: Row[] = [
+  ROW_BOOT,
+  header("Checkout", false),
+  at(ROW_LOG, 1),
+  at(ROW_WARN, 1),
+  header("Shipping rates", true, 1),
+  at(ROW_FETCH, 2),
+  at(ROW_OBJECT_WARN, 1),
+  ROW_NETWORK,
+];
+
 export interface ConsoleStackFixture {
   /** Drawer width in CSS px. A docked or split pane runs anywhere from ~420 to ~1200. */
   width: number;
@@ -190,7 +213,18 @@ export interface ConsoleStackFixture {
    */
   expand?: number[];
   /** A pointer or keyboard drive the spec performs after expansion. */
-  drive?: "keyboard-focus" | "hover-toggle" | "row-focus" | "object-open";
+  drive?:
+    | "keyboard-focus"
+    | "hover-toggle"
+    | "row-focus"
+    | "object-open"
+    | "filter-errors"
+    | "search-hit"
+    | "search-miss";
+  /** Rows on screen once the drive has run, when filters or groups hide some. */
+  visible?: number;
+  /** The page navigated after these rows arrived, so object handles are gone. */
+  stale?: boolean;
 }
 
 const SESSION: Row[] = [ROW_BOOT, ROW_LOG, ROW_WARN, ROW_FETCH, ROW_NETWORK, ROW_UNCAUGHT];
@@ -214,6 +248,19 @@ export const CONSOLE_FIXTURES = {
   },
   "row-focus": { width: 460, height: 360, rows: [ROW_LOG, ROW_LONG], drive: "row-focus" },
   "hover-toggle": { width: 900, height: 360, rows: SESSION, drive: "hover-toggle" },
+  groups: { width: 900, height: 400, rows: GROUPS, visible: 7 },
+  empty: { width: 900, height: 240, rows: [] },
+  "filter-errors": {
+    width: 900,
+    height: 300,
+    rows: SESSION,
+    drive: "filter-errors",
+    visible: 3,
+  },
+  "search-hit": { width: 900, height: 300, rows: SESSION, drive: "search-hit", visible: 2 },
+  "search-miss": { width: 900, height: 240, rows: SESSION, drive: "search-miss", visible: 0 },
+  "stale-object": { width: 900, height: 240, rows: [ROW_LOG, ROW_OBJECT_WARN], stale: true },
+  "narrow-session": { width: 420, height: 420, rows: SESSION },
 } satisfies Record<string, ConsoleStackFixture>;
 
 export type ConsoleFixtureName = keyof typeof CONSOLE_FIXTURES;

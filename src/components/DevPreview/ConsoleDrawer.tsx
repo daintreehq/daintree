@@ -62,7 +62,7 @@ const STATUS_LABEL: Record<
   stopped: {
     label: "Stopped",
     textClass: "text-text-secondary",
-    dotClass: "bg-daintree-text/40",
+    dotClass: "bg-text-muted",
   },
   starting: {
     label: "Starting",
@@ -92,7 +92,7 @@ const STATUS_LABEL: Record<
   "restored-stopped": {
     label: "Stopped",
     textClass: "text-text-secondary",
-    dotClass: "bg-daintree-text/40",
+    dotClass: "bg-text-muted",
   },
 };
 
@@ -122,6 +122,11 @@ export function ConsoleDrawer({
 
   const [uncontrolledTab, setUncontrolledTab] = useState<ConsoleDrawerTab>("output");
   const activeTab = controlledActiveTab ?? uncontrolledTab;
+
+  // The console keeps its filters, folds, open traces and scroll position
+  // across a look at another tab, so it stays mounted once it has been shown.
+  const [consoleVisited, setConsoleVisited] = useState(activeTab === "console");
+  if (activeTab === "console" && !consoleVisited) setConsoleVisited(true);
 
   const regionRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
@@ -400,9 +405,7 @@ export function ConsoleDrawer({
               hidden={activeTab !== "console"}
               className="absolute inset-0"
             >
-              {activeTab === "console" && (
-                <ConsolePanel paneId={paneId} webContentsId={webContentsId} />
-              )}
+              {consoleVisited && <ConsolePanel paneId={paneId} webContentsId={webContentsId} />}
             </div>
             <div
               id={diagnosticsPanelId}

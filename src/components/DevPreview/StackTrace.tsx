@@ -1,10 +1,10 @@
 import { Fragment, useId } from "react";
 import type { CdpStackFrame, CdpStackTrace } from "@shared/types/ipc/webviewConsole";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DisclosureChevron } from "./DisclosureChevron";
 import {
   frameFileName,
-  frameFullLocation,
   frameName,
   framePath,
   isLibraryFrame,
@@ -12,6 +12,7 @@ import {
   segmentFrames,
 } from "./stackFrames";
 import { pluralize } from "@/lib/pluralize";
+import { useRowFocusTooltip } from "./rowFocusTooltip";
 
 interface StackTraceProps {
   stackTrace: CdpStackTrace;
@@ -22,11 +23,16 @@ interface StackTraceProps {
   onToggleRun: (start: number) => void;
 }
 
-const TOGGLE_CLASS =
+/** The console's disclosure toggle: stacks, library runs and group headers. */
+export const DISCLOSURE_TOGGLE_CLASS =
   "inline-flex items-center gap-1 whitespace-nowrap rounded-[var(--radius-sm)] px-1 -mx-1 text-text-secondary hover:bg-overlay-soft hover:text-text-primary transition-colors duration-150 ease-out select-none";
 
-/** A path that wraps at its separators before it ever breaks a name. */
-function BreakablePath({ path }: { path: string }) {
+/**
+ * A path that wraps at its separators before it ever breaks a name, and keeps
+ * its `:line:column` in one piece: a column number alone on a line reads as
+ * part of the next frame.
+ */
+function BreakablePath({ path, line, column }: { path: string; line: number; column: number }) {
   const parts = path.split("/");
   return (
     <>
@@ -40,6 +46,10 @@ function BreakablePath({ path }: { path: string }) {
           )}
         </Fragment>
       ))}
+      <wbr />
+      <span className="whitespace-nowrap">
+        :{line}:{column}
+      </span>
     </>
   );
 }
@@ -58,11 +68,8 @@ function FrameRow({ frame }: { frame: CdpStackFrame }) {
         {frameName(frame)}
       </span>
       {path ? (
-        <span
-          className="min-w-0 wrap-break-word text-text-secondary"
-          title={frameFullLocation(frame)}
-        >
-          <BreakablePath path={path} />:{frame.lineNumber}:{frame.columnNumber}
+        <span className="min-w-0 wrap-break-word text-text-secondary">
+          <BreakablePath path={path} line={frame.lineNumber} column={frame.columnNumber} />
         </span>
       ) : (
         <span className="italic text-text-secondary">source unavailable</span>
@@ -88,7 +95,7 @@ function LibraryRun({
         onClick={onToggle}
         aria-expanded={isOpen}
         aria-controls={listId}
-        className={TOGGLE_CLASS}
+        className={DISCLOSURE_TOGGLE_CLASS}
       >
         <DisclosureChevron expanded={isOpen} />
         {frames.length} library frames
@@ -103,33 +110,35 @@ function LibraryRun({
 }
 
 /**
- * The source of a message, on its own line: filename and line at rest, the
- * full path when the row has keyboard focus — the keyboard's equivalent of
- * the hover title, without adding a tab stop. Assistive tech always gets the
- * full location.
+ * The source of a message: filename and line, with the full path in a tooltip.
+ * The row owns the keyboard, so the tooltip opens on the pointer or with the
+ * row's keyboard focus rather than adding a tab stop, and the row keeps one
+ * shape either way. Assistive tech gets the full location as text.
  */
 export function StackLocation({ stackTrace }: { stackTrace: CdpStackTrace }) {
+  const tooltip = useRowFocusTooltip();
   const frame = primaryFrame(stackTrace.callFrames);
   if (!frame) return null;
   const full = `${framePath(frame)}:${frame.lineNumber}:${frame.columnNumber}`;
   return (
-    <span
-      className="ml-auto flex min-w-0 max-w-full text-text-secondary select-none"
-      title={frameFullLocation(frame)}
-    >
+    <span className="ml-auto flex min-w-0 max-w-full text-text-secondary select-none">
       <span className="sr-only">Source: {full}</span>
-      {/* Only the filename gives way in a narrow pane; the line number is
-          the part of the answer that can't be recovered anywhere else. */}
-      <span aria-hidden="true" className="flex min-w-0 group-focus-visible/row:hidden">
-        <span className="min-w-0 truncate">{frameFileName(frame)}</span>
-        <span className="shrink-0">:{frame.lineNumber}</span>
-      </span>
-      <span
-        aria-hidden="true"
-        className="hidden min-w-0 wrap-break-word group-focus-visible/row:inline"
-      >
-        <BreakablePath path={framePath(frame)} />:{frame.lineNumber}:{frame.columnNumber}
-      </span>
+      <Tooltip open={tooltip.open} onOpenChange={tooltip.onOpenChange}>
+        <TooltipTrigger asChild>
+          {/* Only the filename gives way in a narrow pane; the line number is
+              the part of the answer that can't be recovered anywhere else. */}
+          <span aria-hidden="true" className="flex min-w-0" {...tooltip.triggerProps}>
+            <span className="min-w-0 truncate">{frameFileName(frame)}</span>
+            <span className="shrink-0">:{frame.lineNumber}</span>
+          </span>
+        </TooltipTrigger>
+        {/* Below the source, so a tooltip opened by keyboard focus never covers
+            the message being read. A path has no spaces to wrap at, so it may
+            break anywhere. */}
+        <TooltipContent side="bottom" align="end" className="wrap-anywhere">
+          {full}
+        </TooltipContent>
+      </Tooltip>
     </span>
   );
 }
@@ -156,7 +165,7 @@ export function StackTrace({
         onClick={onToggle}
         aria-expanded={isExpanded}
         aria-controls={listId}
-        className={cn(TOGGLE_CLASS, "min-h-6")}
+        className={cn(DISCLOSURE_TOGGLE_CLASS, "min-h-6")}
       >
         <DisclosureChevron expanded={isExpanded} />
         Stack trace

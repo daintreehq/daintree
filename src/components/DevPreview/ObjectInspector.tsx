@@ -1,10 +1,13 @@
-import { useState, useCallback } from "react";
+import { createContext, useCallback, useContext, useId, useRef, useState } from "react";
 import type { CdpRemoteArg, CdpPropertyDescriptor } from "@shared/types/ipc/webviewConsole";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { DisclosureChevron } from "./DisclosureChevron";
+import { DISCLOSURE_TOGGLE_CLASS } from "./StackTrace";
+import { useRowFocusTooltip } from "./rowFocusTooltip";
 
 interface ObjectInspectorProps {
   arg: CdpRemoteArg;
@@ -18,9 +21,27 @@ interface ObjectInspectorProps {
   rowId: number;
   isStale?: boolean;
   depth?: number;
+  /** Where this value sits in its row: the argument index, then property names. */
+  path: string;
 }
 
 const MAX_DEPTH = 5;
+
+export interface ObjectView {
+  expanded: boolean;
+  properties: CdpPropertyDescriptor[] | null;
+}
+
+/**
+ * What the user has opened, kept by the console rather than by each inspector:
+ * the list is virtualized, so a row scrolled out of view unmounts and would
+ * otherwise come back closed and read its properties again. Keyed by row and
+ * property path; the console drops a row's entries when the row goes.
+ */
+export type ObjectViewCache = Map<string, ObjectView>;
+export const ObjectViewCacheContext = createContext<ObjectViewCache | null>(null);
+
+const CLOSED_VIEW: ObjectView = { expanded: false, properties: null };
 
 function PrimitiveValue({ arg }: { arg: CdpRemoteArg & { type: "primitive" } }) {
   switch (arg.kind) {
@@ -44,6 +65,8 @@ function PrimitiveValue({ arg }: { arg: CdpRemoteArg & { type: "primitive" } }) 
 }
 
 function PropertyTree({
+  id,
+  path,
   properties,
   webContentsId,
   paneId,
@@ -51,6 +74,8 @@ function PropertyTree({
   isStale,
   depth,
 }: {
+  id: string;
+  path: string;
   properties: CdpPropertyDescriptor[];
   webContentsId?: number;
   paneId: string;
@@ -62,11 +87,12 @@ function PropertyTree({
   const visibleProps = properties.filter((p) => p.enumerable !== false && p.name !== "__proto__");
 
   return (
-    <div className="pl-3 border-l border-tint/10">
+    <div id={id} className="pl-3 border-l border-tint/10">
       {visibleProps.map((prop) => (
-        <div key={prop.name} className="flex items-start gap-1">
-          <span className="text-text-secondary shrink-0">{prop.name}</span>
-          <span className="text-text-secondary shrink-0">:</span>
+        // 24px apart, so neighbouring property disclosures keep the
+        // target-spacing clearance (WCAG 2.5.8) without growing the button.
+        <div key={prop.name} className="flex items-start gap-1 py-[0.1875rem]">
+          <span className="text-text-secondary shrink-0">{prop.name}:</span>
           {prop.value ? (
             <ObjectInspector
               arg={prop.value}
@@ -75,6 +101,7 @@ function PropertyTree({
               rowId={rowId}
               isStale={isStale}
               depth={depth + 1}
+              path={`${path}.${prop.name}`}
             />
           ) : (
             <span className="text-text-secondary">undefined</span>
@@ -92,22 +119,36 @@ export function ObjectInspector({
   rowId,
   isStale = false,
   depth = 0,
+  path,
 }: ObjectInspectorProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [properties, setProperties] = useState<CdpPropertyDescriptor[] | null>(null);
+  const cache = useContext(ObjectViewCacheContext);
+  const cacheKey = `${rowId}:${path}`;
+  const [view, setViewState] = useState<ObjectView>(() => cache?.get(cacheKey) ?? CLOSED_VIEW);
+  const { expanded: isExpanded, properties } = view;
+  const setView = useCallback(
+    (next: ObjectView) => {
+      setViewState(next);
+      cache?.set(cacheKey, next);
+    },
+    [cache, cacheKey]
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState(false);
   // Most property reads land inside the gate, where an indicator would only flash.
   const showLoading = useDeferredLoading(isLoading, UI_INLINE_LOADING_GATE_MS);
+  const propertiesId = useId();
+  const staleTooltip = useRowFocusTooltip();
+  const disclosureRef = useRef<HTMLButtonElement>(null);
+  const retryRef = useRef<HTMLButtonElement>(null);
 
   const handleExpand = useCallback(async () => {
     if (isExpanded) {
-      setIsExpanded(false);
+      setView({ expanded: false, properties });
       return;
     }
 
     if (properties) {
-      setIsExpanded(true);
+      setView({ expanded: true, properties });
       return;
     }
 
@@ -129,15 +170,19 @@ export function ObjectInspector({
         rowId,
         arg.objectId
       );
-      setProperties(result.properties);
-      setIsExpanded(true);
+      // A successful retry takes its button away; focus moves to the value
+      // it opened rather than falling to the page.
+      const retryHadFocus =
+        retryRef.current !== null && retryRef.current === document.activeElement;
+      setView({ expanded: true, properties: result.properties });
       setFetchError(false);
+      if (retryHadFocus) requestAnimationFrame(() => disclosureRef.current?.focus());
     } catch {
       setFetchError(true);
     } finally {
       setIsLoading(false);
     }
-  }, [isExpanded, properties, arg, webContentsId, paneId, rowId, isStale, depth]);
+  }, [isExpanded, properties, setView, arg, webContentsId, paneId, rowId, isStale, depth]);
 
   if (arg.type === "primitive") {
     return <PrimitiveValue arg={arg} />;
@@ -153,9 +198,15 @@ export function ObjectInspector({
 
   if (isStale) {
     return (
-      <span className="text-text-placeholder italic" title="Value unavailable after navigation">
-        {displayText}
-      </span>
+      <Tooltip open={staleTooltip.open} onOpenChange={staleTooltip.onOpenChange}>
+        <TooltipTrigger asChild>
+          <span className="text-text-secondary italic" {...staleTooltip.triggerProps}>
+            {displayText}
+            <span className="sr-only"> (unavailable after navigation)</span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">Value unavailable after navigation</TooltipContent>
+      </Tooltip>
     );
   }
 
@@ -166,12 +217,14 @@ export function ObjectInspector({
   return (
     <span className="inline">
       <button
+        ref={disclosureRef}
         type="button"
         onClick={() => void handleExpand()}
         aria-expanded={isExpanded}
+        aria-controls={isExpanded && properties ? propertiesId : undefined}
         aria-busy={isLoading || undefined}
         className={cn(
-          "inline text-left hover:bg-overlay-subtle rounded-[var(--radius-xs)] px-0.5 -mx-0.5 transition-colors",
+          "inline text-left hover:bg-overlay-subtle rounded-[var(--radius-xs)] px-0.5 -mx-0.5 transition-colors duration-150 ease-out",
           isExpanded ? "text-text-primary" : "text-text-secondary"
         )}
       >
@@ -180,9 +233,25 @@ export function ObjectInspector({
         </span>
         {displayText}
       </button>
-      {fetchError && <span className="text-status-error text-3xs ml-1">unavailable</span>}
+      {fetchError && (
+        <span className="ml-2 inline-flex items-baseline gap-2">
+          <span role="alert" className="text-status-error">
+            Couldn't load value
+          </span>
+          <button
+            ref={retryRef}
+            type="button"
+            onClick={() => void handleExpand()}
+            className={cn(DISCLOSURE_TOGGLE_CLASS, "min-h-6 -my-1")}
+          >
+            Retry
+          </button>
+        </span>
+      )}
       {isExpanded && properties && (
         <PropertyTree
+          id={propertiesId}
+          path={path}
           properties={properties}
           webContentsId={webContentsId}
           paneId={paneId}
