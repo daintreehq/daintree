@@ -68,7 +68,7 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
   }),
 }));
 
-import { rehydrateHostProjectState } from "../hostProjectRehydrate";
+import { refreshHostDrafts, rehydrateHostProjectState } from "../hostProjectRehydrate";
 import { draftInputPersistence } from "../persistence/draftInputPersistence";
 import {
   resetStoreAccessorsForTesting,
@@ -77,6 +77,7 @@ import {
 } from "../storeAccessors";
 
 const hydrate = vi.fn();
+const getDraftInputs = vi.fn();
 
 function hostSaved(overrides: Record<string, unknown> = {}) {
   return {
@@ -111,7 +112,7 @@ beforeEach(() => {
   setWorktreeSelectionAccessor(() => ({ activeWorktreeId: "wt-main", restoreWorktreeId: null }));
   setWorktreeIdSetAccessor(() => new Set(["wt-main", "wt-feature"]));
   Object.defineProperty(window, "electron", {
-    value: { app: { hydrate } },
+    value: { app: { hydrate }, project: { getDraftInputs } },
     writable: true,
     configurable: true,
   });
@@ -376,5 +377,115 @@ describe("rehydrateHostProjectState following the driver (#13280)", () => {
     expect(store.removePanel).not.toHaveBeenCalled();
     expect(saveNormalized).not.toHaveBeenCalled();
     expect(saveTabGroups).not.toHaveBeenCalled();
+  });
+});
+
+describe("refreshHostDrafts — following the driver's drafts (#13283)", () => {
+  beforeEach(() => {
+    drafts.local = {};
+  });
+
+  it("shows the driver's drafts as the host now holds them, and nothing else", async () => {
+    getDraftInputs.mockResolvedValue({ t1: "driver typing" });
+
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+
+    expect(getDraftInputs).toHaveBeenCalledWith("proj-1");
+    expect(hydrate).not.toHaveBeenCalled();
+    expect(store.addPanel).not.toHaveBeenCalled();
+    expect(drafts.local).toEqual({ t1: "driver typing" });
+    expect(drafts.bumpExternalDraftRevision).toHaveBeenCalledTimes(1);
+    expect(draftInputPersistence.getBaseline("proj-1")).toEqual({ t1: "driver typing" });
+  });
+
+  it("takes each edit over the last one it showed", async () => {
+    getDraftInputs.mockResolvedValueOnce({ t1: "dri" });
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+    getDraftInputs.mockResolvedValueOnce({ t1: "driver" });
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+
+    expect(drafts.local).toEqual({ t1: "driver" });
+  });
+
+  it("clears a draft the driver sent or cleared", async () => {
+    getDraftInputs.mockResolvedValueOnce({ t1: "about to send", t2: "kept" });
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+    getDraftInputs.mockResolvedValueOnce({ t2: "kept" });
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+
+    expect(drafts.local).toEqual({ t2: "kept" });
+    expect(drafts.clearDraftInput).toHaveBeenCalledWith("t1", "proj-1");
+    expect(draftInputPersistence.getBaseline("proj-1")).toEqual({ t2: "kept" });
+  });
+
+  it("doesn't bump mounted editors when nothing it shows changed", async () => {
+    getDraftInputs.mockResolvedValue({ t1: "same" });
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+    drafts.bumpExternalDraftRevision.mockClear();
+
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+
+    expect(drafts.bumpExternalDraftRevision).not.toHaveBeenCalled();
+  });
+
+  it("keeps a draft of its own the host never held", async () => {
+    drafts.local = { t9: "typed here before the project was taken" };
+    getDraftInputs.mockResolvedValue({ t1: "driver typing" });
+
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+
+    expect(drafts.local).toEqual({
+      t1: "driver typing",
+      t9: "typed here before the project was taken",
+    });
+  });
+
+  it("never applies an older read of the drafts over a newer one", async () => {
+    // A full rehydrate asks first; a draft refresh asks after and answers first.
+    let answerHydrate!: (value: unknown) => void;
+    hydrate.mockImplementationOnce(() => new Promise((resolve) => (answerHydrate = resolve)));
+    const rehydrating = rehydrateHostProjectState("proj-1", {
+      isCurrent: current,
+      authoritative: true,
+    });
+    await vi.waitFor(() => expect(hydrate).toHaveBeenCalled());
+    getDraftInputs.mockResolvedValueOnce({ t1: "newer" });
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+
+    answerHydrate(hostSaved({ draftInputs: { t1: "older" } }));
+    await rehydrating;
+
+    expect(drafts.local).toEqual({ t1: "newer" });
+    expect(draftInputPersistence.getBaseline("proj-1")).toEqual({ t1: "newer" });
+  });
+
+  it("lets a takeover's answer land after a later merge-style resync's", async () => {
+    drafts.local = { t1: "stale here" };
+    let answerTakeover!: (value: unknown) => void;
+    hydrate.mockImplementationOnce(() => new Promise((resolve) => (answerTakeover = resolve)));
+    const takingOver = rehydrateHostProjectState("proj-1", {
+      isCurrent: current,
+      authoritative: true,
+    });
+    await vi.waitFor(() => expect(hydrate).toHaveBeenCalledTimes(1));
+    hydrate.mockResolvedValueOnce(hostSaved({ draftInputs: { t1: "host latest" } }));
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: false });
+    expect(drafts.local).toEqual({ t1: "stale here" });
+
+    answerTakeover(hostSaved({ draftInputs: { t1: "host latest" } }));
+    await takingOver;
+
+    expect(drafts.local).toEqual({ t1: "host latest" });
+  });
+
+  it("applies nothing once overtaken", async () => {
+    getDraftInputs.mockResolvedValue({ t1: "stale" });
+    let live = true;
+    const pending = refreshHostDrafts("proj-1", { isCurrent: () => live });
+    live = false;
+    await pending;
+
+    expect(drafts.restoreProjectDraftInputs).not.toHaveBeenCalled();
+    expect(draftInputPersistence.getBaseline("proj-1")).toBeUndefined();
   });
 });

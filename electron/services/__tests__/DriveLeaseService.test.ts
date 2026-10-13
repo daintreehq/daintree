@@ -5,7 +5,11 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null), getAllWindows: vi.fn(() => []) },
 }));
 
-import { DriveLeaseService, PANELS_CHANGED_DELAY_MS } from "../DriveLeaseService.js";
+import {
+  DRAFTS_CHANGED_DELAY_MS,
+  DriveLeaseService,
+  PANELS_CHANGED_DELAY_MS,
+} from "../DriveLeaseService.js";
 import { EndpointRegistryImpl } from "../../ipc/endpointRegistry.js";
 import type { ClientEndpoint, Disposable, HostFrame } from "../../ipc/endpoint.js";
 import type { DriveLeaseEvent } from "../../../shared/types/ipc/driveLease.js";
@@ -514,6 +518,21 @@ describe("DriveLeaseService panel notices", () => {
     // The driver saved it, and a view on another project has nothing to follow.
     expect(panelNotices(laptop)).toEqual([]);
     expect(panelNotices(otherProject)).toEqual([]);
+  });
+
+  it("tells the views that watch of the driver's drafts apart from its panels (#13283)", async () => {
+    const { hostWindow, laptop } = await laptopDrivesWithHostWatching();
+    const draftNotices = (endpoint: FakeEndpoint) =>
+      endpoint.allEvents().filter((event) => event.type === "drafts-changed");
+
+    service.notifyPanelsChanged("p");
+    service.notifyDraftsChanged("p");
+    service.notifyDraftsChanged("p");
+    vi.advanceTimersByTime(Math.max(PANELS_CHANGED_DELAY_MS, DRAFTS_CHANGED_DELAY_MS));
+
+    expect(draftNotices(hostWindow)).toEqual([{ type: "drafts-changed", projectId: "p" }]);
+    expect(panelNotices(hostWindow)).toEqual([{ type: "panels-changed", projectId: "p" }]);
+    expect(draftNotices(laptop)).toEqual([]);
   });
 
   it("tells nobody while this machine's own windows drive among themselves", async () => {

@@ -9,6 +9,16 @@ import {
 import { getWorktreeIdSet, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { logWarn } from "@/utils/logger";
 
+/**
+ * Each read of the host's drafts, numbered as it is asked. The host answers in
+ * order, so a later read holds newer drafts: a full rehydrate and a draft-only
+ * refresh run side by side, and the older answer, landing after the newer
+ * one, would put back a draft the newer one cleared and rebase onto it.
+ */
+let draftReadTicket = 0;
+/** The newest authoritative read applied so far. */
+let appliedDraftRead = 0;
+
 export interface HostProjectRehydrateOptions {
   /**
    * False once a newer rehydrate was requested or the view moved on. Checked
@@ -57,6 +67,7 @@ export async function rehydrateHostProjectState(
   // What this view last knew the host held, read before asking, so a write of
   // ours acknowledged while the answer travels can't pass for a host deletion.
   const baselineBefore = persistence.getBaseline(projectId) ?? {};
+  const draftRead = ++draftReadTicket;
   const hydrate: HydrateResult = await window.electron.app.hydrate();
   if (!options.isCurrent()) return;
   const workspaceId = hydrate.workspaceId ?? hydrate.project?.id ?? null;
@@ -137,14 +148,77 @@ export async function rehydrateHostProjectState(
     if (!options.isCurrent()) return;
   }
 
-  const hostDrafts = hydrate.draftInputs ?? {};
-  const input = drafts.useTerminalInputStore.getState();
+  applyHostDrafts(projectId, hydrate.draftInputs ?? {}, {
+    read: draftRead,
+    authoritative: options.authoritative,
+    draftsBefore,
+    baselineBefore,
+    useTerminalInputStore: drafts.useTerminalInputStore,
+    draftInputPersistence,
+  });
+}
+
+/**
+ * Show the drafts the driver last saved, without the panel pass: what a view
+ * that watches does each time the host says the driver's drafts changed
+ * (#13283). Read through the draft read alone, so nothing else is refetched
+ * per keystroke burst, and merged as an authoritative rehydrate merges them.
+ */
+export async function refreshHostDrafts(
+  projectId: string,
+  options: Pick<HostProjectRehydrateOptions, "isCurrent">
+): Promise<void> {
+  const [{ useTerminalInputStore }, { draftInputPersistence }] = await Promise.all([
+    import("@/store/terminalInputStore"),
+    import("@/store/persistence/draftInputPersistence"),
+  ]);
+  if (!options.isCurrent()) return;
+  const draftsBefore = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
+  const baselineBefore = draftInputPersistence.getBaseline(projectId) ?? {};
+  const draftRead = ++draftReadTicket;
+  const hostDrafts = await window.electron.project.getDraftInputs(projectId);
+  if (!options.isCurrent()) return;
+  applyHostDrafts(projectId, hostDrafts ?? {}, {
+    read: draftRead,
+    authoritative: true,
+    draftsBefore,
+    baselineBefore,
+    useTerminalInputStore,
+    draftInputPersistence,
+  });
+}
+
+interface ApplyHostDraftsContext {
+  /** This answer's {@link draftReadTicket}. */
+  read: number;
+  authoritative: boolean;
+  /** This view's drafts before the host was asked: one typed into since is newer. */
+  draftsBefore: Record<string, string>;
+  /** What this view last knew the host held, read before asking. */
+  baselineBefore: Record<string, string>;
+  useTerminalInputStore: typeof import("@/store/terminalInputStore").useTerminalInputStore;
+  draftInputPersistence: typeof import("@/store/persistence/draftInputPersistence").draftInputPersistence;
+}
+
+function applyHostDrafts(
+  projectId: string,
+  hostDrafts: Record<string, unknown>,
+  context: ApplyHostDraftsContext
+): void {
+  if (context.read < appliedDraftRead) return;
+  // Only an authoritative answer takes the host's drafts whole: a merge-style
+  // one (a fresh session's resync) mustn't keep a takeover's answer, asked
+  // before it, from landing.
+  if (context.authoritative) appliedDraftRead = context.read;
+  const { draftsBefore, baselineBefore, draftInputPersistence } = context;
+  const input = context.useTerminalInputStore.getState();
   const local = input.getProjectDraftInputs(projectId);
   const incoming: Record<string, string> = {};
   for (const [terminalId, text] of Object.entries(hostDrafts)) {
     if (typeof text !== "string" || text === "") continue;
-    if (!options.authoritative && local[terminalId]) continue;
+    if (!context.authoritative && local[terminalId]) continue;
     if ((local[terminalId] ?? "") !== (draftsBefore[terminalId] ?? "")) continue;
+    if (local[terminalId] === text) continue;
     incoming[terminalId] = text;
   }
   let draftsChanged = Object.keys(incoming).length > 0;

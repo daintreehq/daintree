@@ -47,4 +47,9 @@ export type DriveLeaseEvent =
    * The driver saved a different panel set or layout for the project. Sent
    * only to the views that watch it, which read the host's panels back.
    */
-  | { type: "panels-changed"; projectId: string };
+  | { type: "panels-changed"; projectId: string }
+  /**
+   * The driver saved different composer drafts for the project. Sent only to
+   * the views that watch it, which read the drafts back. Carries no text.
+   */
+  | { type: "drafts-changed"; projectId: string };
