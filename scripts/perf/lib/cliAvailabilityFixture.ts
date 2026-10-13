@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import nodeModule from "node:module";
 import { delimiter, dirname, join } from "node:path";
 
@@ -15,9 +15,9 @@ import { createPerfTempRoot } from "./tempRoots";
  * check, and re-probes all 18 agents from scratch. It used to spawn `which -a`
  * per agent, and `which` again on every miss — 37 subprocess starts every three
  * seconds on a first run, happening exactly while a brand-new user watches the
- * app decide what they have installed. On POSIX the PATH probe now walks PATH
- * in-process, so a refresh's only start there is `npm config get prefix`; on
- * Windows it is one `where.exe` per agent.
+ * app decide what they have installed. The PATH probe now searches PATH
+ * in-process on every platform, so a refresh's only start is
+ * `npm config get prefix`, and on Windows only when PATH holds an npm to run.
  *
  * WHAT IS REAL
  *   - `electron/services/CliAvailabilityService.ts` unmodified, driven through
@@ -28,7 +28,7 @@ import { createPerfTempRoot } from "./tempRoots";
  *     `checkAuth` credential discovery, the real duplicate detection and the
  *     real `notifyDuplicateInstalls` persistence.
  *   - The real PATH probe against a real PATH (the in-process `findAllOnPath`
- *     walk on POSIX, `where` subprocesses on Windows), and a real
+ *     walk on POSIX, the in-process directory scan on Windows), and a real
  *     `npm config get prefix` attempt. Every start is counted through the
  *     harness's existing spawn observer in `lib/gitPipelineFixture.ts`, which
  *     validates itself before each measurement window.
@@ -75,9 +75,10 @@ import { createPerfTempRoot } from "./tempRoots";
  *   user's REAL WSL installation — which this fixture must not do. So on
  *   win32 those two agents are planted in every arm, which keeps the probe
  *   hermetic and makes the "all miss" arm an "all but the WSL-capable two"
- *   arm. The PATH probe also differs (a `where.exe` start per agent, where
- *   POSIX spawns nothing), and the expected-spawn arithmetic below accounts
- *   for it — but it has not been executed on Windows.
+ *   arm. The npm-prefix lookup also differs: POSIX starts the bare `npm`
+ *   whatever PATH holds, while Windows looks npm up in PATH first and starts
+ *   nothing when the arm's PATH has none, which no arm here plants. The
+ *   expected-spawn arithmetic below accounts for both.
  *
  * TEMP-DIR HYGIENE
  *   One `mkdtemp` root holds the synthetic HOME, every per-arm bin directory
@@ -354,8 +355,8 @@ function systemPathDirs(): string[] {
 }
 
 function shimNamesFor(command: string): string[] {
-  // `where.exe` resolves through PATHEXT, and `probePrependedCliPath` tries the
-  // `.cmd` spelling first on Windows.
+  // The Windows PATH search matches PATHEXT's launchable spellings, and
+  // `probePrependedCliPath` tries the `.cmd` spelling first.
   return isWindows ? [`${command}.cmd`] : [command];
 }
 
@@ -566,33 +567,59 @@ function hasNpmPackage(config: AgentConfig): boolean {
  * Never derived by running the subject:
  *   - a hit found through `DAINTREE_CLI_PATH_PREPEND` costs 0 — the prepended
  *     probe is an `access()` and returns before the PATH probe
- *   - on POSIX the PATH probe is an in-process walk (`findAllOnPath`), so a
- *     PATH hit and a PATH miss both cost 0
- *   - on Windows the PATH probe is one `where.exe` start per agent, hit or miss
+ *   - the PATH probe searches PATH in-process on every platform (the
+ *     `findAllOnPath` walk on POSIX, the directory scan on Windows), so a PATH
+ *     hit and a PATH miss both cost 0
  *   - plus 1 for `npm config get prefix`, once per refresh (it is cached
  *     against `checkId`, which `refresh()` bumps), if any MISSING agent
- *     declares an npm package
+ *     declares an npm package and the arm starts that lookup at all
+ *     ({@link startsNpmPrefixLookup})
  */
 export function expectedSpawnsFor(
   registry: Record<string, AgentConfig>,
   plantedIds: readonly string[],
-  viaPrepend: boolean
+  npmPrefixStarts: boolean
 ): number {
+  if (!npmPrefixStarts) return 0;
   const planted = new Set(plantedIds);
-  const pathProbeStarts = isWindows ? 1 : 0;
-  let total = 0;
-  let missingDeclaresNpm = false;
+  const missingDeclaresNpm = Object.entries(registry).some(
+    ([id, config]) => !planted.has(id) && hasNpmPackage(config)
+  );
+  return missingDeclaresNpm ? 1 : 0;
+}
 
-  for (const [id, config] of Object.entries(registry)) {
-    if (planted.has(id)) {
-      total += viaPrepend ? 0 : pathProbeStarts;
-      continue;
-    }
-    total += pathProbeStarts;
-    if (hasNpmPackage(config)) missingDeclaresNpm = true;
+/** The extensions a Windows PATH search starts a bare name as, in PATHEXT order. */
+function windowsLaunchExtensions(pathext: string | undefined): string[] {
+  const launchable = new Set([".com", ".exe", ".bat", ".cmd"]);
+  return (pathext ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((extension) => extension.trim().toLowerCase())
+    .filter((extension) => launchable.has(extension));
+}
+
+function isFile(file: string): boolean {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
   }
+}
 
-  return total + (missingDeclaresNpm ? 1 : 0);
+/**
+ * Whether a refresh that needs npm's global prefix starts a process for it on
+ * a PATH of `pathDirs`. POSIX starts the bare `npm` whatever PATH holds, and
+ * the spawn observer counts that start even when it then fails. Windows looks
+ * npm up in PATH first, as a file with a launchable PATHEXT extension, and
+ * starts nothing when no directory holds one.
+ */
+export function startsNpmPrefixLookup(
+  pathDirs: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+  pathext: string | undefined = process.env.PATHEXT
+): boolean {
+  if (platform !== "win32") return true;
+  const names = windowsLaunchExtensions(pathext).map((extension) => `npm${extension}`);
+  return pathDirs.some((dir) => names.some((name) => isFile(join(dir, name))));
 }
 
 let arms: Map<CliArmLabel, CliArm> | null = null;
@@ -641,8 +668,8 @@ function buildArms(modules: CliModules): Map<CliArmLabel, CliArm> {
     for (const id of definition.ids) {
       plantShim(binDir, registry[id]!.command as string);
     }
-    // Everything on PATH is either an empty planting directory of this
-    // fixture's own or a system directory (holding `where` itself on Windows).
+    // Everything on PATH is either a planting directory of this fixture's own
+    // or a system directory.
     const pathDirs = definition.viaPrepend
       ? [join(root, `bin-empty-${definition.label}`), ...system]
       : [binDir, ...(definition.duplicate ? [duplicateDir] : []), ...system];
@@ -653,7 +680,7 @@ function buildArms(modules: CliModules): Map<CliArmLabel, CliArm> {
       plantedIds: definition.ids,
       path: pathDirs.join(delimiter),
       prepend: definition.viaPrepend ? binDir : null,
-      expectedSpawns: expectedSpawnsFor(registry, definition.ids, definition.viaPrepend),
+      expectedSpawns: expectedSpawnsFor(registry, definition.ids, startsNpmPrefixLookup(pathDirs)),
       hasDuplicate: definition.duplicate,
     });
   }
