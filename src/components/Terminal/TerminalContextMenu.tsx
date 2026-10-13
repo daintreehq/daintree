@@ -1,5 +1,7 @@
 import {
   Fragment,
+  lazy,
+  Suspense,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -80,6 +82,12 @@ import {
   TerminalHandOverMenuItems,
   useOrchestratorCandidates,
 } from "./TerminalHandOver";
+
+// Loaded on first use: every pane and session row mounts this menu, and the
+// dialog pulls in Pilot's row and band modules that nothing else here needs.
+const LazyParkRunDialog = lazy(() =>
+  import("@/components/Fleet/ParkRunDialog").then((m) => ({ default: m.ParkRunDialog }))
+);
 import {
   ArrowDownFromLine,
   Bell,
@@ -117,7 +125,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { FolderGit2, FolderOpen, FolderTree } from "@/components/icons";
+import { CirclePause, FolderGit2, FolderOpen, FolderTree } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -393,6 +401,14 @@ function TerminalContextMenuBody({
   if (handOverRequest !== null && handOverRequest.terminalId !== terminalId) {
     setHandOverRequest(null);
   }
+  // "Park…" opens its dialog the same way, and is dropped the same way when
+  // the dock hands this menu another terminal.
+  const [parkRequestId, setParkRequestId] = useState<string | null>(null);
+  if (parkRequestId !== null && parkRequestId !== terminalId) {
+    setParkRequestId(null);
+  }
+  const pendingParkRef = useRef<string | null>(null);
+  const closeParkRequest = useCallback(() => setParkRequestId(null), []);
   // Picking a pane records the request and the root content's close hook
   // opens the dialog — the same handoff as the move picker, so the menu's own
   // focus return can't land after the dialog has taken focus.
@@ -438,6 +454,7 @@ function TerminalContextMenuBody({
         if (cachedHomeDir !== homeDir) setHomeDir(cachedHomeDir);
         pendingMovePickerRef.current = null;
         pendingHandOverRef.current = null;
+        pendingParkRef.current = null;
         pendingMenuDispatchRef.current = null;
         // Only a PTY can be handed over; the other kinds' menus never ask.
         if (terminal !== undefined && panelKindHasPty(terminal.kind ?? "terminal")) {
@@ -579,6 +596,30 @@ function TerminalContextMenuBody({
       }
     );
   }, [handBackState, terminalId]);
+
+  // Presence on the snapshot IS "parked", exactly as for snoozes.
+  const isParked = useFleetSnapshotStore(
+    (s) =>
+      isMenuLive &&
+      (s.snapshot?.runs.some((run) => run.runId === terminalId && run.park !== undefined) ?? false)
+  );
+
+  // Main rejects a park over retained (degraded) data; Unpark needs no
+  // healthy snapshot, so only Park… waits for one.
+  const isFleetDegraded = useFleetSnapshotStore(
+    (s) => isMenuLive && (s.snapshot?.degraded ?? false)
+  );
+  const canPark = isKnownRun && !isFleetDegraded;
+
+  const handleRequestPark = useCallback(() => {
+    pendingParkRef.current = terminalId;
+  }, [terminalId]);
+
+  const handleUnpark = useCallback(() => {
+    safeFireAndForget(window.electron.fleet.unparkRun(terminalId), {
+      context: "TerminalContextMenu unparkRun",
+    });
+  }, [terminalId]);
 
   const handleUnsnooze = useCallback(() => {
     safeFireAndForget(window.electron.fleet.unsnoozeRun(terminalId), {
@@ -1085,6 +1126,14 @@ function TerminalContextMenuBody({
         }, AFTER_MENU_FOCUS_RESTORE_MS);
         return;
       }
+      const pendingPark = pendingParkRef.current;
+      pendingParkRef.current = null;
+      if (pendingPark !== null && pendingPark === terminalId) {
+        // Restoration is left to run, so the dialog records the pane as where
+        // to return focus — the hand-over's handoff, for the same reason.
+        setParkRequestId(pendingPark);
+        return;
+      }
       const pendingHandOver = pendingHandOverRef.current;
       pendingHandOverRef.current = null;
       if (pendingHandOver !== null && pendingHandOver.terminalId === terminalId) {
@@ -1588,6 +1637,27 @@ function TerminalContextMenuBody({
     );
   }
 
+  // One label whatever the state: the dialog's own title says whether it is a
+  // new park or an edit. Unpark sits beside it only once there is a park to
+  // lift — the discoverable inverse that lets parking skip a confirm.
+  const parkItems =
+    canPark || isParked ? (
+      <>
+        {canPark && (
+          <ContextMenuItem onSelect={handleRequestPark}>
+            <CirclePause className={ICON_CLASS} aria-hidden="true" />
+            Park…
+          </ContextMenuItem>
+        )}
+        {isParked && (
+          <ContextMenuItem onSelect={handleUnpark}>
+            <Bell className={ICON_CLASS} aria-hidden="true" />
+            Unpark
+          </ContextMenuItem>
+        )}
+      </>
+    ) : null;
+
   return (
     <>
       {destructiveConfirmDialog}
@@ -1599,6 +1669,16 @@ function TerminalContextMenuBody({
           onClose={() => closeHandOverRequest(handOverRequest)}
           restoreFocusTo={movePickerReturnFocusRef}
         />
+      )}
+      {parkRequestId !== null && (
+        <Suspense fallback={null}>
+          <LazyParkRunDialog
+            key={parkRequestId}
+            runId={parkRequestId}
+            onClose={closeParkRequest}
+            restoreFocusTo={movePickerReturnFocusRef}
+          />
+        </Suspense>
       )}
       <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
@@ -1719,6 +1799,15 @@ function TerminalContextMenuBody({
               <ContextMenuSeparator />
             </>
           )}
+          {/* Parking follows the snapshot, not broadcast eligibility: a docked
+              or exited agent can still be parked, and a parked one must
+              always offer its inverse. */}
+          {!fleetEligible && parkItems !== null && (
+            <>
+              {parkItems}
+              <ContextMenuSeparator />
+            </>
+          )}
           {fleetEligible && (
             <>
               <ContextMenuItem onSelect={() => handleAction("fleet-toggle")}>
@@ -1767,6 +1856,7 @@ function TerminalContextMenuBody({
                   </ContextMenuSubContent>
                 </ContextMenuSub>
               )}
+              {parkItems}
               {handBackState !== "none" && (
                 <ContextMenuItem onSelect={handleToggleHandBackRead}>
                   {handBackState === "unseen" ? (

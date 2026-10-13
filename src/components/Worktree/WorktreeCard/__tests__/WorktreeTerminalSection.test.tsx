@@ -633,6 +633,90 @@ describe("WorktreeTerminalSection row state icon", () => {
     });
   });
 
+  describe("parked runs (#13236)", () => {
+    function setRun(overrides: Partial<FleetRunRow>) {
+      act(() => {
+        useFleetSnapshotStore.setState({
+          snapshot: {
+            runs: [{ runId: "pk-1", workspaceId: "p1", spawnedAt: 0, cwd: "/tmp", ...overrides }],
+            changedAt: 0,
+            degraded: false,
+            lastSuccessfulAt: null,
+          } satisfies FleetSnapshot,
+        });
+      });
+    }
+
+    function renderRow() {
+      const term = makeTerminal({
+        id: "pk-1",
+        hasPty: true,
+        detectedAgentId: "claude",
+        agentState: "waiting",
+      });
+      const { container } = renderSection({
+        isExpanded: true,
+        terminals: [term],
+        counts: { ...baseCounts, total: 1 },
+      });
+      return () => container.querySelector('[data-terminal-id="pk-1"]')!;
+    }
+
+    /** The row button's accessible description, resolved through its id refs. */
+    function description(row: Element): string {
+      const button = row.querySelector<HTMLButtonElement>("button[aria-labelledby]")!;
+      return (button.getAttribute("aria-describedby") ?? "")
+        .split(" ")
+        .map((id) => document.getElementById(id)?.textContent ?? "")
+        .join(" ");
+    }
+
+    beforeEach(() => useFleetSnapshotStore.setState({ snapshot: null }));
+    afterEach(() => useFleetSnapshotStore.setState({ snapshot: null }));
+
+    it("marks a parked run and carries its note into the row's description", () => {
+      setRun({ agentState: "waiting", park: { parkedAt: 1, note: "after the migration" } });
+      const row = renderRow()();
+
+      expect(row.querySelector('[data-testid="session-row-parked"]')).not.toBeNull();
+      expect(description(row)).toContain("Parked: after the migration");
+    });
+
+    it("says Parked alone when the park has no note", () => {
+      setRun({ agentState: "waiting", park: { parkedAt: 1 } });
+      const row = renderRow()();
+
+      expect(description(row)).toContain("Parked");
+      expect(description(row)).not.toContain("Parked:");
+    });
+
+    it("leaves the observed state glyph and attribute alone", () => {
+      // Parking is the user's intent, not something the agent did.
+      setRun({ agentState: "waiting", park: { parkedAt: 1 } });
+      const row = renderRow()();
+
+      expect(row.getAttribute("data-terminal-agent-state")).toBe("waiting");
+      expect(row.querySelector('[aria-label="waiting"]')).not.toBeNull();
+    });
+
+    it("drops the mark as soon as the snapshot no longer carries the park", () => {
+      setRun({ agentState: "waiting", park: { parkedAt: 1 } });
+      const getRow = renderRow();
+      expect(getRow().querySelector('[data-testid="session-row-parked"]')).not.toBeNull();
+
+      setRun({ agentState: "waiting" });
+      expect(getRow().querySelector('[data-testid="session-row-parked"]')).toBeNull();
+      expect(description(getRow())).not.toContain("Parked");
+    });
+
+    it("shows no mark for an unparked run", () => {
+      setRun({ agentState: "waiting" });
+      const row = renderRow()();
+
+      expect(row.querySelector('[data-testid="session-row-parked"]')).toBeNull();
+    });
+  });
+
   it("renders waiting icon when agentState='idle' and agent chrome is live", () => {
     const term = makeTerminal({
       id: "idle-1",

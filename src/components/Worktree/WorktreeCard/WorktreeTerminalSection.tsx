@@ -18,6 +18,8 @@ import {
 } from "../terminalStateConfig";
 import { resolveSessionPresentation } from "@/lib/handBackPresentation";
 import { useRunHandBackState } from "@/hooks/useRunHandBackState";
+import { useRunParkState } from "@/hooks/useRunParkState";
+import { CirclePause } from "@/components/icons";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -72,6 +74,10 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   // The glyph alone follows the hand-back: the data attribute keeps the
   // observed state for E2E selectors.
   const handBack = useRunHandBackState(term.id);
+  // Parked is the user's own intent, not an observed state, so it rides beside
+  // the state glyph rather than replacing it — and leaves the data attribute
+  // alone.
+  const park = useRunParkState(term.id);
   const glyphState = resolveSessionPresentation(
     agentState,
     term.agentState,
@@ -94,6 +100,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   const titleId = `${idBase}-title`;
   const placementId = `${idBase}-placement`;
   const commandId = `${idBase}-command`;
+  const parkId = `${idBase}-park`;
   // The metadata tooltips sit inside the title tooltip's trigger, so pointing
   // at one would otherwise open both.
   const [isOverMeta, setIsOverMeta] = useState(false);
@@ -159,7 +166,13 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
               // descriptions, and as descendant text they would otherwise be
               // read twice and change the toggle's name whenever they change.
               aria-labelledby={titleId}
-              aria-describedby={showCommand ? `${commandId} ${placementId}` : placementId}
+              aria-describedby={[
+                showCommand ? commandId : null,
+                park.parked ? parkId : null,
+                placementId,
+              ]
+                .filter((id): id is string => id !== null)
+                .join(" ")}
               className={cn(
                 // The ring is drawn by a pseudo-element reaching back over the
                 // grip's gutter, so it outlines the row rather than clipping the
@@ -201,6 +214,33 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
                   >
                     {armBadge}
                   </span>
+                )}
+
+                {park.parked && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="text-text-secondary"
+                        data-testid="session-row-parked"
+                        {...metaPointer}
+                      >
+                        <span id={parkId} className="sr-only">
+                          {park.note !== null ? `Parked: ${park.note}` : "Parked"}
+                        </span>
+                        <CirclePause className="w-3 h-3" aria-hidden="true" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      {park.note !== null ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-medium">Parked</span>
+                          <span className="break-words">{park.note}</span>
+                        </div>
+                      ) : (
+                        "Parked"
+                      )}
+                    </TooltipContent>
+                  </Tooltip>
                 )}
 
                 {StateIcon && glyphState && (
