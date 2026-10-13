@@ -1781,11 +1781,13 @@ describe("FileBrowserViewer copy file contents (#12136)", () => {
       });
       const { container } = renderViewer("/repo/icon.svg");
 
-      // `[role="img"]` and not `"svg"`: every lucide icon in the toolbar is an
-      // <svg>, so the loose selector would match one of those and pass without
-      // the SVG branch ever rendering. FileImagePreview paints that role only
-      // when it has sanitized markup, which is exactly the state under test.
-      await waitFor(() => expect(container.querySelector('[role="img"]')).not.toBeNull());
+      // An SVG data-URL `<img>` and not `"svg"`: every lucide icon in the
+      // toolbar is an <svg>, so the loose selector would match one of those and
+      // pass without the SVG branch ever rendering. FileImagePreview shows that
+      // `<img>` only when it has sanitized markup, the state under test.
+      await waitFor(() =>
+        expect(container.querySelector('img[src^="data:image/svg+xml,"]')).not.toBeNull()
+      );
       // Read as text, but only the sanitized markup is kept — there is no raw
       // source left to hand back.
       expect(copyButton()).toBeNull();

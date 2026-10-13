@@ -305,6 +305,18 @@ import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { ClientAppError } from "@/utils/clientAppError";
 
+/**
+ * An element of the SVG FileImagePreview shows, read back from the data URL of
+ * its `<img>` (the SVG is never inserted into the document), or null.
+ */
+function shownSvgPart(container: HTMLElement, selector: string): Element | null {
+  const prefix = "data:image/svg+xml,";
+  const src = container.querySelector(`img[src^="${prefix}"]`)?.getAttribute("src");
+  if (!src) return null;
+  const markup = decodeURIComponent(src.slice(prefix.length));
+  return new DOMParser().parseFromString(markup, "image/svg+xml").querySelector(selector);
+}
+
 function lastContentPanelProps(): Record<string, unknown> {
   const props = contentPanelProps.at(-1);
   if (!props) throw new Error("ContentPanel was not rendered");
@@ -2681,7 +2693,7 @@ describe("FilePane live disk refresh (#11451)", () => {
       content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
     });
     const { container, rerender } = await renderPane({ filePath: "/repo/assets/icon.svg" });
-    await waitFor(() => expect(container.querySelector("svg rect")).not.toBeNull());
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
 
     readMock.mockResolvedValue({
       content: '<svg xmlns="http://www.w3.org/2000/svg"><circle /></svg>',
@@ -2689,9 +2701,9 @@ describe("FilePane live disk refresh (#11451)", () => {
     seedWorktree(OUTER_ID, "/repo", { git: 200 });
     await commitTick(rerender);
 
-    // Inlined markup, so freshness rides React state rather than a URL.
-    await waitFor(() => expect(container.querySelector("svg circle")).not.toBeNull());
-    expect(container.querySelector("svg rect")).toBeNull();
+    // The markup rides React state into a data URL, not a protocol URL.
+    await waitFor(() => expect(shownSvgPart(container, "circle")).not.toBeNull());
+    expect(shownSvgPart(container, "rect")).toBeNull();
   });
 
   it("keeps the last good SVG when a background re-read catches it half-written", async () => {
@@ -2703,13 +2715,13 @@ describe("FilePane live disk refresh (#11451)", () => {
       content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
     });
     const { container, rerender } = await renderPane({ filePath: "/repo/assets/icon.svg" });
-    await waitFor(() => expect(container.querySelector("svg rect")).not.toBeNull());
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
 
     readMock.mockResolvedValue({ content: "<svg" });
     seedWorktree(OUTER_ID, "/repo", { git: 200 });
     await commitTick(rerender);
 
-    expect(container.querySelector("svg rect")).not.toBeNull();
+    expect(shownSvgPart(container, "rect")).not.toBeNull();
   });
 
   it("settles the pane when a failing tick read supersedes an explicit refresh", async () => {
@@ -2760,7 +2772,7 @@ describe("FilePane live disk refresh (#11451)", () => {
       content: '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>',
     });
     const { container } = await renderPane({ filePath: "/elsewhere/icon.svg" });
-    await waitFor(() => expect(container.querySelector("svg rect")).not.toBeNull());
+    await waitFor(() => expect(shownSvgPart(container, "rect")).not.toBeNull());
 
     readMock.mockResolvedValue({
       content: '<svg xmlns="http://www.w3.org/2000/svg"><circle /></svg>',
@@ -2769,7 +2781,7 @@ describe("FilePane live disk refresh (#11451)", () => {
       window.dispatchEvent(new Event("focus"));
     });
 
-    await waitFor(() => expect(container.querySelector("svg circle")).not.toBeNull());
+    await waitFor(() => expect(shownSvgPart(container, "circle")).not.toBeNull());
   });
 
   it("keeps the newest bytes when two overlapping re-reads settle out of order", async () => {
@@ -3588,11 +3600,13 @@ describe("FilePane copy file contents (#12136)", () => {
       });
       const { container } = await renderPane("/repo/icon.svg");
 
-      // `[role="img"]` and not `"svg"`: every lucide icon in the toolbar is an
-      // <svg>, so the loose selector would match one of those and pass without
-      // the SVG branch ever rendering. FileImagePreview paints that role only
-      // when it has sanitized markup, which is exactly the state under test.
-      await waitFor(() => expect(container.querySelector('[role="img"]')).not.toBeNull());
+      // An SVG data-URL `<img>` and not `"svg"`: every lucide icon in the
+      // toolbar is an <svg>, so the loose selector would match one of those and
+      // pass without the SVG branch ever rendering. FileImagePreview shows that
+      // `<img>` only when it has sanitized markup, the state under test.
+      await waitFor(() =>
+        expect(container.querySelector('img[src^="data:image/svg+xml,"]')).not.toBeNull()
+      );
       expect(copyButton()).toBeNull();
     });
   });

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /**
- * SVG inlining for the shared file preview (#11239).
+ * SVG preview for the shared file preview (#11239, #13296).
  *
- * `sanitizeSvg` documents that its output must not be embedded through an HTML
- * reparse, so this component inserts via `DOMParser`. That parser is
- * namespace-strict where `innerHTML` was not, which is the regression these
- * tests pin: a real-world SVG without an `xmlns` must still render.
+ * Sanitized SVG is shown as an `<img>` of its own data URL, never inserted into
+ * this document, so CSS the regex sanitizer misses cannot fetch anything from
+ * this machine. The data URL is namespace-strict, which is the regression the
+ * xmlns tests pin: a real-world SVG without an `xmlns` must still render.
  */
 import { describe, it, expect } from "vitest";
 import { render, cleanup } from "@testing-library/react";
@@ -16,6 +16,7 @@ import { buildDaintreeFileUrl } from "../filePreviewKinds";
 afterEach(cleanup);
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+const SVG_DATA_PREFIX = "data:image/svg+xml,";
 
 function renderSvg(markup: string) {
   const { container } = render(
@@ -26,38 +27,57 @@ function renderSvg(markup: string) {
       sanitizedSvg={markup}
     />
   );
-  return container.querySelector("svg");
+  return container;
 }
 
-describe("FileImagePreview SVG inlining", () => {
-  it("renders an SVG that declares its namespace", () => {
-    const svg = renderSvg(`<svg xmlns="${SVG_NS}" viewBox="0 0 10 10"><rect /></svg>`);
+/** The SVG an `<img>` shows, parsed back from its data URL, or null if none. */
+function shownSvg(container: HTMLElement): Element | null {
+  const src = container.querySelector("img")?.getAttribute("src");
+  if (!src) return null;
+  expect(src.startsWith(SVG_DATA_PREFIX)).toBe(true);
+  const markup = decodeURIComponent(src.slice(SVG_DATA_PREFIX.length));
+  const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+  return doc.querySelector("parsererror") ? null : doc.documentElement;
+}
 
-    expect(svg).not.toBeNull();
+describe("FileImagePreview SVG", () => {
+  it("renders an SVG that declares its namespace", () => {
+    const svg = shownSvg(renderSvg(`<svg xmlns="${SVG_NS}" viewBox="0 0 10 10"><rect /></svg>`));
+
     expect(svg?.namespaceURI).toBe(SVG_NS);
     expect(svg?.querySelector("rect")).not.toBeNull();
   });
 
   it("renders an SVG missing its namespace declaration", () => {
-    // Namespace-strict parsing would yield a null-namespace element here, which
-    // mounts without error and paints nothing — a silent blank preview.
-    const svg = renderSvg('<svg viewBox="0 0 10 10"><circle /></svg>');
+    // A namespace-less SVG image paints nothing — a silent blank preview.
+    const svg = shownSvg(renderSvg('<svg viewBox="0 0 10 10"><circle /></svg>'));
 
-    expect(svg).not.toBeNull();
     expect(svg?.namespaceURI).toBe(SVG_NS);
     expect(svg?.querySelector("circle")).not.toBeNull();
   });
 
   it("renders nothing for markup that does not parse", () => {
-    const svg = renderSvg("<svg><unclosed></svg>");
-
-    expect(svg).toBeNull();
+    expect(renderSvg("<svg><unclosed></svg>").querySelector("img")).toBeNull();
   });
 
   it("renders nothing when the root element is not an svg", () => {
-    const svg = renderSvg(`<wrapper xmlns="${SVG_NS}"><svg /></wrapper>`);
+    const container = renderSvg(`<wrapper xmlns="${SVG_NS}"><svg /></wrapper>`);
 
-    expect(svg).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("keeps the SVG's own styles out of this document", () => {
+    // `u\72l(` is CSS for `url(`, which the regex sanitizer does not see.
+    // Inlined, it would ask this machine for a file on its own disk.
+    const payload =
+      `<svg xmlns="${SVG_NS}"><style>svg{background:u\\72l('daintree-file://load?path=%2Fetc%2Fpasswd&amp;root=%2Fetc')}</style>` +
+      `<rect style="fill:u\\72l('daintree-file://load?path=%2Fetc%2Fhosts&amp;root=%2Fetc')" /></svg>`;
+    const container = renderSvg(payload);
+
+    expect(container.querySelector("svg")).toBeNull();
+    expect(container.querySelector("style")).toBeNull();
+    expect(container.querySelector("[style]")).toBeNull();
+    expect(shownSvg(container)?.querySelector("rect")).not.toBeNull();
   });
 
   it("falls back to an img when no SVG markup is supplied", () => {
@@ -154,8 +174,8 @@ describe("FileImagePreview cache busting", () => {
     expect(container.querySelector("img")).toBe(img);
   });
 
-  it("ignores the token when SVG markup is inlined", () => {
-    // Inlined SVG has no URL to bust — it is re-read and re-sanitized upstream.
+  it("ignores the token for SVG markup", () => {
+    // SVG markup has no protocol URL to bust — it is re-read and re-sanitized upstream.
     const { container } = render(
       <FileImagePreview
         filePath="/repo/assets/icon.svg"
@@ -166,7 +186,10 @@ describe("FileImagePreview cache busting", () => {
       />
     );
 
-    expect(container.querySelector("img")).toBeNull();
-    expect(container.querySelector("svg rect")).not.toBeNull();
+    const src = container.querySelector("img")?.getAttribute("src") ?? "";
+    expect(src.startsWith(SVG_DATA_PREFIX)).toBe(true);
+    expect(decodeURIComponent(src.slice(SVG_DATA_PREFIX.length))).toBe(
+      `<svg xmlns="${SVG_NS}"><rect /></svg>`
+    );
   });
 });

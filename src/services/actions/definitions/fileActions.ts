@@ -211,6 +211,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       // FilePane derives the same name for its own panel header, but the dialog
       // header reads the stored title through the kind-agnostic host.
       const fileName = absolutePath.split(/[/\\]/).filter(Boolean).pop();
+      const panelWorktreeId = resolveFilePanelWorktreeId(absolutePath, worktreeId, callbacks);
       // A remote view's preview URL is built once, at render, and the host
       // refuses one built before this view's capability arrived. A host agent
       // can ask straight after connect, so wait for it; locally this resolves
@@ -219,7 +220,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       const panelId = await usePanelDialogStore.getState().openPanelDialog({
         kind: "file",
         filePath: absolutePath,
-        worktreeId: resolveFilePanelWorktreeId(absolutePath, worktreeId, callbacks),
+        worktreeId: panelWorktreeId,
         ...(fileName && { title: fileName }),
         ...(effectiveViewMode && { fileViewMode: effectiveViewMode }),
         ...(line != null && { initialLine: line }),
