@@ -764,6 +764,28 @@ describe("McpPaneConfigService", () => {
       await expect(fs.stat(again!.configPath!)).resolves.toBeDefined();
     });
 
+    it("records a relaunch's revocation apart from the pane's exit", async () => {
+      const first = await service.preparePaneConfig({
+        paneId: "pane-reasons",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
+      });
+      const firstBearer = bearerOf(Object.values(await readServers(first!.configPath!))[0]);
+
+      const second = await service.preparePaneConfig({
+        paneId: "pane-reasons",
+        port: 45454,
+        tier: "off",
+        plugin: { projectId: PROJECT_A, servers: [ledger] },
+      });
+      const secondBearer = bearerOf(Object.values(await readServers(second!.configPath!))[0]);
+      expect(grants.describeRevoked(firstBearer)?.reason).toBe("relaunched");
+
+      await service.revokePaneConfig("pane-reasons");
+      expect(grants.describeRevoked(secondBearer)?.reason).toBe("terminal-exited");
+    });
+
     it("mints nothing when the configuration a format would replace cannot be carried forward", async () => {
       await fs.mkdir(testUserData, { recursive: true });
       const broken = path.join(testUserData, "broken-defaults.json");

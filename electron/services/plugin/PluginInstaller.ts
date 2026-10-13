@@ -87,7 +87,9 @@ interface PluginInstallerDeps {
     pluginId: string,
     opts: { isBuiltin: boolean; disabled: Set<string> }
   ) => Promise<unknown>;
-  unloadPlugin: (pluginId: string) => void;
+  unloadPlugin: (pluginId: string, options?: { reload: true }) => void;
+  /** Ends a reload `unloadPlugin(id, { reload: true })` began, judged against whatever is loaded now. */
+  settlePluginReload: (pluginId: string) => void;
   activatePlugin: (pluginId: string) => Promise<void>;
   setPluginArchiveHash: (pluginId: string, archiveHash: string) => void;
   setEnabled: (pluginId: string, enabled: boolean) => Promise<void>;
@@ -245,7 +247,8 @@ export class PluginInstaller {
    *    `daintree.*` namespace, publisher/name agreement). An unmet engine range
    *    doesn't fail the install — the load that follows warns about it (#12589).
    *    A reviewed update must also still name the plugin it was approved for.
-   * 5. If the id already exists: `unloadPlugin` (disposer cascade), then swap via
+   * 5. If the id already exists: `unloadPlugin` as a reload (disposer cascade, agent
+   *    credentials held until the version left loaded is known), then swap via
    *    rename — park old aside → move new in → restore old on failure. Per-plugin
    *    settings/secrets live under a separate `plugin-settings/` root, so the
    *    directory swap never touches them; no preserve/restore step is needed.
@@ -336,6 +339,9 @@ export class PluginInstaller {
     }
 
     let tmpDir: string | null = null;
+    // Set once an upgrade has unloaded the running version, so every exit below
+    // settles the reload against whichever version ends up loaded.
+    let reloading: string | null = null;
     try {
       // `proper-lockfile` has no signal support, so a cancel issued while we
       // were queued behind another install can only be honoured here — the
@@ -518,8 +524,12 @@ export class PluginInstaller {
       pluginInstallJobs.setPhase(jobId, "activating");
 
       if (existing) {
+        // A reload rather than a plain unload: agents running against this
+        // plugin keep their credentials if the version left loaded declares
+        // the same agent surface, since they cannot be handed new ones.
+        reloading = pluginId;
         try {
-          this.deps.unloadPlugin(pluginId);
+          this.deps.unloadPlugin(pluginId, { reload: true });
         } catch (err) {
           return fail(
             "unload_failed",
@@ -634,7 +644,9 @@ export class PluginInstaller {
         // malformed `when` expression rejected by the when-clause parser) must
         // surface as a structured result, not an unhandled rejection. The new
         // version never loaded; on an upgrade, roll back to the parked old one.
-        return this._rollbackPostSwapLoadFailure(
+        // Awaited here, not returned bare: the `finally` releases the lock and
+        // settles the reload, and both must wait for the restore to finish.
+        return await this._rollbackPostSwapLoadFailure(
           pluginId,
           finalDir,
           existing ? parked : null,
@@ -646,7 +658,7 @@ export class PluginInstaller {
         // The new version's manifest never loaded. On a fresh install the dir is
         // intact and the user can retry; on an upgrade, roll back to the parked
         // old version so the previous install isn't lost.
-        return this._rollbackPostSwapLoadFailure(
+        return await this._rollbackPostSwapLoadFailure(
           pluginId,
           finalDir,
           existing ? parked : null,
@@ -672,6 +684,13 @@ export class PluginInstaller {
       this.deps.broadcastProvenanceChanged();
       return { status: "installed", pluginId };
     } finally {
+      if (reloading !== null) {
+        try {
+          this.deps.settlePluginReload(reloading);
+        } catch (err) {
+          console.error(`[PluginService] Settling the reload of "${reloading}" threw:`, err);
+        }
+      }
       if (tmpDir) {
         await fs.rm(tmpDir, { recursive: true, force: true }).catch((err) => {
           console.warn(`[PluginService] Failed to clean up install temp dir ${tmpDir}:`, err);

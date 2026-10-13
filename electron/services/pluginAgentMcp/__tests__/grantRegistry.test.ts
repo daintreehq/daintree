@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeProjectPluginInstanceKey } from "../../../../shared/types/plugin.js";
-import { PluginMcpGrantRegistry } from "../grantRegistry.js";
+import { MAX_REMEMBERED_PLUGIN_MCP_REVOCATIONS, PluginMcpGrantRegistry } from "../grantRegistry.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -57,6 +57,60 @@ describe("PluginMcpGrantRegistry", () => {
     expect(revoked.map((g) => g.credentialId)).toEqual([mine.grant.credentialId]);
     expect(registry.authenticate(mine.token)).toBeNull();
     expect(registry.authenticate(theirs.token)).toBe(theirs.grant);
+  });
+
+  describe("describeRevoked", () => {
+    it("names the credential and why it was revoked, without the bearer or its digest", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const { grant, token } = issue(registry);
+
+      registry.revokeTerminal("term-1", "relaunched");
+
+      const revoked = registry.describeRevoked(token);
+      expect(revoked).toMatchObject({
+        credentialId: grant.credentialId,
+        pluginInstanceId: "acme.ledger",
+        terminalId: "term-1",
+        reason: "relaunched",
+      });
+      expect(JSON.stringify(revoked)).not.toContain(token);
+      expect(JSON.stringify(revoked)).not.toContain(grant.bearerSha256);
+    });
+
+    it("knows nothing of a live bearer or one never issued", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const { token } = issue(registry);
+
+      expect(registry.describeRevoked(token)).toBeNull();
+      expect(registry.describeRevoked("never-issued")).toBeNull();
+      expect(registry.describeRevoked("")).toBeNull();
+    });
+
+    it("never lets a remembered revocation authenticate", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const { grant, token } = issue(registry);
+
+      registry.revokePlugin("acme.ledger");
+
+      expect(registry.describeRevoked(token)?.reason).toBe("plugin-unloaded");
+      expect(registry.authenticate(token)).toBeNull();
+      expect(registry.isLive(grant.credentialId)).toBe(false);
+    });
+
+    it("forgets the oldest revocations past its bound", () => {
+      const registry = new PluginMcpGrantRegistry();
+      const issued: Array<ReturnType<typeof issue>> = [];
+      for (let i = 0; i <= MAX_REMEMBERED_PLUGIN_MCP_REVOCATIONS; i++) {
+        issued.push(issue(registry, { terminalId: `term-${i}` }));
+        registry.revokeTerminal(`term-${i}`);
+      }
+
+      const [oldest, ...kept] = issued;
+      expect(registry.describeRevoked(oldest.token)).toBeNull();
+      for (const { grant, token } of kept) {
+        expect(registry.describeRevoked(token)?.credentialId).toBe(grant.credentialId);
+      }
+    });
   });
 
   it("revokes by plugin instance, leaving another project's copy of the same plugin alone", () => {
