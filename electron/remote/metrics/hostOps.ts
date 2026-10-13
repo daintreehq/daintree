@@ -170,7 +170,8 @@ export async function listLocalRestartTerminals(): Promise<LocalRestartTerminals
   const byProject = new Map<string | null, HostRestartProject>();
   const terminalIds: string[] = [];
   for (const terminal of terminals) {
-    if (terminal.hasPty === false || terminal.agentState === "exited") continue;
+    // The PTY's own life decides, never the agent's: a shell an agent exited from still runs.
+    if (terminal.hasPty === false) continue;
     if (terminalIds.length >= MAX_RESTART_IDS) {
       complete = false;
       break;

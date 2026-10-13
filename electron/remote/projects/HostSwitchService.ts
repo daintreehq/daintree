@@ -60,6 +60,12 @@ export interface HostSwitchServiceOptions {
   isKnownHost(hostId: HostId): boolean;
   /** Wait for a dropped host to come back; true once it is usable again. */
   whenReconnected(hostId: HostId, timeoutMs: number): Promise<boolean>;
+  /**
+   * Keep a host's connection open until the returned release is called: a
+   * transfer can outlast the Shell's idle release, and a session closed under
+   * it cancels the transfer.
+   */
+  holdHost?(hostId: HostId): () => void;
   pollIntervalMs?: number;
   reconnectTimeoutMs?: number;
   now?: () => number;
@@ -391,22 +397,36 @@ export class HostSwitchService {
       cancel: null,
       promise: Promise.resolve(null as unknown as HostSwitchExecuteResult),
     };
-    track.promise = run(track).then(
-      (result) => {
-        this.settle(
-          track,
-          result.kind === "git-failed" || result.kind === "push-unconfirmed"
-            ? "failed"
-            : "succeeded"
-        );
-        return result;
-      },
-      (error: unknown) => {
-        const cancelled = (error as { code?: unknown } | null)?.code === "CANCELLED";
-        this.settle(track, cancelled ? "cancelled" : "failed", formatErrorMessage(error, "Failed"));
-        throw error;
-      }
-    );
+    // Every host the step talks to stays connected until it settles.
+    const { fromHostId, toHostId } = payload as { fromHostId?: unknown; toHostId?: unknown };
+    const releases = [...new Set([fromHostId, toHostId])]
+      .filter((hostId): hostId is HostId => typeof hostId === "string" && !isLocalHostId(hostId))
+      .map((hostId) => this.options.holdHost?.(hostId) ?? (() => {}));
+    const releaseHosts = () => {
+      for (const release of releases.splice(0)) release();
+    };
+    track.promise = run(track)
+      .finally(releaseHosts)
+      .then(
+        (result) => {
+          this.settle(
+            track,
+            result.kind === "git-failed" || result.kind === "push-unconfirmed"
+              ? "failed"
+              : "succeeded"
+          );
+          return result;
+        },
+        (error: unknown) => {
+          const cancelled = (error as { code?: unknown } | null)?.code === "CANCELLED";
+          this.settle(
+            track,
+            cancelled ? "cancelled" : "failed",
+            formatErrorMessage(error, "Failed")
+          );
+          throw error;
+        }
+      );
     this.tracked.set(opId, track);
     return track.promise;
   }

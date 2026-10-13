@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import { probeHost } from "../hostProbe.js";
 import {
+  busyAgents,
+  exceedsConfirmed,
   runHostInstall,
   stopScript,
   type InstallProgress,
@@ -618,6 +620,41 @@ describe("runHostInstall", () => {
     });
     const result = await install(deps, { hostId: "studio", whileWorking: "wait-for-idle" });
     expect(result.status).toBe("installed");
+  });
+
+  it("waits again when an agent went busy between the idle wait and the restart", async () => {
+    const deps = makeDeps({
+      shell: fakeShell(),
+      probes: [
+        macProbe({ build: OLD_BUILD, hostMode: true }),
+        macProbe({ build: NEW_BUILD, hostMode: true }),
+      ],
+      // Shown, idle, busy again at the last look, then idle.
+      working: [1, 0, 1, 1, 0, 0],
+    });
+    const result = await install(deps, { hostId: "studio", whileWorking: "wait-for-idle" });
+    expect(result.status).toBe("installed");
+    expect(
+      deps.progress.filter((p) => p.stage === "waiting-for-idle").map((p) => p.message)
+    ).toEqual(["Waiting for 1 agent working or waiting on the host"]);
+  });
+
+  it("never reads a list the host couldn't complete as idle", () => {
+    const partial: HostRestartImpact = {
+      detail: { ...impactOf(0).detail!, complete: false },
+      agents: null,
+    };
+    expect(busyAgents(partial)).toBeNull();
+    expect(busyAgents(impactOf(0))).toBe(0);
+  });
+
+  it("asks again when an older host's counts can't be read right before the restart", () => {
+    const counted: HostRestartImpact = { detail: null, agents: { working: 0, waiting: 0 } };
+    const unknown: HostRestartImpact = { detail: null, agents: null };
+    expect(exceedsConfirmed(unknown, counted)).toBe(true);
+    // Confirmed as unknown, still unknown: the user already agreed to that.
+    expect(exceedsConfirmed(unknown, unknown)).toBe(false);
+    expect(exceedsConfirmed(counted, counted)).toBe(false);
   });
 
   it("stops before the restart when a terminal appeared after the user confirmed", async () => {

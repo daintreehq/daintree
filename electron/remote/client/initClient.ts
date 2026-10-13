@@ -676,13 +676,16 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
           // A host from before it could say (UNSUPPORTED), or one that didn't answer: counts below.
         }
       }
-      const agents =
-        agentsSource?.(hostId) ??
-        (() => {
-          const observed = client.list().find((host) => host.descriptor.id === hostId)
-            ?.summary?.agentsObserved;
-          return observed ? { working: observed.working, waiting: observed.waiting } : null;
-        })();
+      // Only a connected host's counts are current: a summary kept from before
+      // a drop may say zero about agents that have started since.
+      if (manager.connectionState(hostId).status !== "connected") return unknown;
+      const agents = agentsSource
+        ? agentsSource(hostId)
+        : (() => {
+            const observed = client.list().find((host) => host.descriptor.id === hostId)
+              ?.summary?.agentsObserved;
+            return observed ? { working: observed.working, waiting: observed.waiting } : null;
+          })();
       return { detail: null, agents };
     },
     async reconnect(hostId) {

@@ -74,9 +74,14 @@ export function isRestartImpactEmpty(impact: HostRestartImpact): boolean {
   );
 }
 
-/** Agents working or waiting: what "idle" must wait out. Null when that can't be seen. */
+/**
+ * Agents working or waiting: what "idle" must wait out. Null when that can't
+ * be seen, including a list the host couldn't complete: the missing part may
+ * be the busy one.
+ */
 export function busyAgents(impact: HostRestartImpact): number | null {
   if (impact.detail) {
+    if (!impact.detail.complete) return null;
     return impact.detail.projects.reduce(
       (sum, project) => sum + project.working + project.waiting,
       0
@@ -105,7 +110,9 @@ export function exceedsConfirmed(now: HostRestartImpact, confirmed: HostRestartI
   }
   // What the user saw and what is seen now can't be lined up item by item.
   if (now.detail || confirmed.detail) return true;
-  if (!now.agents || !confirmed.agents) return false;
+  // Known when confirmed, unknown now (the link dropped): what runs can't be checked, so ask again.
+  if (!now.agents) return confirmed.agents !== null;
+  if (!confirmed.agents) return false;
   return (
     now.agents.working + (now.agents.waiting ?? 0) >
     confirmed.agents.working + (confirmed.agents.waiting ?? 0)
@@ -751,20 +758,24 @@ export async function runHostInstall(
   if (plan.restartsHost && confirmed) {
     const dropStagedBuild = () =>
       deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
-    if (whileWorking === "wait-for-idle") {
-      try {
-        await waitForIdle(deps, hostId, signal, report);
-      } catch (err) {
-        // Nothing is left staged for an update that isn't going ahead.
-        await dropStagedBuild();
-        throw err;
+    for (;;) {
+      if (whileWorking === "wait-for-idle") {
+        try {
+          await waitForIdle(deps, hostId, signal, report);
+        } catch (err) {
+          // Nothing is left staged for an update that isn't going ahead.
+          await dropStagedBuild();
+          throw err;
+        }
       }
-    }
-    // Checked again right before the restart: work may have started while staging or waiting.
-    const impact = await deps.restartImpact(hostId);
-    if (exceedsConfirmed(impact, confirmed)) {
-      await dropStagedBuild();
-      return { status: "needs-confirmation", impact };
+      // Checked again right before the restart: work may have started while staging or waiting.
+      const impact = await deps.restartImpact(hostId);
+      if (exceedsConfirmed(impact, confirmed)) {
+        await dropStagedBuild();
+        return { status: "needs-confirmation", impact };
+      }
+      // An agent that went busy again since the wait saw it idle: wait for it too.
+      if (whileWorking !== "wait-for-idle" || busyAgents(impact) === 0) break;
     }
   }
   if (signal.aborted) {

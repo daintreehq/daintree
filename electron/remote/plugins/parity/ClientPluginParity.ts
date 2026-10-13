@@ -45,6 +45,8 @@ export interface LocalPlugins {
 
 export interface ClientPluginParityDeps {
   sessionFor(hostId: HostId): ParitySession | null;
+  /** Keep the host's connection open until released, for an upload that may run long. */
+  holdHost?(hostId: HostId): () => void;
   isKnownHost(hostId: HostId): boolean;
   hostLabel(hostId: HostId): string;
   local: LocalPlugins;
@@ -388,6 +390,22 @@ export class ClientPluginParity {
     archivePath: string,
     target: { pluginId?: string; update: boolean },
     job: InstallJob = {}
+  ): Promise<PluginInstallResult> {
+    // An upload and its install can outlast the Shell's idle release: the connection stays until both settle.
+    const release = this.deps.holdHost?.(hostId);
+    try {
+      return await this.sendPackageNow(hostId, session, archivePath, target, job);
+    } finally {
+      release?.();
+    }
+  }
+
+  private async sendPackageNow(
+    hostId: HostId,
+    session: ParitySession,
+    archivePath: string,
+    target: { pluginId?: string; update: boolean },
+    job: InstallJob
   ): Promise<PluginInstallResult> {
     const hostLabel = this.deps.hostLabel(hostId);
     const opId = (this.deps.newOperationId ?? randomUUID)();

@@ -323,6 +323,7 @@ export class RemoteHostsClient {
    */
   async listHostProjects(payload: { hostId: string }): Promise<HostProjectSummary[]> {
     const hostId = hostIdOf(payload);
+    this.options.manager.touch(hostId);
     if (isLocalHostId(hostId)) throw invalid("The local host is listed by the Shell");
     this.options.registry.require(hostId);
     const connection = this.options.manager.get(hostId);

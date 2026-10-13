@@ -767,6 +767,8 @@ export class RemoteHostManager {
   /** When each connection was last asked for or found in use. */
   private readonly lastUsed = new Map<HostId, number>();
   private readonly useChecks = new Set<(hostId: HostId) => boolean>();
+  /** Work in flight on a host that needs its connection kept (a transfer), by count. */
+  private readonly holds = new Map<HostId, number>();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly options: RemoteHostManagerOptions) {
@@ -791,12 +793,30 @@ export class RemoteHostManager {
     return () => this.useChecks.delete(check);
   }
 
+  /**
+   * Keep the host's connection open until the returned release is called,
+   * however long that takes. For work that outlasts the release window.
+   */
+  hold(hostId: HostId): () => void {
+    this.holds.set(hostId, (this.holds.get(hostId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (this.holds.get(hostId) ?? 1) - 1;
+      if (left > 0) this.holds.set(hostId, left);
+      else this.holds.delete(hostId);
+      this.touch(hostId);
+    };
+  }
+
   /** Mark the host's connection used now, so the idle release starts counting again. */
   touch(hostId: HostId): void {
     if (this.connections.has(hostId)) this.lastUsed.set(hostId, this.now());
   }
 
   private inUse(hostId: HostId): boolean {
+    if ((this.holds.get(hostId) ?? 0) > 0) return true;
     // A host whose notifications are on keeps its light connection.
     if (this.options.registry.get(hostId)?.notificationsEnabled === true) return true;
     if (this.connections.get(hostId)?.hasViews) return true;
@@ -821,6 +841,11 @@ export class RemoteHostManager {
         continue;
       }
       if (now - (this.lastUsed.get(hostId) ?? now) < releaseMs) continue;
+      // A link that stopped retrying (ssh can't log in, Host mode off, another
+      // build) costs nothing, and closing it would forget why it stopped.
+      const link = this.connections.get(hostId)?.linkState;
+      if (link?.status === "version-mismatch") continue;
+      if (link?.status === "unreachable" && link.retryAt === null) continue;
       console.log(`[RemoteHosts] Closing the unused connection to ${hostId}`);
       void this.disconnect(hostId).catch((error: unknown) => {
         console.warn(`[RemoteHosts] Closing the unused connection to ${hostId} failed:`, error);

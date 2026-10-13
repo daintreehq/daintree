@@ -195,12 +195,25 @@ function startClient(options: StartRemoteHostsOptions): void {
   teardowns.push(() => client.dispose());
   // Session-level services: both reach a host through its current session,
   // so they work with no local view on it and cost nothing until a host is used.
+  // Reaching a host through its session is using it: the idle release starts counting again.
+  const usedSessionFor = (hostId: string) => {
+    client.manager.touch(hostId);
+    return client.sessionFor(hostId);
+  };
   teardowns.push(
-    installHostSwitchService({ client: client.client, sessionFor: client.sessionFor })
+    installHostSwitchService({
+      client: client.client,
+      sessionFor: usedSessionFor,
+      holdHost: (hostId) => client.manager.hold(hostId),
+    })
   );
   // Plugin comparison and install-on-host, reached from Settings with no view needed.
   teardowns.push(
-    installPluginParityClient({ client: client.client, sessionFor: client.sessionFor })
+    installPluginParityClient({
+      client: client.client,
+      sessionFor: usedSessionFor,
+      holdHost: (hostId) => client.manager.hold(hostId),
+    })
   );
   const hostEntry = (hostId: string) =>
     client.client.list().find((entry) => entry.descriptor.id === hostId);

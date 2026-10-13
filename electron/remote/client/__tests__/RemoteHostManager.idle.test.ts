@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
-import { TEST_HANDSHAKE } from "../../link/__tests__/linkTestUtils.js";
+import { TEST_HANDSHAKE, waitFor } from "../../link/__tests__/linkTestUtils.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
 import { RemoteHostManager } from "../RemoteHostManager.js";
-import { TransportError, type LinkTransport } from "../transport.js";
+import { SshAccessError, TransportError, type LinkTransport } from "../transport.js";
 
 function memoryStore(): RemoteHostsStore {
   let value: { hosts: HostDescriptor[] } | undefined;
@@ -24,13 +24,13 @@ afterEach(async () => {
   manager = null;
 });
 
-function setup() {
+function setup(transport: LinkTransport = unreachable) {
   let now = 0;
   const registry = new HostRegistry(memoryStore());
   const host = registry.add({ name: "studio", connection: { kind: "ssh", target: "studio" } });
   manager = new RemoteHostManager({
     registry,
-    createTransport: () => unreachable,
+    createTransport: () => transport,
     handshake: () => TEST_HANDSHAKE,
     client: { clientId: "c", clientName: "mbp", platform: "darwin" },
     views: { send: () => true, watch: () => () => {}, resync: () => {} },
@@ -60,6 +60,40 @@ describe("RemoteHostManager idle release", () => {
     h.manager.sweepIdle();
     expect(h.manager.get(h.hostId)).toBeUndefined();
     expect(h.manager.connectionState(h.hostId)).toEqual({ status: "disconnected" });
+  });
+
+  it("keeps a held connection however long the work takes", () => {
+    const h = setup();
+    h.manager.connect(h.hostId);
+    const release = h.manager.hold(h.hostId);
+    h.advance(60_000);
+    h.manager.sweepIdle();
+    expect(h.manager.get(h.hostId)).toBeDefined();
+    release();
+    h.advance(999);
+    h.manager.sweepIdle();
+    expect(h.manager.get(h.hostId)).toBeDefined();
+    h.advance(1);
+    h.manager.sweepIdle();
+    expect(h.manager.get(h.hostId)).toBeUndefined();
+  });
+
+  it("keeps a link that stopped retrying, so why it stopped isn't forgotten", async () => {
+    // ssh refused the login: it waits for the user.
+    const h = setup({
+      async open() {
+        throw new SshAccessError("Permission denied (publickey).");
+      },
+    });
+    h.manager.connect(h.hostId);
+    await waitFor(() => h.manager.connectionState(h.hostId).status === "unreachable");
+    expect(h.manager.connectionState(h.hostId)).toMatchObject({ stoppedRetrying: true });
+    h.advance(10_000);
+    h.manager.sweepIdle();
+    expect(h.manager.connectionState(h.hostId)).toMatchObject({
+      status: "unreachable",
+      stoppedRetrying: true,
+    });
   });
 
   it("restarts the window on each use", () => {

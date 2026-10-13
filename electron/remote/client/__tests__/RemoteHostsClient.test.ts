@@ -38,6 +38,7 @@ function fakeManager() {
     bound: [] as number[],
     /** What the host remembers this Shell last showed there. */
     last: null as { projectId: string; path: string; name: string } | null,
+    touch: vi.fn(),
     useChecks: [] as Array<(hostId: string) => boolean>,
     addUseCheck: vi.fn((check: (hostId: string) => boolean) => {
       manager.useChecks.push(check);
