@@ -14,6 +14,8 @@ export interface WindowHostService {
   hostName?(hostId: HostId): string | null;
   switchWindowToLocal(windowId: number, projectId: string): Promise<SwitchWindowHostResult>;
   openHostProjectInNewWindow(hostId: HostId, projectPath: string): Promise<SwitchWindowHostResult>;
+  /** A navigation in the window that didn't go through Remote Hosts: a host switch waiting there gives way. */
+  supersedePendingSwitch?(windowId: number): void;
 }
 
 declare module "../remote/runtime.js" {
@@ -37,6 +39,17 @@ export function getWindowHostId(windowId: number): HostId {
  */
 export function isWindowOnRemoteHost(windowId: number): boolean {
   return !isLocalHostId(getWindowHostId(windowId));
+}
+
+/**
+ * The newest navigation in a window wins: a switch to another host still
+ * waiting on that host when the person picks something here (a local project
+ * or scratch, File › Open Recent) must not pull the window there once the host
+ * answers.
+ */
+export function supersedePendingHostSwitch(windowId: number | null | undefined): void {
+  if (windowId == null) return;
+  getRemoteService("windowHosts")?.supersedePendingSwitch?.(windowId);
 }
 
 /** Bring a window that is on a host back to this machine, showing one of its workspaces. */

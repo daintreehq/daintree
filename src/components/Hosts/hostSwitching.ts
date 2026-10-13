@@ -37,50 +37,77 @@ export function followSwitchResult(result: SwitchWindowHostResult | null | undef
   });
 }
 
-/** Switch this window (or a new one) to a host, optionally straight into one of its projects. */
+/**
+ * The one way a failed switch to another host reads, whichever control started
+ * it: the host's own words for what went wrong (never the IPC wire prefix), and
+ * the one recovery that gets that host back — an update for a host on another
+ * build, setting up Host mode where it's off, otherwise trying the same switch
+ * again.
+ */
+export function notifyHostSwitchFailure(hostId: HostId, error: unknown, retry: () => void): void {
+  // Refused for its build: the update is what gets this host back, so it is
+  // offered right here as well as in the host menu.
+  const entry =
+    isClientAppError(error) && error.code === "HOST_VERSION_MISMATCH"
+      ? getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId)
+      : undefined;
+  // Host mode off there: setting it up is what gets this host working.
+  const update = entry
+    ? hostUpdateOffer(entry)
+    : isClientAppError(error) && error.code === "HOST_MODE_OFF"
+      ? { hostId, target: "host" as const, label: "Set up…" }
+      : null;
+  // The host said the project is gone: trying again can't help, picking another
+  // can. A host that is itself gone from the list is a different miss.
+  const missing =
+    !update &&
+    isClientAppError(error) &&
+    error.code === "NOT_FOUND" &&
+    getHostListSnapshot().hosts.some((candidate) => candidate.descriptor.id === hostId);
+  notify({
+    type: "error",
+    context: { eventKind: "connectivity" },
+    title: `Couldn't switch to ${hostName(hostId)}`,
+    message: clientErrorText(error, "The window stayed on its current host."),
+    actions: update
+      ? [
+          {
+            label: update.label,
+            variant: "primary",
+            onClick: () => runHostUpdate(update.target, update.hostId),
+          },
+        ]
+      : missing
+        ? [
+            {
+              label: "Choose project…",
+              variant: "primary",
+              onClick: () => void requestHostProjectPicker(hostId),
+            },
+          ]
+        : [{ label: "Retry", variant: "primary", onClick: retry }],
+  });
+}
+
+/**
+ * Switch this window (or a new one) to a host, optionally straight into one of
+ * its projects. `onStayed` hears when the window ends up where it was: the
+ * switch failed, or was cancelled or overtaken by a newer navigation.
+ */
 export async function switchToHost(
   hostId: HostId,
   newWindow: boolean,
-  projectId?: string
+  projectId?: string,
+  options?: { onStayed?: () => void }
 ): Promise<void> {
   try {
     const result = await window.electron.remoteHosts.switchWindowHost(
       projectId === undefined ? { hostId, newWindow } : { hostId, newWindow, projectId }
     );
+    if (result?.outcome === "superseded") options?.onStayed?.();
     followSwitchResult(result);
   } catch (error) {
-    // Refused for its build: the update is what gets this host back, so it is
-    // offered right here as well as in the host menu.
-    const entry =
-      isClientAppError(error) && error.code === "HOST_VERSION_MISMATCH"
-        ? getHostListSnapshot().hosts.find((candidate) => candidate.descriptor.id === hostId)
-        : undefined;
-    // Host mode off there: setting it up is what gets this host working.
-    const update = entry
-      ? hostUpdateOffer(entry)
-      : isClientAppError(error) && error.code === "HOST_MODE_OFF"
-        ? { hostId, target: "host" as const, label: "Set up…" }
-        : null;
-    notify({
-      type: "error",
-      context: { eventKind: "connectivity" },
-      title: `Couldn't switch to ${hostName(hostId)}`,
-      message: clientErrorText(error, "The window stayed on its current host."),
-      actions: update
-        ? [
-            {
-              label: update.label,
-              variant: "primary",
-              onClick: () => runHostUpdate(update.target, update.hostId),
-            },
-          ]
-        : [
-            {
-              label: "Retry",
-              variant: "primary",
-              onClick: () => void switchToHost(hostId, newWindow, projectId),
-            },
-          ],
-    });
+    options?.onStayed?.();
+    notifyHostSwitchFailure(hostId, error, () => void switchToHost(hostId, newWindow, projectId));
   }
 }

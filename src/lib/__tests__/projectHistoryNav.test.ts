@@ -312,4 +312,30 @@ describe("switchToLastWorkspace across hosts", () => {
     expect(switchWindowHost).not.toHaveBeenCalled();
     expect(projectState.switchProject).not.toHaveBeenCalled();
   });
+
+  it("reads a failed host switch the way the host chip does, without the wire prefix", async () => {
+    onHost(null);
+    peekMock.mockResolvedValue({ workspaceId: `studio-01:${TARGET_PROJECT}` });
+    // As the preload hands an AppError across the bridge.
+    switchWindowHost.mockRejectedValueOnce(
+      new Error(
+        "[AppError|HOST_DISCONNECTED|Couldn't%20reach%20this%20host.%20Check%20that%20it%20is%20on%20and%20try%20again.] Host studio-01 did not connect (unreachable)"
+      )
+    );
+
+    await switchToLastWorkspace();
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const call = notifyMock.mock.calls[0]![0] as {
+      title: string;
+      message: string;
+      actions: Array<{ label: string; onClick: () => void }>;
+    };
+    expect(call.title).toBe("Couldn't switch to studio-01");
+    expect(call.message).toBe("Couldn't reach this host. Check that it is on and try again.");
+    expect(call.actions.map((action) => action.label)).toEqual(["Retry"]);
+
+    call.actions[0]!.onClick();
+    await vi.waitFor(() => expect(switchWindowHost).toHaveBeenCalledTimes(2));
+  });
 });

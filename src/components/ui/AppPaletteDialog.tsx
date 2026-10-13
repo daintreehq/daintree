@@ -31,7 +31,10 @@ import {
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { usePaletteStore } from "@/store/paletteStore";
-import { consumePaletteFocusRestoreSuppression } from "./paletteFocusRestore";
+import {
+  consumeDeferredPaletteFocusRestore,
+  consumePaletteFocusRestoreSuppression,
+} from "./paletteFocusRestore";
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
@@ -188,6 +191,22 @@ export function AppPaletteDialog({
       clearDialogOverlays();
       return;
     }
+    // The caller decides once it knows whether its pick moved focus elsewhere.
+    const receive = consumeDeferredPaletteFocusRestore();
+    if (receive) {
+      clearDialogOverlays();
+      const dialog = dialogRef.current;
+      receive(() => {
+        if (!el || !document.contains(el)) return;
+        // Only while nothing else has taken the keyboard meanwhile: focus
+        // still on the body, or still in this palette on its way out.
+        const active = document.activeElement;
+        const unclaimed =
+          !active || active === document.body || (dialog !== null && dialog.contains(active));
+        if (unclaimed) el.focus();
+      });
+      return;
+    }
     if (!el) return;
     // Palette-to-palette handoff: the next palette will install its
     // own focus, so skip restore entirely — and skip the overlay clear
@@ -225,6 +244,9 @@ export function AppPaletteDialog({
     if (isOpen === wasOpenRef.current) return;
     wasOpenRef.current = isOpen;
     clearDialogOverlays();
+    // A palette opening owns the keyboard now: a restore another one handed
+    // off on its way out (and never ran) must not take it back later.
+    if (isOpen) consumeDeferredPaletteFocusRestore();
   }, [isOpen]);
 
   // Read in the insertion phase, before this commit's layout work: the palette

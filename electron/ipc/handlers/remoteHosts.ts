@@ -36,6 +36,8 @@ import type {
   PreparePluginViewPayload,
   SwitchWindowHostPayload,
   SwitchWindowHostResult,
+  CancelPendingSwitchPayload,
+  PendingHostSwitch,
   UpdateHostPayload,
   WindowHostInfo,
 } from "../../../shared/types/ipc/remoteHosts.js";
@@ -134,6 +136,18 @@ export const remoteHostsNamespace = defineIpcNamespace({
       REMOTE_HOSTS_METHOD_CHANNELS.switchWindowHost,
       async (ctx: IpcContext, payload: SwitchWindowHostPayload): Promise<SwitchWindowHostResult> =>
         requireRemoteService("remoteHostsClient").switchWindowHost(ctx, payload),
+      { withContext: true }
+    ),
+    getPendingSwitch: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.getPendingSwitch,
+      async (ctx: IpcContext): Promise<PendingHostSwitch | null> =>
+        getRemoteService("remoteHostsClient")?.getPendingSwitch(ctx) ?? null,
+      { withContext: true }
+    ),
+    cancelPendingSwitch: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.cancelPendingSwitch,
+      async (ctx: IpcContext, payload: CancelPendingSwitchPayload): Promise<boolean> =>
+        getRemoteService("remoteHostsClient")?.cancelPendingSwitch(ctx, payload) ?? false,
       { withContext: true }
     ),
     discover: op(REMOTE_HOSTS_METHOD_CHANNELS.discover, async (): Promise<DiscoveredHost[]> =>

@@ -50,7 +50,10 @@ vi.mock("@/utils/logger", () => ({
 
 import { HostSwitcherPalette } from "../HostSwitcherPalette";
 import { usePaletteStore } from "@/store/paletteStore";
-import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
+import {
+  consumeDeferredPaletteFocusRestore,
+  consumePaletteFocusRestoreSuppression,
+} from "@/components/ui/paletteFocusRestore";
 
 const CONNECTED: HostListEntry["connection"] = {
   status: "connected",
@@ -121,6 +124,7 @@ beforeEach(() => {
   });
   usePaletteStore.setState({ activePaletteId: null });
   consumePaletteFocusRestoreSuppression();
+  consumeDeferredPaletteFocusRestore();
 });
 
 afterEach(() => cleanup());
@@ -255,19 +259,33 @@ describe("HostSwitcherPalette", () => {
     );
   });
 
-  // The switch hands the keyboard on (the host's view, or its project list);
-  // the palette's exit-time restore must not take it back.
-  it("leaves focus to the switch, but restores it when nothing moved", () => {
+  // A switch that lands hands the keyboard on (the host's view, or its project
+  // list), so the palette doesn't take it back on close; one that fails or is
+  // cancelled leaves the window where it was, and the keyboard goes back too.
+  it("gives focus back only when the window stayed where it was", async () => {
     hostList.value = {
       hosts: [host("h1", "studio-01", { status: "disconnected" })],
       localSummary: null,
     };
+    switchWindowHost.mockResolvedValueOnce({ outcome: "switched" });
     openPalette();
     fireEvent.click(row("h1"));
-    expect(consumePaletteFocusRestoreSuppression()).toBe(true);
+    const landed = vi.fn();
+    consumeDeferredPaletteFocusRestore()!(landed);
+    await waitFor(() => expect(switchWindowHost).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(landed).not.toHaveBeenCalled();
 
+    switchWindowHost.mockResolvedValueOnce({ outcome: "superseded" });
+    act(() => usePaletteStore.getState().openPalette("host-switcher"));
+    fireEvent.click(row("h1"));
+    const stayed = vi.fn();
+    consumeDeferredPaletteFocusRestore()!(stayed);
+    await waitFor(() => expect(stayed).toHaveBeenCalledTimes(1));
+
+    // Picking where the window already is just closes, and restores as usual.
     act(() => usePaletteStore.getState().openPalette("host-switcher"));
     fireEvent.click(row("local"));
-    expect(consumePaletteFocusRestoreSuppression()).toBe(false);
+    expect(consumeDeferredPaletteFocusRestore()).toBeNull();
   });
 });

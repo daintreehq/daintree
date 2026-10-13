@@ -791,6 +791,8 @@ export const CHANNEL_LOCALITY = {
   "remote-hosts:list": "shell",
   "remote-hosts:probe": "shell",
   "remote-hosts:switch-window-host": "shell",
+  "remote-hosts:get-pending-switch": "shell",
+  "remote-hosts:cancel-pending-switch": "shell",
   "remote-hosts:update": "shell",
   "remote-hosts:plan-install": "shell",
   "remote-hosts:install": "shell",

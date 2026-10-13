@@ -1,6 +1,18 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { HostDescriptor, HostConnectionState } from "../../../../shared/types/remoteHosts.js";
-import type { RemoteHostsEvent } from "../../../../shared/types/ipc/remoteHosts.js";
+import {
+  toHostScopedKey,
+  type HostDescriptor,
+  type HostConnectionState,
+} from "../../../../shared/types/remoteHosts.js";
+import {
+  disposeProjectHistory,
+  getProjectHistory,
+  resetProjectHistory,
+} from "../../../services/ProjectHistoryService.js";
+import type {
+  PendingHostSwitch,
+  RemoteHostsEvent,
+} from "../../../../shared/types/ipc/remoteHosts.js";
 import type { IpcContext } from "../../../ipc/types.js";
 import type { RemoteRouter } from "../../../ipc/endpoint.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
@@ -269,6 +281,158 @@ describe("RemoteHostsClient", () => {
     });
     failLookup();
     await expect(slow).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+  });
+
+  describe("a switch still on its way", () => {
+    function pendingEvents(): Array<PendingHostSwitch | null> {
+      return vi
+        .mocked(windows.notifyWindow!)
+        .mock.calls.filter(([windowId]) => windowId === 1)
+        .map(([, event]) => (event as { pending: PendingHostSwitch | null }).pending);
+    }
+
+    beforeEach(() => {
+      windows.notifyWindow = vi.fn();
+    });
+
+    it("tells the window's views what it is waiting on, then that it is over", async () => {
+      await client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+
+      const seen = pendingEvents();
+      expect(seen.map((pending) => pending?.phase ?? null)).toEqual([
+        "connecting",
+        "opening",
+        "opening",
+        null,
+      ]);
+      expect(seen[2]).toMatchObject({ hostName: "studio-01", projectName: "proj-1" });
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+    });
+
+    it("says Daintree is being started on the host while it is", async () => {
+      let starting = false;
+      client = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: (id) => (id === 5 ? 1 : null) },
+        windows,
+        installRouter,
+        emit: () => {},
+        isStarting: () => starting,
+      });
+      let release!: (value: string) => void;
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>((r) => (release = r)));
+      const switching = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(client.getPendingSwitch(ctxFor(5, 1))).not.toBeNull());
+
+      starting = true;
+      client.refreshPendingSwitches("studio-01");
+      expect(client.getPendingSwitch(ctxFor(5, 1))?.phase).toBe("starting");
+
+      release("ready");
+      await switching;
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+    });
+
+    it("cancels straight away, wherever the switch was waiting, and the window stays", async () => {
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>(() => {}));
+      const switching = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(client.getPendingSwitch(ctxFor(5, 1))).not.toBeNull());
+      const { switchId } = client.getPendingSwitch(ctxFor(5, 1))!;
+
+      expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId: "someone-else" })).toBe(false);
+      expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(true);
+
+      // The host never answered, and the switch settled anyway.
+      await expect(switching).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+      expect(bindings.get(1)).toBe("local");
+      expect(pendingEvents().at(-1)).toBeNull();
+      expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(false);
+    });
+
+    it("has nothing to cancel once the switch has committed", async () => {
+      let releaseOpen!: () => void;
+      vi.mocked(windows.openRemoteProject).mockImplementationOnce(
+        () => new Promise<void>((resolve) => (releaseOpen = resolve))
+      );
+      const switching = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
+
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      releaseOpen();
+      await expect(switching).resolves.toMatchObject({ outcome: "switched" });
+    });
+
+    it("settles a first switch whose window closes before it ever bound", async () => {
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>(() => {}));
+      const switching = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(client.getPendingSwitch(ctxFor(5, 1))).not.toBeNull());
+
+      const closed = vi.mocked(windows.watchWindow).mock.calls.find(([id]) => id === 1)![1];
+      closed();
+
+      await expect(switching).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+      expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    });
+
+    it("says nothing for a switch that opens a new window", async () => {
+      await client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: true,
+        projectId: "proj-1",
+      });
+      expect(windows.notifyWindow).not.toHaveBeenCalled();
+    });
+  });
+
+  it("gives way to a navigation made in the window while the host is still answering", async () => {
+    let releaseSlow!: (value: string) => void;
+    manager
+      .connect("studio-01")
+      .whenReady.mockImplementationOnce(
+        () => new Promise<string>((resolve) => (releaseSlow = resolve))
+      );
+    const slow = client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    // A local project picked in that window meanwhile.
+    client.supersedePendingSwitch(1);
+    releaseSlow("ready");
+
+    await expect(slow).resolves.toEqual({ outcome: "superseded", hostId: "studio-01" });
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+    expect(bindings.get(1)).toBe("local");
   });
 
   it("moves the window for the latest request only, whatever order the hosts answer in", async () => {
@@ -1038,6 +1202,8 @@ describe("RemoteHostsClient", () => {
         projectId: "gone",
       })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // A lookup the link dropped is the host being unreachable, not the project
+    // being gone: Retry is what helps, and nothing is forgotten.
     connection.describeProject.mockRejectedValueOnce(new Error("link dropped"));
     await expect(
       client.switchWindowHost(ctxFor(5, 1), {
@@ -1045,8 +1211,40 @@ describe("RemoteHostsClient", () => {
         newWindow: false,
         projectId: "proj-1",
       })
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
     expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
+  it("forgets a project in the toggle's history only once the host says it's gone", async () => {
+    const history = getProjectHistory(1);
+    const gone = toHostScopedKey("studio-01", "gone");
+    const dropped = toHostScopedKey("studio-01", "proj-1");
+    history.record(gone);
+    history.record(dropped);
+    history.record("local-a");
+    const connection = manager.connect("studio-01");
+
+    connection.describeProject.mockRejectedValueOnce(new Error("link dropped"));
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      })
+    ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
+    expect(history.snapshot().entries).toEqual(["local-a", dropped, gone]);
+
+    connection.describeProject.mockResolvedValueOnce(null);
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "gone",
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(history.snapshot().entries).toEqual(["local-a", dropped]);
+    disposeProjectHistory(1);
+    resetProjectHistory(1);
   });
 
   describe("after an explicit disconnect", () => {

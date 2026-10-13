@@ -1,4 +1,5 @@
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import {
   LOCAL_HOST_ID,
   isLocalHostId,
@@ -13,6 +14,8 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import type {
   AddHostPayload,
+  CancelPendingSwitchPayload,
+  PendingHostSwitch,
   HostProjectSummary,
   RemoteHostsEvent,
   SwitchWindowHostPayload,
@@ -24,6 +27,7 @@ import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { rememberRemoteWorkspaceTitle } from "../../window/windowTitle.js";
+import { discardFromAllProjectHistories } from "../../services/ProjectHistoryService.js";
 import { getRemoteService } from "../runtime.js";
 import type { HostRegistry } from "./HostRegistry.js";
 import { parseHostConnection } from "./connection.js";
@@ -92,6 +96,8 @@ export interface WindowControl {
    * asks once it can show the list.
    */
   offerHostProjects?(windowId: number): void;
+  /** Send an event to the views a window is showing, and only to them. */
+  notifyWindow?(windowId: number, event: RemoteHostsEvent): void;
 }
 
 export interface RemoteHostsClientOptions {
@@ -146,6 +152,17 @@ const DEFAULT_FORGET_SWITCH_WAIT_MS = 5_000;
 
 const MAX_PROJECT_ID_LENGTH = 256;
 
+/** What a wait resolves to once its switch was abandoned for a newer navigation or Cancel. */
+const ABANDONED = Symbol("abandoned");
+
+interface SwitchTicket {
+  /** Names this request to the window's views, and to the Cancel that answers it. */
+  id: string;
+  isCurrent(): boolean;
+  /** Resolves when a newer request (or Cancel) takes the window. */
+  abandoned: Promise<typeof ABANDONED>;
+}
+
 function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message });
 }
@@ -166,7 +183,10 @@ export class RemoteHostsClient {
   private readonly watchedWindows = new Set<number>();
   /** New windows opened onto a host with no project there: the host whose list each offers. */
   private readonly projectOffers = new Map<number, HostId>();
-  private readonly switchSeq = new Map<number, number>();
+  /** Each window's newest switch request; abandoning it settles the wait it is in. */
+  private readonly switchTickets = new Map<number, { seq: number; abandon: () => void }>();
+  /** A window's switch to a host that hasn't committed yet, as its views are told. */
+  private readonly pendingSwitches = new Map<number, PendingHostSwitch>();
   private readonly switchChains = new Map<number, Promise<void>>();
   private readonly unsubscribe: Array<() => void> = [];
   private readonly detached: DetachedViewRegistry;
@@ -448,7 +468,7 @@ export class RemoteHostsClient {
   ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
     const newWindow = payload.newWindow === true;
-    let projectId = payload.projectId;
+    const projectId = payload.projectId;
     if (
       projectId !== undefined &&
       (typeof projectId !== "string" ||
@@ -468,6 +488,73 @@ export class RemoteHostsClient {
       (ticket !== null && !ticket.isCurrent()) || (stillWanted !== undefined && !stillWanted())
         ? { outcome: "superseded", hostId }
         : null;
+    // What the window being switched hears while the host is on its way: only
+    // one moving to a host waits on anything worth saying, and a new window
+    // has no view yet to say it in.
+    const pendingWindowId = remote && ticket !== null ? sourceWindowId : null;
+    let pendingProjectName: string | null = null;
+    const announce = (phase: PendingHostSwitch["phase"]): void => {
+      if (pendingWindowId === null || ticket === null || !ticket.isCurrent()) return;
+      const current = this.pendingSwitches.get(pendingWindowId);
+      if (
+        current?.switchId === ticket.id &&
+        current.phase === phase &&
+        current.projectName === pendingProjectName
+      ) {
+        return;
+      }
+      this.publishPendingSwitch(pendingWindowId, {
+        switchId: ticket.id,
+        hostId,
+        hostName: this.options.registry.get(hostId)?.name ?? hostId,
+        projectName: pendingProjectName,
+        phase,
+      });
+    };
+    const settlePending = (): void => {
+      if (pendingWindowId === null || ticket === null) return;
+      if (this.pendingSwitches.get(pendingWindowId)?.switchId === ticket.id) {
+        this.publishPendingSwitch(pendingWindowId, null);
+      }
+    };
+    try {
+      return await this.runSwitch(
+        askingWindowId,
+        hostId,
+        newWindow,
+        projectId,
+        ticket,
+        superseded,
+        announce,
+        settlePending,
+        (name) => void (pendingProjectName = name),
+        asOwner
+      );
+    } finally {
+      settlePending();
+    }
+  }
+
+  private async runSwitch(
+    askingWindowId: number | null,
+    hostId: HostId,
+    newWindow: boolean,
+    requestedProjectId: string | undefined,
+    ticket: SwitchTicket | null,
+    superseded: () => SwitchWindowHostResult | null,
+    announce: (phase: PendingHostSwitch["phase"]) => void,
+    /** Called once the switch commits: past here it can't be cancelled. */
+    commit: () => void,
+    nameProject: (name: string | null) => void,
+    asOwner: boolean
+  ): Promise<SwitchWindowHostResult> {
+    let projectId = requestedProjectId;
+    const remote = !isLocalHostId(hostId);
+    const sourceWindowId = newWindow ? null : askingWindowId;
+    // Whatever the switch is waiting on, it stops waiting the moment a newer
+    // navigation in the window (or Cancel) abandons it.
+    const untilAbandoned = <T>(work: Promise<T>): Promise<T | typeof ABANDONED> =>
+      ticket ? Promise.race([work, ticket.abandoned]) : work;
     let projectPath: string | null = null;
     let projectName: string | null = null;
     let connection: ReturnType<RemoteHostManager["connect"]> | null = null;
@@ -478,9 +565,14 @@ export class RemoteHostsClient {
       // A cold switch dials the host now. The view is created only once the
       // link is up and the host has named the project's path: a view made
       // before that would open with no path and its first calls would fail.
-      const readiness = await this.whenReady(connection, hostId);
+      const hostConnection = connection;
+      const readiness = await untilAbandoned(
+        this.whenReady(hostConnection, hostId, () =>
+          announce(this.options.isStarting?.(hostId) ? "starting" : "connecting")
+        )
+      );
       const stale = superseded();
-      if (stale) return stale;
+      if (stale || readiness === ABANDONED) return stale ?? { outcome: "superseded", hostId };
       if (readiness === "version-mismatch") throw versionMismatch(hostId);
       if (readiness === "host-mode-off")
         throw hostModeOff(this.options.registry.get(hostId)?.name ?? hostId);
@@ -497,13 +589,18 @@ export class RemoteHostsClient {
       } else if (projectId === undefined) {
         // Where this window last was on the host first; the host's memory of
         // this machine is the fallback, then its project picker.
+        announce("opening");
         const windowLast = this.options.windows.lastProjectOnHost?.(sourceWindowId, hostId) ?? null;
+        // Best effort: a host that can't say where to return offers its
+        // project list instead.
         const remembered = windowLast
-          ? await connection.describeProject(windowLast).catch(() => null)
+          ? await untilAbandoned(hostConnection.describeProject(windowLast).catch(() => null))
           : null;
+        if (remembered === ABANDONED) return { outcome: "superseded", hostId };
         const last = remembered?.path
           ? { projectId: windowLast!, path: remembered.path, name: remembered.name }
-          : await connection.lastActiveProject().catch(() => null);
+          : await untilAbandoned(hostConnection.lastActiveProject().catch(() => null));
+        if (last === ABANDONED) return { outcome: "superseded", hostId };
         const staleLast = superseded();
         if (staleLast) return staleLast;
         if (last?.path) {
@@ -512,10 +609,26 @@ export class RemoteHostsClient {
           projectName = last.name;
         }
       } else {
-        const description = await connection.describeProject(projectId).catch(() => null);
+        // Only the host saying it has no such project means it's gone: a link
+        // that dropped or timed out mid-lookup is the host being unreachable,
+        // and Retry is what helps there.
+        announce("opening");
+        let description: Awaited<ReturnType<typeof hostConnection.describeProject>>;
+        try {
+          const answer = await untilAbandoned(hostConnection.describeProject(projectId));
+          if (answer === ABANDONED) return { outcome: "superseded", hostId };
+          description = answer;
+        } catch (error) {
+          const staleFailure = superseded();
+          if (staleFailure) return staleFailure;
+          throw unreachableLookup(hostId, error);
+        }
         const staleLookup = superseded();
         if (staleLookup) return staleLookup;
         if (!description?.path) {
+          // It won't come back on a later press, so the toggle stops offering it.
+          const key = toHostScopedKey(hostId, projectId);
+          discardFromAllProjectHistories((workspaceId) => workspaceId === key);
           throw new AppError({
             code: "NOT_FOUND",
             message: `Host ${hostId} has no project ${projectId}`,
@@ -524,6 +637,8 @@ export class RemoteHostsClient {
         }
         projectPath = description.path;
         projectName = description.name;
+        nameProject(projectName);
+        announce("opening");
       }
     } else if (projectId === undefined) {
       projectId = this.options.windows.lastLocalProjectId(sourceWindowId) ?? undefined;
@@ -540,7 +655,12 @@ export class RemoteHostsClient {
     // second endpoint, the two claiming the lease from each other). The window
     // that has it comes forward instead.
     if (projectId !== undefined && !asOwner) {
-      const redirected = await this.redirectToOwner(hostId, projectId, sourceWindowId, superseded);
+      // Raced like every other wait: an owner holding the project only in its
+      // cache is switched to it first, and Cancel here doesn't wait for that.
+      const redirected = await untilAbandoned(
+        this.redirectToOwner(hostId, projectId, sourceWindowId, superseded)
+      );
+      if (redirected === ABANDONED) return { outcome: "superseded", hostId };
       if (redirected) return redirected;
     }
 
@@ -556,6 +676,9 @@ export class RemoteHostsClient {
       // one waited behind the window's previous switch.
       const late = superseded();
       if (late) return late;
+      // From here the window moves: nothing checks for a newer request again,
+      // so it is no longer on offer to cancel.
+      commit();
       // Only a new window reaches here without a project. It stays on this
       // machine and offers the host's project list: binding it with no view of
       // the host's behind it made a window whose calls went to the host while
@@ -591,14 +714,7 @@ export class RemoteHostsClient {
       const previousHost = this.options.bindings.get(windowId);
       const nextHost = remote ? hostId : LOCAL_HOST_ID;
       this.options.bindings.set(windowId, nextHost);
-      if (!this.watchedWindows.has(windowId)) {
-        this.watchedWindows.add(windowId);
-        this.options.windows.watchWindow(windowId, () => {
-          this.watchedWindows.delete(windowId);
-          this.switchSeq.delete(windowId);
-          this.options.bindings.release(windowId);
-        });
-      }
+      this.watchClosing(windowId);
 
       try {
         if (!remote) {
@@ -675,11 +791,96 @@ export class RemoteHostsClient {
     return { outcome: "focused-elsewhere", hostId, projectId, targetWindowId: owner.windowId };
   }
 
-  /** A window's newest switch request; any earlier one still in flight is superseded. */
-  private takeSwitchTicket(windowId: number): { isCurrent(): boolean } {
-    const seq = (this.switchSeq.get(windowId) ?? 0) + 1;
-    this.switchSeq.set(windowId, seq);
-    return { isCurrent: () => this.switchSeq.get(windowId) === seq };
+  /**
+   * A navigation in the window that didn't come through here (a local project
+   * or scratch picked, File › Open Recent): a host switch still waiting there
+   * gives way to it rather than pulling the window to the host when it answers.
+   */
+  supersedePendingSwitch(windowId: number): void {
+    if (this.switchTickets.has(windowId)) this.takeSwitchTicket(windowId);
+  }
+
+  /**
+   * Daintree started or stopped being started on a host: a switch still
+   * waiting for that host's link says which, as soon as it changes.
+   */
+  refreshPendingSwitches(hostId: HostId): void {
+    const phase = this.options.isStarting?.(hostId) ? "starting" : "connecting";
+    for (const [windowId, pending] of this.pendingSwitches) {
+      if (pending.hostId !== hostId || pending.phase === "opening" || pending.phase === phase) {
+        continue;
+      }
+      this.publishPendingSwitch(windowId, { ...pending, phase });
+    }
+  }
+
+  /** The asking window's switch to a host that is still on its way, or null. */
+  getPendingSwitch(ctx: IpcContext): PendingHostSwitch | null {
+    const windowId = this.windowOf(ctx);
+    return windowId === null ? null : (this.pendingSwitches.get(windowId) ?? null);
+  }
+
+  /**
+   * Give up the asking window's switch to a host while it is still on its way.
+   * It resolves as superseded straight away, wherever it was waiting, and the
+   * window stays as it is. False when there is none left to cancel: it has
+   * already committed, or another one replaced it.
+   */
+  cancelPendingSwitch(ctx: IpcContext, payload: CancelPendingSwitchPayload): boolean {
+    const windowId = this.windowOf(ctx);
+    if (windowId === null) return false;
+    const pending = this.pendingSwitches.get(windowId);
+    if (!pending || pending.switchId !== payload?.switchId) return false;
+    this.supersedePendingSwitch(windowId);
+    return true;
+  }
+
+  /**
+   * A window's newest switch request; any earlier one still in flight is
+   * superseded, and whatever it was waiting on stops being waited for.
+   */
+  private takeSwitchTicket(windowId: number): SwitchTicket {
+    // From its first request, so one that closes mid-switch drops its ticket
+    // (and whatever was waiting on it) even if it never got as far as binding.
+    this.watchClosing(windowId);
+    const previous = this.switchTickets.get(windowId);
+    previous?.abandon();
+    const seq = (previous?.seq ?? 0) + 1;
+    let abandon!: () => void;
+    const abandoned = new Promise<typeof ABANDONED>((resolve) => {
+      abandon = () => resolve(ABANDONED);
+    });
+    this.switchTickets.set(windowId, { seq, abandon });
+    return {
+      id: `${windowId}:${seq}:${randomUUID()}`,
+      isCurrent: () => this.switchTickets.get(windowId)?.seq === seq,
+      abandoned,
+    };
+  }
+
+  /** Forget a window's binding, switch tickets and pending switch when it closes. */
+  private watchClosing(windowId: number): void {
+    if (this.watchedWindows.has(windowId)) return;
+    this.watchedWindows.add(windowId);
+    this.options.windows.watchWindow(windowId, () => {
+      this.watchedWindows.delete(windowId);
+      this.switchTickets.get(windowId)?.abandon();
+      this.switchTickets.delete(windowId);
+      this.pendingSwitches.delete(windowId);
+      this.options.bindings.release(windowId);
+    });
+  }
+
+  /** Tell a window's views where its switch is, and remember it for one that asks. */
+  private publishPendingSwitch(windowId: number, pending: PendingHostSwitch | null): void {
+    if (pending) this.pendingSwitches.set(windowId, pending);
+    else this.pendingSwitches.delete(windowId);
+    // Telling the views is a courtesy: it must never be what fails the switch.
+    try {
+      this.options.windows.notifyWindow?.(windowId, { type: "switch-pending", pending });
+    } catch (error) {
+      console.warn("[RemoteHosts] Couldn't tell a window about its pending switch:", error);
+    }
   }
 
   /** A window's binding and view change one switch at a time, in the order requests were made. */
@@ -743,14 +944,18 @@ export class RemoteHostsClient {
    */
   private async whenReady(
     connection: { whenReady(timeoutMs: number): Promise<HostReadiness> },
-    hostId: HostId
+    hostId: HostId,
+    /** Told before each wait, so a caller can say whether Daintree is being started there. */
+    onWait?: () => void
   ): Promise<HostReadiness> {
     const timeoutMs = this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
     const deadline = Date.now() + STARTING_TIMEOUT_MS;
+    onWait?.();
     let readiness = await connection.whenReady(timeoutMs);
     while (readiness === "timeout" && this.options.isStarting?.(hostId)) {
       const left = deadline - Date.now();
       if (left <= 0) break;
+      onWait?.();
       readiness = await connection.whenReady(Math.min(timeoutMs, left));
     }
     return readiness;
@@ -763,6 +968,16 @@ export class RemoteHostsClient {
     const windowId = this.windowOf(ctx);
     return windowId === null ? LOCAL_HOST_ID : this.options.bindings.get(windowId);
   }
+}
+
+/** A lookup on the host that couldn't get an answer: the host being unreachable, not the project gone. */
+function unreachableLookup(hostId: HostId, error: unknown): AppError {
+  return new AppError({
+    code: "HOST_DISCONNECTED",
+    message: `Host ${hostId} could not answer a project lookup`,
+    userMessage: "Couldn't reach this host. Check that it is on and try again.",
+    cause: error instanceof Error ? error : undefined,
+  });
 }
 
 function hostModeOff(hostName: string): AppError {

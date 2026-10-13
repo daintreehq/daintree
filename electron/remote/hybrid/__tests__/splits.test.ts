@@ -33,7 +33,16 @@ const mocks = vi.hoisted(() => ({
         summary: null,
       },
     ]),
-    switchWindowHost: vi.fn(async () => undefined),
+    switchWindowHost: vi.fn(
+      async (
+        _ctx: unknown,
+        payload: { hostId: string; projectId: string }
+      ): Promise<Record<string, unknown>> => ({
+        outcome: "switched",
+        hostId: payload.hostId,
+        projectId: payload.projectId,
+      })
+    ),
   },
   hasClient: true,
   cached: false,
@@ -467,6 +476,7 @@ describe("project activation", () => {
       mocks.pvm.getActiveView.mockReturnValue({
         webContents: { isDestroyed: () => false, send: mocks.viewSend },
       });
+      return { outcome: "switched", hostId: "studio", projectId: "p2" };
     });
     mocks.cached = true;
     const { invoke } = setup(
@@ -503,6 +513,44 @@ describe("project activation", () => {
     expect(mocks.viewSend).not.toHaveBeenCalled();
   });
 
+  it("reports a redirect to the window that already had the project", async () => {
+    mocks.client.switchWindowHost.mockResolvedValueOnce({
+      outcome: "focused-elsewhere",
+      hostId: "studio",
+      projectId: "p2",
+      targetWindowId: 9,
+    });
+    const { invoke } = setup(
+      () => ({ outcome: "switched", project: { id: "p2" } }),
+      () => "local"
+    );
+
+    // The asking view stays on screen, so it has to hear that it didn't move.
+    await expect(invoke(CHANNELS.PROJECT_SWITCH, ["p2"])).resolves.toEqual({
+      outcome: "focused-elsewhere",
+      project: { id: "p2" },
+      targetWindowId: 9,
+    });
+    expect(mocks.viewSend).not.toHaveBeenCalled();
+  });
+
+  it("reports a switch a newer navigation overtook", async () => {
+    mocks.client.switchWindowHost.mockResolvedValueOnce({
+      outcome: "superseded",
+      hostId: "studio",
+    });
+    const { invoke } = setup(
+      () => ({ outcome: "switched", project: { id: "p2" } }),
+      () => "local"
+    );
+
+    await expect(invoke(CHANNELS.PROJECT_SWITCH, ["p2"])).resolves.toEqual({
+      outcome: "superseded",
+      project: { id: "p2" },
+    });
+    expect(mocks.viewSend).not.toHaveBeenCalled();
+  });
+
   it("shows nothing when the host did not switch", async () => {
     const { invoke } = setup(
       () => ({ outcome: "redirected" }),
@@ -525,6 +573,7 @@ describe("scratch switch", () => {
       mocks.pvm.getActiveView.mockReturnValue({
         webContents: { isDestroyed: () => false, send: mocks.viewSend },
       });
+      return { outcome: "switched", hostId: "studio", projectId: "s1" };
     });
     const forward = vi.fn(() => scratch);
     const { invoke, listener } = setup(forward, () => "local");
@@ -556,6 +605,21 @@ describe("scratch switch", () => {
     );
     await invoke(CHANNELS.SCRATCH_SWITCH, ["s1"]);
     expect(mocks.client.switchWindowHost).toHaveBeenCalled();
+    expect(mocks.viewSend).not.toHaveBeenCalled();
+  });
+
+  it("hands back no scratch when the window didn't move to it", async () => {
+    mocks.client.switchWindowHost.mockResolvedValueOnce({
+      outcome: "superseded",
+      hostId: "studio",
+    });
+    const { invoke } = setup(
+      () => scratch,
+      () => "local"
+    );
+
+    // The asking view still shows what it showed, so it must not adopt the scratch.
+    await expect(invoke(CHANNELS.SCRATCH_SWITCH, ["s1"])).resolves.toBeNull();
     expect(mocks.viewSend).not.toHaveBeenCalled();
   });
 

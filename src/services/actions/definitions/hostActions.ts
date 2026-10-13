@@ -9,7 +9,11 @@ import { HOSTS_OVERVIEW_ACTION_ID, HOSTS_SETTINGS_TAB } from "@/components/Hosts
 import { requestHostsOverview } from "@/components/Hosts/Overview/hostsOverviewRequests";
 import { ClientAppError } from "@/utils/clientAppError";
 import { getHostListSnapshot, hasRemoteHosts } from "@/components/Hosts/hostList";
-import { followSwitchResult } from "@/components/Hosts/hostSwitching";
+import {
+  followSwitchResult,
+  notifyHostSwitchFailure,
+  switchToHost,
+} from "@/components/Hosts/hostSwitching";
 import { requestHostSettings } from "@/components/Settings/Hosts/hostSettingsRequests";
 
 const hostIdSchema = z
@@ -107,6 +111,8 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
     nonRepeatable: true,
     isVisible: anyRemoteHost,
     argsSchema: switchArgsSchema,
+    // Every failure past argument parsing is presented by the shared host-switch presenter.
+    selfNotifiesOnExecutionError: true,
     run: async (args: unknown) => {
       const parsed = switchArgsSchema.parse(args);
       if (!parsed?.hostId) {
@@ -115,15 +121,21 @@ export function registerHostActions(actions: ActionRegistry, callbacks: ActionCa
         else openHostsSettings(callbacks);
         return;
       }
-      await assertKnownHost(parsed.hostId);
-      const result = await window.electron.remoteHosts.switchWindowHost({
-        hostId: parsed.hostId,
-        newWindow: parsed.newWindow ?? false,
-      });
-      // With nothing to return to on that host, its project list opens for
-      // the person at this screen to pick from.
-      followSwitchResult(result);
-      return result;
+      const { hostId } = parsed;
+      const newWindow = parsed.newWindow ?? false;
+      try {
+        await assertKnownHost(hostId);
+        const result = await window.electron.remoteHosts.switchWindowHost({ hostId, newWindow });
+        // With nothing to return to on that host, its project list opens for
+        // the person at this screen to pick from.
+        followSwitchResult(result);
+        return result;
+      } catch (error) {
+        // Read the way every other way of switching reads it, then still
+        // failed, so whoever dispatched the action hears that it didn't happen.
+        notifyHostSwitchFailure(hostId, error, () => void switchToHost(hostId, newWindow));
+        throw error;
+      }
     },
   }));
 

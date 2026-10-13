@@ -27,7 +27,11 @@ import { isPluginVisibleInProject } from "./services/plugin/projectPluginVisibil
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents, getProjectForWebContents } from "./window/webContentsRegistry.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
-import { isWindowOnRemoteHost, switchWindowToLocal } from "./window/windowHost.js";
+import {
+  isWindowOnRemoteHost,
+  supersedePendingHostSwitch,
+  switchWindowToLocal,
+} from "./window/windowHost.js";
 import { completeLocalProjectActivation } from "./window/localProjectActivation.js";
 import {
   claimProjectActivation,
@@ -1081,6 +1085,7 @@ export async function handleDirectoryOpen(
   cliAvailabilityService?: CliAvailabilityService
 ): Promise<void> {
   if (targetWindow.isDestroyed()) return;
+  supersedePendingHostSwitch(targetWindow.id);
   if (isWindowOnRemoteHost(targetWindow.id)) {
     await openLocalFolderInHostWindow(directoryPath, targetWindow, cliAvailabilityService);
     return;

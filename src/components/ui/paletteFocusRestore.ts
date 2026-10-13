@@ -28,3 +28,23 @@ export function consumePaletteFocusRestoreSuppression(): boolean {
   suppressNextRestore = false;
   return suppressed;
 }
+
+/**
+ * One-shot hand-off of a palette's close-time focus restoration to the caller,
+ * for a pick whose outcome decides it: a switch that moves the window takes
+ * the keyboard with it, one that fails or is cancelled should give it back.
+ * `receive` gets the restore when the palette would have run it, and calls it
+ * (or not) once it knows. Same arming rule as {@link suppressPaletteFocusRestore}.
+ */
+let deferredRestore: ((restore: () => void) => void) | null = null;
+
+export function deferPaletteFocusRestore(receive: (restore: () => void) => void): void {
+  deferredRestore = receive;
+}
+
+/** Reads and clears the hand-off. Null when the palette should restore as usual. */
+export function consumeDeferredPaletteFocusRestore(): ((restore: () => void) => void) | null {
+  const receive = deferredRestore;
+  deferredRestore = null;
+  return receive;
+}

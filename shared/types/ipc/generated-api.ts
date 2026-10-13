@@ -1097,6 +1097,9 @@ export interface GeneratedElectronAPI {
     cancelInstall(
       ...args: IpcInvokeMap["remote-hosts:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:cancel-install"]["result"]>;
+    cancelPendingSwitch(
+      ...args: IpcInvokeMap["remote-hosts:cancel-pending-switch"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:cancel-pending-switch"]["result"]>;
     connect(
       ...args: IpcInvokeMap["remote-hosts:connect"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:connect"]["result"]>;
@@ -1115,6 +1118,9 @@ export interface GeneratedElectronAPI {
     getLocalHandshake(
       ...args: IpcInvokeMap["remote-hosts:get-local-handshake"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:get-local-handshake"]["result"]>;
+    getPendingSwitch(
+      ...args: IpcInvokeMap["remote-hosts:get-pending-switch"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:get-pending-switch"]["result"]>;
     getWindowHost(
       ...args: IpcInvokeMap["remote-hosts:get-window-host"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:get-window-host"]["result"]>;

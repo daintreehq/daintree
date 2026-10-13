@@ -141,4 +141,49 @@ describe("switchToHost", () => {
     const toast = m.notify.mock.calls[0]![0] as { actions: Array<{ label: string }> };
     expect(toast.actions.map((action) => action.label)).toEqual(["Retry"]);
   });
+
+  it("offers that host's project list when the host says the project is gone", async () => {
+    registerHostProjectPickerHost();
+    m.hosts = [studio({ status: "connected", rttMs: 1, handshake: HANDSHAKE })];
+    m.switchWindowHost.mockRejectedValue(
+      new ClientAppError(
+        "NOT_FOUND",
+        "Host h1 has no project p",
+        "This project isn't on that host."
+      )
+    );
+    await switchToHost("h1", false, "p");
+    const toast = m.notify.mock.calls[0]![0] as {
+      message: string;
+      actions: Array<{ label: string; onClick: () => void }>;
+    };
+    // Retrying a project the host just said it doesn't have can't help.
+    expect(toast.message).toBe("This project isn't on that host.");
+    expect(toast.actions.map((action) => action.label)).toEqual(["Choose project…"]);
+    toast.actions[0]!.onClick();
+    expect(currentHostProjectPickerRequest()).toMatchObject({ hostId: "h1" });
+  });
+
+  it("says when the window stayed where it was, and only then", async () => {
+    const onStayed = vi.fn();
+    m.switchWindowHost.mockResolvedValueOnce({ outcome: "switched", hostId: "h1", projectId: "p" });
+    await switchToHost("h1", false, undefined, { onStayed });
+    expect(onStayed).not.toHaveBeenCalled();
+
+    m.switchWindowHost.mockResolvedValueOnce({ outcome: "superseded", hostId: "h1" });
+    await switchToHost("h1", false, undefined, { onStayed });
+    expect(onStayed).toHaveBeenCalledTimes(1);
+
+    m.switchWindowHost.mockRejectedValueOnce(new ClientAppError("HOST_DISCONNECTED", "gone"));
+    await switchToHost("h1", false, undefined, { onStayed });
+    expect(onStayed).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers a retry, not the project list, for a host that is no longer listed", async () => {
+    m.hosts = [];
+    m.switchWindowHost.mockRejectedValue(new ClientAppError("NOT_FOUND", "Unknown host h1"));
+    await switchToHost("h1", false, "p");
+    const toast = m.notify.mock.calls[0]![0] as { actions: Array<{ label: string }> };
+    expect(toast.actions.map((action) => action.label)).toEqual(["Retry"]);
+  });
 });

@@ -58,6 +58,7 @@ vi.mock("@/store/terminalInputStore", () => ({ useTerminalInputStore: asStore(in
 vi.mock("@/components/ui/paletteFocusRestore", () => ({
   suppressPaletteFocusRestore,
   consumePaletteFocusRestoreSuppression: () => false,
+  consumeDeferredPaletteFocusRestore: () => null,
 }));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: asStore({ showAgentTaskTitles: true }),

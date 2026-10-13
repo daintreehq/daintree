@@ -380,7 +380,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       const project = projectStore.getProjectById(projectId);
       if (project) {
         const result = redirectToProjectOwner(owner, project);
-        return result.outcome === "switched" ? owner.context.windowId : result.targetWindowId;
+        return "targetWindowId" in result ? result.targetWindowId : owner.context.windowId;
       }
       // A scratch has no project row to hand over: its window comes forward.
       revealWindow(owner.context.browserWindow);
@@ -436,6 +436,20 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       if (!wc || wc.isDestroyed() || wc.isLoadingMainFrame()) return;
       const event: RemoteHostsEvent = { type: "project-offer" };
       wc.send("remote-hosts:event", event);
+    },
+    notifyWindow(windowId, event) {
+      const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
+      if (!win || win.isDestroyed()) return;
+      // The views on screen: a cached view picks the state up when shown, by asking.
+      for (const child of win.contentView?.children ?? []) {
+        const wc = (child as { webContents?: Electron.WebContents }).webContents;
+        if (!wc || wc.isDestroyed()) continue;
+        try {
+          wc.send(CHANNELS.REMOTE_HOSTS_EVENT, event);
+        } catch {
+          // A view mid-teardown.
+        }
+      }
     },
     watchWindow(windowId, onClosed) {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);
@@ -612,6 +626,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     signal: AbortSignal
   ): Promise<boolean> => {
     startingHosts.set(hostId, (startingHosts.get(hostId) ?? 0) + 1);
+    client.refreshPendingSwitches(hostId);
     try {
       return (await setup.ensureHostRunning(connection, signal)) !== "not-startable";
     } catch (error) {
@@ -623,6 +638,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       const left = (startingHosts.get(hostId) ?? 1) - 1;
       if (left > 0) startingHosts.set(hostId, left);
       else startingHosts.delete(hostId);
+      client.refreshPendingSwitches(hostId);
     }
   };
   const setup: HostSetupService = new HostSetupService({

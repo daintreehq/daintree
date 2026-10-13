@@ -167,6 +167,7 @@ import {
   resetProjectHistory,
 } from "../../../services/ProjectHistoryService.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
@@ -263,6 +264,31 @@ describe("project switch/reopen refreshes the File-menu project gates (#11136)",
     await handler({ sender: { id: 10 } }, "proj-new");
 
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+
+  it("supersedes a host switch still waiting in the window, for a switch and a reopen alike", async () => {
+    const supersedePendingSwitch = vi.fn();
+    registerRemoteService("windowHosts", { supersedePendingSwitch } as never);
+    try {
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-new",
+        name: "New",
+        path: "/projects/new",
+        status: "background",
+      });
+      await handlerFor(CHANNELS.PROJECT_SWITCH, depsWith(makePvm()))(
+        { sender: { id: 10 } },
+        "proj-new"
+      );
+      await handlerFor(CHANNELS.PROJECT_REOPEN, depsWith(makePvm()))(
+        { sender: { id: 10 } },
+        "proj-new"
+      );
+
+      expect(supersedePendingSwitch.mock.calls).toEqual([[1], [1]]);
+    } finally {
+      _resetRemoteServicesForTest();
+    }
   });
 
   it("refreshes after a legacy (no-PVM) switch", async () => {

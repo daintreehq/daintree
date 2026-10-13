@@ -124,7 +124,9 @@ export type ProjectSwitchResult =
       outcome: "focused-elsewhere" | "activated-elsewhere";
       project: Project;
       targetWindowId: number;
-    };
+    }
+  /** A newer navigation in the window won before this one landed: nothing on screen moved. */
+  | { outcome: "superseded"; project: Project };
 
 /** Payload for project:on-switch event with cancellation token */
 export interface ProjectSwitchPayload {

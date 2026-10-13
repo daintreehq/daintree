@@ -187,11 +187,22 @@ const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   const cacheHit = hasLiveProjectView(pvm, key);
   // Before the swap, as a local switch records it: the view consumes it on activation.
   if (options.focusIntent) pvm?.setPendingFocusIntent(key, options.focusIntent);
-  await client.switchWindowHost(senderContext(webContentsId), {
+  const shown = await client.switchWindowHost(senderContext(webContentsId), {
     hostId,
     projectId,
     newWindow: false,
   });
+  // The asking view is still on screen unless this window really moved: a
+  // window that already had the project came forward, or a newer navigation
+  // here won. Reporting `switched` for those left the view busy for good.
+  if (shown.outcome === "focused-elsewhere") {
+    return {
+      outcome: "focused-elsewhere",
+      project: result.project,
+      targetWindowId: shown.targetWindowId,
+    };
+  }
+  if (shown.outcome !== "switched") return { outcome: "superseded", project: result.project };
   const view = pvm?.getActiveProjectId() === key ? pvm.getActiveView() : null;
   const wc = view?.webContents;
   if (wc && !wc.isDestroyed()) {
@@ -212,7 +223,8 @@ const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
  * A scratch is a workspace like a project, with no project row: the host
  * confirms it and marks it opened; this Shell shows it in a view keyed to that
  * host and tells that view, and only it, that it switched. The host's own
- * current-scratch pointer describes its own windows and is left alone.
+ * current-scratch pointer describes its own windows and is left alone. Null
+ * when this window didn't move to it.
  */
 const scratchSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote }) => {
   const scratch = (await remote()) as Scratch | null;
@@ -230,11 +242,14 @@ const scratchSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   const key = toHostScopedKey(hostId, scratch.id);
   const pvm = projectViewManagerOf(webContentsId);
   if (options.focusIntent) pvm?.setPendingFocusIntent(key, options.focusIntent);
-  await client.switchWindowHost(senderContext(webContentsId), {
+  const shown = await client.switchWindowHost(senderContext(webContentsId), {
     hostId,
     projectId: scratch.id,
     newWindow: false,
   });
+  // Another window had it and came forward, or a newer navigation here won:
+  // the asking view still shows what it showed, so it must not adopt the scratch.
+  if (shown.outcome !== "switched") return null;
   const view = pvm?.getActiveProjectId() === key ? pvm.getActiveView() : null;
   const wc = view?.webContents;
   if (wc && !wc.isDestroyed()) {

@@ -64,6 +64,7 @@ import type {
 } from "../../../../shared/types/ipc/project.js";
 import type { TabGroup } from "../../../../shared/types/panel.js";
 import type { ProjectFocusOnActivateIntent } from "../../../../shared/types/ipc/project.js";
+import { supersedePendingHostSwitch } from "../../../window/windowHost.js";
 
 export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -93,6 +94,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     const trace = resolveSwitchTrace(options?.trace);
     const requestedAt = Date.now();
     markMainReceived(trace, operation);
+    supersedePendingHostSwitch(operation.windowId);
 
     const owner = findOwnerElsewhere(deps, operation);
     if (owner) return redirectToProjectOwner(owner, project, options?.focusIntent);
@@ -212,6 +214,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     const trace = resolveSwitchTrace(options?.trace);
     const requestedAt = Date.now();
     markMainReceived(trace, operation);
+    supersedePendingHostSwitch(operation.windowId);
 
     const owner = findOwnerElsewhere(deps, operation);
     if (owner) return redirectToProjectOwner(owner, project);

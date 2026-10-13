@@ -18,6 +18,7 @@ import { activateScratchInWindow } from "./activation.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
+import { supersedePendingHostSwitch } from "../../../window/windowHost.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
@@ -99,7 +100,9 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           ctx,
           scratchId: string,
           options?: { focusIntent?: ProjectFocusOnActivateIntent }
-        ): Promise<Scratch> => {
+          // Null from a remote window's switch that didn't land there (`splits.ts`):
+          // another window had the scratch, or a newer navigation won.
+        ): Promise<Scratch | null> => {
           if (typeof scratchId !== "string" || !scratchId) {
             throw new Error("Invalid scratch ID");
           }
@@ -132,6 +135,8 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // pointed at the previous state so an app restart hydrates a coherent
           // workspace. Mirrors the project:switch flow where `setCurrentProject` is
           // only called after `pvm.switchTo()` resolves.
+          supersedePendingHostSwitch(senderWindow?.id);
+
           let activeView: WebContentsView | null = null;
           if (pvm) {
             // Recorded BEFORE switchTo, matching project:switch: the cached-view

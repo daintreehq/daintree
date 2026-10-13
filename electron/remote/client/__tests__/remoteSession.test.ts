@@ -630,6 +630,15 @@ describe("remote session wiring", () => {
     await expect(connection.describeProject("nope")).resolves.toBeNull();
   });
 
+  it("refuses to describe a project while the link is down rather than calling it missing", async () => {
+    await startHarness();
+    const disconnected = h.manager.connect(HOST_ID);
+    expect(disconnected.currentSession).toBeNull();
+    await expect(disconnected.describeProject("proj-1")).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+  });
+
   it("lists the host's projects without binding a view, and refuses while disconnected", async () => {
     await startHarness();
     const disconnected = h.manager.connect(HOST_ID);
