@@ -82,8 +82,10 @@ interface SmokeRendererCheckResult {
   projectCount: number;
 }
 
+// Main frame only: a subframe still loading never gets a did-finish-load of its
+// own, and a subframe failing is not the app failing to load.
 async function waitForSmokeRendererLoad(appWc: WebContents): Promise<void> {
-  if (!appWc.isLoading()) return;
+  if (!appWc.isLoadingMainFrame()) return;
 
   await withTimeout(
     new Promise<void>((resolve, reject) => {
@@ -100,8 +102,10 @@ async function waitForSmokeRendererLoad(appWc: WebContents): Promise<void> {
         _event: ElectronEvent,
         errorCode: number,
         errorDescription: string,
-        validatedURL: string
+        validatedURL: string,
+        isMainFrame: boolean
       ) => {
+        if (!isMainFrame) return;
         cleanup();
         reject(
           new Error(
@@ -117,10 +121,10 @@ async function waitForSmokeRendererLoad(appWc: WebContents): Promise<void> {
       };
 
       appWc.once("did-finish-load", onFinish);
-      appWc.once("did-fail-load", onFail);
+      appWc.on("did-fail-load", onFail);
       appWc.once("destroyed", onDestroyed);
 
-      if (!appWc.isLoading()) {
+      if (!appWc.isLoadingMainFrame()) {
         onFinish();
       }
     }),
