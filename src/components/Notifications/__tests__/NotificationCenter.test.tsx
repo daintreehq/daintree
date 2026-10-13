@@ -530,7 +530,7 @@ describe("NotificationCenter muted pill", () => {
     try {
       render(<NotificationCenter open onClose={() => {}} />);
       const pill = screen.getByTestId("notification-muted-pill");
-      expect(pill.textContent).toContain("Muted until");
+      expect(pill.textContent).toContain("Paused until");
       expect(pill.textContent).toContain("OS Do Not Disturb is active");
     } finally {
       useNotificationSettingsStore.setState({ osDndActive: undefined });
@@ -545,7 +545,7 @@ describe("NotificationCenter muted pill", () => {
 
     const pill = screen.getByTestId("notification-muted-pill");
     expect(pill).toBeTruthy();
-    expect(pill.textContent).toMatch(/Muted until /);
+    expect(pill.textContent).toMatch(/Paused until /);
     const resume = screen.getByLabelText("Resume notifications");
     expect(resume).toBeTruthy();
     expect(resume.textContent).toBe("Resume");
@@ -638,7 +638,7 @@ describe("NotificationCenter muted pill", () => {
     // time-sensitive System kind toasts.
     expect(pill.textContent).toContain("Will interrupt you: Waiting, System");
     // Provenance line is preserved alongside the hero summary.
-    expect(pill.textContent).toMatch(/Muted until /);
+    expect(pill.textContent).toMatch(/Paused until /);
   });
 
   it("reads 'Nothing will interrupt you' when notifications are globally off during a mute", () => {
@@ -939,7 +939,7 @@ describe("NotificationCenter empty state — zero data", () => {
 });
 
 describe("NotificationCenter empty state — muted", () => {
-  it("renders the muted empty state with a 'Resuming at' description when session mute is active and inbox is empty", () => {
+  it("renders the muted empty state, leaving the resume time to the strip, when session mute is active and inbox is empty", () => {
     const until = Date.now() + 60 * 60 * 1000;
     useNotificationSettingsStore.setState({ quietUntil: until });
 
@@ -948,15 +948,15 @@ describe("NotificationCenter empty state — muted", () => {
     const emptyState = screen.getByTestId("notification-muted-empty-state");
     expect(emptyState).toBeTruthy();
     expect(within(emptyState).getByText("Notifications paused")).toBeTruthy();
-    expect(emptyState.textContent).toMatch(/Resuming at /);
-    expect(emptyState.textContent).not.toMatch(/Quiet hours active/);
+    expect(screen.getByTestId("notification-muted-pill").textContent).toMatch(/Paused until /);
+    expect(emptyState.textContent).not.toMatch(/until/);
     expect(screen.queryByText("No notifications yet")).toBeNull();
     expect(screen.queryByText(/Notifications appear here/)).toBeNull();
     // No duplicate Resume affordance inside the empty state — header pill owns it.
     expect(within(emptyState).queryByLabelText("Resume notifications")).toBeNull();
   });
 
-  it("renders the muted empty state with 'Quiet hours active' provenance when only scheduled quiet hours are active", () => {
+  it("names quiet hours and their end in the strip when only scheduled quiet hours are active", () => {
     const fixedNow = new Date();
     fixedNow.setHours(2, 0, 0, 0);
     vi.useFakeTimers();
@@ -973,21 +973,26 @@ describe("NotificationCenter empty state — muted", () => {
 
       const emptyState = screen.getByTestId("notification-muted-empty-state");
       expect(within(emptyState).getByText("Notifications paused")).toBeTruthy();
-      expect(emptyState.textContent).toMatch(/Quiet hours active\. Resuming at /);
+      const end = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
+        new Date(new Date(fixedNow).setHours(8, 0, 0, 0))
+      );
+      expect(screen.getByTestId("notification-muted-pill").textContent).toContain(
+        `Quiet hours until ${end}`
+      );
       expect(screen.queryByText("No notifications yet")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("uses the scheduled quiet-hours end time when both session and scheduled mutes overlap and scheduled ends later", () => {
+  it("names the later quiet-hours end in the strip when session and scheduled mutes overlap", () => {
     const fixedNow = new Date();
     fixedNow.setHours(2, 0, 0, 0);
     vi.useFakeTimers();
     vi.setSystemTime(fixedNow);
     try {
       // Session expires at 03:00, scheduled quiet hours end at 08:00 — notifications
-      // do not actually resume until 08:00, so the body must show that.
+      // do not actually resume until 08:00, so the strip must say so too.
       useNotificationSettingsStore.setState({
         quietUntil: fixedNow.getTime() + 60 * 60 * 1000,
         quietHoursEnabled: true,
@@ -998,14 +1003,13 @@ describe("NotificationCenter empty state — muted", () => {
 
       render(<NotificationCenter open onClose={vi.fn()} />);
 
-      const emptyState = screen.getByTestId("notification-muted-empty-state");
-      expect(emptyState.textContent).toMatch(/Quiet hours active\. Resuming at /);
-      // Must not advertise the earlier (session) resume time.
-      const formatted = new Intl.DateTimeFormat(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(new Date(fixedNow.getTime() + 60 * 60 * 1000));
-      expect(emptyState.textContent).not.toContain(formatted);
+      expect(screen.getByTestId("notification-muted-empty-state")).toBeTruthy();
+      const end = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
+        new Date(new Date(fixedNow).setHours(8, 0, 0, 0))
+      );
+      expect(screen.getByTestId("notification-muted-pill").textContent).toContain(
+        `Quiet hours continue until ${end}`
+      );
     } finally {
       vi.useRealTimers();
     }

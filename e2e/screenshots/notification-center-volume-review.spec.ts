@@ -28,7 +28,11 @@
  *   silenced   the quiet strip after silencing a kind from a row's menu
  *   caughtup   everything read: the All tab without a rail, and Unread empty
  *   toast      a toast arriving while the inbox is closed
- *   forced     `forced-colors: active` on the fleet rest state
+ *   chrome     the header's Pause menu, then its overflow menu
+ *   archived   the Archived tab
+ *   empty      no notifications yet, then paused through the Pause menu,
+ *              then the fleet reseeded while paused
+ *   forced    `forced-colors: active` on the fleet rest state
  *   light      the fleet rest state on a light palette
  *
  * Opt-in only:
@@ -480,7 +484,11 @@ async function openCenter(page: Page): Promise<void> {
  */
 async function seedAndOpen(
   page: Page,
-  fleet: ReturnType<typeof buildFleet>,
+  fleet: {
+    entries: SeedHistoryEntry[];
+    snoozed: Record<string, number>;
+    lastClosedAt: number;
+  },
   lastClosedAt = fleet.lastClosedAt
 ): Promise<void> {
   await closeCenter(page);
@@ -777,6 +785,44 @@ test("notification center at fleet volume", async () => {
       });
       await settle(page, 800);
       await snap(page, "13-toast-window");
+    });
+
+    await step(page, "chrome", async () => {
+      await seedAndOpen(page, fleet);
+      await page.locator(POPOVER).locator('button[aria-label="Pause notifications"]').click();
+      await page.locator('[role="menu"]').first().waitFor({ state: "visible", timeout: 5000 });
+      await snapWithMenus(page, "18-pause-menu");
+      await seedAndOpen(page, fleet);
+      await page.locator(POPOVER).locator('button[aria-label="More notification actions"]').click();
+      await page.locator('[role="menu"]').first().waitFor({ state: "visible", timeout: 5000 });
+      await snapWithMenus(page, "19-more-menu");
+    });
+
+    await step(page, "archived", async () => {
+      await seedAndOpen(page, fleet);
+      await page.locator(SEL.notifications.centerFilter("Archived")).first().click();
+      await settle(page, 400);
+      await snap(page, "20-archived-tab-popover", POPOVER);
+      const row = page.locator(POPOVER).locator(SEL.notifications.centerRow).first();
+      await row.hover();
+      await row.locator('button[aria-label^="Options for "]').click();
+      await page.locator('[role="menu"]').first().waitFor({ state: "visible", timeout: 5000 });
+      await snapWithMenus(page, "20b-archived-row-menu");
+    });
+
+    await step(page, "empty", async () => {
+      await seedAndOpen(page, { ...fleet, entries: [], snoozed: {} }, 0);
+      await snap(page, "21-empty-popover", POPOVER);
+      await page.locator(POPOVER).locator('button[aria-label="Pause notifications"]').click();
+      await page.locator('[role="menuitem"]', { hasText: "For 1 hour" }).first().click();
+      await page
+        .locator('[data-testid="notification-muted-pill"]')
+        .waitFor({ state: "visible", timeout: 5000 });
+      await snap(page, "22-empty-paused-popover", POPOVER);
+      await seedAndOpen(page, fleet);
+      await snap(page, "23-fleet-paused-popover", POPOVER);
+      await page.locator(POPOVER).locator('button[aria-label="Resume notifications"]').click();
+      await settle(page, 300);
     });
 
     await step(page, "forced", async () => {
