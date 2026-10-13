@@ -54,6 +54,12 @@ export interface OpenDirHandlerDeps {
    * router opens it there itself.
    */
   redirectToOwner?: (project: { id: string; path: string }, windowId: number) => boolean;
+  /**
+   * Tear down the project's cached view in `windowId` so an explicit new-window
+   * open can take it elsewhere (#13274). False when that window can no longer
+   * let it go — the open then switches to it there, as before.
+   */
+  releaseCachedView?: (projectId: string, windowId: number) => boolean;
 }
 
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
@@ -134,8 +140,10 @@ export async function routeProjectOpen(
   const registry = deps.getWindowRegistry();
 
   // Synchronous from the snapshot to the reservation: nothing may change the
-  // world between deciding on a window and claiming it.
-  const decision = decideProjectOpenTarget(
+  // world between deciding on a window and claiming it. A cached view moving to
+  // a new window is released inside that span too, so the project never has a
+  // live view in two windows.
+  let decision = decideProjectOpenTarget(
     {
       projectId: project?.id ?? null,
       projectPath: targetPath,
@@ -146,6 +154,13 @@ export async function routeProjectOpen(
     },
     snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed)
   );
+  const releaseFrom = decision.releaseFromWindowId;
+  if (
+    releaseFrom !== undefined &&
+    !(project !== null && deps.releaseCachedView?.(project.id, releaseFrom) === true)
+  ) {
+    decision = { kind: "activate", windowId: releaseFrom, reason: "owner" };
+  }
 
   const win =
     decision.kind === "create"
@@ -163,9 +178,8 @@ export async function routeProjectOpen(
   // and one still behind its paint gate has to wait for revealWindow's "show".
   //
   // An owner that is the asking window itself only holds the project cached
-  // (one showing it is a no-op focus), and there is nowhere else a single live
-  // view can go: that window switches to it. The single-owner rule outranks
-  // "new" here, as it does for every other gesture.
+  // (one showing it is a no-op focus) that it could not release for "new" — it
+  // backs a running assistant, or is mid-activation: that window switches to it.
   const { windowId } = decision;
   const redirectToOwner = (): boolean =>
     routing.source === "in-app" &&

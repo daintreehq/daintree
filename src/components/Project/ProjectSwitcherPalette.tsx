@@ -646,22 +646,36 @@ function isOpenElsewhere(project: SearchableProject): boolean {
 }
 
 /**
+ * Whether asking for a new window takes the project's one live view out of the
+ * window keeping it in the background, here or elsewhere, rather than going to
+ * where it already is (#13274).
+ */
+function movesCachedView(
+  project: Pick<SearchableProject, "openInOtherWindow" | "isCachedInThisWindow">
+): boolean {
+  return project.isCachedInThisWindow === true || project.openInOtherWindow === "cached";
+}
+
+/**
  * The row's new-window menu item, or null where it has none (#12597).
  *
  * A project has one live view across the app, so asking for a new window for
- * one another window owns brings that window forward — the item says so. A
- * project this window already holds has no second window to go to: the request
- * would just switch here, which the row itself already does.
+ * one another window shows or is activating brings that window forward — the
+ * item says so. One this window shows or is activating has no second window to
+ * go to: the request would just switch here, which the row itself already does.
+ * A view kept cached, in this window or another, moves to the new window.
  *
  * Exported for its own test, like `canSleepProject`.
  */
 export function getNewWindowMenuLabel(
   project: Pick<
     SearchableProject,
-    "isActive" | "isMissing" | "openInOtherWindow" | "isOpenInThisWindow"
+    "isActive" | "isMissing" | "openInOtherWindow" | "isOpenInThisWindow" | "isCachedInThisWindow"
   >
 ): string | null {
-  if (project.isActive || project.isMissing || project.isOpenInThisWindow) return null;
+  if (project.isActive || project.isMissing) return null;
+  if (movesCachedView(project)) return "Open in new window";
+  if (project.isOpenInThisWindow) return null;
   return project.openInOtherWindow !== undefined ? "Go to window" : "Open in new window";
 }
 
@@ -679,9 +693,10 @@ function modEnterOpensWindow(
 
 /**
  * The footer's Enter hint for the highlighted row (#12597). A row another
- * window owns goes there on either key, so both say where it goes rather than
- * "Switch" or "New window". A row this window already holds switches here on
- * either key too. Null with nothing highlighted: Enter no-ops there.
+ * window shows or is activating goes there on either key, so both say where it
+ * goes rather than "Switch" or "New window". A row this window shows or is
+ * activating switches here on either key too. A row only kept cached moves to a
+ * new window on ⌘↵ (#13274). Null with nothing highlighted: Enter no-ops there.
  *
  * Exported for its own test.
  */
@@ -699,6 +714,9 @@ export function getProjectSwitcherEnterHint(
   // platform calls primary — a literal ⌘ tells Windows and Linux to press a key
   // they don't have. The Enter glyph stays the footer family's ↵.
   const modEnter = `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`;
+  if (opensWindow && row.kind === "project" && movesCachedView(row)) {
+    return { keys: modEnter, label: "New window" };
+  }
   if (row.kind === "project" && isOpenElsewhere(row)) {
     return { keys: opensWindow ? modEnter : "↵", label: "Go to window" };
   }

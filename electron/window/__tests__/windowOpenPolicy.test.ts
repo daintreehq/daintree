@@ -355,3 +355,83 @@ describe("decideProjectOpenTarget — windows on a remote host", () => {
     });
   });
 });
+
+describe("decideProjectOpenTarget — a new window takes a cached view (#13274)", () => {
+  // Window 2 shows p2 and keeps "dropped" cached behind it.
+  const holder = (overrides: Partial<OpenWorldWindow> = {}) =>
+    win(2, {
+      activeProjectId: "p2",
+      viewProjectIds: ["p2", "dropped"],
+      releasableViewProjectIds: ["dropped"],
+      ...overrides,
+    });
+  const newWindow = (initiatingWindowId: number) =>
+    inApp(initiatingWindowId, { disposition: "new" });
+
+  it("releases it from the holder and opens a new window, asked from another window", () => {
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), holder()]))).toEqual({
+      kind: "create",
+      releaseFromWindowId: 2,
+    });
+  });
+
+  it("releases it into an empty window when there is one", () => {
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), holder(), win(3)]))).toEqual({
+      kind: "activate",
+      windowId: 3,
+      reason: "empty",
+      releaseFromWindowId: 2,
+    });
+  });
+
+  it("releases it from the asking window itself, never landing back there", () => {
+    expect(decideProjectOpenTarget(newWindow(2), world([holder()]))).toEqual({
+      kind: "create",
+      releaseFromWindowId: 2,
+    });
+  });
+
+  it("keeps a view the holder can't release, switching to it there as before", () => {
+    const pinned = holder({ releasableViewProjectIds: [] });
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), pinned]))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "owner",
+    });
+  });
+
+  it("opens it in a picker window that holds it rather than moving it", () => {
+    const picker = win(2, { viewProjectIds: ["dropped"], releasableViewProjectIds: ["dropped"] });
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), picker]))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "owner",
+    });
+  });
+
+  it("still focuses a window showing the project", () => {
+    expect(
+      decideProjectOpenTarget(newWindow(1), world([occupied(1), occupied(2, "dropped")]))
+    ).toEqual({ kind: "focus", windowId: 2 });
+  });
+
+  it("still focuses a window with an open of it in flight", () => {
+    const claimed = holder({ reservations: [{ projectId: "dropped", projectPath: null }] });
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), claimed]))).toEqual({
+      kind: "focus",
+      windowId: 2,
+    });
+  });
+
+  it.each([
+    ["an external open", external()],
+    ["a plain in-app open under the new-window preference", inApp(1)],
+    ["a switch", inApp(1, { intent: "switch" })],
+  ])("leaves the cached view where it is for %s", (_label, request) => {
+    expect(decideProjectOpenTarget(request, world([occupied(1), holder()], "on"))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "owner",
+    });
+  });
+});

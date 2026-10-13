@@ -27,6 +27,7 @@ interface FakePvm {
     projectId: string;
     view: { webContents: { isDestroyed(): boolean } };
   }>;
+  canReleaseCachedView: (projectId: string) => boolean;
 }
 
 function pvm(
@@ -42,6 +43,10 @@ function pvm(
         projectId,
         view: { webContents: { isDestroyed: () => destroyed ?? false } },
       })),
+    canReleaseCachedView: (projectId) =>
+      projectId !== active &&
+      projectId !== bridge &&
+      views.some(([id, destroyed]) => id === projectId && !destroyed),
   };
 }
 
@@ -74,6 +79,7 @@ describe("snapshotOpenWorld", () => {
           activeProjectId: "p3",
           bridgeProjectId: "leaving",
           viewProjectIds: ["p3", "cached"],
+          releasableViewProjectIds: ["cached"],
           ready: true,
           reservations: [],
           unboundOpens: [],
@@ -84,6 +90,7 @@ describe("snapshotOpenWorld", () => {
           activeProjectId: null,
           bridgeProjectId: null,
           viewProjectIds: [],
+          releasableViewProjectIds: [],
           ready: false,
           reservations: [],
           unboundOpens: [],
@@ -176,6 +183,46 @@ describe("snapshotOpenWorld", () => {
     expect(snapshotOpenWorld(registryOf([switching]), "default").windows[0]?.reservations).toEqual(
       []
     );
+  });
+
+  it("asks each view manager which cached views a new window may take (#13274)", () => {
+    const w = ctx(1, { ...pvm("front", [["front"], ["free"], ["pinned"]]) });
+    w.services.projectViewManager!.canReleaseCachedView = (id) => id === "free";
+
+    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0]).toMatchObject({
+      viewProjectIds: ["front", "free", "pinned"],
+      releasableViewProjectIds: ["free"],
+    });
+  });
+
+  it("never releases a cached view whose activation is already in flight", () => {
+    const w = ctx(1, pvm("front", [["front"], ["coming"], ["idle"]]));
+    const release = claimProjectActivation("coming", 1);
+    try {
+      expect(
+        snapshotOpenWorld(registryOf([w]), "default").windows[0]?.releasableViewProjectIds
+      ).toEqual(["idle"]);
+    } finally {
+      release();
+    }
+  });
+
+  it("releases nothing from a manager that can't answer, keeping the rest of its window", () => {
+    const w = ctx(1, {
+      ...pvm("front", [["front"], ["cached"]]),
+      canReleaseCachedView: () => {
+        throw new Error("disposing");
+      },
+    });
+    markWindowReadyForOpens(w.browserWindow);
+
+    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0]).toMatchObject({
+      activeProjectId: "front",
+      viewProjectIds: ["front", "cached"],
+      releasableViewProjectIds: [],
+      ready: true,
+    });
+    expect(logErrorMock).toHaveBeenCalledOnce();
   });
 
   it("reports readiness only once a window has been marked", () => {
