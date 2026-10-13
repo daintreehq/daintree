@@ -37,6 +37,12 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: { setAgentState },
 }));
 vi.mock("@/store/hostProjectRehydrate", () => ({ rehydrateHostProjectState: rehydrate }));
+// Following the driver loads these lazily. The real module pulls in every IPC
+// client and the agent registry, and a cold load from one test's unawaited
+// follow pass held the next test's own lazy imports past vi.waitFor's timeout.
+vi.mock("@/store/slices/panelRegistry/helpers", () => ({
+  deriveRuntimeStatus: () => "running",
+}));
 
 import {
   _reloadHostConnectionSyncForTesting,
