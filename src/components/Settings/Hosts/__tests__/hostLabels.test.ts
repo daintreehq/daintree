@@ -3,6 +3,7 @@ import type { HostRestartImpact } from "@shared/types/ipc/remoteHosts";
 import {
   canWaitForIdle,
   connectionLabel,
+  defaultHostName,
   localNameSuggestion,
   restartConfirmLabel,
   restartImpactLines,
@@ -33,7 +34,23 @@ describe("localNameSuggestion", () => {
   });
 });
 
+describe("defaultHostName", () => {
+  it("names a machine by its first label, but keeps an address whole", () => {
+    expect(defaultHostName("greg@studio.local")).toBe("studio");
+    expect(defaultHostName("devbox")).toBe("devbox");
+    expect(defaultHostName("greg@192.168.1.20")).toBe("192.168.1.20");
+    expect(defaultHostName("100.64.0.3")).toBe("100.64.0.3");
+  });
+});
+
 describe("connectionLabel", () => {
+  it("says when an unreachable host was last seen relative to now, as the rest of the app does", () => {
+    const now = Date.UTC(2026, 0, 10, 12);
+    expect(
+      connectionLabel({ status: "unreachable", lastSeenAt: now - 3 * 3_600_000, detail: null }, now)
+    ).toBe("Unreachable · last seen 3 hours ago");
+  });
+
   it("gives an unreachable host ssh's own words for why, and says Host mode is off when ssh got in", () => {
     expect(
       connectionLabel({

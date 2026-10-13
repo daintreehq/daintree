@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { HostProbeResult, HostInstallPlan } from "@shared/types/ipc/remoteHosts";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type {
+  HostProbeResult,
+  HostInstallPlan,
+  RemoteHostsEvent,
+} from "@shared/types/ipc/remoteHosts";
+import type { HostListEntry } from "@shared/types/remoteHosts";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { AddHostDialog } from "../AddHostDialog";
 
@@ -74,20 +79,46 @@ const IMPACT = {
 };
 
 let remoteHosts: Record<string, ReturnType<typeof vi.fn>>;
+let listeners: Array<(event: RemoteHostsEvent) => void> = [];
+
+function known(id: string, name: string, target: string): HostListEntry {
+  return {
+    descriptor: {
+      id,
+      name,
+      connection: { kind: "ssh", target },
+      platform: null,
+      arch: null,
+      lastHandshake: null,
+      lastSeenAt: null,
+      addedAt: 0,
+      notificationsEnabled: false,
+    },
+    connection: { status: "disconnected" },
+    summary: null,
+  };
+}
 
 beforeEach(() => {
+  listeners = [];
   useRemoteHostsStore.getState().reset();
   remoteHosts = {
     discover: vi.fn(async () => []),
     probe: vi.fn(async () => probeResult()),
     planInstall: vi.fn(async () => UPDATE_PLAN),
     install: vi.fn(async () => ({ status: "needs-confirmation", impact: IMPACT })),
-    add: vi.fn(async () => ({
+    add: vi.fn(async (payload: { name: string; connection: unknown }) => ({
       id: "studio",
-      name: "studio",
-      connection: { kind: "ssh", target: "greg@studio" },
+      name: payload.name,
+      connection: payload.connection,
     })),
-    connect: vi.fn(async () => ({ status: "connecting", attempt: 1 })),
+    connect: vi.fn(async () => ({ status: "connected", rttMs: 3, handshake: {} })),
+    onEvent: vi.fn((cb: (event: RemoteHostsEvent) => void) => {
+      listeners.push(cb);
+      return () => {
+        listeners = listeners.filter((l) => l !== cb);
+      };
+    }),
     cancelInstall: vi.fn(async () => true),
     startHostMode: vi.fn(async () => ({ probe: probeResult(), lingerRefused: null })),
   };
@@ -110,7 +141,8 @@ async function walkToAddHost() {
   fireEvent.click(screen.getByRole("button", { name: "Check host" }));
   fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
   fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
-  fireEvent.click(await screen.findByRole("button", { name: "Add host" }));
+  // Host mode was on there already, so the host was saved on the way.
+  fireEvent.click(await screen.findByRole("button", { name: "Done" }));
 }
 
 describe("AddHostDialog", () => {
@@ -215,22 +247,152 @@ describe("AddHostDialog", () => {
     expect(names).toEqual(["studio-2", "Studio-03", "studio-10", "studio-01"]);
   });
 
-  it("keeps a host that was added but couldn't connect, and retries only the connection", async () => {
+  it("ends on a connection the link reported unreachable, keeping the host and retrying only the link", async () => {
     const onClose = vi.fn();
-    remoteHosts.connect!.mockRejectedValueOnce(new Error("Permission denied (publickey)"));
+    remoteHosts.connect!.mockResolvedValueOnce({ status: "connecting", attempt: 1 });
     render(<AddHostDialog isOpen onClose={onClose} />);
     await walkToAddHost();
+    await waitFor(() => expect(remoteHosts.connect).toHaveBeenCalledOnce());
+    // The dial only started; what happened arrives as the link reports it.
+    act(() =>
+      listeners.forEach((l) =>
+        l({
+          type: "connection-changed",
+          hostId: "studio",
+          connection: {
+            status: "unreachable",
+            lastSeenAt: null,
+            detail: "Permission denied (publickey).",
+            stoppedRetrying: true,
+          },
+        })
+      )
+    );
 
-    expect(await screen.findByText("studio was added to your hosts.")).toBeTruthy();
+    expect(await screen.findByText("Couldn't connect to studio")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("Permission denied");
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "Add host" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(remoteHosts.add).toHaveBeenCalledOnce();
     expect(remoteHosts.connect).toHaveBeenCalledTimes(2);
     expect(remoteHosts.connect).toHaveBeenLastCalledWith({ hostId: "studio" });
+  });
+
+  it("ends on Host mode being off there, with Set up…", async () => {
+    remoteHosts.connect!.mockResolvedValueOnce({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      hostModeOff: true,
+      stoppedRetrying: true,
+    });
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    await walkToAddHost();
+    expect(await screen.findByText("studio is saved, but Host mode is off there")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Set up…" }));
+    expect(await screen.findByText(/Host mode is on at studio/)).toBeTruthy();
+  });
+
+  it("ends on a build that doesn't match, with Update…", async () => {
+    remoteHosts.connect!.mockResolvedValueOnce({
+      status: "version-mismatch",
+      mismatch: { kind: "version", local: "1.4.0", remote: "1.3.0" },
+      remote: { version: "1", commit: "c", protocolVersion: 1, platform: "linux", arch: "x64" },
+    });
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    await walkToAddHost();
+    expect(
+      await screen.findByText("studio is saved, but needs a compatible Daintree build")
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Update…" }));
+    await waitFor(() => expect(remoteHosts.planInstall).toHaveBeenCalled());
+  });
+
+  it("saves a host whose Host mode was skipped without dialling it", async () => {
+    remoteHosts.probe!.mockResolvedValue(probeResult({ hostModeListening: false }));
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Skip" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add host" }));
+    expect(await screen.findByText("Saved, not connected")).toBeTruthy();
+    expect(remoteHosts.add).toHaveBeenCalledOnce();
+    expect(remoteHosts.connect).not.toHaveBeenCalled();
+  });
+
+  it("saves the host the moment Host mode is on there, and stops offering Cancel", async () => {
+    remoteHosts.probe!.mockResolvedValue(probeResult({ hostModeListening: false }));
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    expect(remoteHosts.add).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
+    expect(await screen.findByText(/studio is saved in your host list/)).toBeTruthy();
+    expect(remoteHosts.add).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+
+    // Finishing reuses the record rather than adding a second.
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    await waitFor(() => expect(remoteHosts.connect).toHaveBeenCalled());
+    expect(remoteHosts.add).toHaveBeenCalledOnce();
+  });
+
+  it("says a taken or reserved name, or an added target, before anything is checked", () => {
+    useRemoteHostsStore.getState().setHosts([known("lab", "studio", "admin@lab.local")]);
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    const targetField = screen.getByPlaceholderText("user@devbox.local");
+    fireEvent.change(targetField, { target: { value: "greg@studio" } });
+    expect(document.body.textContent).toContain('Another host is already called "studio"');
+    const check = () => screen.getByRole("button", { name: "Check host" });
+    expect(check().getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.change(screen.getByPlaceholderText("studio"), { target: { value: "this mac" } });
+    expect(document.body.textContent).toContain("is what Daintree calls this machine");
+
+    fireEvent.change(screen.getByDisplayValue("this mac"), { target: { value: "Lab two" } });
+    fireEvent.change(targetField, { target: { value: "admin@LAB.local" } });
+    expect(document.body.textContent).toContain('is already in your host list as "studio"');
+    expect(check().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("warns, but doesn't block, another account on a machine already added", () => {
+    useRemoteHostsStore.getState().setHosts([known("lab", "Lab", "admin@lab.local")]);
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@lab.local" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("lab"), { target: { value: "Lab (greg)" } });
+    expect(screen.getByTestId("add-host-same-machine").textContent).toContain(
+      '"Lab" already reaches this machine as admin@lab.local'
+    );
+    expect(
+      screen.getByRole("button", { name: "Check host" }).getAttribute("aria-disabled")
+    ).not.toBe("true");
+  });
+
+  it("can't be closed while Host mode is being switched on there", async () => {
+    remoteHosts.probe!.mockResolvedValue(probeResult({ hostModeListening: false }));
+    let finish!: (value: unknown) => void;
+    remoteHosts.startHostMode!.mockImplementationOnce(() => new Promise((r) => (finish = r)));
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
+    expect(screen.getByRole("button", { name: "Skip" }).getAttribute("aria-disabled")).toBe("true");
+    await act(async () => finish({ probe: probeResult(), lingerRefused: null }));
   });
 
   it("closes straight away when the host is added and connects", async () => {

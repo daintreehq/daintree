@@ -66,6 +66,11 @@ export interface HostSetupDeps {
   idlePollMs?: number;
   /** How commands reach a host; by its connection kind (ssh over the shared ControlMaster) unless given. */
   channelFor?(connection: HostConnection): HostCommandChannel;
+  /**
+   * A host on this connection is being removed or re-pointed: its cleanup
+   * closes the SSH master, so nothing that changes the host starts meanwhile.
+   */
+  isRetiring?(connection: HostConnection): boolean;
 }
 
 function requireTarget(payload: unknown): HostConnection {
@@ -151,6 +156,7 @@ export class HostSetupService {
 
   install(payload: InstallHostPayload): Promise<InstallHostResult> {
     const connection = requireTarget(payload);
+    this.refuseWhileRetiring(connection);
     const opId = normalizeOperationId(payload?.opId);
     if (!opId) throw new AppError({ code: "VALIDATION", message: "opId is required" });
     const whileWorking = payload.whileWorking ?? "refuse";
@@ -243,9 +249,16 @@ export class HostSetupService {
    */
   async startHostMode(payload: HostSetupTarget): Promise<StartHostModeResult> {
     const connection = requireTarget(payload);
+    this.refuseWhileRetiring(connection);
     const channel = this.shellFor(connection);
     const before = await this.probeOutcome(connection, channel);
-    if (!before.parsed) return { probe: before.result, lingerRefused: null };
+    if (!before.parsed) {
+      // Nothing was changed there: say why rather than return as if it had been checked.
+      const detail = before.result.sshError?.trim();
+      const message = `Couldn't check ${formatHostConnection(connection)}, so Host mode wasn't turned on.${detail ? ` ${detail}` : ""}`;
+      throw new AppError({ code: "INTERNAL", message, userMessage: message });
+    }
+    this.refuseWhileRetiring(connection);
     return bootstrapHostMode(connection, before, {
       channel,
       probe: () => this.probeOutcome(connection, channel),
@@ -268,7 +281,9 @@ export class HostSetupService {
     connection: HostConnection,
     signal?: AbortSignal
   ): Promise<"listening" | "started" | "not-startable"> {
-    if (this.isInstallRunning(connection)) return "not-startable";
+    if (this.isInstallRunning(connection) || this.deps.isRetiring?.(connection)) {
+      return "not-startable";
+    }
     const channel = this.shellFor(connection);
     const outcome = await this.probeOutcome(connection, channel, signal);
     const probe = outcome.result;
@@ -312,6 +327,12 @@ export class HostSetupService {
       message: "The host's Daintree started but never listened",
       userMessage: `Daintree started on ${label} but didn't begin listening within a minute.`,
     });
+  }
+
+  private refuseWhileRetiring(connection: HostConnection): void {
+    if (!this.deps.isRetiring?.(connection)) return;
+    const message = `${formatHostConnection(connection)} is being removed or changed on this device. Try again once that finishes.`;
+    throw new AppError({ code: "VALIDATION", message, userMessage: message });
   }
 
   /** An install or update for this host is running: it stops and starts Daintree there itself. */

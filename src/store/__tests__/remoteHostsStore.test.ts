@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { HostListEntry } from "@shared/types/remoteHosts";
+import type { HostListEntry, HostMetricsSummary } from "@shared/types/remoteHosts";
 import { useRemoteHostsStore } from "../remoteHostsStore";
 
 const host: HostListEntry = {
@@ -17,6 +17,27 @@ const host: HostListEntry = {
   connection: { status: "disconnected" },
   summary: null,
 };
+
+function report(hostId: string, sampledAt: number): HostMetricsSummary {
+  return {
+    hostId,
+    sampledAt,
+    platform: "linux",
+    cpuPercent: null,
+    memoryPressure: null,
+    memoryUsedBytes: null,
+    memoryTotalBytes: null,
+    swapUsedBytes: null,
+    swapTotalBytes: null,
+    thermal: null,
+    cpuPressure: null,
+    agentsObserved: null,
+    projectCount: null,
+    worktreeCount: null,
+    driver: null,
+    agentClis: [],
+  };
+}
 
 beforeEach(() => useRemoteHostsStore.getState().reset());
 
@@ -65,6 +86,38 @@ describe("remoteHostsStore", () => {
       progress: { stage: "copying" },
       outcome: { status: "cancelled" },
     });
+  });
+
+  it("takes each host's reports as they arrive, and drops them when its link goes", () => {
+    const store = useRemoteHostsStore.getState();
+    store.applyEvent({ type: "hosts-changed", hosts: [host] });
+    const summary = report("studio", 5);
+    store.applySummary(summary);
+    store.applySummary(report("elsewhere", 6));
+    expect(useRemoteHostsStore.getState().hosts.map((h) => h.summary)).toEqual([summary]);
+
+    store.applyEvent({
+      type: "connection-changed",
+      hostId: "studio",
+      connection: {
+        status: "connected",
+        rttMs: 1,
+        handshake: {
+          version: "1",
+          commit: "c",
+          protocolVersion: 1,
+          platform: "linux",
+          arch: "x64",
+        },
+      },
+    });
+    expect(useRemoteHostsStore.getState().hosts[0]!.summary).toBe(summary);
+    store.applyEvent({
+      type: "connection-changed",
+      hostId: "studio",
+      connection: { status: "unreachable", lastSeenAt: 5, detail: null },
+    });
+    expect(useRemoteHostsStore.getState().hosts[0]!.summary).toBeNull();
   });
 
   it("ignores events it has no use for", () => {

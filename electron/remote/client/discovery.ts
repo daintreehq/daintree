@@ -1,6 +1,8 @@
 import os from "node:os";
 import {
+  sameHostAccount,
   sshConnection,
+  sshMachineKey,
   type HostConnection,
   type HostPlatform,
 } from "../../../shared/types/remoteHosts.js";
@@ -313,16 +315,8 @@ function isIpAddress(value: string): boolean {
   );
 }
 
-/**
- * The machine a target names: its host part, lower-cased, whole. An IP
- * address is kept complete, and names are never shortened to their first
- * label: `studio.local` and `studio.tailnet.ts.net` may be different machines.
- */
-export function machineKey(sshTarget: string): string {
-  const host = sshTarget.slice(sshTarget.lastIndexOf("@") + 1).toLowerCase();
-  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-  return bare.endsWith(".") ? bare.slice(0, -1) : bare;
-}
+/** The machine a target names; see {@link sshMachineKey}. */
+export const machineKey = sshMachineKey;
 
 /**
  * Tailnet peers first (their names work from anywhere on the tailnet), then
@@ -347,7 +341,6 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
   const knownTargets = deps.knownConnections
     .map(sshTargetOf)
     .filter((target): target is string => target !== null);
-  const known = new Set(knownTargets.map((t) => t.toLowerCase()));
   const knownMachines = new Set(knownTargets.map(machineKey));
   // This machine's own LAN adverts (Remote Login, Host mode) are never a host to add.
   const self = new Set(selfNames.map(machineKey));
@@ -366,8 +359,12 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
       source: candidate.source,
       platform: candidate.platform,
       online: candidate.online,
-      alreadyAdded:
-        known.has(candidate.sshTarget.toLowerCase()) || keys.some((key) => knownMachines.has(key)),
+      // Only this exact account is added already: another account on the same
+      // machine is a host of its own, so the row stays pickable with a warning.
+      alreadyAdded: deps.knownConnections.some((known) =>
+        sameHostAccount(known, sshConnection(candidate.sshTarget))
+      ),
+      knownMachine: keys.some((key) => knownMachines.has(key)),
     });
   }
   return out;

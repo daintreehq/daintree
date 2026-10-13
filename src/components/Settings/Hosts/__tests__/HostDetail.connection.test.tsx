@@ -6,6 +6,10 @@ import type { HostConnectionState, HostListEntry } from "@shared/types/remoteHos
 const client = vi.hoisted(() => ({
   update: vi.fn(async (payload: unknown) => payload),
   connect: vi.fn(async () => undefined),
+  connectAndSettle: vi.fn(async (): Promise<HostConnectionState> => ({
+    status: "connecting",
+    attempt: 1,
+  })),
   disconnect: vi.fn(async () => undefined),
   forget: vi.fn(async () => undefined),
   listClipboardGrants: vi.fn(async () => []),
@@ -46,6 +50,7 @@ const HANDSHAKE = {
 
 beforeEach(() => {
   client.connect.mockClear();
+  client.connectAndSettle.mockClear();
   client.disconnect.mockClear();
 });
 
@@ -89,7 +94,38 @@ describe("HostDetail connection controls", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     });
-    expect(client.connect).toHaveBeenCalledWith("studio-01");
+    expect(client.connectAndSettle).toHaveBeenCalledWith("studio-01");
+  });
+
+  it("says a Connect failed when the link reports it unreachable, in ssh's words", async () => {
+    client.connectAndSettle.mockResolvedValueOnce({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "Permission denied (publickey).",
+      stoppedRetrying: true,
+    });
+    render(<HostDetail entry={entry({ status: "disconnected" })} onBack={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    });
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Couldn't connect: Permission denied (publickey)."
+    );
+  });
+
+  it("leaves Host mode off to its own row rather than calling it a failed connect", async () => {
+    client.connectAndSettle.mockResolvedValueOnce({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      hostModeOff: true,
+      stoppedRetrying: true,
+    });
+    render(<HostDetail entry={entry({ status: "disconnected" })} onBack={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("keeps Retry beside Set up when Host mode is off there", () => {

@@ -204,6 +204,36 @@ describe("HostSetupService", () => {
     ]);
   });
 
+  it("says why Host mode wasn't turned on when the host's answer can't be read", async () => {
+    const calls: string[] = [];
+    const { setup } = service("", {
+      run: async (_command, args) => {
+        calls.push(args.at(-1) ?? "");
+        return ok("not a probe");
+      },
+    });
+    await expect(
+      setup.startHostMode({ connection: { kind: "ssh", target: "studio" } })
+    ).rejects.toMatchObject({
+      userMessage: expect.stringContaining("Host mode wasn't turned on"),
+    });
+    // Only the check ran: nothing was changed there.
+    expect(calls).toHaveLength(1);
+  });
+
+  it("starts no install or Host mode setup on a host being removed or re-pointed", async () => {
+    const { setup, calls } = service(MAC_RUNNING_OLD, {
+      isRetiring: (connection) => connection.kind === "ssh" && connection.target === "studio",
+    });
+    const connection = { kind: "ssh", target: "studio" } as const;
+    expect(() => setup.install({ opId: "op-retiring", connection })).toThrow(
+      expect.objectContaining({ code: "VALIDATION" })
+    );
+    await expect(setup.startHostMode({ connection })).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(setup.ensureHostRunning(connection)).resolves.toBe("not-startable");
+    expect(calls).toEqual([]);
+  });
+
   it("switches a Mac on through its logged-in session and reads the setting back", async () => {
     const state = JSON.stringify({
       daintreeHostMode: 1,

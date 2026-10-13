@@ -4,18 +4,14 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { getAgentConfig } from "@shared/config/agentRegistry";
-import {
-  formatHostConnection,
-  sshConnection,
-  sshTargetOf,
-  type HostListEntry,
-} from "@shared/types/remoteHosts";
+import { formatHostConnection, sshTargetOf, type HostListEntry } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsSwitch } from "../SettingsSwitch";
 import { useSettingsSubpage } from "../SettingsSubpage";
 import { AddHostDialog } from "./AddHostDialog";
+import { ChangeHostTargetDialog } from "./ChangeHostTargetDialog";
 import { HostPluginsSection } from "./HostPluginsSection";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
@@ -35,13 +31,36 @@ interface HostDetailProps {
   focusBackOnMount?: boolean;
 }
 
-function useCommittedField(initial: string, commit: (value: string) => Promise<unknown>) {
-  const [draft, setDraft] = useState(initial);
+/**
+ * A field saved on blur or Enter, against the value it was started from: a
+ * change made elsewhere (another window's rename) replaces a draft nobody
+ * touched, and an edit begun before it is never written over it silently.
+ */
+function useCommittedField(current: string, commit: (value: string) => Promise<unknown>) {
+  const [draft, setDraft] = useState(current);
+  const [base, setBase] = useState(current);
   const [error, setError] = useState<string | undefined>(undefined);
+  if (current !== base && draft === base) {
+    setBase(current);
+    setDraft(current);
+  }
   const save = () => {
-    if (draft.trim() === initial) return;
-    commit(draft.trim()).then(
-      () => setError(undefined),
+    const next = draft.trim();
+    if (next === current) {
+      setBase(current);
+      return;
+    }
+    if (base !== current) {
+      // Asked once: saving again keeps the edit, now made against the new value.
+      setBase(current);
+      setError(`Renamed to "${current}" in another window. Save again to use "${next}" instead`);
+      return;
+    }
+    commit(next).then(
+      () => {
+        setBase(next);
+        setError(undefined);
+      },
       (err: unknown) => setError(clientErrorText(err, "Couldn't save"))
     );
   };
@@ -74,12 +93,13 @@ export function HostDetail({
   const name = useCommittedField(descriptor.name, (value) =>
     remoteHostsClient.update({ hostId: descriptor.id, name: value })
   );
-  // Only an ssh target is typed; another kind of connection is shown as it is.
+  // Only an ssh target can be changed here; another kind of connection is shown as it is.
   const sshTarget = sshTargetOf(descriptor.connection);
-  const target = useCommittedField(sshTarget ?? "", (value) =>
-    remoteHostsClient.update({ hostId: descriptor.id, connection: sshConnection(value) })
-  );
+  const [changeTargetOpen, setChangeTargetOpen] = useState(false);
   const connected = connection.status === "connected";
+  // What a host reports is about it now only while it is connected: kept from
+  // before a drop, it would read as current. The overview's history keeps it.
+  const liveSummary = connected ? summary : null;
   // Up, or trying to be: Disconnect stops it. A link that gave up offers Retry instead.
   const linked =
     connected ||
@@ -88,12 +108,12 @@ export function HostDetail({
     (connection.status === "unreachable" && connection.stoppedRetrying !== true);
   const hostModeOff = connection.status === "unreachable" && connection.hostModeOff === true;
   const buildMismatch = connected ? (connection.buildMismatch ?? null) : null;
-  const agentClis = [...(summary?.agentClis ?? [])]
+  const agentClis = [...(liveSummary?.agentClis ?? [])]
     .map((cli) => ({ ...cli, name: getAgentConfig(cli.agentId)?.name ?? cli.agentId }))
     .sort((a, b) => nameCollator.compare(a.name, b.name));
-  const forges = summary?.forges
-    ? [...summary.forges].sort((a, b) => nameCollator.compare(a.name, b.name))
-    : summary?.forges;
+  const forges = liveSummary?.forges
+    ? [...liveSummary.forges].sort((a, b) => nameCollator.compare(a.name, b.name))
+    : liveSummary?.forges;
   const [notifyDraft, setNotifyDraft] = useState<boolean | null>(null);
   const [notifyError, setNotifyError] = useState<string | null>(null);
   const notificationsEnabled = notifyDraft ?? descriptor.notificationsEnabled;
@@ -133,8 +153,16 @@ export function HostDetail({
   const connect = () => {
     setConnecting(true);
     setConnectError(null);
-    remoteHostsClient.connect(descriptor.id).then(
-      () => setConnecting(false),
+    // Settled on what the link reports: dialling alone answers at once, so a
+    // failure never rejected and "Couldn't connect" never showed.
+    remoteHostsClient.connectAndSettle(descriptor.id).then(
+      (state) => {
+        setConnecting(false);
+        // Host mode off and a mismatched build have their own words and actions above.
+        if (state.status === "unreachable" && !state.hostModeOff) {
+          setConnectError(`Couldn't connect: ${state.detail ?? "the host didn't answer"}`);
+        }
+      },
       (err: unknown) => {
         setConnecting(false);
         setConnectError(`Couldn't connect: ${clientErrorText(err, "unknown error")}`);
@@ -196,16 +224,14 @@ export function HostDetail({
             onKeyDown={(e) => e.key === "Enter" && name.save()}
           />
           {sshTarget !== null ? (
-            <SettingsInput
+            <SettingsRow
               label="SSH target"
-              description="user@host, a .local or tailnet name, or an ~/.ssh/config alias"
-              layout="inline"
-              spellCheck={false}
-              value={target.draft}
-              error={target.error}
-              onChange={(e) => target.setDraft(e.target.value)}
-              onBlur={target.save}
-              onKeyDown={(e) => e.key === "Enter" && target.save()}
+              description={sshTarget}
+              control={
+                <Button variant="outline" size="sm" onClick={() => setChangeTargetOpen(true)}>
+                  Change target…
+                </Button>
+              }
             />
           ) : (
             <SettingsRow
@@ -298,7 +324,7 @@ export function HostDetail({
         description={`What ${hostName} reports having installed. Each machine signs in to its agents itself`}
       >
         <SettingsGroup>
-          {summary === null || summary === undefined ? (
+          {liveSummary === null || liveSummary === undefined ? (
             <SettingsEmptyRow>
               {connected
                 ? `Waiting for ${hostName} to report its agent CLIs`
@@ -382,6 +408,15 @@ export function HostDetail({
           </p>
         )}
       </ConfirmDialog>
+      {changeTargetOpen && sshTarget !== null && (
+        <ChangeHostTargetDialog
+          isOpen
+          onClose={() => setChangeTargetOpen(false)}
+          hostId={descriptor.id}
+          hostName={hostName}
+          currentTarget={sshTarget}
+        />
+      )}
       {updateOpen && (
         <AddHostDialog
           isOpen

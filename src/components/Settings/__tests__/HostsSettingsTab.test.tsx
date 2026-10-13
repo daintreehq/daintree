@@ -209,7 +209,65 @@ describe("HostsSettingsTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
     expect(remoteHosts.connect).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("button", { name: "Connect" })).toBeTruthy();
+    // Busy until the link reports what happened, not just until the dial started.
+    expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(
+      true
+    );
+    act(() =>
+      listeners.forEach((l) =>
+        l({
+          type: "connection-changed",
+          hostId: "studio-03",
+          connection: { status: "disconnected" },
+        })
+      )
+    );
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement).disabled).toBe(
+        false
+      )
+    );
+  });
+
+  it("shows a Connect that reached ssh but no host as the link reported it", async () => {
+    remoteHosts.list!.mockResolvedValue([
+      { ...entry("studio-03", "studio-03"), connection: { status: "disconnected" } },
+    ]);
+    remoteHosts.connect!.mockResolvedValueOnce({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "Permission denied (publickey).",
+      stoppedRetrying: true,
+    });
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Details for studio-03" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Couldn't connect: Permission denied (publickey)."
+    );
+  });
+
+  it("lists hosts A to Z, numbered as people number them", async () => {
+    remoteHosts.list!.mockResolvedValue([
+      entry("zeta", "zeta"),
+      entry("studio-10", "studio-10"),
+      entry("alpha", "Alpha"),
+      entry("studio-2", "studio-2"),
+    ]);
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
+    await screen.findByText("zeta");
+    const names = screen
+      .getAllByRole("button", { name: /^Details for / })
+      .map((button) => button.getAttribute("aria-label")?.replace("Details for ", ""));
+    expect(names).toEqual(["Alpha", "studio-2", "studio-10", "zeta"]);
   });
 
   it("opens a host's update flow when asked before the tab was showing", async () => {

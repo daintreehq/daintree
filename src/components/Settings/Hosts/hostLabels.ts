@@ -1,3 +1,4 @@
+import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import type {
   HandshakeMismatch,
   HostArch,
@@ -62,13 +63,13 @@ export function installLabel(install: HostInstallInfo | null): string {
   return commit ? `${version} (${commit})` : version;
 }
 
-function formatSeen(at: number | null): string {
+function formatSeen(at: number | null, now: number): string {
   if (at === null) return "never seen";
-  return `last seen ${new Date(at).toLocaleString()}`;
+  return `last seen ${formatRelativeTime(at, now)}`;
 }
 
 /** What the link last reported: observations only, never a guessed cause. */
-export function connectionLabel(state: HostConnectionState): string {
+export function connectionLabel(state: HostConnectionState, now: number = Date.now()): string {
   switch (state.status) {
     case "local":
       return "This machine";
@@ -88,7 +89,7 @@ export function connectionLabel(state: HostConnectionState): string {
       // What was seen, when there is something: ssh's own words for why it couldn't reach it.
       return [
         "Unreachable",
-        formatSeen(state.lastSeenAt),
+        formatSeen(state.lastSeenAt, now),
         ...(state.stoppedRetrying ? ["not retrying until you connect"] : []),
         ...(state.detail ? [state.detail] : []),
       ].join(" · ");
@@ -119,9 +120,15 @@ export function deliveryLabel(plan: HostInstallPlan): string {
   }
 }
 
+/** The SSH target forms the host list accepts (main's `isValidSshTarget`): no ports, no IPv6 literals. */
+export const SSH_TARGET_HINT =
+  "Enter user@host, a host name or IPv4 address, or an ~/.ssh/config alias";
+
 /** A readable default name for a machine from what the user typed or discovery found. */
 export function defaultHostName(sshTarget: string): string {
   const host = sshTarget.slice(sshTarget.lastIndexOf("@") + 1);
+  // An address is only a name whole: "192" names nothing.
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith("[")) return host;
   return host.split(".")[0] || host;
 }
 

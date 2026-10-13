@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
 import {
   formatHostConnection,
+  isReservedHostName,
   isValidRemoteHostId,
   readStoredHostConnection,
+  sameHostAccount,
   sameHostConnection,
+  sameHostName,
   type HostConnection,
   type HostDescriptor,
   type HostId,
@@ -54,6 +57,30 @@ function normalizeName(name: unknown): string {
     throw invalid(`Host name must be 1-${MAX_NAME_LENGTH} printable characters.`);
   }
   return trimmed;
+}
+
+/**
+ * Names are the only identity people see, in titles, palettes and toasts: no
+ * two hosts share one, and none takes this machine's. A name stored before
+ * this rule stays as it was until it is edited.
+ */
+function requireDistinctName(name: string, hosts: HostDescriptor[], self: HostId | null): void {
+  if (isReservedHostName(name)) {
+    throw invalid(`"${name}" is what Daintree calls this machine. Choose another name.`);
+  }
+  if (hosts.some((host) => host.id !== self && sameHostName(host.name, name))) {
+    throw invalid(`Another host is already called "${name}". Choose another name.`);
+  }
+}
+
+function requireNewAccount(
+  connection: HostConnection,
+  hosts: HostDescriptor[],
+  self: HostId | null
+): void {
+  if (hosts.some((host) => host.id !== self && sameHostAccount(host.connection, connection))) {
+    throw invalid(`${formatHostConnection(connection)} is already in your host list.`);
+  }
 }
 
 function normalizeConnection(value: unknown): HostConnection {
@@ -148,9 +175,8 @@ export class HostRegistry {
     const connection = normalizeConnection(payload?.connection);
     const hosts = this.list();
     if (hosts.length >= MAX_HOSTS) throw invalid(`At most ${MAX_HOSTS} hosts can be added.`);
-    if (hosts.some((host) => sameHostConnection(host.connection, connection))) {
-      throw invalid(`${formatHostConnection(connection)} is already in your host list.`);
-    }
+    requireDistinctName(name, hosts, null);
+    requireNewAccount(connection, hosts, null);
     const retired = this.retiredIds();
     const taken = (candidate: string) =>
       retired.has(candidate) || hosts.some((host) => host.id === candidate);
@@ -175,19 +201,22 @@ export class HostRegistry {
   }
 
   update(payload: UpdateHostPayload): HostDescriptor {
+    return this.replace(this.validateUpdate(payload));
+  }
+
+  /** The record {@link update} would write, validated, without writing it. */
+  validateUpdate(payload: UpdateHostPayload): HostDescriptor {
     const current = this.require(payload?.hostId);
     const next: HostDescriptor = { ...current };
-    if (payload.name !== undefined) next.name = normalizeName(payload.name);
+    const hosts = this.list();
+    if (payload.name !== undefined) {
+      next.name = normalizeName(payload.name);
+      // Re-casing its own name is no clash, even with a name stored before the rule.
+      if (!sameHostName(next.name, current.name)) requireDistinctName(next.name, hosts, current.id);
+    }
     if (payload.connection !== undefined) {
       next.connection = normalizeConnection(payload.connection);
-      const hosts = this.list();
-      if (
-        hosts.some(
-          (host) => host.id !== current.id && sameHostConnection(host.connection, next.connection)
-        )
-      ) {
-        throw invalid(`${formatHostConnection(next.connection)} is already in your host list.`);
-      }
+      requireNewAccount(next.connection, hosts, current.id);
       if (!sameHostConnection(next.connection, current.connection)) {
         // A different machine may answer now; what we saw of the old one is not about it.
         next.platform = null;
@@ -202,7 +231,7 @@ export class HostRegistry {
       }
       next.notificationsEnabled = payload.notificationsEnabled;
     }
-    return this.replace(next);
+    return next;
   }
 
   /** Record what a connection observed. Not a user edit, so it never validates names. */
