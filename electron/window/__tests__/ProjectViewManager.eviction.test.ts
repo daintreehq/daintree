@@ -4888,6 +4888,8 @@ describe("ProjectViewManager — releasing a cached view to another window (#132
   let win: ReturnType<typeof createMockWindow>;
   let mgr: ProjectViewManager;
   let dispatching: Set<string>;
+  let bound: Set<string>;
+  let mcpBroken: boolean;
 
   beforeEach(async () => {
     nextWebContentsId = 100;
@@ -4900,6 +4902,8 @@ describe("ProjectViewManager — releasing a cached view to another window (#132
     assistantBackends.clear();
     liveTerminals.clear();
     dispatching = new Set();
+    bound = new Set();
+    mcpBroken = false;
     win = createMockWindow();
     mgr = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -4910,10 +4914,13 @@ describe("ProjectViewManager — releasing a cached view to another window (#132
       cachedProjectViews: 3,
       assistantBackendsForProject,
       isTerminalLive,
-      mcpViewActivity: (workspaceId: string) => ({
-        liveBinding: dispatching.has(workspaceId),
-        dispatchLease: dispatching.has(workspaceId),
-      }),
+      mcpViewActivity: (workspaceId: string) => {
+        if (mcpBroken) throw new Error("registry gone");
+        return {
+          liveBinding: bound.has(workspaceId) || dispatching.has(workspaceId),
+          dispatchLease: dispatching.has(workspaceId),
+        };
+      },
     });
     // proj-a cached behind proj-b in front.
     const wcA = createMockWebContents();
@@ -4961,8 +4968,23 @@ describe("ProjectViewManager — releasing a cached view to another window (#132
   });
 
   it("keeps a cached view an MCP dispatch is still waiting on", () => {
+    // A bound session that is quiet holds nothing.
+    bound.add("proj-a");
+    expect(mgr.canReleaseCachedView("proj-a")).toBe(true);
     dispatching.add("proj-a");
     expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+  });
+
+  it("keeps a cached view when MCP activity can't be read", () => {
+    mcpBroken = true;
+    expect(mgr.releaseCachedView("proj-a")).toBe(false);
+    expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
+  });
+
+  it("releases a view whose assistant is pinned to another window's view", () => {
+    assistantBackends.set("proj-a", { terminalId: "t-help-a", webContentsId: 9999 });
+    liveTerminals.add("t-help-a");
+    expect(mgr.canReleaseCachedView("proj-a")).toBe(true);
   });
 
   it("keeps a cached view still loading", () => {

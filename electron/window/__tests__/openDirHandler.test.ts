@@ -70,7 +70,7 @@ function makeWorld() {
       id: nextId++,
       active: opts.active ?? null,
       views: opts.active ? [opts.active] : [],
-      pinned: [],
+      pinned: [] as string[],
       destroyed: false,
       visible: opts.visible ?? true,
     } as FakeWindow;

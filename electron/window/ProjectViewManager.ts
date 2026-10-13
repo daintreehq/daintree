@@ -1532,7 +1532,8 @@ export class ProjectViewManager {
    * the one in front (a closed project's picker included) or still painted
    * behind a switch, never one still loading, and never one whose loss would
    * kill work — a running Daintree Assistant's process tree dies with the view
-   * it pinned, and an MCP dispatch in flight would lose the renderer it targets.
+   * it pinned, and an MCP dispatch in flight (or one that can't be ruled out)
+   * would lose the renderer it targets.
    */
   canReleaseCachedView(projectId: string): boolean {
     const entry = this.views.get(projectId);
@@ -1541,7 +1542,10 @@ export class ProjectViewManager {
     if (wc.isDestroyed()) return false;
     if (projectId === this.activeProjectId) return false;
     if (projectId === this.getOutgoingBridgeProjectId()) return false;
-    if (this.mcpActivityFor(projectId, wc).dispatchLease) return false;
+    // Unlike pressure eviction, a move the user asked for can wait: activity
+    // that can't be read is treated as a dispatch in flight.
+    const mcp = this.mcpActivityFor(projectId, wc);
+    if (mcp.dispatchLease || mcp.unknown) return false;
     return !EvictionController.hasLiveAssistantBackend(this, projectId, entry);
   }
 

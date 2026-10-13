@@ -67,6 +67,14 @@ describe("getNewWindowMenuLabel (#12597)", () => {
     );
   });
 
+  it("offers nothing for a project this window is activating, whatever another window caches", () => {
+    expect(
+      getNewWindowMenuLabel(projectRow({ isOpenInThisWindow: true, openInOtherWindow: "cached" }))
+    ).toBeNull();
+    const row = projectRow({ isOpenInThisWindow: true, openInOtherWindow: "cached" });
+    expect(getProjectSwitcherEnterHint(row, true, true, true)?.label).not.toBe("New window");
+  });
+
   it("offers nothing for a project this window shows or is activating", () => {
     // The request would switch here — which clicking the row already does.
     expect(getNewWindowMenuLabel(projectRow({ isOpenInThisWindow: true }))).toBeNull();

@@ -409,6 +409,19 @@ describe("decideProjectOpenTarget — a new window takes a cached view (#13274)"
     });
   });
 
+  it("moves nothing when a legacy fleet holds it cached in two windows", () => {
+    const twin = win(3, {
+      activeProjectId: "p3",
+      viewProjectIds: ["p3", "dropped"],
+      releasableViewProjectIds: ["dropped"],
+    });
+    expect(decideProjectOpenTarget(newWindow(1), world([occupied(1), holder(), twin]))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "owner",
+    });
+  });
+
   it("still focuses a window showing the project", () => {
     expect(
       decideProjectOpenTarget(newWindow(1), world([occupied(1), occupied(2, "dropped")]))

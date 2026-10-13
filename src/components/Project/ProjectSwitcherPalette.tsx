@@ -651,9 +651,15 @@ function isOpenElsewhere(project: SearchableProject): boolean {
  * where it already is (#13274).
  */
 function movesCachedView(
-  project: Pick<SearchableProject, "openInOtherWindow" | "isCachedInThisWindow">
+  project: Pick<
+    SearchableProject,
+    "openInOtherWindow" | "isCachedInThisWindow" | "isOpenInThisWindow"
+  >
 ): boolean {
-  return project.isCachedInThisWindow === true || project.openInOtherWindow === "cached";
+  if (project.isCachedInThisWindow) return true;
+  // One this window is already bringing in front stays here, whatever another
+  // window still caches.
+  return project.openInOtherWindow === "cached" && !project.isOpenInThisWindow;
 }
 
 /**

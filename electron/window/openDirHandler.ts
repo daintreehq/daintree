@@ -154,7 +154,7 @@ export async function routeProjectOpen(
     },
     snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed)
   );
-  const releaseFrom = decision.releaseFromWindowId;
+  const releaseFrom = decision.kind === "focus" ? undefined : decision.releaseFromWindowId;
   if (
     releaseFrom !== undefined &&
     !(project !== null && deps.releaseCachedView?.(project.id, releaseFrom) === true)

@@ -147,16 +147,23 @@ function ownerOf(w: OpenWorldWindow): ProjectOpenDecision {
  * cached takes it out of that window rather than switching it in there
  * (#13274): the single live view moves, it is never duplicated. Null where the
  * holder must keep it — it is in front, still painted behind a switch, being
- * activated, or backing a running assistant — or where the new-window target
- * would be the holder itself, a picker window that simply shows it.
+ * activated, or backing a running assistant — where another window holds it
+ * too, or where the new-window target would be the holder itself, a picker
+ * window that simply shows it.
  */
 function releaseCachedOwner(
   request: ProjectOpenRequest,
   world: OpenWorld,
   holder: OpenWorldWindow
 ): ProjectOpenDecision | null {
-  if (request.disposition !== "new" || request.projectId === null) return null;
-  if (!holder.releasableViewProjectIds?.includes(request.projectId)) return null;
+  const { projectId } = request;
+  if (request.disposition !== "new" || projectId === null) return null;
+  if (!holder.releasableViewProjectIds?.includes(projectId)) return null;
+  // A legacy fleet can hold the project in two windows. Releasing one copy would
+  // only send the open to the other, so leave both and use the owner.
+  if (world.windows.some((w) => w !== holder && w.viewProjectIds.includes(projectId))) {
+    return null;
+  }
   const target = newWindowTarget(request, world);
   if (target.kind === "activate" && target.windowId === holder.windowId) return null;
   return { ...target, releaseFromWindowId: holder.windowId };
@@ -178,7 +185,10 @@ function isEmptyWindow(w: OpenWorldWindow): boolean {
  * explicit "new" never reuses the window that asked, even an empty one — the
  * gesture promises the asking window is left exactly as it was (#12594).
  */
-function newWindowTarget(request: ProjectOpenRequest, world: OpenWorld): ProjectOpenDecision {
+function newWindowTarget(
+  request: ProjectOpenRequest,
+  world: OpenWorld
+): Exclude<ProjectOpenDecision, { kind: "focus" }> {
   const excluded = request.disposition === "new" ? request.initiatingWindowId : null;
   const empty = candidateOrder(request, world).find(
     (w) => w.windowId !== excluded && isEmptyWindow(w)
