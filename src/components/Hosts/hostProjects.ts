@@ -37,10 +37,22 @@ export function listingProjects(state: HostListingState): readonly HostProjectRe
 /** Set by `installHostProjectsLoader`; until it is, every host lists nothing. */
 let loader: HostProjectsLoader | null = null;
 
+// Bumped with each loader, so a list mounted before it arrived asks again.
+let loaderRevision = 0;
+
 export function setHostProjectsLoader(next: HostProjectsLoader | null): void {
   loader = next;
+  loaderRevision += 1;
   entries = new Map();
   emit();
+}
+
+function getLoaderRevision(): number {
+  return loaderRevision;
+}
+
+function useLoaderRevision(): number {
+  return useSyncExternalStore(subscribe, getLoaderRevision, getLoaderRevision);
 }
 
 /** A finished listing is reused this long before a host is asked again. */
@@ -193,6 +205,7 @@ export function useOtherHostTargets(localPlatform: ClientPlatform): OtherHostTar
   const hosts = useOtherHosts(localPlatform);
   const hostList = useHostList();
   const catalogue = useCatalogue();
+  const revision = useLoaderRevision();
   const reachableKey = hosts
     .filter((host) => host.reachable)
     .map((host) => host.hostId)
@@ -219,7 +232,7 @@ export function useOtherHostTargets(localPlatform: ClientPlatform): OtherHostTar
   useEffect(() => {
     const now = Date.now();
     if (reachableKey !== "") for (const id of reachableKey.split("\n")) requestHostProjects(id, now);
-  }, [reachableKey]);
+  }, [reachableKey, revision]);
 
   return hosts.map((host) => ({
     ...host,
@@ -237,10 +250,11 @@ export function useHostProjectLists(
 ): ReadonlyMap<HostId, readonly HostProjectRef[] | null> {
   const key = hostIds.join("\n");
   const catalogue = useCatalogue();
+  const revision = useLoaderRevision();
   useEffect(() => {
     const now = Date.now();
     if (key !== "") for (const id of key.split("\n")) requestHostProjects(id, now);
-  }, [key]);
+  }, [key, revision]);
   const lists = new Map<HostId, readonly HostProjectRef[] | null>();
   for (const hostId of hostIds) {
     const entry = catalogue.get(hostId);

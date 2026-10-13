@@ -481,6 +481,25 @@ describe("ProjectSwitcherPalette other-host rows", () => {
     expect(active()).toBe(id(API));
   });
 
+  it("keeps the automatically highlighted row when another host's rows arrive above it", () => {
+    hostOptions.value = band([WEB]);
+    const { rerender } = render(<Harness results={[]} />);
+    expect(active()).toBe(id(WEB));
+
+    hostOptions.value = band([API, WEB]);
+    rerender(<Harness results={[]} />);
+    expect(active()).toBe(id(WEB));
+    press("Enter");
+    expect(activateOtherHostOption).toHaveBeenCalledWith(WEB, false);
+  });
+
+  it("hands the automatic highlight back once local results arrive for the same query", () => {
+    const { rerender } = render(<Harness results={[]} />);
+    expect(active()).toBe(id(API));
+    rerender(<Harness results={RESULTS} />);
+    expect(active()).toBe("project-option-p1");
+  });
+
   it("names this host beside a local project another host also has", () => {
     hostOptions.value = band(OPTIONS, ["project 1"]);
     render(<Harness />);

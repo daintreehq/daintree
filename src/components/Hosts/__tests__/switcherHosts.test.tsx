@@ -179,6 +179,15 @@ describe("Other hosts band", () => {
     }
   });
 
+  it("lists hosts once the loader arrives after the band mounted", async () => {
+    list.mockResolvedValue([host("studio-01")]);
+    render(<Band query="" onChosen={() => {}} />);
+    await settle();
+    expect(screen.queryByRole("option", { name: /^api on studio-01/ })).toBeNull();
+    act(() => setHostProjectsLoader(loader));
+    expect(await screen.findByRole("option", { name: /^api on studio-01/ })).toBeTruthy();
+  });
+
   it("connects a host that isn't connected when its row is picked", async () => {
     list.mockResolvedValue([host("studio-03", { status: "disconnected" } as HostConnectionState)]);
     setHostProjectsLoader(loader);

@@ -279,6 +279,35 @@ describe("HostSwitcherPalette", () => {
     );
   });
 
+  it("moves to another host once the host list arrives after opening", () => {
+    const { rerender } = render(<HostSwitcherPalette />);
+    act(() => usePaletteStore.getState().openPalette("host-switcher"));
+    expect(row("local").getAttribute("aria-selected")).toBe("true");
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    rerender(<HostSwitcherPalette />);
+    expect(row("h1").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("starts each opening on its first other host, wherever the last one ended", () => {
+    hostList.value = {
+      hosts: [
+        host("h1", "studio-01", { status: "disconnected" }),
+        host("h2", "studio-02", { status: "disconnected" }),
+      ],
+      localSummary: null,
+    };
+    openPalette();
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    expect(row("h2").getAttribute("aria-selected")).toBe("true");
+    // Another palette takes over without this one's close running.
+    act(() => usePaletteStore.getState().openPalette("quick-switcher"));
+    act(() => usePaletteStore.getState().openPalette("host-switcher"));
+    expect(row("h1").getAttribute("aria-selected")).toBe("true");
+  });
+
   it("opens the selected host in a new window on Cmd+Enter", async () => {
     hostList.value = {
       hosts: [host("h1", "studio-01", { status: "disconnected" })],

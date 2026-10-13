@@ -16,10 +16,6 @@ import { matchesTokens, queryTokens } from "@/components/Hosts/hostProjectSearch
 // Past this the list says how many it isn't showing; the rest stay a search away.
 const MAX_RESULTS = 100;
 
-function filterProjects(projects: HostProjectSummary[], query: string): HostProjectSummary[] {
-  const tokens = queryTokens(query);
-  return projects.filter((project) => matchesTokens(tokens, [project.name, project.path]));
-}
 
 type LoadState =
   | { status: "loading" }
@@ -64,6 +60,17 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
   }, []);
 
   const projects = load.status === "loaded" ? load.projects : [];
+  // The host's name counts as a field, as it does in the switcher's Other
+  // hosts band, so a query naming project and host means the same in both.
+  const filterProjects = useCallback(
+    (items: HostProjectSummary[], query: string) => {
+      const tokens = queryTokens(query);
+      return items.filter((project) =>
+        matchesTokens(tokens, [project.name, project.path, hostName])
+      );
+    },
+    [hostName]
+  );
   const {
     query,
     results,
@@ -172,6 +179,15 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
       searchPlaceholder={`Search projects on ${hostName}`}
       itemIdPrefix="host-project-picker"
       emptyMessage={emptyMessage}
+      // A failure typed over is still a failure, not "no matches".
+      noMatchMessage={load.status === "failed" ? emptyMessage : undefined}
+      noMatchContent={
+        load.status === "failed" ? (
+          <Button size="sm" variant="outline" onClick={retry}>
+            Retry
+          </Button>
+        ) : undefined
+      }
       emptyContent={
         load.status === "failed" ? (
           <Button size="sm" variant="outline" onClick={retry}>

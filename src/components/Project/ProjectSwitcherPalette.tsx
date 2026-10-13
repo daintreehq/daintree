@@ -2521,11 +2521,16 @@ function ProjectPaletteInner({
     options: hostOptions,
     remoteNames,
   } = useOtherHostProjectOptions(query);
-  const [hostCursorState, setHostCursorState] = useState<{ query: string; key: string } | null>(
-    null
-  );
+  const [hostCursorState, setHostCursorState] = useState<{
+    query: string;
+    key: string;
+    /** Placed for an empty result list rather than moved to; local results take it back. */
+    auto?: boolean;
+  } | null>(null);
   const claimedHostIndex =
-    hostCursorState !== null && hostCursorState.query === query
+    hostCursorState !== null &&
+    hostCursorState.query === query &&
+    !(hostCursorState.auto && results.length > 0)
       ? hostOptions.findIndex((option) => option.key === hostCursorState.key)
       : -1;
   // Nothing here matched: the first project another host offers is what Enter
@@ -2536,6 +2541,13 @@ function ProjectPaletteInner({
   const hostCursor = hostIndex >= 0 ? hostIndex : null;
   const activeHostOption: OtherHostOption | undefined =
     hostCursor === null ? undefined : hostOptions[hostCursor];
+  // The automatic pick is held by key like a chosen one, so a host answering
+  // later, with rows drawn above it, can't move what Enter opens.
+  const defaultHostKey =
+    claimedHostIndex < 0 && defaultHostIndex >= 0 ? hostOptions[defaultHostIndex]!.key : null;
+  useEffect(() => {
+    if (defaultHostKey !== null) setHostCursorState({ query, key: defaultHostKey, auto: true });
+  }, [defaultHostKey, query]);
   const setHostCursor = (index: number | null) => {
     const option = index === null ? undefined : hostOptions[index];
     setHostCursorState(option ? { query, key: option.key } : null);

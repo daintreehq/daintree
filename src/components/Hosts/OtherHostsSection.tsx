@@ -2,6 +2,7 @@ import { LOCAL_HOST_ID, type HostId, type HostPlatform } from "@shared/types/rem
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
@@ -80,7 +81,10 @@ export function otherHostOptionId(option: Pick<OtherHostOption, "key">): string 
 }
 
 function listedSuffix(listedAt: number | undefined, now: number): string {
-  return listedAt === undefined ? "" : ` · listed ${formatRelativeTime(listedAt, now)}`;
+  // The clock ticks by the minute, so a list just given can be newer than it.
+  return listedAt === undefined
+    ? ""
+    : ` · listed ${formatRelativeTime(listedAt, Math.max(now, listedAt))}`;
 }
 
 function describeListing(listing: HostListingState, now: number): string | null {
@@ -106,9 +110,11 @@ function describeListing(listing: HostListingState, now: number): string | null 
 export function useOtherHostProjectOptions(query: string): OtherHostOptions {
   const supported = isRemoteShellSupported();
   const targets = useOtherHostTargets(clientPlatform());
+  // In state rather than read here: a render-time clock would freeze under the
+  // compiler's memoisation and leave "listed 1 min ago" saying so for an hour.
+  const now = useGlobalMinuteClock();
   if (!supported) return { groups: [], options: [], remoteNames: new Set() };
   const tokens = queryTokens(query);
-  const now = Date.now();
   const remoteNames = new Set<string>();
   const groups: OtherHostGroup[] = [];
   for (const target of targets) {

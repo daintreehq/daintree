@@ -96,10 +96,13 @@ export function HostSwitcherPalette() {
       placedForOpening.current = false;
       return;
     }
-    if (placedForOpening.current || query !== "" || results.length === 0) return;
-    placedForOpening.current = true;
+    if (placedForOpening.current || query !== "") return;
+    // Not settled until another host is listed: opened before the host list
+    // arrives, the only row is this one.
     const firstElsewhere = results.findIndex((row) => !row.isCurrent);
-    if (firstElsewhere > 0) setSelectedIndex(firstElsewhere);
+    if (firstElsewhere < 0) return;
+    placedForOpening.current = true;
+    setSelectedIndex(firstElsewhere);
   }, [isOpen, query, results, setSelectedIndex]);
 
   const pick = useCallback(

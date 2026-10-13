@@ -116,6 +116,16 @@ describe("HostProjectPicker", () => {
     expect(listHostProjects).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a failure and its Retry in view when a search was typed while listing", async () => {
+    let reject: (error: Error) => void = () => {};
+    listHostProjects.mockReturnValueOnce(new Promise((_, fail) => (reject = fail)));
+    await renderPicker();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "app" } });
+    await act(async () => reject(new Error("link down")));
+    expect(await screen.findByText("Couldn't list the projects on studio-01.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
   it("retries a failed listing on Enter", async () => {
     listHostProjects.mockRejectedValueOnce(new Error("link down"));
     listHostProjects.mockResolvedValueOnce([]);
