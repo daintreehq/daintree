@@ -164,19 +164,22 @@ function createDeps(eventBuffer?: { getAll: () => unknown[] }) {
   } as unknown as import("../../ipc/types.js").HandlerDependencies;
 }
 
-function setDefaultExecFile(): void {
+/**
+ * Every tool on PATH, whichever lookup the host platform runs (the in-process
+ * walk on POSIX, the directory scan on Windows), and every version probe
+ * answering. Reset per case: `clearAllMocks` keeps implementations, so a case
+ * that narrowed a lookup would otherwise decide what the next one finds.
+ */
+function setDefaultToolFixtures(): void {
   shared.findOnPathHandler.mockImplementation(async (command: string) => `/usr/bin/${command}`);
+  windowsPath.find.mockImplementation(async (tool: string) => `C:\\tools\\${tool}.exe`);
   shared.execFileHandler.mockImplementation(
     (
       file: string,
-      args: string[],
+      _args: string[],
       _options: Record<string, unknown>,
       callback: (error: Error | null, stdout: string, stderr: string) => void
     ) => {
-      if (file === "where") {
-        callback(null, `C:\\tools\\${args[0]}.exe`, "");
-        return;
-      }
       callback(null, `${file} version\n`, "");
     }
   );
@@ -213,7 +216,7 @@ describe("DiagnosticsCollector adversarial", () => {
       args: [...args],
       shell: false,
     }));
-    setDefaultExecFile();
+    setDefaultToolFixtures();
     diagnostics = await import("../DiagnosticsCollector.js");
   });
 
@@ -252,9 +255,21 @@ describe("DiagnosticsCollector adversarial", () => {
   });
 
   it("TOOL_PROBES_HIDE_CONSOLE_WINDOWS", async () => {
-    await diagnostics.collectDiagnostics(createDeps());
+    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+      tools: Array<{ tool: string; available: boolean; path: string | null }>;
+    };
     const calls = shared.execFileHandler.mock.calls as [string, string[], unknown, unknown][];
-    expect(calls.length).toBeGreaterThan(0);
+    // Every tool the fixture put on PATH had its own version probe (by name on
+    // POSIX, by the file found on Windows), so the check below covers the tool
+    // probes themselves and not only the other sections' spawns.
+    const available = payload.tools.filter((tool) => tool.available);
+    expect(available.length).toBeGreaterThan(0);
+    for (const tool of available) {
+      const probed = calls.some(
+        ([file, args]) => args.includes("--version") && (file === tool.tool || file === tool.path)
+      );
+      expect(probed, `${tool.tool} --version`).toBe(true);
+    }
     for (const [, , options] of calls) {
       expect(options).toMatchObject({ windowsHide: true });
     }

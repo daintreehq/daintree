@@ -90,7 +90,12 @@ function setPlatform(p: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { value: p });
 }
 
-describe("AgentInstallService adversarial", () => {
+/**
+ * Per-case isolation for a describe whose cases may simulate Windows: the
+ * platform, PATH, the virtual disk and the PATH-lookup cache all go back after
+ * every case, so a synthetic Windows PATH never reaches a later one.
+ */
+function isolateInstallEnvironment(): void {
   const originalPath = process.env.PATH;
 
   beforeEach(() => {
@@ -106,6 +111,10 @@ describe("AgentInstallService adversarial", () => {
     else process.env.PATH = originalPath;
     virtualWindowsFiles.clear();
   });
+}
+
+describe("AgentInstallService adversarial", () => {
+  isolateInstallEnvironment();
 
   describe("isBlockExecutable — manual-only detection", () => {
     it("rejects piped shell installs (curl | bash)", () => {
@@ -591,14 +600,7 @@ describe("AgentInstallService adversarial", () => {
 });
 
 describe("AgentInstallService — elevation and prerequisite targets (#11763)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setPlatform("linux");
-  });
-
-  afterEach(() => {
-    setPlatform(originalPlatform);
-  });
+  isolateInstallEnvironment();
 
   describe("sudo gate", () => {
     it("refuses a bare sudo command", () => {
