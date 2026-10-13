@@ -155,19 +155,19 @@ describe("serializeConsoleMessage", () => {
 });
 
 describe("per-row copy", () => {
-  it("copies the serialized row text on click", () => {
+  it("copies the serialized row text on click", async () => {
     seedConsoleRow({ level: "error", summaryText: "row text" });
     renderPanel();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy console message" }));
 
-    expect(writeText).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenCalledWith(
       expect.stringMatching(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] \[ERR\] row text$/)
     );
   });
 
-  it("includes stack frames in the copied text", () => {
+  it("includes stack frames in the copied text", async () => {
     seedConsoleRow({
       level: "error",
       summaryText: "with stack",
@@ -181,12 +181,14 @@ describe("per-row copy", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Copy console message" }));
 
-    expect(writeText).toHaveBeenCalledWith(
-      expect.stringContaining("with stack\n  at handler (http://x/main.js:3:7)")
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        expect.stringContaining("with stack\n  at handler (http://x/main.js:3:7)")
+      )
     );
   });
 
-  it("copies the clicked row, not another row", () => {
+  it("copies the clicked row, not another row", async () => {
     seedConsoleRow({ summaryText: "first row" });
     seedConsoleRow({ summaryText: "second row" });
     seedConsoleRow({ summaryText: "third row" });
@@ -194,7 +196,7 @@ describe("per-row copy", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Copy console message" })[1]!);
 
-    expect(writeText).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const text = writeText.mock.calls[0]![0];
     expect(text).toContain("second row");
     expect(text).not.toContain("first row");
@@ -208,7 +210,7 @@ describe("per-row copy", () => {
     const button = screen.getByRole("button", { name: "Copy console message" });
     fireEvent.click(button);
 
-    await waitFor(() => expect(button.querySelector(".animate-badge-bump")).toBeTruthy());
+    await waitFor(() => expect(button.hasAttribute("data-copied")).toBe(true));
   });
 
   it("does not show the copied check when the clipboard write fails", async () => {
@@ -220,7 +222,7 @@ describe("per-row copy", () => {
     fireEvent.click(button);
 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    expect(button.querySelector(".animate-badge-bump")).toBeNull();
+    expect(button.hasAttribute("data-copied")).toBe(false);
   });
 });
 
@@ -326,15 +328,15 @@ describe("accessibility", () => {
     expect(input.tagName).toBe("INPUT");
   });
 
-  it("exposes expand state on the group toggle", () => {
+  it("exposes expand state on the group toggle, named by its label", () => {
     seedConsoleRow({ cdpType: "startGroupCollapsed", summaryText: "group header" });
     renderPanel();
 
-    const toggle = screen.getByRole("button", { name: "Toggle console group" });
+    const toggle = screen.getByRole("button", { name: "group header" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
     fireEvent.click(toggle);
-    const expanded = screen.getByRole("button", { name: "Toggle console group" });
+    const expanded = screen.getByRole("button", { name: "group header" });
     expect(expanded.getAttribute("aria-expanded")).toBe("true");
   });
 
@@ -386,9 +388,8 @@ describe("stack traces", () => {
       useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
       seedConsoleRow({ level, cdpType, stackTrace: { callFrames } });
       const { unmount } = renderPanel();
-      const location = screen.getByTitle(/loadOrders\.ts\?t=123:12:1$/);
-      // Short at rest; the full path for assistive tech and keyboard focus.
-      expect(location.textContent).toContain("loadOrders.ts:12");
+      // Short at rest; the full path for assistive tech and in its tooltip.
+      expect(screen.getByText("loadOrders.ts").parentElement!.textContent).toBe("loadOrders.ts:12");
       expect(screen.getByText("Source: src/loadOrders.ts:12:1")).toBeTruthy();
       offered[cdpType] = stackToggle() !== null;
       unmount();
@@ -411,7 +412,7 @@ describe("stack traces", () => {
     expect(stackToggle()!.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("copies an uncaught exception's frames once", () => {
+  it("copies an uncaught exception's frames once", async () => {
     seedConsoleRow({
       level: "error",
       summaryText: "TypeError: nope\n    at handler (http://x/main.js:3:7)",
@@ -424,6 +425,7 @@ describe("stack traces", () => {
     renderPanel();
 
     fireEvent.click(screen.getByRole("button", { name: "Copy console message" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     const text = writeText.mock.calls[0]![0];
     expect(text.match(/at handler/g)).toHaveLength(1);
     expect(text).toContain("TypeError: nope\n  at handler (http://x/main.js:3:7)");
