@@ -297,7 +297,12 @@ describe("host connection sync", () => {
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "reattached" });
     emitHost({ type: "resync-required", hostId: "studio-02", reason: "reconnected" });
-    await vi.waitFor(() => expect(electron.worktree.refresh).toHaveBeenCalledTimes(2));
+    // The resync and the follow pass this event also starts both load the
+    // terminal resync's lazy modules in the same tick, and the module runner
+    // holds the second load for about a second: longer than waitFor's default.
+    await vi.waitFor(() => expect(electron.worktree.refresh).toHaveBeenCalledTimes(2), {
+      timeout: 5_000,
+    });
     await resyncFromHost();
 
     // One pass for the first request, one follow-up for the overlapping one.
