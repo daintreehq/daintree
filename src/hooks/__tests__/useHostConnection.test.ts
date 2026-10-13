@@ -150,6 +150,10 @@ function bindView(hostId: string | null) {
   window.__DAINTREE_INITIAL_PROJECT__ = { id: "proj-1" };
 }
 
+/** The options a rehydrate was asked for. */
+const optionsOf = (call: unknown[]) =>
+  call[1] as { authoritative: boolean; follow?: boolean; isCurrent: () => boolean };
+
 async function flush() {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();
 }
@@ -780,9 +784,6 @@ describe("runHostOperation", () => {
 });
 
 describe("project state after a fresh session or a takeover", () => {
-  const optionsOf = (call: unknown[]) =>
-    call[1] as { authoritative: boolean; follow?: boolean; isCurrent: () => boolean };
-
   it("reads the host's saved project state back only when the link came back on a fresh session", async () => {
     const { electron, emitHost } = installElectron();
     // This view's own claim on open stays out, so only the path under test reads state back.
@@ -810,11 +811,15 @@ describe("project state after a fresh session or a takeover", () => {
     const stop = startHostConnectionSync();
     await flush();
 
+    rehydrate.mockClear();
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });
-    // Following the driver reads the layout back too; this is the resync's own read.
-    const resyncReads = () => rehydrate.mock.calls.filter((call) => !optionsOf(call).follow);
-    await vi.waitFor(() => expect(resyncReads()).toHaveLength(1));
-    expect(optionsOf(resyncReads()[0]!).authoritative).toBe(true);
+    // Read back by following the driver, never by the resync on its own terms.
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
+    await resyncFromHost();
+    await flush();
+    for (const call of rehydrate.mock.calls) {
+      expect(optionsOf(call)).toMatchObject({ authoritative: true, follow: true });
+    }
     stop();
   });
 
@@ -845,27 +850,67 @@ describe("project state after a fresh session or a takeover", () => {
     const stop = startHostConnectionSync();
     await flush();
     electron.driveLease.takeOver.mockResolvedValue(leaseView(holder(), true));
-    electron.terminal.getForProject.mockClear();
+    let answer!: (infos: unknown[]) => void;
+    electron.terminal.getForProject.mockReset();
+    electron.terminal.getForProject.mockImplementation(
+      () => new Promise<unknown[]>((resolve) => (answer = resolve))
+    );
+
+    await takeOverDrive("proj-1");
+    await vi.waitFor(() => expect(electron.terminal.getForProject).toHaveBeenCalledWith("proj-1"));
+    await flush();
+    // The terminals first, so the saved order also places the ones just adopted.
+    expect(rehydrate).not.toHaveBeenCalled();
+    answer([]);
+
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    expect(rehydrate.mock.calls[0]![0]).toBe("proj-1");
+    const options = optionsOf(rehydrate.mock.calls[0]!);
+    expect(options.authoritative).toBe(true);
+    expect(options.follow).toBe(true);
+    expect(options.isCurrent()).toBe(true);
+    stop();
+  });
+
+  it("still takes the host's state when its own event about the takeover lands late", async () => {
+    const { electron, emitLease } = installElectron();
+    electron.driveLease.takeOver.mockImplementationOnce(() => new Promise(() => {}));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    const mine = leaseView(holder({ endpointId: "me" }), true);
+    electron.driveLease.takeOver.mockResolvedValue(mine);
+    let answer!: (infos: unknown[]) => void;
+    electron.terminal.getForProject.mockImplementation(
+      () => new Promise<unknown[]>((resolve) => (answer = resolve))
+    );
+
+    await takeOverDrive("proj-1");
+    await vi.waitFor(() => expect(electron.terminal.getForProject).toHaveBeenCalled());
+    emitLease({ type: "changed", state: mine });
+    answer([]);
+
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    stop();
+  });
+
+  it("reads the host's state after a takeover even when its terminals can't be read", async () => {
+    const { electron } = installElectron();
+    electron.driveLease.takeOver.mockImplementationOnce(() => new Promise(() => {}));
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    electron.driveLease.takeOver.mockResolvedValue(leaseView(holder(), true));
+    electron.terminal.getForProject.mockRejectedValue(new Error("link down"));
 
     await takeOverDrive("proj-1");
 
     await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
-    // The terminals first, so the saved order also places the ones just adopted.
-    expect(electron.terminal.getForProject).toHaveBeenCalledWith("proj-1");
-    expect(electron.terminal.getForProject.mock.invocationCallOrder[0]!).toBeLessThan(
-      rehydrate.mock.invocationCallOrder[0]!
-    );
-    expect(rehydrate.mock.calls[0]![0]).toBe("proj-1");
-    const options = optionsOf(rehydrate.mock.calls[0]!);
-    expect(options.authoritative).toBe(true);
-    expect(options.isCurrent()).toBe(true);
     stop();
   });
 });
 
 describe("following the driver while watching (#13280)", () => {
-  const optionsOf = (call: unknown[]) =>
-    call[1] as { authoritative: boolean; follow?: boolean; isCurrent: () => boolean };
   const followCalls = () => rehydrate.mock.calls.filter((call) => optionsOf(call).follow === true);
 
   function hostWindow(driving: boolean) {
@@ -915,6 +960,55 @@ describe("following the driver while watching (#13280)", () => {
     expect(rehydrate).not.toHaveBeenCalled();
     expect(electron.terminal.getForProject).not.toHaveBeenCalled();
     stop();
+  });
+
+  it("still follows the driver's layout when the host's terminals can't be read", async () => {
+    const { electron } = hostWindow(false);
+    electron.terminal.getForProject.mockRejectedValue(new Error("link down"));
+    const stop = startHostConnectionSync();
+
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    stop();
+  });
+
+  it("gathers notices that land during a pass into one more pass", async () => {
+    const { electron, emitLease } = hostWindow(false);
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(1));
+    let answer!: (infos: unknown[]) => void;
+    electron.terminal.getForProject.mockImplementation(
+      () => new Promise<unknown[]>((resolve) => (answer = resolve))
+    );
+
+    emitLease({ type: "panels-changed", projectId: "proj-1" });
+    await vi.waitFor(() => expect(electron.terminal.getForProject).toHaveBeenCalledTimes(2));
+    emitLease({ type: "panels-changed", projectId: "proj-1" });
+    emitLease({ type: "panels-changed", projectId: "proj-1" });
+    electron.terminal.getForProject.mockResolvedValue([]);
+    answer([]);
+
+    // The overtaken pass applies nothing; one follow-up pass reads it all fresh.
+    await vi.waitFor(() => expect(followCalls()).toHaveLength(2));
+    await flush();
+    expect(electron.terminal.getForProject).toHaveBeenCalledTimes(3);
+    expect(followCalls()).toHaveLength(2);
+    stop();
+  });
+
+  it("stops following once the sync is torn down", async () => {
+    const { electron } = hostWindow(false);
+    let answer!: (infos: unknown[]) => void;
+    electron.terminal.getForProject.mockImplementation(
+      () => new Promise<unknown[]>((resolve) => (answer = resolve))
+    );
+    const stop = startHostConnectionSync();
+    await vi.waitFor(() => expect(electron.terminal.getForProject).toHaveBeenCalled());
+
+    stop();
+    answer([]);
+    await flush();
+
+    expect(followCalls()).toHaveLength(0);
   });
 
   it("drops a pass that a takeover overtook", async () => {

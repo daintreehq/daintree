@@ -139,11 +139,10 @@ async function runResyncPass(projectState: boolean): Promise<void> {
         // just adopted; after the lease, to know whose layout wins.
         // And after the worktrees, so the saved active worktree can be found.
         await Promise.allSettled([terminals, lease, worktrees]);
-        if (!isCurrent()) return;
-        await rehydrateHostProjectState(projectId, {
-          isCurrent,
-          authoritative: getDriveLeaseSnapshot()?.drivingHere === false,
-        });
+        // A view that watches reads it back by following the driver, which
+        // the lease just read has set going.
+        if (!isCurrent() || watches(projectId)) return;
+        await rehydrateHostProjectState(projectId, { isCurrent, authoritative: false });
       },
     ]);
   }
@@ -158,6 +157,8 @@ async function runResyncPass(projectState: boolean): Promise<void> {
 
 /** Bumped by every lease event and by teardown, so a slower lookup never overrides either. */
 let leaseGeneration = 0;
+/** Bumped by every takeover and by teardown: only the latest takeover reads the host's state back. */
+let takeOverGeneration = 0;
 
 let followRunning: Promise<void> | null = null;
 let followAgain = false;
@@ -200,13 +201,18 @@ async function runFollowPass(): Promise<void> {
   const generation = followGeneration;
   const isCurrent = () =>
     generation === followGeneration && getViewWorkspaceId() === projectId && watches(projectId);
+  // The terminals first, so the host's saved order also places the ones just
+  // adopted; the layout is still worth taking if they couldn't be read.
   try {
-    // The terminals first, so the host's saved order also places the ones just adopted.
     await resyncHostTerminals(projectId, { isCurrent, follow: true });
-    if (!isCurrent()) return;
+  } catch (error) {
+    logWarn("[HostConnection] Couldn't read the host's terminals to follow the driver", { error });
+  }
+  if (!isCurrent()) return;
+  try {
     await rehydrateHostProjectState(projectId, { isCurrent, authoritative: true, follow: true });
   } catch (error) {
-    logWarn("[HostConnection] Couldn't follow the driver's panels", { error });
+    logWarn("[HostConnection] Couldn't read the driver's layout to follow it", { error });
   }
 }
 
@@ -283,16 +289,22 @@ export async function takeOverDrive(
   // The previous driver's terminals and saved layout are the project's now;
   // this view's were stale while it was displaced. The terminals first, so the
   // saved order also places the ones just adopted.
-  const generation = leaseGeneration;
-  const isCurrent = () => generation === leaseGeneration && getViewWorkspaceId() === projectId;
+  // Current while this view still drives the project: the host's own event
+  // about this very takeover may land after its answer, and changes nothing.
+  const generation = ++takeOverGeneration;
+  const isCurrent = () =>
+    generation === takeOverGeneration &&
+    getViewWorkspaceId() === projectId &&
+    getDriveLeaseSnapshot()?.projectId === projectId &&
+    getDriveLeaseSnapshot()?.drivingHere === true;
   void (async () => {
     try {
-      await resyncHostTerminals(projectId, { isCurrent });
+      await resyncHostTerminals(projectId, { isCurrent, follow: true });
     } catch (error) {
       logWarn("[HostConnection] Couldn't read the host's terminals after taking over", { error });
     }
     if (!isCurrent()) return;
-    await rehydrateHostProjectState(projectId, { isCurrent, authoritative: true });
+    await rehydrateHostProjectState(projectId, { isCurrent, authoritative: true, follow: true });
   })().catch((error: unknown) => {
     logWarn("[HostConnection] Couldn't read the project's saved state after taking over", {
       error,
@@ -560,6 +572,7 @@ function beginSync(): () => void {
     leaseGeneration += 1;
     resyncGeneration += 1;
     followGeneration += 1;
+    takeOverGeneration += 1;
     for (const dispose of disposers.splice(0)) dispose();
     setHostInputBlock(null);
     setLeaseInputBlock(null);

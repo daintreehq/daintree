@@ -47,6 +47,8 @@ vi.mock("@/store/panelStore", () => ({
     },
   },
 }));
+const saveNormalized = vi.hoisted(() => vi.fn());
+vi.mock("@/store/slices/panelRegistry/persistence", () => ({ saveNormalized }));
 vi.mock("@/store/terminalInputStore", () => ({
   useTerminalInputStore: { getState: () => drafts },
 }));
@@ -261,14 +263,13 @@ describe("rehydrateHostProjectState following the driver (#13280)", () => {
     }
   }
 
-  it("moves panels where the driver filed them and drops the ones it closed", async () => {
+  const following = { isCurrent: current, authoritative: true, follow: true };
+
+  it("moves panels where the driver filed them, and queues the layout as the host has it", async () => {
     watcherHas([
-      { id: "t1", kind: "terminal", location: "grid", worktreeId: "wt-main" },
+      { id: "t1", kind: "terminal", location: "grid", worktreeId: "wt-main", isVisible: true },
       { id: "browser-1", kind: "browser", location: "grid", worktreeId: "wt-main" },
-      { id: "closed", kind: "browser", location: "grid", worktreeId: "wt-main" },
-      { id: "t-unsaved", kind: "terminal", location: "grid", worktreeId: "wt-main" },
-      { id: "preview", kind: "dev-preview", location: "grid", worktreeId: "wt-main" },
-      { id: "modal", kind: "browser", location: "dialog" },
+      { id: "notes", kind: "file", location: "dock", worktreeId: "wt-main" },
     ]);
     hydrate.mockResolvedValue(
       hostSaved({
@@ -276,30 +277,63 @@ describe("rehydrateHostProjectState following the driver (#13280)", () => {
           terminals: [
             { id: "t1", kind: "terminal", location: "dock", worktreeId: "wt-feature" },
             { id: "browser-1", kind: "browser", location: "grid", worktreeId: "wt-feature" },
+            // Filed globally on the host.
+            { id: "notes", kind: "file", location: "dock" },
           ],
         },
       })
     );
 
-    await rehydrateHostProjectState("proj-1", {
-      isCurrent: current,
-      authoritative: true,
-      follow: true,
-    });
+    await rehydrateHostProjectState("proj-1", following);
 
-    expect(store.panelsById.t1).toMatchObject({
-      location: "dock",
-      worktreeId: "wt-feature",
-      isVisible: false,
-    });
+    expect(store.panelsById.t1).toMatchObject({ location: "dock", worktreeId: "wt-feature" });
+    // Left to the pane's own visibility observer, which sees the move.
+    expect(store.panelsById.t1!.isVisible).toBe(true);
     expect(store.panelsById["browser-1"]).toMatchObject({
       location: "grid",
       worktreeId: "wt-feature",
     });
-    expect(store.panelIdsByWorktreeId["wt-feature"]).toEqual(["t1", "browser-1"]);
-    expect(store.panelIdsByWorktreeId["wt-main"]).toEqual(["closed", "t-unsaved", "preview"]);
-    // Terminals go with the host's PTY, dev previews with the driver's stop, dialogs with this screen.
-    expect(store.removePanel.mock.calls).toEqual([["closed"]]);
+    expect(store.panelsById.notes!.worktreeId).toBeUndefined();
+    expect(store.panelIdsByWorktreeId).toEqual({
+      "wt-feature": ["t1", "browser-1"],
+      __none__: ["notes"],
+    });
+    expect(saveNormalized).toHaveBeenCalledTimes(1);
+    expect(saveNormalized.mock.calls[0]![0]).toBe(store.panelsById);
+    expect(store.removePanel).not.toHaveBeenCalled();
+  });
+
+  it("drops what the driver closed, keeping this screen's own panels and running terminals", async () => {
+    watcherHas([
+      { id: "kept", kind: "browser", location: "grid", worktreeId: "wt-main" },
+      { id: "closed", kind: "browser", location: "grid", worktreeId: "wt-main" },
+      { id: "t-closed", kind: "terminal", location: "grid", runtimeStatus: "exited" },
+      { id: "t-running", kind: "terminal", location: "grid", runtimeStatus: "running" },
+      {
+        id: "assistant",
+        kind: "terminal",
+        location: "dock",
+        exitCode: 0,
+        excludeFromPersistence: true,
+      },
+      { id: "preview", kind: "dev-preview", location: "grid" },
+      { id: "modal", kind: "browser", location: "dialog" },
+    ]);
+    hydrate.mockResolvedValue(
+      hostSaved({
+        appState: {
+          terminals: [{ id: "kept", kind: "browser", location: "grid", worktreeId: "wt-main" }],
+        },
+      })
+    );
+
+    await rehydrateHostProjectState("proj-1", following);
+
+    expect(store.removePanel.mock.calls).toEqual([
+      ["closed"],
+      ["t-closed", { backendAlreadyClosed: true }],
+    ]);
+    expect(saveNormalized).not.toHaveBeenCalled();
   });
 
   it("neither moves nor drops anything when not following", async () => {
@@ -319,5 +353,6 @@ describe("rehydrateHostProjectState following the driver (#13280)", () => {
 
     expect(store.panelsById.t1).toMatchObject({ location: "grid", worktreeId: "wt-main" });
     expect(store.removePanel).not.toHaveBeenCalled();
+    expect(saveNormalized).not.toHaveBeenCalled();
   });
 });

@@ -10,10 +10,11 @@ export interface HostTerminalResyncOptions {
    */
   isCurrent: () => boolean;
   /**
-   * This view watches while another screen drives, so its panels follow the
-   * host's: a terminal the host no longer runs is removed rather than kept as
-   * exited, one the host has trashed leaves this view's layout, and one shown
-   * as exited that the host runs again (a restart) is shown running.
+   * This view follows the driver's panels (it watches, or has just taken the
+   * project over): a terminal the host has trashed leaves this view's layout,
+   * and one shown as exited that the host runs again (a restart) is shown
+   * running. Removing what the driver closed is the layout rehydrate's, which
+   * knows what the driver still shows.
    */
   follow?: boolean;
 }
@@ -70,7 +71,8 @@ export async function resyncHostTerminals(
   }
 
   if (options.follow) {
-    followHostTerminals(infos, exitedBefore, usePanelStore);
+    await followHostTerminals(infos, exitedBefore, usePanelStore);
+    if (!options.isCurrent()) return;
   }
 
   await adoptNewTerminals(
@@ -142,16 +144,6 @@ async function observeVanishedTerminals(
   getState: () => PanelState,
   options: HostTerminalResyncOptions
 ): Promise<void> {
-  if (options.follow) {
-    // Already over here and gone from the host: the driver closed it.
-    const state = getState();
-    for (const id of candidates) {
-      const panel = state.panelsById[id];
-      if (panel && isPtyPanel(panel) && !panel.isRestarting && showsExited(state, id)) {
-        state.removePanel(id, { backendAlreadyClosed: true });
-      }
-    }
-  }
   const live = candidates.filter((id) => {
     const panel = getState().panelsById[id];
     return (
@@ -190,13 +182,23 @@ async function observeVanishedTerminals(
   const state = getState();
   for (const id of live) {
     const answer = confirmed[id];
-    if (!answer || answer.exists || answer.conflict) continue;
+    if (!answer || answer.conflict) continue;
     const panel = state.panelsById[id];
     if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
     if ((panel.restartKey ?? 0) !== probed.get(id)) continue;
     // A real exit reported while the probe was out already says it all, code included.
     if (panel.exitCode !== undefined || panel.runtimeStatus === "exited") continue;
-    if (panel.location === "trash" || options.follow) {
+    if (answer.exists) {
+      // Still running on the host but off its project list: the list leaves
+      // trashed terminals out, so the driver trashed it. It comes back through
+      // adoption if the driver restores it. A spawn can't be in flight here:
+      // a watcher starts nothing, and this pane was on an earlier list.
+      if (options.follow && followsHostLayout(panel)) {
+        state.removePanel(id, { backendAlreadyClosed: true });
+      }
+      continue;
+    }
+    if (panel.location === "trash") {
       state.removePanel(id, { backendAlreadyClosed: true });
     } else {
       // No exit code: none was seen. Left undefined, a restart relaunches an
@@ -219,36 +221,54 @@ function showsExited(state: PanelState, id: string): boolean {
 }
 
 /**
- * Following the driver: a terminal the host has trashed leaves this view's
- * layout (it comes back through adoption if the driver restores it), and one
- * shown as exited that the host runs again was restarted there. Only a pane
- * already exited before the list was read is revived: an exit landing while
- * the answer travelled is about the process the list saw.
+ * A pane that shows the driver's layout, as opposed to one that belongs to this
+ * screen alone (the assistant, a dialog) or is held for restore recovery.
  */
-function followHostTerminals(
+export function followsHostLayout(panel: PanelState["panelsById"][string]): boolean {
+  if ((panel.kind ?? "terminal") !== "terminal") return false;
+  if (panel.location !== "grid" && panel.location !== "dock") return false;
+  if (panel.excludeFromPersistence) return false;
+  return !isPtyPanel(panel) || (panel.removeOnExit !== true && panel.restoreRecovery === undefined);
+}
+
+/**
+ * Following the driver: a terminal the host lists as trashed leaves this
+ * view's layout, and one shown as exited that the host runs again was
+ * restarted there. Only a pane already exited before the list was read is
+ * revived: an exit landing while the answer travelled is about the process
+ * the list saw.
+ */
+async function followHostTerminals(
   infos: BackendTerminalInfo[],
   exitedBefore: ReadonlySet<string>,
   store: PanelStore
-): void {
+): Promise<void> {
+  const { deriveRuntimeStatus } = await import("@/store/slices/panelRegistry/helpers");
   for (const info of infos) {
     const state = store.getState();
     const panel = state.panelsById[info.id];
-    if (!panel || !isPtyPanel(panel) || panel.isRestarting) continue;
+    if (!panel || !isPtyPanel(panel) || panel.isRestarting || !followsHostLayout(panel)) continue;
     if (info.isTrashed) {
-      if (panel.location !== "trash") state.removePanel(info.id, { backendAlreadyClosed: true });
+      state.removePanel(info.id, { backendAlreadyClosed: true });
       continue;
     }
     if (info.hasPty === false || !exitedBefore.has(info.id) || !showsExited(state, info.id)) {
       continue;
     }
-    // The host already runs the new process under this id; nothing is started here.
+    // The host already runs the new process under this id; nothing is started
+    // here. The new restart key remounts the pane, which drops the exit it showed.
     store.setState((current) => {
       const target = current.panelsById[info.id];
       if (!target || !isPtyPanel(target)) return current;
       return {
         panelsById: {
           ...current.panelsById,
-          [info.id]: { ...target, exitCode: undefined, runtimeStatus: "running" },
+          [info.id]: {
+            ...target,
+            exitCode: undefined,
+            restartKey: (target.restartKey ?? 0) + 1,
+            runtimeStatus: deriveRuntimeStatus(target.isVisible, target.flowStatus),
+          },
         },
       };
     });
