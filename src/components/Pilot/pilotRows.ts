@@ -5,10 +5,13 @@ import {
   bandLabel,
   bandTimestamp,
   compareWithinBand,
+  ATTENTION_FILTER_BANDS,
   emptyBandCounts,
+  FINISHED_FILTER_BANDS,
   FLEET_BANDS,
   isAttentionBand,
   isDemandBand,
+  WORKING_FILTER_BANDS,
 } from "@/lib/fleetAttention";
 import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
 import { isFilterMatch } from "@/lib/projectSwitcherSearch";
@@ -794,15 +797,15 @@ export type PilotBandFilter =
  * bottom of All.
  */
 const BAND_FILTER_SETS: Record<Exclude<PilotBandFilter, "all">, ReadonlySet<FleetBand>> = {
-  "needs-you": new Set<FleetBand>(["blocked", "needs-you"]),
+  "needs-you": ATTENTION_FILTER_BANDS,
   // Its own segment rather than a corner of Working, and the segments stay
   // disjoint so the four counts still add up under All. "Which of my agents
   // has gone silent" is the second question this surface answers, and before
   // this it had no control, no count and no summary — only an annotation on
   // whichever row you happened to scroll past.
   quiet: new Set<FleetBand>(["quiet"]),
-  working: new Set<FleetBand>(["running"]),
-  finished: new Set<FleetBand>(["review", "done"]),
+  working: WORKING_FILTER_BANDS,
+  finished: FINISHED_FILTER_BANDS,
   parked: new Set<FleetBand>(["parked"]),
   // The remainder, and the only reason it exists: `snoozed` and `idle` are the
   // two bands that belong to none of the questions above. An exited shell is
@@ -832,9 +835,9 @@ export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
  * and calling the pair by the name of one of its members made the segment
  * contradict itself the moment it drew the blocked glyph: a red prohibition
  * sign beside the word "Waiting" is two different claims about the same two
- * runs. The sidebar's `QuickStateFilterBar` bucket is the same union — it
- * filters on `agentState === "waiting"`, which is where an errored agent lives
- * too — so it carries the same word rather than being left to drift. The ROW
+ * runs. The sidebar's `QuickStateFilterBar` bucket is the same union — both
+ * read `ATTENTION_FILTER_BANDS` — so it carries the same word rather than being
+ * left to drift. The ROW
  * still says "Blocked" or "Waiting"; only the bucket that holds both takes a
  * name wide enough to cover them.
  *

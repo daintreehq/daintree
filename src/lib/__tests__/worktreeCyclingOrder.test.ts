@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeSnapshot } from "@shared/types";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 
 const mocks = vi.hoisted(() => {
   let worktreeViewState: { worktrees: Map<string, WorktreeSnapshot> } = {
@@ -21,6 +22,21 @@ vi.mock("@/store/createWorktreeStore", () => ({
 const { getVisibleWorktreesForCycling } = await import("../worktreeCyclingOrder");
 const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
 const { usePanelStore } = await import("@/store/panelStore");
+const { useFleetSnapshotStore } = await import("@/store/fleetSnapshotStore");
+
+type RunSeed = { runId: string } & Partial<FleetRunRow>;
+
+// The quick-state buckets join agent panels to their fleet runs by id.
+function setFleetRuns(runs: RunSeed[]): void {
+  useFleetSnapshotStore.setState({
+    snapshot: {
+      runs: runs.map((r) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...r })),
+      changedAt: 0,
+      degraded: false,
+      lastSuccessfulAt: 0,
+    },
+  });
+}
 
 function createSnapshot(overrides: Partial<WorktreeSnapshot> = {}): WorktreeSnapshot {
   return {
@@ -65,14 +81,16 @@ function setWorktrees(snaps: WorktreeSnapshot[]): void {
   });
 }
 
-// Parks a single working-agent terminal on `worktreeId` so that worktree
-// derives `hasWorkingAgent` and satisfies the "working" quick-state filter.
-function setWorkingAgentPanel(worktreeId: string): void {
-  const panelId = `term-${worktreeId}`;
-  usePanelStore.setState({
-    panelsById: {
-      [panelId]: {
-        id: panelId,
+// Parks agent terminals on each worktree, all in the given panel state.
+function setAgentPanels(
+  byWorktree: Record<string, string[]>,
+  agentState: "working" | "waiting" = "working"
+): void {
+  const panelsById: Record<string, unknown> = {};
+  for (const [worktreeId, ids] of Object.entries(byWorktree)) {
+    for (const id of ids) {
+      panelsById[id] = {
+        id,
         kind: "terminal",
         type: "terminal",
         title: "T",
@@ -83,13 +101,24 @@ function setWorkingAgentPanel(worktreeId: string): void {
         location: "grid",
         hasPty: true,
         isVisible: true,
-        agentState: "working",
+        agentState,
         detectedAgentId: "claude",
-      } as unknown as ReturnType<typeof usePanelStore.getState>["panelsById"][string],
-    },
-    panelIds: [panelId],
-    panelIdsByWorktreeId: { [worktreeId]: [panelId] },
+      };
+    }
+  }
+  usePanelStore.setState({
+    panelsById,
+    panelIds: Object.keys(panelsById),
+    panelIdsByWorktreeId: byWorktree,
   } as never);
+}
+
+// Parks a single working-agent terminal on `worktreeId` so that worktree
+// derives `hasWorkingAgent` and satisfies the "working" quick-state filter.
+function setWorkingAgentPanel(worktreeId: string): void {
+  const panelId = `term-${worktreeId}`;
+  setAgentPanels({ [worktreeId]: [panelId] });
+  setFleetRuns([{ runId: panelId, agentState: "working" }]);
 }
 
 function resetFilterStore(): void {
@@ -122,6 +151,7 @@ beforeEach(() => {
     panelIds: [],
     panelIdsByWorktreeId: {},
   });
+  useFleetSnapshotStore.setState({ snapshot: null });
   resetFilterStore();
 });
 
@@ -423,6 +453,7 @@ describe("getVisibleWorktreesForCycling", () => {
       panelIds: ["term-waiting"],
       panelIdsByWorktreeId: { "wt-bg": ["term-waiting"] },
     } as never);
+    setFleetRuns([{ runId: "term-waiting", agentState: "waiting", waitingReason: "approval" }]);
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).not.toContain("wt-bg");
   });
@@ -449,46 +480,90 @@ describe("getVisibleWorktreesForCycling", () => {
       panelIds: ["term-waiting"],
       panelIdsByWorktreeId: { "wt-eph": ["term-waiting"] },
     } as never);
+    setFleetRuns([{ runId: "term-waiting", agentState: "waiting", waitingReason: "approval" }]);
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).not.toContain("wt-eph");
   });
 
-  it("excludes a worktree whose only PR is closed from the finished filter (issue #9731)", () => {
+  it("routes only a merged PR to Finished, not an open, closed or declined one (#9731, #13234)", () => {
     useWorktreeFilterStore.setState({ quickStateFilter: "finished" });
+    const pr = (id: string, state: "open" | "merged" | "closed" | "declined") =>
+      createSnapshot({
+        id,
+        name: id,
+        branch: `feature/${id}`,
+        issueNumber: 1,
+        ...prLinkedSnapshot(state),
+        worktreeChanges: cleanChanges(id),
+      });
     setWorktrees([
       createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
-      createSnapshot({
-        id: "wt-open",
-        name: "open",
-        branch: "feature/open",
-        issueNumber: 1,
-        ...prLinkedSnapshot("open"),
-        worktreeChanges: cleanChanges("wt-open"),
-      }),
-      createSnapshot({
-        id: "wt-closed",
-        name: "closed",
-        branch: "feature/closed",
-        issueNumber: 2,
-        ...prLinkedSnapshot("closed"),
-        worktreeChanges: cleanChanges("wt-closed"),
-      }),
-      createSnapshot({
-        id: "wt-declined",
-        name: "declined",
-        branch: "feature/declined",
-        issueNumber: 3,
-        ...prLinkedSnapshot("declined"),
-        worktreeChanges: cleanChanges("wt-declined"),
-      }),
+      pr("wt-merged", "merged"),
+      pr("wt-open", "open"),
+      pr("wt-closed", "closed"),
+      pr("wt-declined", "declined"),
     ]);
 
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
-    // Open PR with no local changes still counts as finished (positive control).
-    expect(ids).toContain("wt-open");
-    // Closed/declined PRs must NOT count as finished — that's the bug.
+    expect(ids).toContain("wt-merged");
+    // An open PR on a clean tree says nothing about the agents (#13234).
+    expect(ids).not.toContain("wt-open");
     expect(ids).not.toContain("wt-closed");
     expect(ids).not.toContain("wt-declined");
+  });
+
+  describe("buckets from the agents' fleet bands (#13234)", () => {
+    beforeEach(() => {
+      setWorktrees([
+        createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
+        createSnapshot({ id: "wt-mixed", name: "mixed", branch: "feature/mixed" }),
+        createSnapshot({ id: "wt-idle", name: "idle", branch: "feature/idle" }),
+        createSnapshot({ id: "wt-asking", name: "asking", branch: "feature/asking" }),
+      ]);
+      setAgentPanels(
+        {
+          "wt-mixed": ["a-working", "a-seen"],
+          "wt-idle": ["a-prompt"],
+          "wt-asking": ["a-approval"],
+        },
+        "waiting"
+      );
+      setFleetRuns([
+        { runId: "a-working", agentState: "working" },
+        {
+          runId: "a-seen",
+          agentState: "waiting",
+          waitingReason: "prompt",
+          handBack: { stoppedAt: 1, seenAt: 2 },
+        },
+        {
+          runId: "a-prompt",
+          agentState: "waiting",
+          waitingReason: "prompt",
+          handBack: { stoppedAt: 1 },
+        },
+        { runId: "a-approval", agentState: "waiting", waitingReason: "approval" },
+      ]);
+    });
+
+    function visibleUnder(filter: "working" | "waiting" | "finished"): string[] {
+      useWorktreeFilterStore.setState({ quickStateFilter: filter, alwaysShowWaiting: false });
+      return getVisibleWorktreesForCycling()
+        .map((w) => w.id)
+        .filter((id) => id !== "main");
+    }
+
+    it("counts a working agent beside an idle one as Working only", () => {
+      expect(visibleUnder("working")).toEqual(["wt-mixed"]);
+    });
+
+    it("cycles Attention through agents asking for something, not agents at their prompt", () => {
+      expect(visibleUnder("waiting")).toEqual(["wt-asking"]);
+    });
+
+    it("puts a lone agent that handed back at its prompt in Finished", () => {
+      expect(visibleUnder("finished")).toEqual(["wt-idle"]);
+    });
   });
 
   it("excludes non-agent terminals from quickStateFilter matching", () => {
@@ -512,6 +587,7 @@ describe("getVisibleWorktreesForCycling", () => {
       panelIds: ["term-plain"],
       panelIdsByWorktreeId: { "wt-shell": ["term-plain"] },
     } as never);
+    setFleetRuns([{ runId: "term-plain", agentState: "waiting", waitingReason: "approval" }]);
     const ids = getVisibleWorktreesForCycling().map((w) => w.id);
     expect(ids).not.toContain("wt-shell");
   });

@@ -12,7 +12,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { WorktreeState } from "@shared/types";
 
-const chipStateCalls = vi.hoisted(() => ({ count: 0, waitingCounts: [] as number[] }));
+const chipStateCalls = vi.hoisted(() => ({ count: 0, attention: [] as boolean[] }));
 
 // Called once per worktree per meta recompute, so it counts the recomputes.
 vi.mock("@/components/Worktree/utils/computeChipState", async (importOriginal) => {
@@ -22,7 +22,7 @@ vi.mock("@/components/Worktree/utils/computeChipState", async (importOriginal) =
     ...actual,
     computeChipState: (...args: Parameters<typeof actual.computeChipState>) => {
       chipStateCalls.count++;
-      chipStateCalls.waitingCounts.push(args[0].waitingTerminalCount);
+      chipStateCalls.attention.push(args[0].attention);
       return actual.computeChipState(...args);
     },
   };
@@ -32,6 +32,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { WorktreeOverviewModal } from "../WorktreeOverviewModal";
 
@@ -55,6 +57,25 @@ function panelId(w: number, a: number) {
 }
 
 let worktrees: WorktreeState[];
+
+function fleetRow(
+  panel: Pick<PtyPanelData, "id" | "worktreeId" | "agentState">,
+  overrides: Partial<FleetRunRow> = {}
+): FleetRunRow {
+  return {
+    runId: panel.id,
+    workspaceId: "p1",
+    spawnedAt: 0,
+    cwd: panel.worktreeId ?? ROOT,
+    agentState: panel.agentState,
+    ...(panel.agentState === "waiting" ? { waitingReason: "prompt" as const } : {}),
+    ...overrides,
+  };
+}
+
+function fleet(runs: FleetRunRow[]): FleetSnapshot {
+  return { runs, changedAt: 0, degraded: false, lastSuccessfulAt: 0 };
+}
 
 beforeEach(async () => {
   initBuiltInPanelKinds();
@@ -106,6 +127,9 @@ beforeEach(async () => {
     panelIds: panels.map((p) => p.id),
     panelIdsByWorktreeId,
   });
+  // Every agent has a fleet run, so the bucket join does real work on each
+  // selector pass rather than missing on an empty index.
+  useFleetSnapshotStore.getState().applySnapshot(fleet(panels.map((p) => fleetRow(p))));
 
   render(
     <TooltipProvider>
@@ -126,10 +150,13 @@ beforeEach(async () => {
   stats.commits = 0;
   stats.ms = 0;
   chipStateCalls.count = 0;
-  chipStateCalls.waitingCounts = [];
+  chipStateCalls.attention = [];
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useFleetSnapshotStore.setState({ snapshot: null });
+});
 
 async function settle(): Promise<void> {
   await act(async () => {
@@ -165,17 +192,23 @@ describe("WorktreeOverviewModal under activity-headline churn", () => {
   });
 
   // Proves the counter sees real recomputes, so the zero above is not vacuous.
-  it("still recomputes when an agent state changes", async () => {
+  it("still recomputes when an agent starts asking for something", async () => {
+    // Worktree 0's prompt waits are hand-backs, so nothing in it is asking until
+    // one of its agents starts to.
+    expect(chipStateCalls.attention).toEqual([]);
+    const runs = useFleetSnapshotStore
+      .getState()
+      .snapshot!.runs.map((run) =>
+        run.runId === panelId(0, 1)
+          ? { ...run, agentState: "waiting" as const, waitingReason: "approval" as const }
+          : run
+      );
     act(() => {
-      usePanelStore.getState().updateAgentState(panelId(0, 0), "waiting");
+      useFleetSnapshotStore.getState().applySnapshot(fleet(runs));
     });
     await settle();
     expect(chipStateCalls.count).toBe(WORKTREES);
-    // Worktree 0 seeds a waiting agent at every a % 4 === 1; pane 0 joins them.
-    const seededWaiting = Array.from({ length: AGENTS_PER_WORKTREE }, (_, a) => a).filter(
-      (a) => a % 4 === 1
-    ).length;
-    expect(chipStateCalls.waitingCounts[0]).toBe(seededWaiting + 1);
+    expect(chipStateCalls.attention[0]).toBe(true);
     expect(stats.commits).toBeGreaterThan(0);
   });
 });

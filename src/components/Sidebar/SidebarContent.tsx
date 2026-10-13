@@ -96,6 +96,12 @@ import {
 } from "@/lib/worktreeFilters";
 import { describeActiveFacets } from "@/lib/worktreeFilterOptions";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
+import {
+  deriveWorktreeAgentBuckets,
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  isWorktreeMergedForCleanup,
+} from "@/lib/worktreeAgentBuckets";
+import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
 import { parseExactNumber } from "@/lib/parseExactNumber";
 import type { WorktreeState } from "@/types";
 import { actionService } from "@/services/ActionService";
@@ -851,8 +857,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   ]);
 
   // Compute derived metadata for each worktree. Panel scan is delegated to the
-  // single-pass `panelStateByWorktree` selector above, so this useMemo only
-  // joins per-worktree state with worktree-level fields and chip computation.
+  // single-pass `panelStateByWorktree` selector above; the quick-state buckets
+  // join this worktree's visible agent panels to their fleet runs, through the
+  // same derivation the overview modal, cycling and the card read.
+  const { runsById } = useWorktreeAgentBucketInputs();
   const derivedMetaMap = useMemo(() => {
     const map = new Map<string, DerivedWorktreeMeta>();
     for (const worktree of deferredWorktrees) {
@@ -866,31 +874,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasExitedAgent: false,
       };
 
-      // chipState logic mirrors useWorktreeStatus.ts — keep in sync
-      const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
-      const isComplete =
-        !!worktree.issueNumber &&
-        !!worktree.linked?.pr &&
-        worktree.linked.pr.state !== "closed" &&
-        worktree.linked.pr.state !== "declined" &&
-        !hasChanges &&
-        worktree.worktreeChanges !== null;
-
-      let lifecycleStage: "in-review" | "merged" | "ready-for-cleanup" | null = null;
-      if (!worktree.isMainWorktree && worktree.worktreeChanges !== null) {
-        if (worktree.linked?.pr?.state === "merged") {
-          lifecycleStage = worktree.issueNumber ? "ready-for-cleanup" : "merged";
-        } else if (worktree.linked?.pr?.state === "open") {
-          lifecycleStage = "in-review";
-        }
-      }
-
-      const chipState = computeChipState({
-        waitingTerminalCount: panelState.waitingTerminalCount,
-        lifecycleStage,
-        isComplete,
-        hasActiveAgent: panelState.hasWorkingAgent,
-      });
+      const worktreeOrphaned = worktreeIds.size > 0 && !worktreeIds.has(worktree.id);
+      const visibleAgentPanelIds = worktreeOrphaned
+        ? []
+        : (panelIdsByWorktreeId[worktree.id] ?? []).filter(
+            (id) => visiblePanelIds[id] && agentPanelIds[id]
+          );
+      const buckets = deriveWorktreeAgentBuckets(
+        visibleAgentPanelIds,
+        runsById,
+        isWorktreeMergedForCleanup(worktree)
+      );
 
       map.set(worktree.id, {
         terminalCount: panelState.terminalCount,
@@ -901,11 +895,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasExitedAgent: panelState.hasExitedAgent,
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
-        chipState,
+        buckets,
+        chipState: computeChipState(buckets),
       });
     }
     return map;
-  }, [deferredWorktrees, panelStateByWorktree]);
+  }, [
+    deferredWorktrees,
+    panelStateByWorktree,
+    panelIdsByWorktreeId,
+    visiblePanelIds,
+    agentPanelIds,
+    worktreeIds,
+    runsById,
+  ]);
 
   // Apply filters and sorting
   const mainWorktree = useMemo(
@@ -925,13 +928,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   );
 
   const quickStateCounts = useMemo(() => {
-    const counts = { all: nonMainWorktrees.length, working: 0, waiting: 0, finished: 0 };
+    const counts = {
+      all: nonMainWorktrees.length,
+      working: 0,
+      waiting: 0,
+      finished: 0,
+      finishedUnseen: 0,
+    };
     for (const w of nonMainWorktrees) {
       const meta = derivedMetaMap.get(w.id);
       if (!meta) continue;
       if (matchesQuickStateFilter("working", meta)) counts.working++;
       if (matchesQuickStateFilter("waiting", meta)) counts.waiting++;
       if (matchesQuickStateFilter("finished", meta)) counts.finished++;
+      if (meta.buckets.finishedUnseen) counts.finishedUnseen++;
     }
     return counts;
   }, [nonMainWorktrees, derivedMetaMap]);
@@ -1038,6 +1048,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           hasCompletedAgent: false,
           hasExitedAgent: false,
           hasMergeConflict: false,
+          buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
           chipState: null,
         };
         const isActive = worktree.id === activeWorktreeId;
@@ -1246,6 +1257,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           hasCompletedAgent: false,
           hasExitedAgent: false,
           hasMergeConflict: false,
+          buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
           chipState: null,
         },
         mainWorktree.id === activeWorktreeId,
@@ -2058,6 +2070,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 value={quickStateFilter}
                 onChange={setQuickStateFilter}
                 counts={quickStateCounts}
+                finishedUnseen={quickStateCounts.finishedUnseen}
                 trailing={armMatchingButton}
               />
             </div>

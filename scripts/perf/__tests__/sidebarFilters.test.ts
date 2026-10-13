@@ -10,6 +10,7 @@ import {
   type SidebarDerivationSubjects,
 } from "../lib/sidebarDerivationFixture";
 import { allScenarios } from "../scenarios";
+import { EMPTY_WORKTREE_AGENT_BUCKETS } from "../../../src/lib/worktreeAgentBuckets";
 
 /**
  * The four accumulators PERF-400..402 declare, watched failing.
@@ -156,6 +157,7 @@ describe("sidebar derivation predicates", () => {
                 hasCompletedAgent: false,
                 hasExitedAgent: false,
                 hasMergeConflict: false,
+                buckets: EMPTY_WORKTREE_AGENT_BUCKETS,
                 chipState: null,
               },
               worktree.id === activeId,

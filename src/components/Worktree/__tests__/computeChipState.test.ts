@@ -1,150 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { computeChipState, type ComputeChipStateInput } from "../utils/computeChipState";
+import { computeChipState } from "../utils/computeChipState";
+import {
+  EMPTY_WORKTREE_AGENT_BUCKETS,
+  type WorktreeAgentBuckets,
+} from "@/lib/worktreeAgentBuckets";
 
-const base: ComputeChipStateInput = {
-  waitingTerminalCount: 0,
-  lifecycleStage: null,
-  isComplete: false,
-  hasActiveAgent: false,
-};
+const buckets = (overrides: Partial<WorktreeAgentBuckets>): WorktreeAgentBuckets => ({
+  ...EMPTY_WORKTREE_AGENT_BUCKETS,
+  ...overrides,
+});
 
 describe("computeChipState", () => {
-  describe("state triggers", () => {
-    it("returns waiting when waitingTerminalCount > 0", () => {
-      expect(computeChipState({ ...base, waitingTerminalCount: 1 })).toBe("waiting");
-    });
-
-    it('returns cleanup when lifecycleStage is "merged"', () => {
-      expect(computeChipState({ ...base, lifecycleStage: "merged" })).toBe("cleanup");
-    });
-
-    it('returns cleanup when lifecycleStage is "ready-for-cleanup"', () => {
-      expect(computeChipState({ ...base, lifecycleStage: "ready-for-cleanup" })).toBe("cleanup");
-    });
-
-    it("returns complete when isComplete is true", () => {
-      expect(computeChipState({ ...base, isComplete: true })).toBe("complete");
-    });
-
-    it("returns null when no conditions are met", () => {
-      expect(computeChipState(base)).toBeNull();
-    });
+  it("returns null with no bucket", () => {
+    expect(computeChipState(EMPTY_WORKTREE_AGENT_BUCKETS)).toBeNull();
   });
 
-  describe("priority ordering", () => {
-    it("cleanup beats waiting", () => {
-      expect(computeChipState({ ...base, waitingTerminalCount: 1, lifecycleStage: "merged" })).toBe(
-        "cleanup"
-      );
-    });
-
-    it("complete beats waiting", () => {
-      expect(computeChipState({ ...base, waitingTerminalCount: 1, isComplete: true })).toBe(
-        "complete"
-      );
-    });
-
-    it("cleanup beats complete", () => {
-      expect(
-        computeChipState({ ...base, lifecycleStage: "ready-for-cleanup", isComplete: true })
-      ).toBe("cleanup");
-    });
-
-    it("cleanup beats complete and waiting combined", () => {
-      expect(
-        computeChipState({
-          ...base,
-          lifecycleStage: "merged",
-          isComplete: true,
-          waitingTerminalCount: 1,
-        })
-      ).toBe("cleanup");
-    });
+  it("returns null for a worktree that is only working", () => {
+    expect(computeChipState(buckets({ working: true }))).toBeNull();
   });
 
-  describe("complete with non-cleanup lifecycle", () => {
-    it('returns complete when lifecycleStage is "in-review"', () => {
-      expect(computeChipState({ ...base, lifecycleStage: "in-review", isComplete: true })).toBe(
-        "complete"
-      );
-    });
-
-    it('returns complete when "in-review", complete, and waiting are all present', () => {
-      expect(
-        computeChipState({
-          ...base,
-          lifecycleStage: "in-review",
-          isComplete: true,
-          waitingTerminalCount: 1,
-        })
-      ).toBe("complete");
-    });
+  it("returns attention when an agent is asking, even beside a working one", () => {
+    expect(computeChipState(buckets({ attention: true, working: true }))).toBe("attention");
   });
 
-  describe("active agent suppresses cleanup and complete", () => {
-    it("returns null when isComplete but hasActiveAgent", () => {
-      expect(computeChipState({ ...base, isComplete: true, hasActiveAgent: true })).toBeNull();
-    });
-
-    it("returns null when merged but hasActiveAgent", () => {
-      expect(
-        computeChipState({ ...base, lifecycleStage: "merged", hasActiveAgent: true })
-      ).toBeNull();
-    });
-
-    it("returns null when ready-for-cleanup but hasActiveAgent", () => {
-      expect(
-        computeChipState({ ...base, lifecycleStage: "ready-for-cleanup", hasActiveAgent: true })
-      ).toBeNull();
-    });
-
-    it("active agent suppresses cleanup even when isComplete is also true", () => {
-      expect(
-        computeChipState({
-          ...base,
-          lifecycleStage: "merged",
-          isComplete: true,
-          hasActiveAgent: true,
-        })
-      ).toBeNull();
-    });
-
-    it("returns waiting when merged, hasActiveAgent, and waitingTerminalCount > 0", () => {
-      expect(
-        computeChipState({
-          ...base,
-          lifecycleStage: "merged",
-          hasActiveAgent: true,
-          waitingTerminalCount: 1,
-        })
-      ).toBe("waiting");
-    });
-
-    it("returns waiting when isComplete, hasActiveAgent, and waitingTerminalCount > 0", () => {
-      expect(
-        computeChipState({
-          ...base,
-          isComplete: true,
-          hasActiveAgent: true,
-          waitingTerminalCount: 1,
-        })
-      ).toBe("waiting");
-    });
-
-    it("returns complete when isComplete and hasActiveAgent is false", () => {
-      expect(computeChipState({ ...base, isComplete: true, hasActiveAgent: false })).toBe(
-        "complete"
-      );
-    });
+  it("returns cleanup for a merged worktree", () => {
+    expect(computeChipState(buckets({ finished: true, cleanup: true }))).toBe("cleanup");
   });
 
-  describe("null cases", () => {
-    it('returns null when lifecycleStage is "in-review"', () => {
-      expect(computeChipState({ ...base, lifecycleStage: "in-review" })).toBeNull();
-    });
+  it("returns finished for an unseen hand-back", () => {
+    expect(computeChipState(buckets({ finished: true, finishedUnseen: true }))).toBe("finished");
+  });
 
-    it("returns null when all counts are zero and isComplete is false", () => {
-      expect(computeChipState({ ...base, lifecycleStage: null })).toBeNull();
-    });
+  it("returns null once every hand-back has been seen", () => {
+    expect(computeChipState(buckets({ finished: true }))).toBeNull();
+  });
+
+  it("prefers cleanup over an unseen hand-back", () => {
+    expect(computeChipState(buckets({ finished: true, finishedUnseen: true, cleanup: true }))).toBe(
+      "cleanup"
+    );
   });
 });

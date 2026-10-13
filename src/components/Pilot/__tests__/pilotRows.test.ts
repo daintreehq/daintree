@@ -833,6 +833,29 @@ describe("countPilotBands", () => {
       })
     );
 
+  it("counts an agent at its prompt as Finished or idle, never Attention — as the sidebar does (#13234)", () => {
+    const counts = countPilotBands(
+      buildPilotGroups(
+        [
+          run({
+            runId: "handed-back",
+            agentState: "waiting",
+            waitingReason: "prompt",
+            since: NOW,
+            handBack: { stoppedAt: NOW },
+          }),
+          run({ runId: "prompt", agentState: "waiting", waitingReason: "prompt", since: NOW }),
+          run({ runId: "bare", agentState: "waiting", waitingReason: undefined, since: NOW }),
+          run({ runId: "approval", agentState: "waiting", waitingReason: "approval", since: NOW }),
+        ],
+        ctx()
+      )
+    );
+    expect(counts["needs-you"]).toBe(1);
+    expect(counts.finished).toBe(1);
+    expect(counts.other).toBe(2);
+  });
+
   it("maps every band onto the segments", () => {
     const counts = countPilotBands(wholeFleet());
 

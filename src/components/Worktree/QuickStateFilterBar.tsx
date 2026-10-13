@@ -40,10 +40,29 @@ const FILTER_VISUALS: Record<
   finished: { Icon: CheckCircle2, color: "text-category-blue" },
 };
 
+/**
+ * Hover text per segment. Finished says what was observed rather than claiming
+ * the work is done: an agent at its prompt is also what a missed approval
+ * dialog or an Esc interrupt looks like.
+ */
+const FILTER_TOOLTIPS: Record<QuickStateFilter, string> = {
+  all: "All",
+  working: "Working: an agent is working",
+  waiting: "Attention: an agent is asking for an approval, an answer or a fix",
+  finished: "Finished: no agent working or asking for anything",
+};
+
 interface QuickStateFilterBarProps {
   value: QuickStateFilter;
   onChange: (value: QuickStateFilter) => void;
   counts?: Record<QuickStateFilter, number>;
+  /**
+   * How many Finished worktrees hold a hand-back nobody has looked at. The
+   * Finished glyph is hued only while this is above zero — Pilot's Finished
+   * segment makes the same distinction between `review` and `done` — so a
+   * bucket of acknowledged work does not read as news.
+   */
+  finishedUnseen?: number;
   /**
    * Optional affordance pinned to the trailing edge of the filter row, past a
    * divider — currently the compact "arm matching terminals" icon button. Kept
@@ -64,6 +83,7 @@ export function QuickStateFilterBar({
   value,
   onChange,
   counts,
+  finishedUnseen = 0,
   trailing,
   className,
   showLabels = false,
@@ -126,7 +146,15 @@ export function QuickStateFilterBar({
           // The status icon + count carry the meaning now that the text label is
           // gone; the name lives in the accessible name and the hover tooltip.
           const noun = rawCount === 1 ? "worktree" : "worktrees";
-          const accessibleName = hasCount ? `${option.label}, ${rawCount} ${noun}` : option.label;
+          const isFinishedSeen = option.value === "finished" && finishedUnseen === 0;
+          const qualifier =
+            option.value === "finished" && finishedUnseen > 0 && hasCount
+              ? finishedUnseen >= rawCount
+                ? "all unseen"
+                : `including ${finishedUnseen} unseen`
+              : null;
+          const baseName = hasCount ? `${option.label}, ${rawCount} ${noun}` : option.label;
+          const accessibleName = qualifier === null ? baseName : `${baseName}, ${qualifier}`;
           return (
             <Tooltip key={option.value}>
               <TooltipTrigger asChild>
@@ -163,7 +191,7 @@ export function QuickStateFilterBar({
                     <Icon
                       className={cn(
                         "w-3 h-3 shrink-0 transition-[color,opacity]",
-                        visual.color,
+                        isFinishedSeen ? "text-text-secondary" : visual.color,
                         shouldFadeIcon && EMPTY_BUCKET_GLYPH_CLASS,
                         isSpinningWorking && "animate-spin-slow motion-reduce:animate-none"
                       )}
@@ -203,7 +231,7 @@ export function QuickStateFilterBar({
                   )}
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">{option.label}</TooltipContent>
+              <TooltipContent side="bottom">{FILTER_TOOLTIPS[option.value]}</TooltipContent>
             </Tooltip>
           );
         })}
