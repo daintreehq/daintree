@@ -1750,7 +1750,7 @@ describe("useTerminalFileTransfer hook", () => {
       expect(window.electron.clipboard.saveImage).toHaveBeenCalledTimes(1);
       expect(terminalClient.write).toHaveBeenCalledWith(
         "term-1",
-        `${escapeShellArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
+        `${quoteLaunchArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
       );
     });
 
