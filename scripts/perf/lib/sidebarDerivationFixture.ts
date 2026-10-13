@@ -511,7 +511,18 @@ export function buildSidebarDerivationFixture(size: number): SidebarDerivationFi
       hasCompletedAgent,
       hasExitedAgent,
       hasMergeConflict: false,
-      chipState: hasWaitingAgent ? "waiting" : hasCompletedAgent ? "complete" : null,
+      buckets: {
+        working: hasWorkingAgent,
+        attention: hasWaitingAgent,
+        finished: !hasWorkingAgent && !hasWaitingAgent && hasCompletedAgent,
+        finishedUnseen: !hasWorkingAgent && !hasWaitingAgent && hasCompletedAgent,
+        cleanup: false,
+      },
+      chipState: hasWaitingAgent
+        ? "attention"
+        : !hasWorkingAgent && hasCompletedAgent
+          ? "finished"
+          : null,
     };
 
     const record: PlantedWorktree = {
