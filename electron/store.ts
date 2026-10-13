@@ -718,8 +718,11 @@ export interface StoreSchema {
    * key with no numbered migration; entries are validated on load.
    */
   devPreviewUserStopped?: DevPreviewUserStoppedRecord[];
-  /** Hosts this client can attach to. Device-owned: never synced between machines. */
-  remoteHosts?: { hosts: HostDescriptor[] };
+  /**
+   * Hosts this client can attach to, and the ids of hosts removed from this
+   * device (never reused). Device-owned: never synced between machines.
+   */
+  remoteHosts?: { hosts: HostDescriptor[]; retiredIds?: string[] };
   /** This machine as a host: whether it listens for Shells and starts at login. */
   hostMode?: { enabled: boolean; startAtLogin: boolean; advertise?: boolean };
   /** Client-side behaviour while a window is attached to a remote host. */

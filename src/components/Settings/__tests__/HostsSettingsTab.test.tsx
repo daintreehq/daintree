@@ -8,6 +8,7 @@ import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import HostsSettingsTab from "../Hosts/HostsSettingsTab";
 import { requestHostUpdate, takePendingHostUpdate } from "../Hosts/hostUpdateRequests";
+import { requestHostPlugins } from "../Hosts/hostPluginRequests";
 
 function entry(id: string, name: string): HostListEntry {
   return {
@@ -230,5 +231,20 @@ describe("HostsSettingsTab", () => {
     await screen.findByRole("button", { name: "Details for studio-03" });
     act(() => requestHostUpdate("studio-03"));
     expect(await screen.findByText("Update studio-03")).toBeTruthy();
+  });
+
+  it("opens a host's plugins when asked after its update flow was asked for", async () => {
+    remoteHosts.list!.mockResolvedValue([entry("studio-03", "studio-03")]);
+    render(
+      <TooltipProvider>
+        <HostsSettingsTab />
+      </TooltipProvider>
+    );
+    await screen.findByRole("button", { name: "Details for studio-03" });
+    act(() => requestHostUpdate("studio-03"));
+    expect(await screen.findByText("Update studio-03")).toBeTruthy();
+    act(() => requestHostPlugins("studio-03"));
+    await waitFor(() => expect(screen.queryByText("Update studio-03")).toBeNull());
+    expect(screen.getByRole("button", { name: "Remove host" })).toBeTruthy();
   });
 });

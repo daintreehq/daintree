@@ -258,7 +258,7 @@ export class HostSetupService {
     connection: HostConnection,
     signal?: AbortSignal
   ): Promise<"listening" | "started" | "not-startable"> {
-    if (this.installRunningFor(connection)) return "not-startable";
+    if (this.isInstallRunning(connection)) return "not-startable";
     const channel = this.shellFor(connection);
     const outcome = await this.probeOutcome(connection, channel, signal);
     const probe = outcome.result;
@@ -273,7 +273,7 @@ export class HostSetupService {
           : null;
     if (!script) return "not-startable";
     // Last look before changing anything on the host.
-    if (signal?.aborted || this.installRunningFor(connection)) return "not-startable";
+    if (signal?.aborted || this.isInstallRunning(connection)) return "not-startable";
     const label = formatHostConnection(connection);
     const started = await channel.exec(script, { timeoutMs: 30_000, signal });
     if (started.code !== 0) {
@@ -303,7 +303,7 @@ export class HostSetupService {
   }
 
   /** An install or update for this host is running: it stops and starts Daintree there itself. */
-  private installRunningFor(connection: HostConnection): boolean {
+  isInstallRunning(connection: HostConnection): boolean {
     for (const [opId, target] of this.targets) {
       if (
         sameHostConnection(target, connection) &&

@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   composeWindowTitle,
   rememberRemoteWorkspaceTitle,
+  setRemoteHostNameResolver,
+  forgetRemoteWorkspaceTitles,
   resolveWindowProjectName,
   type ProjectTitleLookup,
   type ProjectTitleRow,
@@ -121,10 +123,38 @@ describe("composeWindowTitle", () => {
 });
 
 describe("resolveWindowProjectName", () => {
+  afterEach(() => {
+    setRemoteHostNameResolver(() => null);
+    for (const hostId of ["studio-01", "studio-02", "studio-03", "studio-03-2"]) {
+      forgetRemoteWorkspaceTitles(hostId);
+    }
+  });
+
   it("names a host's project with its host, which this machine's store has no row for", () => {
-    rememberRemoteWorkspaceTitle("studio-01:proj-9", "daintree — studio-01");
+    setRemoteHostNameResolver(() => null);
+    rememberRemoteWorkspaceTitle("studio-01:proj-9", "daintree", "studio-01");
     expect(resolveWindowProjectName(pvm("studio-01:proj-9"), () => null)).toBe(
       "daintree — studio-01"
+    );
+  });
+
+  it("follows a rename of the host", () => {
+    let name = "Studio";
+    setRemoteHostNameResolver((hostId) => (hostId === "studio-02" ? name : null));
+    rememberRemoteWorkspaceTitle("studio-02:proj-1", "api", "studio-02");
+    expect(resolveWindowProjectName(pvm("studio-02:proj-1"), () => null)).toBe("api — Studio");
+    name = "Render box";
+    expect(resolveWindowProjectName(pvm("studio-02:proj-1"), () => null)).toBe("api — Render box");
+    setRemoteHostNameResolver(() => null);
+  });
+
+  it("forgets only the removed host's titles", () => {
+    rememberRemoteWorkspaceTitle("studio-03:proj-1", "api", "studio-03");
+    rememberRemoteWorkspaceTitle("studio-03-2:proj-1", "web", "studio-03-2");
+    forgetRemoteWorkspaceTitles("studio-03");
+    expect(resolveWindowProjectName(pvm("studio-03:proj-1"), () => null)).toBeNull();
+    expect(resolveWindowProjectName(pvm("studio-03-2:proj-1"), () => null)).toBe(
+      "web — studio-03-2"
     );
   });
 

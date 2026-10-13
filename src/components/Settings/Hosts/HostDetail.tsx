@@ -341,7 +341,7 @@ export function HostDetail({
         onClose={() => setConfirmRemove(false)}
         variant="destructive"
         title={`Remove '${hostName}' from this device?`}
-        description={`Its connection here closes and windows attached to it return to this machine. Projects and Daintree on ${hostName} keep running.`}
+        description={`Its connection here closes, windows attached to it return to this machine, and its plugin permissions, history and browser data on this device are cleared. Projects and Daintree on ${hostName} keep running.`}
         confirmLabel="Remove host"
         onConfirm={remove}
         isConfirmLoading={removing}

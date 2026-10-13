@@ -156,6 +156,19 @@ describe("restoreRemoteWindows", () => {
     expect(getPendingRemoteRestore(3)).toBeNull();
   });
 
+  it("offers no Retry, and keeps no place, for a host removed while it was being reached", async () => {
+    const client = fakeClient(async () => {
+      client.list.mockReturnValue([]);
+      throw new AppError({ code: "NOT_FOUND", message: "No host with id studio-01" });
+    });
+    noteRemoteWindowRestore(3, KEY);
+    remoteWindowReady(3);
+    const { d, sent } = deps(new Set([3]));
+    await restoreRemoteWindows(d);
+    expect(sent).toEqual([]);
+    expect(getPendingRemoteRestore(3)).toBeNull();
+  });
+
   it("forgets a window that closed before Remote Hosts came up", async () => {
     const client = fakeClient(async () => ({ outcome: "switched" }));
     noteRemoteWindowRestore(3, KEY);

@@ -866,6 +866,66 @@ describe("RemoteHostsClient", () => {
     );
   });
 
+  describe("while an install is running on the host", () => {
+    function installingClient(installing: () => boolean) {
+      return new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: () => null },
+        windows,
+        installRouter,
+        emit: () => {},
+        isInstalling: (connection) =>
+          installing() && connection.kind === "ssh" && connection.target === "studio.example",
+      });
+    }
+
+    it("refuses to remove the host, and changes nothing", async () => {
+      const busy = installingClient(() => true);
+      bindings.set(1, "studio-01");
+      vi.mocked(windows.lastLocalProjectId).mockReturnValue("local-proj");
+      await expect(busy.forget({ hostId: "studio-01" })).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      expect(registry.get("studio-01")).not.toBeNull();
+      expect(registry.retiredIds().size).toBe(0);
+      expect(bindings.get(1)).toBe("studio-01");
+      expect(windows.openLocalProject).not.toHaveBeenCalled();
+      expect(manager.disconnect).not.toHaveBeenCalled();
+    });
+
+    it("refuses a new SSH target, but takes a rename or the same target", async () => {
+      const busy = installingClient(() => true);
+      await expect(
+        busy.update({ hostId: "studio-01", connection: { kind: "ssh", target: "other.example" } })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(registry.get("studio-01")?.connection).toEqual({
+        kind: "ssh",
+        target: "studio.example",
+      });
+      await expect(busy.update({ hostId: "studio-01", name: "Studio" })).resolves.toMatchObject({
+        name: "Studio",
+      });
+      await expect(
+        busy.update({ hostId: "studio-01", connection: { kind: "ssh", target: "studio.example" } })
+      ).resolves.toMatchObject({ id: "studio-01" });
+    });
+
+    it("allows both once the install settles", async () => {
+      let installing = true;
+      const settling = installingClient(() => installing);
+      installing = false;
+      await settling.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "other.example" },
+      });
+      await expect(settling.forget({ hostId: "studio-01" })).resolves.toBeUndefined();
+      expect(registry.list()).toEqual([]);
+    });
+  });
+
   it("still forgets a host when its cleanup fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const failing = new RemoteHostsClient({

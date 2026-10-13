@@ -20,6 +20,7 @@ vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
 import {
   buildOpenWindowRecords,
   clearPendingBackgroundRestores,
+  clearPendingRemoteRestoresForHost,
   enableOpenWindowsSaves,
   freezeAndSnapshotOpenWindows,
   initOpenWindowsTracker,
@@ -136,6 +137,23 @@ describe("buildOpenWindowRecords", () => {
     expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "local" }]);
     win.projectId = null;
     expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+  });
+
+  it("stops naming a removed host's projects for any window, and only that host's", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: null },
+      { windowId: 2, projectId: null },
+      { windowId: 3, projectId: null },
+    ]);
+    setPendingRemoteRestore(1, `studio:${"a".repeat(64)}`);
+    setPendingRemoteRestore(2, `studio:${"b".repeat(64)}`);
+    setPendingRemoteRestore(3, `studio-2:${"a".repeat(64)}`);
+    clearPendingRemoteRestoresForHost("studio");
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: null },
+      { projectId: null },
+      { projectId: `studio-2:${"a".repeat(64)}` },
+    ]);
   });
 
   it("keeps a window whose manager throws, as a picker window", () => {

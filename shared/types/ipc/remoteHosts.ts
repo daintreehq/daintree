@@ -311,4 +311,9 @@ export type RemoteHostsEvent =
       opId: OperationId;
       connection: HostConnection;
       outcome: OperationOutcome;
-    };
+    }
+  /**
+   * A host was removed from this device. Every view drops what it kept under
+   * the host's id (history, layout, toggles): no later host is given that id.
+   */
+  | { type: "host-forgotten"; hostId: HostId };

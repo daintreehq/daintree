@@ -14,7 +14,10 @@ import { CHANNELS } from "../../ipc/channels.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { store } from "../../store.js";
 import { projectStore } from "../../services/ProjectStore.js";
-import { getProjectHistory } from "../../services/ProjectHistoryService.js";
+import {
+  discardFromAllProjectHistories,
+  getProjectHistory,
+} from "../../services/ProjectHistoryService.js";
 import { scratchStore } from "../../services/ScratchStore.js";
 import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import { AppError, isAppError } from "../../utils/errorTypes.js";
@@ -44,6 +47,13 @@ import { toDisposable } from "../../utils/lifecycle.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import type { LinkSession } from "../link/session.js";
 import { registerRemoteService } from "../runtime.js";
+import {
+  forgetRemoteWorkspaceTitles,
+  setRemoteHostNameResolver,
+} from "../../window/windowTitle.js";
+import { clearPendingRemoteRestoresForHost } from "../../window/openWindowsTracker.js";
+import { clearHostPartitions } from "../../services/sessionCacheCleaner.js";
+import { forgetHostState, type HostStateCleanup } from "./forgetHostState.js";
 import { HostRegistry, type RemoteHostsStore } from "./HostRegistry.js";
 import {
   RemoteHostManager,
@@ -431,6 +441,64 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
   };
 }
 
+/**
+ * Everything this device keeps under a host's id, cleared when the host is
+ * removed. Its windows are already back on this machine by then, so its views
+ * here are cached ones, discarded before the storage they could write back to
+ * is cleared.
+ */
+const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
+  {
+    name: "plugin permissions",
+    async run(hostId) {
+      const [{ forgetRunClipboardGrants }, { persistedClipboardGrants }, consent, install] =
+        await Promise.all([
+          import("../plugins/shellRequests.js"),
+          import("../plugins/clipboardGrants.js"),
+          import("../plugins/pluginViewConsent.js"),
+          import("../plugins/install.js"),
+        ]);
+      // This run's answers and open questions go first, with nothing awaited between.
+      forgetRunClipboardGrants(hostId);
+      persistedClipboardGrants.reset(hostId);
+      install.revokePluginViewDecisions(hostId);
+      consent.persistedPluginViewConsent.reset(hostId);
+    },
+  },
+  {
+    name: "workspace history",
+    run: (hostId) =>
+      discardFromAllProjectHistories(
+        (workspaceId) => parseHostScopedKey(workspaceId).hostId === hostId
+      ),
+  },
+  { name: "window titles", run: forgetRemoteWorkspaceTitles },
+  { name: "window restores", run: clearPendingRemoteRestoresForHost },
+  {
+    name: "cached views",
+    run(hostId) {
+      for (const ctx of getWindowRegistry()?.all() ?? []) {
+        const pvm = ctx.services.projectViewManager;
+        if (!pvm) continue;
+        // What the window shows, or still shows while a switch home loads, stays.
+        const onScreen = new Set([pvm.getActiveProjectId(), pvm.getOutgoingBridgeProjectId()]);
+        for (const entry of pvm.getAllViews()) {
+          if (onScreen.has(entry.projectId)) continue;
+          if (parseHostScopedKey(entry.projectId).hostId !== hostId) continue;
+          // One still loading has a restore that would finish it: stop that first.
+          pvm.abandonBackgroundRestore(entry.projectId);
+          pvm.destroyView(entry.projectId);
+        }
+      }
+    },
+  },
+  {
+    name: "view storage",
+    run: (hostId) => broadcastLocal({ type: "host-forgotten", hostId }),
+  },
+  { name: "browser data", run: clearHostPartitions },
+];
+
 /** How a host's link is opened, by how it is reached. */
 function transportFor(
   connection: HostConnection,
@@ -470,6 +538,9 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
+  // Remote windows' titles name their host as it is called now.
+  setRemoteHostNameResolver((hostId) => registry.get(hostId)?.name ?? null);
+  const stopTitleRefresh = registry.onChange(refreshWindowTitles);
   /** Hosts whose Daintree this machine is checking on or starting over ssh, by attempts in flight. */
   const startingHosts = new Map<HostId, number>();
   const clientDir = path.join(app.getPath("userData"), "rh");
@@ -509,8 +580,12 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     installRouter: (next) => getIpcDispatcher().setRemoteRouter(next),
     emit: broadcastLocal,
     onFirstUse: hooks.onFirstUse,
-    onForget: (descriptor): Promise<void> => setup.forgetArtifacts(descriptor),
+    onForget: async (descriptor): Promise<void> => {
+      await forgetHostState(descriptor.id, HOST_STATE_CLEANUPS);
+      await setup.forgetArtifacts(descriptor);
+    },
     isStarting: (hostId) => (startingHosts.get(hostId) ?? 0) > 0,
+    isInstalling: (connection) => setup.isInstallRunning(connection),
   });
   /**
    * A host reachable over ssh whose Daintree isn't serving (a reboot, a power
@@ -603,6 +678,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       unregister();
       unregisterWindowHosts();
       unregisterSetup();
+      stopTitleRefresh();
+      setRemoteHostNameResolver(() => null);
       await client.dispose();
     },
   };
