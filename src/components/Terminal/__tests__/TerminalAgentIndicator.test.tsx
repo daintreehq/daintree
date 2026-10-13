@@ -371,6 +371,8 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     const chip = screen.getByRole("status", { name: "Agent state: unread" });
     expect(chip.className).toContain("bg-overlay-soft");
     expect(chip.className).not.toContain("state-waiting");
+    // The tooltip names what was observed, not the coerced display state.
+    expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: done");
   });
 
   it("keeps an approval wait amber whatever the hand-back says", () => {

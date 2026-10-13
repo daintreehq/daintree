@@ -174,7 +174,7 @@ export function TerminalAgentIndicator({
 
   const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
   const stateLabel = SESSION_LABELS[shownState];
-  const observedLabel = SESSION_LABELS[agentState];
+  const observedLabel = SESSION_LABELS[rawAgentState ?? agentState];
   const headline = activity?.headline?.trim() || `Agent ${stateLabel}`;
   const exitStatus = isExited ? describeExitStatus(exitCode) : null;
   const showStateDuration =

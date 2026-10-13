@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
@@ -599,6 +599,7 @@ describe("WorktreeTerminalSection row state icon", () => {
     }
 
     beforeEach(() => useFleetSnapshotStore.setState({ snapshot: null }));
+    afterEach(() => useFleetSnapshotStore.setState({ snapshot: null }));
 
     it("draws a read hand-back as done while the attribute keeps the observed state", () => {
       setRun({ agentState: "waiting", handBack: { stoppedAt: 1, seenAt: 2 } });

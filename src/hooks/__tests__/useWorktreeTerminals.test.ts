@@ -1,13 +1,18 @@
+// @vitest-environment jsdom
 /**
  * Tests for useWorktreeTerminals hook logic
  *
  * Tests the core filtering and counting logic without full React rendering.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { renderHook, act } from "@testing-library/react";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
+import { usePanelStore } from "@/store/panelStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "../../types";
-import { aggregateAgentStates } from "../useWorktreeTerminals";
+import { aggregateAgentStates, useWorktreeTerminals } from "../useWorktreeTerminals";
 
 /**
  * Helper function that implements the core logic of useWorktreeTerminals
@@ -403,6 +408,65 @@ describe("aggregateAgentStates (#6650)", () => {
       const { byState, unread } = aggregateAgentStates([agent("a")]);
       expect(byState.waiting).toBe(1);
       expect(unread).toBe(0);
+    });
+  });
+
+  describe("useWorktreeTerminals hand-back subscription", () => {
+    afterEach(() => {
+      usePanelStore.setState({ panelsById: {}, panelIdsByWorktreeId: {} });
+      useFleetSnapshotStore.setState({ snapshot: null });
+      vi.useRealTimers();
+    });
+
+    it("recounts when only the fleet snapshot changes", () => {
+      vi.useFakeTimers();
+      const panel = term({
+        id: "hb-hook",
+        worktreeId: "wt-hb",
+        launchAgentId: "claude",
+        agentState: "waiting",
+      });
+      usePanelStore.setState({
+        panelsById: { [panel.id]: panel },
+        panelIdsByWorktreeId: { "wt-hb": [panel.id] },
+      });
+      const setHandBack = (handBack: FleetRunRow["handBack"]) =>
+        act(() => {
+          useFleetSnapshotStore.setState({
+            snapshot: {
+              runs: [
+                {
+                  runId: panel.id,
+                  workspaceId: "p1",
+                  spawnedAt: 0,
+                  cwd: "/x",
+                  agentState: "waiting",
+                  handBack,
+                },
+              ],
+              changedAt: 0,
+            } as FleetSnapshot,
+          });
+        });
+      // A second act: the debounce timer is only scheduled once the first
+      // act has flushed the re-render's effects.
+      const settle = () => act(() => vi.advanceTimersByTime(300));
+
+      const { result } = renderHook(() => useWorktreeTerminals("wt-hb"));
+      expect(result.current.counts.byState.waiting).toBe(1);
+      expect(result.current.counts.unread).toBe(0);
+
+      setHandBack({ stoppedAt: 1 });
+      settle();
+      expect(result.current.counts.unread).toBe(1);
+      expect(result.current.counts.byState.waiting).toBe(0);
+
+      setHandBack({ stoppedAt: 1, seenAt: 2 });
+      settle();
+      expect(result.current.counts.unread).toBe(0);
+      expect(result.current.counts.byState.completed).toBe(1);
+      // The dominant state follows the observation, not the read state.
+      expect(result.current.dominantAgentState).toBe("waiting");
     });
   });
 });
