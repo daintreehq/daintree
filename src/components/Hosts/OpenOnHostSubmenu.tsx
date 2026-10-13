@@ -15,7 +15,7 @@ import { logWarn } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
 import { PlatformGlyph } from "./PlatformGlyph";
 import { clientPlatform } from "./hostModel";
-import { useOtherHostTargets, useProjectPresence, type OtherHostTarget } from "./hostProjects";
+import { useOtherHosts, useProjectPresence, type OtherHost } from "./hostProjects";
 import { isNewWindowClick } from "./hostSwitching";
 
 /**
@@ -50,7 +50,7 @@ function TargetItem({
   projectId,
   presence,
 }: {
-  target: OtherHostTarget;
+  target: OtherHost;
   projectId: string;
   /** Undefined while the host is being asked. */
   presence: HostProjectPresence | undefined;
@@ -101,7 +101,7 @@ function TargetItem({
  */
 export function OpenOnHostSubmenu({ projectId }: { projectId: string }) {
   const supported = isRemoteShellSupported();
-  const targets = useOtherHostTargets(clientPlatform());
+  const targets = useOtherHosts(clientPlatform());
   const presence = useProjectPresence(
     projectId,
     supported ? targets.filter((target) => target.reachable).map((target) => target.hostId) : []

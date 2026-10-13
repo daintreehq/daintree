@@ -365,7 +365,7 @@ export function getHostResidentProject(residentId: number): string | null {
  */
 function markProjectActiveOnHost(projectId: string): void {
   try {
-    projectStore.updateProject(projectId, { status: "active", lastOpened: Date.now() });
+    projectStore.recordRemoteActivation(projectId);
     broadcastProjectSwitchUpdates(null, projectId);
   } catch (error) {
     console.warn("[ProjectSwitch] Failed to record remote activation:", error);

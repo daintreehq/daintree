@@ -299,6 +299,11 @@ describe("host connection sync", () => {
     bindView("studio-01");
     const stop = startHostConnectionSync();
     await flush();
+    // Opening the project takes it over, and that pass reads the host's
+    // terminals on its own. Left in flight, the resync below imports the same
+    // mocked modules alongside it and vitest holds the second import for about
+    // a second, past vi.waitFor's timeout. It ends with the authoritative read.
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalled());
     electron.driveLease.get.mockClear();
 
     emitHost({ type: "resync-required", hostId: "studio-01", reason: "reconnected" });

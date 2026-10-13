@@ -179,9 +179,11 @@ vi.mock("@/utils/timeAgo", () => ({
   formatTimeAgo: () => "2h ago",
 }));
 
-const { hostOptions, openOtherHostProject } = vi.hoisted(() => ({
-  hostOptions: { value: [] as unknown[] },
-  openOtherHostProject: vi.fn(),
+const { hostOptions, activateOtherHostOption } = vi.hoisted(() => ({
+  hostOptions: {
+    value: { groups: [], options: [], remoteNames: new Set<string>() } as unknown,
+  },
+  activateOtherHostOption: vi.fn(),
 }));
 
 vi.mock("@/components/Hosts/OtherHostsSection", async () => {
@@ -191,7 +193,8 @@ vi.mock("@/components/Hosts/OtherHostsSection", async () => {
   return {
     ...actual,
     useOtherHostProjectOptions: () => hostOptions.value,
-    openOtherHostProject,
+    useCurrentHostName: () => "This Mac",
+    activateOtherHostOption,
   };
 });
 vi.mock("@/components/Hosts/OpenOnHostSubmenu", () => ({ OpenOnHostSubmenu: () => null }));
@@ -204,7 +207,11 @@ import type {
   ProjectSwitcherProjectRow,
   SearchableProject,
 } from "@/hooks/useProjectSwitcherPalette";
-import type { OtherHostProjectOption } from "@/components/Hosts/OtherHostsSection";
+import {
+  otherHostOptionId,
+  type OtherHostGroup,
+  type OtherHostOption,
+} from "@/components/Hosts/OtherHostsSection";
 
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
 
@@ -238,20 +245,42 @@ function makeProject(overrides: Partial<SearchableProject> = {}): ProjectSwitche
   };
 }
 
-const OPTIONS: OtherHostProjectOption[] = [
-  {
-    hostId: "studio-01",
-    hostName: "studio-01",
+function projectOption(hostId: string, id: string, name: string): OtherHostOption {
+  return {
+    key: `project:${hostId}:${id}`,
+    kind: "project",
+    hostId,
+    hostName: hostId,
     platform: "linux",
-    project: { id: "s1-api", name: "api", path: "/home/greg/api" },
-  },
-  {
-    hostId: "studio-02",
-    hostName: "studio-02",
-    platform: "linux",
-    project: { id: "s2-web", name: "web", path: "/srv/web" },
-  },
-];
+    project: { id, name, path: `/srv/${name}` },
+    stale: false,
+  };
+}
+
+const API = projectOption("studio-01", "s1-api", "api");
+const WEB = projectOption("studio-02", "s2-web", "web");
+const OPTIONS: OtherHostOption[] = [API, WEB];
+
+/** The band as the hook hands it over: rows grouped by host, and flat. */
+function band(options: OtherHostOption[], remoteNames: string[] = []) {
+  const groups: OtherHostGroup[] = [];
+  for (const option of options) {
+    const last = groups[groups.length - 1];
+    if (last?.hostId === option.hostId) last.options.push(option);
+    else {
+      groups.push({
+        hostId: option.hostId,
+        hostName: option.hostName,
+        platform: option.platform,
+        note: null,
+        options: [option],
+      });
+    }
+  }
+  return { groups, options, remoteNames: new Set(remoteNames) };
+}
+
+const id = (option: OtherHostOption) => otherHostOptionId(option);
 
 const RESULTS = [
   makeProject({ id: "p1", name: "Project 1" }),
@@ -264,7 +293,13 @@ const onCloseProject = vi.fn();
 
 // Steps the selection the way useProjectSwitcherPalette does: relative, wrapping,
 // resolved inside the updater so batched steps compose.
-function Harness({ results = RESULTS }: { results?: ProjectSwitcherProjectRow[] }) {
+function Harness({
+  results = RESULTS,
+  query = "",
+}: {
+  results?: ProjectSwitcherProjectRow[];
+  query?: string;
+}) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const step = (delta: number) =>
     setSelectedIndex((from) =>
@@ -274,7 +309,7 @@ function Harness({ results = RESULTS }: { results?: ProjectSwitcherProjectRow[] 
     <ProjectSwitcherPalette
       isOpen
       mode="modal"
-      query=""
+      query={query}
       results={results}
       selectedIndex={selectedIndex}
       onQueryChange={vi.fn()}
@@ -304,11 +339,11 @@ function selectedOptions(): string[] {
 describe("ProjectSwitcherPalette other-host rows", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hostOptions.value = OPTIONS;
+    hostOptions.value = band(OPTIONS);
   });
 
   afterEach(() => {
-    hostOptions.value = [];
+    hostOptions.value = band([]);
   });
 
   it("walks from the last result into other hosts' projects and wraps back to the first", () => {
@@ -317,12 +352,14 @@ describe("ProjectSwitcherPalette other-host rows", () => {
     press("ArrowDown");
     expect(active()).toBe("project-option-p2");
     press("ArrowDown");
-    expect(active()).toBe("project-other-host-option-0");
+    expect(active()).toBe(id(API));
     // Exactly one row reads as selected: the local result gives up the highlight.
-    expect(selectedOptions()).toEqual(["project-other-host-option-0"]);
-    expect(document.getElementById(active()!)?.getAttribute("aria-label")).toBe("api on studio-01");
+    expect(selectedOptions()).toEqual([id(API)]);
+    expect(document.getElementById(active()!)?.getAttribute("aria-label")).toBe(
+      "api on studio-01, /srv/api"
+    );
     press("ArrowDown");
-    expect(active()).toBe("project-other-host-option-1");
+    expect(active()).toBe(id(WEB));
     press("ArrowDown");
     expect(active()).toBe("project-option-p1");
   });
@@ -330,9 +367,9 @@ describe("ProjectSwitcherPalette other-host rows", () => {
   it("wraps upward from the first result into the last other-host row and back", () => {
     render(<Harness />);
     press("ArrowUp");
-    expect(active()).toBe("project-other-host-option-1");
+    expect(active()).toBe(id(WEB));
     press("ArrowUp");
-    expect(active()).toBe("project-other-host-option-0");
+    expect(active()).toBe(id(API));
     press("ArrowUp");
     expect(active()).toBe("project-option-p2");
   });
@@ -354,11 +391,87 @@ describe("ProjectSwitcherPalette other-host rows", () => {
     press("ArrowUp");
     press("Enter");
     expect(onClose).toHaveBeenCalledTimes(1);
-    expect(openOtherHostProject).toHaveBeenCalledWith(OPTIONS[1], false);
+    expect(activateOtherHostOption).toHaveBeenCalledWith(WEB, false);
     expect(onSelect).not.toHaveBeenCalled();
 
     press("Enter", { metaKey: true });
-    expect(openOtherHostProject).toHaveBeenLastCalledWith(OPTIONS[1], true);
+    expect(activateOtherHostOption).toHaveBeenLastCalledWith(WEB, true);
+  });
+
+  it("keeps the cursor on its project when another host's rows arrive above it", () => {
+    const { rerender } = render(<Harness />);
+    press("ArrowUp");
+    expect(active()).toBe(id(WEB));
+
+    // A host connects mid-search and its rows land ahead of the highlighted one.
+    const early = projectOption("studio-00", "s0-app", "app");
+    hostOptions.value = band([early, API, WEB]);
+    rerender(<Harness />);
+    expect(active()).toBe(id(WEB));
+    expect(selectedOptions()).toEqual([id(WEB)]);
+    press("Enter");
+    expect(activateOtherHostOption).toHaveBeenCalledWith(WEB, false);
+  });
+
+  it("gives the cursor back to the results when its row goes away, rather than its neighbour", () => {
+    const { rerender } = render(<Harness />);
+    press("ArrowUp");
+    expect(active()).toBe(id(WEB));
+
+    hostOptions.value = band([API]);
+    rerender(<Harness />);
+    expect(active()).toBe("project-option-p1");
+    press("Enter");
+    expect(activateOtherHostOption).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalled();
+  });
+
+  it("tells the same project id on two hosts apart", () => {
+    const twin = {
+      ...WEB,
+      key: "project:studio-03:s2-web",
+      hostId: "studio-03",
+      hostName: "studio-03",
+    };
+    hostOptions.value = band([API, WEB, twin]);
+    render(<Harness />);
+    press("ArrowUp");
+    expect(active()).toBe(id(twin));
+    press("Enter");
+    expect(activateOtherHostOption).toHaveBeenCalledWith(twin, false);
+  });
+
+  it("reaches the band's ends with Home, End and the page keys", () => {
+    render(<Harness />);
+    press("End");
+    expect(active()).toBe(id(WEB));
+    press("Home");
+    expect(active()).toBe("project-option-p1");
+    press("PageDown");
+    expect(active()).toBe(id(WEB));
+  });
+
+  it("says in the footer what Enter does on an other-host row", () => {
+    render(<Harness />);
+    press("ArrowUp");
+    expect(screen.getByTestId("palette-footer").textContent).toContain("Open on studio-02");
+  });
+
+  it("keeps the palette open for Retry", () => {
+    const retry: OtherHostOption = {
+      key: "retry:studio-02:",
+      kind: "retry",
+      hostId: "studio-02",
+      hostName: "studio-02",
+      platform: "linux",
+    };
+    hostOptions.value = band([API, retry]);
+    render(<Harness />);
+    press("ArrowUp");
+    expect(screen.getByTestId("palette-footer").textContent).toContain("Retry");
+    press("Enter");
+    expect(activateOtherHostOption).toHaveBeenCalledWith(retry, false);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("never closes a local project with Cmd+Backspace from an other-host row", () => {
@@ -368,18 +481,64 @@ describe("ProjectSwitcherPalette other-host rows", () => {
     expect(onCloseProject).not.toHaveBeenCalled();
   });
 
-  it("reaches other hosts' projects when nothing local matches", () => {
+  it("highlights another host's first project when nothing local matches, so Enter opens it", () => {
     render(<Harness results={[]} />);
-    expect(active()).toBeNull();
+    expect(active()).toBe(id(API));
+    press("Enter");
+    expect(activateOtherHostOption).toHaveBeenCalledWith(API, false);
     press("ArrowDown");
-    expect(active()).toBe("project-other-host-option-0");
+    expect(active()).toBe(id(WEB));
     press("ArrowDown");
-    press("ArrowDown");
-    expect(active()).toBe("project-other-host-option-0");
+    expect(active()).toBe(id(API));
+  });
+
+  it("keeps the automatically highlighted row when another host's rows arrive above it", () => {
+    hostOptions.value = band([WEB]);
+    const { rerender } = render(<Harness results={[]} />);
+    expect(active()).toBe(id(WEB));
+
+    hostOptions.value = band([API, WEB]);
+    rerender(<Harness results={[]} />);
+    expect(active()).toBe(id(WEB));
+    press("Enter");
+    expect(activateOtherHostOption).toHaveBeenCalledWith(WEB, false);
+  });
+
+  it("hands the automatic highlight back once local results arrive for the same query", () => {
+    const { rerender } = render(<Harness results={[]} />);
+    expect(active()).toBe(id(API));
+    rerender(<Harness results={RESULTS} />);
+    expect(active()).toBe("project-option-p1");
+  });
+
+  it("forgets a band pick made under an earlier query once the query is cleared", () => {
+    const { rerender } = render(<Harness />);
+    press("ArrowUp");
+    expect(active()).toBe(id(WEB));
+    hostOptions.value = band([]);
+    rerender(<Harness query="project" />);
+    hostOptions.value = band(OPTIONS);
+    rerender(<Harness />);
+    expect(active()).toBe("project-option-p1");
+  });
+
+  it("keeps an automatic pick the pointer moved onto once local results arrive", () => {
+    const { rerender } = render(<Harness results={[]} />);
+    expect(active()).toBe(id(API));
+    fireEvent.pointerMove(document.getElementById(id(API))!);
+    rerender(<Harness results={RESULTS} />);
+    expect(active()).toBe(id(API));
+  });
+
+  it("names this host beside a local project another host also has", () => {
+    hostOptions.value = band(OPTIONS, ["project 1"]);
+    render(<Harness />);
+    expect(document.getElementById("project-option-p1")?.textContent).toContain("This Mac");
+    expect(document.getElementById("project-option-p2")?.textContent).not.toContain("This Mac");
   });
 
   it("changes nothing for someone with no remote host", () => {
-    hostOptions.value = [];
+    hostOptions.value = band([]);
     render(<Harness />);
     expect(screen.getByTestId("palette-input").getAttribute("aria-controls")).toBe("project-list");
     press("ArrowDown");

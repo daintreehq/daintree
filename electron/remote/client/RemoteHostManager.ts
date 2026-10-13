@@ -128,6 +128,9 @@ function notifyEndpointOpened(
  * local view that has called through it), and routing of the host's events
  * back to those views.
  */
+/** How long a host gets to list its projects before the listing counts as failed. */
+export const HOST_PROJECT_LIST_TIMEOUT_MS = 8_000;
+
 export class HostConnection {
   readonly hostId: HostId;
   private readonly link: LinkClient;
@@ -452,7 +455,11 @@ export class HostConnection {
         userMessage: "Couldn't reach this host. Check that it is on and try again.",
       });
     }
-    const answer = await session.call(LinkMethod.LIST_PROJECTS, null);
+    // Bounded well under the link's 60 s default: a listing feeds a palette the
+    // user is waiting on, and a wedged host should read as failed, not loading.
+    const answer = await session.call(LinkMethod.LIST_PROJECTS, null, {
+      timeoutMs: HOST_PROJECT_LIST_TIMEOUT_MS,
+    });
     const parsed = HostProjectListSchema.safeParse(answer);
     if (!parsed.success) {
       throw new AppError({

@@ -82,7 +82,7 @@ function remoteHostsInUse(): boolean {
 async function listLocalProjects(): Promise<HostProjectSummary[]> {
   const { projectStore } = await import("../../services/ProjectStore.js");
   return projectStore
-    .getAllProjects()
+    .getProjectSummaries()
     .map(({ id, name, path, emoji }) => ({ id, name, path, ...(emoji ? { emoji } : {}) }));
 }
 

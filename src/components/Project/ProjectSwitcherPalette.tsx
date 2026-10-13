@@ -118,9 +118,12 @@ import { OpenOnHostSubmenu } from "@/components/Hosts/OpenOnHostSubmenu";
 import {
   OTHER_HOSTS_LIST_ID,
   OtherHostsSection,
-  openOtherHostProject,
+  useCurrentHostName,
+  activateOtherHostOption,
+  otherHostOptionCloses,
   otherHostOptionId,
   useOtherHostProjectOptions,
+  type OtherHostOption,
 } from "@/components/Hosts/OtherHostsSection";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 
@@ -262,6 +265,8 @@ interface ProjectListItemProps {
   nowMs: number;
   /** False only under the "Current project" band header, which already says it. */
   showCurrentLabel: boolean;
+  /** Set when another host lists a project of the same name: which host this one is on. */
+  hostName?: string;
   onSelect: (row: ProjectSwitcherProjectRow, source?: ProjectSwitchSelectSource) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -732,11 +737,32 @@ export function getProjectSwitcherEnterHint(
   return { keys: "↵", label: "Switch" };
 }
 
+/**
+ * The footer's Enter hint for a row of the other-hosts band: Enter opens the
+ * project on its host (connecting first when it isn't), ⌘↵ in a new window;
+ * Retry asks the host again. Exported for its own test.
+ */
+export function getOtherHostEnterHint(
+  option: OtherHostOption,
+  modifierHeld: boolean,
+  mac: boolean = isMac()
+): { keys: string; label: string } {
+  if (option.kind === "retry") return { keys: "↵", label: "Retry" };
+  if (modifierHeld) {
+    return { keys: `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`, label: "New window" };
+  }
+  return {
+    keys: "↵",
+    label: option.kind === "connect" ? "Connect" : `Open on ${option.hostName}`,
+  };
+}
+
 function ProjectListItem({
   project,
   isSelected,
   nowMs,
   showCurrentLabel,
+  hostName,
   onSelect,
   onStopProject,
   onCloseProject,
@@ -832,6 +858,13 @@ function ProjectListItem({
           >
             {project.name}
           </span>
+          {hostName && (
+            <span className="ml-1.5 shrink-0 text-xs text-text-secondary">
+              <span className="sr-only">, on </span>
+              <span aria-hidden="true">· </span>
+              {hostName}
+            </span>
+          )}
           {/*
            * Said in the name, not just in `aria-current`. In browse the band
            * header carries it, but search drops the bands entirely — and even
@@ -1372,6 +1405,11 @@ interface ProjectListContentProps {
    * this list, so a "No workspaces match" here would sit above real results.
    */
   hasOtherHostResults: boolean;
+  /**
+   * This window's host, said beside a project whose name another host also
+   * lists, so the two copies can be told apart. Null when nothing collides.
+   */
+  sharedNameHost?: { hostName: string; names: ReadonlySet<string> } | null;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
@@ -1403,6 +1441,7 @@ function ProjectListContent({
   canCreateScratch,
   scratchesStandAlone,
   hasOtherHostResults,
+  sharedNameHost,
   onStopProject,
   onCloseProject,
   onSleepProject,
@@ -1535,6 +1574,11 @@ function ProjectListContent({
             // project that became active mid-session can sit under another
             // header; only the "Current project" band makes the label redundant.
             showCurrentLabel={!hasBands || row.section !== "current"}
+            hostName={
+              sharedNameHost?.names.has(row.name.toLocaleLowerCase())
+                ? sharedNameHost.hostName
+                : undefined
+            }
             onSelect={onSelect}
             onStopProject={onStopProject}
             onCloseProject={onCloseProject}
@@ -2194,9 +2238,12 @@ function ScratchSection({
  */
 function ProjectSwitcherFooter({
   selectedRow,
+  hostOption,
   canOpenWindow,
   onOpenPilot,
 }: {
+  /** The other-hosts row under the cursor; it takes the hint over `selectedRow`. */
+  hostOption?: OtherHostOption;
   /**
    * Undefined when nothing is highlighted — an empty list, or every band folded
    * (#11943). Enter no-ops there, so naming it would be the footer promising an
@@ -2214,7 +2261,9 @@ function ProjectSwitcherFooter({
 
   const hasSelection = selectedRow !== undefined;
   const isScratchSelected = selectedRow?.kind === "scratch";
-  const hint = getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
+  const hint = hostOption
+    ? getOtherHostEnterHint(hostOption, modifiers.meta)
+    : getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
 
   return (
     // Container-queried rather than fixed: the same footer serves the anchored
@@ -2460,23 +2509,54 @@ function ProjectPaletteInner({
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
   const fleetSummary = fleetLiveness ? formatFleetLiveness(fleetLiveness) : null;
 
-  // Other hosts' projects are the tail of the arrow-key order: ArrowDown off the
+  // Other hosts' rows are the tail of the arrow-key order: ArrowDown off the
   // last result enters them, and moving past either end wraps back into
   // `results`, the same wrap the hook applies inside them. The hook owns the
   // selection within `results`; this cursor exists only while it sits in the
-  // band, and only for the query it was set under.
-  const hostOptions = useOtherHostProjectOptions(query);
-  const [hostCursorState, setHostCursorState] = useState<{ query: string; index: number } | null>(
-    null
-  );
-  const hostCursor =
+  // band, and only for the query it was set under. It holds a row's key, never
+  // its position: hosts connect and drop while the palette is open, and a
+  // position would hand Enter whichever row slid into it (#13290).
+  const {
+    groups: hostGroups,
+    options: hostOptions,
+    remoteNames,
+  } = useOtherHostProjectOptions(query);
+  const [hostCursorState, setHostCursorState] = useState<{
+    query: string;
+    key: string;
+    /** Placed for an empty result list rather than moved to; local results take it back. */
+    auto?: boolean;
+  } | null>(null);
+  const claimedHostIndex =
     hostCursorState !== null &&
     hostCursorState.query === query &&
-    hostCursorState.index < hostOptions.length
-      ? hostCursorState.index
-      : null;
-  const setHostCursor = (index: number | null) =>
-    setHostCursorState(index === null ? null : { query, index });
+    !(hostCursorState.auto && results.length > 0)
+      ? hostOptions.findIndex((option) => option.key === hostCursorState.key)
+      : -1;
+  // Nothing here matched: the first project another host offers is what Enter
+  // opens, the way the first result is when there are results.
+  const defaultHostIndex =
+    results.length === 0 ? hostOptions.findIndex((option) => option.kind === "project") : -1;
+  const hostIndex = claimedHostIndex >= 0 ? claimedHostIndex : defaultHostIndex;
+  const hostCursor = hostIndex >= 0 ? hostIndex : null;
+  const activeHostOption: OtherHostOption | undefined =
+    hostCursor === null ? undefined : hostOptions[hostCursor];
+  // The automatic pick is held by key like a chosen one, so a host answering
+  // later, with rows drawn above it, can't move what Enter opens.
+  const defaultHostKey =
+    claimedHostIndex < 0 && defaultHostIndex >= 0 ? hostOptions[defaultHostIndex]!.key : null;
+  // A claim belongs to the query it was made under; left in place it would
+  // come back when the query is cleared, pointing Enter at a row nobody chose.
+  useEffect(() => {
+    setHostCursorState((prev) => (prev !== null && prev.query !== query ? null : prev));
+  }, [query]);
+  useEffect(() => {
+    if (defaultHostKey !== null) setHostCursorState({ query, key: defaultHostKey, auto: true });
+  }, [defaultHostKey, query]);
+  const setHostCursor = (index: number | null) => {
+    const option = index === null ? undefined : hostOptions[index];
+    setHostCursorState(option ? { query, key: option.key } : null);
+  };
   const resultsCursor = hostCursor === null ? selectedIndex : -1;
 
   // The hook only steps relative to its own selection (its updater composes
@@ -2490,10 +2570,25 @@ function ProjectPaletteInner({
     else for (let i = 0; i < backward; i += 1) onSelectPrevious();
   };
 
+  const activeHostOptionId = activeHostOption ? otherHostOptionId(activeHostOption) : null;
   useEffect(() => {
-    if (hostCursor === null) return;
-    document.getElementById(otherHostOptionId(hostCursor))?.scrollIntoView?.({ block: "nearest" });
-  }, [hostCursor]);
+    if (activeHostOptionId === null) return;
+    document.getElementById(activeHostOptionId)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeHostOptionId]);
+
+  /**
+   * Puts the cursor on a position in the whole arrow-key order: `results`,
+   * then the other hosts' rows.
+   */
+  const moveCursorTo = (position: number) => {
+    if (position >= results.length) {
+      setHostCursor(position - results.length);
+      return;
+    }
+    setHostCursor(null);
+    if (onHoverRow) onHoverRow(results[position]!.id);
+    else moveResultsSelectionTo(position);
+  };
 
   useEffect(() => {
     if (hostCursor !== null) return;
@@ -2581,33 +2676,37 @@ function ProjectPaletteInner({
           onSelectNext();
         }
         break;
-      // First and last, as in every other palette. Shift+Home selects the
-      // query instead, and an empty list leaves the keys to the caret. Both
-      // land in `results`, leaving the other-hosts band if the cursor was there.
+      // First and last, as in every other palette, counting the other hosts'
+      // rows as the tail of the list. Shift+Home selects the query instead, and
+      // an empty list leaves the keys to the caret.
       case "Home":
-      case "End":
-        if (keyBelongsToField(e) || results.length === 0 || !onHoverRow) break;
+      case "End": {
+        const total = results.length + hostOptions.length;
+        if (keyBelongsToField(e) || total === 0) break;
         e.preventDefault();
         e.stopPropagation();
-        setHostCursor(null);
-        onHoverRow(results[e.key === "Home" ? 0 : results.length - 1]!.id);
+        moveCursorTo(e.key === "Home" ? 0 : total - 1);
         break;
+      }
       // A page of rows rather than native scrolling, which would walk the
       // highlighted row off screen and leave Enter committing something the
       // user can no longer see.
       case "PageUp":
       case "PageDown": {
-        if (results.length === 0 || !onHoverRow) break;
+        const total = results.length + hostOptions.length;
+        if (total === 0) break;
         e.preventDefault();
         e.stopPropagation();
-        setHostCursor(null);
         const step = pageStep();
-        const from = selectedIndex >= 0 ? selectedIndex : 0;
-        const target =
-          e.key === "PageDown"
-            ? Math.min(results.length - 1, from + step)
-            : Math.max(0, from - step);
-        onHoverRow(results[target]!.id);
+        const from =
+          hostCursor !== null
+            ? results.length + hostCursor
+            : selectedIndex >= 0
+              ? selectedIndex
+              : 0;
+        moveCursorTo(
+          e.key === "PageDown" ? Math.min(total - 1, from + step) : Math.max(0, from - step)
+        );
         break;
       }
       // The keyboard's right-click. Without it pin, sleep, copy path and move
@@ -2626,10 +2725,10 @@ function ProjectPaletteInner({
       case "Enter":
         e.preventDefault();
         e.stopPropagation();
-        if (hostCursor !== null) {
+        if (activeHostOption) {
           // Same modifier as a click on the row: a new window on ⌘/Ctrl.
-          onClose();
-          openOtherHostProject(hostOptions[hostCursor]!, isNewWindowClick(e));
+          if (otherHostOptionCloses(activeHostOption)) onClose();
+          activateOtherHostOption(activeHostOption, isNewWindowClick(e));
         } else if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
           const selected = results[selectedIndex]!;
           // Anything ⌘↵ can't open a window for falls through to the plain
@@ -2674,8 +2773,8 @@ function ProjectPaletteInner({
 
   const activeResult = hostCursor === null ? results[selectedIndex] : undefined;
   const activeDescendant =
-    hostCursor !== null
-      ? otherHostOptionId(hostCursor)
+    activeHostOptionId !== null
+      ? activeHostOptionId
       : activeResult
         ? `project-option-${activeResult.id}`
         : undefined;
@@ -2698,7 +2797,17 @@ function ProjectPaletteInner({
   // Doherty-gated so a fast typist hears one count, read when the timer fires
   // so it is the list that settled. Zero stands down — the empty state below
   // announces its own "No workspaces match …", and two owners would say it twice.
-  const resultCount = results.length + hostOptions.length;
+  const currentHostName = useCurrentHostName();
+  const remoteNamesKey = [...remoteNames].sort().join("\n");
+  const sharedNameHost = useMemo(
+    () =>
+      remoteNamesKey === ""
+        ? null
+        : { hostName: currentHostName, names: new Set(remoteNamesKey.split("\n")) },
+    [remoteNamesKey, currentHostName]
+  );
+  const hostProjectCount = hostOptions.filter((option) => option.kind === "project").length;
+  const resultCount = results.length + hostProjectCount;
   const resultCountRef = useRef(resultCount);
   useEffect(() => {
     resultCountRef.current = resultCount;
@@ -2803,7 +2912,8 @@ function ProjectPaletteInner({
           canAddProject={Boolean(onAddProject)}
           canCreateScratch={Boolean(onCreateScratch)}
           scratchesStandAlone={scratchesStandAlone}
-          hasOtherHostResults={hostOptions.length > 0}
+          hasOtherHostResults={hostProjectCount > 0}
+          sharedNameHost={sharedNameHost}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onSleepProject={onSleepProject}
@@ -2850,10 +2960,17 @@ function ProjectPaletteInner({
           </>
         )}
         <OtherHostsSection
-          options={hostOptions}
-          activeIndex={hostCursor}
+          groups={hostGroups}
+          activeKey={activeHostOption?.key ?? null}
           onChosen={onClose}
-          onHoverIndex={setHostCursor}
+          // Also turns an automatic pick under the pointer into a chosen one.
+          onHoverKey={(key) =>
+            setHostCursorState((prev) =>
+              prev !== null && prev.key === key && prev.query === query && !prev.auto
+                ? prev
+                : { query, key }
+            )
+          }
         />
       </AppPaletteDialog.Body>
 
@@ -2902,6 +3019,7 @@ function ProjectPaletteInner({
       <AppPaletteDialog.Footer>
         <ProjectSwitcherFooter
           selectedRow={activeResult}
+          hostOption={activeHostOption}
           canOpenWindow={onSelectNewWindow !== undefined}
           onOpenPilot={() => {
             onClose();

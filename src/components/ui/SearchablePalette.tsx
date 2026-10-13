@@ -16,6 +16,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { pluralize } from "@/lib/pluralize";
+import { isMac } from "@/lib/platform";
 
 const noopHoverIndex = () => {};
 
@@ -44,7 +45,11 @@ export interface SearchablePaletteProps<T> {
   onQueryChange: (query: string) => void;
   onSelectPrevious: () => void;
   onSelectNext: () => void;
-  onConfirm: () => void;
+  /**
+   * Enter on the selected row. `newWindow` is the platform's primary modifier
+   * (⌘ on macOS, Ctrl elsewhere), for palettes whose rows can open elsewhere.
+   */
+  onConfirm: (newWindow: boolean) => void;
   onClose: () => void;
 
   /** Unique key for each item */
@@ -433,7 +438,7 @@ export function SearchablePalette<T>({
         case "Enter":
           e.preventDefault();
           e.stopPropagation();
-          onConfirm();
+          onConfirm(isMac() ? e.metaKey : e.ctrlKey);
           break;
       }
     },

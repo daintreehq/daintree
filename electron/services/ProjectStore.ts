@@ -1268,6 +1268,65 @@ export class ProjectStore {
       .all();
   }
 
+  /**
+   * Every project as another window lists it, most used first (#13290).
+   *
+   * Not `getAllProjects()`, for the reason `getAllProjectIdentities()` gives:
+   * its status repair demotes the `active` a remote switch just wrote, so every
+   * listing from another machine would undo that switch's bookkeeping.
+   */
+  getProjectSummaries(): Array<{ id: string; name: string; path: string; emoji: string }> {
+    const rows = getSharedDb()
+      .select({
+        id: projectsTable.id,
+        name: projectsTable.name,
+        path: projectsTable.path,
+        emoji: projectsTable.emoji,
+        frecencyScore: projectsTable.frecencyScore,
+        lastAccessedAt: projectsTable.lastAccessedAt,
+        lastOpened: projectsTable.lastOpened,
+      })
+      .from(projectsTable)
+      .all();
+    const now = Date.now();
+    return rows
+      .map((row) => ({
+        row,
+        score: decayFrecencyScore(row.frecencyScore ?? 0, row.lastAccessedAt ?? 0, now),
+      }))
+      .sort((a, b) => b.score - a.score || (b.row.lastOpened ?? 0) - (a.row.lastOpened ?? 0))
+      .map(({ row }) => ({ id: row.id, name: row.name, path: row.path, emoji: row.emoji }));
+  }
+
+  /**
+   * A project opened here from another machine's window: status and the same
+   * frecency bump a local switch gives it, so "Most used" counts remote use.
+   * The global current-project pointer names this machine's own window and is
+   * left alone.
+   */
+  recordRemoteActivation(projectId: string): Project {
+    const project = this.getProjectById(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    if (getWritesSuppressed()) {
+      return this.updateProject(projectId, { status: "active", autoParkedAt: null });
+    }
+    const now = Date.now();
+    // Bumped from the pre-update lastOpened, which is the debounce clock.
+    const frecencyScore = bumpFrecencyScore(
+      project.frecencyScore ?? FRECENCY_COLD_START,
+      project.lastAccessedAt ?? 0,
+      project.lastOpened ?? 0,
+      now
+    );
+    return this.updateProject(projectId, {
+      status: "active",
+      autoParkedAt: null,
+      lastOpened: now,
+      lastAccessedAt: now,
+      frecencyScore,
+    });
+  }
+
   getAllProjects(): Project[] {
     const db = getSharedDb();
     const rows = db

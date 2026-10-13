@@ -127,7 +127,10 @@ beforeEach(() => {
   consumeDeferredPaletteFocusRestore();
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  delete window.__DAINTREE_HOST_ID__;
+});
 
 function openPalette() {
   render(<HostSwitcherPalette />);
@@ -245,18 +248,111 @@ describe("HostSwitcherPalette", () => {
     expect(switchWindowHost).not.toHaveBeenCalled();
   });
 
-  it("switches to the host chosen with the arrow keys and Enter", async () => {
+  it("opens on the first host this window isn't on, so Enter goes there", async () => {
     hostList.value = {
       hosts: [host("h1", "studio-01", { status: "disconnected" })],
       localSummary: null,
     };
     openPalette();
     const search = screen.getByRole("combobox");
-    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(row("h1").getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("to switch")).toBeTruthy();
     fireEvent.keyDown(search, { key: "Enter" });
     await waitFor(() =>
       expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: false })
     );
+  });
+
+  it("opens on this machine from a remote window, and switches with the arrow keys", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "h1" };
+    hostList.value = {
+      hosts: [host("h1", "studio-01", CONNECTED), host("h2", "studio-02", CONNECTED)],
+      localSummary: null,
+    };
+    openPalette();
+    expect(row("local").getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h2", newWindow: false })
+    );
+  });
+
+  it("moves to another host once the host list arrives after opening", () => {
+    const { rerender } = render(<HostSwitcherPalette />);
+    act(() => usePaletteStore.getState().openPalette("host-switcher"));
+    expect(row("local").getAttribute("aria-selected")).toBe("true");
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    rerender(<HostSwitcherPalette />);
+    expect(row("h1").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("leaves the cursor where the user put it when hosts arrive after opening", () => {
+    hostList.value = { hosts: [], localSummary: null };
+    const { rerender } = render(<HostSwitcherPalette />);
+    act(() => usePaletteStore.getState().openPalette("host-switcher"));
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    rerender(<HostSwitcherPalette />);
+    expect(row("local").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("starts each opening on its first other host, wherever the last one ended", () => {
+    hostList.value = {
+      hosts: [
+        host("h1", "studio-01", { status: "disconnected" }),
+        host("h2", "studio-02", { status: "disconnected" }),
+      ],
+      localSummary: null,
+    };
+    openPalette();
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    expect(row("h2").getAttribute("aria-selected")).toBe("true");
+    // Another palette takes over without this one's close running.
+    act(() => usePaletteStore.getState().openPalette("quick-switcher"));
+    act(() => usePaletteStore.getState().openPalette("host-switcher"));
+    expect(row("h1").getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("opens the selected host in a new window on Cmd+Enter", async () => {
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    openPalette();
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter", metaKey: true });
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: true })
+    );
+  });
+
+  it("reconnects the host this window is on when its link is down", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "h1" };
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    openPalette();
+    fireEvent.click(row("h1"));
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: false })
+    );
+  });
+
+  it("says a host's link state once", () => {
+    hostList.value = {
+      hosts: [host("h1", "studio-01", { status: "disconnected" })],
+      localSummary: null,
+    };
+    openPalette();
+    expect((row("h1").textContent ?? "").match(/Not connected/g)).toHaveLength(1);
   });
 
   // A switch that lands hands the keyboard on (the host's view, or its project

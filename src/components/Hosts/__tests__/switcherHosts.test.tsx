@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { HostConnectionState, HostListEntry } from "@shared/types/remoteHosts";
+import type { RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 
 const { supported, dispatch } = vi.hoisted(() => ({
   supported: { value: true },
@@ -88,6 +89,7 @@ const locate = vi.fn<
   >
 >();
 const switchWindowHost = vi.fn(() => Promise.resolve());
+let emitHostsEvent: (event: RemoteHostsEvent) => void = () => {};
 const loader = vi.fn((hostId: string) => Promise.resolve(PROJECTS[hostId] ?? []));
 
 beforeEach(() => {
@@ -104,19 +106,36 @@ beforeEach(() => {
     configurable: true,
     writable: true,
     value: {
-      remoteHosts: { list, switchWindowHost, onEvent: () => () => {} },
+      remoteHosts: {
+        list,
+        switchWindowHost,
+        onEvent: (listener: (event: RemoteHostsEvent) => void) => {
+          emitHostsEvent = listener;
+          return () => {};
+        },
+      },
       hostSwitch: { locate },
     },
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // Radix's focus scope hands focus back on a zero-delay timer after the
+  // context menu unmounts; let it run while jsdom is still here.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 function Band({ query, onChosen }: { query: string; onChosen: () => void }) {
-  const options = useOtherHostProjectOptions(query);
-  return <OtherHostsSection options={options} activeIndex={null} onChosen={onChosen} />;
+  const { groups } = useOtherHostProjectOptions(query);
+  return <OtherHostsSection groups={groups} activeKey={null} onChosen={onChosen} />;
+}
+
+/** Each host group's accessible name: its visible header. */
+function groupNames(band: HTMLElement): string[] {
+  return [...band.querySelectorAll('[role="group"]')].map(
+    (group) => document.getElementById(group.getAttribute("aria-labelledby")!)?.textContent ?? ""
+  );
 }
 
 async function settle() {
@@ -142,7 +161,7 @@ describe("Other hosts band", () => {
     expect(container.textContent).toBe("");
   });
 
-  it("groups connected hosts' projects by host and skips hosts that aren't connected", async () => {
+  it("groups hosts' projects under visible headers and never dials a host to list it", async () => {
     list.mockResolvedValue([
       host("studio-02"),
       host("studio-01"),
@@ -151,12 +170,112 @@ describe("Other hosts band", () => {
     setHostProjectsLoader(loader);
     render(<Band query="" onChosen={() => {}} />);
     const band = await screen.findByTestId("project-switcher-other-hosts");
-    const groups = [...band.querySelectorAll('[role="group"]')].map((g) =>
-      g.getAttribute("aria-label")
-    );
-    // This machine lists nothing here (the loader knows no "local"), so it drops out.
-    expect(groups).toEqual(["studio-01", "studio-02"]);
+    await screen.findByRole("option", { name: /^web on studio-02/ });
+    // This machine lists nothing here (the loader knows no "local"), so it drops
+    // out; a host never listed this run still shows, offering to connect.
+    expect(groupNames(band)).toEqual(["studio-01", "studio-02", "studio-03· Not connected"]);
     expect(loader.mock.calls.map(([id]) => id)).not.toContain("studio-03");
+    // The header names its group, so it can't be hidden from the reader it names it for.
+    for (const group of band.querySelectorAll('[role="group"]')) {
+      const header = document.getElementById(group.getAttribute("aria-labelledby")!)!;
+      expect(header.closest("[aria-hidden='true']")).toBeNull();
+    }
+  });
+
+  it("lists hosts once the loader arrives after the band mounted", async () => {
+    list.mockResolvedValue([host("studio-01")]);
+    render(<Band query="" onChosen={() => {}} />);
+    await settle();
+    expect(screen.queryByRole("option", { name: /^api on studio-01/ })).toBeNull();
+    act(() => setHostProjectsLoader(loader));
+    expect(await screen.findByRole("option", { name: /^api on studio-01/ })).toBeTruthy();
+  });
+
+  it("connects a host that isn't connected when its row is picked", async () => {
+    list.mockResolvedValue([host("studio-03", { status: "disconnected" } as HostConnectionState)]);
+    setHostProjectsLoader(loader);
+    const onChosen = vi.fn();
+    render(<Band query="" onChosen={onChosen} />);
+    fireEvent.click(await screen.findByRole("option", { name: "Connect to studio-03" }));
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "studio-03", newWindow: false })
+    );
+    expect(onChosen).toHaveBeenCalled();
+  });
+
+  it("shows each host's rows as it answers, whatever another host is doing", async () => {
+    list.mockResolvedValue([host("studio-01"), host("studio-02")]);
+    setHostProjectsLoader((hostId) =>
+      hostId === "studio-02" ? new Promise(() => {}) : loader(hostId)
+    );
+    render(<Band query="" onChosen={() => {}} />);
+    expect(await screen.findByRole("option", { name: /^api on studio-01/ })).toBeTruthy();
+    expect(screen.queryByText(/studio-02/)).toBeNull();
+  });
+
+  it("says a listing failed and offers Retry rather than showing no projects", async () => {
+    list.mockResolvedValue([host("studio-01")]);
+    let fail = true;
+    setHostProjectsLoader((hostId) =>
+      fail ? Promise.reject(new Error("timed out")) : loader(hostId)
+    );
+    const onChosen = vi.fn();
+    render(<Band query="" onChosen={onChosen} />);
+    const retry = await screen.findByRole("option", {
+      name: "Retry listing projects on studio-01",
+    });
+    expect(screen.getByText(/Couldn't list projects/)).toBeTruthy();
+
+    fail = false;
+    fireEvent.click(retry);
+    expect(await screen.findByRole("option", { name: /^api on studio-01/ })).toBeTruthy();
+    expect(onChosen).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Couldn't list projects/)).toBeNull();
+  });
+
+  it("keeps a dropped host's last list, marked not connected, and connects to open a row", async () => {
+    list.mockResolvedValue([host("studio-01")]);
+    setHostProjectsLoader(loader);
+    render(<Band query="" onChosen={() => {}} />);
+    await screen.findByRole("option", { name: /^api on studio-01/ });
+
+    act(() => {
+      emitHostsEvent({
+        type: "connection-changed",
+        hostId: "studio-01",
+        connection: { status: "disconnected" },
+      } as RemoteHostsEvent);
+    });
+    const row = await screen.findByRole("option", { name: /^api on studio-01.*Not connected/ });
+    expect(screen.getByText(/Not connected · listed/)).toBeTruthy();
+
+    fireEvent.click(row);
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "s1-api",
+      })
+    );
+  });
+
+  it("matches a query naming the project and the host together", async () => {
+    list.mockResolvedValue([host("studio-02"), host("studio-03")]);
+    setHostProjectsLoader(loader);
+    render(<Band query="web 03" onChosen={() => {}} />);
+    expect(await screen.findByRole("option", { name: /^web on studio-03/ })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /^web on studio-02/ })).toBeNull();
+  });
+
+  it("names the host and the folder on every row", async () => {
+    list.mockResolvedValue([host("studio-01")]);
+    setHostProjectsLoader(loader);
+    render(<Band query="" onChosen={() => {}} />);
+    const row = await screen.findByRole("option", {
+      name: /^api on studio-01, \/home\/greg\/api$/,
+    });
+    expect(row.textContent).toContain("studio-01");
+    expect(row.textContent).toContain("/home/greg/api");
   });
 
   it("switches host and project together, in a new window on Cmd-click", async () => {
@@ -164,7 +283,7 @@ describe("Other hosts band", () => {
     setHostProjectsLoader(loader);
     const onChosen = vi.fn();
     render(<Band query="" onChosen={onChosen} />);
-    fireEvent.click(await screen.findByRole("option", { name: "api on studio-01" }));
+    fireEvent.click(await screen.findByRole("option", { name: /^api on studio-01/ }));
     await waitFor(() =>
       expect(switchWindowHost).toHaveBeenCalledWith({
         hostId: "studio-01",
@@ -174,7 +293,7 @@ describe("Other hosts band", () => {
     );
     expect(onChosen).toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("option", { name: "daintree on studio-01" }), {
+    fireEvent.click(screen.getByRole("option", { name: /^daintree on studio-01/ }), {
       metaKey: true,
     });
     await waitFor(() =>
@@ -190,9 +309,9 @@ describe("Other hosts band", () => {
     list.mockResolvedValue([host("studio-01"), host("studio-02")]);
     setHostProjectsLoader(loader);
     render(<Band query="dain" onChosen={() => {}} />);
-    await screen.findByRole("option", { name: "daintree on studio-01" });
-    expect(screen.queryByRole("option", { name: "api on studio-01" })).toBeNull();
-    expect(screen.queryByRole("group", { name: "studio-02" })).toBeNull();
+    await screen.findByRole("option", { name: /^daintree on studio-01/ });
+    expect(screen.queryByRole("option", { name: /^api on studio-01/ })).toBeNull();
+    expect(screen.queryByText("studio-02")).toBeNull();
   });
 });
 
