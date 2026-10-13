@@ -1,0 +1,285 @@
+import "@/components/Layout/__preview__/launcherShims";
+import { StrictMode, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { resolveAppTheme } from "@shared/theme/themes";
+import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { ProjectSwitcherPalette } from "../ProjectSwitcherPalette";
+import {
+  PROJECT_SECTION_LABELS,
+  type ProjectSectionKey,
+  type ProjectSwitcherBrowseBand,
+  type ProjectSwitcherProjectRow,
+  type ProjectSwitcherRow,
+  type ProjectSwitcherScratchRow,
+  type SearchableScratch,
+} from "@/hooks/useProjectSwitcherPalette";
+import "@/index.css";
+
+/**
+ * Standalone visual-review harness for the project switcher: every state the
+ * palette draws from fixtures, against the real tokens and `index.css`.
+ * `project-switcher-review.spec.ts` drives it.
+ *
+ * Query parameters:
+ *   ?theme=daintree|bondi|…   built-in theme id
+ *   ?state=browse|dropdown|dropdown-menu|search|nomatch|empty|collapsed
+ */
+
+const params = new URLSearchParams(window.location.search);
+const themeId = params.get("theme") ?? "daintree";
+const state = params.get("state") ?? "browse";
+
+applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
+document.body.style.background = "var(--color-surface-canvas)";
+document.body.style.margin = "0";
+
+const NOW = Date.now();
+const MIN = 60_000;
+
+function project(
+  id: string,
+  name: string,
+  emoji: string,
+  color: string,
+  section: ProjectSectionKey,
+  extra: Partial<ProjectSwitcherProjectRow> = {}
+): ProjectSwitcherProjectRow {
+  return {
+    kind: "project",
+    id,
+    name,
+    path: `/Users/dev/Projects/${id}`,
+    displayPath: id,
+    emoji,
+    color,
+    status: "active",
+    isBackground: false,
+    isMissing: false,
+    isPinned: false,
+    frecencyScore: 1,
+    section,
+    lastOpened: NOW - 3 * 60 * MIN,
+    isActive: false,
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
+    processCount: 0,
+    ...extra,
+  };
+}
+
+const PROJECTS: ProjectSwitcherProjectRow[] = [
+  project("daintree", "daintree", "🌳", "emerald", "current", {
+    isActive: true,
+    isOpenInThisWindow: true,
+    activeAgentCount: 2,
+    processCount: 3,
+    lastOpened: NOW,
+  }),
+  project("helios-dashboard", "Helios Dashboard", "☀️", "amber", "attention", {
+    activeAgentCount: 1,
+    waitingAgentCount: 2,
+    processCount: 3,
+    oldestWaitingSince: NOW - 11 * MIN,
+  }),
+  project("payments-api", "payments-api", "💳", "violet", "running", {
+    activeAgentCount: 3,
+    processCount: 3,
+    latestWorkingSince: NOW - 4 * MIN,
+    openInOtherWindow: "foreground",
+  }),
+  project("assistant", "assistant", "🤖", "blue", "pinned", { isPinned: true }),
+  project("marketing-site", "marketing-site", "📣", "rose", "other"),
+  project("backend", "backend", "🛠️", "slate", "other", { resumableAgentCount: 2 }),
+  project(
+    "design-tokens-and-theme-system",
+    "design-tokens-and-theme-system",
+    "🎨",
+    "pink",
+    "other"
+  ),
+  project("docs", "docs", "📚", "teal", "other"),
+  project("legacy-importer", "legacy-importer", "📦", "orange", "unavailable", {
+    isMissing: true,
+  }),
+];
+
+const BANDS: ProjectSwitcherBrowseBand[] = (
+  ["current", "attention", "running", "pinned", "other", "unavailable"] as ProjectSectionKey[]
+).map((key) => ({
+  key,
+  label: PROJECT_SECTION_LABELS[key],
+  itemCount: PROJECTS.filter((p) => p.section === key).length,
+  collapsed: false,
+}));
+
+function scratch(
+  id: string,
+  name: string,
+  lastOpenedAgoDays: number,
+  extra: Partial<SearchableScratch> = {}
+): SearchableScratch {
+  return {
+    id,
+    name,
+    path: `/Users/dev/.daintree/scratch/${id}`,
+    createdAt: NOW - 20 * 86_400_000,
+    lastOpened: NOW - lastOpenedAgoDays * 86_400_000,
+    isActive: false,
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
+    processCount: 0,
+    ...extra,
+  };
+}
+
+const SCRATCHES: SearchableScratch[] = [
+  scratch("spike-auth", "Spike: auth refresh", 0.1, { activeAgentCount: 1, processCount: 1 }),
+  scratch("try-vite", "Try Vite 9", 2),
+  scratch("old-bisect", "Bisect flaky shard", 13),
+];
+
+const noop = () => {};
+
+function withCollapsed(bands: ProjectSwitcherBrowseBand[], keys: ProjectSectionKey[]) {
+  return bands.map((band) => (keys.includes(band.key) ? { ...band, collapsed: true } : band));
+}
+
+interface Fixture {
+  query: string;
+  results: ProjectSwitcherRow[];
+  bands?: ProjectSwitcherBrowseBand[];
+  scratches: SearchableScratch[];
+  ranked: boolean;
+}
+
+function fixture(): Fixture {
+  switch (state) {
+    case "search": {
+      const scratchRow: ProjectSwitcherScratchRow = {
+        kind: "scratch",
+        ...scratch("design-spike", "Design spike: tokens", 0.1, {
+          activeAgentCount: 1,
+          processCount: 1,
+        }),
+      };
+      const rows: ProjectSwitcherRow[] = [
+        PROJECTS[0]!,
+        PROJECTS[6]!,
+        scratchRow,
+        PROJECTS[7]!,
+        PROJECTS[1]!,
+      ];
+      return {
+        query: "d",
+        results: rows,
+        scratches: SCRATCHES,
+        ranked: true,
+      };
+    }
+    case "nomatch":
+      return {
+        query: "kubernetes",
+        results: [],
+        scratches: SCRATCHES,
+        ranked: true,
+      };
+    case "empty":
+      return { query: "", results: [], bands: [], scratches: [], ranked: false };
+    case "collapsed": {
+      const collapsedKeys: ProjectSectionKey[] = ["other", "pinned"];
+      return {
+        query: "",
+        results: PROJECTS.filter((p) => !collapsedKeys.includes(p.section)),
+        bands: withCollapsed(BANDS, collapsedKeys),
+        scratches: SCRATCHES,
+        ranked: false,
+      };
+    }
+    default:
+      return {
+        query: "",
+        results: PROJECTS,
+        bands: BANDS,
+        scratches: SCRATCHES,
+        ranked: false,
+      };
+  }
+}
+
+if (state === "collapsed") {
+  usePreferencesStore.getState().setProjectSwitcherBandCollapsed("scratch", true);
+}
+
+function Surface() {
+  const data = fixture();
+  const [query, setQuery] = useState(data.query);
+  const results = data.results;
+  const [selectedIndex, setSelectedIndex] = useState(results.length > 1 ? 1 : 0);
+  // Mirrors the app: the ⌘⌥P modal (`ModalHostLayer`) mounts without the
+  // project commands, the toolbar dropdown carries settings, open and clone.
+  const dropdown = state === "dropdown" || state === "dropdown-menu";
+
+  return (
+    <ProjectSwitcherPalette
+      isOpen
+      mode={dropdown ? "dropdown" : "modal"}
+      query={query}
+      results={results}
+      browseBands={data.bands}
+      selectedIndex={selectedIndex}
+      onQueryChange={setQuery}
+      onSelectPrevious={() => setSelectedIndex((i) => Math.max(0, i - 1))}
+      onSelectNext={() => setSelectedIndex((i) => Math.min(results.length - 1, i + 1))}
+      onSelect={noop}
+      onClose={noop}
+      onHoverRow={(id) => setSelectedIndex(results.findIndex((r) => r.id === id))}
+      rankedSearch={data.ranked}
+      scratchResults={data.scratches}
+      onSelectScratch={noop}
+      onCreateScratch={noop}
+      onRenameScratch={noop}
+      onRequestDeleteScratch={noop}
+      onRequestDeleteAllScratches={noop}
+      onSaveAsProject={noop}
+      onAddProject={dropdown ? noop : undefined}
+      onCloneRepo={dropdown ? noop : undefined}
+      onOpenProjectSettings={dropdown ? noop : undefined}
+      onStopProject={noop}
+      onCloseProject={noop}
+      onSleepProject={noop}
+      onLocateProject={noop}
+      onMoveOrRenameProject={noop}
+      onTogglePinProject={noop}
+      onCopyPath={noop}
+      onSelectNewWindow={noop}
+      fleetLiveness={
+        data.results.length > 0 ? { runningAgentCount: 6, workingAssistantCount: 0 } : undefined
+      }
+    >
+      <Button variant="outline" className="m-4 w-64 h-12 justify-start">
+        🌳 daintree
+      </Button>
+    </ProjectSwitcherPalette>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <TooltipProvider>
+      <div data-preview-frame className="h-screen w-screen">
+        <Surface />
+      </div>
+    </TooltipProvider>
+  </StrictMode>
+);

@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { isMac } from "@/lib/platform";
 import { describeKeyCap, formatChordText } from "@/lib/kbdShortcut";
-import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
+import { AppPaletteDialog, KBD_CLASS, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
 import {
   PALETTE_ROW_CLASS,
   PALETTE_ROW_FOCUS_CLASS,
@@ -111,6 +111,8 @@ import {
 } from "@shared/config/scratchCleanup";
 import { PathSegments } from "@/components/ui/PathSegments";
 import { pluralize } from "@/lib/pluralize";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { keyBelongsToField } from "@/hooks/useListboxCursor";
 import { OpenOnHostSubmenu } from "@/components/Hosts/OpenOnHostSubmenu";
 import {
@@ -277,6 +279,12 @@ interface ProjectListItemProps {
    * `pointerenter`: rows scrolling under a resting pointer must not steal it.
    */
   onHoverRow?: (rowId: string) => void;
+  /**
+   * Hands focus back to the search box when the row's menu closes. The row
+   * itself is never focusable, so the menu's own restore would land on
+   * `document.body` and strand a keyboard user who opened it with Shift+F10.
+   */
+  onReturnFocus?: () => void;
 }
 
 /**
@@ -684,6 +692,8 @@ export function getProjectSwitcherEnterHint(
   mac: boolean = isMac()
 ): { keys: string; label: string } | null {
   if (!row) return null;
+  // A missing project's Enter opens the relocation dialog, not a switch.
+  if (row.kind === "project" && row.isMissing) return { keys: "↵", label: "Locate" };
   const opensWindow = modifierHeld && modEnterOpensWindow(row, canOpenWindow);
   // The keydown takes Meta or Control, so the modifier is whichever this
   // platform calls primary — a literal ⌘ tells Windows and Linux to press a key
@@ -713,6 +723,7 @@ function ProjectListItem({
   onHoverProject,
   onHoverProjectEnd,
   onHoverRow,
+  onReturnFocus,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
   const showSleep = canSleepProject(project);
@@ -764,6 +775,9 @@ function ProjectListItem({
       <StatusDot status={status} showResumeDot={showResumeDot} />
 
       <div
+        // Identity colour and emoji are decoration: left in the name, a reader
+        // hears "deciduous tree, daintree" before the name it qualifies.
+        aria-hidden="true"
         className={cn(
           // Wash/shadow var fallbacks keep themes without the overrides byte-identical.
           "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0",
@@ -868,7 +882,17 @@ function ProjectListItem({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-      <ContextMenuContent>
+      <ContextMenuContent
+        onCloseAutoFocus={() => {
+          // Only a stranded focus is taken back: an item that opened a dialog
+          // (Remove, Sleep, Move) has already handed focus to it.
+          if (!onReturnFocus) return;
+          requestAnimationFrame(() => {
+            const active = document.activeElement;
+            if (active === null || active === document.body) onReturnFocus();
+          });
+        }}
+      >
         {onSelectNewWindow && newWindowLabel !== null && (
           <ContextMenuItem onSelect={() => onSelectNewWindow(project)}>
             <AppWindow className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
@@ -1317,6 +1341,11 @@ interface ProjectListContentProps {
    * for it — printed above real rows it contradicts them.
    */
   scratchesStandAlone: boolean;
+  /**
+   * Other hosts matched even though this one did not. Their band renders below
+   * this list, so a "No workspaces match" here would sit above real results.
+   */
+  hasOtherHostResults: boolean;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
@@ -1347,6 +1376,7 @@ function ProjectListContent({
   canAddProject,
   canCreateScratch,
   scratchesStandAlone,
+  hasOtherHostResults,
   onStopProject,
   onCloseProject,
   onSleepProject,
@@ -1491,6 +1521,7 @@ function ProjectListContent({
             onHoverProject={onHoverProject}
             onHoverProjectEnd={onHoverProjectEnd}
             onHoverRow={onHoverRow}
+            onReturnFocus={onReturnFocus}
           />
         )}
       </div>
@@ -1574,30 +1605,32 @@ function ProjectListContent({
             );
           })
         ) : results.length === 0 ? (
-          scratchesStandAlone ? null : (
-            <div className="px-1 py-1">
-              <div
-                className="px-2 py-8 text-center text-text-secondary text-sm"
-                data-testid="project-empty-state"
-              >
-                {query.trim() ? (
-                  // "Workspaces", not "projects": scratches are ranked into this
-                  // same list now, so naming only half of what was searched would
-                  // read as a scratch still being findable somewhere else.
-                  <div>{`No workspaces match "${query}"`}</div>
-                ) : canAddProject ? (
-                  // Names the button sitting directly below this list.
-                  "Open a project to get started"
-                ) : canCreateScratch ? (
-                  // No project commands on this surface, but Scratch is still
-                  // here — so the nearest action is the create row, not a menu.
-                  "Create a scratch workspace to get started"
-                ) : (
-                  // Nothing on this surface can open anything, so the only honest
-                  // instruction points outside it.
-                  "Open a project from the File menu to get started"
-                )}
-              </div>
+          scratchesStandAlone || hasOtherHostResults ? null : (
+            // The family's empty state rather than a local one, so this palette
+            // says "nothing matched" the way every other does: same type, a
+            // debounced polite announcement, and the Esc hint that turns the
+            // dead end into one keypress back.
+            <div data-testid="project-empty-state">
+              <AppPaletteDialog.Empty
+                query={query}
+                // "Workspaces", not "projects": scratches are ranked into this
+                // same list now, so naming only half of what was searched would
+                // read as a scratch still being findable somewhere else.
+                noMatchMessage={`No workspaces match "${query.trim()}"`}
+                noMatchContent={<PaletteNoMatchHint what="all workspaces" />}
+                emptyMessage={
+                  canAddProject
+                    ? // Names the button sitting directly below this list.
+                      "Open a project to get started"
+                    : canCreateScratch
+                      ? // No project commands on this surface, but Scratch is
+                        // still here — so the nearest action is the create row.
+                        "Create a scratch workspace to get started"
+                      : // Nothing on this surface can open anything, so the only
+                        // honest instruction points outside it.
+                        "Open a project from the File menu to get started"
+                }
+              />
             </div>
           )
         ) : (
@@ -1698,7 +1731,10 @@ function ScratchNameEditor({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.nativeEvent.isComposing) return;
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+        if (e.key === "Escape") e.stopPropagation();
+        return;
+      }
       if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
@@ -1758,6 +1794,12 @@ interface ScratchSectionProps {
    * staying mounted (#11943).
    */
   isSearching: boolean;
+  /**
+   * Nothing else in the palette: no projects, no scratches. The empty state
+   * above then names this section's create row as the next step, so it opens
+   * by default rather than folding that row away behind its header.
+   */
+  isOnlyAction?: boolean;
   onCreate?: (name?: string) => void;
   onSelect?: (scratch: SearchableScratch) => void;
   onRequestDelete?: (scratchId: string) => void;
@@ -1786,6 +1828,7 @@ interface ScratchSectionProps {
 function ScratchSection({
   scratches,
   isSearching,
+  isOnlyAction = false,
   onCreate,
   onSelect,
   onRequestDelete,
@@ -1798,7 +1841,7 @@ function ScratchSection({
     (state) => state.projectSwitcherCollapsedBands[PROJECT_SWITCHER_SCRATCH_BAND_KEY]
   );
   const setBandCollapsed = usePreferencesStore((state) => state.setProjectSwitcherBandCollapsed);
-  const collapsed = storedCollapsed ?? scratches.length === 0;
+  const collapsed = storedCollapsed ?? (scratches.length === 0 && !isOnlyAction);
   const [editor, setEditor] = useState<ScratchEditorState>(null);
   // Radix restores focus to the context-menu trigger on close, but for a rename
   // that trigger has been swapped out for the editor — the restore would steal
@@ -1898,9 +1941,13 @@ function ScratchSection({
       {!collapsed && (
         <div id="scratch-section-list">
           {scratches.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-text-secondary">
-              Create a scratch workspace for a quick one-off task
-            </div>
+            // The palette's empty state already says this when it is the only
+            // thing to do; a second line would be the same instruction twice.
+            isOnlyAction ? null : (
+              <div className="px-2 py-1 text-xs text-text-secondary">
+                Create a scratch workspace for a quick one-off task
+              </div>
+            )
           ) : (
             <div role="listbox" aria-label="Scratch workspaces">
               {scratches.map((scratch) => {
@@ -2436,7 +2483,44 @@ function ProjectPaletteInner({
     }
   }, [listRef, selectedIndex, results, hostCursor]);
 
+  /** Rows that fit in the scroller, less one so a page keeps a row of context. */
+  const pageStep = () => {
+    const list = listRef.current;
+    const scroller = list?.closest<HTMLElement>("[tabindex]") ?? list;
+    const row = list?.querySelector<HTMLElement>('[role="option"]');
+    if (!scroller || !row || row.offsetHeight === 0) return 5;
+    return Math.max(1, Math.floor(scroller.clientHeight / row.offsetHeight) - 1);
+  };
+
+  /**
+   * Opens a row's context menu from the keyboard, anchored under its name. The
+   * menu returns focus to the search box when it closes (see `ProjectListItem`).
+   */
+  const openRowMenu = (rowId: string) => {
+    const row = document.getElementById(`project-option-${rowId}`);
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    const rect = row.getBoundingClientRect();
+    row.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left + 48,
+        clientY: rect.bottom,
+      })
+    );
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // An IME spends Enter, the arrows and Escape on its candidate window, so
+    // none of them may reach the list while a composition is open — Enter would
+    // switch projects on the keypress meant to commit a character.
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+      // Kept from the dialog's document backstop too, which would otherwise
+      // read a composing Escape as "close".
+      if (e.key === "Escape") e.stopPropagation();
+      return;
+    }
     switch (e.key) {
       case "ArrowUp":
         e.preventDefault();
@@ -2482,6 +2566,37 @@ function ProjectPaletteInner({
         setHostCursor(null);
         onHoverRow(results[e.key === "Home" ? 0 : results.length - 1]!.id);
         break;
+      // A page of rows rather than native scrolling, which would walk the
+      // highlighted row off screen and leave Enter committing something the
+      // user can no longer see.
+      case "PageUp":
+      case "PageDown": {
+        if (results.length === 0 || !onHoverRow) break;
+        e.preventDefault();
+        e.stopPropagation();
+        setHostCursor(null);
+        const step = pageStep();
+        const from = selectedIndex >= 0 ? selectedIndex : 0;
+        const target =
+          e.key === "PageDown"
+            ? Math.min(results.length - 1, from + step)
+            : Math.max(0, from - step);
+        onHoverRow(results[target]!.id);
+        break;
+      }
+      // The keyboard's right-click. Without it pin, sleep, copy path and move
+      // were pointer-only: the rows never take focus, so there is nothing for
+      // the platform's own context-menu key to land on.
+      case "F10":
+      case "ContextMenu": {
+        if (e.key === "F10" && !e.shiftKey) break;
+        const target = hostCursor === null ? results[selectedIndex] : undefined;
+        if (target?.kind !== "project") break;
+        e.preventDefault();
+        e.stopPropagation();
+        openRowMenu(target.id);
+        break;
+      }
       case "Enter":
         e.preventDefault();
         e.stopPropagation();
@@ -2505,8 +2620,6 @@ function ProjectPaletteInner({
         }
         break;
       case "Escape":
-        // An IME spends Escape cancelling its candidate; leave the query alone.
-        if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) break;
         // Anchored mode leaves Escape entirely to the shell, which spends the
         // first press clearing the query. Closing here would beat that: this
         // runs on bubble, after Radix's capture-phase dismissal has already
@@ -2547,10 +2660,31 @@ function ProjectPaletteInner({
   const isRankedSearch = rankedSearch ?? query.trim().length > 0;
   const hasProjectPresentation =
     (browseBands?.length ?? 0) > 0 || results.some((row) => row.kind === "project");
+  const hasProjectCommands = Boolean(
+    onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder
+  );
   const scratchesStandAlone =
     !isRankedSearch && !hasProjectPresentation && (scratchResults?.length ?? 0) > 0;
 
   useWaitAgeTick(results.length > 0 || (scratchResults?.length ?? 0) > 0);
+
+  // "N results" once a search settles, the way `SearchablePalette` says it:
+  // Doherty-gated so a fast typist hears one count, read when the timer fires
+  // so it is the list that settled. Zero stands down — the empty state below
+  // announces its own "No workspaces match …", and two owners would say it twice.
+  const resultCount = results.length + hostOptions.length;
+  const resultCountRef = useRef(resultCount);
+  useEffect(() => {
+    resultCountRef.current = resultCount;
+  });
+  useEffect(() => {
+    if (!isRankedSearch || query.trim() === "") return;
+    const timer = window.setTimeout(() => {
+      const count = resultCountRef.current;
+      if (count > 0) useAnnouncerStore.getState().announce(pluralize(count, "result"), "polite");
+    }, UI_DOHERTY_THRESHOLD);
+    return () => window.clearTimeout(timer);
+  }, [query, isRankedSearch]);
 
   return (
     <>
@@ -2573,6 +2707,7 @@ function ProjectPaletteInner({
           onKeyDown={handleKeyDown}
           placeholder="Search workspaces…"
           role="combobox"
+          aria-autocomplete="list"
           aria-expanded={true}
           aria-haspopup="listbox"
           aria-label="Search workspaces"
@@ -2615,10 +2750,22 @@ function ProjectPaletteInner({
          * of each divider only, so every rule sat off centre between the two
          * bands it separates.
          */
+        /*
+         * The shell's 60vh assumes a header, a body and a footer. This palette
+         * also stands up to four 48px command rows under the body, and at 60vh
+         * the ⌘⌥P modal ran past the bottom of a 1000px window, clipping
+         * "Create new folder…" and the footer with the Enter hint. The cap
+         * leaves room for that block below the modal's 15vh offset.
+         */
+        maxHeight={hasProjectCommands ? "max-h-[min(60vh,calc(85vh-20rem))]" : undefined}
         scrollClassName="space-y-0"
         ariaLabel="Workspaces"
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleKeyDown}
+        // A press on row whitespace must not park focus on the region, where
+        // typing stops filtering. The scratch rows and their controls are
+        // tabbable, so the shell leaves presses on them alone.
+        keepPointerFocusOnInput
       >
         <ProjectListContent
           results={results}
@@ -2630,6 +2777,7 @@ function ProjectPaletteInner({
           canAddProject={Boolean(onAddProject)}
           canCreateScratch={Boolean(onCreateScratch)}
           scratchesStandAlone={scratchesStandAlone}
+          hasOtherHostResults={hostOptions.length > 0}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onSleepProject={onSleepProject}
@@ -2640,7 +2788,16 @@ function ProjectPaletteInner({
           onSelectNewWindow={onSelectNewWindow}
           onHoverProject={onHoverProject}
           onHoverProjectEnd={onHoverProjectEnd}
-          onHoverRow={onHoverRow}
+          // A local row under the pointer takes the cursor back from the
+          // other-hosts band, or the highlight and Enter would stay remote.
+          onHoverRow={
+            onHoverRow
+              ? (rowId) => {
+                  setHostCursor(null);
+                  onHoverRow(rowId);
+                }
+              : undefined
+          }
           onReturnFocus={() => inputRef.current?.focus()}
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
@@ -2650,6 +2807,12 @@ function ProjectPaletteInner({
             <ScratchSection
               scratches={scratchResults ?? []}
               isSearching={isRankedSearch}
+              isOnlyAction={
+                !isRankedSearch &&
+                !hasProjectPresentation &&
+                (scratchResults?.length ?? 0) === 0 &&
+                !onAddProject
+              }
               onCreate={onCreateScratch}
               onSelect={onSelectScratch}
               onRequestDelete={onRequestDeleteScratch}
@@ -2668,7 +2831,7 @@ function ProjectPaletteInner({
         />
       </AppPaletteDialog.Body>
 
-      {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (
+      {hasProjectCommands && (
         <>
           <AppPaletteDialog.Divider />
           <div>
@@ -2746,7 +2909,17 @@ function ModalContent({
   return (
     <AppPaletteDialog
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={(reason) => {
+        // The input spends Escape on a query itself, but once Tab has moved
+        // focus to the results or a command row the shell's backstop is what
+        // hears it — and it would close on the press meant to clear.
+        if (reason === "escape" && innerProps.query !== "") {
+          innerProps.onQueryChange("");
+          inputRef.current?.focus();
+          return;
+        }
+        onClose();
+      }}
       ariaLabel="Project switcher"
       // The modal form is the global ⌘P surface, so it takes the command box.
       // Its dropdown twin below is anchored: same content, same material, a
@@ -3193,13 +3366,24 @@ export function ProjectSwitcherPalette({
                   <Callout severity="warning" title="All running processes will be terminated">
                     <div>
                       {removeConfirmProject.processCount > 0 && (
-                        <div>• {removeConfirmProject.processCount} running process(es)</div>
+                        <div>
+                          •{" "}
+                          {pluralize(
+                            removeConfirmProject.processCount,
+                            "running process",
+                            "running processes"
+                          )}
+                        </div>
                       )}
                       {removeConfirmProject.activeAgentCount > 0 && (
-                        <div>• {removeConfirmProject.activeAgentCount} active agent(s)</div>
+                        <div>
+                          • {pluralize(removeConfirmProject.activeAgentCount, "active agent")}
+                        </div>
                       )}
                       {removeConfirmProject.waitingAgentCount > 0 && (
-                        <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                        <div>
+                          • {pluralize(removeConfirmProject.waitingAgentCount, "waiting agent")}
+                        </div>
                       )}
                     </div>
                   </Callout>
@@ -3208,13 +3392,24 @@ export function ProjectSwitcherPalette({
                   <Callout severity="warning" title="Active sessions detected">
                     <div>
                       {removeConfirmProject.processCount > 0 && (
-                        <div>• {removeConfirmProject.processCount} running process(es)</div>
+                        <div>
+                          •{" "}
+                          {pluralize(
+                            removeConfirmProject.processCount,
+                            "running process",
+                            "running processes"
+                          )}
+                        </div>
                       )}
                       {removeConfirmProject.activeAgentCount > 0 && (
-                        <div>• {removeConfirmProject.activeAgentCount} active agent(s)</div>
+                        <div>
+                          • {pluralize(removeConfirmProject.activeAgentCount, "active agent")}
+                        </div>
                       )}
                       {removeConfirmProject.waitingAgentCount > 0 && (
-                        <div>• {removeConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                        <div>
+                          • {pluralize(removeConfirmProject.waitingAgentCount, "waiting agent")}
+                        </div>
                       )}
                     </div>
                   </Callout>
@@ -3252,13 +3447,20 @@ export function ProjectSwitcherPalette({
               <Callout severity="warning" title="Running processes will be stopped">
                 <div>
                   {sleepConfirmProject.processCount > 0 && (
-                    <div>• {sleepConfirmProject.processCount} running process(es)</div>
+                    <div>
+                      •{" "}
+                      {pluralize(
+                        sleepConfirmProject.processCount,
+                        "running process",
+                        "running processes"
+                      )}
+                    </div>
                   )}
                   {sleepConfirmProject.activeAgentCount > 0 && (
-                    <div>• {sleepConfirmProject.activeAgentCount} active agent(s)</div>
+                    <div>• {pluralize(sleepConfirmProject.activeAgentCount, "active agent")}</div>
                   )}
                   {sleepConfirmProject.waitingAgentCount > 0 && (
-                    <div>• {sleepConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                    <div>• {pluralize(sleepConfirmProject.waitingAgentCount, "waiting agent")}</div>
                   )}
                 </div>
               </Callout>

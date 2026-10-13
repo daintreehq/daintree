@@ -29,7 +29,7 @@ export type ProjectRowTone =
  * honest today.
  */
 export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
-  blocked: "text-status-danger/80",
+  blocked: "text-status-danger",
   waiting: "text-activity-waiting",
   // Finished-awaiting-review: the completed-state hue, distinct from both the
   // warning of a wait and the success-green of a healthy process. Never danger
@@ -58,7 +58,7 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   assistant: "text-text-secondary",
   // An assistant that failed says so in the danger hue — the severity is real
   // — while its dot stays hollow, so it never reads as a worker run.
-  "assistant-blocked": "text-status-danger/80",
+  "assistant-blocked": "text-status-danger",
 };
 
 /**

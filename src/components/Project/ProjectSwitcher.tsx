@@ -21,7 +21,7 @@ const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg"
   <div
     className={cn(
       // Wash/shadow var fallbacks keep themes without the overrides byte-identical.
-      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0 transition duration-150",
+      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0",
       sizeClass
     )}
     style={{
@@ -321,6 +321,7 @@ export function ProjectSwitcher() {
         onTogglePinProject={handleTogglePinProject}
         onOpenProjectSettings={currentProject ? handleOpenSettings : undefined}
         onCopyPath={projectSwitcher.copyPath}
+        onSelectNewWindow={handleSelectNewWindow}
         onHoverProject={projectSwitcher.onHoverProject}
         onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
         onHoverRow={projectSwitcher.hoverRow}

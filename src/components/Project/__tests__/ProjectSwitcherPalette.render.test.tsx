@@ -97,9 +97,29 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
   Dialog.Body = Body;
   Dialog.Footer = Footer;
   Dialog.Divider = (props: React.HTMLAttributes<HTMLDivElement>) => <div {...props} />;
+  Dialog.Empty = ({
+    query,
+    emptyMessage,
+    noMatchMessage,
+    noMatchContent,
+  }: {
+    query: string;
+    emptyMessage?: string;
+    noMatchMessage?: string;
+    noMatchContent?: React.ReactNode;
+  }) =>
+    query.trim() ? (
+      <div>
+        <p>{noMatchMessage}</p>
+        {noMatchContent}
+      </div>
+    ) : (
+      <p>{emptyMessage}</p>
+    );
 
   return {
     AppPaletteDialog: Dialog,
+    PaletteNoMatchHint: () => <p>Press Esc to clear the search</p>,
     KBD_CLASS: "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-border-default text-text-secondary",
     PALETTE_SURFACE_WIDTHS: {
       // Sentinel values, not the production pixels: this mock only has to satisfy
@@ -1374,9 +1394,9 @@ describe("ProjectSwitcherPalette scratch search rows", () => {
 
     // Positively: the umbrella term, not merely the absence of the old copy —
     // "No bananas match spike" would satisfy a negative-only assertion.
-    expect(screen.getByTestId("project-empty-state").textContent).toBe(
-      'No workspaces match "spike"'
-    );
+    // The title is its own element; the Esc hint below it is the way back.
+    const emptyState = screen.getByTestId("project-empty-state");
+    expect(within(emptyState).getByText('No workspaces match "spike"')).toBeTruthy();
   });
 
   it("drops the project-only shortcut hints while a scratch is highlighted", () => {
