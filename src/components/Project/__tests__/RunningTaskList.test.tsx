@@ -207,8 +207,7 @@ describe("RunningTaskList overflow", () => {
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-2").closest("[data-task-row]")!;
-    fireEvent.click(within(row as HTMLElement).getByLabelText("Focus terminal"));
+    fireEvent.click(within(overflowList()).getByText("cmd-2"));
     expect(storeState.activateTerminal).toHaveBeenCalledWith("task-2");
     expect(screen.queryByText("cmd-1")).toBeNull();
   });

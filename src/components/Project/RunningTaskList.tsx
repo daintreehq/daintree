@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useId } from "react";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
-import { ChevronDown, X, Eye, RotateCw } from "lucide-react";
+import { ChevronDown, CircleStop, RotateCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
@@ -295,6 +295,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
   const elapsed = terminal.startedAt ? now - terminal.startedAt : 0;
   const isActive = status === "running" || status === "restarting";
   const command = terminal.command || terminal.title;
+  const statusId = useId();
 
   return (
     // The row used to be a `role="button"` wrapping these action buttons, which
@@ -318,6 +319,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
         <button
           type="button"
           data-task-focus=""
+          aria-describedby={statusId}
           onClick={() => onFocus(terminal.id)}
           className="flex-1 min-h-6 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0 rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         >
@@ -325,28 +327,27 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
         </button>
       </TruncatedTooltip>
 
-      {/* Elapsed time */}
-      {/* Elapsed time and the failure word trade places with the actions on
-          hover or focus. The actions used to sit at opacity 0 and keep their
-          width, which pushed the time into the middle of the row and cut the
-          command to a letter at the 200px floor. */}
-      {status === "running" && (
-        <span className="text-3xs text-text-secondary tabular-nums shrink-0 group-hover:hidden group-focus-within:hidden">
-          {formatElapsedDuration(elapsed)}
-        </span>
-      )}
-      {/* Failure in words, where the elapsed time sat while it ran. A red dot
-          alone leaves it to colour, and the left border that used to mark the
-          row curved with the row's radius into a stray "(". */}
-      {/* Restarting and finished say so in words too. Restarting used to show
-          only an elapsed time beside an amber dot, reading as one more running
-          row, and a finished row faded as a whole, taking its command below the
-          text contrast floor. */}
-      {(status === "failed" || status === "success" || status === "restarting") && (
-        <span className="text-3xs text-text-secondary shrink-0 group-hover:hidden group-focus-within:hidden">
-          {TASK_STATUS_LABEL[status]}
-        </span>
-      )}
+      {/* Elapsed time while it runs, and the outcome in words once it stops,
+          so status never rests on the dot's colour alone. They stay put when
+          the actions appear on hover or focus: the row's own state is what the
+          user is choosing an action from. The command is the route to the
+          terminal, so the actions are only the ones that change the task. */}
+      <span
+        id={statusId}
+        className={cn(
+          "text-3xs text-text-secondary shrink-0",
+          status === "running" && "tabular-nums"
+        )}
+      >
+        {status === "running" ? (
+          <>
+            <span className="sr-only">Running, </span>
+            {formatElapsedDuration(elapsed)}
+          </>
+        ) : (
+          TASK_STATUS_LABEL[status]
+        )}
+      </span>
 
       {/* Actions */}
       <div className="hidden items-center gap-0.5 shrink-0 group-hover:flex group-focus-within:flex">
@@ -363,7 +364,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
                 className="[&_svg]:size-3.5 hover:text-status-error"
                 aria-label="Stop task"
               >
-                <X aria-hidden="true" />
+                <CircleStop aria-hidden="true" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">Stop task</TooltipContent>
@@ -397,23 +398,6 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
             aria-label="Dismiss task"
           />
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={(e) => {
-                e.stopPropagation();
-                onFocus(terminal.id);
-              }}
-              className="[&_svg]:size-3.5"
-              aria-label="Focus terminal"
-            >
-              <Eye aria-hidden="true" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Focus terminal</TooltipContent>
-        </Tooltip>
       </div>
     </div>
   );
