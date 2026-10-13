@@ -1,7 +1,5 @@
 import { buildDefaultKeybindings } from "../../shared/config/defaultKeybindings.js";
 import { getValidatedOverrides } from "./keybindingOverridesStore.js";
-import { isRemoteShellSupported } from "../remote/buildGate.js";
-import { store } from "../store.js";
 
 /**
  * Native menu accelerators derived from the same source the renderer resolves
@@ -45,8 +43,6 @@ interface ParsedAccelerator {
   shift: boolean;
   alt: boolean;
   key: string;
-  /** Consulted per keystroke: the renderer owns the combo only while this holds. */
-  when?: () => boolean;
 }
 
 /**
@@ -177,48 +173,10 @@ export function rendererMenuAccelerator(actionId: string): string | undefined {
   return accelerator;
 }
 
-/**
- * `when` makes the claim conditional, for a renderer binding that shares its
- * combo with a native role it should only displace sometimes (host.switch's
- * Cmd+Alt+H and macOS Hide Others).
- */
-export function trackRendererOwnedAccelerator(
-  accelerator: string | undefined,
-  when?: () => boolean
-): void {
+export function trackRendererOwnedAccelerator(accelerator: string | undefined): void {
   if (!accelerator) return;
   const parsed = parseAccelerator(accelerator);
-  if (!parsed) return;
-  if (when) parsed.when = when;
-  rendererOwnedAccelerators.push(parsed);
-}
-
-function hasHostToSwitchTo(): boolean {
-  if (!isRemoteShellSupported()) return false;
-  const hosts = store.get("remoteHosts")?.hosts;
-  return Array.isArray(hosts) && hosts.length > 0;
-}
-
-/**
- * Switch host has no menu item, but its default Cmd+Alt+H is macOS Hide
- * Others, whose native key equivalent would take the keydown before the
- * renderer saw it. The renderer claims the combo only while there is a host to
- * switch to; with none, Cmd+Alt+H stays Hide Others. Read per keystroke, so
- * adding or forgetting a host needs no menu rebuild.
- */
-export function trackHostSwitchAccelerator(): void {
-  for (const combo of getEffectiveCombos("host.switch")) {
-    trackRendererOwnedAccelerator(comboToAccelerator(combo), hasHostToSwitchTo);
-  }
-}
-
-/** Every combo the renderer resolves for an action, not just the first a menu item shows. */
-function getEffectiveCombos(actionId: string): string[] {
-  const override = getValidatedOverrides()[actionId];
-  if (override) return override;
-  return getDefaultKeybindingsForPlatform()
-    .filter((b) => b.actionId === actionId && b.scope === "global" && b.combo)
-    .map((b) => b.combo);
+  if (parsed) rendererOwnedAccelerators.push(parsed);
 }
 
 /**
@@ -244,7 +202,7 @@ export function isRendererOwnedShortcut(input: Electron.Input): boolean {
     if (acc.alt !== input.alt) continue;
     if (mac && !acc.primary && input.meta) continue;
 
-    if (keyMatches(acc, input, inputKey, mac) && (!acc.when || acc.when())) return true;
+    if (keyMatches(acc, input, inputKey, mac)) return true;
   }
   return false;
 }

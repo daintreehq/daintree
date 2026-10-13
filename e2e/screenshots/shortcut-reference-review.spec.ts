@@ -73,7 +73,7 @@ const ROWS = `${DIALOG} [role="listitem"]`;
 const OVERRIDES: Record<string, string[]> = {
   "terminal.watch": ["Ctrl+Alt+W", "Ctrl+Alt+Shift+W"],
   "terminal.redraw": [],
-  "agent.cursor": ["Cmd+Alt+U"],
+  "agent.cursor": ["Cmd+Alt+Y"],
 };
 
 const POLISH_CSS = `

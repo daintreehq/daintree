@@ -1002,6 +1002,54 @@ describe("useGlobalKeybindings — Dead key guard (issue #7303)", () => {
     });
     expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
   });
+
+  describe("with Cmd held on macOS", () => {
+    function setNavigatorPlatform(platform: string) {
+      Object.defineProperty(globalThis, "navigator", {
+        value: { platform },
+        configurable: true,
+        writable: true,
+      });
+    }
+
+    const originalNavigator = globalThis.navigator;
+    afterEach(() => {
+      Object.defineProperty(globalThis, "navigator", {
+        value: originalNavigator,
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    // Chromium ignores Command when it detects a dead key, so Cmd+Alt+U (¨ on
+    // a US layout) reaches the page as "Dead" although nothing composes.
+    it("resolves Cmd+Alt+(dead U) as a shortcut", () => {
+      setNavigatorPlatform("MacIntel");
+      mocks.keybindingService.getPendingChord.mockReturnValue(null);
+      mocks.keybindingService.resolveKeybinding.mockReturnValueOnce({
+        match: { actionId: "host.switch" },
+        chordPrefix: false,
+        shouldConsume: true,
+      });
+
+      render(<Host />);
+      const event = dispatchDead(document.body, { code: "KeyU", metaKey: true, altKey: true });
+
+      expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("still ignores a Meta-held dead key off macOS", () => {
+      setNavigatorPlatform("Linux x86_64");
+      mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+
+      render(<Host />);
+      dispatchDead(document.body, { code: "KeyU", metaKey: true, altKey: true });
+
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.keybindingService.clearPendingChord).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("useGlobalKeybindings — region focus key bypass (issue #7303)", () => {

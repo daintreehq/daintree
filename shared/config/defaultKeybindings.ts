@@ -1164,13 +1164,12 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
-// Remote Hosts doesn't exist on Windows, so neither does its action. On macOS
-// Cmd+Alt+H is also Hide Others: the menu stands aside for it only while a
-// host other than this machine exists (electron/menu.ts).
+// Remote Hosts doesn't exist on Windows, so neither does its action. U sits
+// beside the I, O and P switchers; Cmd+Alt+H would take macOS Hide Others.
 const REMOTE_HOSTS_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "host.switch",
-    combo: "Cmd+Alt+H",
+    combo: "Cmd+Alt+U",
     scope: "global",
     priority: 0,
     description: "Switch host",

@@ -6,6 +6,7 @@ import {
 } from "../services/KeybindingService";
 import { actionService } from "../services/ActionService";
 import { logError } from "@/utils/logger";
+import { isMac } from "@/lib/platform";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
@@ -105,8 +106,11 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
 
       // Dead-key keydowns (accent layout first-press, e.g. ´ on macOS Romance
       // layouts) emit `key === "Dead"` and aren't a valid chord step on any
-      // layout. Bail entirely so they neither start nor clear a chord.
-      if (e.key === "Dead") return;
+      // layout. Bail entirely so they neither start nor clear a chord. The
+      // exception is Cmd on macOS: Chromium's dead-key check ignores Command,
+      // so Cmd+Alt+U, I and N report "Dead" on a US layout although nothing
+      // composes, and normalizeKeyForBinding resolves them by physical key.
+      if (e.key === "Dead" && !(e.metaKey && isMac())) return;
 
       // Handle Shift+F10 and ContextMenu key for panel context menus.
       // Must be checked before the editable/terminal bailouts below.
