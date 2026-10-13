@@ -431,7 +431,7 @@ describe("NotificationCenterEntry timestamp formatting", () => {
     const ts = new Date(2026, 0, 14, 9, 30, 0);
     render(<NotificationCenterEntry entry={makeEntry({ timestamp: ts.getTime() })} />);
     const expectedTime = new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
+      hour: "numeric",
       minute: "2-digit",
     }).format(ts);
     expect(timestampSpan().textContent).toBe(`Yesterday ${expectedTime}`);
@@ -499,7 +499,7 @@ describe("NotificationCenterEntry timestamp formatting", () => {
     const ts = new Date(2025, 11, 31, 23, 30, 0);
     render(<NotificationCenterEntry entry={makeEntry({ timestamp: ts.getTime() })} />);
     const expectedTime = new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
+      hour: "numeric",
       minute: "2-digit",
     }).format(ts);
     expect(timestampSpan().textContent).toBe(`Yesterday ${expectedTime}`);

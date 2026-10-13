@@ -6,6 +6,7 @@ import {
   Bug,
   ArrowRight,
   Archive,
+  ArchiveRestore,
   Mail,
   MailOpen,
   BellMinus,
@@ -109,8 +110,10 @@ const TYPE_CONFIG = {
   warning: { icon: SEVERITY_GLYPH.warning, className: "text-status-warning" },
 };
 
+// `numeric`, like every other clock time in the inbox: `2-digit` printed
+// "Yesterday 04:05 AM" a row away from "Yesterday 11:05 PM".
 const yesterdayTimeFormatter = new Intl.DateTimeFormat(undefined, {
-  hour: "2-digit",
+  hour: "numeric",
   minute: "2-digit",
 });
 const sameYearFormatter = new Intl.DateTimeFormat(undefined, {
@@ -183,6 +186,8 @@ interface NotificationCenterEntryProps {
   /** Row-menu twins of the list's `e` and `u` keys; absent, the item is too. */
   onArchive?: () => void;
   onToggleRead?: () => void;
+  /** Archive's inverse, offered in the Archived tab. */
+  onRestore?: () => void;
   /**
    * False where something above the row already names its project and
    * worktree — a grouped section header — so the row doesn't say it twice.
@@ -216,6 +221,7 @@ export function NotificationCenterEntry({
   onUnsnooze,
   onArchive,
   onToggleRead,
+  onRestore,
   showSource = true,
   compact = false,
 }: NotificationCenterEntryProps) {
@@ -363,14 +369,18 @@ export function NotificationCenterEntry({
       <div className="grid flex-1 min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-2">
         {entry.title && (
           <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5">
-            <p
-              className={cn(
-                "text-xs text-text-primary truncate",
-                isNew ? "font-semibold" : "font-normal"
-              )}
-            >
-              {entry.title}
-            </p>
+            {/* The title is what the notification concerns, so a clipped one
+                says so in full on hover. Not focusable: the row is the stop. */}
+            <TruncatedTooltip content={entry.title} focusable={false}>
+              <p
+                className={cn(
+                  "min-w-0 text-xs text-text-primary truncate",
+                  isNew ? "font-semibold" : "font-normal"
+                )}
+              >
+                {entry.title}
+              </p>
+            </TruncatedTooltip>
             {showChip && (
               <CountBadge
                 key={bumpKey}
@@ -586,6 +596,7 @@ export function NotificationCenterEntry({
             isRead={!isNew}
             onArchive={onArchive}
             onToggleRead={onToggleRead}
+            onRestore={onRestore}
             source={entry.context?.projectId || entry.context?.worktreeId ? source : undefined}
             destination={destination}
           />
@@ -737,6 +748,7 @@ interface RowOptionsMenuProps {
   isRead: boolean;
   onArchive?: () => void;
   onToggleRead?: () => void;
+  onRestore?: () => void;
   /** Where the row came from, in full — the row's own line truncates it. */
   source?: string;
   destination: NotificationDestination;
@@ -755,12 +767,15 @@ function RowOptionsMenu({
   isRead,
   onArchive,
   onToggleRead,
+  onRestore,
   source,
   destination,
 }: RowOptionsMenuProps) {
   const eventKind = entry.context?.eventKind;
   const hasContextActions = isNotificationEventKind(eventKind) || !!entry.context?.projectId;
-  const supportsSnooze = !!entry.correlationId && !!onSnooze;
+  // Not on a filed row: the Snoozed tab never shows archived entries, so a
+  // snooze set here vanished into neither tab.
+  const supportsSnooze = !!entry.correlationId && !!onSnooze && !entry.archivedAt;
   const messageString = typeof entry.message === "string" ? entry.message : "";
   // Diagnostics affordances. "Report on GitHub" is restricted to error/warning
   // entries so the inbox isn't a vector for filing noise issues on success
@@ -778,7 +793,7 @@ function RowOptionsMenu({
       : null;
   const hasDiagnosticsActions =
     supportsCopyCorrelationId || supportsReportOnGitHub || supportsGoToSource;
-  const hasTriageActions = !!onToggleRead || !!onArchive;
+  const hasTriageActions = !!onToggleRead || !!onArchive || !!onRestore;
   const hasActions =
     hasTriageActions || hasContextActions || supportsSnooze || hasDiagnosticsActions;
   const [open, setOpen] = useState(false);
@@ -939,10 +954,14 @@ function RowOptionsMenu({
             {/* The full project and worktree, which the row truncates and a
                 grouped row omits. Here it costs no Tab stop, and a keyboard
                 user reaches it with the menu they already open for triage. */}
-            {source && (
+            {/* Which notification, then where from. The source alone left the
+                menu naming a place rather than the thing it acts on, and a
+                title the row truncates was readable nowhere from the keyboard. */}
+            {(entry.title || source) && (
               <>
                 <DropdownMenuLabel className="break-words font-medium normal-case tracking-normal">
-                  {source}
+                  {entry.title && <span className="block text-text-primary">{entry.title}</span>}
+                  {source && <span className="block">{source}</span>}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
               </>
@@ -959,6 +978,12 @@ function RowOptionsMenu({
                 )}
                 {isRead ? "Mark as unread" : "Mark as read"}
                 <DropdownMenuShortcut shortcut="U" />
+              </DropdownMenuItem>
+            )}
+            {onRestore && (
+              <DropdownMenuItem onSelect={onRestore}>
+                <ArchiveRestore data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Move to inbox
               </DropdownMenuItem>
             )}
             {onArchive && (
@@ -982,7 +1007,10 @@ function RowOptionsMenu({
                 </DropdownMenuItem>
               ) : (
                 <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>
+                  {/* `h` is announced but not drawn: the submenu chevron owns
+                      the trailing column, and a key glyph beside it sat off the
+                      U and E column above. The `h` menu itself is titled Snooze. */}
+                  <DropdownMenuSubTrigger aria-keyshortcuts="H">
                     <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                     Snooze
                   </DropdownMenuSubTrigger>
@@ -1001,6 +1029,7 @@ function RowOptionsMenu({
               <DropdownMenuItem
                 onSelect={handleGoToSource}
                 disabled={!!goToSourceUnavailable}
+                aria-keyshortcuts={goToSourceUnavailable ? undefined : "Enter"}
                 aria-label={
                   goToSourceUnavailable
                     ? `Go to source, ${goToSourceUnavailable.toLowerCase()}`
@@ -1009,8 +1038,10 @@ function RowOptionsMenu({
               >
                 <ArrowRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Go to source
-                {goToSourceUnavailable && (
+                {goToSourceUnavailable ? (
                   <DropdownMenuMeta>{goToSourceUnavailable}</DropdownMenuMeta>
+                ) : (
+                  <DropdownMenuShortcut shortcut="Enter" />
                 )}
               </DropdownMenuItem>
             )}
