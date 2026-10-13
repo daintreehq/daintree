@@ -451,10 +451,19 @@ export function useTerminalFileTransfer(
      * Build what one gesture writes: each file in order, separated by a space
      * and followed by one. Images become their own segment when the terminal
      * takes them as attachments; everything else is the usual text reference.
+     * `owners`, when given, is filled with the paths each segment carries, so
+     * a paced write cut short can tell which files never landed.
      */
-    const buildSegments = (filePaths: readonly string[], isAgent: boolean): ImageInputSegment[] => {
+    const buildSegments = (
+      filePaths: readonly string[],
+      isAgent: boolean,
+      owners?: string[][]
+    ): ImageInputSegment[] => {
       const imagesAttach = isAgent && takesImagePaths();
       const segments: ImageInputSegment[] = [];
+      const own = (filePath: string) => {
+        if (owners) (owners[segments.length - 1] ??= []).push(filePath);
+      };
       const pushText = (text: string) => {
         const last = segments[segments.length - 1];
         if (last?.kind === "text") last.text += text;
@@ -467,6 +476,7 @@ export function useTerminalFileTransfer(
         } else {
           pushText(formatPath(filePath, isAgent));
         }
+        own(filePath);
       });
       pushText(" ");
       return segments;
@@ -493,8 +503,11 @@ export function useTerminalFileTransfer(
         automatic?: boolean;
         /** Re-checked before each paced write, so a change mid-batch stops the rest. */
         stillCurrent?: () => boolean;
-        /** Told when a paced write was stopped, so what it held isn't lost silently. */
-        onWithheld?: () => void;
+        /**
+         * Told the first segment a paced write stopped at, so what it still
+         * held isn't lost silently.
+         */
+        onWithheld?: (fromSegment: number) => void;
       } = {}
     ) => {
       const hasImage = segments.some((segment) => segment.kind === "image");
@@ -518,14 +531,14 @@ export function useTerminalFileTransfer(
         .then(async () => {
           if (!hasImage) {
             await gap();
-            if (isStale()) onWithheld?.();
+            if (isStale()) onWithheld?.(0);
             else writeToTerminal(joinText(segments), isAgent, automatic);
             return;
           }
           for (let index = 0; index < segments.length; index++) {
             if (index > 0 || queued) await gap();
             if (isStale()) {
-              onWithheld?.();
+              onWithheld?.(index);
               return;
             }
             const segment = segments[index]!;
@@ -568,6 +581,16 @@ export function useTerminalFileTransfer(
 
     // The user asked for these paths from a withheld drop's notice, so they
     // go in as typed input, formatted for whatever runs in the terminal now.
+    const offerUnwritten = (
+      owners: readonly (readonly string[] | undefined)[],
+      fromSegment: number,
+      reason: () => WithheldReason,
+      hadPanel = false
+    ) => {
+      const unwritten = owners.slice(fromSegment).flatMap((paths) => paths ?? []);
+      if (unwritten.length > 0) offerWithheldPaths(terminalId, unwritten, reason(), hadPanel);
+    };
+
     // The pane is still mounted, so a missing panel row is a PTY that never
     // had one (a Dev Preview console), not a closed pane.
     const canInsert = () =>
@@ -580,7 +603,18 @@ export function useTerminalFileTransfer(
       insert: (paths) => {
         if (!canInsert()) return false;
         const isAgent = isAgentTerminal();
-        writeSegments(buildSegments(paths, isAgent), isAgent);
+        const owners: string[][] = [];
+        writeSegments(buildSegments(paths, isAgent, owners), isAgent, {
+          // Queued behind a pacing drop, it can still be cut short by a lock.
+          onWithheld: (from) =>
+            offerUnwritten(owners, from, () =>
+              cancelled || !isMountedRef.current
+                ? "moved"
+                : isInputLockedRef.current
+                  ? "unavailable"
+                  : "locked"
+            ),
+        });
         handOffFocus();
         return true;
       },
@@ -760,12 +794,13 @@ export function useTerminalFileTransfer(
 
         // Trailing space terminates the last token and leaves the caret ready for
         // the next argument or prompt word, matching the hybrid input's drop.
-        writeSegments(buildSegments(deliverable, context.isAgent), context.isAgent, {
+        const owners: string[][] = [];
+        writeSegments(buildSegments(deliverable, context.isAgent, owners), context.isAgent, {
           lockEpoch,
           automatic: true,
           stillCurrent: () => landingChange(context) === null,
-          onWithheld: () =>
-            offerWithheldPaths(terminalId, deliverable, withheld() ?? "input", context.hasPanel),
+          onWithheld: (from) =>
+            offerUnwritten(owners, from, () => withheld() ?? "input", context.hasPanel),
         });
 
         const activeNow = document.activeElement;

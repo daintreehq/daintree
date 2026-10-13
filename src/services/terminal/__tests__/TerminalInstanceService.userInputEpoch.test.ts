@@ -90,6 +90,13 @@ describe("TerminalInstanceService - user input epoch", () => {
     expect(service.getUserInputEpoch("t1")).toBe(0);
   });
 
+  it("stays put for a terminal reply or mouse report relayed as input", () => {
+    // What a fleet follower is told when the origin's xterm answers a query.
+    service.notifyUserInput("t1", "\x1b[12;4R");
+    service.notifyUserInput("t1", "\x1b[<0;10;5M");
+    expect(service.getUserInputEpoch("t1")).toBe(0);
+  });
+
   it("forgets a terminal once it is destroyed", () => {
     service.notifyUserInput("t1");
     service.destroy("t1");

@@ -1056,6 +1056,40 @@ describe("useTerminalFileTransfer hook", () => {
       );
     });
 
+    it("offers only the files a cut-short image drop never wrote", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      await dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      terminalInstanceService.notifyUserInput("term-1", "x");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(payloads()).toEqual([formatWithBracketedPaste("/Users/test/a.png")]);
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({
+        title: "File not inserted",
+        inboxMessage: expect.stringMatching(/\/Users\/test\/b\.png$/),
+      });
+    });
+
+    it("offers nothing when only the trailing space was left to write", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      terminalInstanceService.notifyUserInput("term-1", "x");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(payloads()).toEqual([formatWithBracketedPaste("/Users/test/a.png")]);
+      expect(notify).not.toHaveBeenCalled();
+    });
+
     it("stops pacing once the pane unmounts", async () => {
       const { unmount } = renderFileTransferHook({ detectedAgentId: "claude" });
       await dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);

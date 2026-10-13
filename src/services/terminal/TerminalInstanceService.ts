@@ -101,6 +101,7 @@ import { TerminalWorkerIngestController } from "./TerminalWorkerIngestController
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
+import { isMouseReport, isTerminalReply } from "./inputUtils";
 
 /**
  * Automatic rebuild budget for a terminal that cannot be opened (#11776).
@@ -669,7 +670,11 @@ class TerminalInstanceService {
    * epoch alone so it cannot make other pending drops look overtaken.
    */
   notifyUserInput(id: string, data = "", options: { automatic?: boolean } = {}): void {
-    if (!options.automatic) this.noteUserInput(id);
+    // A fleet follower is told about the origin's raw input, which can be a
+    // reply or a mouse report rather than anything the user typed.
+    if (!options.automatic && !isTerminalReply(data) && !isMouseReport(data)) {
+      this.noteUserInput(id);
+    }
     this.onUserInput(id, data);
   }
 
