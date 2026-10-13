@@ -472,6 +472,41 @@ export class TerminalResizeController {
     return true;
   }
 
+  /**
+   * Put a held pane's xterm on the grid the PTY reports holding, while another
+   * frontend drives the project and owns its size (#13282). The one renderer
+   * resize allowed under a hold: it never reaches the PTY, and it follows what
+   * the PTY says rather than this pane's box, so the driver's frame lands
+   * cell-for-cell and an oversized grid is clipped by the host, not reflowed
+   * to fit. Also re-points the targets so a cold open builds at this grid.
+   */
+  adoptPtyGeometry(id: string, cols: number, rows: number): void {
+    const managed = this.deps.getInstance(id);
+    if (!managed || !this.geometryHolds.has(id)) return;
+    const normalizedCols = normalizeTerminalGridDimension(cols);
+    const normalizedRows = normalizeTerminalGridDimension(rows);
+    if (this.refusesGrid(id, normalizedCols, normalizedRows, "pty-geometry", "measured")) return;
+
+    managed.targetCols = normalizedCols;
+    managed.targetRows = normalizedRows;
+    managed.latestCols = normalizedCols;
+    managed.latestRows = normalizedRows;
+    if (
+      !managed.isSerializedRestoreInProgress &&
+      managed.terminal.cols === normalizedCols &&
+      managed.terminal.rows === normalizedRows
+    ) {
+      return;
+    }
+
+    const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
+    this.resizeTerminal(managed, normalizedCols, normalizedRows);
+    if (!flushedHeldBytes) {
+      this.deps.dataBuffer.resumeFlush(id);
+    }
+    this.pinToBottomAfterResize(managed);
+  }
+
   isResizeLocked(id: string): boolean {
     if (this.geometryHolds.has(id)) return true;
     const expiry = this.resizeLocks.get(id);

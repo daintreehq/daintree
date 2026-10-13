@@ -135,4 +135,66 @@ describe("TerminalResizeController geometry hold", () => {
     expect(controller.releaseGeometry("term-0")).toBe(false);
     expect(controller.isResizeLocked("term-0")).toBe(true);
   });
+
+  describe("adopting the PTY's grid while another frontend drives (#13282)", () => {
+    it("puts xterm on the PTY's grid without sending anything to the PTY", () => {
+      const { panes, dataBuffer, controller } = setup();
+      const managed = panes.get("term-0");
+      controller.holdGeometry("term-0");
+
+      controller.adoptPtyGeometry("term-0", 200, 50);
+
+      expect(managed.terminal.resize).toHaveBeenCalledWith(200, 50);
+      expect(managed.terminal.cols).toBe(200);
+      expect(managed.terminal.rows).toBe(50);
+      expect(managed.targetCols).toBe(200);
+      expect(managed.targetRows).toBe(50);
+      expect(dataBuffer.flushForTerminal).toHaveBeenCalledWith("term-0");
+      expect(resizeMock).not.toHaveBeenCalled();
+      // Still held: the pane's own box can't take the grid back.
+      expect(controller.fit("term-0")).toBeNull();
+      expect(managed.terminal.cols).toBe(200);
+    });
+
+    it("leaves an unheld pane to its own fit", () => {
+      const { panes, controller } = setup();
+      controller.adoptPtyGeometry("term-0", 200, 50);
+
+      expect(panes.get("term-0").terminal.resize).not.toHaveBeenCalled();
+    });
+
+    it("doesn't reflow a pane already on that grid", () => {
+      const { panes, dataBuffer, controller } = setup();
+      controller.holdGeometry("term-0");
+
+      controller.adoptPtyGeometry("term-0", 80, 24);
+
+      expect(panes.get("term-0").terminal.resize).not.toHaveBeenCalled();
+      expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+    });
+
+    it("parks the grid for a serialized restore to normalize to", () => {
+      const { panes, controller } = setup();
+      const managed = panes.get("term-0");
+      managed.isSerializedRestoreInProgress = true;
+      controller.holdGeometry("term-0");
+
+      controller.adoptPtyGeometry("term-0", 200, 50);
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(managed.pendingRestoreGeometry).toEqual({ cols: 200, rows: 50 });
+    });
+
+    it("keeps an over-budget backlog queued and resumes it after the resize", () => {
+      const { panes, dataBuffer, controller } = setup();
+      dataBuffer.getQueuedBytes.mockReturnValue(Number.MAX_SAFE_INTEGER);
+      controller.holdGeometry("term-0");
+
+      controller.adoptPtyGeometry("term-0", 200, 50);
+
+      expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+      expect(dataBuffer.resumeFlush).toHaveBeenCalledWith("term-0");
+      expect(panes.get("term-0").terminal.resize).toHaveBeenCalledWith(200, 50);
+    });
+  });
 });
