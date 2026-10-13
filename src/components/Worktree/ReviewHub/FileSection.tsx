@@ -17,6 +17,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { DiffStat } from "@/components/ui/DiffStat";
 import { SearchField } from "@/components/ui/SearchField";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { type MountedRange } from "@/lib/fileListWindowing";
@@ -104,6 +105,14 @@ interface FileSectionProps {
    * flat index, and Virtuoso does not re-emit a range that has not changed.
    */
   onRenderedRangeChange?: (range: MountedRange) => void;
+  /**
+   * Whether the OTHER section holds any files. An empty Changes section only
+   * means "all changes staged" when something is staged; beside an empty
+   * Staged section (the rest are conflicted) that headline is false.
+   */
+  otherSectionHasFiles?: boolean;
+  /** Rows across both sections, for each option's `aria-setsize`. */
+  setSize?: number;
 }
 
 /**
@@ -119,6 +128,7 @@ const VIRTUALIZED_OVERSCAN_PX = 200;
 /** Per-row inputs, passed through Virtuoso's `context` rather than closed over per row. */
 interface SectionRowContext {
   section: FileStageRowSection;
+  setSize: number | undefined;
   isStaged: boolean;
   indexOffset: number;
   focusedIndex: number;
@@ -163,6 +173,7 @@ function renderSectionRow(index: number, file: StagingFileEntry, ctx: SectionRow
     <FileStageRow
       id={`review-hub-row-${rowIndex}`}
       rowIndex={rowIndex}
+      setSize={ctx.setSize}
       isFocused={ctx.focusedIndex === rowIndex}
       file={file}
       section={ctx.section}
@@ -221,6 +232,8 @@ export function FileSection({
   scrollParent = null,
   listRef,
   onRenderedRangeChange,
+  otherSectionHasFiles = true,
+  setSize,
 }: FileSectionProps) {
   const section: FileStageRowSection = isStaged ? "staged" : "unstaged";
   const title = isStaged ? "Staged" : "Changes";
@@ -233,7 +246,11 @@ export function FileSection({
   // check-box glyphs, which read as the section's state rather than as the
   // action about to run. One vocabulary per operation.
   const BulkActionIcon = isStaged ? Minus : Plus;
-  const emptyNothingTitle = isStaged ? "Nothing staged" : "All changes staged";
+  const emptyNothingTitle = isStaged
+    ? "Nothing staged"
+    : otherSectionHasFiles
+      ? "All changes staged"
+      : "No unstaged changes";
   const emptyGeneratedTitle = isStaged
     ? "Only generated files staged"
     : "Only generated files changed";
@@ -285,6 +302,7 @@ export function FileSection({
   const rowContext: SectionRowContext = useMemo(
     () => ({
       section,
+      setSize,
       isStaged,
       indexOffset,
       focusedIndex,
@@ -300,6 +318,7 @@ export function FileSection({
     }),
     [
       section,
+      setSize,
       isStaged,
       indexOffset,
       focusedIndex,
@@ -355,21 +374,19 @@ export function FileSection({
         <div className={REVIEW_HUB_SECTION_BAND}>
           <span className={cn(SECTION_LABEL_CLASS, "shrink-0 flex items-center")}>
             {title}
-            <span
-              data-testid={countTestId}
-              className={cn(REVIEW_HUB_COUNT_CHIP, "inline-flex items-center gap-1")}
-            >
-              <span>{pluralize(totalCount, "file")}</span>
-              {(churn.ins > 0 || churn.del > 0) && (
-                <span className={cn("inline-flex items-center gap-1", churnDropClass)}>
-                  <span aria-hidden="true" className="text-daintree-text/30">
-                    ·
-                  </span>
-                  {churn.ins > 0 && <span className="text-status-success">{`+${churn.ins}`}</span>}
-                  {churn.del > 0 && <span className="text-status-error">{`-${churn.del}`}</span>}
-                </span>
-              )}
+            <span data-testid={countTestId} className={REVIEW_HUB_COUNT_CHIP}>
+              {pluralize(totalCount, "file")}
             </span>
+            {/* Churn sits on the band, not inside the chip: the status inks are
+                gated against panel surfaces, and on the chip's tinted fill they
+                fell under 4.5:1 at this size. DiffStat is also the app's one
+                spelling of churn, so the totals format like every row's. */}
+            <DiffStat
+              data-testid={`${section}-section-churn`}
+              insertions={churn.ins}
+              deletions={churn.del}
+              className={cn("ml-2 font-normal normal-case tracking-normal", churnDropClass)}
+            />
             {/* The disclosure that the count above is not what is on screen.
                 Independent of the bulk label on purpose: that label loses its
                 "shown" wording the moment rows are selected, which used to
@@ -444,9 +461,9 @@ export function FileSection({
                       Path
                       {view.sortKey === "path" &&
                         (view.sortDir === "asc" ? (
-                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
+                          <ChevronUp className="w-3 h-3 ml-auto text-text-secondary" />
                         ) : (
-                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
+                          <ChevronDown className="w-3 h-3 ml-auto text-text-secondary" />
                         ))}
                     </span>
                   </DropdownMenuRadioItem>
@@ -455,9 +472,9 @@ export function FileSection({
                       Status
                       {view.sortKey === "status" &&
                         (view.sortDir === "asc" ? (
-                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
+                          <ChevronUp className="w-3 h-3 ml-auto text-text-secondary" />
                         ) : (
-                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
+                          <ChevronDown className="w-3 h-3 ml-auto text-text-secondary" />
                         ))}
                     </span>
                   </DropdownMenuRadioItem>
@@ -466,9 +483,9 @@ export function FileSection({
                       Churn
                       {view.sortKey === "churn" &&
                         (view.sortDir === "asc" ? (
-                          <ChevronUp className="w-3 h-3 ml-auto text-daintree-text/40" />
+                          <ChevronUp className="w-3 h-3 ml-auto text-text-secondary" />
                         ) : (
-                          <ChevronDown className="w-3 h-3 ml-auto text-daintree-text/40" />
+                          <ChevronDown className="w-3 h-3 ml-auto text-text-secondary" />
                         ))}
                     </span>
                   </DropdownMenuRadioItem>
@@ -554,6 +571,7 @@ export function FileSection({
                 key={`${section}-${file.path}`}
                 id={`review-hub-row-${indexOffset + i}`}
                 rowIndex={indexOffset + i}
+                setSize={setSize}
                 isFocused={focusedIndex === indexOffset + i}
                 file={file}
                 section={section}

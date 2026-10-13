@@ -75,6 +75,8 @@ interface FileStageRowProps {
   /** Flat index across both sections; used by the parent to scroll the row
    * into view via `[data-row-index]`. */
   rowIndex?: number;
+  /** Rows across both sections, so a windowed option can still say "3 of 412". */
+  setSize?: number;
   onToggle: (filePath: string) => void;
   onRowClick: (
     section: FileStageRowSection,
@@ -121,6 +123,7 @@ function FileStageRowComponent({
   isFocused = false,
   id,
   rowIndex,
+  setSize,
   onToggle,
   onRowClick,
   density = "comfortable",
@@ -152,6 +155,17 @@ function FileStageRowComponent({
     [onRowClick, section, file.path, file.status]
   );
 
+  // The name button sits inside the row, which has the same handler; letting the
+  // click bubble ran it twice, so a Cmd/Ctrl-click toggled selection and then
+  // toggled it straight back.
+  const handleNameClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      handleClick(e);
+    },
+    [handleClick]
+  );
+
   const handleViewedChange = useCallback(
     (checked: boolean | "indeterminate") => {
       onViewedChange?.(checked === true);
@@ -174,6 +188,8 @@ function FileStageRowComponent({
       ref={rowRef}
       id={id}
       role="option"
+      aria-posinset={rowIndex !== undefined ? rowIndex + 1 : undefined}
+      aria-setsize={setSize}
       data-row-index={rowIndex}
       onMouseDown={suppressShiftClickTextSelection}
       onClick={handleClick}
@@ -216,7 +232,10 @@ function FileStageRowComponent({
       <TruncatedTooltip content={file.path}>
         <button
           type="button"
-          onClick={handleClick}
+          onClick={handleNameClick}
+          // Out of the tab order: the listbox is the list's one tab stop and
+          // Enter opens the cursor row's diff. Pointer use is unchanged.
+          tabIndex={-1}
           aria-label={`View diff: ${file.path}`}
           className={cn(
             "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded-[var(--radius-sm)] px-1 text-left",
@@ -254,7 +273,7 @@ function FileStageRowComponent({
             className={cn(
               "shrink truncate font-medium font-mono text-2xs transition-[color,opacity] duration-150 ease-out",
               viewedDim,
-              generated ? "text-daintree-text/40" : "text-text-primary"
+              generated ? "text-text-secondary" : "text-text-primary"
             )}
           >
             {base}
@@ -289,6 +308,8 @@ function FileStageRowComponent({
                 size="sm"
                 checked={viewed}
                 onCheckedChange={handleViewedChange}
+                // V toggles the cursor row's viewed mark from the listbox.
+                tabIndex={-1}
                 // Constant, as a toggle's name must be: the checked state is
                 // announced by the checkbox itself.
                 aria-label={`Mark ${file.path} as viewed`}
@@ -308,6 +329,8 @@ function FileStageRowComponent({
             variant="ghost"
             size="icon-xs"
             onClick={handleToggle}
+            // Space stages or unstages the cursor row from the listbox.
+            tabIndex={-1}
             // The 24px hit area without the 24px of row height: the negative
             // margin gives back what the button adds over the row's 16px line.
             className="-my-1 ml-2 shrink-0"

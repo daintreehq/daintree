@@ -331,14 +331,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Recorded result carried by a success notification on the grid bar",
     },
   ],
-  "src/components/Worktree/ReviewHub/FileSection.tsx": [
-    {
-      category: "domain",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Section diff insertion count",
-    },
-  ],
   "src/components/Worktree/ReviewHub/FileStageRow.tsx": [
     {
       category: "domain",
@@ -577,5 +569,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 64;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 66;
+export const EXPECTED_STATUS_SUCCESS_SITES = 63;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 65;

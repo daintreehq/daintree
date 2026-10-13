@@ -14,6 +14,12 @@ import type { FileStageRowSection } from "./FileStageRow";
 export interface ReviewHubActionFailure {
   title: string;
   detail: string;
+  /**
+   * Re-runs the operation that failed, with the scope it had when it failed.
+   * Absent when re-running would skip a confirmation or is not meaningful; the
+   * banner then offers no Retry rather than one that only re-reads status.
+   */
+  retry?: () => void;
 }
 
 interface UseReviewHubStagingActionsArgs {
@@ -60,98 +66,122 @@ export function useReviewHubStagingActions({
 
   const handleStageFile = useCallback(
     async (filePath: string) => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      try {
-        await window.electron.git.stageFile(worktreePath, filePath);
-        await refresh();
-      } catch (err) {
-        setActionError({
-          title: "Couldn't stage file",
-          detail: formatErrorMessage(err, "Failed to stage file"),
-        });
-      }
+      const attempt = async (): Promise<void> => {
+        setActionError(null);
+        debouncedBgRefreshRef.current?.cancel();
+        try {
+          await window.electron.git.stageFile(worktreePath, filePath);
+          await refresh();
+        } catch (err) {
+          setActionError({
+            title: "Couldn't stage file",
+            detail: formatErrorMessage(err, "Failed to stage file"),
+            retry: () => void attempt(),
+          });
+        }
+      };
+      await attempt();
     },
     [worktreePath, refresh, setActionError, debouncedBgRefreshRef]
   );
 
   const handleUnstageFile = useCallback(
     async (filePath: string) => {
-      setActionError(null);
-      debouncedBgRefreshRef.current?.cancel();
-      try {
-        await window.electron.git.unstageFile(worktreePath, filePath);
-        await refresh();
-      } catch (err) {
-        setActionError({
-          title: "Couldn't unstage file",
-          detail: formatErrorMessage(err, "Failed to unstage file"),
-        });
-      }
+      const attempt = async (): Promise<void> => {
+        setActionError(null);
+        debouncedBgRefreshRef.current?.cancel();
+        try {
+          await window.electron.git.unstageFile(worktreePath, filePath);
+          await refresh();
+        } catch (err) {
+          setActionError({
+            title: "Couldn't unstage file",
+            detail: formatErrorMessage(err, "Failed to unstage file"),
+            retry: () => void attempt(),
+          });
+        }
+      };
+      await attempt();
     },
     [worktreePath, refresh, setActionError, debouncedBgRefreshRef]
   );
 
   const handleStageAll = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.stageAll(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError({
-        title: "Couldn't stage all files",
-        detail: formatErrorMessage(err, "Failed to stage all files"),
-      });
-    }
+    const attempt = async (): Promise<void> => {
+      setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
+      try {
+        await window.electron.git.stageAll(worktreePath);
+        await refresh();
+      } catch (err) {
+        setActionError({
+          title: "Couldn't stage all files",
+          detail: formatErrorMessage(err, "Failed to stage all files"),
+          retry: () => void attempt(),
+        });
+      }
+    };
+    await attempt();
   }, [worktreePath, refresh, setActionError, debouncedBgRefreshRef]);
 
   const handleUnstageAll = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.unstageAll(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError({
-        title: "Couldn't unstage all files",
-        detail: formatErrorMessage(err, "Failed to unstage all files"),
-      });
-    }
+    const attempt = async (): Promise<void> => {
+      setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
+      try {
+        await window.electron.git.unstageAll(worktreePath);
+        await refresh();
+      } catch (err) {
+        setActionError({
+          title: "Couldn't unstage all files",
+          detail: formatErrorMessage(err, "Failed to unstage all files"),
+          retry: () => void attempt(),
+        });
+      }
+    };
+    await attempt();
   }, [worktreePath, refresh, setActionError, debouncedBgRefreshRef]);
 
   const handleStageFiltered = useCallback(async () => {
     const paths = derivedUnstaged.map((f) => f.path);
     if (paths.length === 0) return;
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.stageFiles(worktreePath, paths);
-    } catch (err) {
-      setActionError({
-        title: "Couldn't stage files",
-        detail: formatErrorMessage(err, "Failed to stage files"),
-      });
-    } finally {
-      await refresh();
-    }
+    const attempt = async (): Promise<void> => {
+      setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
+      try {
+        await window.electron.git.stageFiles(worktreePath, paths);
+      } catch (err) {
+        setActionError({
+          title: "Couldn't stage files",
+          detail: formatErrorMessage(err, "Failed to stage files"),
+          retry: () => void attempt(),
+        });
+      } finally {
+        await refresh();
+      }
+    };
+    await attempt();
   }, [worktreePath, refresh, derivedUnstaged, setActionError, debouncedBgRefreshRef]);
 
   const handleUnstageFiltered = useCallback(async () => {
     const paths = derivedStaged.map((f) => f.path);
     if (paths.length === 0) return;
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.unstageFiles(worktreePath, paths);
-    } catch (err) {
-      setActionError({
-        title: "Couldn't unstage files",
-        detail: formatErrorMessage(err, "Failed to unstage files"),
-      });
-    } finally {
-      await refresh();
-    }
+    const attempt = async (): Promise<void> => {
+      setActionError(null);
+      debouncedBgRefreshRef.current?.cancel();
+      try {
+        await window.electron.git.unstageFiles(worktreePath, paths);
+      } catch (err) {
+        setActionError({
+          title: "Couldn't unstage files",
+          detail: formatErrorMessage(err, "Failed to unstage files"),
+          retry: () => void attempt(),
+        });
+      } finally {
+        await refresh();
+      }
+    };
+    await attempt();
   }, [worktreePath, refresh, derivedStaged, setActionError, debouncedBgRefreshRef]);
 
   const handleStageSelection = useCallback(async () => {
@@ -168,9 +198,26 @@ export function useReviewHubStagingActions({
       selectionAnchorRef.current = null;
       await refresh();
     } catch (err) {
+      // The selection's own paths, captured at the click: by the time Retry
+      // is pressed the selection may have moved on.
+      const retry = async (): Promise<void> => {
+        setActionError(null);
+        try {
+          await window.electron.git.stageFiles(worktreePath, paths);
+        } catch (retryErr) {
+          setActionError({
+            title: "Couldn't stage files",
+            detail: formatErrorMessage(retryErr, "Failed to stage selected files"),
+            retry: () => void retry(),
+          });
+        } finally {
+          await refresh();
+        }
+      };
       setActionError({
         title: "Couldn't stage selected files",
         detail: formatErrorMessage(err, "Failed to stage selected files"),
+        retry: () => void retry(),
       });
     } finally {
       isBulkStagingRef.current = false;
@@ -201,9 +248,26 @@ export function useReviewHubStagingActions({
       selectionAnchorRef.current = null;
       await refresh();
     } catch (err) {
+      // The selection's own paths, captured at the click: by the time Retry
+      // is pressed the selection may have moved on.
+      const retry = async (): Promise<void> => {
+        setActionError(null);
+        try {
+          await window.electron.git.unstageFiles(worktreePath, paths);
+        } catch (retryErr) {
+          setActionError({
+            title: "Couldn't unstage files",
+            detail: formatErrorMessage(retryErr, "Failed to unstage selected files"),
+            retry: () => void retry(),
+          });
+        } finally {
+          await refresh();
+        }
+      };
       setActionError({
         title: "Couldn't unstage selected files",
         detail: formatErrorMessage(err, "Failed to unstage selected files"),
+        retry: () => void retry(),
       });
     } finally {
       isBulkStagingRef.current = false;

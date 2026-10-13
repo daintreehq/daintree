@@ -479,9 +479,11 @@ describe("ReviewHub", () => {
       await waitFor(() => screen.getByText("a.ts"));
       // Exact full-text match: catches misordered/duplicate/missing segments.
       const stagedChip = screen.getByTestId("staged-section-count-chip");
-      expect(stagedChip.textContent).toBe("2 files·+15-3");
+      expect(stagedChip.textContent).toBe("2 files");
+      expect(screen.getByTestId("staged-section-churn").textContent).toBe("+15-3");
       const changesChip = screen.getByTestId("changes-section-count-chip");
-      expect(changesChip.textContent).toBe("1 file·+3-4");
+      expect(changesChip.textContent).toBe("1 file");
+      expect(screen.getByTestId("unstaged-section-churn").textContent).toBe("+3-4");
     });
 
     it("renders only +N when deletions are zero in the chip", async () => {
@@ -495,7 +497,8 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("new.ts"));
       const stagedChip = screen.getByTestId("staged-section-count-chip");
-      expect(stagedChip.textContent).toBe("1 file·+10");
+      expect(stagedChip.textContent).toBe("1 file");
+      expect(screen.getByTestId("staged-section-churn").textContent).toBe("+10");
     });
 
     it("omits churn suffix when all insertions/deletions are null", async () => {
