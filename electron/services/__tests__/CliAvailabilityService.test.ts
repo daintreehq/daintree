@@ -1150,45 +1150,9 @@ describe("CliAvailabilityService", () => {
   });
 
   describe("blocked state (security software / permissions)", () => {
-    // POSIX walks PATH in-process, so only Windows still has a probe
-    // subprocess (`where.exe`) that security software can block.
-    it("reports 'blocked' when where throws EPERM (Santa / CrowdStrike / Defender)", async () => {
-      Object.defineProperty(process, "platform", { value: "win32", writable: true });
-      mockedExecFileSync.mockImplementation(() => {
-        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
-      });
-
-      const result = await service.checkAvailability();
-
-      // Every agent surfaces as blocked — the shell probe couldn't tell
-      // them apart, but "blocked" is the common, actionable verdict.
-      for (const state of Object.values(result)) {
-        expect(state).toBe("blocked");
-      }
-
-      const details = service.getDetails();
-      expect(details).not.toBeNull();
-      expect(details!.claude?.state).toBe("blocked");
-      expect(details!.claude?.blockReason).toBe("security");
-      expect(details!.claude?.message).toMatch(/EPERM/);
-    });
-
-    it("reports 'blocked' when where throws EACCES", async () => {
-      Object.defineProperty(process, "platform", { value: "win32", writable: true });
-      mockedExecFileSync.mockImplementation(() => {
-        throw Object.assign(new Error("access denied"), { code: "EACCES" });
-      });
-
-      const result = await service.checkAvailability();
-
-      for (const state of Object.values(result)) {
-        expect(state).toBe("blocked");
-      }
-
-      const details = service.getDetails();
-      expect(details!.claude?.blockReason).toBe("security");
-    });
-
+    // Neither platform spawns a PATH probe (POSIX walks PATH in-process,
+    // Windows reads its directories), so "blocked" comes from the native-path
+    // and spawn checks below, which touch the binary itself.
     it("reports 'blocked' when a native-path binary exists but fs.access returns EACCES", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
@@ -2561,17 +2525,12 @@ describe("CliAvailabilityService", () => {
       logBuffer.clear();
     });
 
-    // The hung agent's PATH lookup never settles (the in-process walk on POSIX,
-    // `where` on Windows), so its check outlives the batch budget while every
-    // other agent settles through microtasks.
+    // The hung agent's PATH lookup never settles, so its check outlives the
+    // batch budget while every other agent settles through microtasks.
     const hangPathLookupFor = (hungCommand: string) => {
       mockedFindAllOnPath.mockImplementation((command) =>
         command === hungCommand ? new Promise<string[]>(() => {}) : pathFixtureLookup(command)
       );
-      mockedExecFile.mockImplementation(((...args: unknown[]) =>
-        args[0] === "where" && cmdOf(args[1]) === hungCommand
-          ? ({} as never)
-          : defaultExecFileImpl(...args)) as never);
     };
 
     const timedOutAgentIds = () =>
@@ -2641,30 +2600,34 @@ describe("CliAvailabilityService", () => {
     });
 
     it("keeps a carried agent's own diagnostic instead of the timeout note", async () => {
-      // `where` is the PATH probe that can itself be blocked by security
-      // software, which is what gives goose a diagnostic of its own here.
-      Object.defineProperty(process, "platform", { value: "win32", writable: true });
-      mockedExecFileSync.mockImplementation((_file, args) => {
-        if (cmdOf(args) === "goose") {
-          throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      // A native install the process may not execute is what gives claude a
+      // diagnostic of its own here.
+      const { access } = await import("fs/promises");
+      const claudeNative = join(homedir(), ".local/bin/claude");
+      vi.mocked(access).mockImplementation(async (p) => {
+        if (String(p) === claudeNative) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
         }
         throw Object.assign(new Error("not found"), { code: "ENOENT" });
       });
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
       await service.checkAvailability();
-      const blockedGoose = service.getDetails()!.goose;
-      expect(blockedGoose?.state).toBe("blocked");
-      expect(blockedGoose?.message).toBeDefined();
+      const blockedClaude = service.getDetails()!.claude;
+      expect(blockedClaude?.state).toBe("blocked");
+      expect(blockedClaude?.message).toBeDefined();
 
-      hangPathLookupFor("goose");
+      hangPathLookupFor("claude");
       vi.useFakeTimers();
       const refreshPromise = service.refresh();
       await vi.advanceTimersByTimeAsync(60_000);
       await refreshPromise;
 
       // A fresh re-check would rebuild the same blocked detail, so pin that
-      // goose really was carried rather than re-probed.
-      expect(timedOutAgentIds()).toEqual([["goose"]]);
-      expect(service.getDetails()!.goose).toEqual(blockedGoose);
+      // claude really was carried rather than re-probed.
+      expect(timedOutAgentIds()).toEqual([["claude"]]);
+      expect(service.getDetails()!.claude).toEqual(blockedClaude);
     });
 
     it("never offers a timed-out check for reuse", async () => {
