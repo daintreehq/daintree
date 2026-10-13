@@ -6,7 +6,7 @@
 // installed client until a hand-rolled republish — see #7573.
 //
 // Reads the new version from the local artifacts already downloaded into
-// `release/${UPDATE_METADATA_PREFIX}{,-mac,-linux}.yml` (Windows uses the
+// `release/${UPDATE_METADATA_PREFIX}{,-mac,-linux,-linux-arm64}.yml` (Windows uses the
 // no-suffix file), fetches the same files from
 // https://updates.daintree.org/releases/, and compares with `semver.gt`.
 // Equal versions are treated as "already published" — the gate passes without
@@ -36,7 +36,9 @@ import semver from "semver";
 
 const FEED_BASE_URL = "https://updates.daintree.org/releases";
 const FETCH_TIMEOUT_MS = 15_000;
-const PLATFORMS = ["mac", "linux", "win"];
+// Linux arm64 clients poll their own `-linux-arm64` feed (electron-updater
+// Provider.getChannelFilePrefix()), so it is gated as a platform of its own.
+const PLATFORMS = ["mac", "linux", "linux-arm64", "win"];
 
 /**
  * Map a platform identifier to the metadata filename electron-updater actually

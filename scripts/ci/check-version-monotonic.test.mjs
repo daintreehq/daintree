@@ -285,6 +285,14 @@ describe("check-version-monotonic", () => {
       expect(resolvePlatforms("win")).toEqual({ ok: true, platforms: ["win"] });
     });
 
+    it("treats linux-arm64 as its own feed, distinct from linux", () => {
+      expect(resolvePlatforms("linux-arm64")).toEqual({ ok: true, platforms: ["linux-arm64"] });
+      expect(resolvePlatforms("linux-arm64,linux")).toEqual({
+        ok: true,
+        platforms: ["linux", "linux-arm64"],
+      });
+    });
+
     it("normalizes case and whitespace, dedupes, and preserves PLATFORMS order", () => {
       expect(resolvePlatforms(" WIN , mac , mac ")).toEqual({
         ok: true,
@@ -296,7 +304,7 @@ describe("check-version-monotonic", () => {
       const result = resolvePlatforms("macos");
       expect(result.ok).toBe(false);
       expect(result.error).toContain("macos");
-      expect(result.error).toContain("mac, linux, win");
+      expect(result.error).toContain("mac, linux, linux-arm64, win");
     });
   });
 });

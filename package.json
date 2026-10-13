@@ -52,6 +52,7 @@
     "package:win:appx": "npm run build && electron-builder --config electron-builder.config.cjs --win appx",
     "rebuild:win-arm64": "cross-env npm_config_arch=arm64 electron-rebuild -f -w win-job-object --arch=arm64; cross-env npm_config_arch=arm64 node node_modules/node-pty/scripts/post-install.js",
     "package:linux": "npm run build && electron-builder --config electron-builder.config.cjs --linux",
+    "package:linux:arm64": "npm run build && electron-builder --config electron-builder.config.cjs --linux --arm64",
     "package:local": "node scripts/package-local-dmg.mjs --dir",
     "package:local:dmg": "node scripts/package-local-dmg.mjs",
     "install:local": "node scripts/package-local-dmg.mjs --dir --install",

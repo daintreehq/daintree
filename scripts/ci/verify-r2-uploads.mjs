@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Verifies that every binary referenced in the generated update metadata
-// (release/<prefix>{,-mac,-linux}.yml — Windows uses the no-suffix file)
+// (release/<prefix>{,-mac,-linux,-linux-arm64}.yml — Windows uses the no-suffix file)
 // is reachable at the public CDN URL with a matching Content-Length before
 // the metadata files are uploaded.
 //
@@ -78,6 +78,7 @@ export async function verifyWithRetries(
 const METADATA_PATTERNS = [
   (prefix) => `${prefix}-mac.yml`,
   (prefix) => `${prefix}-linux.yml`,
+  (prefix) => `${prefix}-linux-arm64.yml`,
   (prefix) => `${prefix}.yml`,
 ];
 
@@ -160,7 +161,7 @@ async function main() {
   const metadataFiles = await findMetadataFiles(releaseDir, prefix);
   if (metadataFiles.length === 0) {
     console.error(
-      `::error::No update metadata files found in ${releaseDir} matching ${prefix}{,-mac,-linux}.yml`
+      `::error::No update metadata files found in ${releaseDir} matching ${prefix}{,-mac,-linux,-linux-arm64}.yml`
     );
     process.exit(1);
   }
