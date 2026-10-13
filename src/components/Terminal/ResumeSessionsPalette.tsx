@@ -123,10 +123,6 @@ function ResumeSessionRow({
       // text node in the row.
       aria-labelledby={`${optionId}-title ${optionId}-agent`}
       aria-describedby={meta ? `${optionId}-meta ${optionId}-age` : `${optionId}-age`}
-      // The pointer's only explanation of why a removed row does nothing.
-      title={
-        item.isStale ? "This session's worktree was deleted, so it can't be resumed" : undefined
-      }
       ref={itemRef}
       className={cn(
         PALETTE_ROW_CLASS,
