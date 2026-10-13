@@ -31,19 +31,25 @@ export function EnvironmentRadioGroup({
   if (!hasAnyEnvironments) return null;
 
   return (
-    <div className="space-y-1.5">
-      <SegmentedRadioGroup
-        options={options}
-        value={worktreeMode}
-        onChange={onChange}
-        aria-label="Environment"
-        disabled={disabled}
-      />
-      {worktreeMode !== "local" && (
-        <p className="text-xs text-text-secondary">
-          Provisions the {worktreeMode} environment after setup
-        </p>
-      )}
-    </div>
+    <SegmentedRadioGroup
+      options={options}
+      value={worktreeMode}
+      onChange={onChange}
+      aria-label="Environment"
+      disabled={disabled}
+    />
+  );
+}
+
+/**
+ * What a non-local choice does, on the row's hint rail rather than in the
+ * control cell — inside, it pulled the "Environment" label below the pills.
+ */
+export function EnvironmentHint({ worktreeMode }: { worktreeMode: string }) {
+  if (worktreeMode === "local") return null;
+  return (
+    <p className="text-xs text-text-secondary">
+      Provisions the {worktreeMode} environment after setup
+    </p>
   );
 }

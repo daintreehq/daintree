@@ -160,6 +160,18 @@ export function IssueSelector({
               aria-expanded={open}
               aria-haspopup="listbox"
               aria-controls={LIST_ID}
+              // Once an issue is picked the visible text is just the issue, so
+              // the field's own name rides in front of it; empty, the visible
+              // prompt already says what the field is.
+              aria-label={
+                selectedIssue ? `Issue #${selectedIssue.number} ${selectedIssue.title}` : undefined
+              }
+              onKeyDown={(event) => {
+                if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                  event.preventDefault();
+                  handleOpenChange(true);
+                }
+              }}
               className={cn(
                 "flex h-full min-w-0 flex-1 items-center justify-between gap-2 px-2.5",
                 "text-sm text-text-primary transition-colors duration-150 ease-out",
@@ -269,7 +281,7 @@ export function IssueSelector({
           aria-busy={loading || undefined}
         >
           {loading && issues.length === 0 ? (
-            <ForgeOptionRowsSkeleton count={3} immediate />
+            <ForgeOptionRowsSkeleton count={3} />
           ) : issues.length === 0 ? (
             loadFailed ? null : trimmedQuery ? (
               <EmptyState

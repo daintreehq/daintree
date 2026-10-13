@@ -80,12 +80,19 @@ vi.mock("@/config/agents", () => ({
 }));
 
 const mockAddTerminal = vi.fn().mockResolvedValue("new-terminal-id");
-vi.mock("@/store/panelStore", () => ({
-  usePanelStore: Object.assign(() => ({}), {
-    getState: () => ({ addPanel: mockAddTerminal, panelsById: {} }),
-    subscribe: () => () => {},
-  }),
-}));
+vi.mock("@/store/panelStore", () => {
+  const panelState = () => ({ addPanel: mockAddTerminal, panelsById: {}, panelIds: [] });
+  return {
+    usePanelStore: Object.assign(
+      (selector?: (s: ReturnType<typeof panelState>) => unknown) =>
+        selector ? selector(panelState()) : panelState(),
+      {
+        getState: panelState,
+        subscribe: () => () => {},
+      }
+    ),
+  };
+});
 
 const mockGenerateRecipeFromActiveTerminals = vi.fn().mockReturnValue([]);
 const recipeFixtures = vi.hoisted(() => ({ recipes: [] as unknown[] }));
@@ -182,17 +189,22 @@ const mockSetPendingWorktree = vi.fn();
 const mockSelectWorktree = vi.fn();
 const mockAddPendingCreation = vi.fn();
 const mockFailPendingCreation = vi.fn();
-vi.mock("@/store/worktreeStore", () => ({
-  useWorktreeSelectionStore: {
-    getState: () => ({
-      setPendingWorktree: mockSetPendingWorktree,
-      selectWorktree: mockSelectWorktree,
-      addPendingCreation: mockAddPendingCreation,
-      failPendingCreation: mockFailPendingCreation,
-      activeWorktreeId: null,
-    }),
-  },
-}));
+vi.mock("@/store/worktreeStore", () => {
+  const selectionState = () => ({
+    setPendingWorktree: mockSetPendingWorktree,
+    selectWorktree: mockSelectWorktree,
+    addPendingCreation: mockAddPendingCreation,
+    failPendingCreation: mockFailPendingCreation,
+    activeWorktreeId: null,
+  });
+  return {
+    useWorktreeSelectionStore: Object.assign(
+      (selector?: (s: ReturnType<typeof selectionState>) => unknown) =>
+        selector ? selector(selectionState()) : selectionState(),
+      { getState: selectionState }
+    ),
+  };
+});
 
 const recipePickerCalls = vi.hoisted(() => ({
   last: null as { startingLayoutRecipes: unknown[]; defaultRecipeId: string | undefined } | null,
@@ -700,7 +712,7 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("disables Create button when no existing branch is selected", async () => {
+  it("keeps Create available with no existing branch and names the missing pick under the field", async () => {
     renderDialog();
     await advanceTimersGradually(500);
 
@@ -709,7 +721,18 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     });
 
     const createButton = screen.getByTestId("create-worktree-button");
-    expect(createButton.getAttribute("aria-disabled")).toBe("true");
+    expect(createButton.getAttribute("aria-disabled")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(createButton);
+    });
+
+    const picker = screen.getByTestId("existing-branch-picker");
+    expect(picker.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById("validation-error")?.textContent).toContain(
+      "Please select a branch"
+    );
+    expect(document.activeElement).toBe(picker);
   });
 });
 
@@ -2139,8 +2162,12 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     renderDialog();
     await advanceTimersGradually(500);
     await nameBranch();
-    await pickClaudeAndType(PROMPT);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
     expect(screen.getByText(/This recipe already starts an agent/)).toBeDefined();
+    // An empty prompt that could never be sent isn't offered at all.
+    expect(screen.queryByTestId("first-agent-prompt")).toBeNull();
     await submit();
 
     expect(actionCalls("agent.launch")).toHaveLength(0);

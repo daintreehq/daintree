@@ -351,6 +351,11 @@ function buildEmptyQueryRows(
   }
 
   let remaining = limit - cappedRecent.length;
+  // Under a Recent band the rest need their own heading, or they read as more
+  // of the recent ones. Without one there is nothing to tell them apart from.
+  if (cappedRecent.length > 0 && remaining > 0 && otherBranches.length > 0) {
+    rows.push({ kind: "section", label: "All branches" });
+  }
   for (const branch of otherBranches) {
     if (remaining <= 0) break;
     rows.push({ kind: "option", ...branch });
