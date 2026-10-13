@@ -112,6 +112,11 @@ async function bootstrap() {
       .catch((error: unknown) => {
         console.warn("[Hosts] Couldn't install the host project listing:", error);
       });
+    void import("./lib/forgetHostLocalState")
+      .then((m) => m.installForgetHostLocalState())
+      .catch((error: unknown) => {
+        console.warn("[Hosts] Couldn't install removed-host cleanup:", error);
+      });
   }
 
   // Kick off the agent-settings store so `App.tsx`, `Toolbar`, and the tray

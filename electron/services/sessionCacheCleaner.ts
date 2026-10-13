@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { app, session } from "electron";
 import { classifyPartition } from "../utils/webviewCsp.js";
+import { remotePartitionKeyPrefix } from "../../shared/utils/partitionUtils.js";
 
 /** Chromium's HTTP disk cache and V8 code cache, relative to a session's storage dir. */
 const CACHE_DIR_NAMES = ["Cache", "Code Cache"] as const;
@@ -197,6 +198,69 @@ async function clearPartitionDir(
 
   if (!ok) return "failed";
   return alreadyCounted ? "already-counted" : "cleared";
+}
+
+/**
+ * The partition directory names a host's browser, dev-preview and portal
+ * sessions use. The prefix ends at the host part's closing `__`, which no host
+ * part holds, so one host's partitions never match another's.
+ */
+export function isHostPartitionDirName(name: string, hostId: string): boolean {
+  const prefix = remotePartitionKeyPrefix(hostId);
+  return name.startsWith(`browser-${prefix}`) || name.startsWith(`dev-preview-${prefix}`);
+}
+
+/**
+ * A host was removed from this device: wipe every session its projects used
+ * (cookies, storage, service workers, caches). An open session is cleared
+ * through the Session API; one not open this run has its directory removed,
+ * detached first so a session opening meanwhile starts empty.
+ */
+export async function clearHostPartitions(hostId: string): Promise<ClearSessionCachesResult> {
+  const result: ClearSessionCachesResult = { cleared: 0, failed: 0 };
+  const partitionsRoot = path.join(app.getPath("sessionData"), "Partitions");
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(partitionsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isErrnoCode(error, "ENOENT")) return result;
+    console.warn("[SessionCacheCleaner] Failed to list partitions:", error);
+    result.failed++;
+    return result;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isHostPartitionDirName(entry.name, hostId)) continue;
+    const partitionDir = path.join(partitionsRoot, entry.name);
+    const live = findLiveSession(partitionDir);
+    if (live) {
+      try {
+        await live.clearData();
+        result.cleared++;
+      } catch (error) {
+        console.warn(`[SessionCacheCleaner] Failed to clear ${entry.name}:`, error);
+        result.failed++;
+      }
+      continue;
+    }
+    // Synchronous with the liveness check: no session can open in between.
+    const detached = `${partitionDir}${DETACHED_MARKER}${randomBytes(6).toString("hex")}`;
+    try {
+      fs.renameSync(partitionDir, detached);
+      await fs.promises.rm(detached, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+      result.cleared++;
+    } catch (error) {
+      if (isErrnoCode(error, "ENOENT")) continue;
+      console.warn(`[SessionCacheCleaner] Failed to remove ${entry.name}:`, error);
+      result.failed++;
+    }
+  }
+  return result;
 }
 
 function findLiveSession(dir: string): Electron.Session | undefined {

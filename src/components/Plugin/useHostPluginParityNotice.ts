@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
 import { requestHostPlugins } from "@/components/Settings/Hosts/hostPluginRequests";
+import { HOSTS_SETTINGS_TAB } from "@/components/Hosts/hostModel";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { logWarn } from "@/utils/logger";
 import { pluginViewHostId } from "./remotePluginView";
@@ -38,8 +39,14 @@ export function useHostPluginParityNotice(): void {
           action: {
             label: "Review",
             onClick: () => {
+              // Settings → Hosts on that host's plugins, and nothing else: the
+              // request is what the tab opens on.
               requestHostPlugins(hostId);
-              void actionService.dispatch("host.add", undefined, { source: "user" });
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: HOSTS_SETTINGS_TAB },
+                { source: "user" }
+              );
             },
           },
         });

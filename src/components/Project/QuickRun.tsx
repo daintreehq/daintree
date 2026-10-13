@@ -29,6 +29,11 @@ import { SeverityMark } from "@/lib/statusSeverity";
 import { isMac } from "@/lib/platform";
 import { describeChord } from "@/lib/kbdShortcut";
 import { hostScopedKey } from "@/hooks/useHostPlatform";
+import {
+  QUICK_RUN_AUTO_RESTART_KEY_PREFIX,
+  QUICK_RUN_EXPANDED_KEY_PREFIX,
+  QUICK_RUN_HISTORY_KEY_PREFIX,
+} from "./quickRunStorageKeys";
 
 interface QuickRunProps {
   projectId: string;
@@ -118,9 +123,6 @@ function matchRanges(text: string, search: string): Array<[number, number]> | un
 }
 
 const QUICK_RUN_PANEL_ID = "quick-run-panel";
-const HISTORY_KEY_PREFIX = "daintree_cmd_history_";
-const AUTO_RESTART_KEY_PREFIX = "daintree_quickrun_autorestart_";
-const EXPANDED_KEY_PREFIX = "daintree_quickrun_expanded_";
 
 /** Stable ids so `aria-activedescendant` has something to point at. */
 const SUGGESTION_LIST_ID = "quick-run-suggestions";
@@ -157,7 +159,9 @@ export function useQuickRunExpanded(projectId: string | null): [boolean, () => v
   const read = (id: string | null) => {
     if (id == null) return false;
     try {
-      return localStorage.getItem(`${EXPANDED_KEY_PREFIX}${hostScopedKey(id)}`) === "true";
+      return (
+        localStorage.getItem(`${QUICK_RUN_EXPANDED_KEY_PREFIX}${hostScopedKey(id)}`) === "true"
+      );
     } catch {
       return false;
     }
@@ -173,7 +177,10 @@ export function useQuickRunExpanded(projectId: string | null): [boolean, () => v
     setState({ projectId, expanded: next });
     if (projectId == null) return;
     try {
-      localStorage.setItem(`${EXPANDED_KEY_PREFIX}${hostScopedKey(projectId)}`, String(next));
+      localStorage.setItem(
+        `${QUICK_RUN_EXPANDED_KEY_PREFIX}${hostScopedKey(projectId)}`,
+        String(next)
+      );
     } catch {
       // a session that cannot persist still gets the toggle
     }
@@ -259,7 +266,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   const [autoRestart, setAutoRestart] = useState(() => {
     try {
       return (
-        localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`) === "true"
+        localStorage.getItem(`${QUICK_RUN_AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`) ===
+        "true"
       );
     } catch {
       return false;
@@ -269,7 +277,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   useEffect(() => {
     try {
       setAutoRestart(
-        localStorage.getItem(`${AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`) === "true"
+        localStorage.getItem(`${QUICK_RUN_AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`) ===
+          "true"
       );
     } catch {
       setAutoRestart(false);
@@ -308,7 +317,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   }, []);
 
   useEffect(() => {
-    const saved = localStorage.getItem(`${HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
+    const saved = localStorage.getItem(
+      `${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`
+    );
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
@@ -321,11 +332,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
           setHistory(parsed);
         } else {
           console.warn("Invalid history format, resetting");
-          localStorage.removeItem(`${HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
+          localStorage.removeItem(`${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
         }
       } catch (e) {
         logError("Failed to parse command history", e);
-        localStorage.removeItem(`${HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
+        localStorage.removeItem(`${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
       }
     }
   }, [projectId]);
@@ -341,7 +352,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         ...prev.filter((h) => normalizeCommand(h.command) !== normalizedNew),
       ].slice(0, MAX_HISTORY);
       localStorage.setItem(
-        `${HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`,
+        `${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`,
         JSON.stringify(newHistory)
       );
       return newHistory;
@@ -500,7 +511,10 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     setAutoRestart((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem(`${AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`, String(next));
+        localStorage.setItem(
+          `${QUICK_RUN_AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`,
+          String(next)
+        );
       } catch {
         // ignore
       }

@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { isValidRemoteHostId, type HostDescriptor } from "../../../../shared/types/remoteHosts.js";
-import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
+import { HostRegistry, type RemoteHostsStore, type RemoteHostsValue } from "../HostRegistry.js";
 
 function memoryStore(initial?: unknown): RemoteHostsStore & { value: unknown; writes: number } {
   const store = {
     value: initial,
     writes: 0,
-    get: () => store.value as { hosts: HostDescriptor[] } | undefined,
-    set: (_key: "remoteHosts", value: { hosts: HostDescriptor[] }) => {
+    get: () => store.value as RemoteHostsValue | undefined,
+    set: (_key: "remoteHosts", value: RemoteHostsValue) => {
       store.value = value;
       store.writes++;
     },
@@ -114,6 +114,74 @@ describe("HostRegistry", () => {
     expect(registry.forget(host.id)).toBe(false);
     expect(registry.list()).toEqual([]);
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("never gives a removed host's id to a host added later", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const first = registry.add({
+      name: "studio-02",
+      connection: { kind: "ssh", target: "greg@studio-02" },
+    });
+    expect(first.id).toBe("studio-02");
+    registry.forget(first.id);
+
+    const second = registry.add({
+      name: "studio-02",
+      connection: { kind: "ssh", target: "greg@10.0.0.9" },
+    });
+    expect(second.id).toBe("studio-02-2");
+    registry.forget(second.id);
+
+    const third = registry.add({
+      name: "Studio 02",
+      connection: { kind: "ssh", target: "greg@10.0.0.10" },
+    });
+    expect(third.id).toBe("studio-02-3");
+    expect([...registry.retiredIds()].sort()).toEqual(["studio-02", "studio-02-2"]);
+  });
+
+  it("keeps retired ids through later edits, and stored ids as they were", () => {
+    const store = memoryStore({
+      hosts: [
+        {
+          id: "old-box",
+          name: "Old box",
+          connection: { kind: "ssh", target: "old.example" },
+          addedAt: 1,
+        },
+      ],
+    });
+    const registry = new HostRegistry(store);
+    const gone = registry.add({
+      name: "gone",
+      connection: { kind: "ssh", target: "gone.example" },
+    });
+    registry.forget(gone.id);
+    registry.update({ hostId: "old-box", name: "Renamed" });
+    registry.recordObservation("old-box", { lastSeenAt: 5 });
+
+    expect(registry.get("old-box")?.name).toBe("Renamed");
+    expect((store.value as { retiredIds?: string[] }).retiredIds).toEqual(["gone"]);
+    expect(
+      registry.add({ name: "gone", connection: { kind: "ssh", target: "b.example" } }).id
+    ).toBe("gone-2");
+  });
+
+  it("ignores retired ids a hand-edited settings file mangled", () => {
+    const registry = new HostRegistry(
+      memoryStore({ hosts: [], retiredIds: ["box", 7, "", "local", "BAD ID"] })
+    );
+    expect([...registry.retiredIds()]).toEqual(["box"]);
+    expect(registry.add({ name: "box", connection: { kind: "ssh", target: "box" } }).id).toBe(
+      "box-2"
+    );
+  });
+
+  it("writes no retired list until a host is removed", () => {
+    const store = memoryStore();
+    new HostRegistry(store).add({ name: "box", connection: { kind: "ssh", target: "box" } });
+    expect(store.value).not.toHaveProperty("retiredIds");
   });
 
   it("drops malformed entries a hand-edited settings file left behind", () => {

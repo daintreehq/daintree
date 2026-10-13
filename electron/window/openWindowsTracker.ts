@@ -22,6 +22,7 @@
  *     purpose; persisting that would overwrite the user's real fleet with it.
  */
 
+import { parseHostScopedKey } from "../../shared/types/remoteHosts.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
 import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
@@ -94,6 +95,13 @@ export function setPendingRemoteRestore(windowId: number, workspaceKey: string):
 
 export function clearPendingRemoteRestore(windowId: number): void {
   pendingRemoteRestores.delete(windowId);
+}
+
+/** A host was removed from this device: no window is restored onto it any more. */
+export function clearPendingRemoteRestoresForHost(hostId: string): void {
+  for (const [windowId, key] of pendingRemoteRestores) {
+    if (parseHostScopedKey(key).hostId === hostId) pendingRemoteRestores.delete(windowId);
+  }
 }
 
 /** A restored window's host-scoped workspace, while it is still on the picker it opened with. */

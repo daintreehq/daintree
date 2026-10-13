@@ -310,7 +310,14 @@ describe("the switch notice", () => {
     expect(payload.action.label).toBe("Review");
     payload.action.onClick();
     expect(takePendingHostPlugins()).toBe("studio-01");
-    expect(dispatchMock).toHaveBeenCalledWith("host.add", undefined, { source: "user" });
+    // Review opens that host's plugins, never the Add host flow.
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "hosts" },
+      { source: "user" }
+    );
+    expect(dispatchMock).not.toHaveBeenCalledWith("host.add", expect.anything(), expect.anything());
   });
 
   it("stays quiet when main says this switch was already announced", async () => {

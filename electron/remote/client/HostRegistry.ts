@@ -17,11 +17,19 @@ import { parseHostConnection } from "./connection.js";
  * store key. The key is optional and deliberately absent from the store
  * defaults, so the settings file of someone who never adds a host is never
  * touched; reads apply the empty default instead.
+ *
+ * `retiredIds` holds the id of every host removed from this device. An id is
+ * what this machine's grants, consent, history and storage are keyed by, so a
+ * later host never gets one back: it would inherit whatever was left under it.
  */
+export interface RemoteHostsValue {
+  hosts: HostDescriptor[];
+  retiredIds?: string[];
+}
 
 export interface RemoteHostsStore {
-  get(key: "remoteHosts"): { hosts: HostDescriptor[] } | undefined;
-  set(key: "remoteHosts", value: { hosts: HostDescriptor[] }): void;
+  get(key: "remoteHosts"): RemoteHostsValue | undefined;
+  set(key: "remoteHosts", value: RemoteHostsValue): void;
 }
 
 const MAX_HOSTS = 64;
@@ -65,6 +73,15 @@ function slugFor(name: string): string {
     .replace(/-+$/, "")
     .slice(0, 48);
   return isValidRemoteHostId(slug) ? slug : `host-${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function readRetiredIds(raw: unknown): Set<string> {
+  const retired = new Set<string>();
+  if (!raw || typeof raw !== "object") return retired;
+  const ids = (raw as { retiredIds?: unknown }).retiredIds;
+  if (!Array.isArray(ids)) return retired;
+  for (const id of ids) if (typeof id === "string" && isValidRemoteHostId(id)) retired.add(id);
+  return retired;
 }
 
 /** Drop anything a hand-edited or older settings file put there that isn't a usable host. */
@@ -134,9 +151,12 @@ export class HostRegistry {
     if (hosts.some((host) => sameHostConnection(host.connection, connection))) {
       throw invalid(`${formatHostConnection(connection)} is already in your host list.`);
     }
+    const retired = this.retiredIds();
+    const taken = (candidate: string) =>
+      retired.has(candidate) || hosts.some((host) => host.id === candidate);
     const base = slugFor(name);
     let id = base;
-    for (let n = 2; hosts.some((host) => host.id === id); n++) {
+    for (let n = 2; taken(id); n++) {
       id = `${base.slice(0, 58)}-${n}`;
     }
     const descriptor: HostDescriptor = {
@@ -199,8 +219,13 @@ export class HostRegistry {
     const hosts = this.list();
     const next = hosts.filter((host) => host.id !== hostId);
     if (next.length === hosts.length) return false;
-    this.write(next);
+    this.write(next, hostId);
     return true;
+  }
+
+  /** Ids of hosts removed from this device, never given to another host. */
+  retiredIds(): Set<string> {
+    return readRetiredIds(this.store.get("remoteHosts"));
   }
 
   onChange(listener: () => void): () => void {
@@ -213,8 +238,13 @@ export class HostRegistry {
     return descriptor;
   }
 
-  private write(hosts: HostDescriptor[]): void {
-    this.store.set("remoteHosts", { hosts });
+  private write(hosts: HostDescriptor[], retire?: HostId): void {
+    const retired = this.retiredIds();
+    if (retire !== undefined) retired.add(retire);
+    this.store.set(
+      "remoteHosts",
+      retired.size > 0 ? { hosts, retiredIds: [...retired] } : { hosts }
+    );
     for (const listener of [...this.listeners]) {
       try {
         listener();

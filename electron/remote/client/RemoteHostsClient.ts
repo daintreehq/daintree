@@ -25,6 +25,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import { rememberRemoteWorkspaceTitle } from "../../window/windowTitle.js";
 import { getRemoteService } from "../runtime.js";
 import type { HostRegistry } from "./HostRegistry.js";
+import { parseHostConnection } from "./connection.js";
 import type { HostReadiness, RemoteHostManager } from "./RemoteHostManager.js";
 import type { SenderLookup } from "./RemoteRouter.js";
 import type { WindowHostBinding } from "./WindowHostBinding.js";
@@ -120,6 +121,12 @@ export interface RemoteHostsClientOptions {
   forgetSwitchWaitMs?: number;
   /** After a host is forgotten: drop what this machine kept for it (SSH master, cached bundles). */
   onForget?: (descriptor: HostDescriptor) => Promise<void>;
+  /**
+   * Whether an install or update is running on that connection. It reconnects
+   * to the host when done, so the host's target can't change and the host
+   * can't be removed until it settles.
+   */
+  isInstalling?: (connection: HostConnection) => boolean;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 20_000;
@@ -201,6 +208,12 @@ export class RemoteHostsClient {
 
   async update(payload: UpdateHostPayload): Promise<HostDescriptor> {
     const before = this.options.registry.require(hostIdOf(payload));
+    if (payload.connection !== undefined) {
+      const next = parseHostConnection(payload.connection);
+      if (next && !sameHostConnection(next, before.connection)) {
+        this.refuseWhileInstalling(before, "Its SSH target can change");
+      }
+    }
     const after = this.options.registry.update(payload);
     if (
       !sameHostConnection(after.connection, before.connection) &&
@@ -217,6 +230,7 @@ export class RemoteHostsClient {
   async forget(payload: { hostId: string }): Promise<void> {
     const hostId = hostIdOf(payload);
     const descriptor = this.options.registry.require(hostId);
+    this.refuseWhileInstalling(descriptor, "It can be removed");
     // Windows on the host come back to this machine first, binding and view
     // together, as the removal promises: only rebinding left the host's view
     // on screen with nothing behind it and no host chip to leave by. A window
@@ -267,10 +281,19 @@ export class RemoteHostsClient {
     for (const windowId of this.options.bindings.windowsOn(hostId)) {
       this.options.bindings.set(windowId, LOCAL_HOST_ID);
     }
+    for (const [windowId, offered] of [...this.projectOffers]) {
+      if (offered === hostId) this.projectOffers.delete(windowId);
+    }
     this.options.registry.forget(hostId);
     await this.options.onForget?.(descriptor).catch((error: unknown) => {
       console.warn("[RemoteHosts] Cleanup after forgetting a host failed:", error);
     });
+  }
+
+  private refuseWhileInstalling(descriptor: HostDescriptor, then: string): void {
+    if (!this.options.isInstalling?.(descriptor.connection)) return;
+    const message = `Daintree is being installed on ${descriptor.name}. ${then} once that finishes.`;
+    throw new AppError({ code: "CONFLICT", message, userMessage: message });
   }
 
   connect(payload: { hostId: string }): HostConnectionState {
@@ -583,10 +606,10 @@ export class RemoteHostsClient {
           throw new AppError({ code: "INTERNAL", message: "No host path" });
         }
         // The window's title names the place too: "<project> — <host>".
-        const hostName = this.options.registry.get(hostId)?.name ?? hostId;
         rememberRemoteWorkspaceTitle(
           toHostScopedKey(hostId, targetProjectId),
-          `${projectName || targetProjectId} — ${hostName}`
+          projectName || targetProjectId,
+          hostId
         );
         await this.options.windows.openRemoteProject(windowId, hostId, targetProjectId, targetPath);
       } catch (error) {

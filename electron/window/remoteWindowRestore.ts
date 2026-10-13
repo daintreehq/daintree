@@ -106,6 +106,11 @@ async function restoreOne(deps: RemoteWindowRestoreDeps, windowId: number): Prom
     }
   } catch (error) {
     if (!stillWanted()) return;
+    // Removed from this device while it was being reached: nothing to retry.
+    if (!client.list().some((entry) => entry.descriptor.id === hostId)) {
+      clearPendingRemoteRestore(windowId);
+      return;
+    }
     // A save taken while the view was loading may have spent the intent; the
     // window is back on the picker, so it still belongs on the host.
     setPendingRemoteRestore(windowId, key);
