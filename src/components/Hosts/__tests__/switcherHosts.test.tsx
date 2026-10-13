@@ -119,8 +119,11 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  // Radix's focus scope hands focus back on a zero-delay timer after the
+  // context menu unmounts; let it run while jsdom is still here.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
 function Band({ query, onChosen }: { query: string; onChosen: () => void }) {
