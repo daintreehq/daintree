@@ -860,7 +860,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // single-pass `panelStateByWorktree` selector above; the quick-state buckets
   // join this worktree's visible agent panels to their fleet runs, through the
   // same derivation the overview modal, cycling and the card read.
-  const { runsById, acknowledgedAt } = useWorktreeAgentBucketInputs();
+  const { runsById } = useWorktreeAgentBucketInputs();
   const derivedMetaMap = useMemo(() => {
     const map = new Map<string, DerivedWorktreeMeta>();
     for (const worktree of deferredWorktrees) {
@@ -883,7 +883,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const buckets = deriveWorktreeAgentBuckets(
         visibleAgentPanelIds,
         runsById,
-        acknowledgedAt,
         isWorktreeMergedForCleanup(worktree)
       );
 
@@ -909,7 +908,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     agentPanelIds,
     worktreeIds,
     runsById,
-    acknowledgedAt,
   ]);
 
   // Apply filters and sorting

@@ -363,12 +363,22 @@ describe("CanopyRow", () => {
     expect(description(container)).toContain("asking you a question");
   });
 
-  it("rings a question Daintree's own classifier saw only as a prompt (#13234)", () => {
-    for (const waitingReason of ["prompt", "question"] as const) {
-      const { container, unmount } = renderRow(itemFor("question", {}, { waitingReason }));
+  it("rings a question Daintree's own classifier saw only as a hand-back prompt (#13234)", () => {
+    for (const handBack of [
+      { stoppedAt: NOW - 60_000 },
+      { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+    ]) {
+      const { container, unmount } = renderRow(
+        itemFor("question", {}, { waitingReason: "prompt", handBack })
+      );
       expect(container.querySelector("[data-asking]")).not.toBeNull();
       unmount();
     }
+  });
+
+  it("never rings a prompt with no hand-back record: that agent is idle", () => {
+    const { container } = renderRow(itemFor("question", {}, { waitingReason: "prompt" }));
+    expect(container.querySelector("[data-asking]")).toBeNull();
   });
 
   it("names a row by its agent alone, and says what it wants and where it is after that", () => {

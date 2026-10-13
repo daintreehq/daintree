@@ -76,7 +76,6 @@ function buildDerivedMeta(
   const buckets = deriveWorktreeAgentBuckets(
     agentIds,
     bucketInputs.runsById,
-    bucketInputs.acknowledgedAt,
     isWorktreeMergedForCleanup(worktree)
   );
 

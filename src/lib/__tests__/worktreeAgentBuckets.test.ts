@@ -8,7 +8,6 @@ import {
   encodeWorktreeAgentBuckets,
   indexFleetRuns,
   isWorktreeMergedForCleanup,
-  viewCompletionWatermark,
   type WorktreeAgentBuckets,
 } from "../worktreeAgentBuckets";
 
@@ -20,12 +19,11 @@ function run(runId: string, overrides: Partial<FleetRunRow> = {}): FleetRunRow {
 
 function buckets(
   runs: FleetRunRow[],
-  { merged = false, acknowledgedAt }: { merged?: boolean; acknowledgedAt?: number } = {}
+  { merged = false }: { merged?: boolean } = {}
 ): WorktreeAgentBuckets {
   return deriveWorktreeAgentBuckets(
     runs.map((r) => r.runId),
     indexFleetRuns(runs),
-    acknowledgedAt,
     merged
   );
 }
@@ -59,9 +57,13 @@ describe("deriveWorktreeAgentBuckets", () => {
     expect(buckets([seen])).toMatchObject({ finished: true, finishedUnseen: false });
   });
 
-  it("puts an agent at its prompt with no hand-back record in Finished, never unseen", () => {
-    // Main saw no work stop, and nothing could ever mark it seen.
-    expect(buckets([atPrompt("a")])).toMatchObject({ finished: true, finishedUnseen: false });
+  it("leaves a stop with no hand-back record out of every bucket", () => {
+    // Main saw no work stop, so nothing was handed back: the agent is idle, and
+    // a prompt is not a question either.
+    expect(buckets([atPrompt("a")])).toEqual(decodeWorktreeAgentBuckets(0));
+    expect(buckets([run("a", { agentState: "completed", since: NOW })])).toEqual(
+      decodeWorktreeAgentBuckets(0)
+    );
   });
 
   it("lets Working and Attention overlap", () => {
@@ -79,7 +81,7 @@ describe("deriveWorktreeAgentBuckets", () => {
         waitingReason,
         handBack: { stoppedAt: NOW - 1000, seenAt: NOW },
       });
-      expect(buckets([r], { acknowledgedAt: NOW + 1 }).attention).toBe(true);
+      expect(buckets([r]).attention).toBe(true);
     }
   });
 
@@ -120,7 +122,7 @@ describe("deriveWorktreeAgentBuckets", () => {
   });
 
   it("ignores agent panels the fleet has not reported", () => {
-    expect(deriveWorktreeAgentBuckets(["missing"], indexFleetRuns(null), undefined, false)).toEqual(
+    expect(deriveWorktreeAgentBuckets(["missing"], indexFleetRuns(null), false)).toEqual(
       decodeWorktreeAgentBuckets(0)
     );
   });
@@ -143,12 +145,6 @@ describe("deriveWorktreeAgentBuckets", () => {
       finished: false,
       cleanup: false,
     });
-  });
-
-  it("dates an unrecorded completion against the watermark", () => {
-    const stop = run("a", { agentState: "completed", since: NOW - 60_000 });
-    expect(buckets([stop], { acknowledgedAt: NOW }).finishedUnseen).toBe(false);
-    expect(buckets([stop], { acknowledgedAt: NOW - 120_000 }).finishedUnseen).toBe(true);
   });
 });
 
@@ -190,19 +186,5 @@ describe("isWorktreeMergedForCleanup", () => {
     for (const state of ["open", "closed", "declined"] as const) {
       expect(isWorktreeMergedForCleanup(facts(state))).toBe(false);
     }
-  });
-});
-
-describe("viewCompletionWatermark", () => {
-  it("reads the view's own project, then its scratch", () => {
-    const projects = [
-      { id: "p1", lastCompletionSeenAt: 5 },
-      { id: "p2", lastCompletionSeenAt: 9 },
-    ];
-    const scratches = [{ id: "s1", lastCompletionSeenAt: 7 }];
-    expect(viewCompletionWatermark("p2", projects, scratches)).toBe(9);
-    expect(viewCompletionWatermark("s1", projects, scratches)).toBe(7);
-    expect(viewCompletionWatermark("other", projects, scratches)).toBeUndefined();
-    expect(viewCompletionWatermark(null, projects, scratches)).toBeUndefined();
   });
 });

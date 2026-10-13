@@ -1,6 +1,4 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import type { Project } from "@shared/types/project";
-import type { Scratch } from "@shared/types/scratch";
 import type { WorktreeState } from "@shared/types/worktree";
 import { ATTENTION_FILTER_BANDS, bandForRun, FINISHED_FILTER_BANDS } from "@/lib/fleetAttention";
 
@@ -63,23 +61,6 @@ export function indexFleetRuns(
 }
 
 /**
- * The completion watermark of the workspace this view owns, which is what Pilot
- * dates an unrecorded hand-back against too. Keyed by the view's own workspace
- * id, never the globally broadcast current selection.
- */
-export function viewCompletionWatermark(
-  viewWorkspaceId: string | null,
-  projects: readonly Pick<Project, "id" | "lastCompletionSeenAt">[],
-  scratches: readonly Pick<Scratch, "id" | "lastCompletionSeenAt">[]
-): number | undefined {
-  if (viewWorkspaceId === null) return undefined;
-  return (
-    projects.find((p) => p.id === viewWorkspaceId)?.lastCompletionSeenAt ??
-    scratches.find((s) => s.id === viewWorkspaceId)?.lastCompletionSeenAt
-  );
-}
-
-/**
  * Buckets for one worktree.
  *
  * `agentPanelIds` is the surface's own membership — the agent panels it already
@@ -92,7 +73,6 @@ export function viewCompletionWatermark(
 export function deriveWorktreeAgentBuckets(
   agentPanelIds: Iterable<string>,
   runsById: ReadonlyMap<string, FleetRunRow>,
-  acknowledgedAt: number | undefined,
   mergedForCleanup: boolean
 ): WorktreeAgentBuckets {
   let working = false;
@@ -109,7 +89,7 @@ export function deriveWorktreeAgentBuckets(
       working = true;
       continue;
     }
-    const band = bandForRun(run, acknowledgedAt);
+    const band = bandForRun(run);
     if (ATTENTION_FILTER_BANDS.has(band)) attention = true;
     else if (FINISHED_FILTER_BANDS.has(band)) {
       handedBack = true;

@@ -536,7 +536,12 @@ describe("getVisibleWorktreesForCycling", () => {
           waitingReason: "prompt",
           handBack: { stoppedAt: 1, seenAt: 2 },
         },
-        { runId: "a-prompt", agentState: "waiting", waitingReason: "prompt" },
+        {
+          runId: "a-prompt",
+          agentState: "waiting",
+          waitingReason: "prompt",
+          handBack: { stoppedAt: 1 },
+        },
         { runId: "a-approval", agentState: "waiting", waitingReason: "approval" },
       ]);
     });
@@ -556,7 +561,7 @@ describe("getVisibleWorktreesForCycling", () => {
       expect(visibleUnder("waiting")).toEqual(["wt-asking"]);
     });
 
-    it("puts a lone agent idle at its prompt in Finished", () => {
+    it("puts a lone agent that handed back at its prompt in Finished", () => {
       expect(visibleUnder("finished")).toEqual(["wt-idle"]);
     });
   });

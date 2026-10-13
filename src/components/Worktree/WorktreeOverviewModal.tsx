@@ -159,7 +159,7 @@ export function WorktreeOverviewModal({
   // shallow-equal tally lets those writes pass without recomputing the meta
   // below. The fleet inputs are read through the closure, so a fleet change
   // re-renders this component and the selector re-runs against it.
-  const { runsById, acknowledgedAt } = useWorktreeAgentBucketInputs();
+  const { runsById } = useWorktreeAgentBucketInputs();
   const agentTallies = usePanelStore(
     useShallow((state) => {
       const tallies: number[] = [];
@@ -183,7 +183,6 @@ export function WorktreeOverviewModal({
         const buckets = deriveWorktreeAgentBuckets(
           agentIds,
           runsById,
-          acknowledgedAt,
           isWorktreeMergedForCleanup(worktree)
         );
         tallies.push(terminalCount, encodeWorktreeAgentBuckets(buckets), flags);
