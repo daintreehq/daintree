@@ -10,12 +10,13 @@ vi.mock("@/clients/appThemeClient", () => ({
   },
 }));
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemePalette } from "../ThemePalette";
 
 const COMMITTED = BUILT_IN_APP_SCHEMES.find((s) => s.type === "light")!;
 
 function renderOpen() {
-  return render(<ThemePalette isOpen onClose={() => {}} />);
+  return render(<ThemePalette isOpen onClose={() => {}} />, { wrapper: TooltipProvider });
 }
 
 /** Theme rows, without the inert band heads that share the option role. */
@@ -131,10 +132,10 @@ describe("ThemePalette", () => {
     await act(async () => {});
     const dialog = screen.getByRole("dialog");
     expect(dialog.textContent).toContain(`to keep ${COMMITTED.name}`);
-    expect(dialog.textContent).not.toContain("Current:");
+    expect(dialog.textContent).not.toContain("to go back to");
     fireEvent.keyDown(input(), { key: "ArrowDown" });
     await act(async () => {});
-    expect(dialog.textContent).toContain(`Current: ${COMMITTED.name}`);
+    expect(dialog.textContent).toContain(`to go back to ${COMMITTED.name}`);
   });
 
   it("goes back to the saved theme when a search hides every row", async () => {
