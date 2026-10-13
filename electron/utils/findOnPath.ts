@@ -7,7 +7,9 @@ import path from "path";
  * Fedora containers ship without it and Arch keeps it out of `base` — so on
  * those systems every probe built on it read every tool as missing.
  *
- * POSIX only. Windows callers keep `where.exe`, which owns PATHEXT resolution.
+ * POSIX only. Windows searches PATH with `scanWindowsPath` / `findWindowsCommand`
+ * (`windowsExecutable.ts`), which own PATHEXT resolution and bound their own
+ * threadpool use.
  *
  * Semantics, matching `which` where it is well defined:
  * - A command containing `/` is checked as written (relative to the process

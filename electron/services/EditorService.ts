@@ -319,8 +319,9 @@ function resolveEditorDef(id: KnownEditorId): EditorDefinition | undefined {
  * dirs, then PATH, one candidate at a time — so it touches exactly the paths
  * and picks exactly the file a sequential search would. Only the waiting moves
  * off the main thread; separate editors walk concurrently under the slot cap,
- * which is shared with every other PATH lookup so that together they can never
- * hold more of libuv's fs pool than the cap allows.
+ * which is shared with every POSIX PATH lookup (`findOnPath`) so that together
+ * they can never hold more of libuv's fs pool than the cap allows. Windows PATH
+ * searches (`windowsExecutable.ts`) keep a cap of their own.
  */
 async function findExecutable(def: EditorDefinition): Promise<string | null> {
   const extraDirs = def.extraDirs ? def.extraDirs() : [];
