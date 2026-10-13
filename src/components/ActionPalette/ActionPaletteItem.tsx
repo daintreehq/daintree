@@ -8,7 +8,7 @@ import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl
 import { paletteSummary } from "@/lib/paletteSummary";
 import { KbdChord } from "@/components/ui/Kbd";
 import { HighlightedText } from "@/components/ui/HighlightedText";
-import { getActionMatchRanges } from "@/lib/actionPaletteSearch";
+import { getActionDescriptionLine, getActionMatchRanges } from "@/lib/actionPaletteSearch";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
 
@@ -105,9 +105,9 @@ function ActionPaletteItemInner({
     [onHide, item]
   );
 
-  // Disabled actions still dispatch so ActionService surfaces the
-  // disabled-reason toast; the pin and hide controls stop propagation, so they
-  // stay usable on a disabled row.
+  // A click on an unavailable row is a no-op, as Enter is (#8814): the reason
+  // line already says why. The pin and hide controls stop propagation, so they
+  // stay usable on an unavailable row.
   const handleSelectClick = useCallback(() => onSelect(item), [item, onSelect]);
 
   const isConfirmTier = item.danger === "confirm";
@@ -117,18 +117,24 @@ function ActionPaletteItemInner({
   const canShowHide = Boolean(onHide) && !isPinned && !isConfirmTier;
 
   const hasRationale = isConfirmTier && Boolean(item.dangerRationale);
-  const rationaleId = hasRationale ? `${item.id}-danger-rationale` : undefined;
-  // Rationale node is CSS-hidden on unselected rows but stays in the DOM, so we
-  // only point aria-describedby at it while selected. The footer hint is always
-  // visible, so it's announced for every option.
-  const describedBy =
-    [footerHintId, isSelected ? rationaleId : undefined].filter(Boolean).join(" ") || undefined;
+  const hasReason = !item.enabled && Boolean(item.disabledReason);
+
+  const summary = useMemo(() => paletteSummary(item.description), [item.description]);
+
+  // The option is named by its title alone and described by the rest, so a
+  // screen reader hears "Kill terminal…" first and the category, summary and
+  // consequence after it — not one run-on name built from every line of the
+  // row. What stops the row is said before what the row is for.
+  const idBase = `action-option-${item.id}`;
+  const titleId = `${idBase}-title`;
+  const categoryId = `${idBase}-category`;
+  const summaryId = `${idBase}-summary`;
+  const reasonId = `${idBase}-reason`;
+  const rationaleId = `${idBase}-danger-rationale`;
   // HIG ellipsis (U+2026) signals "activation requires further input or
   // confirmation". Set tight against the title, as the app's own "Pick theme…"
   // titles are, and never doubled onto a title that already carries one.
   const displayTitle = isConfirmTier && !item.title.endsWith("…") ? `${item.title}…` : item.title;
-
-  const summary = useMemo(() => paletteSummary(item.description), [item.description]);
 
   const match = useMemo(
     () =>
@@ -136,16 +142,31 @@ function ActionPaletteItemInner({
         ? getActionMatchRanges(highlightQuery, {
             title: item.title,
             titleLower: item.titleLower,
-            description: summary,
-            descriptionLower: summary.toLowerCase(),
+            description: item.description,
+            descriptionLower: item.descriptionLower,
           })
         : null,
-    [highlightQuery, item.title, item.titleLower, summary]
+    [highlightQuery, item.title, item.titleLower, item.description, item.descriptionLower]
+  );
+  const descriptionLine = useMemo(
+    () => getActionDescriptionLine(item.description, summary, match),
+    [item.description, summary, match]
   );
 
   // The chip adds nothing when the title already says it ("Focus terminal 1"
   // under a "terminal" chip).
   const categoryInTitle = item.titleLower.includes(item.categoryLower);
+  const showCategoryChip = showCategory && !categoryInTitle;
+
+  const describedBy = [
+    hasReason ? reasonId : undefined,
+    hasRationale ? rationaleId : undefined,
+    showCategoryChip ? categoryId : undefined,
+    summary ? summaryId : undefined,
+    footerHintId,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const ariaKeyshortcuts = useMemo(
     () => (item.shortcut ? comboToAriaKeyshortcuts(item.shortcut, isMac()) : undefined),
@@ -157,13 +178,11 @@ function ActionPaletteItemInner({
       className={cn(
         PALETTE_ROW_CLASS,
         "group w-full flex items-start gap-3 px-3 rounded-[var(--radius-md)]",
-        // A second line takes the two-line height. The danger rationale is
-        // left out: it shows only under the cursor, and a row that grew as the
-        // cursor landed on it would shove the list.
-        summary || (!item.enabled && item.disabledReason) ? "py-2" : "py-1.5",
+        // A second line takes the two-line height.
+        summary || hasReason || hasRationale ? "py-2" : "py-1.5",
         "text-text-secondary"
       )}
-      id={`action-option-${item.id}`}
+      id={idBase}
       role="option"
       aria-selected={isSelected}
       aria-disabled={!item.enabled}
@@ -178,7 +197,8 @@ function ActionPaletteItemInner({
       // interactive descendants inside `role="option"`, so there is no inner
       // button left to hold them.
       aria-haspopup={isConfirmTier ? "dialog" : undefined}
-      aria-describedby={describedBy}
+      aria-labelledby={titleId}
+      aria-describedby={describedBy || undefined}
       // The visible chord sits in the presentational trailing cluster, so the
       // binding is exposed here instead of through the option's name.
       aria-keyshortcuts={ariaKeyshortcuts}
@@ -204,9 +224,12 @@ function ActionPaletteItemInner({
               the still-working pin and hide controls down with it, to about
               2.5:1 — the reason is the one line on the row that has to be read. */}
           <span
+            id={titleId}
             className={cn(
               "text-sm font-medium truncate",
-              item.enabled ? "text-text-primary" : "text-text-secondary"
+              // The match band inks its run primary; on an unavailable row that
+              // lit the matched words back up past the rest of the title.
+              item.enabled ? "text-text-primary" : "text-text-secondary *:text-inherit"
             )}
           >
             <HighlightedText
@@ -214,8 +237,9 @@ function ActionPaletteItemInner({
               indices={match?.field === "title" ? match.ranges : undefined}
             />
           </span>
-          {showCategory && !categoryInTitle && (
+          {showCategoryChip && (
             <span
+              id={categoryId}
               className={cn(
                 "shrink-0 max-w-32 truncate rounded-[var(--radius-sm)] px-1.5 py-px text-3xs font-medium leading-tight",
                 categoryColor
@@ -226,15 +250,12 @@ function ActionPaletteItemInner({
           )}
         </div>
         {summary && (
-          <div className="text-xs leading-snug text-text-secondary truncate">
-            <HighlightedText
-              text={summary}
-              indices={match?.field === "description" ? match.ranges : undefined}
-            />
+          <div id={summaryId} className="text-xs leading-snug text-text-secondary truncate">
+            <HighlightedText text={descriptionLine.text} indices={descriptionLine.ranges} />
           </div>
         )}
-        {!item.enabled && item.disabledReason && (
-          <div className="text-xs leading-snug text-text-secondary italic truncate">
+        {hasReason && (
+          <div id={reasonId} className="text-xs leading-snug text-text-secondary italic truncate">
             {item.disabledReason}
           </div>
         )}
@@ -243,7 +264,10 @@ function ActionPaletteItemInner({
             id={rationaleId}
             // Two lines, not one: this is the consequence the confirmation
             // exists to state, and a single truncated line cut it mid-clause.
-            className="hidden group-aria-selected:line-clamp-2 text-xs leading-snug text-text-secondary italic"
+            // Shown on every destructive row, not only under the cursor: a row
+            // that grew as the cursor landed on it shoved the rows below it, and
+            // could slide a different action under a resting pointer.
+            className="line-clamp-2 text-xs leading-snug text-text-secondary italic"
           >
             {item.dangerRationale}
           </div>
@@ -294,8 +318,10 @@ function ActionPaletteItemInner({
                   {/* At rest a pinned row states what it is; the struck-through
                       glyph is the action, so it appears only where the action is
                       offered. Showing PinOff at rest read as "not pinned". */}
+                  {/* Filled: the outline pin is the "pin this" control on an
+                      unpinned row, and the two read as the same mark. */}
                   <Pin
-                    className="w-3.5 h-3.5 group-hover:hidden group-aria-selected:hidden"
+                    className="w-3.5 h-3.5 fill-current group-hover:hidden group-aria-selected:hidden"
                     aria-hidden
                   />
                   <PinOff

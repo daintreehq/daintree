@@ -505,9 +505,12 @@ export function ActionPalette({
       // row it won't run. A disabled action is a silent no-op on Enter (#8814),
       // so offering "↵ to …" there promised a result that never comes; the row's
       // own reason line says why, and its pin/hide chords still work.
+      // The phrase drops a title's "…": it is the end of a sentence here, and
+      // the row only gains one when its action asks for more input, so the
+      // footer otherwise trailed off on some rows and not on others.
       const enterHint =
         selectedItem && selectedItem.enabled
-          ? { keys: ["↵"], label: `to ${toHintPhrase(selectedItem.title)}` }
+          ? { keys: ["↵"], label: `to ${toHintPhrase(selectedItem.title.replace(/…$/, ""))}` }
           : null;
 
       if (activeMode === "commands") {
@@ -615,7 +618,7 @@ export function ActionPalette({
       listId="action-palette-list"
       itemIdPrefix="action-option"
       emptyMessage="No actions yet"
-      noMatchContent={offersProjectSearch ? undefined : <PaletteNoMatchHint what="all actions" />}
+      noMatchContent={<PaletteNoMatchHint what="all actions" />}
       totalResults={totalResults}
     />
   );

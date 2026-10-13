@@ -394,6 +394,10 @@ export function AppPaletteDialog({
           // same inset top lip, deeper drop, because this one floats over a
           // scrim.
           PALETTE_SURFACE_WIDTHS[tier],
+          // A column capped at what is left below the 15vh offset, so a short
+          // window shrinks the body's scroll box instead of pushing the footer
+          // — the line that says what Enter does — off the bottom of the screen.
+          "flex flex-col max-h-[calc(85dvh-1rem)]",
           "mx-4 surface-overlay shadow-modal rounded-[var(--radius-lg)] overflow-hidden origin-top",
           // Tailwind v4 scale-* emits the individual `scale` property, which
           // `transform` in a transition list does NOT cover — the palette
@@ -468,7 +472,8 @@ AppPaletteDialog.Header = function AppPaletteHeader({
         // tighter default to give the search box room above the rule, and they
         // are the two surfaces the family is modelled on. Promoted to the
         // default so every palette breathes the same.
-        "relative overflow-hidden px-3 pt-2 pb-2 border-b border-border-strong",
+        // `shrink-0`: in the card's capped column only the body gives way.
+        "relative shrink-0 overflow-hidden px-3 pt-2 pb-2 border-b border-border-strong",
         className
       )}
     >
@@ -731,7 +736,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   return (
     <div
       className={cn(
-        "px-3 py-2 border-t border-border-strong bg-surface-panel text-xs text-text-secondary flex items-center gap-4",
+        "shrink-0 px-3 py-2 border-t border-border-strong bg-surface-panel text-xs text-text-secondary flex items-center gap-4",
         className
       )}
     >

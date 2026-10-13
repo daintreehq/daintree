@@ -169,10 +169,24 @@ function scoreTitle(
   return score;
 }
 
+/**
+ * Whether every word of the query appears in the field as typed. The gate for
+ * prose: a sentence walked fuzzily spells almost anything ("theme" across "the
+ * merge"), but a multi-word query whose words the sentence really holds ("split
+ * panel" in "split the panel") is a match a reader can see.
+ */
+function containsEveryWord(lowerField: string, lowerQuery: string): boolean {
+  if (lowerField.includes(lowerQuery)) return true;
+  const words = lowerQuery.split(/\s+/).filter(Boolean);
+  return words.length > 1 && words.every((word) => lowerField.includes(word));
+}
+
 function scoreKeywords(lowerQuery: string, keywordsLower: readonly string[]): number {
   let max = 0;
   for (const kw of keywordsLower) {
-    if (kw.length === 0) continue;
+    // Keywords are synonyms the row never renders, so a fuzzy hit on one is a
+    // match with no visible reason at all. Whole words only.
+    if (kw.length === 0 || !containsEveryWord(kw, lowerQuery)) continue;
     const s = scoreSubsequence(lowerQuery, kw, kw);
     if (s > max) max = s;
   }
@@ -205,8 +219,14 @@ function scoreActionLower(
       ? 0
       : scoreSubsequence(lowerQuery, item.category, item.categoryLower);
 
+  // Prose only counts when it holds every word of the query. Walked fuzzily, a
+  // sentence spells almost anything — "theme" across "the merge" — and ranked
+  // rows the palette can't show a reason for: `getActionMatchRanges` marks only
+  // whole words in a description, so the ranker credits nothing less.
   const descriptionRaw =
-    item.descriptionLower.length > 0 && (queryMask & ~charMasks[maskBase + 2]!) === 0
+    item.descriptionLower.length > 0 &&
+    (queryMask & ~charMasks[maskBase + 2]!) === 0 &&
+    containsEveryWord(item.descriptionLower, lowerQuery)
       ? scoreSubsequence(lowerQuery, item.description, item.descriptionLower)
       : 0;
 
@@ -496,7 +516,19 @@ function fieldMatchRanges(
   const substringIdx = lowerField.indexOf(lowerQuery);
   if (substringIdx >= 0) return [[substringIdx, substringIdx + qLen - 1]];
 
-  if (!allowFuzzy) return null;
+  if (!allowFuzzy) {
+    // The ranker's prose gate (`containsEveryWord`): each word where it first
+    // appears, or nothing.
+    const words = lowerQuery.split(/\s+/).filter(Boolean);
+    if (words.length < 2) return null;
+    const ranges: MatchRange[] = [];
+    for (const word of words) {
+      const at = lowerField.indexOf(word);
+      if (at < 0) return null;
+      ranges.push([at, at + word.length - 1]);
+    }
+    return ranges.sort((a, b) => a[0] - b[0]);
+  }
 
   if (qLen >= 2) {
     const initials: MatchRange[] = [];
@@ -533,7 +565,7 @@ function fieldMatchRanges(
 
 /**
  * The evidence to show for a ranked row: the title when the query lands there,
- * otherwise a whole-query hit in the description. The description never gets a
+ * otherwise a hit on every word of the query in the description. The description never gets a
  * fuzzy walk — across a sentence it lands on scattered letters ("Stage every
  * change in the") that read as random bold, not as a reason. Category and keyword hits have no rendered text
  * to mark, so they return null and the row simply shows no emphasis.
@@ -549,4 +581,42 @@ export function getActionMatchRanges(
   const description = fieldMatchRanges(lowerQuery, item.description, item.descriptionLower, false);
   if (description) return { field: "description", ranges: description };
   return null;
+}
+
+/** How far into a one-line description a match can sit and still be seen. */
+const EXCERPT_VISIBLE_LEAD = 40;
+/** Context kept ahead of a match that had to be scrolled into view. */
+const EXCERPT_CONTEXT = 24;
+
+/**
+ * The description line to render for a row and the ranges to mark in it.
+ *
+ * At rest the row shows the description's first sentence. When the query was
+ * found in the description, though, that sentence is not always where it was
+ * found: the hit can sit in a later sentence, or far enough along the first
+ * that the line's own truncation cuts it off — a row ranked for a reason the
+ * user can't see. So a hit past the visible lead is shown as an excerpt that
+ * starts a few words before it, behind an ellipsis.
+ */
+export function getActionDescriptionLine(
+  description: string,
+  summary: string,
+  match: ActionMatchRanges | null
+): { text: string; ranges: readonly MatchRange[] | undefined } {
+  if (!match || match.field !== "description" || match.ranges.length === 0) {
+    return { text: summary, ranges: undefined };
+  }
+  const [start] = match.ranges[0]!;
+  const end = match.ranges[match.ranges.length - 1]![1];
+  if (description.startsWith(summary) && end < summary.length && start < EXCERPT_VISIBLE_LEAD) {
+    return { text: summary, ranges: match.ranges };
+  }
+  const space = description.lastIndexOf(" ", Math.max(0, start - EXCERPT_CONTEXT));
+  const from = space < 0 ? 0 : space + 1;
+  if (from === 0) return { text: description, ranges: match.ranges };
+  const shift = 1 - from;
+  return {
+    text: `…${description.slice(from)}`,
+    ranges: match.ranges.map(([s, e]) => [s + shift, e + shift] as const),
+  };
 }
