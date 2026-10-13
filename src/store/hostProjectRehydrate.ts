@@ -9,6 +9,16 @@ import {
 import { getWorktreeIdSet, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { logWarn } from "@/utils/logger";
 
+/**
+ * Each read of the host's drafts, numbered as it is asked. The host answers in
+ * order, so a later read holds newer drafts: a full rehydrate and a draft-only
+ * refresh run side by side, and the older answer, landing after the newer
+ * one, would put back a draft the newer one cleared and rebase onto it.
+ */
+let draftReadTicket = 0;
+/** The newest read applied so far. */
+let appliedDraftRead = 0;
+
 export interface HostProjectRehydrateOptions {
   /**
    * False once a newer rehydrate was requested or the view moved on. Checked
@@ -57,6 +67,7 @@ export async function rehydrateHostProjectState(
   // What this view last knew the host held, read before asking, so a write of
   // ours acknowledged while the answer travels can't pass for a host deletion.
   const baselineBefore = persistence.getBaseline(projectId) ?? {};
+  const draftRead = ++draftReadTicket;
   const hydrate: HydrateResult = await window.electron.app.hydrate();
   if (!options.isCurrent()) return;
   const workspaceId = hydrate.workspaceId ?? hydrate.project?.id ?? null;
@@ -138,6 +149,7 @@ export async function rehydrateHostProjectState(
   }
 
   applyHostDrafts(projectId, hydrate.draftInputs ?? {}, {
+    read: draftRead,
     authoritative: options.authoritative,
     draftsBefore,
     baselineBefore,
@@ -163,9 +175,11 @@ export async function refreshHostDrafts(
   if (!options.isCurrent()) return;
   const draftsBefore = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
   const baselineBefore = draftInputPersistence.getBaseline(projectId) ?? {};
+  const draftRead = ++draftReadTicket;
   const hostDrafts = await window.electron.project.getDraftInputs(projectId);
   if (!options.isCurrent()) return;
   applyHostDrafts(projectId, hostDrafts ?? {}, {
+    read: draftRead,
     authoritative: true,
     draftsBefore,
     baselineBefore,
@@ -175,6 +189,8 @@ export async function refreshHostDrafts(
 }
 
 interface ApplyHostDraftsContext {
+  /** This answer's {@link draftReadTicket}. */
+  read: number;
   authoritative: boolean;
   /** This view's drafts before the host was asked: one typed into since is newer. */
   draftsBefore: Record<string, string>;
@@ -189,6 +205,8 @@ function applyHostDrafts(
   hostDrafts: Record<string, unknown>,
   context: ApplyHostDraftsContext
 ): void {
+  if (context.read < appliedDraftRead) return;
+  appliedDraftRead = context.read;
   const { draftsBefore, baselineBefore, draftInputPersistence } = context;
   const input = context.useTerminalInputStore.getState();
   const local = input.getProjectDraftInputs(projectId);

@@ -525,10 +525,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
     }, [terminalId, projectId, getDraftInput]);
 
+    const wasFollowingDriverRef = useRef(followsDriver);
     useEffect(() => {
+      const wasFollowing = wasFollowingDriverRef.current;
+      wasFollowingDriverRef.current = followsDriver;
       // Written back, the text a render behind would land over a newer draft
-      // the host just sent.
-      if (followsDriver) return;
+      // the host just sent. That holds for the pass that stops following too:
+      // the store has the host's latest, and the outside-write effect below
+      // brings the editor to it.
+      if (followsDriver || wasFollowing) return;
       setDraftInput(terminalId, value, projectId);
     }, [terminalId, value, projectId, setDraftInput, followsDriver]);
 

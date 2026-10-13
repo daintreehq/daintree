@@ -61,8 +61,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function mount(followsDriver: boolean) {
-  return render(
+function bar(followsDriver: boolean) {
+  return (
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
         <HybridInputBar
@@ -76,6 +76,10 @@ function mount(followsDriver: boolean) {
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );
+}
+
+function mount(followsDriver: boolean) {
+  return render(bar(followsDriver));
 }
 
 /** What the host's read-back does: put the driver's draft in the store and tell editors. */
@@ -124,5 +128,21 @@ describe("HybridInputBar following the driver's draft", () => {
     expect(editorText(container)).toBe("driver typing more");
     expect(setDraftInput).not.toHaveBeenCalled();
     expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("driver typing more");
+  });
+
+  it("takes over from the driver's latest draft, not the one a render behind", async () => {
+    const view = mount(true);
+    await act(async () => {});
+    await hostDraft("sent by the driver");
+
+    // The driver's send clears the draft in the same render this view takes over.
+    await act(async () => {
+      useTerminalInputStore.setState({ draftInputs: new Map() });
+      useTerminalInputStore.getState().bumpExternalDraftRevision();
+      view.rerender(bar(false));
+    });
+
+    expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("");
+    expect(editorText(view.container)).toBe("");
   });
 });

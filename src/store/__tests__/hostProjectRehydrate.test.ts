@@ -440,6 +440,25 @@ describe("refreshHostDrafts — following the driver's drafts (#13283)", () => {
     });
   });
 
+  it("never applies an older read of the drafts over a newer one", async () => {
+    // A full rehydrate asks first; a draft refresh asks after and answers first.
+    let answerHydrate!: (value: unknown) => void;
+    hydrate.mockImplementationOnce(() => new Promise((resolve) => (answerHydrate = resolve)));
+    const rehydrating = rehydrateHostProjectState("proj-1", {
+      isCurrent: current,
+      authoritative: true,
+    });
+    await vi.waitFor(() => expect(hydrate).toHaveBeenCalled());
+    getDraftInputs.mockResolvedValueOnce({ t1: "newer" });
+    await refreshHostDrafts("proj-1", { isCurrent: current });
+
+    answerHydrate(hostSaved({ draftInputs: { t1: "older" } }));
+    await rehydrating;
+
+    expect(drafts.local).toEqual({ t1: "newer" });
+    expect(draftInputPersistence.getBaseline("proj-1")).toEqual({ t1: "newer" });
+  });
+
   it("applies nothing once overtaken", async () => {
     getDraftInputs.mockResolvedValue({ t1: "stale" });
     let live = true;

@@ -19,6 +19,8 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 const { draftInputPersistence, LIVE_DRAFT_FLUSH_DELAY_MS, LIVE_DRAFT_FLUSH_MAX_WAIT_MS } =
   await import("../draftInputPersistence");
 const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+const { setDriveLeaseSnapshot } = await import("@/services/terminal/inputGate");
+const { dropDeferredHostOwnedWrites } = await import("../hostOwnedWrites");
 
 let projectSeq = 0;
 const createdProjectIds: string[] = [];
@@ -128,6 +130,45 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     // First write rejected → baseline not advanced → resent.
     expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
     expect(setDraftInputsMock.mock.calls[1]![2]).toEqual(["t1"]);
+  });
+
+  it("still sends a clear of a draft whose save may have landed unacknowledged (#13283)", async () => {
+    const projectId = freshProjectId();
+    setDraft(projectId, "t1", "maybe saved");
+    setDraftInputsMock.mockImplementationOnce(() => Promise.reject(new Error("answer lost")));
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    useTerminalInputStore.getState().clearDraftInput("t1", projectId);
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
+    expect(setDraftInputsMock.mock.calls[1]).toEqual([projectId, {}, [], ["t1"]]);
+
+    // Acknowledged, the removal is settled and not sent again.
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a flush queued before another screen drove the project (#13283)", async () => {
+    const projectId = freshProjectId();
+    let release!: () => void;
+    setDraftInputsMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (release = resolve))
+    );
+    setDraft(projectId, "t1", "first");
+    draftInputPersistence.flushAll();
+    await flushMicrotasks();
+    useTerminalInputStore.getState().clearDraftInput("t1", projectId);
+    draftInputPersistence.flushAll();
+
+    dropDeferredHostOwnedWrites("another screen took the project");
+    release();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledTimes(1);
   });
 
   it("serializes overlapping same-project flushes so the second diffs against the advanced baseline", async () => {
@@ -308,7 +349,6 @@ describe("draftInputPersistence.rebaseProject", () => {
   });
 });
 
-const { setDriveLeaseSnapshot } = await import("@/services/terminal/inputGate");
 
 describe("draftInputPersistence.startLiveSync — drafts watchers can follow (#13283)", () => {
   type Lease = Parameters<typeof setDriveLeaseSnapshot>[0];
