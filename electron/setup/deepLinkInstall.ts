@@ -1,6 +1,7 @@
 import { CHANNELS } from "../ipc/channels.js";
 import { SCOPED_PLUGIN_NAME_PATTERN } from "../schemas/pluginIdentifiers.js";
 import { getAppWebContents } from "../window/webContentsRegistry.js";
+import { watchMainFrameDocument } from "../utils/mainFrameNavigation.js";
 import {
   clearPendingDaintreeUrls,
   getPendingDaintreeUrls,
@@ -97,8 +98,12 @@ let pendingIntent: PluginDeepLinkIntent | null = null;
 // signal guarantees the listener is live — delivering earlier would race it
 // onto the floor (#8465).
 const paintedWebContentsIds = new Set<number>();
+// Painted ids whose main frame has a navigation in flight. Held back from
+// delivery until it either commits (a fresh paint is then required) or loading
+// stops without a commit (the page is still there, painted as-is).
+const leavingWebContentsIds = new Set<number>();
 // Ids whose lifecycle listeners are already attached, so re-paints don't stack
-// duplicate `did-start-loading` / `destroyed` handlers.
+// duplicate navigation / `destroyed` handlers.
 const wiredWebContentsIds = new Set<number>();
 
 // Flush callbacks run after every paint signal. Lets sibling OS-ingress queues
@@ -145,18 +150,44 @@ function deliver(webContents: Electron.WebContents, intent: PluginDeepLinkIntent
 }
 
 /**
- * Attach lifecycle listeners (once per id) that drop the id from the painted
- * set: a reload restarts loading (the renderer's listener unmounts and must
- * re-register), and destroy removes the view entirely. Without this a deep link
- * after a reload would deliver to a not-yet-mounted renderer.
+ * Attach lifecycle listeners (once per id) that keep the painted set honest: a
+ * reload or a dead renderer takes the page's listener with it, so the id waits
+ * for a fresh paint, and destroy removes the view entirely. Without this a deep
+ * link after a reload would deliver to a not-yet-mounted renderer. Only the
+ * main frame counts — a browser panel's `<webview>` attaching starts loading in
+ * the same page, and treating that as a reload held every deep link forever —
+ * and a navigation that never commits (cancelled by the navigation guard, as a
+ * file dropped on the window is) leaves the painted page in place.
  */
 function wireWebContentsLifecycle(webContents: Electron.WebContents): void {
   const id = webContents.id;
   if (wiredWebContentsIds.has(id)) return;
   wiredWebContentsIds.add(id);
-  webContents.on("did-start-loading", () => paintedWebContentsIds.delete(id));
+  watchMainFrameDocument(webContents, {
+    onLeaving: () => {
+      if (paintedWebContentsIds.delete(id)) leavingWebContentsIds.add(id);
+    },
+    onReplaced: () => {
+      paintedWebContentsIds.delete(id);
+      leavingWebContentsIds.delete(id);
+    },
+    onSettled: () => {
+      if (!leavingWebContentsIds.has(id)) return;
+      // A renderer dying mid-navigation also stops loading, in its teardown,
+      // before Electron reports it gone — and a send into it can still return
+      // true. Decide a turn later, once a crash or a newer load is visible.
+      setImmediate(() => {
+        if (!leavingWebContentsIds.has(id)) return;
+        if (webContents.isDestroyed() || webContents.isCrashed() || webContents.isLoading()) return;
+        leavingWebContentsIds.delete(id);
+        paintedWebContentsIds.add(id);
+        flushToPaintedViews();
+      });
+    },
+  });
   webContents.once("destroyed", () => {
     paintedWebContentsIds.delete(id);
+    leavingWebContentsIds.delete(id);
     wiredWebContentsIds.delete(id);
   });
 }
@@ -193,8 +224,13 @@ export function handleDaintreeUrl(raw: string): void {
  */
 export function notifyAppViewPainted(webContents: Electron.WebContents): void {
   wireWebContentsLifecycle(webContents);
+  leavingWebContentsIds.delete(webContents.id);
   paintedWebContentsIds.add(webContents.id);
+  flushToPaintedViews();
+}
 
+/** Hand everything held for a painted view to the views painted now. */
+function flushToPaintedViews(): void {
   for (const listener of [...paintedFlushListeners]) {
     try {
       listener();
@@ -238,5 +274,6 @@ export function _resetDeepLinkStateForTest(): void {
   windowRegistry = null;
   pendingIntent = null;
   paintedWebContentsIds.clear();
+  leavingWebContentsIds.clear();
   wiredWebContentsIds.clear();
 }
