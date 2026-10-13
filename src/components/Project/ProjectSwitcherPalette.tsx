@@ -723,7 +723,9 @@ export function getProjectSwitcherEnterHint(
   if (opensWindow && row.kind === "project" && movesCachedView(row)) {
     return { keys: modEnter, label: "New window" };
   }
-  if (row.kind === "project" && isOpenElsewhere(row)) {
+  // A row this window is already bringing in front switches here, whatever
+  // another window still caches.
+  if (row.kind === "project" && isOpenElsewhere(row) && !row.isOpenInThisWindow) {
     return { keys: opensWindow ? modEnter : "↵", label: "Go to window" };
   }
   if (opensWindow && !row.isOpenInThisWindow) return { keys: modEnter, label: "New window" };
