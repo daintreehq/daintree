@@ -29,6 +29,7 @@ const {
   mockTerminalSubmit,
   mockTerminalSendKey,
   mockNotifyUserInput,
+  mockClearDirectingState,
 } = vi.hoisted(() => ({
   mockDispatch: vi.fn(),
   mockNotify: vi.fn().mockReturnValue(""),
@@ -135,6 +136,7 @@ const {
   mockTerminalSubmit: vi.fn(),
   mockTerminalSendKey: vi.fn(),
   mockNotifyUserInput: vi.fn(),
+  mockClearDirectingState: vi.fn(),
 }));
 
 // Passthrough tooltips: the footer's Radix provider is incidental to these
@@ -246,6 +248,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     focus: vi.fn(),
     setFocused: vi.fn(),
     notifyUserInput: (...args: unknown[]) => mockNotifyUserInput(...args),
+    clearDirectingState: (...args: unknown[]) => mockClearDirectingState(...args),
   },
 }));
 
@@ -505,6 +508,7 @@ function resetState() {
   mockTerminalSubmit.mockResolvedValue(undefined);
   mockTerminalSendKey.mockReset();
   mockNotifyUserInput.mockReset();
+  mockClearDirectingState.mockReset();
   mockProvisionSession.mockReset();
   mockProvisionSession.mockResolvedValue({
     sessionId: "sess-default",
@@ -1074,7 +1078,7 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
     );
   });
 
-  it("onSendKey calls notifyUserInput before terminalClient.sendKey", async () => {
+  it("onSendKey escape clears directing before terminalClient.sendKey", async () => {
     setupBoundTerminal();
 
     let getByTestId!: ReturnType<typeof render>["getByTestId"];
@@ -1086,9 +1090,12 @@ describe("HelpPanel — HybridInputBar wiring (issue #8185)", () => {
       fireEvent.click(getByTestId("hybrid-input-key"));
     });
 
-    expect(mockNotifyUserInput).toHaveBeenCalledWith("term-1");
+    // Escape ends directing even with a draft still in the composer, so it
+    // must not re-enter it through notifyUserInput.
+    expect(mockNotifyUserInput).not.toHaveBeenCalled();
+    expect(mockClearDirectingState).toHaveBeenCalledWith("term-1", "escape-key");
     expect(mockTerminalSendKey).toHaveBeenCalledWith("term-1", "escape");
-    expect(mockNotifyUserInput.mock.invocationCallOrder?.[0] ?? 0).toBeLessThan(
+    expect(mockClearDirectingState.mock.invocationCallOrder?.[0] ?? 0).toBeLessThan(
       mockTerminalSendKey.mock.invocationCallOrder?.[0] ?? 0
     );
   });

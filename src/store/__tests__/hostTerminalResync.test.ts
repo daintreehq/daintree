@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { store, setAgentState, reportLost } = vi.hoisted(() => {
+const { store, setAgentState, reportLost, clearDirectingState } = vi.hoisted(() => {
   const store = {
     panelsById: {} as Record<string, Record<string, unknown>>,
     panelIds: [] as string[],
@@ -11,7 +11,7 @@ const { store, setAgentState, reportLost } = vi.hoisted(() => {
     setRuntimeStatus: vi.fn(),
     removePanel: vi.fn(),
   };
-  return { store, setAgentState: vi.fn(), reportLost: vi.fn() };
+  return { store, setAgentState: vi.fn(), reportLost: vi.fn(), clearDirectingState: vi.fn() };
 });
 
 vi.mock("@/utils/logger", () => ({
@@ -22,7 +22,7 @@ vi.mock("@/utils/logger", () => ({
 }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => store } }));
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { setAgentState, reportLost },
+  terminalInstanceService: { setAgentState, reportLost, clearDirectingState },
 }));
 vi.mock("@/utils/stateHydration/statePatcher", () => ({
   buildArgsForOrphanedTerminal: (info: { id: string; cwd: string; kind?: string }) => ({
@@ -89,6 +89,30 @@ describe("resyncHostTerminals", () => {
       "working",
       undefined,
       200,
+      undefined,
+      undefined,
+      undefined
+    );
+    expect(clearDirectingState).not.toHaveBeenCalled();
+  });
+
+  it("ends directing when a new incarnation reports waiting", async () => {
+    panel("t-new", { agentState: "directing", lastStateChange: 100, agentIncarnation: 1 });
+    getForProject.mockResolvedValue([
+      { id: "t-new", agentState: "waiting", lastStateChange: 50, agentIncarnation: 2 },
+    ]);
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(clearDirectingState).toHaveBeenCalledWith("t-new", "canonical-change");
+    expect(clearDirectingState.mock.invocationCallOrder[0]).toBeLessThan(
+      setAgentState.mock.invocationCallOrder[0]
+    );
+    expect(store.updateAgentState).toHaveBeenCalledWith(
+      "t-new",
+      "waiting",
+      undefined,
+      50,
       undefined,
       undefined,
       undefined

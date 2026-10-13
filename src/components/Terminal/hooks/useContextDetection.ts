@@ -67,6 +67,16 @@ export function useContextDetection({
 
   const handleUpdateRef = useRef<(update: ViewUpdate) => void>(() => {});
 
+  // An unmounted composer can no longer send or clear its draft, so it must
+  // not keep holding directing; the draft itself stays in the store.
+  const heldTerminalIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const held = heldTerminalIdRef;
+    return () => {
+      if (held.current) terminalInstanceService.releaseComposerDraft(held.current);
+    };
+  }, []);
+
   useEffect(() => {
     handleUpdateRef.current = (update: ViewUpdate) => {
       if (update.focusChanged && setIsEditorFocused) {
@@ -77,15 +87,10 @@ export function useContextDetection({
         const nextValue = update.state.doc.toString();
         applyDocChange(nextValue);
 
-        if (consumeExternalValueFlag()) {
-          // A programmatic empty (the reset after a send) ends the draft hold
-          // without the user having cleared anything.
-          const terminalId = latestRef.current?.terminalId;
-          if (terminalId && nextValue.trim().length === 0) {
-            terminalInstanceService.releaseComposerDraft(terminalId);
-          }
-        } else {
-          const latest = latestRef.current;
+        const isExternal = consumeExternalValueFlag();
+        const latest = latestRef.current;
+        let isUserChange = false;
+        if (!isExternal) {
           if (latest?.isInHistoryMode) {
             latest.resetHistoryIndex(latest.terminalId, latest.projectId);
           }
@@ -94,18 +99,25 @@ export function useContextDetection({
             onUserType?.();
           }
 
-          const isUserChange = update.transactions.some(
+          isUserChange = update.transactions.some(
             (tr) => tr.isUserEvent("input") || tr.isUserEvent("delete")
           );
-          if (isUserChange) {
-            const terminalId = latest?.terminalId;
-            if (terminalId) {
-              if (nextValue.trim().length === 0) {
-                terminalInstanceService.clearDirectingState(terminalId);
-              } else {
-                terminalInstanceService.notifyComposerDraft(terminalId);
-              }
+        }
+
+        const terminalId = latest?.terminalId;
+        if (terminalId) {
+          if (nextValue.trim().length === 0) {
+            // A user clearing the draft ends directing outright; any other
+            // empty (the reset after a send, a stash, an unannotated chip
+            // removal) only ends the draft hold.
+            if (isUserChange) {
+              terminalInstanceService.clearDirectingState(terminalId);
+            } else {
+              terminalInstanceService.releaseComposerDraft(terminalId);
             }
+          } else if (isUserChange) {
+            heldTerminalIdRef.current = terminalId;
+            terminalInstanceService.notifyComposerDraft(terminalId);
           }
         }
       }

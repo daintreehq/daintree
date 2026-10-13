@@ -875,8 +875,27 @@ describe("TerminalAgentStateController", () => {
       controller.onUserInput("t1", "hello");
 
       controller.releaseComposerDraft("t1");
-      vi.advanceTimersByTime(1500);
+      vi.advanceTimersByTime(9999);
       expect(managed.agentState).toBe("directing");
+      vi.advanceTimersByTime(1);
+      expect(managed.agentState).toBe("waiting");
+    });
+
+    it("sweeps an unheld pane at the 15s cap while a held draft survives", () => {
+      const held = waitingAgent("t1");
+      const typed = waitingAgent("t2");
+      const t0 = Date.now();
+      controller.onComposerDraft("t1");
+      controller.onUserInput("t2", "a");
+
+      vi.setSystemTime(t0 + 15_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(held.agentState).toBe("directing");
+      expect(typed.agentState).toBe("waiting");
+
+      vi.setSystemTime(t0 + 120_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(held.agentState).toBe("waiting");
     });
 
     it.each([

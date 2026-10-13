@@ -46,6 +46,9 @@ export async function resyncHostTerminals(
     if (!newIncarnation && panel.lastStateChange && info.lastStateChange <= panel.lastStateChange) {
       continue;
     }
+    // A new incarnation is a different agent: whatever the user was directing
+    // at its predecessor is over, so the controller can't keep holding it.
+    if (newIncarnation) terminalInstanceService.clearDirectingState(info.id, "canonical-change");
     terminalInstanceService.setAgentState(info.id, info.agentState);
     // Same guard as the live state listener: a waiting report never overwrites
     // the renderer's directing, which the controller only writes on entry and
