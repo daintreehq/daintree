@@ -196,7 +196,9 @@ function SessionLine({ mark, onBeforeOpen }: { mark: SessionMark; onBeforeOpen: 
   const line = leadLine(mark);
   const text = line?.text ?? mark.chrome.label;
   const Glyph =
-    mark.state && mark.state !== "idle" && mark.state !== "exited" ? SESSION_ICONS[mark.state] : null;
+    mark.state && mark.state !== "idle" && mark.state !== "exited"
+      ? SESSION_ICONS[mark.state]
+      : null;
   const quietState = mark.chrome.hasExited
     ? "exited"
     : mark.chrome.isAgent && (mark.state === "idle" || mark.state === undefined)

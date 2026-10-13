@@ -35,11 +35,7 @@ const ALL_REACHABLE = { working: 1, directing: 1, waiting: 1, completed: 1 };
 /** The drawn glyph: an svg ring, or the CSS-drawn spinner box. */
 const glyphOf = (seg: Element): Element => seg.querySelector("svg, [data-glyph-box]")!;
 
-function renderCluster(
-  byState: Partial<Record<AgentState, number>>,
-  total?: number,
-  unread = 0
-) {
+function renderCluster(byState: Partial<Record<AgentState, number>>, total?: number, unread = 0) {
   const counts = { ...ZERO, ...byState };
   const sum = total ?? Object.values(counts).reduce((a, b) => a + b, 0) + unread;
   const summary = summarizeSessionStates(counts, sum, unread);
