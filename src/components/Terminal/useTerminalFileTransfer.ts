@@ -117,13 +117,14 @@ interface LandingContext {
 }
 
 /** Why verified paths were held back instead of typed in. */
-type WithheldReason = "input" | "agent" | "worktree" | "unavailable" | "moved";
+type WithheldReason = "input" | "agent" | "worktree" | "unavailable" | "locked" | "moved";
 
 const WITHHELD_MESSAGE: Record<WithheldReason, string> = {
   input: "The terminal's input changed before the transfer finished.",
   agent: "The agent in the terminal changed before the transfer finished.",
   worktree: "The terminal moved to another worktree before the transfer finished.",
   unavailable: "The terminal isn't taking input.",
+  locked: "The terminal was locked before the transfer finished.",
   moved: "The terminal was moved or closed before the transfer finished.",
 };
 
@@ -148,9 +149,12 @@ function isTerminalUnavailable(terminalId: string, hadPanel: boolean): boolean {
 /**
  * Types a batch of already-verified paths into a terminal, through whichever
  * mount of its pane is live now, so a recovery offered after a remount still
- * reaches it. False when no mount can take them.
+ * reaches it. `insert` is false when that mount can't take them.
  */
-type DropInserter = (paths: readonly string[]) => boolean;
+interface DropInserter {
+  canInsert: () => boolean;
+  insert: (paths: readonly string[]) => boolean;
+}
 
 const dropInserters = new Map<string, DropInserter>();
 
@@ -180,17 +184,20 @@ function offerWithheldPaths(
   hadPanel: boolean
 ): void {
   const one = paths.length === 1;
+  // The inbox keeps no actions, so its entry carries the paths themselves.
+  const listed = paths.join(", ");
   const actions = [copyPathsAction(paths)];
-  if (dropInserters.has(terminalId) && !isTerminalUnavailable(terminalId, hadPanel)) {
+  if (dropInserters.get(terminalId)?.canInsert() && !isTerminalUnavailable(terminalId, hadPanel)) {
     actions.unshift({
       label: one ? "Insert path" : "Insert paths",
       onClick: () => {
-        if (dropInserters.get(terminalId)?.(paths)) return;
+        if (dropInserters.get(terminalId)?.insert(paths)) return;
         notify({
           type: "warning",
           priority: "high",
           title: one ? "Couldn't insert path" : "Couldn't insert paths",
           message: WITHHELD_MESSAGE.unavailable,
+          inboxMessage: `${WITHHELD_MESSAGE.unavailable} ${listed}`,
           action: copyPathsAction(paths),
           context: { eventKind: "recovery" },
         });
@@ -202,6 +209,7 @@ function offerWithheldPaths(
     priority: "high",
     title: one ? "File not inserted" : `${pluralize(paths.length, "file")} not inserted`,
     message: WITHHELD_MESSAGE[reason],
+    inboxMessage: `${WITHHELD_MESSAGE[reason]} ${listed}`,
     actions,
     context: { eventKind: "recovery" },
   });
@@ -478,12 +486,15 @@ export function useTerminalFileTransfer(
         lockEpoch = lockEpochRef.current,
         automatic = false,
         stillCurrent,
+        onWithheld,
       }: {
         lockEpoch?: number;
         /** A drop landing on its own, rather than the user typing or pasting. */
         automatic?: boolean;
         /** Re-checked before each paced write, so a change mid-batch stops the rest. */
         stillCurrent?: () => boolean;
+        /** Told when a paced write was stopped, so what it held isn't lost silently. */
+        onWithheld?: () => void;
       } = {}
     ) => {
       const hasImage = segments.some((segment) => segment.kind === "image");
@@ -507,12 +518,16 @@ export function useTerminalFileTransfer(
         .then(async () => {
           if (!hasImage) {
             await gap();
-            if (!isStale()) writeToTerminal(joinText(segments), isAgent, automatic);
+            if (isStale()) onWithheld?.();
+            else writeToTerminal(joinText(segments), isAgent, automatic);
             return;
           }
           for (let index = 0; index < segments.length; index++) {
             if (index > 0 || queued) await gap();
-            if (isStale()) return;
+            if (isStale()) {
+              onWithheld?.();
+              return;
+            }
             const segment = segments[index]!;
             const text = segment.kind === "image" ? segment.path : segment.text;
             terminalClient.write(terminalId, formatWithBracketedPaste(text));
@@ -553,15 +568,22 @@ export function useTerminalFileTransfer(
 
     // The user asked for these paths from a withheld drop's notice, so they
     // go in as typed input, formatted for whatever runs in the terminal now.
-    const unregisterDropInserter = registerDropInserter(terminalId, (paths) => {
-      if (cancelled || !isMountedRef.current || isInputLockedRef.current) return false;
-      // The pane is still mounted, so a missing panel row is a PTY that never
-      // had one (the Assistant, a Dev Preview console), not a closed pane.
-      if (isTerminalUnavailable(terminalId, false)) return false;
-      const isAgent = isAgentTerminal();
-      writeSegments(buildSegments(paths, isAgent), isAgent);
-      handOffFocus();
-      return true;
+    // The pane is still mounted, so a missing panel row is a PTY that never
+    // had one (a Dev Preview console), not a closed pane.
+    const canInsert = () =>
+      !cancelled &&
+      isMountedRef.current &&
+      !isInputLockedRef.current &&
+      !isTerminalUnavailable(terminalId, false);
+    const unregisterDropInserter = registerDropInserter(terminalId, {
+      canInsert,
+      insert: (paths) => {
+        if (!canInsert()) return false;
+        const isAgent = isAgentTerminal();
+        writeSegments(buildSegments(paths, isAgent), isAgent);
+        handOffFocus();
+        return true;
+      },
     });
 
     const handlePaste = async (event: ClipboardEvent) => {
@@ -726,7 +748,8 @@ export function useTerminalFileTransfer(
         // went away, the path is offered instead of typed in.
         const withheld = (): WithheldReason | null => {
           if (cancelled || !isMountedRef.current) return "moved";
-          if (isInputLockedRef.current || lockEpochRef.current !== lockEpoch) return "unavailable";
+          if (isInputLockedRef.current) return "unavailable";
+          if (lockEpochRef.current !== lockEpoch) return "locked";
           return landingChange(context);
         };
         const reason = withheld();
@@ -741,6 +764,8 @@ export function useTerminalFileTransfer(
           lockEpoch,
           automatic: true,
           stillCurrent: () => landingChange(context) === null,
+          onWithheld: () =>
+            offerWithheldPaths(terminalId, deliverable, withheld() ?? "input", context.hasPanel),
         });
 
         const activeNow = document.activeElement;

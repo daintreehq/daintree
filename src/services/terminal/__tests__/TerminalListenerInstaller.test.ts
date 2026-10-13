@@ -222,6 +222,7 @@ function makeDeps(
     notifyUserInput: vi.fn(),
     clearDirectingState: vi.fn(),
     onUserInput: vi.fn(),
+    noteUserInput: vi.fn(),
     onActiveWheel: vi.fn(),
     onUserScrollIntent: vi.fn(),
     onEnterPressed: vi.fn(),
@@ -274,6 +275,16 @@ describe("installTerminalBoundListeners", () => {
 
     expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith("t1", "hello");
     expect(deps.onUserInput).toHaveBeenCalledWith("t1", "hello");
+    expect(deps.noteUserInput).toHaveBeenCalledTimes(1);
+
+    // Delete, an arrow and Ctrl+C edit the prompt without composing it, but
+    // they still change the input a late file drop must not type over.
+    for (const key of ["\x1b[3~", "\x1b[D", "\x03"]) captured.onData!(key);
+    expect(deps.noteUserInput).toHaveBeenCalledTimes(4);
+
+    // A focus report, a cursor-position reply and a mouse report are not typing.
+    for (const reply of ["\x1b[I", "\x1b[12;4R", "\x1b[<0;10;5M"]) captured.onData!(reply);
+    expect(deps.noteUserInput).toHaveBeenCalledTimes(4);
   });
 
   it("forwards observed agent titles via window.electron.terminal.updateObservedTitle and panel store (drift #2 fix)", () => {

@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useId,
   useRef,
@@ -442,15 +443,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
     const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd);
 
+    // Layout phase: a native drop can arrive after a commit that disabled the
+    // bar but before passive effects run, and must not be taken then.
+    const disabledRef = useRef(disabled);
+    useLayoutEffect(() => {
+      disabledRef.current = disabled;
+    }, [disabled]);
+
     // A drop on this pane's agent terminal lands here when "Focus the input bar
     // first" is on — in the pane's own composer, never Canopy's reply box for
-    // the same terminal. A bar that can't take the user's own typing declines,
-    // and the drop falls through to the terminal instead of vanishing.
+    // the same terminal. A bar that can't take the user's own typing (disabled,
+    // or read-only while a voice submission settles) declines, and the drop
+    // falls through to the terminal instead of vanishing.
     useEffect(() => {
       if (isolated) return;
       return registerComposerDropTarget(terminalId, (sources) => {
         const view = editorViewRef.current;
-        if (!view || !latestRef.current || latestRef.current.disabled) return false;
+        if (!view || disabledRef.current || !view.state.facet(EditorView.editable)) return false;
         const entries = sources.map(fileAttachmentEntryFromSource);
         if (entries.length === 0) return false;
         usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");

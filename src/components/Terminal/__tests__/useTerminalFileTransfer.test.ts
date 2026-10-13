@@ -1036,6 +1036,26 @@ describe("useTerminalFileTransfer hook", () => {
       expect(payloads()).toEqual([formatWithBracketedPaste("/Users/test/a.png")]);
     });
 
+    it("offers a queued drop's path when the user types while images still pace", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await dropFiles([fileAt("b.md", "/Users/test/b.md")]);
+      terminalInstanceService.notifyUserInput("term-1", "x");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(payloads()).not.toContain(
+        formatWithBracketedPaste(`${formatAtFileToken("/Users/test/b.md")} `)
+      );
+      expect(notify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "The terminal's input changed before the transfer finished.",
+          inboxMessage: expect.stringContaining("/Users/test/b.md"),
+        })
+      );
+    });
+
     it("stops pacing once the pane unmounts", async () => {
       const { unmount } = renderFileTransferHook({ detectedAgentId: "claude" });
       await dropFiles([fileAt("a.png", "/Users/test/a.png"), fileAt("b.png", "/Users/test/b.png")]);
@@ -1756,6 +1776,34 @@ describe("useTerminalFileTransfer hook", () => {
         expect(terminalClient.write).not.toHaveBeenCalled();
         expect(notice()).toMatchObject({ title: "Couldn't insert path", labels: [] });
         expect(vi.mocked(notify).mock.calls.at(-1)![0].action?.label).toBe("Copy path");
+      });
+
+      it("names a lock that came and went, and still offers Insert", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({});
+        await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+        rerender({ isInputLocked: true });
+        rerender({ isInputLocked: false });
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({
+          message: "The terminal was locked before the transfer finished.",
+          labels: ["Insert path", "Copy path"],
+        });
+      });
+
+      it("offers no Insert while the terminal is still locked", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({});
+        await dropFiles([fileAt("a.ts", "/Users/test/a.ts")]);
+        rerender({ isInputLocked: true });
+        await release();
+
+        expect(notice()).toMatchObject({
+          message: "The terminal isn't taking input.",
+          labels: ["Copy path"],
+        });
       });
 
       it("drops the offer's Insert once the pane unmounted", async () => {

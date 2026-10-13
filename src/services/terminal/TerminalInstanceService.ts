@@ -669,7 +669,7 @@ class TerminalInstanceService {
    * epoch alone so it cannot make other pending drops look overtaken.
    */
   notifyUserInput(id: string, data = "", options: { automatic?: boolean } = {}): void {
-    if (!options.automatic) this.bumpUserInputEpoch(id);
+    if (!options.automatic) this.noteUserInput(id);
     this.onUserInput(id, data);
   }
 
@@ -690,7 +690,8 @@ class TerminalInstanceService {
     return this.userInputEpochs.get(id) ?? 0;
   }
 
-  private bumpUserInputEpoch(id: string): void {
+  /** Records that the user changed this terminal's input, without the activity side effects. */
+  noteUserInput(id: string): void {
     this.userInputEpochs.set(id, this.getUserInputEpoch(id) + 1);
   }
 
@@ -727,10 +728,8 @@ class TerminalInstanceService {
       notifyUserInput: (id) => this.notifyUserInput(id),
       clearDirectingState: (id, trigger) =>
         this.agentStateController.clearDirectingState(id, trigger),
-      onUserInput: (id, data) => {
-        this.bumpUserInputEpoch(id);
-        this.onUserInput(id, data);
-      },
+      onUserInput: (id, data) => this.onUserInput(id, data),
+      noteUserInput: (id) => this.noteUserInput(id),
       onActiveWheel: (id) => this.burstController.onActiveWheel(id),
       onUserScrollIntent: (id) => this.burstController.onUserScrollIntent(id),
       onEnterPressed: (id) => this.onEnterPressed(id),
