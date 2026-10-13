@@ -26,7 +26,9 @@ import type { HostDirectoryListing, HostPickerRoots } from "../../../shared/type
  */
 export const ProjectLinkMethod = {
   DESCRIBE_SOURCE: "projects.describe-source",
-  PUSH_BRANCH: "projects.push-branch",
+  // Named for the pinned push: a host from before it has no such method and
+  // refuses, rather than dropping the commit and pushing the branch's tip.
+  PUSH_BRANCH: "projects.push-branch-pinned",
   /** Kill the push this session started under that opId. */
   PUSH_CANCEL: "projects.push-cancel",
   /** The host's retained record of a push by opId, for a Shell whose answer was lost. */

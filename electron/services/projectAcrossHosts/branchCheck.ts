@@ -90,20 +90,32 @@ export async function resolveSameNamePush(
     if (push.status !== "resolved") return null;
     const { destination } = push;
     if (destination.requiresUpstreamRepair || destination.branch !== branch) return null;
+    // The effective config in one read, refused if it can't be read: a
+    // setting that would forbid the push is never taken as absent.
+    const config = await tryRaw(git, ["config", "--list", "-z"]);
+    if (config === null) return null;
+    let pushDefault: string | null = null;
+    let merge: string | null = null;
+    for (const entry of config.split("\u0000")) {
+      if (!entry) continue;
+      const newline = entry.indexOf("\n");
+      const key = newline === -1 ? entry : entry.slice(0, newline);
+      const value = newline === -1 ? "" : entry.slice(newline + 1);
+      const lower = key.toLowerCase();
+      if (lower === "push.default") pushDefault = value.trim().toLowerCase();
+      // Section and variable names are case-insensitive; the remote and branch names aren't.
+      else if (lower.startsWith("remote.") && lower.endsWith(".push")) {
+        if (key.slice("remote.".length, -".push".length) === destination.remote) return null;
+      } else if (lower.startsWith("branch.") && lower.endsWith(".merge")) {
+        if (key.slice("branch.".length, -".merge".length) === branch) merge = value;
+      }
+    }
     // With nothing configured the resolver falls back to the only remote;
     // that is only git's own answer when no setting says otherwise.
-    const pushDefault = (await readConfigValue(git, "push.default"))?.toLowerCase() ?? null;
     if (pushDefault === "nothing" || pushDefault === "matching") return null;
-    const refspecs = await tryRaw(git, [
-      "config",
-      "--get-all",
-      `remote.${destination.remote}.push`,
-    ]);
-    if ((refspecs ?? "").trim().length > 0) return null;
     // Under `push.default=current` git would push a topic that tracks
     // `develop` to `topic`; tracking another branch still means the person
     // set it up to land somewhere else, so it isn't pushed from here.
-    const merge = await readConfigValue(git, `branch.${branch}.merge`);
     if (merge !== null && merge !== `refs/heads/${branch}`) return null;
     return { remote: destination.remote, branch };
   } catch {
