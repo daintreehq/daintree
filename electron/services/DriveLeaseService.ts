@@ -245,7 +245,10 @@ export class DriveLeaseService {
       }
     }
     if (!changed) return;
-    for (const projectId of [...this.leases.keys()]) this.reconcileProject(projectId);
+    // Projects nobody holds too: a lease released while every view was away
+    // goes to whoever comes back, or each returning view would drive at once.
+    const projects = new Set([...this.leases.keys(), ...this.attachedProjects()]);
+    for (const projectId of projects) this.reconcileProject(projectId);
   }
 
   /** Every holder change, for the remote session layer's LEASE_CHANGED frames. */
@@ -257,15 +260,26 @@ export class DriveLeaseService {
   }
 
   /**
-   * The project's holder. Reading never changes it: a metrics sample, a fleet
-   * check or a view looking at the lease must not make a window that merely
-   * shows the project its driver. A read only starts (or stops) the grace of a
-   * holder that has gone. May name an endpoint that has just closed while its
-   * client's reservation runs; use {@link getHolderEndpoint} to reach it.
+   * The project's holder. Reading never gives it to another machine: a
+   * metrics sample, a fleet check or a view looking at the lease must not make
+   * a window that merely shows the project its driver. A read only moves it
+   * to another window of the holder's own client, and starts (or stops) the
+   * grace of a holder that has gone. May name an endpoint that has just closed
+   * while its client's reservation runs; use {@link getHolderEndpoint} to
+   * reach it.
    */
   getHolder(projectId: string): DriveLeaseHolder | null {
     this.reconcileProject(projectId, false);
     return this.leases.get(projectId)?.holder ?? null;
+  }
+
+  /**
+   * The endpoint a lease nobody holds would go to, without granting it: for
+   * checks that must treat a window already on the project as holding it.
+   */
+  nextHolderEndpoint(projectId: string): ClientEndpoint | null {
+    if (this.disposed || this.leases.has(projectId)) return null;
+    return this.successor(projectId, null) ?? null;
   }
 
   getState(projectId: string): DriveLeaseState {
@@ -508,7 +522,8 @@ export class DriveLeaseService {
 
   /**
    * Settle a project's lease against who is attached. Only a change in who is
-   * attached may grant it (`mayGrant`); a read just keeps the grace of a
+   * attached may grant a lease nobody holds (`mayGrant`); a read only moves a
+   * held lease between windows of its own client and keeps the grace of a
    * holder that has gone running.
    */
   private reconcileProject(projectId: string, mayGrant = true): void {
@@ -527,10 +542,11 @@ export class DriveLeaseService {
       }
       return;
     }
-    // Another window of the same client carries on driving without a gap.
-    const sameClient = mayGrant
-      ? this.presentFor(projectId).find((endpoint) => endpoint.clientId === lease.holder.clientId)
-      : undefined;
+    // Another window of the same client carries on driving without a gap. The
+    // same machine keeps the project, so a read may do this much.
+    const sameClient = this.presentFor(projectId).find(
+      (endpoint) => endpoint.clientId === lease.holder.clientId
+    );
     if (sameClient) {
       this.grant(projectId, sameClient);
       return;

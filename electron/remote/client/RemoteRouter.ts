@@ -80,6 +80,16 @@ export class RemoteRouterImpl implements RemoteRouter {
     return this.retain(webContentsId, isLocalHostId(hostId) ? null : hostId, null);
   }
 
+  /**
+   * Learn the route of every view that already exists. A view only teaches
+   * the router its route by calling through it, and views cached before the
+   * router was first installed never have: one evicted while its window shows
+   * a host would otherwise follow the window there.
+   */
+  learn(webContentsIds: Iterable<number>): void {
+    for (const webContentsId of webContentsIds) this.hostForSender(webContentsId);
+  }
+
   forwardInvoke(
     hostId: HostId,
     webContentsId: number,

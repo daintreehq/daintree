@@ -54,6 +54,7 @@ vi.mock("../../../window/windowRef.js", () => ({
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getProjectForWebContents: () => null,
   getWebContentsForProject: (projectId: string) => mockProjectViews.get(projectId) ?? [],
   getWindowForWebContents: (wc: { id: number }) => mockWindowForWebContents.get(wc.id) ?? null,
 }));

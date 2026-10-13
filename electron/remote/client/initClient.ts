@@ -511,7 +511,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     router: remoteRouter,
     senders,
     windows: createWindowControl(hooks),
-    installRouter: (next) => getIpcDispatcher().setRemoteRouter(next),
+    installRouter: (next) => {
+      if (next) remoteRouter.learn(getAllAppWebContents().map((wc) => wc.id));
+      getIpcDispatcher().setRemoteRouter(next);
+    },
     emit: broadcastLocal,
     onFirstUse: hooks.onFirstUse,
     onForget: (descriptor): Promise<void> => setup.forgetArtifacts(descriptor),

@@ -65,7 +65,7 @@ type WriteMessage = Extract<TerminalInPortMessage, { type: "write" }>;
 interface HeldWrite {
   message: WriteMessage;
   session: LinkSession;
-  /** The terminal's incarnation when it was typed, if any output had arrived. */
+  /** The terminal's incarnation when it was typed; unknown before any output arrived. */
   incarnation: number | undefined;
 }
 type ResizeMessage = Extract<TerminalInPortMessage, { type: "resize" }>;
@@ -283,21 +283,20 @@ export class ClientTerminalRelay {
   }
 
   private isCurrent(held: HeldWrite): boolean {
-    if (held.session !== this.session) return false;
     return (
-      held.incarnation === undefined ||
+      held.session === this.session &&
       this.positions.get(held.message.id)?.incarnation === held.incarnation
     );
   }
 
-  /** A terminal restarted: what was typed into the PTY that ended goes with it. */
+  /**
+   * A terminal's incarnation changed, or became known: what was typed before
+   * then can't be shown to be for the PTY now running, so it goes.
+   */
   private dropHeldInputFor(id: string, incarnation: number): void {
     if (!this.pendingInput.some((held) => held.message.id === id)) return;
     this.pendingInput = this.pendingInput.filter((held) => {
-      const stale =
-        held.message.id === id &&
-        held.incarnation !== undefined &&
-        held.incarnation !== incarnation;
+      const stale = held.message.id === id && held.incarnation !== incarnation;
       if (stale) this.pendingInputBytes -= held.message.data.length;
       return !stale;
     });

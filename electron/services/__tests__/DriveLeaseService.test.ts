@@ -145,12 +145,40 @@ describe("DriveLeaseService", () => {
     }
     expect(changes).toEqual([]);
 
-    // A held lease isn't handed to another window of its client by a read either.
+    expect(service.nextHolderEndpoint("p")?.endpointId).toBe("local:1");
+    expect(changes).toEqual([]);
+
+    // A held lease stays on its machine: a read may move it to another window
+    // of the holder's client, and never to anyone else.
     service.takeOver("p", hostWindow);
+    const laptop = remote("s1:e1", "greg-mbp-id");
+    registry.add(laptop);
+    await settle();
     changes.length = 0;
     hostWindow.projectId = "q";
-    expect(service.getHolder("p")?.endpointId).toBe("local:1");
-    expect(changes).toEqual([]);
+    expect(service.getHolder("p")?.endpointId).toBe("local:2");
+    other.projectId = "q";
+    expect(service.getHolder("p")?.endpointId).toBe("local:2");
+    expect(changes.map((change) => change.holder?.clientId)).toEqual(["local"]);
+  });
+
+  it("settles a lease nobody holds when views come back after it was released (#13285)", async () => {
+    const a = remote("s1:e1", "c1");
+    const b = remote("s2:e1", "c2");
+    registry.add(a);
+    registry.add(b);
+    await settle();
+    expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+
+    service.noteEndpointTransport(["s1:e1", "s2:e1"], false);
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(service.getHolder("p")).toBeNull();
+
+    service.noteEndpointTransport(["s1:e1", "s2:e1"], true);
+    const holder = service.getHolder("p");
+    expect(holder).not.toBeNull();
+    expect([a, b].filter((endpoint) => service.isDriving("p", endpoint))).toHaveLength(1);
+    expect(arbitrated()).toEqual(["p"]);
   });
 
   it("lists the projects someone else drives, which a caller's calls may not change", async () => {

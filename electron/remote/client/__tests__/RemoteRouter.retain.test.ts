@@ -112,4 +112,16 @@ describe("RemoteRouterImpl after a view is unregistered (#13285)", () => {
     h.destroy(1);
     expect(h.router.hostForSender(1)).toBeNull();
   });
+
+  it("keeps a local view that never called through the router local, once it learned the view", () => {
+    const h = harness();
+    h.keys.set(8, "proj");
+    h.windows.set(8, 2);
+    h.router.learn([8]);
+
+    // Evicted while its window shows a host's project.
+    h.keys.delete(8);
+    h.bindings.set(2, "studio-01");
+    expect(h.router.hostForSender(8)).toBeNull();
+  });
 });

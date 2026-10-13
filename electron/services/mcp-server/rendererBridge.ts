@@ -17,8 +17,9 @@ import {
 } from "../viewless/index.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
 import { getRemoteService } from "../../remote/runtime.js";
-import { isLocalHostId } from "../../../shared/types/remoteHosts.js";
+import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import {
+  getProjectForWebContents,
   getWebContentsForProject,
   getWindowForWebContents,
 } from "../../window/webContentsRegistry.js";
@@ -391,9 +392,17 @@ export function createRendererBridge(
     };
   }
 
-  /** The host a view's calls go to, or null for a view on this machine. */
+  /**
+   * The host a view's calls go to, or null for a view on this machine. A
+   * project view's host is in its key, which outlives Remote Hosts stopping at
+   * quit; a view with no project follows its window.
+   */
   function remoteHostOf(webContents: Electron.WebContents): string | null {
-    const hostId = getRemoteService("windowHosts")?.viewHost(webContents.id);
+    const key = getProjectForWebContents(webContents.id);
+    const hostId =
+      key !== null
+        ? parseHostScopedKey(key).hostId
+        : getRemoteService("windowHosts")?.viewHost(webContents.id);
     return hostId === undefined || isLocalHostId(hostId) ? null : hostId;
   }
 
@@ -537,7 +546,9 @@ export function createRendererBridge(
         const active = registry
           ?.getByWindowId(win.id)
           ?.services.projectViewManager?.getActiveView()?.webContents;
-        if (active && !active.isDestroyed()) return active;
+        // A window now showing a host's project would read this machine's
+        // workspace id against the host's projects.
+        if (active && !active.isDestroyed() && remoteHostOf(active) === null) return active;
       }
     }
     return getActiveProjectWebContents();

@@ -146,7 +146,12 @@ export const electronMock = {
   ipcMain: ipcMainMock,
   session: { defaultSession: {}, fromPartition: () => ({}) },
   MessageChannelMain: FakeMessageChannelMain,
-  BrowserWindow: class {},
+  BrowserWindow: class {
+    // The harness has no windows; installing the router looks for views.
+    static getAllWindows(): unknown[] {
+      return [];
+    }
+  },
   WebContentsView: class {},
   webContents: { fromId: () => undefined },
 };

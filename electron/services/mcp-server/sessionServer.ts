@@ -101,6 +101,7 @@ import {
   McpRouteBindingError,
   NoFrontendAttachedError,
   RendererBridgeUnavailableError,
+  RemoteHostWindowOnlyError,
   WorkspaceBindingError,
 } from "./rendererBridge.js";
 import { getExternalBaseManifest } from "./baseManifest.js";
@@ -1341,6 +1342,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // bound path exists to prevent. The base surface is generated from the
       // action registry at commit time and describes nobody's view.
       if (err instanceof WorkspaceBindingError) {
+        return getExternalBaseManifest();
+      }
+      // Only windows on a remote host are open (#13285). This machine's tools
+      // are still this machine's: list them, and let each call name the host
+      // it refuses to reach into.
+      if (err instanceof RemoteHostWindowOnlyError) {
         return getExternalBaseManifest();
       }
       // A dead *pin* still is a dead end (#11789). The session's identity is

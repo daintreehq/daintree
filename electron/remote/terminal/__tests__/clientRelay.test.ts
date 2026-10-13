@@ -300,6 +300,9 @@ function backpressuredSession() {
       refusing = false;
       writable?.();
     },
+    refuse() {
+      refusing = true;
+    },
     close() {
       (session as { isOpen: boolean }).isOpen = false;
       closed?.();
@@ -340,6 +343,47 @@ describe("ClientTerminalRelay held input", () => {
       { type: "write", id: "t1", data: "ls" },
       { type: "write", id: "t1", data: "\r" },
     ]);
+  });
+
+  it("bounds input held for backpressure by messages, bytes and distinct resizes", async () => {
+    const peer = new FakePeer();
+    const relay = new ClientTerminalRelay({
+      endpointId: ENDPOINT,
+      openRendererPort: () => peer.port,
+      maxPendingInputMessages: 3,
+      maxPendingInputBytes: 10,
+      maxPendingResizes: 2,
+    });
+    cleanups.push(() => {
+      relay.dispose();
+      peer.close();
+    });
+    relay.deliverPort();
+    const link = backpressuredSession();
+    relay.attach(link.session);
+    for (let i = 0; i < 5; i++) peer.post({ type: "write", id: "t1", data: "" });
+    peer.post({ type: "resize", id: "a", cols: 80, rows: 24 });
+    peer.post({ type: "resize", id: "b", cols: 80, rows: 24 });
+    peer.post({ type: "resize", id: "c", cols: 80, rows: 24 });
+    peer.post({ type: "resize", id: "b", cols: 100, rows: 30 });
+    await settle();
+
+    link.drain();
+    expect(link.posted).toEqual([
+      { type: "resize", id: "c", cols: 80, rows: 24 },
+      { type: "resize", id: "b", cols: 100, rows: 30 },
+      { type: "write", id: "t1", data: "" },
+      { type: "write", id: "t1", data: "" },
+      { type: "write", id: "t1", data: "" },
+    ]);
+
+    link.posted.length = 0;
+    link.refuse();
+    peer.post({ type: "write", id: "t1", data: "123456" });
+    peer.post({ type: "write", id: "t1", data: "7890ab" });
+    await settle();
+    link.drain();
+    expect(link.posted).toEqual([{ type: "write", id: "t1", data: "123456" }]);
   });
 
   it("never replays input held for one session into the next", async () => {
@@ -386,12 +430,19 @@ describe("ClientTerminalRelay held input", () => {
     expect(relay.position("t1")).toEqual({ incarnation: 1, lastSeq: 1 });
 
     peer.post({ type: "write", id: "t1", data: "old" });
-    peer.post({ type: "write", id: "t2", data: "other" });
+    // t2 has shown nothing yet, so nothing says which PTY this was typed at.
+    peer.post({ type: "write", id: "t2", data: "unknown" });
+    peer.post({ type: "write", id: "t1", data: "old too" });
     await settle();
     output(2, 1);
     expect(relay.position("t1")).toEqual({ incarnation: 2, lastSeq: 1 });
+    peer.post({ type: "write", id: "t1", data: "new" });
+    await settle();
 
     link.drain();
-    expect(link.posted).toEqual([{ type: "write", id: "t2", data: "other" }]);
+    expect(link.posted).toEqual([
+      { type: "write", id: "t2", data: "unknown" },
+      { type: "write", id: "t1", data: "new" },
+    ]);
   });
 });
