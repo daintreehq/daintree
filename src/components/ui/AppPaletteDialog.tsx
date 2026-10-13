@@ -31,7 +31,10 @@ import {
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { usePaletteStore } from "@/store/paletteStore";
-import { consumePaletteFocusRestoreSuppression } from "./paletteFocusRestore";
+import {
+  consumeDeferredPaletteFocusRestore,
+  consumePaletteFocusRestoreSuppression,
+} from "./paletteFocusRestore";
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
@@ -186,6 +189,18 @@ export function AppPaletteDialog({
     // only the focus move is skipped.
     if (consumePaletteFocusRestoreSuppression()) {
       clearDialogOverlays();
+      return;
+    }
+    // The caller decides once it knows whether its pick moved focus elsewhere.
+    const receive = consumeDeferredPaletteFocusRestore();
+    if (receive) {
+      clearDialogOverlays();
+      receive(() => {
+        if (!el || !document.contains(el)) return;
+        // Only while nothing else has taken the keyboard meanwhile.
+        if (document.activeElement && document.activeElement !== document.body) return;
+        el.focus();
+      });
       return;
     }
     if (!el) return;

@@ -45,7 +45,7 @@ export const scratchClient = {
   switch(
     scratchId: string,
     options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
-  ): Promise<Scratch> {
+  ): Promise<Scratch | null> {
     const a = api();
     if (!a) return Promise.reject(new Error("scratch IPC unavailable"));
     return a.switch(scratchId, options);

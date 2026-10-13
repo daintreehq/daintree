@@ -57,6 +57,8 @@ export function notifyHostSwitchFailure(hostId: HostId, error: unknown, retry: (
     : isClientAppError(error) && error.code === "HOST_MODE_OFF"
       ? { hostId, target: "host" as const, label: "Set up…" }
       : null;
+  // The host said the project is gone: trying again can't help, picking another can.
+  const missing = !update && isClientAppError(error) && error.code === "NOT_FOUND";
   notify({
     type: "error",
     context: { eventKind: "connectivity" },
@@ -70,22 +72,37 @@ export function notifyHostSwitchFailure(hostId: HostId, error: unknown, retry: (
             onClick: () => runHostUpdate(update.target, update.hostId),
           },
         ]
-      : [{ label: "Retry", variant: "primary", onClick: retry }],
+      : missing
+        ? [
+            {
+              label: "Choose project…",
+              variant: "primary",
+              onClick: () => void requestHostProjectPicker(hostId),
+            },
+          ]
+        : [{ label: "Retry", variant: "primary", onClick: retry }],
   });
 }
 
-/** Switch this window (or a new one) to a host, optionally straight into one of its projects. */
+/**
+ * Switch this window (or a new one) to a host, optionally straight into one of
+ * its projects. `onStayed` hears when the window ends up where it was: the
+ * switch failed, or was cancelled or overtaken by a newer navigation.
+ */
 export async function switchToHost(
   hostId: HostId,
   newWindow: boolean,
-  projectId?: string
+  projectId?: string,
+  options?: { onStayed?: () => void }
 ): Promise<void> {
   try {
     const result = await window.electron.remoteHosts.switchWindowHost(
       projectId === undefined ? { hostId, newWindow } : { hostId, newWindow, projectId }
     );
+    if (result?.outcome === "superseded") options?.onStayed?.();
     followSwitchResult(result);
   } catch (error) {
+    options?.onStayed?.();
     notifyHostSwitchFailure(hostId, error, () => void switchToHost(hostId, newWindow, projectId));
   }
 }

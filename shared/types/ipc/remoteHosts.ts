@@ -61,6 +61,29 @@ export type SwitchWindowHostResult =
   /** Another window already had the project: it came forward, and the asking window stayed as it was. */
   | { outcome: "focused-elsewhere"; hostId: HostId; projectId: string; targetWindowId: number };
 
+/**
+ * A window's switch to a host that hasn't landed yet. Ends when the window
+ * moves, the switch fails, or it is cancelled or overtaken by a newer navigation.
+ */
+export interface PendingHostSwitch {
+  /** This request, as `cancelPendingSwitch` names it. */
+  switchId: string;
+  hostId: HostId;
+  /** The host as this machine's list names it. */
+  hostName: string;
+  /** Known once the host has described the project; null before, or when returning to its last one. */
+  projectName: string | null;
+  /**
+   * `connecting` while the link comes up, `starting` while Daintree is being
+   * started on the host, `opening` once the host is answering.
+   */
+  phase: "connecting" | "starting" | "opening";
+}
+
+export interface CancelPendingSwitchPayload {
+  switchId: string;
+}
+
 /** A project as the host that has it lists it. Its id means something only on that host. */
 export interface HostProjectSummary {
   id: string;
@@ -347,6 +370,12 @@ export type RemoteHostsEvent =
    * `takeProjectOffer`.
    */
   | { type: "project-offer" }
+  /**
+   * Sent to the views a window is showing: where its switch to a host is
+   * while that host is on its way, and null once it lands, fails or is
+   * cancelled. A window that is switching keeps showing what it shows until then.
+   */
+  | { type: "switch-pending"; pending: PendingHostSwitch | null }
   /** An install or update this client is running on a host. */
   | {
       type: "install-progress";

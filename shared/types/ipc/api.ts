@@ -969,7 +969,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     switch(
       scratchId: string,
       options?: { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent }
-    ): Promise<import("../scratch.js").Scratch>;
+    ): Promise<import("../scratch.js").Scratch | null>;
     saveAsProject(scratchId: string): Promise<import("./scratch.js").ScratchSaveAsProjectResult>;
     onUpdated(callback: (scratch: import("../scratch.js").Scratch) => void): () => void;
     onRemoved(callback: (scratchId: string) => void): () => void;

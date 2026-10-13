@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
-import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
+import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { useHostList } from "@/components/Hosts/hostList";
@@ -73,12 +73,23 @@ export function HostSwitcherPalette() {
         close();
         return;
       }
-      // The switch hands the keyboard on (to the host's view, or to its
-      // project list when it has nothing to return to); restoring focus from
-      // the exit animation would take it back a beat later.
-      suppressPaletteFocusRestore();
+      // A switch that lands hands the keyboard on (to the host's view, or to
+      // its project list when it has nothing to return to), so focus isn't
+      // put back on close. One that fails or is cancelled leaves this window
+      // where it was, and the keyboard goes back to where it was too.
+      let restore: (() => void) | null = null;
+      let stayed = false;
+      deferPaletteFocusRestore((restoreFocus) => {
+        if (stayed) restoreFocus();
+        else restore = restoreFocus;
+      });
       close();
-      void switchToHost(row.hostId, newWindow);
+      void switchToHost(row.hostId, newWindow, undefined, {
+        onStayed: () => {
+          stayed = true;
+          restore?.();
+        },
+      });
     },
     [close]
   );

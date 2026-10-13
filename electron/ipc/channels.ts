@@ -1299,6 +1299,8 @@ export const CHANNELS = {
   REMOTE_HOSTS_GET_WINDOW_HOST: "remote-hosts:get-window-host",
   REMOTE_HOSTS_TAKE_PROJECT_OFFER: "remote-hosts:take-project-offer",
   REMOTE_HOSTS_SWITCH_WINDOW_HOST: "remote-hosts:switch-window-host",
+  REMOTE_HOSTS_GET_PENDING_SWITCH: "remote-hosts:get-pending-switch",
+  REMOTE_HOSTS_CANCEL_PENDING_SWITCH: "remote-hosts:cancel-pending-switch",
   REMOTE_HOSTS_DISCOVER: "remote-hosts:discover",
   REMOTE_HOSTS_PROBE: "remote-hosts:probe",
   REMOTE_HOSTS_GET_LOCAL_HANDSHAKE: "remote-hosts:get-local-handshake",

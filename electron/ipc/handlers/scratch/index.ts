@@ -100,7 +100,9 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           ctx,
           scratchId: string,
           options?: { focusIntent?: ProjectFocusOnActivateIntent }
-        ): Promise<Scratch> => {
+          // Null from a remote window's switch that didn't land there (`splits.ts`):
+          // another window had the scratch, or a newer navigation won.
+        ): Promise<Scratch | null> => {
           if (typeof scratchId !== "string" || !scratchId) {
             throw new Error("Invalid scratch ID");
           }

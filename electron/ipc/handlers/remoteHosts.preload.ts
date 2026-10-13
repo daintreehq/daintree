@@ -10,6 +10,8 @@ export const REMOTE_HOSTS_METHOD_CHANNELS = {
   getWindowHost: "remote-hosts:get-window-host",
   takeProjectOffer: "remote-hosts:take-project-offer",
   switchWindowHost: "remote-hosts:switch-window-host",
+  getPendingSwitch: "remote-hosts:get-pending-switch",
+  cancelPendingSwitch: "remote-hosts:cancel-pending-switch",
   discover: "remote-hosts:discover",
   probe: "remote-hosts:probe",
   getLocalHandshake: "remote-hosts:get-local-handshake",

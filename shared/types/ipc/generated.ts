@@ -1974,6 +1974,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { opId: string }];
     result: boolean;
   };
+  "remote-hosts:cancel-pending-switch": {
+    args: [payload: import("./remoteHosts.js").CancelPendingSwitchPayload];
+    result: boolean;
+  };
   "remote-hosts:connect": {
     args: [payload: { hostId: string }];
     result: import("../remoteHosts.js").HostConnectionState;
@@ -1997,6 +2001,10 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:get-local-handshake": {
     args: [];
     result: import("../remoteHosts.js").HostHandshakeInfo;
+  };
+  "remote-hosts:get-pending-switch": {
+    args: [];
+    result: import("./remoteHosts.js").PendingHostSwitch | null;
   };
   "remote-hosts:get-window-host": {
     args: [];
@@ -2101,7 +2109,7 @@ export interface GeneratedIpcInvokeMap {
         | { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent | undefined }
         | undefined,
     ];
-    result: import("../scratch.js").Scratch;
+    result: import("../scratch.js").Scratch | null;
   };
   "scratch:update": {
     args: [

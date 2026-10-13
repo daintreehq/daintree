@@ -608,6 +608,21 @@ describe("scratch switch", () => {
     expect(mocks.viewSend).not.toHaveBeenCalled();
   });
 
+  it("hands back no scratch when the window didn't move to it", async () => {
+    mocks.client.switchWindowHost.mockResolvedValueOnce({
+      outcome: "superseded",
+      hostId: "studio",
+    });
+    const { invoke } = setup(
+      () => scratch,
+      () => "local"
+    );
+
+    // The asking view still shows what it showed, so it must not adopt the scratch.
+    await expect(invoke(CHANNELS.SCRATCH_SWITCH, ["s1"])).resolves.toBeNull();
+    expect(mocks.viewSend).not.toHaveBeenCalled();
+  });
+
   it("leaves the view where it is when the host refuses", async () => {
     const { invoke } = setup(
       () => {
