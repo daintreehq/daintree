@@ -79,6 +79,12 @@ afterAll(() => {
 });
 
 const { ResumeSessionsPalette } = await import("@/components/Terminal/ResumeSessionsPalette");
+const { TooltipProvider } = await import("@/components/ui/tooltip");
+
+/** Mounted under the app's tooltip provider, as it is in the app: rows wrap truncated text in TruncatedTooltip. */
+function renderPalette() {
+  return render(<ResumeSessionsPalette />, { wrapper: TooltipProvider });
+}
 
 function makeItem(id: string, overrides: Partial<ResumeSessionItem> = {}): ResumeSessionItem {
   return {
@@ -123,7 +129,7 @@ describe("ResumeSessionsPalette", () => {
   });
 
   it("marks exactly one row selected and points the active descendant at it", () => {
-    render(<ResumeSessionsPalette />);
+    renderPalette();
 
     const selected = screen.getAllByRole("option").filter((el) => el.ariaSelected === "true");
     expect(selected).toHaveLength(1);
@@ -137,12 +143,12 @@ describe("ResumeSessionsPalette", () => {
   });
 
   it("moves the selected row and the active descendant together", () => {
-    const { unmount } = render(<ResumeSessionsPalette />);
+    const { unmount } = renderPalette();
     const firstReferenced = screen.getByRole("combobox").getAttribute("aria-activedescendant");
     unmount();
 
     paletteState.selectedIndex = 1;
-    render(<ResumeSessionsPalette />);
+    renderPalette();
 
     const referenced = screen.getByRole("combobox").getAttribute("aria-activedescendant");
     expect(referenced).not.toBe(firstReferenced);
@@ -155,7 +161,7 @@ describe("ResumeSessionsPalette", () => {
     // The regression this guards: the selected treatment used to live inside a
     // JS `isSelected` ternary, which let the rendered attribute and the visible
     // highlight drift apart and left the rail with nothing to transition.
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     const selectedClass = rowFor("a").className;
     const unselectedClass = rowFor("b").className;
 
@@ -173,7 +179,7 @@ describe("ResumeSessionsPalette", () => {
   });
 
   it("keeps a stale row visually distinct from a merely unselected one", () => {
-    render(<ResumeSessionsPalette />);
+    renderPalette();
 
     // Staleness is still a class-level difference — it is a property of the
     // item, not of the selection, so it must not have been folded away.
@@ -182,7 +188,7 @@ describe("ResumeSessionsPalette", () => {
   });
 
   it("moves the one cursor with the pointer, and never onto an inert row", () => {
-    render(<ResumeSessionsPalette />);
+    renderPalette();
 
     // Pointing at a live row moves the cursor Enter acts on, rather than
     // painting a second row beside it.
@@ -211,7 +217,7 @@ describe("ResumeSessionsPalette", () => {
     paletteState.removedResults = [];
     paletteState.totalResults = live.length;
     paletteState.selectedIndex = 1;
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     const field = screen.getByRole("combobox");
 
     expect(fireEvent.keyDown(field, { key: "End" })).toBe(false);
@@ -233,7 +239,7 @@ describe("ResumeSessionsPalette", () => {
     paletteState.removedResults = [lead, tail];
     paletteState.totalResults = 4;
     paletteState.selectedIndex = 1;
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     const field = screen.getByRole("combobox");
 
     fireEvent.keyDown(field, { key: "End" });
@@ -243,7 +249,7 @@ describe("ResumeSessionsPalette", () => {
   });
 
   it("says 'Worktree removed' once for the section, never once per row", () => {
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     const dialog = document.querySelector('[role="dialog"]')!;
     const mentions = (dialog.textContent ?? "").match(/worktree removed/gi) ?? [];
     expect(mentions).toHaveLength(1);
@@ -256,7 +262,7 @@ describe("ResumeSessionsPalette", () => {
 
   it("keeps every option inside a listbox and every control outside one", () => {
     paletteState.hiddenCount = 3;
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     const lists = screen.getAllByRole("listbox");
     for (const option of screen.getAllByRole("option")) {
       expect(lists.some((list) => list.contains(option))).toBe(true);
@@ -278,13 +284,13 @@ describe("ResumeSessionsPalette", () => {
     paletteState.visibleResults = [paletteState.results[1]!];
     paletteState.removedResults = [paletteState.results[0]!];
     paletteState.selectedIndex = 0;
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     expect(screen.getByRole("combobox").getAttribute("aria-activedescendant")).toBeNull();
     expect(document.querySelector('[role="dialog"]')?.textContent ?? "").not.toMatch(/to resume/);
   });
 
   it("names the agent for assistive tech, since the glyph is hidden from it", () => {
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     expect(rowFor("a").textContent).toContain("Claude");
   });
 
@@ -292,7 +298,7 @@ describe("ResumeSessionsPalette", () => {
     paletteState.results = paletteState.removedResults;
     paletteState.visibleResults = [];
     paletteState.selectedIndex = -1;
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     expect(document.querySelector('[role="dialog"]')?.textContent ?? "").not.toMatch(/to resume/);
     // And with nothing to fold the history under, the heading is a label,
     // not a chevron that cannot collapse anything.
@@ -307,7 +313,7 @@ describe("ResumeSessionsPalette", () => {
     paletteState.visibleResults = [];
     paletteState.removedResults = [];
     paletteState.selectedIndex = -1;
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     const input = screen.getByRole("combobox");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(input.getAttribute("aria-expanded")).toBe("false");
@@ -315,7 +321,7 @@ describe("ResumeSessionsPalette", () => {
   });
 
   it("points aria-controls at the listbox it renders", () => {
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     const input = screen.getByRole("combobox");
     expect(input.getAttribute("aria-expanded")).toBe("true");
     const controls = input.getAttribute("aria-controls");
@@ -329,7 +335,7 @@ describe("ResumeSessionsPalette", () => {
 
   it("folds the removed rows away while browsing until the heading is opened", () => {
     paletteState.removedVisible = false;
-    render(<ResumeSessionsPalette />);
+    renderPalette();
 
     expect(document.getElementById("resume-session-option-c")).toBeNull();
     const fold = screen.getByRole("button", { name: /worktree removed/i });
@@ -342,7 +348,7 @@ describe("ResumeSessionsPalette", () => {
   it("labels rather than folds the removed matches while searching", () => {
     paletteState.isSearching = true;
     paletteState.query = "sess";
-    render(<ResumeSessionsPalette />);
+    renderPalette();
 
     expect(screen.queryByRole("button", { name: /worktree removed/i })).toBeNull();
     expect(screen.getByRole("listbox", { name: /worktree removed/i }).contains(rowFor("c"))).toBe(
@@ -351,7 +357,7 @@ describe("ResumeSessionsPalette", () => {
   });
 
   it("renders the bare title with its age beside it, and never stutters the verb", () => {
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     const row = rowFor("a");
     expect(row.textContent).not.toMatch(/resume/i);
     expect(row.textContent).toContain("Session a");
@@ -383,7 +389,7 @@ describe("ResumeSessionsPalette Escape", () => {
   it("spends the first press clearing a query, and keeps it from the dialog's backstop", () => {
     paletteState.query = "rebase";
     try {
-      render(<ResumeSessionsPalette />);
+      renderPalette();
       pressEscape();
       expect(paletteState.setQuery).toHaveBeenCalledWith("");
       // The dialog's document-level backstop calls `close` if the press reaches it.
@@ -394,7 +400,7 @@ describe("ResumeSessionsPalette Escape", () => {
   });
 
   it("closes on a press with nothing typed", () => {
-    render(<ResumeSessionsPalette />);
+    renderPalette();
     pressEscape();
     expect(paletteState.close).toHaveBeenCalled();
     expect(paletteState.setQuery).not.toHaveBeenCalled();

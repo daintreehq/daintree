@@ -90,8 +90,10 @@ function removed(title: string | null, savedAt: number, branch: string): AgentSe
 
 const RESUMABLE: AgentSessionRecord[] = [
   record("✳ Pane resize scroll position bug", hours(1)),
+  // Two untitled panes closed together, as a fleet teardown does: the row
+  // has to tell them apart by the second.
   record("✳ Claude Code", hours(3)),
-  record("✳ Claude Code", hours(3)),
+  record("✳ Claude Code", hours(3) - 25_000),
   record(null, hours(6)),
   record("✳ 4K screencast with Inworld audio sync", days(1), {
     worktreeId: "wt-video",
@@ -149,6 +151,8 @@ const MANY: AgentSessionRecord[] = byNewest([
 export interface ResumeSessionFixture {
   what: string;
   sessions: AgentSessionRecord[];
+  /** The journal read rejects, as it does when the history file cannot be read. */
+  fails?: boolean;
 }
 
 export const FIXTURES = {
@@ -167,6 +171,11 @@ export const FIXTURES = {
   empty: {
     what: "nothing has been closed yet",
     sessions: [],
+  },
+  failed: {
+    what: "the journal could not be read",
+    sessions: [],
+    fails: true,
   },
 } satisfies Record<string, ResumeSessionFixture>;
 
