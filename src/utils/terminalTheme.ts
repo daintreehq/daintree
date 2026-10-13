@@ -74,10 +74,10 @@ function parseColor(value: string): ParsedColor | null {
   }
   const fn = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:\s*[,/]\s*([\d.]+)(%?))?/i.exec(v);
   if (fn) {
-    const channels = [fn[1], fn[2], fn[3]].map((c) => Number(c) / 255);
+    const [r, g, b] = [fn[1], fn[2], fn[3]].map((c) => Number(c) / 255);
     const alpha = fn[4] === undefined ? 1 : Number(fn[4]) / (fn[5] ? 100 : 1);
-    if (![...channels, alpha].every(Number.isFinite)) return null;
-    return { rgb: channels.map(unit) as unknown as Rgb, alpha: unit(alpha) };
+    if (![r, g, b, alpha].every(Number.isFinite)) return null;
+    return { rgb: [unit(r!), unit(g!), unit(b!)], alpha: unit(alpha) };
   }
   return null;
 }
@@ -122,7 +122,8 @@ function fromOklab([L, a, b]: Rgb): Rgb {
 /** What `color-mix(in oklab, x p%, y)` paints, for opaque x and y. */
 function mixOklab(x: Rgb, y: Rgb, p: number): Rgb {
   const [a, b] = [toOklab(x), toOklab(y)];
-  return fromOklab([0, 1, 2].map((i) => a[i]! * p + b[i]! * (1 - p)) as unknown as Rgb);
+  const lerp = (i: 0 | 1 | 2) => a[i] * p + b[i] * (1 - p);
+  return fromOklab([lerp(0), lerp(1), lerp(2)]);
 }
 
 function luminance([r, g, b]: Rgb): number {
@@ -164,9 +165,8 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     const parsed = parseColor(raw);
     if (!parsed || !bg) return null;
     if (parsed.alpha === 1) return { rgb: parsed.rgb, css: raw };
-    const rgb = parsed.rgb.map(
-      (c, i) => c * parsed.alpha + bg[i]! * (1 - parsed.alpha)
-    ) as unknown as Rgb;
+    const over = (i: 0 | 1 | 2) => parsed.rgb[i] * parsed.alpha + bg[i] * (1 - parsed.alpha);
+    const rgb: Rgb = [over(0), over(1), over(2)];
     return { rgb, css: toHex(rgb) };
   };
   const fgInk = solid(foreground);
