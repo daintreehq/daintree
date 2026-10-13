@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { actionService } from "@/services/ActionService";
@@ -52,6 +53,8 @@ import { pluralize } from "@/lib/pluralize";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
 const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
+/** How long the filter query must settle before its result count is announced. */
+const FILTER_ANNOUNCE_DELAY_MS = 500;
 
 /**
  * How much of the inventory the dialog is showing right now — the scroll box's
@@ -113,12 +116,49 @@ export function RecipeManager({
     "recipe";
 
   const [recipeToDelete, setRecipeToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [recipeToSave, setRecipeToSave] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [recipeToDeleteAfterSave, setRecipeToDeleteAfterSave] = useState<string | null>(null);
+  const [deleteAfterSaveError, setDeleteAfterSaveError] = useState<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  // The row a delete removes takes its trigger with it, so focus goes to the
+  // row that slides into its place, or the one above when it was the last.
+  const deleteSuccessorRef = useRef<string | null>(null);
+  const inventoryFocusFallbackRef = useRef<HTMLDivElement>(null);
+  // Deleting the last recipe swaps the inventory for the empty state, whose
+  // primary action is then the next thing to do.
+  const emptyStateActionRef = useRef<HTMLButtonElement>(null);
+  // The original a team save leaves behind, offered for deletion once the save
+  // confirm has fully closed.
+  const pendingDeleteAfterSaveRef = useRef<string | null>(null);
+
+  const captureDeleteSuccessor = (recipeId: string) => {
+    const rows = Array.from(
+      inventoryRef.current?.querySelectorAll<HTMLElement>("[data-recipe-id]") ?? []
+    ).map((row) => row.dataset.recipeId);
+    const index = rows.indexOf(recipeId);
+    deleteSuccessorRef.current = rows[index + 1] ?? rows[index - 1] ?? null;
+  };
+
+  const requestDelete = (recipeId: string) => {
+    captureDeleteSuccessor(recipeId);
+    setRecipeToDelete(recipeId);
+  };
+
+  const deleteFocusSuccessor = (): HTMLElement | null => {
+    const id = deleteSuccessorRef.current;
+    const row = id
+      ? inventoryRef.current?.querySelector<HTMLElement>(`[data-recipe-id="${CSS.escape(id)}"]`)
+      : null;
+    return (
+      row?.querySelector<HTMLElement>("button") ??
+      inventoryFocusFallbackRef.current?.querySelector<HTMLElement>("input") ??
+      emptyStateActionRef.current
+    );
+  };
 
   // Kept mounted between opens; a filter left from last time would reopen the
   // manager showing a fraction of the inventory with no obvious reason why.
@@ -131,11 +171,13 @@ export function RecipeManager({
 
   const handleDeleteRecipe = async (recipeId: string) => {
     setDeleteError(null);
+    setIsDeleting(true);
     const result = await actionService.dispatch(
       "recipe.delete",
       { recipeId },
       { source: "user", confirmed: true }
     );
+    setIsDeleting(false);
     if (result.ok) {
       setRecipeToDelete(null);
     } else {
@@ -184,7 +226,10 @@ export function RecipeManager({
       // A plugin recipe cannot be deleted — the plugin still owns the original —
       // so there is no "delete the original?" follow-up to offer.
       const saved = pluginRecipes.find((r) => r.id === savedId);
-      if (!saved) setRecipeToDeleteAfterSave(savedId);
+      if (!saved) {
+        captureDeleteSuccessor(savedId);
+        pendingDeleteAfterSaveRef.current = savedId;
+      }
     } catch (err) {
       setSaveError(formatErrorMessage(err, "Failed to save recipe to repo"));
     } finally {
@@ -192,17 +237,24 @@ export function RecipeManager({
     }
   };
 
+  // A failed delete keeps the dialog open: closing it would leave the original
+  // in place while reading as though it had gone.
   const handleDeleteAfterSave = async () => {
     if (!recipeToDeleteAfterSave) return;
+    setDeleteAfterSaveError(null);
+    setIsDeleting(true);
     const result = await actionService.dispatch(
       "recipe.delete",
       { recipeId: recipeToDeleteAfterSave },
       { source: "user", confirmed: true }
     );
-    if (!result.ok) {
+    setIsDeleting(false);
+    if (result.ok) {
+      setRecipeToDeleteAfterSave(null);
+    } else {
       logError("Failed to delete original recipe", result.error);
+      setDeleteAfterSaveError(formatErrorMessage(result.error, "Failed to delete recipe"));
     }
-    setRecipeToDeleteAfterSave(null);
   };
 
   const resolveWorktreeName = (worktreeId: string) =>
@@ -214,6 +266,36 @@ export function RecipeManager({
   const totalCount =
     globalRecipes.length + pluginRecipes.length + inRepoRecipes.length + projectRecipes.length;
   const isFiltering = query.length > 0;
+  const matchCount = isFiltering
+    ? [...globalRecipes, ...projectRecipes, ...inRepoRecipes, ...pluginRecipes].filter(matches)
+        .length
+    : totalCount;
+
+  // The result count is the only feedback a screen reader gets while typing,
+  // so it is announced once the query settles rather than per keystroke.
+  const wasFilteringRef = useRef(false);
+  useEffect(() => {
+    const wasFiltering = wasFilteringRef.current;
+    wasFilteringRef.current = isOpen && isFiltering;
+    if (!isOpen) return;
+    // Clearing the query is announced too, or the list growing back is silent.
+    if (!isFiltering) {
+      if (wasFiltering) {
+        useAnnouncerStore.getState().announce(`Showing all ${pluralize(totalCount, "recipe")}`);
+      }
+      return;
+    }
+    const timer = setTimeout(() => {
+      useAnnouncerStore
+        .getState()
+        .announce(
+          matchCount === 0
+            ? "No recipes match"
+            : `${pluralize(matchCount, "recipe matches", "recipes match")}`
+        );
+    }, FILTER_ANNOUNCE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [isOpen, isFiltering, query, matchCount, totalCount]);
 
   const renderRecipeRow = (recipe: TerminalRecipe) => {
     // A plugin owns its recipes' content — editing or deleting one here would
@@ -234,7 +316,10 @@ export function RecipeManager({
       <div
         key={recipe.id}
         data-recipe-row={recipe.name}
-        className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-overlay-subtle has-[[data-state=open]]:bg-overlay-subtle"
+        data-recipe-id={recipe.id}
+        // `aria-expanded`, not `data-state`: the More trigger sits inside a
+        // Tooltip trigger, whose own `data-state` overwrites the menu's.
+        className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-overlay-subtle has-[[aria-expanded=true]]:bg-overlay-subtle"
       >
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
@@ -310,7 +395,7 @@ export function RecipeManager({
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    className="text-text-secondary hover:text-text-primary data-[state=open]:bg-overlay-raised"
+                    className="text-text-secondary hover:text-text-primary aria-expanded:bg-overlay-raised aria-expanded:text-text-primary"
                     aria-label={`More actions for recipe ${recipe.name}`}
                   >
                     <MoreHorizontal />
@@ -356,7 +441,7 @@ export function RecipeManager({
               {!fromPlugin && (
                 <>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem destructive onSelect={() => setRecipeToDelete(recipe.id)}>
+                  <DropdownMenuItem destructive onSelect={() => requestDelete(recipe.id)}>
                     <Trash2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                     Delete recipe…
                   </DropdownMenuItem>
@@ -396,18 +481,18 @@ export function RecipeManager({
     if (visible.length === 0 && (isFiltering || !emptyLine)) return null;
     return (
       <section key={id} aria-labelledby={`recipe-section-${id}`} className="mb-5 last:mb-0">
-        <div className="mb-2 flex items-center gap-2">
+        {/* The title row sticks under the filter bar for as long as its
+            section is in view, so a row deep in a long list still says where
+            it lives. The description scrolls away with the rows. */}
+        <div className="sticky top-9 z-[5] flex min-h-8 items-center gap-2 bg-surface-dialog">
           <Icon className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden />
-          <div className="min-w-0 flex-1">
-            <h3
-              id={`recipe-section-${id}`}
-              className="flex items-baseline gap-2 text-sm font-semibold text-text-primary"
-            >
-              {title}
-              {trailing}
-            </h3>
-            <p className="text-xs text-text-secondary">{description}</p>
-          </div>
+          <h3
+            id={`recipe-section-${id}`}
+            className="flex min-w-0 flex-1 items-baseline gap-2 text-sm font-semibold text-text-primary"
+          >
+            {title}
+            {trailing}
+          </h3>
           {onNew && (
             <Button
               variant="ghost"
@@ -421,6 +506,7 @@ export function RecipeManager({
             </Button>
           )}
         </div>
+        <p className="-mt-1 mb-2 pl-6 text-xs text-text-secondary">{description}</p>
         {visible.length > 0 ? (
           <div className="divide-y divide-border-default rounded-[var(--radius-md)] border border-border-default">
             {visible.map(renderRecipeRow)}
@@ -489,7 +575,9 @@ export function RecipeManager({
         {/* Each query starts its results from the top: filtering from the
             bottom of a long list would otherwise leave the matches scrolled
             out of view above the sticky field. */}
-        <AppDialog.Body resetScrollKey={filter}>
+        {/* The scroll padding clears the sticky filter bar and section title,
+            so a row focused by Tab never lands underneath them. */}
+        <AppDialog.Body resetScrollKey={filter} className="scroll-pt-20">
           {totalCount === 0 ? (
             <EmptyState
               variant="zero-data"
@@ -499,7 +587,12 @@ export function RecipeManager({
               description="A recipe launches a set of terminals and agents together in one click."
               action={
                 <div className="flex flex-col items-center gap-2">
-                  <Button variant="contrast" size="sm" onClick={() => onCreateRecipe("project")}>
+                  <Button
+                    ref={emptyStateActionRef}
+                    variant="contrast"
+                    size="sm"
+                    onClick={() => onCreateRecipe("project")}
+                  >
                     <Plus />
                     New project recipe
                   </Button>
@@ -536,7 +629,10 @@ export function RecipeManager({
                   importing from the bottom of a long list is not a trip back
                   to the top. The negative margin reclaims the body's top
                   padding so nothing scrolls visibly above it. */}
-              <div className="sticky -top-6 z-10 -mt-6 mb-4 flex items-center gap-2 bg-surface-dialog pb-2 pt-6">
+              <div
+                ref={inventoryFocusFallbackRef}
+                className="sticky -top-6 z-10 -mt-6 mb-4 flex items-center gap-2 bg-surface-dialog pb-2 pt-6"
+              >
                 <SearchField
                   size="compact"
                   fieldClassName="flex-1"
@@ -592,6 +688,8 @@ export function RecipeManager({
         }
         confirmLabel={deleteError ? "Retry delete" : "Delete recipe"}
         variant="destructive"
+        isBusy={isDeleting}
+        restoreFocusTo={deleteFocusSuccessor}
         onConfirm={() => {
           if (recipeToDelete) void handleDeleteRecipe(recipeToDelete);
         }}
@@ -625,17 +723,34 @@ export function RecipeManager({
           setRecipeToSave(null);
           setSaveError(null);
         }}
+        // The follow-up opens only after this confirm has handed focus back to
+        // the row, so it opens from — and "Keep both" returns to — the row's
+        // More trigger rather than a control that is already closing.
+        onCloseComplete={() => {
+          const pending = pendingDeleteAfterSaveRef.current;
+          pendingDeleteAfterSaveRef.current = null;
+          if (pending) setRecipeToDeleteAfterSave(pending);
+        }}
       />
 
       <ConfirmDialog
         isOpen={recipeToDeleteAfterSave !== null}
         title={`Delete original '${nameOf(recipeToDeleteAfterSave)}'?`}
-        description="The recipe has been saved to the repository. The original copy on this machine will be permanently removed."
-        confirmLabel="Delete original"
+        description={
+          deleteAfterSaveError
+            ? `Error: ${deleteAfterSaveError}`
+            : "The recipe has been saved to the repository. The original copy on this machine will be permanently removed."
+        }
+        confirmLabel={deleteAfterSaveError ? "Retry delete" : "Delete original"}
         cancelLabel="Keep both"
         variant="destructive"
+        isBusy={isDeleting}
+        restoreFocusTo={deleteFocusSuccessor}
         onConfirm={() => void handleDeleteAfterSave()}
-        onClose={() => setRecipeToDeleteAfterSave(null)}
+        onClose={() => {
+          setRecipeToDeleteAfterSave(null);
+          setDeleteAfterSaveError(null);
+        }}
       />
 
       <RecipeImportDialog

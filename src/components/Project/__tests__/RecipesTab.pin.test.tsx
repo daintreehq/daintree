@@ -77,7 +77,7 @@ describe("RecipesTab — default pin", () => {
 
     expect(
       screen.getByRole("button", {
-        name: /pin global recipe as the default worktree recipe/i,
+        name: /make global recipe the default worktree recipe/i,
       })
     ).toBeTruthy();
   });
@@ -95,7 +95,7 @@ describe("RecipesTab — default pin", () => {
       />
     );
 
-    expect(screen.queryByRole("button", { name: /as the default worktree recipe/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /the default worktree recipe/i })).toBeNull();
   });
 
   it("calls onDefaultWorktreeRecipeIdChange with the recipe id when an unpinned eligible recipe is clicked", async () => {
@@ -112,7 +112,7 @@ describe("RecipesTab — default pin", () => {
     );
 
     const pin = screen.getByRole("button", {
-      name: /pin recipe one as the default worktree recipe/i,
+      name: /make recipe one the default worktree recipe/i,
       pressed: false,
     });
     fireEvent.click(pin);
@@ -133,7 +133,7 @@ describe("RecipesTab — default pin", () => {
     );
 
     const pin = screen.getByRole("button", {
-      name: /pin pinned as the default worktree recipe/i,
+      name: /make pinned the default worktree recipe/i,
       pressed: true,
     });
     fireEvent.click(pin);

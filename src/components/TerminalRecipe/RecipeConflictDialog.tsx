@@ -64,8 +64,8 @@ function RecipeConflictDialogInner() {
       <AppDialog.Body className="space-y-3">
         <AppDialog.Description>
           {isForwardCompat
-            ? "This recipe's file holds content this version of Daintree can't represent — most likely written by a newer build. It was read without those parts, so saving would delete them from the file. Your unsaved edit hasn't been written."
-            : "Another tool changed this recipe's file since it was loaded — usually a git pull, branch switch, or stash pop. Your unsaved edit hasn't been written. Choose how to reconcile."}
+            ? "This recipe's file holds content this version of Daintree can't represent — most likely written by a newer build. It was read without those parts, and your edit hasn't been written yet."
+            : "Another tool changed this recipe's file since it was loaded — usually a git pull, branch switch, or stash pop. Your edit hasn't been written yet."}
         </AppDialog.Description>
         {isForwardCompat && pendingConflict.detail && (
           <pre
@@ -75,6 +75,13 @@ function RecipeConflictDialogInner() {
             {pendingConflict.detail}
           </pre>
         )}
+        {/* Each answer's effect on the file, in footer order, so the choice
+            never rests on reading the button labels alone. */}
+        <p className="text-sm text-text-secondary">
+          {isForwardCompat
+            ? "Overwrite and discard saves your edit and removes the unsupported parts from the file. Reload from disk drops your edit and keeps the file as it is. Cancel drops your edit too and leaves the file untouched."
+            : "Overwrite recipe replaces the file with your edit. Reload from disk drops your edit and loads the file's new version. Cancel drops your edit too and leaves the file untouched."}
+        </p>
       </AppDialog.Body>
       <AppDialog.Footer
         leadingAction={{

@@ -1,6 +1,9 @@
 // Imported FIRST by recipes.tsx so the bridge shim exists before any store
 // module reaches for `window.electron` at evaluation time.
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
+// The dev CSP requires Trusted Types; without the app's default policy every
+// Radix Select viewport's inline <style> throws and the editor never mounts.
+import "@/lib/trustedTypesPolicy";
 
 // With a real bridge on the window this page is running inside the app, and
 // clearing that origin's storage would clear the user's own persisted state.

@@ -92,6 +92,7 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
                 setScope(value === "global" ? "global" : "project");
                 setImportError(null);
               }}
+              disabled={isImporting}
             >
               <SelectTrigger id={scopeId} className={FIELD_CONTROL_SIZE}>
                 <SelectValue />
@@ -120,6 +121,7 @@ export function RecipeImportDialog({ isOpen, onClose, projectId }: RecipeImportD
               setImportError(null);
             }}
             data-testid="recipe-import-textarea"
+            readOnly={isImporting}
             aria-labelledby={jsonLabelId}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
             variant="code"

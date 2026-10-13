@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { FileDown, Pencil, Pin, Plus, Trash2 } from "lucide-react";
+import { Star } from "@/components/icons";
 import { Callout } from "@/components/ui/Callout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,7 +59,12 @@ export function RecipesTab({
   const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<TerminalRecipe | undefined>(undefined);
   const [recipeToDelete, setRecipeToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // A delete takes its own trigger with it, so focus goes to the row that
+  // slides into its place, or the one above when it was the last.
+  const listRef = useRef<HTMLDivElement>(null);
+  const deleteSuccessorRef = useRef<string | null>(null);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   // "Clear default" removes the warning it sits in, so focus goes to the next
@@ -108,13 +114,32 @@ export function RecipesTab({
     setEditingRecipe(undefined);
   };
 
+  const requestDelete = (recipeId: string) => {
+    const rows = Array.from(
+      listRef.current?.querySelectorAll<HTMLElement>("[data-recipe-id]") ?? []
+    ).map((row) => row.dataset.recipeId);
+    const index = rows.indexOf(recipeId);
+    deleteSuccessorRef.current = rows[index + 1] ?? rows[index - 1] ?? null;
+    setRecipeToDelete(recipeId);
+  };
+
+  const deleteFocusSuccessor = (): HTMLElement | null => {
+    const id = deleteSuccessorRef.current;
+    const row = id
+      ? listRef.current?.querySelector<HTMLElement>(`[data-recipe-id="${CSS.escape(id)}"]`)
+      : null;
+    return row?.querySelector<HTMLElement>("button") ?? addRecipeRef.current;
+  };
+
   const handleDeleteRecipe = async (recipeId: string) => {
     setDeleteError(null);
+    setIsDeleting(true);
     const result = await actionService.dispatch(
       "recipe.delete",
       { recipeId },
       { source: "user", confirmed: true }
     );
+    setIsDeleting(false);
     if (result.ok) {
       if (recipeId === defaultWorktreeRecipeId) {
         onDefaultWorktreeRecipeIdChange(undefined);
@@ -158,7 +183,7 @@ export function RecipesTab({
           </>
         }
       >
-        <div className="space-y-3">
+        <div ref={listRef} className="space-y-3">
           {!recipesLoading &&
             defaultWorktreeRecipeId &&
             !recipes.find(
@@ -167,8 +192,8 @@ export function RecipesTab({
               <Callout severity="warning" title="Default recipe unavailable" role="alert">
                 <div>
                   <p>
-                    The pinned recipe was deleted or is no longer eligible. Pin another recipe with
-                    its pin button, or clear the default.
+                    The default recipe was deleted or is no longer eligible. Make another recipe the
+                    default with its star button, or clear the default.
                   </p>
                   <Button
                     variant="outline"
@@ -217,7 +242,7 @@ export function RecipesTab({
                 // toast for an action that was never possible (#11860).
                 const fromPlugin = isPluginRecipe(recipe);
                 return (
-                  <div key={recipe.id} className="px-4 py-3">
+                  <div key={recipe.id} data-recipe-id={recipe.id} className="px-4 py-3">
                     <div className="flex items-start gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
@@ -236,7 +261,12 @@ export function RecipesTab({
                           <Badge size="xs">{pluralize(recipe.terminals.length, "terminal")}</Badge>
                           {isShadowed && <Badge size="xs">Overridden by team recipe</Badge>}
                           {isDefault && <Badge size="xs">Default</Badge>}
-                          {recipe.showInEmptyState && <Badge size="xs">On empty grid</Badge>}
+                          {recipe.showInEmptyState && (
+                            <Badge size="xs">
+                              <Pin aria-hidden />
+                              Pinned
+                            </Badge>
+                          )}
                         </div>
                         <div className="text-xs text-text-secondary mt-1">
                           {recipe.lastUsedAt ? (
@@ -248,8 +278,10 @@ export function RecipesTab({
                           )}
                         </div>
                       </div>
+                      {/* Every action keeps its column whether or not a row
+                          offers it, so the icons line up down the list. */}
                       <div className="flex items-center gap-1 shrink-0">
-                        {isEligibleForDefault && (
+                        {isEligibleForDefault ? (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button
@@ -260,16 +292,20 @@ export function RecipesTab({
                                 }
                                 pressed={isDefault}
                                 // A toggle's name stays put; `pressed` announces the state.
-                                aria-label={`Pin ${recipe.name} as the default worktree recipe`}
+                                aria-label={`Make ${recipe.name} the default worktree recipe`}
                               >
-                                <Pin className={isDefault ? "fill-current" : undefined} />
+                                <Star className={isDefault ? "fill-current" : undefined} />
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent side="bottom">Pin as default recipe</TooltipContent>
+                            <TooltipContent side="bottom">Default for new worktrees</TooltipContent>
                           </Tooltip>
+                        ) : (
+                          <span className="h-7 w-7" aria-hidden="true" />
                         )}
                         <div className="flex items-center gap-1">
-                          {!fromPlugin && (
+                          {fromPlugin ? (
+                            <span className="h-7 w-7" aria-hidden="true" />
+                          ) : (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
@@ -297,13 +333,15 @@ export function RecipesTab({
                               setExportError(formatErrorMessage(err, "Couldn't copy the recipe"));
                             }}
                           />
-                          {!fromPlugin && (
+                          {fromPlugin ? (
+                            <span className="h-7 w-7" aria-hidden="true" />
+                          ) : (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
                                   variant="ghost-danger"
                                   size="icon-sm"
-                                  onClick={() => setRecipeToDelete(recipe.id)}
+                                  onClick={() => requestDelete(recipe.id)}
                                   aria-label={`Delete recipe ${recipe.name}`}
                                 >
                                   <Trash2 />
@@ -341,6 +379,8 @@ export function RecipesTab({
         }
         confirmLabel={deleteError ? "Retry delete" : "Delete recipe"}
         variant="destructive"
+        isBusy={isDeleting}
+        restoreFocusTo={deleteFocusSuccessor}
         onConfirm={() => {
           if (recipeToDelete) {
             void handleDeleteRecipe(recipeToDelete);
