@@ -41,6 +41,11 @@ export interface HostProjectRehydrateOptions {
    * leaves this view. Terminals are the terminal resync's to remove.
    */
   follow?: boolean;
+  /**
+   * The driver's live navigation names the worktree, so the saved one (which
+   * may predate it) is left alone.
+   */
+  keepActiveWorktree?: boolean;
 }
 
 /**
@@ -144,8 +149,10 @@ export async function rehydrateHostProjectState(
       // host's own, not a stale one written over it.
       if (followDeps) followDeps.saveTabGroups(usePanelStore.getState().tabGroups);
     }
-    await applyActiveWorktree(hydrate.appState?.activeWorktreeId ?? null, options);
-    if (!options.isCurrent()) return;
+    if (!options.keepActiveWorktree) {
+      await applyActiveWorktree(hydrate.appState?.activeWorktreeId ?? null, options);
+      if (!options.isCurrent()) return;
+    }
   }
 
   applyHostDrafts(projectId, hydrate.draftInputs ?? {}, {

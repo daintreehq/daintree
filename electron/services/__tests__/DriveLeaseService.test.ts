@@ -8,11 +8,15 @@ vi.mock("electron", () => ({
 import {
   DRAFTS_CHANGED_DELAY_MS,
   DriveLeaseService,
+  NAVIGATION_CHANGED_DELAY_MS,
   PANELS_CHANGED_DELAY_MS,
 } from "../DriveLeaseService.js";
 import { EndpointRegistryImpl } from "../../ipc/endpointRegistry.js";
 import type { ClientEndpoint, Disposable, HostFrame } from "../../ipc/endpoint.js";
-import type { DriveLeaseEvent } from "../../../shared/types/ipc/driveLease.js";
+import type {
+  DriveLeaseEvent,
+  DriveLeaseNavigation,
+} from "../../../shared/types/ipc/driveLease.js";
 import type { DriveLeaseState } from "../../../shared/types/remoteHosts.js";
 import type { PtyHostDriveLease } from "../../../shared/types/pty-host.js";
 
@@ -568,6 +572,93 @@ describe("DriveLeaseService panel notices", () => {
     vi.advanceTimersByTime(PANELS_CHANGED_DELAY_MS);
 
     expect(panelNotices(hostWindow)).toEqual([]);
+  });
+});
+
+describe("DriveLeaseService driver navigation (#13281)", () => {
+  const navigationNotices = (endpoint: FakeEndpoint) =>
+    endpoint.allEvents().filter((event) => event.type === "navigation-changed");
+  const at = (worktree: string, focused: string | null = null): DriveLeaseNavigation => ({
+    activeWorktreeId: worktree,
+    focusedPanelId: focused,
+    maximize: null,
+    focusMode: false,
+  });
+
+  async function laptopDrivesWithHostWatching() {
+    const hostWindow = local(1);
+    const laptop = remote("s1:e1", "greg-mbp-id");
+    const otherProject = local(3, "q");
+    for (const endpoint of [hostWindow, laptop, otherProject]) registry.add(endpoint);
+    await settle();
+    const holder = service.takeOver("p", laptop);
+    return { hostWindow, laptop, otherProject, leaseId: holder.leaseId };
+  }
+
+  it("passes the newest of a burst of moves to the views that watch", async () => {
+    const { hostWindow, laptop, otherProject, leaseId } = await laptopDrivesWithHostWatching();
+
+    service.reportNavigation("p", laptop, leaseId, at("wt-1"));
+    service.reportNavigation("p", laptop, leaseId, at("wt-2", "t1"));
+    expect(navigationNotices(hostWindow)).toEqual([]);
+    vi.advanceTimersByTime(NAVIGATION_CHANGED_DELAY_MS);
+
+    expect(navigationNotices(hostWindow)).toEqual([
+      { type: "navigation-changed", projectId: "p", navigation: at("wt-2", "t1") },
+    ]);
+    expect(navigationNotices(laptop)).toEqual([]);
+    expect(navigationNotices(otherProject)).toEqual([]);
+    // A view reading the lease, or coming to watch, gets it without waiting for a move.
+    expect(service.viewFor("p", hostWindow).driverNavigation).toEqual(at("wt-2", "t1"));
+  });
+
+  it("ignores a view that doesn't drive, and a driver's report from a lease it lost", async () => {
+    const { hostWindow, laptop, leaseId } = await laptopDrivesWithHostWatching();
+
+    service.reportNavigation("p", hostWindow, leaseId, at("watcher"));
+    service.reportNavigation("p", laptop, leaseId, at("driver"));
+    const taken = service.takeOver("p", hostWindow);
+    // Sent before the takeover reached the laptop.
+    service.reportNavigation("p", laptop, leaseId, at("stale"));
+    vi.advanceTimersByTime(NAVIGATION_CHANGED_DELAY_MS);
+
+    // The view taking over starts from where the driver it displaced was.
+    expect(service.viewFor("p", hostWindow).driverNavigation).toEqual(at("driver"));
+    service.reportNavigation("p", hostWindow, taken.leaseId, at("host"));
+    vi.advanceTimersByTime(NAVIGATION_CHANGED_DELAY_MS);
+    expect(service.viewFor("p", laptop).driverNavigation).toEqual(at("host"));
+    expect(navigationNotices(laptop).at(-1)).toEqual({
+      type: "navigation-changed",
+      projectId: "p",
+      navigation: at("host"),
+    });
+  });
+
+  it("takes a report from any of this machine's windows while it drives", async () => {
+    const a = local(1);
+    const b = local(2);
+    const laptop = remote("s1:e1", "greg-mbp-id");
+    for (const endpoint of [a, b, laptop]) registry.add(endpoint);
+    await settle();
+    const holder = service.takeOver("p", a);
+
+    service.reportNavigation("p", b, holder.leaseId, at("from-b"));
+    vi.advanceTimersByTime(NAVIGATION_CHANGED_DELAY_MS);
+
+    expect(navigationNotices(laptop)).toEqual([
+      { type: "navigation-changed", projectId: "p", navigation: at("from-b") },
+    ]);
+    expect(navigationNotices(a)).toEqual([]);
+  });
+
+  it("sends nothing still pending once disposed", async () => {
+    const { hostWindow, laptop, leaseId } = await laptopDrivesWithHostWatching();
+
+    service.reportNavigation("p", laptop, leaseId, at("wt-1"));
+    service.dispose();
+    vi.advanceTimersByTime(NAVIGATION_CHANGED_DELAY_MS);
+
+    expect(navigationNotices(hostWindow)).toEqual([]);
   });
 });
 

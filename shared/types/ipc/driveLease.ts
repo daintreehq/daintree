@@ -15,6 +15,31 @@ export interface DriveLeaseTakeOverPayload extends DriveLeaseProjectPayload {
   ifLeaseId?: number | null;
 }
 
+/**
+ * Where the driver is in the project, as it last reported it: what a watching
+ * screen moves to so it shows what the driver shows. Screen-owned state (sizes,
+ * widths, scroll, zoom, overlays) is never part of it.
+ */
+export interface DriveLeaseNavigation {
+  activeWorktreeId: string | null;
+  /** The focused grid or dock panel; null when nothing is focused. */
+  focusedPanelId: string | null;
+  /** The maximized panel and what it maximizes: itself, or its tab group. */
+  maximize: { panelId: string; target: { type: "panel" | "group"; id: string } } | null;
+  /** The worktree sidebar hidden by focus mode, as the project saves it. */
+  focusMode: boolean;
+}
+
+export interface DriveLeaseReportNavigationPayload extends DriveLeaseProjectPayload {
+  /**
+   * The lease the reporter drove under when it read its navigation, or null
+   * for nobody holding it. A report from a lease that has since changed hands
+   * is dropped, so a displaced driver's late report can't move anyone.
+   */
+  leaseId: number | null;
+  navigation: DriveLeaseNavigation;
+}
+
 /** A project's drive lease as one renderer sees it. */
 export interface DriveLeaseView extends DriveLeaseState {
   /**
@@ -39,6 +64,12 @@ export interface DriveLeaseView extends DriveLeaseState {
    * from hosts before this field.
    */
   hostScreenInUse?: boolean;
+  /**
+   * The driver's navigation as it last reported it, kept across a change of
+   * holder so a view taking over starts from it. Absent until a driver reports,
+   * and from hosts before this field.
+   */
+  driverNavigation?: DriveLeaseNavigation;
 }
 
 export type DriveLeaseEvent =
@@ -52,4 +83,6 @@ export type DriveLeaseEvent =
    * The driver saved different composer drafts for the project. Sent only to
    * the views that watch it, which read the drafts back. Carries no text.
    */
-  | { type: "drafts-changed"; projectId: string };
+  | { type: "drafts-changed"; projectId: string }
+  /** The driver moved: sent only to the views that watch the project. */
+  | { type: "navigation-changed"; projectId: string; navigation: DriveLeaseNavigation };

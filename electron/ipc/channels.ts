@@ -1327,6 +1327,7 @@ export const CHANNELS = {
   // Remote Hosts: driveLease (host).
   DRIVE_LEASE_GET: "drive-lease:get",
   DRIVE_LEASE_TAKE_OVER: "drive-lease:take-over",
+  DRIVE_LEASE_REPORT_NAVIGATION: "drive-lease:report-navigation",
   DRIVE_LEASE_EVENT: "drive-lease:event",
 
   // Remote Hosts: operations (host).

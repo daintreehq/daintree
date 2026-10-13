@@ -645,7 +645,7 @@ function captureMaximizeSnapshot(panels: PanelMaximizeFields): WorktreeMaximizeS
  * `ContentGrid`'s maximize branch either, and a panel that has since moved to
  * another worktree is no longer ours to show.
  */
-function resolveMaximizeForWorktree(
+export function resolveMaximizeForWorktree(
   snapshot: WorktreeMaximizeSnapshot,
   worktreeId: string,
   panels: PanelMaximizeLookup

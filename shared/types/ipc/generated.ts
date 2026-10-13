@@ -499,6 +499,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./driveLease.js").DriveLeaseProjectPayload];
     result: import("./driveLease.js").DriveLeaseView;
   };
+  "drive-lease:report-navigation": {
+    args: [payload: import("./driveLease.js").DriveLeaseReportNavigationPayload];
+    result: void;
+  };
   "drive-lease:take-over": {
     args: [payload: import("./driveLease.js").DriveLeaseTakeOverPayload];
     result: import("./driveLease.js").DriveLeaseView;
