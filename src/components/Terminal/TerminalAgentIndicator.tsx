@@ -3,10 +3,15 @@ import type { AgentState, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
-  getEffectiveStateLabel,
+  SESSION_ICONS,
+  SESSION_COLORS,
+  SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
+import {
+  resolveSessionPresentation,
+  type SessionPresentationState,
+} from "@/lib/handBackPresentation";
+import { useRunHandBackState } from "@/hooks/useRunHandBackState";
 import type { ActivityState } from "./TerminalPane";
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
@@ -43,10 +48,10 @@ export function AgentStateChip({
   agentState,
   ariaLabel,
 }: {
-  agentState: AgentState;
+  agentState: SessionPresentationState;
   ariaLabel: string;
 }) {
-  const StateIcon = getEffectiveStateIcon(agentState);
+  const StateIcon = SESSION_ICONS[agentState];
   if (!StateIcon) return null;
   const chipStyle =
     agentState === "working"
@@ -57,8 +62,8 @@ export function AgentStateChip({
           // not asking for anything, so it does not get a hue of its own
           // (#12002) — and the two stay apart on the channels that survive
           // without one, `CheckCircle2` against `ExitedCircle` in slate
-          // against secondary.
-          agentState === "completed" || agentState === "exited"
+          // against secondary. An unread hand-back is not asking either.
+          agentState === "completed" || agentState === "exited" || agentState === "unread"
           ? "bg-overlay-soft border-divider"
           : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
   return (
@@ -67,7 +72,7 @@ export function AgentStateChip({
         "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
         "transition-[background-color,border-color,color] duration-150 ease-out reduce-motion:transition-none",
         chipStyle,
-        getEffectiveStateColor(agentState)
+        SESSION_COLORS[agentState]
       )}
       role="status"
       aria-label={ariaLabel}
@@ -106,6 +111,7 @@ export function TerminalAgentIndicator({
   exitCode = null,
 }: TerminalAgentIndicatorProps) {
   const {
+    rawAgentState,
     startedAt,
     lastStateChange,
     stateChangeTrigger,
@@ -118,6 +124,7 @@ export function TerminalAgentIndicator({
       const t = state.panelsById[id];
       const pty = t && isPtyPanel(t) ? t : undefined;
       return {
+        rawAgentState: pty?.agentState,
         startedAt: pty?.startedAt,
         lastStateChange: pty?.lastStateChange,
         stateChangeTrigger: pty?.stateChangeTrigger,
@@ -142,32 +149,43 @@ export function TerminalAgentIndicator({
   useGlobalMinuteTicker();
   const now = Date.now();
 
+  const handBack = useRunHandBackState(id);
+
   if (!agentState || agentState === "idle") {
     return null;
   }
 
+  // The glyph follows the hand-back; `agentState` stays the observation.
+  const shownState = resolveSessionPresentation(agentState, rawAgentState, waitingReason, handBack);
+  const isHandBack = shownState !== agentState;
+
   // A settled agent only keeps its glyph while there is a session cost to
   // explain in the tooltip; without one the row's "Finished, no changes" pill
-  // is the only trace.
-  if ((agentState === "completed" || agentState === "exited") && sessionCost == null) {
+  // is the only trace. A live agent drawn settled by its hand-back keeps it.
+  if (
+    !isHandBack &&
+    (agentState === "completed" || agentState === "exited") &&
+    sessionCost == null
+  ) {
     return null;
   }
 
-  if (!getEffectiveStateIcon(agentState)) return null;
+  if (!shownState || !SESSION_ICONS[shownState]) return null;
 
-  const headline = activity?.headline?.trim() || `Agent ${agentState}`;
   const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
-  const stateLabel = getEffectiveStateLabel(agentState);
+  const stateLabel = SESSION_LABELS[shownState];
+  const observedLabel = SESSION_LABELS[agentState];
+  const headline = activity?.headline?.trim() || `Agent ${stateLabel}`;
   const exitStatus = isExited ? describeExitStatus(exitCode) : null;
   const showStateDuration =
-    (agentState === "working" || agentState === "waiting" || agentState === "directing") &&
+    (shownState === "working" || shownState === "waiting" || shownState === "directing") &&
     lastStateChange != null &&
     lastStateChange > 0 &&
     now - lastStateChange > 10_000;
   // Specific reasons only — the classifier's `prompt` fallback stays a
   // plain "waiting" so the chip never overclaims.
   const chipWaitingReason =
-    agentState === "waiting" ? actionableWaitingReason(waitingReason) : null;
+    shownState === "waiting" ? actionableWaitingReason(waitingReason) : null;
   const chipAriaLabel = chipWaitingReason
     ? `Agent state: ${stateLabel} (${WAITING_REASON_BADGE_LABEL[chipWaitingReason].toLowerCase()})`
     : `Agent state: ${stateLabel}`;
@@ -176,7 +194,7 @@ export function TerminalAgentIndicator({
     <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <div className="relative inline-flex items-center shrink-0">
-          <AgentStateChip agentState={agentState} ariaLabel={chipAriaLabel} />
+          <AgentStateChip agentState={shownState} ariaLabel={chipAriaLabel} />
           {errorCount > 0 && (
             <span
               className="status-mark absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
@@ -215,6 +233,7 @@ export function TerminalAgentIndicator({
             {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
             {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
           </span>
+          {isHandBack && <span className="text-text-secondary">Observed: {observedLabel}</span>}
           {lastStateChange != null && lastStateChange > 0 && (
             <span className="text-text-secondary">Since: {formatTimeAgo(lastStateChange)}</span>
           )}

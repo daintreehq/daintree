@@ -6,7 +6,7 @@ import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import type { AgentState } from "@/types";
 import { CollapsedSessionIndicators } from "../CollapsedSessionIndicators";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { STATE_COLORS, summarizeSessionStates } from "../../terminalStateConfig";
+import { SESSION_COLORS, summarizeSessionStates } from "../../terminalStateConfig";
 
 /**
  * Rendered against the real tooltip primitive (`vitest.setup.ts` primes it), so
@@ -24,16 +24,25 @@ const ZERO: Record<AgentState, number> = {
   exited: 0,
 };
 
-/** The states `getTerminalAgentDisplayState` can actually hand the cluster. */
-const REACHABLE = ["working", "directing", "waiting"] as const;
+/**
+ * The states the cluster can actually be handed: what
+ * `getTerminalAgentDisplayState` passes through, plus the settled and unread
+ * marks a hand-back draws.
+ */
+const REACHABLE = ["working", "directing", "waiting", "unread", "completed"] as const;
+const ALL_REACHABLE = { working: 1, directing: 1, waiting: 1, completed: 1 };
 
 /** The drawn glyph: an svg ring, or the CSS-drawn spinner box. */
 const glyphOf = (seg: Element): Element => seg.querySelector("svg, [data-glyph-box]")!;
 
-function renderCluster(byState: Partial<Record<AgentState, number>>, total?: number) {
+function renderCluster(
+  byState: Partial<Record<AgentState, number>>,
+  total?: number,
+  unread = 0
+) {
   const counts = { ...ZERO, ...byState };
-  const sum = total ?? Object.values(counts).reduce((a, b) => a + b, 0);
-  const summary = summarizeSessionStates(counts, sum);
+  const sum = total ?? Object.values(counts).reduce((a, b) => a + b, 0) + unread;
+  const summary = summarizeSessionStates(counts, sum, unread);
   render(
     <TooltipProvider delayDuration={0}>
       <button type="button">
@@ -86,6 +95,21 @@ describe("summarizeSessionStates", () => {
     expect(parts).toHaveLength(visibleStates.length);
     visibleStates.forEach((v, i) => expect(parts[i]!.startsWith(`${v.count} `)).toBe(true));
   });
+
+  it("names unread hand-backs apart from waiting, ranked below it and above done", () => {
+    const { breakdown, visibleStates } = summarizeSessionStates(
+      { ...ZERO, waiting: 1, completed: 2 },
+      5,
+      2
+    );
+    expect(breakdown).toBe("1 waiting, 2 unread, 2 done");
+    expect(visibleStates.map((v) => v.state)).toEqual(["waiting", "unread", "completed"]);
+  });
+
+  it("leaves unread out when there are none", () => {
+    const { visibleStates } = summarizeSessionStates({ ...ZERO, working: 1 }, 1);
+    expect(visibleStates.some((v) => v.state === "unread")).toBe(false);
+  });
 });
 
 describe("CollapsedSessionIndicators", () => {
@@ -120,7 +144,7 @@ describe("CollapsedSessionIndicators", () => {
   });
 
   it("gives every reachable state its own glyph shape, so forced colors can still tell them apart", () => {
-    const { segments } = renderCluster({ working: 1, directing: 1, waiting: 1 });
+    const { segments } = renderCluster(ALL_REACHABLE, undefined, 1);
     expect(segments.map((s) => s.dataset.state).sort()).toEqual([...REACHABLE].sort());
     const shapes = segments.map((seg) => {
       const glyph = glyphOf(seg);
@@ -160,8 +184,8 @@ describe("CollapsedSessionIndicators", () => {
     // State colours are tuned as graphics (3:1). As 11px text they drop under
     // 4.5:1 in every light theme, so no count may inherit one, while each glyph
     // must still carry its own state's hue.
-    const stateHues = new Set<string>(REACHABLE.map((state) => STATE_COLORS[state]));
-    const { segments } = renderCluster({ working: 1, directing: 1, waiting: 1 });
+    const stateHues = new Set<string>(REACHABLE.map((state) => SESSION_COLORS[state]));
+    const { segments } = renderCluster(ALL_REACHABLE, undefined, 1);
     for (const seg of segments) {
       const count = seg.querySelector(".tabular-nums")!;
       const inherited = [seg, count].flatMap((el) => (el.getAttribute("class") ?? "").split(/\s+/));

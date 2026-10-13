@@ -371,4 +371,38 @@ describe("aggregateAgentStates (#6650)", () => {
     expect(byState.idle).toBe(1);
     expect(agentStates).toEqual([]);
   });
+
+  describe("hand-backs (#13235)", () => {
+    const agent = (id: string, overrides: Partial<PtyPanelData> = {}) =>
+      term({ id, launchAgentId: "claude", agentState: "waiting", ...overrides });
+
+    it("counts a read hand-back as completed and an unread one apart from waiting", () => {
+      const states = { seen: "seen", unseen: "unseen" } as const;
+      const { byState, unread, agentStates } = aggregateAgentStates(
+        [agent("seen"), agent("unseen", { agentState: "completed" }), agent("plain")],
+        (id) => states[id as keyof typeof states] ?? "none"
+      );
+      expect(byState.completed).toBe(1);
+      expect(unread).toBe(1);
+      expect(byState.waiting).toBe(1);
+      // The dominant state follows the observation, not the read state.
+      expect(agentStates).toEqual(["waiting", "waiting", "waiting"]);
+    });
+
+    it("keeps an approval wait counted as waiting even with a read hand-back", () => {
+      const { byState, unread } = aggregateAgentStates(
+        [agent("a", { waitingReason: "approval" })],
+        () => "seen"
+      );
+      expect(byState.waiting).toBe(1);
+      expect(byState.completed).toBe(0);
+      expect(unread).toBe(0);
+    });
+
+    it("counts nothing as unread without hand-back data", () => {
+      const { byState, unread } = aggregateAgentStates([agent("a")]);
+      expect(byState.waiting).toBe(1);
+      expect(unread).toBe(0);
+    });
+  });
 });

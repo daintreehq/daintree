@@ -1361,6 +1361,7 @@ export function WorktreeCard({
                   branchLabel={branchLabel}
                   sessionStates={terminalCounts.byState}
                   sessionTotal={terminalCounts.total}
+                  sessionUnread={terminalCounts.unread}
                   environmentIcon={environmentIcon}
                   isLifecycleRunning={isLifecycleRunning}
                   resourceStatusLabel={resourceStatusLabel}

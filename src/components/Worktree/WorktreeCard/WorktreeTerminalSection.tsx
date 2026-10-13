@@ -11,11 +11,13 @@ import { getAgentConfig } from "@/config/agents";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import {
-  STATE_LABELS,
+  SESSION_ICONS,
+  SESSION_COLORS,
+  SESSION_LABELS,
   summarizeSessionStates,
-  getEffectiveStateIcon,
-  getEffectiveStateColor,
 } from "../terminalStateConfig";
+import { resolveSessionPresentation } from "@/lib/handBackPresentation";
+import { useRunHandBackState } from "@/hooks/useRunHandBackState";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -67,6 +69,15 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   // demotes back to a plain terminal (agent exited or never lived), there
   // is nothing for the sidebar row to track either.
   const agentState = getTerminalAgentDisplayState(chrome, term.agentState);
+  // The glyph alone follows the hand-back: the data attribute keeps the
+  // observed state for E2E selectors.
+  const handBack = useRunHandBackState(term.id);
+  const glyphState = resolveSessionPresentation(
+    agentState,
+    term.agentState,
+    term.waitingReason,
+    handBack
+  );
   // Only the primary ("last armed") row gets the accent ring — it's the
   // singular focus anchor that will receive keyboard focus when fleet scope
   // exits. Secondary armed peers keep the dashed shape but use a neutral
@@ -74,7 +85,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   // badge stays accent-colored as the secondary signal.
   const isPrimary = useFleetArmingStore((s) => s.lastArmedId === term.id);
   const isArmable = canArm && isFleetArmEligible(term);
-  const StateIcon = agentState ? getEffectiveStateIcon(agentState) : null;
+  const StateIcon = glyphState ? SESSION_ICONS[glyphState] : null;
   const placementLabel = term.location === "dock" ? "Docked" : "On grid";
   const showCommand = !chrome.isAgent && term.activityStatus === "working" && !!term.lastCommand;
   // `useId`, not the terminal id: the sidebar card and the overview grid can
@@ -192,14 +203,14 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
                   </span>
                 )}
 
-                {StateIcon && agentState && (
+                {StateIcon && glyphState && (
                   <StateIcon
                     className={cn(
                       "w-3 h-3",
-                      getEffectiveStateColor(agentState),
-                      agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                      SESSION_COLORS[glyphState],
+                      glyphState === "working" && "animate-spin-slow motion-reduce:animate-none"
                     )}
-                    aria-label={STATE_LABELS[agentState]}
+                    aria-label={SESSION_LABELS[glyphState]}
                   />
                 )}
 
@@ -284,7 +295,8 @@ export function WorktreeTerminalSection({
   const { visibleTerminalStates, terminalSessionAriaLabel, collapsedTriggerLabel } = useMemo(() => {
     const { visibleStates, label, breakdown } = summarizeSessionStates(
       counts.byState,
-      counts.total
+      counts.total,
+      counts.unread
     );
     // The collapsed trigger names itself once. Left to name-from-content it
     // read "3 active 3 sessions: 2 working, …" — the visible summary, then
@@ -296,7 +308,7 @@ export function WorktreeTerminalSection({
       terminalSessionAriaLabel: label,
       collapsedTriggerLabel: triggerLabel,
     };
-  }, [counts.byState, counts.total]);
+  }, [counts.byState, counts.total, counts.unread]);
 
   const SummaryIcon = useMemo(() => {
     if (terminals.length === 0) return null;
