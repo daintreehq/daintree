@@ -184,4 +184,20 @@ describe("watchPendingHostSwitch", () => {
 
     expect(usePendingHostSwitchStore.getState().pending).toBeNull();
   });
+
+  it("doesn't show early, or twice, when the window is looked at again before the gate", () => {
+    const { send, stop } = harness();
+    send(pending());
+    vi.advanceTimersByTime(100);
+    window.dispatchEvent(new Event("focus"));
+    expect(m.notify).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(300);
+    window.dispatchEvent(new Event("focus"));
+    expect(m.notify).toHaveBeenCalledTimes(1);
+
+    send(null);
+    expect(dismiss).toHaveBeenCalledWith("toast-1");
+    stop();
+  });
 });

@@ -65,8 +65,10 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
   // no inbox: it is only worth seeing while the switch is on its way) shows
   // when the window is looked at again.
   const showWhenFocused = () => {
+    // Not before the gate: a switch that hasn't been slow yet shows nothing.
+    if (onsetTimer || notificationId) return;
     const current = store.getState().pending;
-    if (!notificationId && current && current.switchId === shownFor) show(current);
+    if (current && current.switchId === shownFor) show(current);
   };
   const focusSource = typeof window === "undefined" ? null : window;
   focusSource?.addEventListener("focus", showWhenFocused);
@@ -83,6 +85,7 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
   };
 
   const show = (pending: PendingHostSwitch) => {
+    if (notificationId) return;
     if (stillWorkingTimer) clearTimeout(stillWorkingTimer);
     notificationId =
       notify({
