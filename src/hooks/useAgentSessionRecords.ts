@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
 /**
@@ -11,11 +11,17 @@ import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
  *
  * `enabled` gates both the fetch and the subscription so transient surfaces
  * (palettes) don't re-read the journal or hold listeners while closed.
+ *
+ * A failed read is reported as `failed` rather than as an empty journal: an
+ * empty list says "you have closed nothing", which is a false answer when the
+ * history simply could not be read. `reload` re-runs the initial read.
  */
 export function useAgentSessionRecords(enabled: boolean) {
   const [sessions, setSessions] = useState<AgentSessionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [hasLoaded, setHasLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!enabled) return;
@@ -27,12 +33,23 @@ export function useAgentSessionRecords(enabled: boolean) {
 
     const fetchSessions = async (initial: boolean) => {
       const fetchId = ++latestFetch;
-      if (initial) setIsLoading(true);
+      if (initial) {
+        setIsLoading(true);
+        setFailed(false);
+      }
       try {
         const list = (await window.electron?.agentSessionHistory?.list()) ?? [];
-        if (!cancelled && fetchId === latestFetch) setSessions(list);
+        if (!cancelled && fetchId === latestFetch) {
+          setSessions(list);
+          setFailed(false);
+        }
       } catch {
-        if (!cancelled && fetchId === latestFetch) setSessions([]);
+        // A failed refresh keeps the rows already on screen; only a failed
+        // initial read has nothing to show and says so.
+        if (!cancelled && fetchId === latestFetch && initial) {
+          setSessions([]);
+          setFailed(true);
+        }
       } finally {
         if (!cancelled && initial) {
           setIsLoading(false);
@@ -55,7 +72,9 @@ export function useAgentSessionRecords(enabled: boolean) {
       // the finally block from ever resetting it.
       setIsLoading(false);
     };
-  }, [enabled]);
+  }, [enabled, attempt]);
 
-  return { sessions, isLoading, hasLoaded };
+  const reload = useCallback(() => setAttempt((n) => n + 1), []);
+
+  return { sessions, isLoading, hasLoaded, failed, reload };
 }
