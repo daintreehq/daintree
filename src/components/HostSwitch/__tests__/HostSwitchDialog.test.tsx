@@ -318,12 +318,10 @@ describe("HostSwitchDialog", () => {
       hasUncommittedChanges: false,
       candidates: [CANDIDATE],
     });
-    prepare
-      .mockResolvedValueOnce(ahead)
-      .mockResolvedValueOnce({
-        ...ahead,
-        branchCheck: { kind: "same-tip", remote: "origin", sha: "a" },
-      });
+    prepare.mockResolvedValueOnce(ahead).mockResolvedValueOnce({
+      ...ahead,
+      branchCheck: { kind: "same-tip", remote: "origin", sha: "a" },
+    });
     execute.mockResolvedValue({
       kind: "git-failed",
       step: "push",
