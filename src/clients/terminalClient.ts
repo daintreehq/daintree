@@ -15,6 +15,7 @@ import type {
   SerializedTerminalSnapshot,
   TerminalLocation,
 } from "@shared/types";
+import type { TerminalInfoPayload } from "@shared/types/ipc/terminal";
 import type { PaneNotifyState } from "@shared/types/terminalNotify";
 import type {
   HostMemoryPauseSnapshot,
@@ -974,6 +975,11 @@ export const terminalClient = {
    */
   getForProject: (projectId: string): Promise<BackendTerminalInfo[]> => {
     return window.electron.terminal.getForProject(projectId);
+  },
+
+  /** One terminal's live record, including the grid its PTY is on now. */
+  getInfo: (id: string): Promise<TerminalInfoPayload> => {
+    return window.electron.terminal.getInfo(id);
   },
 
   /**

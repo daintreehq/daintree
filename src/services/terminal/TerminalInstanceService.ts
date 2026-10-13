@@ -8,6 +8,7 @@ import {
   subscribeProjectViewObservability,
 } from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
+import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "./inputGate";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
 import {
@@ -240,6 +241,18 @@ class TerminalInstanceService {
   private unsubReset: (() => void) | null = null;
   private unsubResizeResult: (() => void) | null = null;
   private unsubExit: (() => void) | null = null;
+  private unsubDriveLease: (() => void) | null = null;
+  /**
+   * Terminals held at the PTY's grid because another frontend drives this
+   * project and owns its size (#13282). One controller hold each, released
+   * together when this view takes the project over.
+   */
+  private watchHolds = new Set<string>();
+  /** Bumped by each echo for an id, so a seed read before it can't land after it. */
+  private watchEchoSeq = new Map<string, number>();
+  /** Held, but the PTY's grid is still unknown; retried on the next lease event. */
+  private watchUnseeded = new Set<string>();
+  private watchEpoch = 0;
   private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
@@ -1179,6 +1192,114 @@ class TerminalInstanceService {
       managed.ptyGeometryDivergenceSignature = undefined;
     }
     managed.lastPtyResizeResult = result;
+
+    if (this.watchHolds.has(id) && result.appliedCols !== null && result.appliedRows !== null) {
+      this.watchEchoSeq.set(id, (this.watchEchoSeq.get(id) ?? 0) + 1);
+      this.watchUnseeded.delete(id);
+      this.resizeController.adoptPtyGeometry(id, result.appliedCols, result.appliedRows);
+    }
+  }
+
+  private ensureDriveLeaseSubscription(): void {
+    if (this.unsubDriveLease) return;
+    this.unsubDriveLease = subscribeDriveLeaseSnapshot(() => this.syncWatchMode());
+  }
+
+  /**
+   * Another frontend drives this project. Its resizes are the only ones the
+   * PTY takes, so this view draws each terminal at the PTY's grid instead of
+   * fitting its own panes. No lease at all is ordinary local use.
+   */
+  private isWatching(): boolean {
+    const lease = getDriveLeaseSnapshot();
+    return lease !== null && !lease.drivingHere && lease.holder !== null;
+  }
+
+  private syncWatchMode(): void {
+    if (!this.isWatching()) {
+      this.stopWatching();
+      return;
+    }
+    // A seed that failed (the link dropped mid-read) gets another go on the
+    // next lease answer, which a reconnect always brings.
+    const retry = [...this.watchUnseeded];
+    this.instances.forEach((managed, id) => this.watchTerminal(id, managed));
+    for (const id of retry) this.seedWatchedGeometry(id);
+  }
+
+  private watchTerminal(id: string, managed: ManagedTerminal): void {
+    if (this.watchHolds.has(id)) return;
+    this.resizeController.holdGeometry(id);
+    this.watchHolds.add(id);
+    this.watchUnseeded.add(id);
+    const echo = managed.lastPtyResizeResult;
+    if (echo && echo.appliedCols !== null && echo.appliedRows !== null) {
+      this.resizeController.adoptPtyGeometry(id, echo.appliedCols, echo.appliedRows);
+    }
+    // The driver may not resize again for a long time, so ask the host where
+    // the PTY sits now rather than wait for its next echo.
+    this.seedWatchedGeometry(id);
+  }
+
+  /**
+   * Read where the PTY sits now. Dropped if anything newer spoke for this
+   * terminal meanwhile: an echo, a take-over, or a new instance under the id.
+   */
+  private seedWatchedGeometry(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    const epoch = this.watchEpoch;
+    const seq = this.watchEchoSeq.get(id) ?? 0;
+    terminalClient
+      .getInfo(id)
+      .then((info) => {
+        if (
+          epoch !== this.watchEpoch ||
+          this.instances.get(id) !== managed ||
+          (this.watchEchoSeq.get(id) ?? 0) !== seq ||
+          !this.watchHolds.has(id)
+        ) {
+          return;
+        }
+        this.watchUnseeded.delete(id);
+        if (!info.ptyCols || !info.ptyRows) return;
+        this.resizeController.adoptPtyGeometry(id, info.ptyCols, info.ptyRows);
+      })
+      .catch((error: unknown) => {
+        logWarn("[TerminalInstanceService] Couldn't read the PTY grid to watch at", {
+          id,
+          error,
+        });
+      });
+  }
+
+  /**
+   * This view drives again (it took the project over, or the lease is gone):
+   * re-fit every watched pane to its own box and send that to the PTY, in one
+   * pass so the panes don't supersede one another's.
+   */
+  private stopWatching(): void {
+    this.watchEpoch += 1;
+    if (this.watchHolds.size === 0) return;
+    const refit: string[] = [];
+    for (const id of this.watchHolds) {
+      const managed = this.instances.get(id);
+      if (managed) {
+        // The PTY was last sized by the other frontend, and the pane's box was
+        // never applied while held: no cache may dedup the re-fit away, even
+        // where the pane's grid is the one xterm already holds. A pane still
+        // locked or held by Canopy carries this to whichever pass frees it.
+        managed.lastWidth = 0;
+        managed.lastHeight = 0;
+        managed.reassertPtyGrid = true;
+        this.resizeController.invalidatePtyGrid(id);
+      }
+      if (this.resizeController.releaseGeometry(id) && managed) refit.push(id);
+    }
+    this.watchHolds.clear();
+    this.watchEchoSeq.clear();
+    this.watchUnseeded.clear();
+    if (refit.length > 0) this.runResizePass(refit, { immediate: true });
   }
 
   /**
@@ -1544,6 +1665,8 @@ class TerminalInstanceService {
 
     this.instances.set(id, managed);
     this.ensureResizeResultSubscription();
+    this.ensureDriveLeaseSubscription();
+    if (this.isWatching()) this.watchTerminal(id, managed);
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
     this.rendererPolicy.applyRendererPolicy(id, initialTier);
@@ -3935,6 +4058,11 @@ class TerminalInstanceService {
     managed.scrollbackRestoreState = "none";
 
     this.instances.delete(id);
+    if (this.watchHolds.delete(id)) {
+      this.watchEchoSeq.delete(id);
+      this.watchUnseeded.delete(id);
+      this.resizeController.releaseGeometry(id);
+    }
     this.scheduleWhySlowReport();
     // Keep the batch aggregate honest when a terminal is torn down mid-restore
     // (e.g. the user closes a pane while it is still pending/in-progress).
@@ -4051,6 +4179,8 @@ class TerminalInstanceService {
     this.unsubResizeResult = null;
     this.unsubExit?.();
     this.unsubExit = null;
+    this.unsubDriveLease?.();
+    this.unsubDriveLease = null;
     this.workerIngestController.dispose();
     this.resizePassScheduler.dispose();
     this.reflowController.dispose();

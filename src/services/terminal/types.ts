@@ -180,6 +180,12 @@ export interface ManagedTerminal {
    */
   ptyCols?: number;
   ptyRows?: number;
+  /**
+   * Another frontend sized the PTY while this pane watched (#13282), so the
+   * next resize must reach it even when xterm already holds the pane's grid.
+   * Cleared by the send.
+   */
+  reassertPtyGrid?: boolean;
   latestWasAtBottom: boolean;
   isUserScrolledBack: boolean;
 
