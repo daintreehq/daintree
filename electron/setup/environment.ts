@@ -281,6 +281,7 @@ let shellProbePromise: Promise<string | null> | null = null;
  * native Claude installer bin dir. The shell-env probe covers the common
  * case, but corporate `.zshrc` files can hang shell-env past the timeout.
  * Without this fallback those users would see every CLI as "missing".
+ * POSIX path rules throughout: these lists only ever apply on macOS and Linux.
  */
 export function getUnixFallbackPaths(): string[] {
   const home = os.homedir();
@@ -289,16 +290,20 @@ export function getUnixFallbackPaths(): string[] {
   // mise — env var override, then the standard location.
   const miseData = process.env["MISE_DATA_DIR"];
   candidates.push(
-    miseData ? path.join(miseData, "shims") : path.join(home, ".local/share/mise/shims")
+    miseData ? path.posix.join(miseData, "shims") : path.posix.join(home, ".local/share/mise/shims")
   );
 
   // asdf — env var override, then the standard location.
   const asdfData = process.env["ASDF_DATA_DIR"];
-  candidates.push(asdfData ? path.join(asdfData, "shims") : path.join(home, ".asdf/shims"));
+  candidates.push(
+    asdfData ? path.posix.join(asdfData, "shims") : path.posix.join(home, ".asdf/shims")
+  );
 
   // Volta — env var override, then the standard location.
   const voltaHome = process.env["VOLTA_HOME"];
-  candidates.push(voltaHome ? path.join(voltaHome, "bin") : path.join(home, ".volta/bin"));
+  candidates.push(
+    voltaHome ? path.posix.join(voltaHome, "bin") : path.posix.join(home, ".volta/bin")
+  );
 
   // pnpm — env var override, then the platform-default bin dir. pnpm's
   // installer writes the bin dir path directly (no `bin/` suffix).
@@ -308,13 +313,13 @@ export function getUnixFallbackPaths(): string[] {
   } else {
     candidates.push(
       process.platform === "darwin"
-        ? path.join(home, "Library/pnpm")
-        : path.join(home, ".local/share/pnpm")
+        ? path.posix.join(home, "Library/pnpm")
+        : path.posix.join(home, ".local/share/pnpm")
     );
   }
 
   // Nix — user profile (single-user + home-manager) and system default profile.
-  candidates.push(path.join(home, ".nix-profile/bin"));
+  candidates.push(path.posix.join(home, ".nix-profile/bin"));
   candidates.push("/nix/var/nix/profiles/default/bin");
 
   // Homebrew — Apple Silicon (ARM64) default prefix. Intel Homebrew lives
@@ -323,7 +328,7 @@ export function getUnixFallbackPaths(): string[] {
 
   // User-local bin — catches Anthropic's native installer for Claude
   // (~/.local/bin/claude) and other user-level installs.
-  candidates.push(path.join(home, ".local/bin"));
+  candidates.push(path.posix.join(home, ".local/bin"));
 
   return candidates.filter((p) => {
     try {
@@ -336,7 +341,7 @@ export function getUnixFallbackPaths(): string[] {
 
 function expandHomePrefix(value: string, home: string): string {
   if (value === "~") return home;
-  return value.startsWith("~/") ? path.join(home, value.slice(2)) : value;
+  return value.startsWith("~/") ? path.posix.join(home, value.slice(2)) : value;
 }
 
 /**
@@ -350,7 +355,7 @@ function readNpmUserPrefix(home: string): string | null {
   if (!value) {
     let npmrc: string;
     try {
-      npmrc = fs.readFileSync(path.join(home, ".npmrc"), "utf8");
+      npmrc = fs.readFileSync(path.posix.join(home, ".npmrc"), "utf8");
     } catch {
       return null;
     }
@@ -364,7 +369,7 @@ function readNpmUserPrefix(home: string): string | null {
       .replace(/\$\{([^}]+)\}/g, (_match, name: string) => process.env[name] ?? "");
   }
   const expanded = expandHomePrefix(value, home);
-  return path.isAbsolute(expanded) ? expanded : null;
+  return path.posix.isAbsolute(expanded) ? expanded : null;
 }
 
 /**
@@ -382,22 +387,24 @@ export function getLinuxFallbackPaths(): string[] {
   // npm with a user-owned global prefix: whatever ~/.npmrc names, then the
   // directory npm's EACCES guide tells people to create.
   const npmPrefix = readNpmUserPrefix(home);
-  if (npmPrefix) candidates.push(path.join(npmPrefix, "bin"));
-  candidates.push(path.join(home, ".npm-global/bin"));
+  if (npmPrefix) candidates.push(path.posix.join(npmPrefix, "bin"));
+  candidates.push(path.posix.join(home, ".npm-global/bin"));
 
   // rustup/cargo, Bun and Deno installers, each with its env override.
-  candidates.push(path.join(env["CARGO_HOME"] || path.join(home, ".cargo"), "bin"));
-  candidates.push(path.join(env["BUN_INSTALL"] || path.join(home, ".bun"), "bin"));
-  candidates.push(path.join(env["DENO_INSTALL_ROOT"] || path.join(home, ".deno"), "bin"));
+  candidates.push(path.posix.join(env["CARGO_HOME"] || path.posix.join(home, ".cargo"), "bin"));
+  candidates.push(path.posix.join(env["BUN_INSTALL"] || path.posix.join(home, ".bun"), "bin"));
+  candidates.push(
+    path.posix.join(env["DENO_INSTALL_ROOT"] || path.posix.join(home, ".deno"), "bin")
+  );
 
   // Homebrew on Linux: the shared prefix its installer prefers, and the
   // in-home prefix it falls back to without sudo.
-  if (env["HOMEBREW_PREFIX"]) candidates.push(path.join(env["HOMEBREW_PREFIX"], "bin"));
+  if (env["HOMEBREW_PREFIX"]) candidates.push(path.posix.join(env["HOMEBREW_PREFIX"], "bin"));
   candidates.push("/home/linuxbrew/.linuxbrew/bin");
-  candidates.push(path.join(home, ".linuxbrew/bin"));
+  candidates.push(path.posix.join(home, ".linuxbrew/bin"));
 
   // Debian/Ubuntu's default ~/.profile puts ~/bin on PATH when it exists.
-  candidates.push(path.join(home, "bin"));
+  candidates.push(path.posix.join(home, "bin"));
 
   // snapd's profile.d script appends this, so a snap never shadows a deb.
   candidates.push("/snap/bin");

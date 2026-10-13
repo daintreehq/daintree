@@ -11,8 +11,8 @@ let cached: NativeImage | null | undefined;
 export function getLinuxAppIconPath(): string | undefined {
   if (process.platform !== "linux") return undefined;
   return app.isPackaged
-    ? path.join(process.resourcesPath, "icon.png")
-    : path.join(app.getAppPath(), "build", "icon.png");
+    ? path.posix.join(process.resourcesPath, "icon.png")
+    : path.posix.join(app.getAppPath(), "build", "icon.png");
 }
 
 /**

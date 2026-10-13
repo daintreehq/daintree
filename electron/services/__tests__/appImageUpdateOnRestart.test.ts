@@ -34,7 +34,8 @@ function waiterCommands(): string[][] {
   });
 }
 
-describe("an AppImage restart with an update staged", () => {
+// The real `mv` and the run of a `#!/bin/sh` image need a POSIX host.
+describe.skipIf(process.platform === "win32")("an AppImage restart with an update staged", () => {
   let dir: string;
   let installDir: string;
   let oldImage: string;

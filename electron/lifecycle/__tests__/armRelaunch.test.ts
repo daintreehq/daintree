@@ -40,10 +40,13 @@ function setPlatform(value: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { value, configurable: true });
 }
 
-// runningAppImage() requires this binary to sit inside APPDIR, as it does in a mount.
-function runFromImage(appDir = path.dirname(process.execPath)) {
+// runningAppImage() requires this binary to sit inside APPDIR, as it does in a
+// mount. A POSIX mount whatever the host: AppRun's path lists split on ":".
+const mount = "/tmp/.mount_x";
+function runFromImage() {
   process.env.APPIMAGE = image;
-  process.env.APPDIR = appDir;
+  process.env.APPDIR = mount;
+  vi.spyOn(process, "execPath", "get").mockReturnValue(`${mount}/daintree`);
 }
 
 function waiterError(): (error: Error) => void {
@@ -91,13 +94,17 @@ describe("armRelaunch", () => {
     expect(mocks.waiter.unref).toHaveBeenCalled();
   });
 
-  it("keeps the command where only this user can read or replace it", () => {
-    runFromImage();
-    armRelaunch();
+  // Windows has no Unix mode bits.
+  it.skipIf(process.platform === "win32")(
+    "keeps the command where only this user can read or replace it",
+    () => {
+      runFromImage();
+      armRelaunch();
 
-    expect(fs.statSync(commandFile()).mode & 0o777).toBe(0o600);
-    expect(fs.statSync(path.dirname(commandFile())).mode & 0o777).toBe(0o700);
-  });
+      expect(fs.statSync(commandFile()).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.dirname(commandFile())).mode & 0o777).toBe(0o700);
+    }
+  );
 
   it("keeps the current args when the caller passes none", () => {
     runFromImage();
@@ -106,10 +113,9 @@ describe("armRelaunch", () => {
   });
 
   it("drops the old mount's entries from the path lists AppRun will prefix again", () => {
-    const appDir = path.dirname(process.execPath);
-    runFromImage(appDir);
-    process.env.PATH = `${appDir}:${appDir}/usr/sbin:/usr/local/bin:/usr/bin`;
-    process.env.LD_LIBRARY_PATH = `${appDir}/usr/lib`;
+    runFromImage();
+    process.env.PATH = `${mount}:${mount}/usr/sbin:/usr/local/bin:/usr/bin`;
+    process.env.LD_LIBRARY_PATH = `${mount}/usr/lib`;
     armRelaunch();
 
     const { env } = spawnCall()[2];
@@ -117,7 +123,7 @@ describe("armRelaunch", () => {
     expect(env).not.toHaveProperty("LD_LIBRARY_PATH");
     expect(env.APPIMAGE_EXTRACT_AND_RUN).toBeUndefined();
     // The running process keeps its own environment.
-    expect(process.env.LD_LIBRARY_PATH).toBe(`${appDir}/usr/lib`);
+    expect(process.env.LD_LIBRARY_PATH).toBe(`${mount}/usr/lib`);
   });
 
   function runExtracted(parentExe: string) {
@@ -179,9 +185,8 @@ describe("armRelaunch", () => {
 
 describe("armAppImageRelaunch", () => {
   it("runs the image an update put in place through the same waiter", () => {
-    const appDir = path.dirname(process.execPath);
-    runFromImage(appDir);
-    process.env.LD_LIBRARY_PATH = `${appDir}/usr/lib`;
+    runFromImage();
+    process.env.LD_LIBRARY_PATH = `${mount}/usr/lib`;
     const fallback = vi.fn();
 
     expect(armAppImageRelaunch(updated, [], fallback)).toBe(true);

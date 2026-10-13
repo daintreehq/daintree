@@ -50,7 +50,11 @@ function runXdgOpen(target: string): Promise<string> {
     let child: ReturnType<typeof spawn>;
     try {
       // Absolute, so a relative path that starts with "-" can't read as an option.
-      child = spawn("xdg-open", [path.resolve(target)], { detached: true, stdio: "ignore", env });
+      child = spawn("xdg-open", [path.posix.resolve(target)], {
+        detached: true,
+        stdio: "ignore",
+        env,
+      });
     } catch (err) {
       resolve(`Couldn't run xdg-open: ${formatErrorMessage(err, "spawn failed")}`);
       return;
