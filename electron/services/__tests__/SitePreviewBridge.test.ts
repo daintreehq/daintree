@@ -12,6 +12,7 @@ import { GUEST_PROTOCOL_VERSION } from "../sitePreview/guestProtocol.js";
 import { GUEST_RUNTIME_GLOBAL } from "../sitePreview/guestRuntime.js";
 import type { SitePreviewPushRoute } from "../SitePreviewBridge.js";
 import type { SitePreviewPushPayload } from "../../../shared/types/ipc/sitePreview.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
 const PANEL_ID = "panel-1";
 const ADAPTER_ID = "test.guest";
@@ -1644,6 +1645,26 @@ describe("SitePreviewBridge observation addressing", () => {
 
     expect(harness.pushed).toHaveLength(1);
     expect(harness.routes).toEqual([{ subscriberWebContentsId: OTHER_SUBSCRIBER_WC_ID }]);
+  });
+
+  // A view can bind several previews; a `destroyed` listener each would run
+  // its count past the unpackaged build's limit.
+  it("watches the binding view through its shared destroyed listener", async () => {
+    const harness = makeHarness();
+    const unwatch = onWebContentsDestroyed(
+      harness.subscriber as unknown as Electron.WebContents,
+      () => {}
+    );
+    expect(harness.subscriber.listenerCount("destroyed")).toBe(1);
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
+    });
+    expect(harness.subscriber.listenerCount("destroyed")).toBe(1);
+    unwatch();
   });
 
   it("tears the binding down when the view that bound is destroyed", async () => {

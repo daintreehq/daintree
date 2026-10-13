@@ -2,6 +2,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { SCOPED_PLUGIN_NAME_PATTERN } from "../schemas/pluginIdentifiers.js";
 import { getAppWebContents } from "../window/webContentsRegistry.js";
 import { watchMainFrameDocument } from "../utils/mainFrameNavigation.js";
+import { onWebContentsDestroyed } from "../window/webContentsDestroyed.js";
 import {
   clearPendingDaintreeUrls,
   getPendingDaintreeUrls,
@@ -185,7 +186,7 @@ function wireWebContentsLifecycle(webContents: Electron.WebContents): void {
       });
     },
   });
-  webContents.once("destroyed", () => {
+  onWebContentsDestroyed(webContents, () => {
     paintedWebContentsIds.delete(id);
     leavingWebContentsIds.delete(id);
     wiredWebContentsIds.delete(id);

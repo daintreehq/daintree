@@ -32,11 +32,12 @@ import {
   VoiceInputCorrectPayloadSchema,
   type VoiceInputCorrectPayload,
 } from "../../schemas/ipc.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
 let service: VoiceTranscriptionService | null = null;
 let servicePromise: Promise<VoiceTranscriptionService> | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
-let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | null = null;
+let activeDestroyListener: { fn: () => void; unwatch: () => void } | null = null;
 let correctionService: VoiceCorrectionService | null = null;
 let sessionController: AbortController | null = null;
 let sessionProjectInfo: { name?: string; path?: string } = {};
@@ -192,7 +193,7 @@ function cleanupActiveSubscription(): void {
     activeEventUnsubscribe = null;
   }
   if (activeDestroyListener) {
-    activeDestroyListener.sender.removeListener("destroyed", activeDestroyListener.fn);
+    activeDestroyListener.unwatch();
     activeDestroyListener = null;
   }
 }
@@ -586,8 +587,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (preStartAudio?.nonce === myNonce) preStartAudio = null;
     };
     const sender = ctx.event?.sender ?? null;
-    sender?.once("destroyed", onDestroyed);
-    activeDestroyListener = sender ? { sender, fn: onDestroyed } : null;
+    const unwatchDestroyed = sender ? onWebContentsDestroyed(sender, onDestroyed) : null;
+    activeDestroyListener = unwatchDestroyed
+      ? { fn: onDestroyed, unwatch: unwatchDestroyed }
+      : null;
 
     // Freeze the assembled keyterms into the session settings snapshot. Assembly
     // has its own internal timeouts, so this await is bounded and never blocks the
@@ -614,7 +617,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         activeEventUnsubscribe = null;
       }
       unsubscribe();
-      sender?.removeListener("destroyed", onDestroyed);
+      unwatchDestroyed?.();
       if (activeDestroyListener?.fn === onDestroyed) {
         activeDestroyListener = null;
       }

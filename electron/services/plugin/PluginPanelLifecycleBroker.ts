@@ -10,6 +10,7 @@ export type PluginPanelLifecycleListener = (event: PluginPanelLifecycleEvent) =>
  * Structural so the owning service stays unit-testable without an Electron stub.
  */
 export interface PanelLifecycleSourceHandle {
+  readonly id: number;
   once(event: "destroyed", listener: () => void): unknown;
   removeListener(event: "destroyed", listener: () => void): unknown;
 }

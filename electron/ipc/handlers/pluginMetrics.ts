@@ -11,6 +11,7 @@ import type { PluginPerfSnapshot } from "../../../shared/types/pluginMetrics.js"
 import { projectIdFromPluginInstanceKey } from "../../../shared/types/plugin.js";
 import type { IpcContext } from "../types.js";
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
+import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 
 /** Report messages accepted per renderer per second; the renderer drains every 250 ms at most. */
 export const MAX_REPORTS_PER_SECOND = 5;
@@ -200,23 +201,21 @@ export function registerPluginMetricsHandlers(options?: {
     if (sender.isDestroyed()) return;
     dropPendingUnsubscribe(id);
     // A closed view's endpoint closes on the host with its subscription.
-    const onGone = (): void => dropPendingUnsubscribe(id);
-    sender.once("destroyed", onGone);
-    pendingUnsubscribes.set(id, { sender, off: () => sender.removeListener("destroyed", onGone) });
+    const off = onWebContentsDestroyed(sender, () => dropPendingUnsubscribe(id));
+    pendingUnsubscribes.set(id, { sender, off });
   };
   const relaySubscribe = (sender: Electron.WebContents): boolean => {
     if (!relaySendToHost(sender.id, CHANNELS.PLUGIN_PERF_SNAPSHOTS_SUBSCRIBE, [])) return false;
     dropPendingUnsubscribe(sender.id);
     if (relayedSubscribers.has(sender.id)) return true;
     const id = sender.id;
-    const onGone = (): void => endRelayed(id, false);
     const onNavigate = (): void => endRelayed(id, true);
-    sender.once("destroyed", onGone);
+    const offGone = onWebContentsDestroyed(sender, () => endRelayed(id, false));
     sender.once("did-navigate", onNavigate);
     relayedSubscribers.set(id, {
       sender,
       off: () => {
-        sender.removeListener("destroyed", onGone);
+        offGone();
         sender.removeListener("did-navigate", onNavigate);
       },
     });
@@ -247,17 +246,16 @@ export function registerPluginMetricsHandlers(options?: {
     const sender = event.sender;
     if (sender.isDestroyed() || subscribers.has(sender)) return;
     if (relaySubscribe(sender)) return;
-    const onGone = (): void => removeSubscriber(sender);
     // A reload starts a fresh preload that re-subscribes if it still wants the feed.
     const onNavigate = (): void => removeSubscriber(sender);
-    sender.once("destroyed", onGone);
+    const offGone = onWebContentsDestroyed(sender, () => removeSubscriber(sender));
     sender.once("did-navigate", onNavigate);
     subscribers.set(sender, {
       projectId: () => projectFor(sender.id),
       isGone: () => sender.isDestroyed(),
       deliver: (snapshots) => sender.send(CHANNELS.PLUGIN_PERF_SNAPSHOTS_CHANGED, snapshots),
       detach: () => {
-        sender.removeListener("destroyed", onGone);
+        offGone();
         sender.removeListener("did-navigate", onNavigate);
       },
     });
