@@ -5,10 +5,12 @@ import type {
   EndpointRegistry,
   EndpointRequestOptions,
   HostFrame,
+  RemoteEndpointCloseCause,
 } from "../../ipc/endpoint.js";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { createLogger } from "../../utils/logger.js";
 import { toTransportSafeError } from "../../ipc/transportSafeError.js";
 import { appErrorEnvelope } from "../link/envelopes.js";
 import { Lane } from "../link/frames.js";
@@ -29,6 +31,8 @@ import {
   type ProjectDescription,
 } from "./linkMethods.js";
 import { RemoteViewEndpoint, type RemoteEndpointTransport } from "./RemoteViewEndpoint.js";
+
+const logger = createLogger("main:SessionHost");
 
 /**
  * The Host's half of an attached Shell: turns a link session's endpoint
@@ -161,6 +165,18 @@ function defaultHostInfo(): HostInfo {
   };
 }
 
+/** What a lifecycle log line says about an endpoint: ids only, never what it carries. */
+function describeEndpoint(endpoint: RemoteViewEndpoint) {
+  return {
+    sessionId: endpoint.linkSessionId,
+    clientId: endpoint.clientId,
+    endpointId: endpoint.endpointId,
+    clientEndpointId: endpoint.clientEndpointId,
+    handle: endpoint.handle,
+    projectId: endpoint.projectId,
+  };
+}
+
 /** What a Shell's remembered project is filed under: its install, or its machine name if it doesn't say. */
 function rememberedKey(client: ClientRef): string {
   return client.deviceId ? `device:${client.deviceId}` : `name:${client.clientName}`;
@@ -190,7 +206,9 @@ export class SessionHost {
     this.maxEndpoints = options.maxEndpointsPerSession ?? DEFAULT_MAX_ENDPOINTS_PER_SESSION;
     this.activityWindowMs = options.activityWindowMs ?? DEFAULT_ACTIVITY_WINDOW_MS;
     this.unsubscribe.push(server.onSession((ctx) => this.attach(ctx)));
-    this.unsubscribe.push(server.onSessionExpired((info) => this.expire(info.sessionId)));
+    this.unsubscribe.push(
+      server.onSessionExpired((info) => this.expire(info.sessionId, info.cause))
+    );
   }
 
   /** Seam for bridges that follow an endpoint (terminal streams, the worktree port). */
@@ -304,7 +322,7 @@ export class SessionHost {
     if (this.disposed) return;
     this.disposed = true;
     for (const off of this.unsubscribe.splice(0)) off();
-    for (const sessionId of [...this.states.keys()]) this.expire(sessionId);
+    for (const sessionId of [...this.states.keys()]) this.expire(sessionId, "host-shutdown");
     this.openedListeners.clear();
     this.transportListeners.clear();
     this.publishFrontendCount();
@@ -316,7 +334,7 @@ export class SessionHost {
     if (this.disposed) return;
     let state = this.states.get(ctx.sessionId);
     if (state && !ctx.resumed) {
-      this.expire(ctx.sessionId);
+      this.expire(ctx.sessionId, "session-replaced");
       state = undefined;
     }
     if (!state) {
@@ -383,7 +401,7 @@ export class SessionHost {
         this.rebindEndpoint(s, body.endpointId, body.projectId)
       ),
       link.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, (body) =>
-        s.endpoints.get(body.endpointId)?.close()
+        s.endpoints.get(body.endpointId)?.close("client-closed")
       ),
       link.onWritable(() => this.maybeFinishResync(s)),
       link.registerCallHandler(LinkMethod.HOST_INFO, EmptyPayloadSchema, () =>
@@ -464,9 +482,12 @@ export class SessionHost {
       return;
     }
     if (state.endpoints.size >= this.maxEndpoints) {
-      console.warn(
-        `[SessionHost] Session ${state.sessionId} is at its endpoint cap; ignoring ${clientEndpointId}`
-      );
+      logger.warn("Remote session is at its endpoint cap; ignoring a view", {
+        sessionId: state.sessionId,
+        clientId: state.client.clientId,
+        clientEndpointId,
+        maxEndpoints: this.maxEndpoints,
+      });
       return;
     }
     const endpoint = new RemoteViewEndpoint(
@@ -474,14 +495,20 @@ export class SessionHost {
         endpointId: `remote:${state.sessionId}:${clientEndpointId}`,
         clientEndpointId,
         clientId: state.client.clientId,
+        linkSessionId: state.sessionId,
         projectId,
       },
       this.transportFor(state)
     );
     state.endpoints.set(clientEndpointId, endpoint);
+    logger.info("Remote view endpoint opened", describeEndpoint(endpoint));
     // A new endpoint has no assistant yet, which is what the Shell assumes.
     state.assistantTold.set(clientEndpointId, false);
     endpoint.onClose(() => {
+      logger.info("Remote view endpoint closed", {
+        ...describeEndpoint(endpoint),
+        cause: endpoint.closeCause,
+      });
       if (state.endpoints.get(clientEndpointId) === endpoint) {
         state.endpoints.delete(clientEndpointId);
         state.stale.delete(clientEndpointId);
@@ -505,6 +532,10 @@ export class SessionHost {
   private rebindEndpoint(state: SessionState, clientEndpointId: string, projectId: string | null) {
     const endpoint = state.endpoints.get(clientEndpointId);
     if (!endpoint || endpoint.isClosed() || endpoint.projectId === projectId) return;
+    logger.info("Remote view endpoint rebound", {
+      ...describeEndpoint(endpoint),
+      nextProjectId: projectId,
+    });
     this.options.registry.rebind(endpoint.endpointId, projectId);
     endpoint.markRebound();
     // Switching project in a view is using the host.
@@ -557,9 +588,11 @@ export class SessionHost {
     } catch (error) {
       // Unencodable or oversized: only this event is lost, but the Shell's view
       // of it is now wrong, so it repaints.
-      console.warn(
-        `[SessionHost] Dropped event ${frame.channel}: ${formatErrorMessage(error, "unsendable")}`
-      );
+      logger.warn("Dropped an event to a remote view", {
+        ...describeEndpoint(endpoint),
+        channel: frame.channel,
+        reason: formatErrorMessage(error, "unsendable"),
+      });
       state.stale.add(endpoint.clientEndpointId);
       state.staleReason = "overflow";
       this.maybeFinishResync(state);
@@ -596,9 +629,12 @@ export class SessionHost {
     state.staleReason = "overflow";
     this.clearOverHighWater(state);
     for (const id of state.endpoints.keys()) state.stale.add(id);
-    console.warn(
-      `[SessionHost] Shell ${state.client.clientName} is not keeping up; dropping its events until it resyncs`
-    );
+    logger.warn("Remote Shell is not keeping up; dropping its events until it resyncs", {
+      sessionId: state.sessionId,
+      clientId: state.client.clientId,
+      clientName: state.client.clientName,
+      endpointCount: state.endpoints.size,
+    });
   }
 
   /** Resume delivery once everything already queued has gone out. */
@@ -671,12 +707,12 @@ export class SessionHost {
     });
   }
 
-  private expire(sessionId: string): void {
+  private expire(sessionId: string, cause: RemoteEndpointCloseCause): void {
     const state = this.states.get(sessionId);
     if (!state) return;
     this.states.delete(sessionId);
     this.unbindLink(state);
-    for (const endpoint of [...state.endpoints.values()]) endpoint.close();
+    for (const endpoint of [...state.endpoints.values()]) endpoint.close(cause);
     state.endpoints.clear();
     this.publishFrontendCount();
   }

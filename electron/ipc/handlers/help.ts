@@ -4,8 +4,10 @@ import { HELP_METHOD_CHANNELS } from "./help.preload.js";
 import type * as HelpServiceModule from "../../services/HelpService.js";
 import type * as HelpSessionServiceModule from "../../services/HelpSessionService.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
-import type { ClientEndpoint } from "../endpoint.js";
+import type { ClientEndpoint, RemoteEndpointCloseCause } from "../endpoint.js";
 import { getEndpointRegistry } from "../endpointRegistry.js";
+import { createLogger } from "../../utils/logger.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type {
@@ -142,12 +144,39 @@ async function handleProvisionSession(
  */
 const remoteSessionProjects = new WeakMap<ClientEndpoint, { projectId: string | null }>();
 
+const logger = createLogger("main:Help");
+
+/**
+ * Why a remote view's assistant is going. The kill that follows logs only a
+ * terminal id and a graceful shutdown, which reads like a user closing an
+ * agent; this line names the endpoint, its link session and the cause.
+ */
+type RemoteViewRevokeCause =
+  | { cause: RemoteEndpointCloseCause | null }
+  | { cause: "project-rebound"; previousProjectId: string | null };
+
 function revokeRemoteViewSessions(
   helpSessionService: HelpSessionServiceModule.HelpSessionService,
-  endpoint: ClientEndpoint
+  endpoint: ClientEndpoint,
+  why: RemoteViewRevokeCause
 ): Promise<void> {
+  const view = {
+    sessionId: endpoint.linkSessionId ?? null,
+    clientId: endpoint.clientId,
+    endpointId: endpoint.endpointId,
+    handle: endpoint.handle,
+    projectId: endpoint.projectId,
+    ...why,
+  };
+  const helpSessions = helpSessionService.helpSessionRefsForWebContentsId(endpoint.handle);
+  if (helpSessions.length > 0) {
+    logger.info("Revoking a remote view's help sessions", { ...view, helpSessions });
+  }
   return helpSessionService.revokeByWebContentsId(endpoint.handle).catch((err: unknown) => {
-    console.warn("[help] revoke for a remote view failed:", err);
+    logger.warn("Revoking a remote view's help sessions failed", {
+      ...view,
+      reason: formatErrorMessage(err, "revoke failed"),
+    });
   });
 }
 
@@ -165,14 +194,20 @@ function trackRemoteViewSessions(
   remoteSessionProjects.set(endpoint, tracked);
   const offChange = getEndpointRegistry().onChange(() => {
     if (endpoint.isClosed() || endpoint.projectId === tracked.projectId) return;
+    const previousProjectId = tracked.projectId;
     tracked.projectId = endpoint.projectId;
-    void revokeRemoteViewSessions(helpSessionService, endpoint);
+    void revokeRemoteViewSessions(helpSessionService, endpoint, {
+      cause: "project-rebound",
+      previousProjectId,
+    });
   });
   // A remote view has no WebContents here to be destroyed or evicted; its
   // endpoint closing is the same moment, so its sessions go with it.
   endpoint.onClose(() => {
     offChange();
-    void revokeRemoteViewSessions(helpSessionService, endpoint);
+    void revokeRemoteViewSessions(helpSessionService, endpoint, {
+      cause: endpoint.closeCause ?? null,
+    });
   });
 }
 

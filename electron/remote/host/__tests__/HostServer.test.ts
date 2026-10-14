@@ -16,6 +16,7 @@ import {
   type HostSocketLocation,
 } from "../hostSocketPath.js";
 import { readDiscoveryFile, removeDiscoveryFile, writeDiscoveryFile } from "../discoveryFile.js";
+import { logBuffer } from "../../../services/LogBuffer.js";
 import {
   TEST_HANDSHAKE,
   makeTempDir,
@@ -29,6 +30,7 @@ const servers: HostServer[] = [];
 const clients: LinkClient[] = [];
 
 beforeEach(async () => {
+  logBuffer.clear();
   root = await makeTempDir();
   location = hostSocketLocation({ platform: "darwin", userDataDir: path.join(root, "ud") });
 });
@@ -130,6 +132,14 @@ async function helloOn(
     resumeSecret: string;
   };
   return { raw, welcome };
+}
+
+/** What a logger wrote, in order, as daintree.log keeps it at production's info floor. */
+function logged(source: string): Array<{ message: string; context: unknown }> {
+  return logBuffer
+    .getFiltered({ sources: [source] })
+    .filter((entry) => entry.level !== "debug")
+    .map((entry) => ({ message: entry.message, context: entry.context }));
 }
 
 /** Something from the client after its WELCOME, as any live Shell soon sends. */
@@ -464,6 +474,69 @@ describe("HostServer authentication", () => {
 });
 
 describe("HostServer session resume", () => {
+  it("logs a link's life on both ends with the session id, and never a credential", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const client = startClient(server, { hostId: "host-studio" });
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+    const sessionId = seen[0]!.sessionId;
+    const firstSecret = (client as unknown as { resumeSecret: string }).resumeSecret;
+
+    (seen[0]!.session as unknown as { socket: net.Socket }).socket.destroy();
+    await waitFor(() => seen.length === 2 && client.getState().status === "connected");
+    await client.stop();
+    await waitFor(() =>
+      logged("main:HostServer").some((entry) => entry.message === "Remote session expired")
+    );
+
+    const host = logged("main:HostServer");
+    const who = { sessionId, clientId: "client-a", clientName: "greg-mbp" };
+    expect(host.map((entry) => entry.message)).toEqual([
+      "Remote session started",
+      "Remote session detached; held for resume",
+      "Remote session resumed",
+      "Remote session expired",
+    ]);
+    expect(host[0]!.context).toEqual(who);
+    expect(host[1]!.context).toMatchObject({ sessionId, by: "transport", graceMs: 60_000 });
+    expect(host[2]!.context).toMatchObject({ ...who, parkedMs: expect.any(Number) });
+    expect(host[3]!.context).toMatchObject({ sessionId, cause: "goodbye", by: "remote" });
+
+    const shell = logged("main:LinkClient");
+    const link = { hostId: "host-studio", sessionId };
+    expect(shell.map((entry) => entry.message)).toEqual([
+      "Dialling remote host",
+      "Remote host link established",
+      "Remote host link closed",
+      // Dropped within seconds of the handshake, so the retry goes through backoff.
+      "Remote host unreachable",
+      "Dialling remote host",
+      "Remote host link resumed",
+      "Remote host link closed",
+    ]);
+    expect(shell[0]!.context).toEqual({
+      hostId: "host-studio",
+      attempt: 1,
+      previousSessionId: null,
+    });
+    expect(shell[1]!.context).toMatchObject({ ...link, hostName: "studio-01" });
+    expect(shell[2]!.context).toMatchObject({ ...link, by: "transport" });
+    expect(shell[3]!.context).toMatchObject({
+      hostId: "host-studio",
+      previousSessionId: sessionId,
+    });
+    expect(shell[4]!.context).toMatchObject({ previousSessionId: sessionId });
+    expect(shell[5]!.context).toMatchObject(link);
+    expect(shell[6]!.context).toMatchObject({ ...link, reason: "client stopped", by: "local" });
+
+    // Ids survive the logger's redaction, and nothing secret rides along.
+    const written = JSON.stringify([...host, ...shell]);
+    expect(written).not.toContain("[redacted]");
+    expect(written).not.toContain(server.token);
+    expect(written).not.toContain(firstSecret);
+  });
+
   it("resumes the same session id after a reconnect within the grace window", async () => {
     const server = await startServer();
     const seen: HostSessionContext[] = [];
@@ -520,7 +593,32 @@ describe("HostServer session resume", () => {
     await waitFor(() => seen.length === 2);
     expect(seen[1]!.resumed).toBe(false);
     expect(seen[1]!.sessionId).not.toBe(firstId);
-    void client;
+    // Both ends say the old session is gone, and why the host gave it up.
+    const host = logged("main:HostServer");
+    expect(host).toContainEqual({
+      message: "Remote session expired",
+      context: { sessionId: firstId, clientId: "client-a", cause: "grace-expired" },
+    });
+    expect(host).toContainEqual(
+      expect.objectContaining({
+        message: "Remote session started; the previous one could not be resumed",
+        context: expect.objectContaining({
+          sessionId: seen[1]!.sessionId,
+          previousSessionId: firstId,
+          resumeRefused: "session-unknown",
+        }),
+      })
+    );
+    await waitFor(() => client.getState().status === "connected");
+    expect(logged("main:LinkClient")).toContainEqual(
+      expect.objectContaining({
+        message: "Remote host started a new session; the previous one was not resumed",
+        context: expect.objectContaining({
+          sessionId: seen[1]!.sessionId,
+          previousSessionId: firstId,
+        }),
+      })
+    );
   });
 
   it("does not resume a session for a different client id", async () => {
@@ -548,6 +646,15 @@ describe("HostServer session resume", () => {
     expect(seen[1]!.resumed).toBe(false);
     expect(seen[1]!.sessionId).not.toBe(seen[0]!.sessionId);
     expect(seen[0]!.session.isOpen).toBe(true);
+    expect(logged("main:HostServer")).toContainEqual(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          clientId: "intruder",
+          previousSessionId: seen[0]!.sessionId,
+          resumeRefused: "secret-mismatch",
+        }),
+      })
+    );
     raw.socket.destroy();
   });
 
@@ -842,6 +949,7 @@ describe("HostServer session cap", () => {
     // Only what a resume must match is parked, never the dropped session.
     expect(Object.keys(resumable.get(seen[0]!.sessionId)!).sort()).toEqual([
       "clientId",
+      "parkedAt",
       "sessionId",
       "timer",
     ]);
@@ -850,6 +958,10 @@ describe("HostServer session cap", () => {
     await waitFor(() => seen.length === 3);
     expect(expired).toEqual([seen[0]!.sessionId]);
     expect(resumable.size).toBe(0);
+    expect(logged("main:HostServer")).toContainEqual({
+      message: "Remote session expired",
+      context: { sessionId: seen[0]!.sessionId, clientId: "c1", cause: "session-cap" },
+    });
 
     const four = await rawHello(server.token, "c4");
     await closedSocket(four.socket);

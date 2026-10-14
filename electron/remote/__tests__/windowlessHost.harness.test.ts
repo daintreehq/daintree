@@ -94,6 +94,10 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     revokeByWebContentsId: async (id: number) => {
       helpSessions.revoked.push(id);
     },
+    helpSessionRefsForWebContentsId: (id: number) =>
+      helpSessions.provisioned
+        .filter((input) => input.projectViewWebContentsId === id)
+        .map(() => ({ helpSessionId: "session-1", terminalId: "terminal-help-1", slot: 0 })),
     revokeSession: async () => undefined,
     addSessionEndedListener: () => () => {},
     getRunningLaneSession: () => null,
@@ -125,6 +129,7 @@ import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { registerHelpHandlers } from "../../ipc/handlers/help.js";
 import { registerWorktreeLifecycleHandlers } from "../../ipc/handlers/worktree/lifecycle.js";
 import type { HandlerDependencies } from "../../ipc/types.js";
+import { logBuffer } from "../../services/LogBuffer.js";
 import { _resetHostResidencyForTesting } from "../../services/ProjectSwitchService.js";
 import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
 import { PluginRendererDispatcher } from "../../services/plugin/PluginRendererDispatcher.js";
@@ -357,15 +362,42 @@ describe("host handlers with no window here, over the real link", () => {
 
       // Moved to another project, the endpoint's sessions go: an assistant
       // launched for proj-1 never acts in proj-2.
+      logBuffer.clear();
       getEndpointRegistry().rebind(endpoint.endpointId, "proj-2");
       expect(helpSessions.revoked).toEqual([endpoint.handle]);
+      const helpLog = () => logBuffer.getFiltered({ sources: ["main:Help"] });
+      expect(helpLog().map((entry) => entry.context)).toEqual([
+        expect.objectContaining({
+          sessionId: endpoint.linkSessionId,
+          endpointId: endpoint.endpointId,
+          handle: endpoint.handle,
+          projectId: "proj-2",
+          cause: "project-rebound",
+          previousProjectId: "proj-1",
+          helpSessions: [{ helpSessionId: "session-1", terminalId: "terminal-help-1", slot: 0 }],
+        }),
+      ]);
 
-      // The view going (its endpoint closes on the host) takes its sessions with it.
+      // The view going (its endpoint closes on the host) takes its sessions
+      // with it, and the host's log says the Shell closed it.
+      logBuffer.clear();
       view.destroy();
       await waitUntil(
         () => helpSessions.revoked.length === 2,
         "the remote view's help sessions revoked"
       );
+      expect(helpLog().map((entry) => entry.context)).toEqual([
+        expect.objectContaining({
+          sessionId: endpoint.linkSessionId,
+          endpointId: endpoint.endpointId,
+          cause: "client-closed",
+        }),
+      ]);
+      expect(
+        logBuffer
+          .getFiltered({ sources: ["main:SessionHost"] })
+          .find((entry) => entry.message === "Remote view endpoint closed")?.context
+      ).toMatchObject({ endpointId: endpoint.endpointId, cause: "client-closed" });
     },
     TEST_TIMEOUT_MS
   );

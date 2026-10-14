@@ -2,6 +2,7 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
+import { logBuffer } from "../../../services/LogBuffer.js";
 import {
   HostModeOffError,
   SshAccessError,
@@ -32,12 +33,13 @@ afterEach(async () => {
   client = null;
 });
 
-function failingTransport(detail: string): LinkTransport & { opens: number } {
+function failingTransport(detail: string): LinkTransport & { opens: number; detail: string } {
   const t = {
     opens: 0,
+    detail,
     async open() {
       t.opens++;
-      throw new TransportError("unreachable", detail);
+      throw new TransportError("unreachable", t.detail);
     },
   };
   return t;
@@ -67,6 +69,48 @@ describe("LinkClient backoff", () => {
     expect(delays.slice(0, 4)).toEqual([5, 10, 20, 20]);
     expect(states[0]).toEqual({ status: "connecting", attempt: 1 });
     expect(states[1]).toMatchObject({ status: "unreachable", detail: "Connection timed out" });
+  });
+
+  it("logs a host that stays down once, not on every retry, and again when what it sees changes", async () => {
+    logBuffer.clear();
+    const transport = failingTransport("Connection timed out");
+    client = new LinkClient({
+      hostId: "host-studio",
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+    });
+    client.start();
+    await waitFor(() => transport.opens >= 5);
+    // What production's info floor keeps; the retries in between are debug.
+    const lines = () =>
+      logBuffer
+        .getFiltered({ sources: ["main:LinkClient"] })
+        .filter((entry) => entry.level !== "debug")
+        .map((entry) => ({ message: entry.message, context: entry.context }));
+    expect(lines()).toEqual([
+      {
+        message: "Dialling remote host",
+        context: { hostId: "host-studio", attempt: 1, previousSessionId: null },
+      },
+      {
+        message: "Remote host unreachable",
+        context: {
+          hostId: "host-studio",
+          attempt: 1,
+          previousSessionId: null,
+          detail: "Connection timed out",
+          retryInMs: 1,
+        },
+      },
+    ]);
+
+    const seenBefore = transport.opens;
+    transport.detail = "Connection refused";
+    await waitFor(() => transport.opens >= seenBefore + 3);
+    expect(lines().filter((line) => line.message === "Remote host unreachable")).toHaveLength(2);
+    expect(lines().at(-1)?.context).toMatchObject({ detail: "Connection refused" });
   });
 
   it("says when the host answered but Daintree there isn't in Host mode", async () => {

@@ -5,6 +5,7 @@ import {
   type HostHandshakeInfo,
 } from "../../../shared/types/remoteHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { createLogger } from "../../utils/logger.js";
 import { Lane } from "../link/frames.js";
 import {
   ControlKind,
@@ -21,6 +22,8 @@ import {
   type LinkTransport,
   type LinkTransportConnection,
 } from "./transport.js";
+
+const logger = createLogger("main:LinkClient");
 
 /**
  * Keeps one host's link up: opens the transport, authenticates with HELLO,
@@ -86,6 +89,8 @@ export interface LinkSessionEstablished {
 }
 
 export interface LinkClientOptions {
+  /** The registry id of the host this link is to; it tags the link's log lines. */
+  hostId?: string;
   transport: LinkTransport;
   handshake: HostHandshakeInfo;
   client: LinkClientInfo;
@@ -120,6 +125,8 @@ export class LinkClient {
   /** The secret the last WELCOME carried, presented with `sessionId` to resume. */
   private resumeSecret: string | null = null;
   private lastSeenAt: number | null = null;
+  /** What the last logged failure said, so a host down for hours logs once, not every retry. */
+  private lastLoggedFailure: string | null = null;
   private generation = 0;
   private readonly releasing = new Set<Promise<void>>();
   private readonly stateListeners = new Set<(state: LinkClientState) => void>();
@@ -142,6 +149,11 @@ export class LinkClient {
 
   get lastSeen(): number | null {
     return this.lastSeenAt;
+  }
+
+  /** The session id the host last gave this link, kept while it is down so a resume can ask for it. */
+  get lastSessionId(): string | null {
+    return this.sessionId;
   }
 
   onStateChange(listener: (state: LinkClientState) => void): () => void {
@@ -188,6 +200,14 @@ export class LinkClient {
     const generation = ++this.generation;
     const stale = () => generation !== this.generation || !this.running;
     this.attempt++;
+    const dial = {
+      hostId: this.options.hostId ?? null,
+      attempt: this.attempt,
+      previousSessionId: this.sessionId,
+    };
+    // Only the first dial of a run: the retries after it log only when what they see changes.
+    if (this.attempt === 1) logger.info("Dialling remote host", dial);
+    else logger.debug("Dialling remote host", dial);
     this.setState({ status: "connecting", attempt: this.attempt });
     const abort = new AbortController();
     this.attemptAbort = abort;
@@ -305,6 +325,26 @@ export class LinkClient {
       this.fail(session.closedWith?.reason ?? "closed");
       return;
     }
+    const previousSessionId = this.sessionId;
+    const link = { hostId: this.options.hostId ?? null, sessionId: welcome.sessionId };
+    const accepted = {
+      ...link,
+      attempt: this.attempt,
+      hostName: welcome.hostName,
+      ...(buildMismatch ? { buildMismatch } : {}),
+    };
+    if (welcome.resumed) {
+      logger.info("Remote host link resumed", accepted);
+    } else if (previousSessionId !== null) {
+      // The host gave up the session this Shell asked for: everything open on it is gone.
+      logger.info("Remote host started a new session; the previous one was not resumed", {
+        ...accepted,
+        previousSessionId,
+      });
+    } else {
+      logger.info("Remote host link established", accepted);
+    }
+    this.lastLoggedFailure = null;
     this.current = session;
     this.sessionId = welcome.sessionId;
     this.resumeSecret = welcome.resumeSecret ?? null;
@@ -355,6 +395,13 @@ export class LinkClient {
     quietTimer?.unref?.();
     session.onClose((info) => {
       if (quietTimer) clearInterval(quietTimer);
+      // Before the guard: stop() lets go of the session before closing it.
+      logger.info("Remote host link closed", {
+        ...link,
+        reason: info.reason,
+        by: info.by,
+        upMs: this.now() - establishedAt,
+      });
       if (this.current !== session) return;
       this.current = null;
       // Before the state below: whoever hears it records when the host was last seen.
@@ -403,6 +450,15 @@ export class LinkClient {
     observed: { workingAgents: number | null } | null
   ): void {
     this.failures = 0;
+    this.logFailure(
+      "Remote host runs a different build; not connecting",
+      `mismatch:${mismatch.kind}:${mismatch.remote}`,
+      {
+        mismatchKind: mismatch.kind,
+        local: mismatch.local,
+        remote: mismatch.remote,
+      }
+    );
     this.setState({
       status: "version-mismatch",
       mismatch,
@@ -420,6 +476,11 @@ export class LinkClient {
     const { initialMs = 500, maxMs = 30_000, jitter = 0.3 } = this.options.backoff ?? {};
     const base = Math.min(maxMs, initialMs * 2 ** Math.min(this.failures - 1, 30));
     const delay = Math.max(0, Math.round(base * (1 - jitter * this.random())));
+    this.logFailure("Remote host unreachable", detail ?? "unknown", {
+      detail,
+      ...(options.hostModeOff ? { hostModeOff: true } : {}),
+      ...(options.parked ? { stoppedRetrying: true } : { retryInMs: delay }),
+    });
     this.clearRetry();
     this.setState({
       status: "unreachable",
@@ -434,6 +495,22 @@ export class LinkClient {
       if (this.running) void this.connect();
     }, delay);
     this.retryTimer.unref?.();
+  }
+
+  /** Info when what went wrong changed since the last one logged, debug while it repeats. */
+  private logFailure(message: string, signature: string, context: Record<string, unknown>): void {
+    const line = {
+      hostId: this.options.hostId ?? null,
+      attempt: this.attempt,
+      previousSessionId: this.sessionId,
+      ...context,
+    };
+    if (signature === this.lastLoggedFailure) {
+      logger.debug(message, line);
+      return;
+    }
+    this.lastLoggedFailure = signature;
+    logger.info(message, line);
   }
 
   private clearRetry(): void {

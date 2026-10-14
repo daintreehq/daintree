@@ -3,6 +3,7 @@ import type {
   Disposable,
   EndpointRequestOptions,
   HostFrame,
+  RemoteEndpointCloseCause,
 } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
 
@@ -51,10 +52,13 @@ export class RemoteViewEndpoint implements ClientEndpoint {
   readonly clientEndpointId: string;
   readonly clientId: string;
   readonly handle: number;
+  /** The link session it belongs to, the id the Shell logs for the same link. */
+  readonly linkSessionId: string;
   projectId: string | null;
   /** Bumped on every rebind; answers to requests made under an older binding are stale. */
   generation = 0;
   private closed = false;
+  private _closeCause: RemoteEndpointCloseCause | null = null;
   private readonly closeListeners = new Set<() => void>();
   private readonly pending = new Set<(error: Error) => void>();
 
@@ -63,6 +67,7 @@ export class RemoteViewEndpoint implements ClientEndpoint {
       endpointId: string;
       clientEndpointId: string;
       clientId: string;
+      linkSessionId: string;
       projectId: string | null;
       handle?: number;
     },
@@ -71,6 +76,7 @@ export class RemoteViewEndpoint implements ClientEndpoint {
     this.endpointId = params.endpointId;
     this.clientEndpointId = params.clientEndpointId;
     this.clientId = params.clientId;
+    this.linkSessionId = params.linkSessionId;
     this.projectId = params.projectId;
     this.handle = params.handle ?? allocateRemoteHandle();
   }
@@ -132,9 +138,15 @@ export class RemoteViewEndpoint implements ClientEndpoint {
     return this.closed;
   }
 
-  close(): void {
+  /** Why it closed, readable by its close listeners; null while open or when nobody said. */
+  get closeCause(): RemoteEndpointCloseCause | null {
+    return this._closeCause;
+  }
+
+  close(cause?: RemoteEndpointCloseCause): void {
     if (this.closed) return;
     this.closed = true;
+    this._closeCause = cause ?? null;
     for (const fail of [...this.pending]) {
       fail(disconnected(`Endpoint ${this.endpointId} closed before it answered`));
     }

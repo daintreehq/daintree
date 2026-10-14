@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EndpointRegistryImpl } from "../../../ipc/endpointRegistry.js";
-import type { EndpointInvocation } from "../../../ipc/endpoint.js";
+import type { EndpointInvocation, RemoteSessionExpiryCause } from "../../../ipc/endpoint.js";
+import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
 import { Lane } from "../../link/frames.js";
@@ -94,8 +95,8 @@ function fakeServer() {
       };
       for (const l of sessionListeners) l(ctx);
     },
-    expire(sessionId: string) {
-      for (const l of expiredListeners) l({ sessionId, clientId: "c1" });
+    expire(sessionId: string, cause: RemoteSessionExpiryCause = "grace-expired") {
+      for (const l of expiredListeners) l({ sessionId, clientId: "c1", cause });
     },
   };
 }
@@ -250,6 +251,60 @@ describe("SessionHost", () => {
 
     server.expire("s1");
     expect(registry.getRemote()).toHaveLength(0);
+  });
+
+  it("says why each endpoint closed, in its close listeners and in the log", () => {
+    logBuffer.clear();
+    const one = fakeLink();
+    server.attach("s1", one);
+    open(one, "view-1", "p1");
+    open(one, "view-2", "p1");
+    const two = fakeLink();
+    server.attach("s2", two);
+    open(two, "view-1", "p2");
+    const three = fakeLink();
+    server.attach("s3", three);
+    open(three, "view-1", "p3");
+    const closed: Array<[string, unknown]> = [];
+    for (const endpoint of registry.getRemote()) {
+      endpoint.onClose(() => closed.push([endpoint.endpointId, endpoint.closeCause]));
+    }
+
+    one.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+    // A dropped link closes nothing: the session waits for a resume.
+    one.drop();
+    expect(closed).toHaveLength(1);
+    server.expire("s1", "grace-expired");
+    // A fresh session under an id the host still holds replaces it.
+    server.attach("s2", fakeLink());
+    host.dispose();
+
+    expect(closed).toEqual([
+      ["remote:s1:view-1", "client-closed"],
+      ["remote:s1:view-2", "grace-expired"],
+      ["remote:s2:view-1", "session-replaced"],
+      ["remote:s3:view-1", "host-shutdown"],
+    ]);
+    const lines = logBuffer
+      .getFiltered({ sources: ["main:SessionHost"] })
+      .filter((entry) => entry.message === "Remote view endpoint closed")
+      .map((entry) => entry.context);
+    expect(lines).toEqual([
+      expect.objectContaining({
+        sessionId: "s1",
+        clientId: "c1",
+        clientEndpointId: "view-1",
+        projectId: "p1",
+        cause: "client-closed",
+      }),
+      expect.objectContaining({
+        sessionId: "s1",
+        clientEndpointId: "view-2",
+        cause: "grace-expired",
+      }),
+      expect.objectContaining({ sessionId: "s2", cause: "session-replaced" }),
+      expect.objectContaining({ sessionId: "s3", cause: "host-shutdown" }),
+    ]);
   });
 
   it("reports its endpoints' link dropping and resuming, before the session expires", () => {

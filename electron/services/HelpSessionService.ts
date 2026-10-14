@@ -1003,6 +1003,23 @@ export class HelpSessionService {
   }
 
   /**
+   * The unrevoked help sessions pinned to a view, with the terminal each is
+   * bound to, so whoever is about to revoke them can say which PTYs that kill
+   * reaches. Ids only: the bearer stays here.
+   */
+  helpSessionRefsForWebContentsId(
+    webContentsId: number
+  ): Array<{ helpSessionId: string; terminalId: string | null; slot: number }> {
+    return [...this.sessionsById.values()]
+      .filter((record) => record.projectViewWebContentsId === webContentsId && !record.revoked)
+      .map((record) => ({
+        helpSessionId: record.sessionId,
+        terminalId: this.terminalBySessionId.get(record.sessionId) ?? null,
+        slot: record.slot,
+      }));
+  }
+
+  /**
    * Renderer-safe sibling of `getActionContextForToken`, keyed on the public
    * `sessionId` (persisted in `helpPanelStore`) instead of the bearer token.
    * The HelpPanel footer uses this to surface the pinned worktree/terminal

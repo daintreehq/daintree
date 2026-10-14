@@ -13,7 +13,10 @@ import { LinkSession, type LinkCloseInfo, type LinkSessionOptions } from "../lin
 import { assertSocketPathFits, type HostSocketLocation } from "./hostSocketPath.js";
 import { removeDiscoveryFile, tokensEqual, writeDiscoveryFile } from "./discoveryFile.js";
 import { withHostSocketLock } from "./hostSocketLock.js";
-import { LOCAL_CLIENT_ID } from "../../ipc/endpoint.js";
+import { LOCAL_CLIENT_ID, type RemoteSessionExpiryCause } from "../../ipc/endpoint.js";
+import { createLogger } from "../../utils/logger.js";
+
+const logger = createLogger("main:HostServer");
 
 /**
  * Host mode's listener: a 0600 Unix socket in a 0700 directory, a per-launch
@@ -35,10 +38,20 @@ export interface HostSessionContext {
   session: LinkSession;
 }
 
-export interface HostSessionExpired {
+export interface HostSessionDetached {
   sessionId: string;
   clientId: string;
 }
+
+export interface HostSessionExpired extends HostSessionDetached {
+  cause: RemoteSessionExpiryCause;
+  /** The dropped link's close reason, when the drop itself ended the session. */
+  reason?: string;
+  by?: LinkCloseInfo["by"];
+}
+
+/** Why a Shell that asked to resume a session got a fresh one instead. */
+type ResumeRefusal = "session-unknown" | "secret-mismatch" | "client-mismatch";
 
 export interface HostServerOptions {
   location: HostSocketLocation;
@@ -62,13 +75,14 @@ export interface HostServerOptions {
 }
 
 /**
- * What a parked session keeps: only what a resume has to match. The dropped
- * LinkSession and its context are not retained, so a parked slot costs a few
- * strings and a timer however much the session carried.
+ * What a parked session keeps: only what a resume has to match, and when it
+ * was parked. The dropped LinkSession and its context are not retained, so a
+ * parked slot costs a few strings and a timer however much the session carried.
  */
 interface Resumable {
   sessionId: string;
   clientId: string;
+  parkedAt: number;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -103,6 +117,17 @@ export function describeMismatch(mismatch: HandshakeMismatch): string {
   }
 }
 
+/** Ids and names only: a HELLO also carries the token and the resume secret. */
+function logRefused(hello: HelloMessage, reason: string, extra: { detail?: string } = {}): void {
+  logger.info("Remote Shell refused at handshake", {
+    reason,
+    clientId: hello.client.clientId,
+    clientName: hello.client.clientName,
+    requestedSessionId: hello.resumeSessionId,
+    ...extra,
+  });
+}
+
 export class HostServer {
   readonly token: string;
   private server: net.Server | null = null;
@@ -126,10 +151,12 @@ export class HostServer {
   private readonly resumeSecrets = new Map<string, { current: string; previous: string | null }>();
   private readonly sessionListeners = new Set<(ctx: HostSessionContext) => void>();
   private readonly expiredListeners = new Set<(info: HostSessionExpired) => void>();
-  private readonly detachedListeners = new Set<(info: HostSessionExpired) => void>();
+  private readonly detachedListeners = new Set<(info: HostSessionDetached) => void>();
+  private readonly now: () => number;
 
   constructor(private readonly options: HostServerOptions) {
     this.token = options.token ?? crypto.randomBytes(32).toString("hex");
+    this.now = options.now ?? Date.now;
   }
 
   get socketPath(): string {
@@ -154,7 +181,7 @@ export class HostServer {
    * A session's link dropped: it is no longer among {@link sessions}, though
    * it may still resume within its grace window.
    */
-  onSessionDetached(listener: (info: HostSessionExpired) => void): () => void {
+  onSessionDetached(listener: (info: HostSessionDetached) => void): () => void {
     this.detachedListeners.add(listener);
     return () => this.detachedListeners.delete(listener);
   }
@@ -276,6 +303,12 @@ export class HostServer {
   }
 
   private closeSessions(): void {
+    if (this.live.size > 0 || this.resumable.size > 0) {
+      logger.info("Host server closing; dropping its remote sessions", {
+        attachedSessionIds: [...this.live.keys()],
+        parkedSessionIds: [...this.resumable.keys()],
+      });
+    }
     for (const ctx of [...this.live.values()]) ctx.session.close("shutting-down");
     this.live.clear();
     for (const entry of this.resumable.values()) clearTimeout(entry.timer);
@@ -357,16 +390,21 @@ export class HostServer {
   private onHello(session: LinkSession, hello: HelloMessage): void {
     const local = this.options.handshake;
     if (this.closing) {
+      logRefused(hello, "shutting-down");
       session.reject({ reason: "shutting-down", handshake: null, detail: null });
       return;
     }
     if (!tokensEqual(hello.token, this.token)) {
+      logRefused(hello, "unauthorized");
       session.reject({ reason: "unauthorized", handshake: null, detail: null });
       return;
     }
     // A different version or commit is let in: the client warns and runs best effort.
     const mismatch = compareHandshake(local, hello.handshake);
     if (mismatch && isBlockingMismatch(mismatch)) {
+      logRefused(hello, mismatch.kind === "protocol" ? "protocol" : "version-mismatch", {
+        detail: describeMismatch(mismatch),
+      });
       void this.rejectBuild(session, mismatch);
       return;
     }
@@ -374,6 +412,7 @@ export class HostServer {
     const clientId = hello.client.clientId;
     // "local" names this host's own windows to the lease; no Shell may claim it.
     if (clientId === LOCAL_CLIENT_ID) {
+      logRefused(hello, "protocol", { detail: "reserved client id" });
       session.reject({ reason: "protocol", handshake: null, detail: null });
       return;
     }
@@ -391,6 +430,7 @@ export class HostServer {
       presented !== null &&
       (tokensEqual(presented, secrets.current) ||
         (secrets.previous !== null && tokensEqual(presented, secrets.previous)));
+    let resumedFrom: { parkedAt: number } | "live-link" | null = null;
     if (resumeId !== null && mayResume) {
       const parked = this.resumable.get(resumeId);
       const attached = this.live.get(resumeId);
@@ -398,15 +438,26 @@ export class HostServer {
         clearTimeout(parked.timer);
         this.resumable.delete(resumeId);
         sessionId = resumeId;
+        resumedFrom = { parkedAt: parked.parkedAt };
       } else if (attached && attached.client.clientId === clientId) {
         // The old stream hasn't noticed it is dead yet; the new one replaces it.
         this.live.delete(resumeId);
         attached.session.close("superseded by a resumed session");
         sessionId = resumeId;
+        resumedFrom = "live-link";
       }
     }
     const resumed = sessionId !== null;
+    const refusal: ResumeRefusal | null =
+      resumeId === null || resumed
+        ? null
+        : secrets === undefined
+          ? "session-unknown"
+          : mayResume
+            ? "client-mismatch"
+            : "secret-mismatch";
     if (!resumed && !this.makeRoomForSession()) {
+      logRefused(hello, "busy");
       session.reject({ reason: "busy", handshake: null, detail: null });
       return;
     }
@@ -433,6 +484,25 @@ export class HostServer {
       },
     });
     this.live.set(id, ctx);
+    const who = { sessionId: id, clientId, clientName: hello.client.clientName };
+    if (resumedFrom === "live-link") {
+      logger.info("Remote session resumed over a new link", { ...who, replacedLiveLink: true });
+    } else if (resumedFrom) {
+      logger.info("Remote session resumed", {
+        ...who,
+        parkedMs: Math.max(0, this.now() - resumedFrom.parkedAt),
+      });
+    } else if (refusal) {
+      // The Shell asked for its old session and gets a new one: whatever it
+      // had open there is gone.
+      logger.info("Remote session started; the previous one could not be resumed", {
+        ...who,
+        previousSessionId: resumeId,
+        resumeRefused: refusal,
+      });
+    } else {
+      logger.info("Remote session started", who);
+    }
     session.onClose((info) => this.park(ctx, info));
     for (const listener of this.sessionListeners) {
       try {
@@ -455,7 +525,11 @@ export class HostServer {
       if (oldest.done) return false;
       clearTimeout(oldest.value.timer);
       this.resumable.delete(oldest.value.sessionId);
-      this.expire(oldest.value.sessionId, oldest.value.clientId);
+      this.expire({
+        sessionId: oldest.value.sessionId,
+        clientId: oldest.value.clientId,
+        cause: "session-cap",
+      });
     }
     return true;
   }
@@ -480,25 +554,37 @@ export class HostServer {
         // Ignore subscriber failures.
       }
     }
-    const deliberate = close.by === "remote" || close.reason.startsWith("protocol error");
+    // A protocol error is ours to report even when it reads as the peer leaving.
+    const deliberate: RemoteSessionExpiryCause | null = close.reason.startsWith("protocol error")
+      ? "protocol-error"
+      : close.by === "remote"
+        ? "goodbye"
+        : null;
     if (deliberate) {
-      this.expire(sessionId, clientId);
+      this.expire({ sessionId, clientId, cause: deliberate, reason: close.reason, by: close.by });
       return;
     }
     const grace = this.options.resumeGraceMs ?? DEFAULT_RESUME_GRACE_MS;
+    logger.info("Remote session detached; held for resume", {
+      sessionId,
+      clientId,
+      reason: close.reason,
+      by: close.by,
+      graceMs: grace,
+    });
     // The timer closes over ids only, never ctx, so the dropped session can be collected.
     const timer = setTimeout(() => {
       if (this.resumable.get(sessionId)?.timer !== timer) return;
       this.resumable.delete(sessionId);
-      this.expire(sessionId, clientId);
+      this.expire({ sessionId, clientId, cause: "grace-expired" });
     }, grace);
     timer.unref?.();
-    this.resumable.set(sessionId, { sessionId, clientId, timer });
+    this.resumable.set(sessionId, { sessionId, clientId, parkedAt: this.now(), timer });
   }
 
-  private expire(sessionId: string, clientId: string): void {
-    this.resumeSecrets.delete(sessionId);
-    const info = { sessionId, clientId };
+  private expire(info: HostSessionExpired): void {
+    this.resumeSecrets.delete(info.sessionId);
+    logger.info("Remote session expired", { ...info });
     for (const listener of this.expiredListeners) {
       try {
         listener(info);
