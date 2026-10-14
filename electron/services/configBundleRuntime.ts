@@ -16,6 +16,19 @@ import type { ConfigBundleService } from "./ConfigBundleService.js";
 
 let servicePromise: Promise<ConfigBundleService> | undefined;
 let writeChain: Promise<void> = Promise.resolve();
+let configReloader: (() => Promise<unknown>) | null = null;
+
+/**
+ * The app's own "reload config" (the `app:reload-config` handler), so a write
+ * with no window asking reloads the registry instance that handler keeps
+ * rather than a fresh one it would never see.
+ */
+export function registerConfigReloader(reload: () => Promise<unknown>): () => void {
+  configReloader = reload;
+  return () => {
+    if (configReloader === reload) configReloader = null;
+  };
+}
 
 function anyWindow(): BrowserWindow | undefined {
   const focused = BrowserWindow.getFocusedWindow();
@@ -90,12 +103,16 @@ export function runConfigWrite<T>(write: () => Promise<T>): Promise<T> {
  * on a host with no window open, this is the only reload there is.
  */
 export async function reconcileAfterConfigWrite(): Promise<void> {
-  const { UserAgentRegistryService } = await import("./UserAgentRegistryService.js");
-  new UserAgentRegistryService().reload();
-  await rebuildMenu();
-  const { events } = await import("./events.js");
-  events.emit("sys:config:reload");
-  broadcastToRenderer(CHANNELS.APP_CONFIG_RELOADED);
+  if (configReloader) {
+    await configReloader();
+  } else {
+    const { UserAgentRegistryService } = await import("./UserAgentRegistryService.js");
+    new UserAgentRegistryService().reload();
+    await rebuildMenu();
+    const { events } = await import("./events.js");
+    events.emit("sys:config:reload");
+    broadcastToRenderer(CHANNELS.APP_CONFIG_RELOADED);
+  }
   broadcastToRenderer(CHANNELS.CONFIG_BUNDLE_IMPORTED);
 }
 
@@ -103,4 +120,5 @@ export async function reconcileAfterConfigWrite(): Promise<void> {
 export function resetConfigBundleRuntimeForTests(): void {
   servicePromise = undefined;
   writeChain = Promise.resolve();
+  configReloader = null;
 }

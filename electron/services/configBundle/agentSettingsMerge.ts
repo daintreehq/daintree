@@ -213,6 +213,25 @@ export function invalidBypassAgent(payload: unknown): string | null {
 }
 
 /**
+ * The bypass intent in a payload as the canonical mode plus its mirrored
+ * legacy boolean, the way Settings writes it: `dangerousMode` wins, and a
+ * legacy `dangerousEnabled` alone reads as `on`/`inherit`
+ * (`resolveDangerousMode`). Laid over the target's fields this way, a copied
+ * intent can't sit beside a target mode that silently outranks it.
+ */
+function bypassIntent(payload: Entry): Entry {
+  const mode =
+    typeof payload.dangerousMode === "string"
+      ? payload.dangerousMode
+      : typeof payload.dangerousEnabled === "boolean"
+        ? payload.dangerousEnabled
+          ? "on"
+          : "inherit"
+        : undefined;
+  return mode === undefined ? {} : { dangerousMode: mode, dangerousEnabled: mode === "on" };
+}
+
+/**
  * Lay one agent's bypass payload over its settings: the agent's own fields,
  * and each preset's override on the target's preset of that id. A preset the
  * target doesn't have is returned in `missingPresets` and left out.
@@ -222,7 +241,8 @@ export function mergeBypassAgent(
   payload: BypassAgentPayload
 ): { entry: Entry; missingPresets: string[] } {
   const entry: Entry = isRecord(current) ? { ...current } : {};
-  Object.assign(entry, pick(payload as Entry, AGENT_BYPASS_FIELDS));
+  Object.assign(entry, bypassIntent(payload as Entry));
+  if (typeof payload.dangerousArgs === "string") entry.dangerousArgs = payload.dangerousArgs;
   const missingPresets: string[] = [];
   if (payload.presets && isRecord(payload.presets)) {
     const presets = presetList(entry.customPresets).map((preset) => ({ ...preset }));
@@ -232,7 +252,7 @@ export function mergeBypassAgent(
         missingPresets.push(id);
         continue;
       }
-      presets[index] = { ...presets[index], ...pick(fields, PRESET_BYPASS_FIELDS) };
+      presets[index] = { ...presets[index], ...bypassIntent(fields) };
     }
     if (presets.length > 0 || entry.customPresets !== undefined) entry.customPresets = presets;
   }

@@ -204,9 +204,11 @@ export class ClientSettingsCopy {
         { timeoutMs: APPLY_TIMEOUT_MS }
       );
     } catch (error) {
-      if (errorCode(error) === "HOST_DISCONNECTED") {
-        // The write may have landed before the link went: say so rather than
-        // call it a failure, and let a fresh preview show where it stands.
+      const code = errorCode(error);
+      if (code === "HOST_DISCONNECTED" || code === "OUTCOME_UNKNOWN") {
+        // The link went, or the answer took too long: the write may have
+        // landed or may still be landing. Say so rather than call it a
+        // failure, and let a fresh preview show where it stands.
         throw new AppError({
           code: "OUTCOME_UNKNOWN",
           message: "The link dropped during a settings copy",

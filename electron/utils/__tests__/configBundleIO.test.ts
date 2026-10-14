@@ -304,3 +304,42 @@ describe("sections that never travel in a file (#13346)", () => {
     expect(result.unknownSections).toEqual(["permissionBypass"]);
   });
 });
+
+describe("credentials that no value pattern names (#13346)", () => {
+  it("withholds a connection string with a password in it, whatever its scheme", () => {
+    const { sections, omittedSecretPaths } = omitSectionSecrets({
+      agentSettings: {
+        claude: { globalEnv: { DATABASE_URL: "postgresql://alice:hunter2@db/app" } },
+      },
+    });
+    expect(sections.agentSettings).toEqual({ claude: { globalEnv: {} } });
+    expect(omittedSecretPaths).toEqual(["agentSettings.claude.globalEnv.DATABASE_URL"]);
+  });
+
+  it("withholds an argument list where a credential flag takes the next argument", () => {
+    const { sections, omittedSecretPaths } = omitSectionSecrets({
+      userAgentRegistry: { mine: { id: "mine", args: ["--verbose", "--token", "plainword"] } },
+    });
+    expect(sections.userAgentRegistry).toEqual({ mine: { id: "mine" } });
+    expect(omittedSecretPaths).toEqual(["userAgentRegistry.mine.args[2]"]);
+  });
+
+  it("withholds flag text that carries a credential inline", () => {
+    const { sections } = omitSectionSecrets({
+      agentSettings: { claude: { customFlags: "--model opus --api-key=plainword" } },
+    });
+    expect(sections.agentSettings).toEqual({ claude: {} });
+  });
+
+  it("keeps ordinary flags and URLs without credentials", () => {
+    const payload = {
+      agentSettings: {
+        claude: {
+          customFlags: "--model opus --verbose",
+          globalEnv: { API_BASE: "https://example.com/v1" },
+        },
+      },
+    };
+    expect(omitSectionSecrets(payload).sections).toEqual(payload);
+  });
+});

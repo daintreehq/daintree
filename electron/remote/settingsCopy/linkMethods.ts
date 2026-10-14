@@ -24,7 +24,12 @@ const sectionId = z
   .max(64)
   .regex(/^[A-Za-z][A-Za-z0-9]*$/);
 const ticket = z.string().regex(/^[0-9a-f]{32}$/);
-const text = z.string().max(4096);
+/**
+ * Names come from settings the host itself accepts (a custom agent's name has
+ * no length limit), so the bound only keeps a broken host from flooding the
+ * preview; the whole payload is already capped.
+ */
+const text = z.string().max(65_536);
 
 export const SettingsCopyPreviewSchema = z.object({
   sections: z

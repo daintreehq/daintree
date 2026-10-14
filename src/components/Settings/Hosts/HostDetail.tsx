@@ -14,6 +14,7 @@ import { AddHostDialog } from "./AddHostDialog";
 import { ChangeHostTargetDialog } from "./ChangeHostTargetDialog";
 import { HostPluginsSection } from "./HostPluginsSection";
 import { HostCopySettingsSection } from "./HostCopySettingsSection";
+import { takeFirstConnect } from "./hostCopySettingsRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
 import { buildLabel, connectionLabel, describeBuildDifference, platformLabel } from "./hostLabels";
@@ -184,11 +185,18 @@ export function HostDetail({
     if (focusPlugins) document.getElementById("host-plugins")?.scrollIntoView({ block: "start" });
   }, [focusPlugins]);
 
+  // A host added here that first connects after the add flow closed still
+  // gets the one offer, the first time it is seen connected.
+  const [offered, setOffered] = useState(offerCopySettings);
   useEffect(() => {
-    if (offerCopySettings) {
+    if (connected && takeFirstConnect(descriptor.id)) setOffered(true);
+  }, [connected, descriptor.id]);
+
+  useEffect(() => {
+    if (offered) {
       document.getElementById("host-copy-settings")?.scrollIntoView({ block: "start" });
     }
-  }, [offerCopySettings]);
+  }, [offered]);
 
   const connect = () => {
     setConnecting(true);
@@ -434,7 +442,7 @@ export function HostDetail({
         hostId={descriptor.id}
         hostName={hostName}
         connected={connected}
-        offered={offerCopySettings}
+        offered={offered}
       />
       <HostPluginsSection hostId={descriptor.id} hostName={hostName} connected={connected} />
       <HostPluginViewConsents hostId={descriptor.id} hostName={hostName} />

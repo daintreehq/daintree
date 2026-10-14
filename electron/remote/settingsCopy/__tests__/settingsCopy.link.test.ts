@@ -230,3 +230,28 @@ describe("settings copy over a link", () => {
     ).rejects.toMatchObject({ code: "HOST_DISCONNECTED" });
   });
 });
+
+describe("an apply whose answer never arrives", () => {
+  it("is an unknown outcome, not a failure, and still releases the host", async () => {
+    const release = vi.fn();
+    const timedOut = new ClientSettingsCopy({
+      sessionFor: () => ({
+        isOpen: true,
+        call: async () => {
+          throw Object.assign(new Error("Request timed out"), { code: "OUTCOME_UNKNOWN" });
+        },
+      }),
+      holdHost: () => release,
+      isKnownHost: () => true,
+      hostLabel: () => HOST,
+      collect: async () => ({}),
+    });
+    await expect(
+      timedOut.apply({ hostId: HOST, ticket: "0123456789abcdef0123456789abcdef" })
+    ).rejects.toMatchObject({
+      code: "OUTCOME_UNKNOWN",
+      userMessage: expect.stringContaining("Preview again"),
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+});

@@ -202,6 +202,24 @@ describe("Settings → Hosts → host → Copy settings", () => {
     expect(screen.getByRole("button", { name: "Preview changes on Studio" })).not.toBeNull();
   });
 
+  it("says so when undoing a failed copy failed too, rather than claim nothing changed", async () => {
+    settingsCopy.apply.mockResolvedValueOnce({
+      outcome: "rolled-back",
+      rolledBack: false,
+      restoreFailed: true,
+      sections: [],
+      errors: [
+        "Couldn't import notifications: disk full. Undoing the earlier sections also failed.",
+      ],
+    });
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview changes on Studio" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Copy to Studio" }));
+    await screen.findByText("Partly changed");
+    expect(screen.queryByText("Nothing changed")).toBeNull();
+    expect(screen.getByText(/may be partly changed/)).not.toBeNull();
+  });
+
   it("offers the copy for a host that was just added", () => {
     render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected offered />);
     expect(screen.getByText(/Studio starts from defaults/)).not.toBeNull();

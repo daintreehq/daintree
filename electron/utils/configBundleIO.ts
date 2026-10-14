@@ -31,6 +31,28 @@ function childPath(parent: string, key: string): string {
   return parent ? `${parent}.${key}` : key;
 }
 
+/** `scheme://user:password@host`: credentials inside a connection string, whatever the scheme. */
+const URI_USERINFO = /[a-z][a-z0-9+.-]*:\/\/[^\s/?#@:]+:[^\s/?#@]+@/i;
+
+const CREDENTIAL_WORD = "(?:token|secret|password|passwd|passphrase|api-?key|credentials?)";
+
+/** A flag named for a credential on its own (`--token`): the next argument is the secret. */
+const CREDENTIAL_FLAG = new RegExp(`^--?[a-z0-9-]*${CREDENTIAL_WORD}[a-z0-9-]*$`, "i");
+
+/** A credential flag with its value in the same string (`--api-key=…`, `--token abc`). */
+const CREDENTIAL_FLAG_WITH_VALUE = new RegExp(
+  `(?:^|\\s)--?[a-z0-9-]*${CREDENTIAL_WORD}[a-z0-9-]*(?:=|\\s+)\\S`,
+  "i"
+);
+
+function looksSecret(value: string): boolean {
+  return (
+    Boolean(findSecretInValue(value)) ||
+    URI_USERINFO.test(value) ||
+    CREDENTIAL_FLAG_WITH_VALUE.test(value)
+  );
+}
+
 /** Keys whose value is an environment map: agent and preset `env`, an agent's `globalEnv`. */
 const ENV_MAP_KEYS: ReadonlySet<string> = new Set(["env", "globalEnv"]);
 
@@ -41,7 +63,7 @@ function walk(value: unknown, path: string, omitted: string[], envMap = false): 
   if (typeof value === "string") {
     // Value-level detection everywhere, since a secret can sit in a flag or an
     // argument as well as an env map; names are checked only inside env maps.
-    if (findSecretInValue(value)) {
+    if (looksSecret(value)) {
       omitted.push(path);
       return OMIT;
     }
@@ -49,6 +71,14 @@ function walk(value: unknown, path: string, omitted: string[], envMap = false): 
   }
 
   if (Array.isArray(value)) {
+    // ["--token", "<secret>"]: the secret is the argument after a credential flag.
+    const flagIndex = value.findIndex(
+      (item, i) => typeof item === "string" && CREDENTIAL_FLAG.test(item) && i < value.length - 1
+    );
+    if (flagIndex !== -1) {
+      omitted.push(`${path}[${flagIndex + 1}]`);
+      return OMIT;
+    }
     const next: unknown[] = [];
     for (let i = 0; i < value.length; i++) {
       const result = walk(value[i], `${path}[${i}]`, omitted);

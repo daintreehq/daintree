@@ -25,6 +25,7 @@ import {
 } from "./sectionKit.js";
 import {
   invalidBypassAgent,
+  mergeAgentEntry,
   mergeBypassAgent,
   projectBypass,
   projectBypassAgent,
@@ -198,8 +199,18 @@ export function assistantModelsSection(
     check: async (incoming, _current, ctx) => {
       const check = emptyCheck();
       if (!isRecord(incoming)) return check;
+      // A custom agent this same copy defines isn't in the registry yet, so
+      // whether it can run the assistant is only known once it lands: the
+      // apply decides, and can only skip what the preview listed, never add.
+      const arriving = isRecord(ctx.incoming.userAgentRegistry)
+        ? ctx.incoming.userAgentRegistry
+        : {};
       for (const [agentId, value] of Object.entries(incoming)) {
-        const reason = refusal(agentId, value, ctx);
+        const reason = Object.prototype.hasOwnProperty.call(arriving, agentId)
+          ? typeof sanitizeModelId(value) === "string"
+            ? null
+            : "Not a valid model id"
+          : refusal(agentId, value, ctx);
         if (reason) check.skipped.set(agentId, reason);
       }
       return check;
@@ -397,10 +408,17 @@ export function permissionBypassSection(): SectionHandler {
         snapshot.assistant
       );
     },
-    diff: (incoming, current) => {
+    diff: (incoming, current, ctx) => {
       const result: SectionDiff = { add: [], update: [], unchanged: [] };
       const payload = asPayload(incoming);
       const snapshot = asSnapshot(current);
+      // Agent settings land first, so a preset they add can take an override here.
+      const arriving = ctx?.incoming.agentSettings;
+      const incomingAgents = isRecord(arriving) ? arriving : {};
+      const baseFor = (agentId: string) =>
+        isRecord(incomingAgents[agentId])
+          ? mergeAgentEntry(snapshot.agents[agentId], incomingAgents[agentId])
+          : snapshot.agents[agentId];
       const scalar = (key: string, next: unknown, now: unknown) => {
         if (next === undefined) return;
         if (now === undefined) result.add.push(key);
@@ -413,14 +431,14 @@ export function permissionBypassSection(): SectionHandler {
         isRecord(payload.agents) ? payload.agents : {}
       )) {
         const key = agentKey(agentId);
-        const existing = snapshot.agents[agentId];
+        const base = baseFor(agentId);
         if (!isRecord(agentPayload)) {
           result.update.push(key);
           continue;
         }
-        const { entry } = mergeBypassAgent(existing, agentPayload as BypassAgentPayload);
-        if (projectBypassAgent(existing) === undefined) result.add.push(key);
-        else if (sameValue(entry, existing)) result.unchanged.push(key);
+        const { entry } = mergeBypassAgent(base, agentPayload as BypassAgentPayload);
+        if (sameValue(entry, base ?? {})) result.unchanged.push(key);
+        else if (projectBypassAgent(snapshot.agents[agentId]) === undefined) result.add.push(key);
         else result.update.push(key);
       }
       return result;

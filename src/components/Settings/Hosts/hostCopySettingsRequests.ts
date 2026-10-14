@@ -4,6 +4,21 @@ type Listener = (hostId: HostId) => void;
 
 const listeners = new Set<Listener>();
 let pending: HostId | null = null;
+/** Hosts added here whose first connection hasn't happened yet. */
+const awaitingFirstConnect = new Set<HostId>();
+
+/**
+ * A host was just added: offer the copy on its first connection, whether that
+ * happens in the add flow or later from Settings.
+ */
+export function awaitFirstConnect(hostId: HostId): void {
+  awaitingFirstConnect.add(hostId);
+}
+
+/** True once, for a host added here that has now connected. */
+export function takeFirstConnect(hostId: HostId): boolean {
+  return awaitingFirstConnect.delete(hostId);
+}
 
 /**
  * Offer to copy this machine's settings to a host, once: the add-host flow

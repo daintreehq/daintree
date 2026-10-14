@@ -67,6 +67,7 @@ import {
 import {
   customPresetIds,
   mergeAgentEntry,
+  mergeEnv,
   projectAgentEntry,
   projectAgents,
 } from "./configBundle/agentSettingsMerge.js";
@@ -436,7 +437,7 @@ export class ConfigBundleService {
       const handler = this.handlerFor(id);
       if (!handler) continue;
       const current = await handler.read();
-      const diff = handler.diff(payload, current);
+      const diff = handler.diff(payload, current, ctx);
       const check: SectionCheck = handler.check
         ? await handler.check(payload, current, ctx)
         : emptyCheck();
@@ -597,15 +598,35 @@ export class ConfigBundleService {
   // --- Sections ---
 
   private userAgentRegistrySection(): SectionHandler {
+    /**
+     * An update lays the incoming fields over the target's definition rather
+     * than replacing it: a field withheld at the source (an `args` list that
+     * held a secret) is absent, and must leave the target's own alone.
+     */
+    const merged = (incoming: unknown, existing: unknown): unknown =>
+      isRecord(incoming) && isRecord(existing) ? { ...existing, ...incoming } : incoming;
+
     return {
       id: "userAgentRegistry",
       read: async () => loadSanitizedUserAgentRegistry(),
-      diff: diffRecord,
+      diff: (incoming, current) => {
+        const result: SectionDiff = { add: [], update: [], unchanged: [] };
+        if (!isRecord(incoming)) return result;
+        const currentRecord = isRecord(current) ? current : {};
+        for (const [id, config] of Object.entries(incoming)) {
+          const existing = currentRecord[id];
+          if (existing === undefined) result.add.push(id);
+          else if (sameValue(merged(config, existing), existing)) result.unchanged.push(id);
+          else result.update.push(id);
+        }
+        return result;
+      },
       check: async (incoming, current, ctx) => {
         const check = emptyCheck();
         if (!isRecord(incoming)) return check;
         const currentRecord = isRecord(current) ? current : {};
-        for (const [id, config] of Object.entries(incoming)) {
+        for (const [id, incomingConfig] of Object.entries(incoming)) {
+          const config = merged(incomingConfig, currentRecord[id]);
           if (sameValue(config, currentRecord[id])) continue;
           const parsed = UserAgentConfigSchema.safeParse(config);
           if (!parsed.success) {
@@ -638,7 +659,8 @@ export class ConfigBundleService {
         const currentRecord = isRecord(current) ? current : {};
         const service = new UserAgentRegistryService();
 
-        for (const [id, config] of Object.entries(incoming)) {
+        for (const [id, incomingConfig] of Object.entries(incoming)) {
+          const config = merged(incomingConfig, currentRecord[id]);
           if (sameValue(config, currentRecord[id])) {
             results.push(unchangedLeaf(id));
             continue;
@@ -1301,6 +1323,29 @@ export class ConfigBundleService {
       return new Map(list.map((r) => [String(r.id), r]));
     };
 
+    /**
+     * An existing recipe as the update leaves it. Terminals have no ids, so
+     * their env maps merge per name with the target's terminal at the same
+     * position: an env entry withheld as a secret at the source is absent,
+     * and the target's own value for that name is kept rather than erased.
+     */
+    const merged = (
+      recipe: Record<string, unknown>,
+      existing: Record<string, unknown> | undefined
+    ): Record<string, unknown> => {
+      if (!existing) return recipe;
+      const next: Record<string, unknown> = { ...existing, ...recipe };
+      if (Array.isArray(recipe.terminals) && Array.isArray(existing.terminals)) {
+        const before = existing.terminals as unknown[];
+        next.terminals = recipe.terminals.map((terminal, index) => {
+          const prior = before[index];
+          if (!isRecord(terminal) || !isRecord(prior) || !isRecord(prior.env)) return terminal;
+          return { ...terminal, env: mergeEnv(prior.env, terminal.env) };
+        });
+      }
+      return next;
+    };
+
     return {
       id: "globalRecipes",
       read: async () => projectStore.getGlobalRecipes(),
@@ -1309,7 +1354,7 @@ export class ConfigBundleService {
         const currentById = byId(current);
         for (const [id, recipe] of byId(incoming)) {
           const existing = currentById.get(id);
-          if (existing && sameValue(recipe, existing)) continue;
+          if (existing && sameValue(merged(recipe, existing), existing)) continue;
           const reason = recipeRefusal(recipe);
           if (reason) check.skipped.set(id, reason);
         }
@@ -1321,7 +1366,7 @@ export class ConfigBundleService {
         for (const [id, recipe] of byId(incoming)) {
           const existing = currentById.get(id);
           if (!existing) result.add.push(id);
-          else if (sameValue(recipe, existing)) result.unchanged.push(id);
+          else if (sameValue(merged(recipe, existing), existing)) result.unchanged.push(id);
           else result.update.push(id);
         }
         return result;
@@ -1329,11 +1374,12 @@ export class ConfigBundleService {
       apply: async (incoming, current) => {
         const results: ConfigImportLeafResult[] = [];
         const currentById = byId(current);
-        const pending: string[] = [];
+        const pending = new Map<string, Record<string, unknown>>();
 
         for (const [id, recipe] of byId(incoming)) {
           const existing = currentById.get(id);
-          if (existing && sameValue(recipe, existing)) {
+          const next = merged(recipe, existing);
+          if (existing && sameValue(next, existing)) {
             results.push(unchangedLeaf(id));
             continue;
           }
@@ -1347,6 +1393,7 @@ export class ConfigBundleService {
             // id/projectId/createdAt are owned by the target store — merging by
             // id is what makes a repeat import a no-op instead of a duplicate.
             const { id: _id, projectId: _projectId, createdAt: _createdAt, ...updates } = recipe;
+            if (next.terminals !== undefined) updates.terminals = next.terminals;
             await projectStore.updateGlobalRecipe(id, updates as Partial<TerminalRecipe>);
           } else {
             await projectStore.addGlobalRecipe({
@@ -1355,27 +1402,28 @@ export class ConfigBundleService {
               createdAt: typeof recipe.createdAt === "number" ? recipe.createdAt : Date.now(),
             });
           }
-          pending.push(id);
+          pending.set(id, next);
         }
 
-        if (pending.length === 0) return results;
+        if (pending.size === 0) return results;
 
         const incomingById = byId(incoming);
         const readBackById = byId(await projectStore.getGlobalRecipes());
-        for (const id of pending) {
+        for (const [id, next] of pending) {
           const stored = readBackById.get(id);
           if (!stored) {
             results.push(skippedLeaf(id, "Recipe did not persist"));
             continue;
           }
-          // Compare the fields the bundle actually asked for. Checking only that
-          // the id exists would report a recipe as applied even when the store
-          // stripped half of it on the way in. `createdAt`/`projectId` are the
-          // target store's to own, so they are excluded from the comparison.
+          // Compare the fields the bundle actually asked for, as the merge
+          // wrote them. Checking only that the id exists would report a recipe
+          // as applied even when the store stripped half of it on the way in.
+          // `createdAt`/`projectId` are the target store's to own, so they are
+          // excluded from the comparison.
           const requested = incomingById.get(id) ?? {};
           const mismatched = Object.keys(requested).filter(
             (key) =>
-              key !== "createdAt" && key !== "projectId" && !sameValue(requested[key], stored[key])
+              key !== "createdAt" && key !== "projectId" && !sameValue(next[key], stored[key])
           );
           results.push(
             mismatched.length === 0

@@ -37,8 +37,12 @@ export interface SectionHandler {
   read: () => Promise<unknown>;
   /** The part of `read()` that may leave this machine. Identity when absent. */
   export?: (current: unknown) => unknown;
-  /** Compare an incoming payload against the current value, per leaf. */
-  diff: (incoming: unknown, current: unknown) => SectionDiff;
+  /**
+   * Compare an incoming payload against the current value, per leaf. `ctx`
+   * is there during a preview, for a section whose result depends on another
+   * section of the same bundle landing first.
+   */
+  diff: (incoming: unknown, current: unknown, ctx?: SectionContext) => SectionDiff;
   /** Validation the preview reports before the apply would discover it. */
   check?: (incoming: unknown, current: unknown, ctx: SectionContext) => Promise<SectionCheck>;
   /** Name one changed leaf. Sections without it fall back to the service's table. */

@@ -263,21 +263,41 @@ describe("permission bypass", () => {
       (storeState.current.agentSettings as Record<string, unknown>).globalSkipPermissions
     ).toBe(true);
     expect(agents().claude.dangerousMode).toBe("on");
+    expect(agents().claude.dangerousEnabled).toBe(true);
     expect(agents().claude.customPresets).toEqual([
       { id: "fast", name: "Fast", env: { MODEL_TOKEN: "host-token" }, dangerousMode: "on" },
-      { id: "host-only", name: "Host only", dangerousMode: "off" },
+      { id: "host-only", name: "Host only", dangerousMode: "off", dangerousEnabled: false },
     ]);
     // Agent preferences are untouched by a bypass-only copy.
     expect(agents().claude.customFlags).toBe("--host");
   });
 
-  it("counts a preset arriving in the same copy's agent settings as defined", async () => {
+  it("counts a preset arriving in the same copy's agent settings, and previews its override", async () => {
+    agents().claude.dangerousEnabled = false;
     const [, bypass] = await makeService().preview({
       agentSettings: { claude: { customPresets: [{ id: "arriving", name: "Arriving" }] } },
-      permissionBypass: { agents: { claude: { presets: { arriving: { dangerousMode: "on" } } } } },
+      permissionBypass: {
+        agents: {
+          claude: {
+            dangerousMode: "off",
+            dangerousEnabled: false,
+            presets: { arriving: { dangerousMode: "on" } },
+          },
+        },
+      },
     });
     expect(bypass.section).toBe("permissionBypass");
     expect(bypass.skipped).toBeUndefined();
+    // The agent's own mode is unchanged; the arriving preset's override is the change.
+    expect(bypass.update).toBe(1);
+  });
+
+  it("reads a legacy enabled flag as the mode it means, so it can't sit under a host veto", async () => {
+    await makeService().apply({
+      permissionBypass: { agents: { claude: { dangerousEnabled: true } } },
+    });
+    expect(agents().claude.dangerousMode).toBe("on");
+    expect(agents().claude.dangerousEnabled).toBe(true);
   });
 });
 
@@ -369,6 +389,77 @@ describe("revision", () => {
 
     storeState.current.globalEnvironmentVariables = { CHANGED: "1" };
     expect(await service.revision(["agentSettings"])).toBe(afterRelevant);
+  });
+});
+
+describe("withheld values leave the host's own in place", () => {
+  it("keeps a custom agent's args when the copy withheld them", async () => {
+    const base = {
+      id: "mine",
+      name: "Mine",
+      command: "mine-cli",
+      color: "#112233",
+      iconId: "bot",
+      supportsContextInjection: true,
+    };
+    storeState.current.userAgentRegistry = { mine: { ...base, args: ["--token", "host-secret"] } };
+    const service = makeService();
+    const incoming = { userAgentRegistry: { mine: { ...base, name: "Mine renamed" } } };
+    const [preview] = await service.preview(incoming);
+    expect(preview).toMatchObject({ update: 1, add: 0 });
+    // The registry service is mocked here, so the merge is checked on what apply asks it to write.
+    const { UserAgentRegistryService } = await import("../UserAgentRegistryService.js");
+    const proto = UserAgentRegistryService.prototype as unknown as Record<string, unknown>;
+    const original = { getAgent: proto.getAgent, updateAgent: proto.updateAgent };
+    const update = vi.fn(() => ({ success: true }));
+    proto.getAgent = () => (storeState.current.userAgentRegistry as Record<string, unknown>).mine;
+    proto.updateAgent = update;
+    try {
+      await service.apply(incoming);
+    } finally {
+      Object.assign(proto, original);
+    }
+    expect(update).toHaveBeenCalledWith(
+      "mine",
+      expect.objectContaining({ name: "Mine renamed", args: ["--token", "host-secret"] })
+    );
+  });
+
+  it("merges a recipe terminal's env per name, keeping a withheld secret", async () => {
+    const { projectStore } = await import("../ProjectStore.js");
+    const recipes = [
+      {
+        id: "r1",
+        name: "Dev",
+        terminals: [
+          { type: "terminal", command: "npm run dev", env: { DB_PASSWORD: "host", PORT: "1" } },
+        ],
+      },
+    ];
+    const store = projectStore as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    store.getGlobalRecipes.mockImplementation(async () => structuredClone(recipes));
+    store.updateGlobalRecipe = vi.fn(async (id: string, updates: Record<string, unknown>) => {
+      const index = recipes.findIndex((r) => r.id === id);
+      recipes[index] = { ...recipes[index], ...updates } as (typeof recipes)[number];
+    });
+    const service = makeService();
+    const incoming = {
+      globalRecipes: [
+        {
+          id: "r1",
+          name: "Dev",
+          terminals: [{ type: "terminal", command: "npm run dev", env: { PORT: "2" } }],
+        },
+      ],
+    };
+    const report = await service.apply(incoming);
+    expect(recipes[0].terminals[0].env).toEqual({ DB_PASSWORD: "host", PORT: "2" });
+    expect(report.sections.find((s) => s.section === "globalRecipes")?.leaves).toEqual([
+      { key: "r1", status: "applied" },
+    ]);
+    // A second copy of the same thing changes nothing.
+    const [again] = await service.preview(incoming);
+    expect(again).toMatchObject({ update: 0, unchanged: 1 });
   });
 });
 

@@ -391,13 +391,19 @@ function ResultGroups({ preview, report, hostName, selected, onDone }: ResultGro
   );
   const applied = report.sections.reduce((sum, section) => sum + section.applied, 0);
   const rolledBack = report.outcome === "rolled-back";
+  // Undoing an earlier category failed too: some of it may have stayed.
+  const partly = rolledBack && report.restoreFailed === true;
 
   return (
     <>
       {rolledBack ? (
         <SettingsGroup label="Not copied">
           {report.errors.map((message) => (
-            <SettingsRow key={message} label="Nothing changed" description={message} />
+            <SettingsRow
+              key={message}
+              label={partly ? "Partly changed" : "Nothing changed"}
+              description={message}
+            />
           ))}
         </SettingsGroup>
       ) : (
@@ -436,9 +442,11 @@ function ResultGroups({ preview, report, hostName, selected, onDone }: ResultGro
       <SettingsGroup>
         <SettingsActions
           status={
-            rolledBack
-              ? `Nothing on ${hostName} was changed`
-              : `${pluralize(applied, "setting")} copied to ${hostName}`
+            partly
+              ? `Settings on ${hostName} may be partly changed. Preview again to see where they stand`
+              : rolledBack
+                ? `Nothing on ${hostName} was changed`
+                : `${pluralize(applied, "setting")} copied to ${hostName}`
           }
         >
           <Button variant="outline" size="sm" onClick={onDone}>
