@@ -106,9 +106,9 @@ function AgentCounts({ summary }: { summary: HostMetricsSummary }) {
   const spoken =
     working === 0 && waiting === 0
       ? "No agents waiting or working"
-      : [waiting > 0 && `${waiting} waiting`, working > 0 && `${working} working`]
+      : `Agents: ${[waiting > 0 && `${waiting} waiting`, working > 0 && `${working} working`]
           .filter(Boolean)
-          .join(", ");
+          .join(", ")}`;
   return (
     <span className="flex items-center gap-2 text-xs tabular-nums text-text-primary">
       <span className="sr-only">{spoken} (observed)</span>

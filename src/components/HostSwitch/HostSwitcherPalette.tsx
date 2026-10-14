@@ -247,11 +247,13 @@ export function HostSwitcherPalette() {
       selectedIndex={selectedIndex}
       onQueryChange={setQuery}
       onSelectPrevious={() => {
-        placedForOpening.current = true;
+        // Before the rows arrive there is nothing to move to; placement still owed.
+        if (recents !== null) placedForOpening.current = true;
         palette.selectPrevious();
       }}
       onSelectNext={() => {
-        placedForOpening.current = true;
+        // Before the rows arrive there is nothing to move to; placement still owed.
+        if (recents !== null) placedForOpening.current = true;
         palette.selectNext();
       }}
       onConfirm={handleConfirm}

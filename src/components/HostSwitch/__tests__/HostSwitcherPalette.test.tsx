@@ -174,10 +174,10 @@ describe("HostSwitcherPalette", () => {
     expect(rows[0]!.getAttribute("aria-current")).toBe("true");
     const text = row("h1").textContent ?? "";
     expect(text).toContain("studio-01");
-    expect(text).toContain("Connected");
-    expect(text).toContain("3 projects · 2 working · 1 waiting (observed)");
-    expect(text).toContain("CPU 42%");
-    expect(text).toContain("Memory normal");
+    expect(text).toContain("3 projects");
+    expect(text).toContain("Agents: 1 waiting, 2 working (observed)");
+    expect(text).toContain("42% CPU");
+    expect(text).toContain("normal memory pressure");
   });
 
   it("says when an unreachable host was last seen and shows no stale load", () => {
@@ -262,7 +262,7 @@ describe("HostSwitcherPalette", () => {
     openPalette();
     const search = screen.getByRole("combobox");
     expect(row("h1").getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByText("to switch")).toBeTruthy();
+    expect(screen.getByText("to connect and switch")).toBeTruthy();
     fireEvent.keyDown(search, { key: "Enter" });
     await waitFor(() =>
       expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: false })
@@ -277,7 +277,6 @@ describe("HostSwitcherPalette", () => {
     };
     openPalette();
     expect(row("local").getAttribute("aria-selected")).toBe("true");
-    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
     await waitFor(() =>

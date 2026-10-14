@@ -691,11 +691,9 @@ export class RemoteHostsClient {
         (name) => void (pendingProjectName = name)
       );
       // A window is showing that host now: it's the one the switcher offers first.
-      if (
-        result.outcome === "switched" ||
-        result.outcome === "window-opened" ||
-        result.outcome === "focused-elsewhere"
-      ) {
+      // Not `window-opened`: that window stays on this machine offering the
+      // host's projects, and picking one comes back through here.
+      if (result.outcome === "switched" || result.outcome === "focused-elsewhere") {
         try {
           this.options.registry.recordUse(hostId);
         } catch (error) {
