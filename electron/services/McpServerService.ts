@@ -50,6 +50,7 @@ import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle, sendToPinnedView } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
 import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
+import { routedViewWorktreePort } from "./mcp-server/worktreeViewPort.js";
 import { createPluginMcpRoute } from "./pluginAgentMcp/pluginMcpRoute.js";
 import type * as PluginServiceModule from "./PluginService.js";
 import { getPtyClient, setMcpServerServiceRef } from "../window/serviceRefs.js";
@@ -241,7 +242,8 @@ export class McpServerService {
       this.pendingManifests,
       this.pendingDispatches,
       () => this._registry,
-      this.viewLeases
+      this.viewLeases,
+      routedViewWorktreePort
     );
 
     // Subscribes to the bus and the pty-host only while a pane has a notice pending.

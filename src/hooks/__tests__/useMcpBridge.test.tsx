@@ -9,6 +9,10 @@ import {
   resetStoreAccessorsForTesting,
   setWorktreePathIndexAccessor,
 } from "@/store/storeAccessors";
+import {
+  resetWorktreeSnapshotSyncForTesting,
+  trackWorktreeSnapshot,
+} from "@/store/worktreeSnapshotSync";
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(() => [] as ActionManifestEntry[]),
@@ -213,6 +217,7 @@ describe("useMcpBridge", () => {
   afterEach(() => {
     consoleErrorSpy.mockRestore();
     __resetMcpConfirmStoreForTesting();
+    resetWorktreeSnapshotSyncForTesting();
   });
 
   it("returns the current action manifest and falls back to an empty manifest on failure", () => {
@@ -256,6 +261,52 @@ describe("useMcpBridge", () => {
       result: { ok: true, result: { ok: true } },
       confirmationDecision: undefined,
     });
+  });
+
+  it("holds an action until the worktree snapshot in flight has landed (#13348)", async () => {
+    // A background view's port is restored and confirmed before its snapshot
+    // fetch answers; running now would read the map from when it was cached.
+    mocks.get.mockReturnValue(safeManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    let landSnapshot: () => void = () => {};
+    trackWorktreeSnapshot(
+      new Promise<void>((resolve) => {
+        landSnapshot = resolve;
+      })
+    );
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({ requestId: "req-sync", actionId: "actions.list" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+
+    landSnapshot();
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "req-sync", result: { ok: true, result: { ok: true } } })
+    );
+  });
+
+  it("runs nothing once the bridge is torn down during the snapshot wait", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry());
+    let landSnapshot: () => void = () => {};
+    trackWorktreeSnapshot(
+      new Promise<void>((resolve) => {
+        landSnapshot = resolve;
+      })
+    );
+
+    const { unmount } = renderHook(() => useMcpBridge());
+    const dispatched = dispatchHandler?.({ requestId: "req-gone", actionId: "actions.list" });
+    unmount();
+    landSnapshot();
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).not.toHaveBeenCalled();
   });
 
   it("forwards the bound provision-time context as contextOverride (#8317)", async () => {

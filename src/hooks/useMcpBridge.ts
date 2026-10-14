@@ -71,6 +71,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { pendingWorktreeSnapshot } from "@/store/worktreeSnapshotSync";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
 
 const REJECTION_RESULT: ActionDispatchResult = {
@@ -1099,6 +1100,14 @@ export function useMcpBridge(): void {
         approvalReason,
         authorization,
       }) => {
+        // A background view's worktree port is restored just before main sends
+        // this, so the snapshot it fetched may still be on its way. Everything
+        // below reads the worktree store, which has to hold it first (#13348).
+        const snapshot = pendingWorktreeSnapshot();
+        if (snapshot) {
+          await snapshot;
+          if (disposed) return;
+        }
         // An agent pane's replayed snapshot names its worktree by id only, so
         // describe it from this view's store once, up front (#12486): the
         // confirm preview and the dispatch must read the same context, or the
