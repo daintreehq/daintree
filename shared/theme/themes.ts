@@ -831,7 +831,9 @@ const LIGHT_BEVEL = "0 1px 0 rgba(255, 255, 255, 0.6) inset";
  * page that applies only the theme's variables (the plugin preview) draws
  * light dialogs as the app does.
  */
-const POLARITY_VARIABLES: Record<AppColorScheme["type"], Record<string, string>> = {
+export const APP_THEME_POLARITY_VARIABLES: Readonly<
+  Record<AppColorScheme["type"], Readonly<Record<string, string>>>
+> = {
   dark: {
     "--theme-surface-dialog": "var(--theme-surface-panel)",
   },
@@ -854,7 +856,7 @@ export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, 
   ]);
   const variables = Object.fromEntries(entries);
   variables["--theme-color-mode"] = scheme.type;
-  Object.assign(variables, POLARITY_VARIABLES[scheme.type]);
+  Object.assign(variables, APP_THEME_POLARITY_VARIABLES[scheme.type]);
   if (scheme.extensions) {
     for (const [extensionName, extensionValue] of Object.entries(scheme.extensions)) {
       if (typeof extensionValue === "string" && extensionValue.trim()) {

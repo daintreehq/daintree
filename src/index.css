@@ -163,7 +163,7 @@ code.hljs {
      is the dark source of truth: dark dialogs sit on `surface-panel` (the
      historical look), not the lightest `surface-panel-elevated` plane, whose
      grey reads as washed-out against the near-black workbench. Light themes get
-     the elevated plane from the theme engine (`POLARITY_VARIABLES` in
+     the elevated plane from the theme engine (`APP_THEME_POLARITY_VARIABLES` in
      shared/theme/themes.ts, the round-2 light-contrast audit). */
   --theme-surface-dialog: var(--theme-surface-panel);
 
@@ -206,11 +206,11 @@ code.hljs {
    * black-derived stack and remain the dark-mode source of truth (byte-for-byte
    * unchanged). E7 re-expresses this on top of the single cool-slate engine
    * source (--theme-shadow-floating/-dialog) ONLY on light, in the theme
-   * engine's `POLARITY_VARIABLES` (shared/theme/themes.ts) — on light the old
-   * stack re-derived every layer from --theme-shadow-color (pure black on 6/7
-   * light themes) and baked a DARK inset top-highlight, a black hairline on the
-   * element's top edge (wrong direction on near-white). On light the inset top-highlight becomes a true white
-   * bevel. */
+   * engine's `APP_THEME_POLARITY_VARIABLES` (shared/theme/themes.ts) — on
+   * light the old stack re-derived every layer from --theme-shadow-color (pure
+   * black on 6/7 light themes) and baked a DARK inset top-highlight, a black
+   * hairline on the element's top edge (wrong direction on near-white). On
+   * light the inset top-highlight becomes a true white bevel. */
   --shadow-overlay:
     0 1px 0 var(--theme-overlay-soft) inset,
     0 12px 40px color-mix(in srgb, var(--theme-shadow-color) 89%, transparent);
@@ -292,12 +292,12 @@ code.hljs {
    * into --pill-surface at --category-subtle-mix / --category-border-mix.
    * The :root defaults reproduce the ORIGINAL behavior (mix into surface-canvas
    * at 12% / 28%) so DARK is byte-for-byte unchanged. On light (the theme
-   * engine's `POLARITY_VARIABLES`) the base is re-pointed to the elevated
-   * plane — category pills render on elevated/floating chrome, so mixing into canvas produced a fill
-   * DARKER than its real container (an inverted figure-ground; a Fleet pill on
-   * elevated read recessed) — and the mix strength is raised because 12% over a
-   * near-white surface is sub-JND. Consumers on a different surface can locally
-   * override --pill-surface. */
+   * engine's `APP_THEME_POLARITY_VARIABLES`) the base is re-pointed to the
+   * elevated plane — category pills render on elevated/floating chrome, so
+   * mixing into canvas produced a fill DARKER than its real container (an
+   * inverted figure-ground; a Fleet pill on elevated read recessed) — and the
+   * mix strength is raised because 12% over a near-white surface is sub-JND.
+   * Consumers on a different surface can locally override --pill-surface. */
   --pill-surface: var(--color-surface-canvas);
   --category-subtle-mix: 12%;
   --category-border-mix: 28%;
