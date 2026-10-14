@@ -2,9 +2,9 @@
 
 The cleanup on `test/full-test-audit` is broadly sound after correcting the coverage gaps below. Keep the consolidations and removal of copied implementations, static-value assertions and duplicate examples. The original cleanup also removed distinct behavior and failure paths; those are restored in production-facing tests, often as extra rows or assertions in retained cases. No production implementation changed.
 
-The comparison covers all 2,144 originally changed files against `da0654f88bbcc7e0dba708738bcbb5a013edef70`, through the reviewed commit `459c40511dd6d3bdc0bd5c65871c95fee38c0b0b` and the audit corrections in this branch. The original commit modified 1,698 files and deleted 446, adding 64,803 lines and removing 174,965. All 2,144 paths have exactly one review entry, with no omissions or duplicate ownership. Test-declaration counts in the file review describe the original branch change, before these corrections and before parameterized expansion.
+The comparison covers all 2,144 originally changed files against `da0654f88bbcc7e0dba708738bcbb5a013edef70`, through the audit corrections in this branch. The original commit modified 1,698 files and deleted 446, adding 64,803 lines and removing 174,965. All 2,144 paths have exactly one review entry, with no omissions or duplicate ownership. Test-declaration counts in the file review describe the original branch change, before these corrections and before parameterized expansion.
 
-The [case evidence](/tmp/daintree-audit/full-review.json) contains removed and added case records, original assertion evidence where available, relocation candidates and coverage destinations. A matching title or body is evidence for a consolidation, not by itself proof that a replacement exercises the same production subject; fixture scope, production paths and stronger retained cases were also checked.
+The case evidence, a local working artifact that was not committed, contained removed and added case records, original assertion evidence where available, relocation candidates and coverage destinations. A matching title or body is evidence for a consolidation, not by itself proof that a replacement exercises the same production subject; fixture scope, production paths and stronger retained cases were also checked.
 
 ## Coverage restored
 
@@ -51,7 +51,7 @@ Documentation and lesson references point to the retained consolidated suites. T
 | First repository check | Exit 2: one incomplete new panel fixture and four excess branch-field errors in the branch's consolidated context-menu fixture; both corrected |
 | Second repository check | Exit 2: the plugin fixture used the closed built-in union; corrected it to the open-kind TerminalInstance input accepted by isDockPanel |
 | Third repository check | Exit 2: the merged skeleton-theme store mock inferred only string IDs; annotated its raw return as unknown so the malformed numeric-ID case typechecks |
-| Final repository check | `npm run check` passed, exit 0; 1,128 lint warnings remain within the existing 2,975-warning baseline, with no baseline change |
+| Final repository check | `npm run check` passed, exit 0; 1,128 lint warnings remain; the warning baseline was regenerated from 2,975 down to 1,128 with every per-rule count equal or lower |
 
 An intermediate root test run failed because an attempted clone-URL helper restoration imported the helper from the wrong module. Coverage tracing then confirmed that the unchanged `gitRemoteUrl.test.ts` already covers those URL forms more extensively, so the redundant restoration was withdrawn. The corrected 12-file root batch passed all 370 tests. No assertion was weakened to hide a failure and no baseline was widened.
 
