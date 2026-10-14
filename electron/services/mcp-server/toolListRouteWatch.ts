@@ -23,19 +23,16 @@ export class ToolListRouteWatch {
 
   /**
    * Record the route a listing is answered from, read before it is fetched.
-   * Returns what to call once it is answered: a route that moved while the
-   * fetch was out means the client was just handed the old route's list, which
-   * can land after the re-list a notification already asked for.
+   * Returns whether the route has moved since, for the listing to ask once it
+   * is answered: an answer from the route it left must not be served, since it
+   * can reach the client after the re-list the move's notice asked for.
    */
-  noteListed(sessionId: string, describe: () => string): () => void {
+  noteListed(sessionId: string, describe: () => string): () => boolean {
     const entry = { route: describe(), describe };
     this.listed.set(sessionId, entry);
     return () => {
       const now = readRoute(sessionId, entry);
-      if (now === undefined || now === entry.route) return;
-      if (this.listed.get(sessionId) === entry) this.listed.delete(sessionId);
-      // After the answer is on its way, so the re-list cannot be overtaken by it.
-      setTimeout(() => this.notify(sessionId), 0);
+      return now !== undefined && now !== entry.route;
     };
   }
 

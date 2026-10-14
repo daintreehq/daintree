@@ -1185,10 +1185,9 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   /**
    * Record where this session's `tools/list` is about to be answered from, so
    * a later route change can tell the client its list moved (#13350). Returns
-   * what to call once the listing is answered. Wired for workspace-bound
-   * sessions only.
+   * whether the route has moved since. Wired for workspace-bound sessions only.
    */
-  noteToolListRoute?: () => () => void;
+  noteToolListRoute?: () => () => boolean;
 }
 
 /**
@@ -1385,14 +1384,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // legitimately empty surface and carrying no hint that reconnecting is the
     // fix.
     if (tier === null) throw sessionGoneError();
-    // Read before the fetch and settled after it: a route that moves while the
-    // fetch is out reads as moved, and the client is told to list again.
-    const settleToolListRoute = deps.noteToolListRoute?.();
-    let manifest: Awaited<ReturnType<typeof resolveManifest>>;
-    try {
-      manifest = await resolveManifest("tools/list");
-    } finally {
-      settleToolListRoute?.();
+    // A route that moved while the fetch was out is fetched again from where it
+    // went (#13350): the old route's answer could land after the re-list the
+    // move's notice asks for, and the client keeps whichever list came last.
+    // Once only; a route still moving is left to the notice.
+    let manifest!: Awaited<ReturnType<typeof resolveManifest>>;
+    for (let attempt = 1; ; attempt++) {
+      const routeMoved = deps.noteToolListRoute?.();
+      try {
+        manifest = await resolveManifest("tools/list");
+      } catch (err) {
+        if (attempt === 1 && routeMoved?.()) continue;
+        throw err;
+      }
+      if (attempt === 1 && routeMoved?.()) continue;
+      break;
     }
     // Origin read once for the whole listing, and the same way the dispatch
     // gate reads it, so a tool withheld here is refused there (#12407).

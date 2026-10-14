@@ -510,36 +510,63 @@ describe("sessionServer tools/list handler", () => {
     expect(result.tools.map((t) => t.name)).toEqual(["actions.list"]);
   });
 
-  it("records the session's route before the listing's fetch and settles it after (#13350)", async () => {
-    // A route that moves while the fetch is out must read as moved afterwards,
-    // whether the fetch answered or failed.
+  /** A route that moves while each listing's fetch is out, per `moves`. */
+  function movingRoute(moves: boolean[]) {
     const order: string[] = [];
-    const requestManifest = vi
-      .fn()
-      .mockImplementationOnce(async () => {
+    const noteToolListRoute = vi.fn(() => {
+      order.push("route");
+      const moved = moves.shift() ?? false;
+      return () => moved;
+    });
+    return { order, noteToolListRoute };
+  }
+
+  it("records the session's route before the listing's fetch (#13350)", async () => {
+    const { order, noteToolListRoute } = movingRoute([false]);
+    const deps = externalDeps({
+      noteToolListRoute,
+      requestManifest: vi.fn(async () => {
         order.push("fetch");
         return [makeManifestEntry("actions.list")];
-      })
-      .mockImplementationOnce(async () => {
-        order.push("fetch");
-        throw new Error("Manifest request timed out");
-      });
-    const deps = externalDeps({
-      noteToolListRoute: vi.fn(() => {
-        order.push("route");
-        return () => {
-          order.push("settle");
-        };
       }),
-      requestManifest,
     });
     const server = createSessionServer("tools-list-route", deps);
     await server.connect(makeMockTransport());
 
-    await listTools(server);
-    expect(order).toEqual(["route", "fetch", "settle"]);
-    await expect(listTools(server)).rejects.toThrow();
-    expect(order).toEqual(["route", "fetch", "settle", "route", "fetch", "settle"]);
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["actions.list"]);
+    expect(order).toEqual(["route", "fetch"]);
+  });
+
+  it("never serves the answer of a route that moved while the fetch was out (#13350)", async () => {
+    // The old route's answer could land after the re-list the move's notice
+    // asks for, and the client keeps whichever list came last.
+    const { noteToolListRoute } = movingRoute([true, false]);
+    const requestManifest = vi
+      .fn()
+      .mockResolvedValueOnce([makeManifestEntry("terminal.list")])
+      .mockResolvedValueOnce([makeManifestEntry("actions.list")]);
+    const deps = externalDeps({ noteToolListRoute, requestManifest });
+    const server = createSessionServer("tools-list-moved", deps);
+    await server.connect(makeMockTransport());
+
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["actions.list"]);
+    expect(requestManifest).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetches a failed listing once when its route moved, and stops there", async () => {
+    const { noteToolListRoute } = movingRoute([true, true]);
+    const requestManifest = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Manifest request timed out"))
+      .mockResolvedValueOnce([makeManifestEntry("actions.list")]);
+    const deps = externalDeps({ noteToolListRoute, requestManifest });
+    const server = createSessionServer("tools-list-moved-failed", deps);
+    await server.connect(makeMockTransport());
+
+    // Still moving after the second fetch: that answer is served, and the
+    // route's notice is left to tell the client.
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["actions.list"]);
+    expect(requestManifest).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to the cached manifest, warning with the error, when requestManifest rejects", async () => {
