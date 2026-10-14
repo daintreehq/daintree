@@ -35,7 +35,7 @@ vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
 
-vi.mock("@/hooks", () => ({
+vi.mock("@/hooks/useOverlayState", () => ({
   useOverlayState: () => {},
 }));
 

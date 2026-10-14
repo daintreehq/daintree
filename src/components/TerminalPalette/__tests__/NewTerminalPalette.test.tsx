@@ -26,6 +26,10 @@ vi.mock("@/hooks", () => ({
   useEscapeStack: escapeStackMock,
   useOverlayState: () => {},
 }));
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 
 vi.mock("@/hooks/useKeybinding", () => ({
   useEffectiveCombo: () => "⌘T",

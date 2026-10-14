@@ -2,18 +2,16 @@ import { isValidElement, useId, useRef, useState } from "react";
 import type { PluginConfirmPopoverProps, PluginToastTone } from "@shared/types/plugin-sdk-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { UNDO_ACTION_LABEL, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { combosFieldsEqual, keybindingService } from "@/services/KeybindingService";
-import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { useNotificationStore } from "@/store/notificationStore";
 import { ALIGNS, SIDES, field, fn, nonEmpty, oneOf, useKitOwnerAttributes } from "./kitProps";
 import { useKitOverlayZClass } from "./kitScope";
 import { runPluginAction } from "./kitDiagnostics";
+import { getPluginKitHost } from "./kitHost";
 
-// View toasts go through the same `notify()` the worker's `host.showToast`
-// reaches over IPC, held to the same rules: a message of at most 2000
+// View toasts go through `kitHost` to the same `notify()` the worker's
+// `host.showToast` reaches over IPC, held to the same rules: a message of at most 2000
 // characters, one of four tones, at most a minute on screen, the plugin's
 // name in front of the message so a view cannot pass for the app, and the
 // per-plugin rate-limit bucket. What a view adds is the action button, which
@@ -27,8 +25,8 @@ const DURATION_MAX_MS = 60_000;
 
 /** A plugin's name as a person reads it; never the machine-local instance key. */
 export function pluginDisplayName(owner: string): string {
-  const meta = usePluginRuntimeStore.getState().pluginMetaById.get(owner);
-  if (meta?.displayName) return meta.displayName;
+  const displayName = getPluginKitHost().pluginDisplayName(owner);
+  if (displayName) return displayName;
   // A project plugin's key is `project__{projectId}__{manifestId}`.
   const parts = owner.split("__");
   return parts.length >= 3 && parts[0] === "project" ? parts.slice(2).join("__") : owner;
@@ -77,9 +75,7 @@ export function showPluginViewToast(owner: string | null, options: unknown): str
       };
     }
   }
-  // No event kind: a plugin's toast is its own, as on the worker's path.
-  // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
-  return notify({
+  return getPluginKitHost().showToast({
     type: tone,
     message: owner ? `${pluginDisplayName(owner)}: ${message}` : message,
     duration: readDuration(field(options, "durationMs")),
@@ -107,13 +103,17 @@ export function showPluginViewUndoToast(owner: string | null, options: unknown):
     Reflect.apply(onUndo, undefined, []);
   };
   const id = showUndoNotification(owner, message, undo);
-  liveUndoToasts.set(slot, id);
+  if (id === null) liveUndoToasts.delete(slot);
+  else liveUndoToasts.set(slot, id);
   return id;
 }
 
-function showUndoNotification(owner: string | null, message: string, onUndo: () => void): string {
-  // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
-  return notify({
+function showUndoNotification(
+  owner: string | null,
+  message: string,
+  onUndo: () => void
+): string | null {
+  return getPluginKitHost().showToast({
     type: "success",
     message: owner ? `${pluginDisplayName(owner)}: ${message}` : message,
     // The app's one Undo window: every site shares it, so a plugin cannot
@@ -130,7 +130,7 @@ function showUndoNotification(owner: string | null, message: string, onUndo: () 
 }
 
 export function dismissPluginViewToast(id: string): void {
-  useNotificationStore.getState().dismissNotification(id);
+  getPluginKitHost().dismissToast(id);
 }
 
 /** Every combo a host binding fires on right now, in the scope the app is in. */

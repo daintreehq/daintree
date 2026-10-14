@@ -1,5 +1,5 @@
 import { dirname, isAbsolute, isPathInside, join, normalize } from "@shared/utils/path";
-import { actionService } from "@/services/ActionService";
+import { getPluginKitHost } from "@/components/PluginKit/kitHost";
 import { logError } from "@/utils/logger";
 
 // Apart from the render policy so the plugin kit's `Link` routes a click
@@ -28,8 +28,8 @@ export function activateMarkdownLink(
   // there is nothing to scroll to — swallow instead of navigating.
   if (!href || href.startsWith("#")) return;
   if (HTTPish.test(href)) {
-    actionService
-      .dispatch("browser.openExternal", { url: href }, { source: "user" })
+    getPluginKitHost()
+      .dispatchAction("browser.openExternal", { url: href }, { source: "user" })
       .catch((err) => logError("[markdownRenderPolicy] openExternal failed", err));
     return;
   }
@@ -45,7 +45,11 @@ export function activateMarkdownLink(
   // The check above is lexical; a directory symlink inside the root can still
   // point anywhere. `confineToRoot` makes the viewer hold every read to this
   // root on the real path.
-  actionService
-    .dispatch("file.view", { path: absolute, rootPath, confineToRoot: true }, { source: "user" })
+  getPluginKitHost()
+    .dispatchAction(
+      "file.view",
+      { path: absolute, rootPath, confineToRoot: true },
+      { source: "user" }
+    )
     .catch((err) => logError("[markdownRenderPolicy] file.view failed", err));
 }

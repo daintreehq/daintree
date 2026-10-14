@@ -9,14 +9,13 @@ vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
 }));
 
-vi.mock("@/store", () => ({
+vi.mock("@/store/portalStore", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
 
-vi.mock("@/hooks", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return { ...actual, useOverlayState: () => {} };
-});
+vi.mock("@/hooks/useOverlayState", () => ({
+  useOverlayState: () => {},
+}));
 
 vi.mock("@/lib/scrollbarGutter", () => ({
   SCROLLBAR_GUTTER_VAR: "--app-scrollbar-gutter",

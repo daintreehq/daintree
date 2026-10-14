@@ -19,6 +19,10 @@ vi.mock("@/hooks", () => ({
   useEscapeStack: () => {},
   useOverlayState: () => {},
 }));
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 
 vi.mock("@/store/paletteStore", () => ({
   usePaletteStore: { getState: () => ({ activePaletteId: null }) },

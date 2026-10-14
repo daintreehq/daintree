@@ -205,6 +205,7 @@ vi.mock("@/store", () => ({
   usePanelStore: usePanelStoreMock,
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: useProjectStoreMock,

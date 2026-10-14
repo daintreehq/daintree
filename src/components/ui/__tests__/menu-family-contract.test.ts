@@ -56,8 +56,8 @@ function destructuredDefault(fn: ts.ArrowFunction, prop: string): string | undef
   return undefined;
 }
 
-const PRIMITIVE_FILES = ["dropdown-menu.tsx", "context-menu.tsx", "popover.tsx"].map((f) =>
-  path.join(UI_DIR, f)
+const PRIMITIVE_FILES = ["dropdown-menu-base.tsx", "context-menu-base.tsx", "popover.tsx"].map(
+  (f) => path.join(UI_DIR, f)
 );
 
 describe("menu and popover primitives share one placement and surface contract", () => {

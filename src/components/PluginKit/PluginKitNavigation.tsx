@@ -33,13 +33,13 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
   stopContextMenuPropagation,
-} from "@/components/ui/context-menu";
+} from "@/components/ui/context-menu-base";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/ui/dropdown-menu-base";
 import { findMatchIndices, HighlightedText } from "@/components/ui/HighlightedText";
 import { KbdChord } from "@/components/ui/Kbd";
 import {

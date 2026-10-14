@@ -18,7 +18,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
   stopContextMenuPropagation,
-} from "@/components/ui/context-menu";
+} from "@/components/ui/context-menu-base";
 import { HighlightedText, substringMatchIndices } from "@/components/ui/HighlightedText";
 import { SearchField } from "@/components/ui/SearchField";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";

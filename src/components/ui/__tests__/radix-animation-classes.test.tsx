@@ -85,8 +85,8 @@ describe("Radix overlay animation classes — wrapper source", () => {
   it.each([
     ["popover.tsx", "OVERLAY_MOTION_CLASS", 1],
     ["select.tsx", "OVERLAY_MOTION_CLASS", 1],
-    ["dropdown-menu.tsx", "OVERLAY_MOTION_CLASS", 2],
-    ["context-menu.tsx", "OVERLAY_MOTION_CLASS", 2],
+    ["dropdown-menu-base.tsx", "OVERLAY_MOTION_CLASS", 2],
+    ["context-menu-base.tsx", "OVERLAY_MOTION_CLASS", 2],
     ["tooltip.tsx", "TOOLTIP_MOTION_CLASS", 1],
   ])("%s applies %s to each of its content components", (file, constant, expected) => {
     // Imports are stripped whole, so one prettier wraps across lines still
@@ -101,8 +101,8 @@ describe("Radix overlay animation classes — wrapper source", () => {
   });
 
   it.each([
-    ["dropdown-menu.tsx", "--radix-dropdown-menu-content-transform-origin"],
-    ["context-menu.tsx", "--radix-context-menu-content-transform-origin"],
+    ["dropdown-menu-base.tsx", "--radix-dropdown-menu-content-transform-origin"],
+    ["context-menu-base.tsx", "--radix-context-menu-content-transform-origin"],
   ])("%s sets transformOrigin on both Content and SubContent", (file, variable) => {
     const src = readWrapperSource(file);
     expect(src.split(`var(${variable})`).length - 1).toBe(2);

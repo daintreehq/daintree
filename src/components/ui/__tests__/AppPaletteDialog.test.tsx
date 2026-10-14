@@ -9,13 +9,9 @@ import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 import { handleDockEscapeKeyDown } from "@/components/Layout/dockPopoverGuard";
 
-vi.mock("@/hooks", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    useOverlayState: () => {},
-  };
-});
+vi.mock("@/hooks/useOverlayState", () => ({
+  useOverlayState: () => {},
+}));
 
 const animatedPresenceState = vi.hoisted(() => ({ shouldRender: true }));
 

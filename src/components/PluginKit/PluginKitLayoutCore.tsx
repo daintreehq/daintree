@@ -34,7 +34,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/ui/dropdown-menu-base";
 import {
   PANE_STATUS_FOOTER_CLASS,
   PANE_TOOLBAR_ICON_BUTTON_CLASS,

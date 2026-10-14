@@ -810,8 +810,10 @@ export default tseslint.config(
     files: [
       "src/components/ui/button.tsx",
       "src/components/ui/context-menu.tsx",
+      "src/components/ui/context-menu-base.tsx",
       "src/components/ui/DialogDismissSurface.tsx",
       "src/components/ui/dropdown-menu.tsx",
+      "src/components/ui/dropdown-menu-base.tsx",
       "src/components/ui/popover.tsx",
       "src/components/ui/select.tsx",
       "src/components/ui/tooltip.tsx",
@@ -1238,6 +1240,22 @@ export default tseslint.config(
       ["@/components/ui/DismissButton", ["DismissButton"]],
       [
         "@/components/ui/dropdown-menu",
+        [
+          "DropdownMenu",
+          "DropdownMenuTrigger",
+          "DropdownMenuContent",
+          "DropdownMenuItem",
+          "DropdownMenuCheckboxItem",
+          "DropdownMenuRadioGroup",
+          "DropdownMenuRadioItem",
+          "DropdownMenuLabel",
+          "DropdownMenuSeparator",
+          "DropdownMenuShortcut",
+        ],
+      ],
+      // The same primitives, where the kit itself imports them from.
+      [
+        "@/components/ui/dropdown-menu-base",
         [
           "DropdownMenu",
           "DropdownMenuTrigger",

@@ -101,7 +101,6 @@ import {
   FILE_TREE_ICON_COLOR_CLASS,
   getFileTypeIcon,
 } from "@/panels/file-browser/fileTypeIcons";
-import { actionService } from "@/services/ActionService";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { useNow } from "../../../packages/plugin-sdk/src/react/useNow";
 import {
@@ -123,6 +122,7 @@ import { useDaintreeTheme } from "@/pluginUi/theme";
 import { pluginKitDates } from "./PluginKitDates";
 import { pluginKitOverlays } from "./PluginKitOverlays";
 import { pluginKitTypography } from "./PluginKitTypography";
+import { getPluginKitHost } from "./kitHost";
 import { reportPluginFault } from "./kitDiagnostics";
 import { toTimestamp } from "./kitTime";
 
@@ -139,12 +139,14 @@ function count(value: unknown): number | undefined {
 
 /** Runs a host action for a press, logging a refusal: dispatch resolves `{ ok: false }` rather than throwing. */
 function dispatchFromKit(actionId: string, args: Record<string, unknown>): void {
-  actionService.dispatch(actionId, args, { source: "user" }).then(
-    (result) => {
-      if (!result.ok) reportPluginFault(`${actionId} failed`, result.error);
-    },
-    (error: unknown) => reportPluginFault(`${actionId} failed`, error)
-  );
+  getPluginKitHost()
+    .dispatchAction(actionId, args, { source: "user" })
+    .then(
+      (result) => {
+        if (!result.ok) reportPluginFault(`${actionId} failed`, result.error);
+      },
+      (error: unknown) => reportPluginFault(`${actionId} failed`, error)
+    );
 }
 
 function dispatchOpen(actionId: "browser.openExternal" | "browser.openUrl", url: string): void {
