@@ -95,3 +95,9 @@ export function closeAndAnnounce(
   closeFn();
   useAnnouncerStore.getState().announce(message, priority);
 }
+
+/**
+ * Marks a tab stop that exists only to reveal a truncated label's full text
+ * (`TruncatedTooltip`), so initial-focus logic can pass over it.
+ */
+export const TRUNCATION_DISCLOSURE_ATTR = "data-truncation-disclosure";

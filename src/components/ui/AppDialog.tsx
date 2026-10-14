@@ -14,7 +14,7 @@ import { InsetSurface } from "@/components/ui/insetSurface";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import { getVisibleTabbableElements } from "@/lib/accessibility";
+import { getVisibleTabbableElements, TRUNCATION_DISCLOSURE_ATTR } from "@/lib/accessibility";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useOverlayState } from "@/hooks/useOverlayState";
@@ -421,8 +421,17 @@ export function AppDialog({
         // control that answers nothing — arriving there makes a reflexive
         // Enter throw the dialog away. Land on it only when nothing else is
         // tabbable.
+        // Nor on a truncated label made tabbable only to show its full text:
+        // focus there opens its tooltip the moment the dialog appears.
         const tabbable = getVisibleTabbableElements(root);
-        target = tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ?? tabbable[0] ?? null;
+        target =
+          tabbable.find(
+            (el) =>
+              !el.hasAttribute(DIALOG_CLOSE_ATTR) && !el.hasAttribute(TRUNCATION_DISCLOSURE_ATTR)
+          ) ??
+          tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ??
+          tabbable[0] ??
+          null;
       }
       if (target) {
         target.focus();

@@ -65,6 +65,63 @@ export function groupTerminalsByProject(terminals: ProcessInventoryTerminal[]): 
   });
 }
 
+export type ProjectProcessRow =
+  | { kind: "terminal"; terminal: ProcessInventoryTerminal }
+  | { kind: "closed"; closed: ClosedProcessGroup };
+
+/** A project's live terminals and the processes its closed terminals left running. */
+export interface ProjectProcessGroup {
+  key: string;
+  label: string;
+  terminals: ProcessInventoryTerminal[];
+  closed: ClosedProcessGroup[];
+  /** Both kinds together, heaviest first, so the list reads as one ranking. */
+  rows: ProjectProcessRow[];
+}
+
+function rowMemory(row: ProjectProcessRow): number {
+  return row.kind === "terminal" ? (row.terminal.sample?.memoryKb ?? -1) : (row.closed.memoryKb ?? -1);
+}
+
+/**
+ * Everything a project owns in one place: named projects first, "No project"
+ * last, live terminals before what closed terminals left behind.
+ */
+export function groupProcessesByProject(
+  terminals: ProcessInventoryTerminal[],
+  closed: ClosedProcessGroup[]
+): ProjectProcessGroup[] {
+  const groups = new Map<string, ProjectProcessGroup>();
+  const ensure = (key: string, label: string): ProjectProcessGroup => {
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label, terminals: [], closed: [], rows: [] };
+      groups.set(key, group);
+    }
+    return group;
+  };
+  for (const group of groupTerminalsByProject(terminals)) {
+    ensure(group.key, group.label).terminals.push(...group.terminals);
+  }
+  for (const group of closed) {
+    const key = group.projectId ?? UNOWNED_KEY;
+    ensure(key, group.projectId ? (group.projectLabel ?? "Unknown project") : "No project").closed.push(
+      group
+    );
+  }
+  for (const group of groups.values()) {
+    group.rows = [
+      ...group.terminals.map((terminal) => ({ kind: "terminal" as const, terminal })),
+      ...group.closed.map((closed) => ({ kind: "closed" as const, closed })),
+    ].sort((a, b) => rowMemory(b) - rowMemory(a));
+  }
+  return [...groups.values()].sort((a, b) => {
+    if (a.key === UNOWNED_KEY) return 1;
+    if (b.key === UNOWNED_KEY) return -1;
+    return a.label.localeCompare(b.label);
+  });
+}
+
 export function sortPluginProcesses(
   processes: ProcessInventoryPluginProcess[]
 ): ProcessInventoryPluginProcess[] {
@@ -77,8 +134,9 @@ export function formatApproxMemory(memoryKb: number): string {
   return `~${Math.max(1, Math.round(mb))} MB`;
 }
 
+/** The value alone: the column heading names it. */
 export function formatCpu(cpuPercent: number): string {
-  return `${Math.round(cpuPercent)}% CPU`;
+  return `${Math.round(cpuPercent)}%`;
 }
 
 /**
@@ -105,11 +163,13 @@ export function trashSecondsLeft(terminal: ProcessInventoryTerminal, now: number
 export interface ClosedProcessGroup {
   key: string;
   title: string;
+  projectId: string | null;
   projectLabel: string | null;
   closedAt: number;
   processes: ProcessInventoryClosedProcess[];
   /** Summed over processes the census still had a reading for. */
   memoryKb: number | null;
+  cpuPercent: number | null;
 }
 
 /** What the record says the closed root was — never a guess at what it ran. */
@@ -138,6 +198,15 @@ function sumMemory(processes: readonly ProcessInventoryClosedProcess[]): number 
   return total;
 }
 
+function sumCpu(processes: readonly ProcessInventoryClosedProcess[]): number | null {
+  let total: number | null = null;
+  for (const process of processes) {
+    if (process.cpuPercent === null) continue;
+    total = (total ?? 0) + process.cpuPercent;
+  }
+  return total;
+}
+
 /** One row per closed terminal, heaviest first. */
 export function groupClosedProcesses(
   processes: readonly ProcessInventoryClosedProcess[]
@@ -151,10 +220,12 @@ export function groupClosedProcesses(
       group = {
         key,
         title: describeClosedOrigin(process.origin),
+        projectId: projectId ?? null,
         projectLabel: projectId ? (process.projectName ?? "Unknown project") : null,
         closedAt: process.closedAt,
         processes: [],
         memoryKb: null,
+        cpuPercent: null,
       };
       groups.set(key, group);
     }
@@ -163,6 +234,7 @@ export function groupClosedProcesses(
   for (const group of groups.values()) {
     group.processes.sort((a, b) => (b.memoryKb ?? -1) - (a.memoryKb ?? -1));
     group.memoryKb = sumMemory(group.processes);
+    group.cpuPercent = sumCpu(group.processes);
   }
   return [...groups.values()].sort((a, b) => (b.memoryKb ?? -1) - (a.memoryKb ?? -1));
 }
