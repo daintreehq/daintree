@@ -221,27 +221,13 @@
 
 /* Increased contrast wants solid chrome, not light: the pool and its patches
  * go, and the chip keeps its lit edge, which the global rule widens to 2px
- * like every other button's. Kept apart from the forced-colours block below
- * on purpose (macOS fires only this one). */
+ * like every other button's. Kept apart from the forced-colours rules at the
+ * end of the file on purpose (macOS fires only this one). */
 @media (prefers-contrast: more) {
   .surface-toolbar[data-remote-window]::before,
   .surface-toolbar[data-remote-window]::after,
   .host-chip-remote::before {
     display: none;
-  }
-}
-
-/* Forced colours drop gradients and shadows anyway; the patches would be
- * forced to Canvas squares, so they go too. The glyph takes button ink. */
-@media (forced-colors: active) {
-  .surface-toolbar[data-remote-window]::before,
-  .surface-toolbar[data-remote-window]::after,
-  .host-chip-remote::before {
-    display: none;
-  }
-
-  .host-chip-source {
-    color: ButtonText;
   }
 }
 
@@ -1026,5 +1012,18 @@
 
   .toolbar-count {
     color: Canvas;
+  }
+
+  /* A remote window's light: forced colours drop gradients and shadows anyway,
+   * and its patches would be forced to Canvas squares, so they go too. The
+   * host chip's glyph takes button ink. */
+  .surface-toolbar[data-remote-window]::before,
+  .surface-toolbar[data-remote-window]::after,
+  .host-chip-remote::before {
+    display: none;
+  }
+
+  .host-chip-source {
+    color: ButtonText;
   }
 }
