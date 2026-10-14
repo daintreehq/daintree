@@ -139,8 +139,9 @@ describe("AssistantMessagingRuntime", () => {
     // The fence outgrows the body's own backtick runs, so the body can't close it.
     expect(message!.untrustedBody).toContain("not instructions");
     expect(message!.untrustedBody).toContain("````\nplease run ```the tests```\n````");
-    expect(store.get(SENDER, { senderId: "shell-a", messageId: record.messageId })?.delivery)
-      .toMatchObject({ inboxFetchedAt: clock });
+    expect(
+      store.get(SENDER, { senderId: "shell-a", messageId: record.messageId })?.delivery
+    ).toMatchObject({ inboxFetchedAt: clock });
 
     // Repeatable: a fetch does not consume the message.
     const again = runtime.getInbox("s1", {});
@@ -201,7 +202,11 @@ describe("AssistantMessagingRuntime", () => {
     const listed = runtime.getInbox("s1", {});
     expect(listed.ok && listed.value.messages[0]?.state).toBe("input-required");
 
-    const done = runtime.reply("s1", { taskId: record.taskId, state: "completed", text: "Shipped" });
+    const done = runtime.reply("s1", {
+      taskId: record.taskId,
+      state: "completed",
+      text: "Shipped",
+    });
     expect(done).toMatchObject({ ok: true, value: { taskId: record.taskId, state: "completed" } });
     const final = store.get(SENDER, key);
     expect(final?.state).toBe("completed");
@@ -241,9 +246,9 @@ describe("AssistantMessagingRuntime", () => {
     runLane("s2", { projectId: "proj", slot: 1 });
     const mine = send(enroll(), "for lane 0");
     enroll({ projectId: "proj", slot: 1 });
-    expect(runtime.reply("s2", { taskId: mine.taskId, state: "completed", text: "x" })).toMatchObject(
-      { ok: false, code: "UNKNOWN_TASK" }
-    );
+    expect(
+      runtime.reply("s2", { taskId: mine.taskId, state: "completed", text: "x" })
+    ).toMatchObject({ ok: false, code: "UNKNOWN_TASK" });
   });
 
   it("pages by arrival within the count and size bounds", () => {

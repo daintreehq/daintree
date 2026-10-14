@@ -11,7 +11,10 @@ function fakeRuntime(): AssistantMessagingRuntimeHandle & {
 } {
   return {
     isAvailable: vi.fn((helpSessionId: string) => helpSessionId === "help-1"),
-    getInbox: vi.fn(() => ({ ok: true as const, value: { messages: [], cursor: 0, hasMore: false } })),
+    getInbox: vi.fn(() => ({
+      ok: true as const,
+      value: { messages: [], cursor: 0, hasMore: false },
+    })),
     reply: vi.fn(() => ({
       ok: true as const,
       value: { taskId: "t", state: "completed" as const, revision: 1 },

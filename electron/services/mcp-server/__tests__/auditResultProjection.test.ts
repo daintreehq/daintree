@@ -189,7 +189,11 @@ describe("assistant messaging audit entries carry no body (#13335)", () => {
 
   it("drops a task id that is not one the store mints, however id-shaped", () => {
     const summary = summarizeMcpArgs(
-      projectAuditArgs("assistant.reply", { taskId: "BODY-SENTINEL", state: "completed", text: "x" })
+      projectAuditArgs("assistant.reply", {
+        taskId: "BODY-SENTINEL",
+        state: "completed",
+        text: "x",
+      })
     );
     expect(summary).not.toContain("BODY-SENTINEL");
     expect(JSON.parse(summary).taskId).toBeNull();

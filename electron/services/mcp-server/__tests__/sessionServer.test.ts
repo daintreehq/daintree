@@ -4426,7 +4426,11 @@ describe("assistant inbox tools (#13335)", () => {
       arguments: { taskId: "task-1", state: "completed", text: "done" },
     });
     expect(reply.structuredContent).toEqual({ taskId: "task-1", state: "completed", revision: 4 });
-    expect(access.reply).toHaveBeenCalledWith({ taskId: "task-1", state: "completed", text: "done" });
+    expect(access.reply).toHaveBeenCalledWith({
+      taskId: "task-1",
+      state: "completed",
+      text: "done",
+    });
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 

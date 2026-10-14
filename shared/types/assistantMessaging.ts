@@ -84,11 +84,7 @@ export const AssistantGetInboxResultSchema = z.object({
 export type AssistantGetInboxResult = z.infer<typeof AssistantGetInboxResultSchema>;
 
 export const AssistantReplyArgsSchema = z.object({
-  taskId: z
-    .string()
-    .min(1)
-    .max(TASK_ID_MAX_CHARS)
-    .describe("The taskId of an inbox message."),
+  taskId: z.string().min(1).max(TASK_ID_MAX_CHARS).describe("The taskId of an inbox message."),
   state: z
     .enum(["input-required", "completed"])
     .describe(
@@ -121,5 +117,4 @@ export type AssistantMessagingRefusalCode =
   | "UNAVAILABLE";
 
 export type AssistantMessagingOutcome<T> =
-  | { ok: true; value: T }
-  | { ok: false; code: AssistantMessagingRefusalCode; message: string };
+  { ok: true; value: T } | { ok: false; code: AssistantMessagingRefusalCode; message: string };

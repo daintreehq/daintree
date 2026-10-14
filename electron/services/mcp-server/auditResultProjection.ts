@@ -189,9 +189,7 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
       return {
         taskId: auditId(record?.taskId),
         state:
-          typeof record?.state === "string" && REPLY_STATES.has(record.state)
-            ? record.state
-            : null,
+          typeof record?.state === "string" && REPLY_STATES.has(record.state) ? record.state : null,
         textChars: typeof record?.text === "string" ? record.text.length : null,
       };
     },

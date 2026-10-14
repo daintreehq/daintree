@@ -127,7 +127,7 @@ describe("AssistantInbox", () => {
   });
 
   it("strips control and bidi characters from a label another machine chose", () => {
-    expect(cleanProvenanceLabel("evil\u001b]0;title\u0007‮host\n")).toBe("evil ]0;title host");
+    expect(cleanProvenanceLabel("evil\u001b]0;title\u0007\u202ehost\n")).toBe("evil ]0;title host");
     expect(cleanProvenanceLabel("\u0000\u0001")).toBe("unknown");
     expect(cleanProvenanceLabel("x".repeat(500))).toHaveLength(120);
   });

@@ -1653,7 +1653,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               .filter((toolId) => isGenericNativeGrantEligible(toolId))
           );
           const permittedActionIds = new Set<string>([
-            ...getReachableActionIds(tier, rendererOwnedOrigin, sessionSurface.paneApproval === true),
+            ...getReachableActionIds(
+              tier,
+              rendererOwnedOrigin,
+              sessionSurface.paneApproval === true
+            ),
             ...perToolGrantedActionIds,
             ...nativeGrantedActionIds,
           ]);
