@@ -57,6 +57,11 @@ describe("sample file tree stories", () => {
   it("Loading renders the tree with no rows while the listing is outstanding", async () => {
     const container = await show(stories.Loading);
     expect(container.querySelector("[data-testid=file-tree-view]")).not.toBeNull();
+    expect(rowNames(container)).toEqual([]);
+  });
+
+  it("Populated restores the expanded directory and the selection", async () => {
+    const container = await show(stories.Populated);
     const names = rowNames(container);
     // Expanded: `src`'s children follow it directly. Collapsed: `docs` has none.
     expect(names.slice(names.indexOf("src"), names.indexOf("src") + 4)).toEqual([
@@ -65,6 +70,7 @@ describe("sample file tree stories", () => {
       "panel.tsx",
       "styles.css",
     ]);
+    expect(names).toContain("docs");
     expect(names).not.toContain("guide.md");
     // Dotfiles are hidden by default, as in the app.
     expect(names).not.toContain(".env");
