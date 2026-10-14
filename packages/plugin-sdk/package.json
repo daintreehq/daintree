@@ -52,6 +52,11 @@
       "import": "./dist/testing-preview.js",
       "default": "./dist/testing-preview.js"
     },
+    "./testing/playwright": {
+      "types": "./dist/testing-playwright.d.ts",
+      "import": "./dist/testing-playwright.js",
+      "default": "./dist/testing-playwright.js"
+    },
     "./testing/plugin-ui": {
       "types": "./testing-plugin-ui.d.ts",
       "import": "./browser/plugin-ui.js",
@@ -92,23 +97,38 @@
     "yaml": "^2.9.1"
   },
   "peerDependencies": {
+    "@playwright/test": "^1.63.0",
+    "esbuild": "^0.28.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "tailwindcss": "^4.3.0",
     "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@playwright/test": {
+      "optional": true
+    },
+    "esbuild": {
+      "optional": true
+    },
     "react": {
       "optional": true
     },
     "react-dom": {
       "optional": true
+    },
+    "tailwindcss": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "esbuild": "^0.28.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "tailwindcss": "4.3.3",
     "tsup": "^8.5.1",
     "zod": "^4.6.5"
   }

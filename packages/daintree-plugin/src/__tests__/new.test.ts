@@ -161,6 +161,48 @@ describe("scaffoldPlugin", () => {
     expect(panel?.hasPty ?? false).toBe(false);
   });
 
+  it("gives view-bearing templates a panel preview, and the others none", async () => {
+    const PREVIEW_FILES = [
+      "review/panel.stories.tsx",
+      "review/panel.spec.ts",
+      "playwright.config.ts",
+    ];
+    for (const template of TEMPLATE_KINDS) {
+      const result = await scaffoldPlugin({
+        cwd: tmpDir,
+        targetDir: `preview-${template}`,
+        publisher: "acme",
+        displayName: "Preview",
+        template,
+      });
+      const pkg = await readJson(path.join(result.dir, "package.json"));
+      const scripts = pkg.scripts as Record<string, string>;
+      const dev = pkg.devDependencies as Record<string, string>;
+      if (template === "view" || template === "full") {
+        expect(result.files).toEqual(expect.arrayContaining(PREVIEW_FILES));
+        // The stories mount the scaffolded panel under the plugin's own id.
+        const stories = await fs.readFile(
+          path.join(result.dir, "review", "panel.stories.tsx"),
+          "utf8"
+        );
+        expect(stories).toContain('import Panel from "../src/panel";');
+        expect(stories).toContain(`pluginId: ${JSON.stringify(result.scopedName)}`);
+        expect(scripts["test:preview"]).toBe("playwright test");
+        for (const name of ["@playwright/test", "esbuild", "tailwindcss"]) {
+          expect(dev[name], name).toBeDefined();
+        }
+      } else {
+        expect(result.files.filter((file) => PREVIEW_FILES.includes(file))).toEqual([]);
+        expect(scripts["test:preview"]).toBeUndefined();
+        expect(dev["@playwright/test"]).toBeUndefined();
+      }
+      const gitignore = await fs.readFile(path.join(result.dir, ".gitignore"), "utf8");
+      expect(gitignore.split("\n")).toEqual(
+        expect.arrayContaining(["test-results/", "playwright-report/"])
+      );
+    }
+  });
+
   it("full template pairs its contributed view with a matching panel", async () => {
     const result = await scaffoldPlugin({
       cwd: tmpDir,

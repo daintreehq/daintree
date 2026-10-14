@@ -2,24 +2,19 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const sdkDir = path.resolve(here, "../..");
 
-/** Every `from "..."` / `import("...")` specifier in a source file. */
+/**
+ * Every `from "..."`, bare `import "..."` and `import("...")` specifier in a
+ * source file. Read by TypeScript's import scanner rather than a regex, so the
+ * text of a template literal — a generated module or a stylesheet's `@import`s
+ * — is not mistaken for the file's own imports.
+ */
 function importSpecifiers(source: string): string[] {
-  const specifiers: string[] = [];
-  // Static `import ... from "x"` and `export ... from "x"`, plus bare
-  // `import "x"` side-effect imports and dynamic `import("x")`.
-  const patterns = [
-    /\bfrom\s*["']([^"']+)["']/g,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-    /\bimport\s+["']([^"']+)["']/g,
-  ];
-  for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) specifiers.push(match[1]);
-  }
-  return specifiers;
+  return ts.preProcessFile(source, true, true).importedFiles.map((file) => file.fileName);
 }
 
 /**
@@ -29,6 +24,8 @@ function importSpecifiers(source: string): string[] {
 function packageName(specifier: string): string | null {
   if (specifier.startsWith(".") || specifier.startsWith("/")) return null;
   if (specifier.startsWith("node:")) return null;
+  // Supplied by the build (`pluginStyleContractEsbuild` in tsup.config.ts), not a package.
+  if (specifier === "virtual:daintree-plugin-style-contract") return null;
   const segments = specifier.split("/");
   const name = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0];
   return name || null;
@@ -57,7 +54,7 @@ async function sourceFiles(dir: string): Promise<string[]> {
  * and panels shipped a second React copy.
  *
  * Scope is deliberately narrow: direct imports in this package's own `.ts`
- * sources, matched by regex rather than parsed. It's the fast, readable half of
+ * sources, scanned rather than resolved. It's the fast, readable half of
  * the guard and it names the offending file. The exhaustive half — anything
  * bundled transitively, including through the `shared/` code the entries
  * re-export — is asserted against the real build's esbuild metafile in

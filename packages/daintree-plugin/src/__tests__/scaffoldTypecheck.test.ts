@@ -67,8 +67,11 @@ async function linkDependencies(dir: string): Promise<void> {
   await fs.symlink(mcpSdk, path.join(mcp, "sdk"));
 }
 
-/** `tsc --noEmit -p <dir>` over the generated tsconfig, reporting diagnostics in the project's own files. */
-function typecheck(dir: string, override: ts.CompilerOptions = {}): string[] {
+/**
+ * `tsc --noEmit -p <dir>` over the generated tsconfig, reporting diagnostics in
+ * the project's own files: `src/`, plus any `extra` files given relative to it.
+ */
+function typecheck(dir: string, override: ts.CompilerOptions = {}, extra: string[] = []): string[] {
   const configPath = path.join(dir, "tsconfig.json");
   const config = ts.readConfigFile(configPath, (p) => ts.sys.readFile(p));
   if (config.error) return [ts.flattenDiagnosticMessageText(config.error.messageText, "\n")];
@@ -81,16 +84,23 @@ function typecheck(dir: string, override: ts.CompilerOptions = {}): string[] {
     paths: {
       "@daintreehq/plugin-sdk": [path.join(sdkDir, "src/index.ts")],
       "@daintreehq/plugin-sdk/react": [path.join(sdkDir, "src/react.ts")],
+      "@daintreehq/plugin-sdk/testing/preview": [path.join(sdkDir, "src/testing-preview.ts")],
+      "@daintreehq/plugin-sdk/testing/playwright": [path.join(sdkDir, "src/testing-playwright.ts")],
     },
     ...override,
   };
   const host = ts.createCompilerHost(options);
   host.getCurrentDirectory = () => dir;
-  const program = ts.createProgram(parsed.fileNames, options, host);
+  const extraFiles = extra.map((file) => path.join(dir, file));
+  const program = ts.createProgram([...parsed.fileNames, ...extraFiles], options, host);
   const sourcePrefix = path.join(dir, "src") + path.sep;
   const own = program
     .getSourceFiles()
-    .filter((file) => path.resolve(file.fileName).startsWith(sourcePrefix));
+    .filter(
+      (file) =>
+        path.resolve(file.fileName).startsWith(sourcePrefix) ||
+        extraFiles.includes(path.resolve(file.fileName))
+    );
   return [
     ...program.getOptionsDiagnostics(),
     ...program.getGlobalDiagnostics(),
@@ -133,6 +143,26 @@ describe("a scaffolded view typechecks", () => {
       }, 60_000);
     }
   }
+
+  it("view: its panel preview stories, spec and config typecheck against the SDK", async () => {
+    const result = await scaffoldPlugin({
+      cwd: tmpDir,
+      targetDir: "viewer",
+      publisher: "acme",
+      displayName: "Viewer",
+      template: "view",
+    });
+    await linkDependencies(result.dir);
+    const require = createRequire(import.meta.url);
+    const playwright = path.join(result.dir, "node_modules", "@playwright");
+    await fs.mkdir(playwright, { recursive: true });
+    await fs.symlink(
+      path.dirname(require.resolve("@playwright/test/package.json")),
+      path.join(playwright, "test")
+    );
+    const files = ["review/panel.stories.tsx", "review/panel.spec.ts", "playwright.config.ts"];
+    expect(typecheck(result.dir, {}, files)).toEqual([]);
+  }, 60_000);
 
   it("fails the same probe without the opt-in, which is what the entries fix", async () => {
     const result = await scaffoldPlugin({

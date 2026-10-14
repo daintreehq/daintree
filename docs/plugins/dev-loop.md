@@ -33,11 +33,12 @@ Interactively, an invalid name, publisher or `--template` value (or an `mcp`/`fu
 Creates `./my-plugin/` with:
 
 - `plugin.json` — starter manifest, with a `$schema` pointing at the generated JSON Schema so an editor flags a misspelled field (see [`schema`](#daintree-plugin-schema))
-- `package.json` — `build`, `validate` and `package` scripts, and dev dependencies on `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite` and `daintree-plugin` (each the hard-coded range `^0.1.0`), `typescript` `^6.0.0` and `vite` `^8.0.0`. The `view` and `full` templates add `react`, `react-dom`, `@types/react` and `@types/react-dom` (`^19.0.0`); `mcp` and `full` add the runtime dependency `@modelcontextprotocol/sdk` `^1.12.0`, because the spawned server imports it
+- `package.json` — `build`, `validate` and `package` scripts, and dev dependencies on `@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite` and `daintree-plugin` (each the hard-coded range `^0.1.0`), `typescript` `^6.0.0` and `vite` `^8.0.0`. The `view` and `full` templates add `react` and `react-dom` (`^19.2.0`), `@types/react` and `@types/react-dom` (`^19.0.0`), the [panel preview](#preview-a-panel-outside-daintree)'s `@playwright/test`, `esbuild` and `tailwindcss`, and a `test:preview` script; `mcp` and `full` add the runtime dependency `@modelcontextprotocol/sdk` `^1.12.0`, because the spawned server imports it
 - `vite.config.ts` — pre-configured for plugin builds; `mcp` and `full` also get `vite.config.server.ts`, a second, Node-target config for the MCP server entry
 - `tsconfig.json` — for a template with a view, `compilerOptions.types` lists `@daintreehq/plugin-sdk/view-globals` and `@daintreehq/plugin-sdk/plugin-ui`, so `window.electron.plugin` and the [UI kit](./ui-kit.md) typecheck. Not in the 0.1.0 release on npm; it ships in the next one — the 0.1.0 scaffold writes no `types`, and SDK 0.1.0 has neither entry
 - `src/` — starter code based on template choice
-- `.gitignore` — excludes `node_modules/`, `dist/`, `*.dntr`, `.dev-marker` and `.tour-preview/`
+- `review/panel.stories.tsx`, `review/panel.spec.ts` and `playwright.config.ts` — for a template with a view, one story of the starter panel and a spec that captures every story, the [panel preview](#preview-a-panel-outside-daintree). `review/` is never built or packaged into `dist/`
+- `.gitignore` — excludes `node_modules/`, `dist/`, `*.dntr`, `.dev-marker`, `.tour-preview/`, and the preview's `test-results/` and `playwright-report/`
 - `.dntrignore` — commented-out examples of files to keep out of the packaged archive (see [Distribution → Packaging](./distribution.md#packaging))
 - `.claude/skills/daintree-tour/` — the tour-authoring Claude Code skill (`SKILL.md` plus its reference files), so a Claude Code session in the plugin can build a [tour](./tours.md) without a Daintree checkout. Not written under `--project`, since project plugins cannot contribute tours. Not in the 0.1.0 release on npm; it ships in the next one — [`skill add`](#daintree-plugin-skill-add-name) adds it to an existing plugin
 
@@ -346,6 +347,54 @@ Every destination is checked before anything is written. An identical file is le
 `install`, `uninstall`, `dev` and `doctor` talk to the running app over a local control socket. On startup Daintree writes `~/.daintree/cli-control.json` (owner-only) with the socket or pipe path and a per-launch token, and the CLI reads it and presents the token on every request. `DAINTREE_CLI_SOCKET` overrides the path; the token still comes from the control file. With no control file the CLI tries the default, `~/.daintree/cli.sock` (`\\.\pipe\daintree-cli` on Windows, where the real pipe name is randomised per launch and only the control file knows it).
 
 Each request times out after 30 seconds. When nothing is listening the error names the path it tried — `Daintree isn't running. Start Daintree and try again. (tried: <socket>)` — and a stale socket left by a crashed instance reads `Couldn't connect to Daintree (stale or unresponsive socket at <socket>)`. `doctor` treats an unreachable Daintree as information and checks everything else.
+
+## Preview a panel outside Daintree
+
+> Not in the 0.1.0 release on npm; it ships in the next one.
+
+`@daintreehq/plugin-sdk/testing/playwright` renders a panel view in a plain browser page and captures it, with no Daintree running and no CLI in between. An author, an agent or CI drives it from an ordinary Playwright spec. It builds the plugin's stories with esbuild and compiles the classes they use with Tailwind against Daintree's design contract, serves the page on loopback, and mounts each story against the SDK's mock view host, under the built-in theme you name.
+
+**Stories.** `review/panel.stories.tsx` is the input: a CSF3-shaped module whose default export names the view (`component`), the panel props every story shares (`args`) and the channel answers they start from (`fixtures.channels`), and whose named exports are the panel's states, each with its own `args`, `fixtures` and an optional `play` that drives the DOM into that state. The types come from `@daintreehq/plugin-sdk/testing/preview`, which also mounts a story in jsdom for a unit test. `plugins/sample/file-tree/review/` in the Daintree repo is the worked example.
+
+**The spec.** The fixtures are `@playwright/test`'s own `test`, extended:
+
+```ts
+import { test } from "@daintreehq/plugin-sdk/testing/playwright";
+
+test.use({ previewOptions: { themes: ["daintree", "bondi"] } });
+
+test("every panel story renders", async ({ preview }) => {
+  for (const story of preview.stories) {
+    for (const theme of preview.themes) {
+      await preview.open(story, theme);
+      await preview.snap(`${story}-${theme}`);
+    }
+  }
+  await preview.finish();
+});
+```
+
+`npm run test:preview` runs it; install a browser once with `npx playwright install chromium`. The page fills the viewport, so set `use.viewport` in `playwright.config.ts` to the panel size you want. The build runs once per worker.
+
+| `previewOptions` | Default |  |
+| --- | --- | --- |
+| `pluginDir` | the Playwright config's directory | Where the stories and the plugin's own React and SDK resolve from |
+| `storiesPath` | `review/panel.stories.tsx` | Relative to `pluginDir` |
+| `stories` | every story in the module | The export names a test must capture. A story added later is one the spec then has to cover |
+| `themes` | `["daintree"]` | Built-in theme ids. An unknown id fails the test |
+
+| `preview` |  |
+| --- | --- |
+| `stories`, `themes` | The declared stories and themes: the matrix `finish()` checks |
+| `open(story, theme?)` | Loads the page with that story mounted under that theme. Each open is a fresh page, so panel state does not carry over |
+| `snap(name)` | A verified screenshot of the open story. It waits for the page to report ready (the story mounted, `play` finished, the kit, styles and fonts in), for fonts again, and for two consecutive frames to match. It fails instead on a story that did not mount, a `play` that threw, a stylesheet or font that did not load, and on any console error, uncaught page error or failed request since the last capture. The image is saved as `name.png` in the test's output folder, attached to the report and returned |
+| `finish()` | Fails naming every declared (story, theme) pair without a verified capture, so a story that silently did not run cannot pass. A test that opened a story and never called it fails too |
+
+`snap` checks that a render is healthy and still, not that it matches an earlier one: there is no baseline. Two identical frames cannot prove data has arrived, so a story that waits on something should await it in `play`. Use Playwright's own `expect(page).toHaveScreenshot()` beside it when you want a committed baseline.
+
+What the page is and is not: the view renders with the kit's browser build (`@daintreehq/plugin-sdk/testing/plugin-ui`) and the host stylesheet (`testing/preview.css`), its classes compiled once from its sources rather than by the host's DOM observer, and React, the SDK and the kit bundled into one module. Worker calls answer from `fixtures.channels`; host actions, toasts and other host behaviour stay inert. It previews the view, not the production build's externals, which `daintree-plugin lint` and a real load check.
+
+`@playwright/test`, `esbuild` and `tailwindcss` are optional peer dependencies of the SDK, loaded only by this entry: a plugin that never runs the preview never installs them, and nothing of them reaches a built view.
 
 ## Performance
 

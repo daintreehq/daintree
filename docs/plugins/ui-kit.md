@@ -30,6 +30,8 @@ export default function Panel() {
 }
 ```
 
+To see a panel drawn with the kit without Daintree running, and capture it from a test, use the [panel preview](./dev-loop.md#preview-a-panel-outside-daintree): it renders with the kit's browser build, `@daintreehq/plugin-sdk/testing/plugin-ui`, styled by `@daintreehq/plugin-sdk/testing/preview.css`.
+
 ## Versioning and stability
 
 `PLUGIN_UI_VERSION` is the kit's contract version, a semver string — `"1.0.0"` for this release, the first. The rules:
