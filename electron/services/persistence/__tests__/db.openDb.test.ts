@@ -51,6 +51,9 @@ describe("openDb (integration)", () => {
       expect(names).toContain("app_state");
       expect(names).toContain("__drizzle_migrations");
       expect(names).toContain("scratches");
+      expect(names).toContain("assistant_exchanges");
+      expect(names).toContain("assistant_exchange_clock");
+      expect(names).toContain("assistant_exchange_audit");
       expect(names).not.toContain("tasks");
 
       const migrations = sqlite.prepare("SELECT id, hash FROM __drizzle_migrations").all() as {
@@ -478,7 +481,10 @@ describe("openDb (integration)", () => {
     const deletedKeys = [
       ...finalSql.matchAll(/DELETE FROM `app_state` WHERE `key` = '([^']+)'/g),
     ].map((m) => m[1]!);
-    expect(additions.length).toBeGreaterThan(0);
+    const createdTables = [
+      ...finalSql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?`([a-z_]+)`/g),
+    ].map((m) => m[1]!);
+    expect(additions.length + createdTables.length).toBeGreaterThan(0);
 
     const Database = (await import("better-sqlite3")).default;
     const seed = new Database(dbPath);
@@ -540,6 +546,12 @@ describe("openDb (integration)", () => {
       ).map((c) => c.name);
       expect(seededColumns).not.toContain(column);
     }
+    const seededTables = (
+      preCheck.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+        name: string;
+      }[]
+    ).map((t) => t.name);
+    for (const table of createdTables) expect(seededTables).not.toContain(table);
     // And the dropped ones must be present, or the DROP would prove nothing.
     for (const { table, column } of removals) {
       const seededColumns = (
@@ -559,6 +571,12 @@ describe("openDb (integration)", () => {
         const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
         expect(columns).not.toContain(column);
       }
+      const tables = (
+        sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+          name: string;
+        }[]
+      ).map((t) => t.name);
+      for (const table of createdTables) expect(tables).toContain(table);
 
       // Obsolete keys are gone and their neighbours are not — a DELETE without
       // a WHERE, or one aimed at the wrong key, fails on the second assertion.
@@ -661,7 +679,11 @@ describe("openDb (integration)", () => {
     const applied = seed.prepare(
       "INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)"
     );
-    for (const entry of journal.slice(0, -1)) applied.run(entry.tag, entry.when);
+    const migration0013 = journal.findIndex(
+      (entry) => entry.tag === "0013_add_scratch_resumable_agent_count"
+    );
+    expect(migration0013).toBeGreaterThan(0);
+    for (const entry of journal.slice(0, migration0013)) applied.run(entry.tag, entry.when);
     seed
       .prepare(
         "INSERT INTO scratches (id, path, name, created_at, last_opened) VALUES (?, ?, ?, ?, ?)"
