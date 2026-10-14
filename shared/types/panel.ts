@@ -1068,12 +1068,15 @@ export function isBrowserPanel(panel: PanelInstance | TerminalInstance): panel i
   return kind === "browser";
 }
 
+export function isDevPreviewKind(kind: PanelKind | undefined): boolean {
+  // eslint-disable-next-line no-restricted-syntax -- sanctioned panel-kind type guard
+  return kind === "dev-preview";
+}
+
 export function isDevPreviewPanel(
   panel: PanelInstance | TerminalInstance
 ): panel is DevPreviewPanelData {
-  const kind = panel.kind ?? "terminal";
-  // eslint-disable-next-line no-restricted-syntax -- sanctioned panel-kind type guard
-  return kind === "dev-preview";
+  return isDevPreviewKind(panel.kind);
 }
 
 export function isReviewPanel(panel: PanelInstance | TerminalInstance): panel is ReviewPanelData {

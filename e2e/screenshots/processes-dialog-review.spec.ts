@@ -113,7 +113,10 @@ const STATES: State[] = [
     capture: async (page, theme) => {
       const dialog = await populated(page, theme);
       // The long dev-server title: its full text should be reachable.
-      await dialog.getByText(/^npm run dev/).first().hover();
+      await dialog
+        .getByText(/^npm run dev/)
+        .first()
+        .hover();
       await page.waitForTimeout(900);
       return dialog;
     },
@@ -123,7 +126,10 @@ const STATES: State[] = [
     capture: async (page, theme) => {
       const dialog = await populated(page, theme);
       // The abbreviated process names: every name should be one hover away.
-      await dialog.locator('[data-terminal-id="claude-main"]').getByText(/PID 51204/).hover();
+      await dialog
+        .locator('[data-terminal-id="claude-main"]')
+        .getByText(/PID 51204/)
+        .hover();
       await page.waitForTimeout(900);
       return dialog;
     },
@@ -198,6 +204,10 @@ const STATES: State[] = [
 ];
 
 test("processes dialog", async ({ browser }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_PROCESSES is required for the processes dialog capture",
+  });
   test.skip(!ENABLED, "set DAINTREE_SHOT_PROCESSES=1 to capture");
   const context = await browser.newContext();
   await settleDevServer(context);

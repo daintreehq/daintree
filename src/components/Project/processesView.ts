@@ -66,7 +66,7 @@ export function groupTerminalsByProject(terminals: ProcessInventoryTerminal[]): 
 }
 
 export type ProjectProcessRow =
-  | { kind: "terminal"; terminal: ProcessInventoryTerminal }
+  | { kind: "live"; terminal: ProcessInventoryTerminal }
   | { kind: "closed"; closed: ClosedProcessGroup };
 
 /** A project's live terminals and the processes its closed terminals left running. */
@@ -80,12 +80,12 @@ export interface ProjectProcessGroup {
 }
 
 function rowMemory(row: ProjectProcessRow): number {
-  return row.kind === "terminal" ? (row.terminal.sample?.memoryKb ?? -1) : (row.closed.memoryKb ?? -1);
+  return row.kind === "live" ? (row.terminal.sample?.memoryKb ?? -1) : (row.closed.memoryKb ?? -1);
 }
 
 /**
  * Everything a project owns in one place: named projects first, "No project"
- * last, live terminals before what closed terminals left behind.
+ * last, live terminals and closed leftovers ranked together by memory.
  */
 export function groupProcessesByProject(
   terminals: ProcessInventoryTerminal[],
@@ -105,13 +105,14 @@ export function groupProcessesByProject(
   }
   for (const group of closed) {
     const key = group.projectId ?? UNOWNED_KEY;
-    ensure(key, group.projectId ? (group.projectLabel ?? "Unknown project") : "No project").closed.push(
-      group
-    );
+    ensure(
+      key,
+      group.projectId ? (group.projectLabel ?? "Unknown project") : "No project"
+    ).closed.push(group);
   }
   for (const group of groups.values()) {
     group.rows = [
-      ...group.terminals.map((terminal) => ({ kind: "terminal" as const, terminal })),
+      ...group.terminals.map((terminal) => ({ kind: "live" as const, terminal })),
       ...group.closed.map((closed) => ({ kind: "closed" as const, closed })),
     ].sort((a, b) => rowMemory(b) - rowMemory(a));
   }

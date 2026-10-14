@@ -113,7 +113,8 @@ const populated: ProcessInventorySnapshot = {
     }),
     terminal("dev-web", {
       kind: "dev-preview",
-      title: "npm run dev -- --host 0.0.0.0 --port 5173 --strictPort --config vite.config.preview.ts",
+      title:
+        "npm run dev -- --host 0.0.0.0 --port 5173 --strictPort --config vite.config.preview.ts",
       rootPid: 51_377,
       sample: sample(12, 684, [
         ["node", 412],
@@ -289,8 +290,7 @@ const sessions: DevPreviewSessionState[] = [
 
 const never = <T,>() => new Promise<T>(() => {});
 
-const snapshot =
-  state === "empty" ? empty : state === "degraded" ? degraded : populated;
+const snapshot = state === "empty" ? empty : state === "degraded" ? degraded : populated;
 
 installPreviewShims({
   // The shim's thenable answers "cached" to `isViewCached`, which would stop

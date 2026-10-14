@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { RefreshCw, Trash2 } from "lucide-react";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
+import { isDevPreviewKind } from "@shared/types/panel";
 import type {
   ClosedProcessKillResult,
   ProcessInventoryPluginProcess,
@@ -343,7 +344,7 @@ export function ProcessesDialog({
   // In the order the rows render, so focus after a kill lands on a neighbour.
   const listedIds = groups.flatMap((group) =>
     group.rows.map((row) =>
-      row.kind === "terminal" ? row.terminal.id : `${CLOSED_KILL_PREFIX}${row.closed.key}`
+      row.kind === "live" ? row.terminal.id : `${CLOSED_KILL_PREFIX}${row.closed.key}`
     )
   );
 
@@ -477,7 +478,7 @@ export function ProcessesDialog({
     const secondsLeft = trashSecondsLeft(terminal, now);
     const stops = devSessionTerminalIds
       ? devSessionTerminalIds.has(terminal.id)
-      : terminal.kind === "dev-preview";
+      : isDevPreviewKind(terminal.kind);
     const action = stops ? "Stop dev server" : "Kill terminal";
     const members = terminal.sample ? describeMembers(terminal.sample, 3) : null;
     const pid = terminal.rootPid !== null ? `PID ${terminal.rootPid}` : null;
@@ -716,7 +717,9 @@ export function ProcessesDialog({
                     0
                   );
                   const counts = [
-                    group.terminals.length > 0 ? pluralize(group.terminals.length, "terminal") : null,
+                    group.terminals.length > 0
+                      ? pluralize(group.terminals.length, "terminal")
+                      : null,
                     leftover > 0
                       ? `${pluralize(leftover, "process", "processes")} left running`
                       : null,
@@ -736,7 +739,7 @@ export function ProcessesDialog({
                       </h3>
                       <ul>
                         {group.rows.map((row) =>
-                          row.kind === "terminal"
+                          row.kind === "live"
                             ? renderTerminal(row.terminal, group.label)
                             : renderClosedGroup(row.closed)
                         )}
