@@ -815,12 +815,17 @@ describe("remote session wiring", () => {
       await connect();
       await invoke(HOST_CHANNEL, VIEW_A, {});
       const connection = h.manager.get(HOST_ID)!;
-      live.set(handleOf("proj-1"), "proj-1");
+      const first = handleOf("proj-1");
+      live.set(first, "proj-1");
       h.sessionHost.refreshAssistants();
       await waitFor(() => connection.hasLiveAssistant(VIEW_A));
 
       h.sink.gone(VIEW_A);
-      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const envelope = await invoke(HOST_CHANNEL, VIEW_A, {});
+      expect(envelope.ok).toBe(true);
+      expect(connection.boundViews()).toEqual([VIEW_A]);
+      await waitFor(() => getEndpointRegistry().getRemote().length === 1);
+      expect(handleOf("proj-1")).not.toBe(first);
       expect(connection.hasLiveAssistant(VIEW_A)).toBe(false);
     });
 
