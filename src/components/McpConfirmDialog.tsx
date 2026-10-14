@@ -341,16 +341,16 @@ export function McpConfirmDialog() {
   };
 
   // Who → what happens → what's affected → detail → later requests. The
-  // consequence replaces the generic description when the action carries one:
-  // both describe the same act, and the rationale is the specific one.
+  // description stays beside the rationale: some actions carry a warning in one
+  // that the other doesn't repeat (forge.dismissReview's merge-safety note).
   const body = (
     <div className="space-y-4">
       <RequesterRow current={current} />
 
-      {current.dangerRationale ? (
+      <AppDialog.Description>{current.actionDescription}</AppDialog.Description>
+
+      {current.dangerRationale && (
         <ConsequenceNote isDestructive={isDestructive}>{current.dangerRationale}</ConsequenceNote>
-      ) : (
-        <AppDialog.Description>{current.actionDescription}</AppDialog.Description>
       )}
 
       {selectableTargets !== undefined && (

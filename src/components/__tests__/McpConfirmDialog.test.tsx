@@ -657,6 +657,19 @@ describe("McpConfirmDialog", () => {
     ).toBeTruthy();
   });
 
+  it("keeps the action description beside the rationale, since each can carry its own warning", () => {
+    void enqueue({
+      actionTitle: "Delete worktree",
+      dangerRationale: "Permanently removes the worktree directory and any uncommitted changes.",
+    });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Permanently delete a worktree.")).toBeTruthy();
+    expect(
+      screen.getByText(/Permanently removes the worktree directory and any uncommitted changes\./)
+    ).toBeTruthy();
+  });
+
   it("omits the rationale block entirely when the action carries no dangerRationale", () => {
     void enqueue({ actionTitle: "Delete worktree" });
     render(<McpConfirmDialog />);
