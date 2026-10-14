@@ -148,6 +148,9 @@ async function buildHostListener(
     launchCommand: hostLaunchCommand(),
     observeWorkingAgents: async () => (await observeAgents())?.working ?? null,
   });
+  // Runs after the server closes: closing ends every session without an expiry
+  // event, and no Shell can resume one, so their lanes are released here.
+  teardowns.push(() => getRemoteService("assistantMessagingPolicy")?.releaseRemoteShells());
   teardowns.push(() => server.close());
   teardowns.push(registerRemoteService("hostServer", server));
 
@@ -274,10 +277,7 @@ async function buildHostListener(
         detachWorktreePortBridge(endpointId);
       }
       // That Shell can't come back as this session, so the lanes it enrolled are done.
-      getRemoteService("assistantMessagingPolicy")?.releaseShell({
-        kind: "remote",
-        linkSessionId: sessionId,
-      });
+      getRemoteService("assistantMessagingPolicy")?.releaseLinkSession(sessionId);
       notify();
     })
   );

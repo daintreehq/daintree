@@ -1828,17 +1828,31 @@ describe("HelpSessionService", () => {
       ]);
     });
 
-    it("ends the lane's session when its conversation is discarded, with or without a resume store", async () => {
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
-      const { events } = listen();
-      await service.discardConversation("proj-1", 1);
-      expect(events).toEqual([]);
-      await service.discardConversation("proj-1", 0);
-      expect(events).toEqual([
-        { projectId: "proj-1", slot: 0, sessionId: result.sessionId, reason: "discarded" },
-      ]);
-    });
+    it.each([
+      ["without", false],
+      ["with", true],
+    ])(
+      "ends the lane's session when its conversation is discarded, %s a resume store",
+      async (_label, withStore) => {
+        if (withStore) {
+          service.setPendingHibernationStore({
+            get: vi.fn().mockReturnValue(null),
+            set: vi.fn().mockResolvedValue(undefined),
+            clear: vi.fn().mockResolvedValue(undefined),
+            flush: vi.fn().mockResolvedValue(undefined),
+          } as never);
+        }
+        const result = await service.provisionSession(provisionInput());
+        if (!result) throw new Error("expected result");
+        const { events } = listen();
+        await service.discardConversation("proj-1", 1);
+        expect(events).toEqual([]);
+        await service.discardConversation("proj-1", 0);
+        expect(events).toEqual([
+          { projectId: "proj-1", slot: 0, sessionId: result.sessionId, reason: "discarded" },
+        ]);
+      }
+    );
 
     it("keeps the single MCP revoke callback and the other listeners running when one listener throws", async () => {
       const result = await service.provisionSession(provisionInput());

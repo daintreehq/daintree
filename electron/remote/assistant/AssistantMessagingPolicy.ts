@@ -71,7 +71,7 @@ export interface AssistantMessagingPolicyDeps {
   /** The help session a lane is running right now; never launches one. */
   getRunningLaneSession(projectId: string, slot: number): RunningLaneSession | null;
   /** Which incarnation of a PTY is running under its id, or null when none is. */
-  getLaunchGeneration(terminalId: string): number | null;
+  getLiveGeneration(terminalId: string): number | null;
   /** This Shell's per-host opt-in. */
   isHostMessagingEnabled(hostId: HostId): boolean;
   onSessionEnded(listener: (event: HelpSessionEndedEvent) => void): () => void;
@@ -142,7 +142,7 @@ export class AssistantMessagingPolicy {
     if (!this.supported) return { ok: false, reason: "unsupported-platform" };
     const key = laneKey(lane);
     if (key === null || !isValidShell(shell)) return { ok: false, reason: "invalid-lane" };
-    const existing = this.enrollments.get(key);
+    const existing = this.current(key);
     if (existing && !sameShell(existing.enrolledBy, shell)) {
       return { ok: false, reason: "wrong-shell" };
     }
@@ -151,7 +151,7 @@ export class AssistantMessagingPolicy {
       if (hub && laneKey(hub) !== key) return { ok: false, reason: "hub-taken" };
     }
     const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
-    const launchGeneration = running ? this.deps.getLaunchGeneration(running.terminalId) : null;
+    const launchGeneration = running ? this.deps.getLiveGeneration(running.terminalId) : null;
     if (!running || launchGeneration === null) return { ok: false, reason: "unavailable" };
     const enrollment: LaneEnrollment = {
       projectId: lane.projectId,
@@ -174,7 +174,7 @@ export class AssistantMessagingPolicy {
   unenroll(lane: LaneRef, shell: MessagingShell, generation: string): boolean {
     const key = laneKey(lane);
     if (key === null) return false;
-    const existing = this.enrollments.get(key);
+    const existing = this.current(key);
     if (!existing || existing.generation !== generation) return false;
     if (!sameShell(existing.enrolledBy, shell)) return false;
     this.enrollments.delete(key);
@@ -182,22 +182,32 @@ export class AssistantMessagingPolicy {
   }
 
   /** Ends every enrollment a remote Shell made, once its link session is gone for good. */
-  releaseShell(shell: MessagingShell): void {
+  releaseLinkSession(linkSessionId: string): void {
     for (const [key, enrollment] of this.enrollments) {
-      if (sameShell(enrollment.enrolledBy, shell)) this.enrollments.delete(key);
+      const by = enrollment.enrolledBy;
+      if (by.kind === "remote" && by.linkSessionId === linkSessionId) this.enrollments.delete(key);
+    }
+  }
+
+  /** Ends every remote Shell's enrollments: this host stopped listening, so none can resume. */
+  releaseRemoteShells(): void {
+    for (const [key, enrollment] of this.enrollments) {
+      if (enrollment.enrolledBy.kind === "remote") this.enrollments.delete(key);
     }
   }
 
   getEnrollment(lane: LaneRef): LaneEnrollment | null {
     const key = laneKey(lane);
-    const enrollment = key === null ? undefined : this.enrollments.get(key);
+    const enrollment = key === null ? undefined : this.current(key);
     return enrollment ? copyEnrollment(enrollment) : null;
   }
 
   /** The lane enrolled on this Shell itself, if any. */
   getHub(): LaneEnrollment | null {
-    for (const enrollment of this.enrollments.values()) {
-      if (enrollment.enrolledBy.kind === "local") return copyEnrollment(enrollment);
+    for (const [key, enrollment] of this.enrollments) {
+      if (enrollment.enrolledBy.kind !== "local") continue;
+      const hub = this.current(key);
+      return hub ? copyEnrollment(hub) : null;
     }
     return null;
   }
@@ -218,13 +228,13 @@ export class AssistantMessagingPolicy {
     if (!this.supported) return { ok: false, reason: "unsupported-platform" };
     const key = laneKey(check.lane);
     if (key === null || !isValidShell(check.shell)) return { ok: false, reason: "invalid-lane" };
-    const enrollment = this.enrollments.get(key);
+    const enrollment = this.current(key);
     if (!enrollment) return { ok: false, reason: "not-enrolled" };
     if (!sameShell(enrollment.enrolledBy, check.shell)) return { ok: false, reason: "wrong-shell" };
     if (enrollment.generation !== check.generation) {
       return { ok: false, reason: "stale-generation" };
     }
-    return this.decide(key, enrollment, check.kind);
+    return this.decide(enrollment, check.kind);
   }
 
   /** Shell side: may this Shell's hub message assistants on `hostId` for `kind`? */
@@ -235,10 +245,7 @@ export class AssistantMessagingPolicy {
     }
     const hub = this.getHub();
     if (!hub) return { ok: false, reason: "no-hub" };
-    const key = laneKey(hub) as string;
-    const decision = this.decide(key, this.enrollments.get(key) as LaneEnrollment, check.kind);
-    if (!decision.ok && decision.reason === "not-enrolled") return { ok: false, reason: "no-hub" };
-    return decision;
+    return this.decide(hub, check.kind);
   }
 
   dispose(): void {
@@ -248,41 +255,43 @@ export class AssistantMessagingPolicy {
     this.paused = false;
   }
 
-  private decide(
-    key: string,
-    enrollment: LaneEnrollment,
-    kind: MessagingRequestKind
-  ): EnrollmentResult {
-    if (kind !== "inspect") {
-      const availability = this.availability(key, enrollment);
-      if (availability !== null) return { ok: false, reason: availability };
+  private decide(enrollment: LaneEnrollment, kind: MessagingRequestKind): EnrollmentResult {
+    if (kind !== "inspect" && !this.isRunning(enrollment)) {
+      return { ok: false, reason: "unavailable" };
     }
     if (this.paused && !PAUSE_EXEMPT.has(kind)) return { ok: false, reason: "paused" };
     return { ok: true, enrollment: copyEnrollment(enrollment) };
   }
 
   /**
-   * Null when the enrolled run is the one running now. A run that was replaced
-   * ends the enrollment here even if no session event said so, so a relaunch
-   * in place can't inherit consent given to its predecessor.
+   * The lane's enrollment, unless the run it was given to has been replaced.
+   * A replacement ends it here even when no session event said so, so a
+   * relaunch in place can't inherit consent given to its predecessor. A run
+   * that merely isn't running right now keeps its enrollment.
    */
-  private availability(key: string, enrollment: LaneEnrollment): MessagingDenial | null {
+  private current(key: string): LaneEnrollment | undefined {
+    const enrollment = this.enrollments.get(key);
+    if (!enrollment) return undefined;
     const running = this.deps.getRunningLaneSession(enrollment.projectId, enrollment.slot);
-    if (!running) return "unavailable";
-    if (
+    if (!running) return enrollment;
+    const launchGeneration = this.deps.getLiveGeneration(running.terminalId);
+    const replaced =
       running.sessionId !== enrollment.sessionId ||
-      running.terminalId !== enrollment.terminalId
-    ) {
-      this.enrollments.delete(key);
-      return "not-enrolled";
-    }
-    const launchGeneration = this.deps.getLaunchGeneration(running.terminalId);
-    if (launchGeneration === null) return "unavailable";
-    if (launchGeneration !== enrollment.launchGeneration) {
-      this.enrollments.delete(key);
-      return "not-enrolled";
-    }
-    return null;
+      running.terminalId !== enrollment.terminalId ||
+      (launchGeneration !== null && launchGeneration !== enrollment.launchGeneration);
+    if (!replaced) return enrollment;
+    this.enrollments.delete(key);
+    return undefined;
+  }
+
+  private isRunning(enrollment: LaneEnrollment): boolean {
+    const running = this.deps.getRunningLaneSession(enrollment.projectId, enrollment.slot);
+    return (
+      running !== null &&
+      running.sessionId === enrollment.sessionId &&
+      running.terminalId === enrollment.terminalId &&
+      this.deps.getLiveGeneration(running.terminalId) === enrollment.launchGeneration
+    );
   }
 
   private handleSessionEnded(event: HelpSessionEndedEvent): void {

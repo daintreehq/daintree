@@ -22,7 +22,7 @@ export function installAssistantMessagingPolicy(
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),
-    getLaunchGeneration: (terminalId) => getPtyClient()?.getLaunchGeneration(terminalId) ?? null,
+    getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     isHostMessagingEnabled: deps.isHostMessagingEnabled,
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
   });

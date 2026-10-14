@@ -25,7 +25,7 @@ function harness(overrides: Partial<AssistantMessagingPolicyDeps> = {}) {
   let nextGeneration = 0;
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) => running.get(laneKey(projectId, slot)) ?? null,
-    getLaunchGeneration: (terminalId) => launchGenerations.get(terminalId) ?? null,
+    getLiveGeneration: (terminalId) => launchGenerations.get(terminalId) ?? null,
     isHostMessagingEnabled: (hostId) => enabledHosts.has(hostId),
     onSessionEnded: (listener) => {
       listeners.add(listener);
@@ -282,13 +282,115 @@ describe("AssistantMessagingPolicy", () => {
     h.run("proj", 0, "s1");
     h.run("proj", 1, "s2");
     h.run("proj", 2, "s3");
-    h.policy.enroll(lane("proj", 0), SHELL_A);
-    h.policy.enroll(lane("proj", 1), SHELL_A);
-    h.policy.enroll(lane("proj", 2), SHELL_B);
-    h.policy.releaseShell(SHELL_A);
+    h.run("hub", 0, "s4");
+    expect(h.policy.enroll(lane("proj", 0), SHELL_A).ok).toBe(true);
+    expect(h.policy.enroll(lane("proj", 1), SHELL_A).ok).toBe(true);
+    expect(h.policy.enroll(lane("proj", 2), SHELL_B).ok).toBe(true);
+    expect(h.policy.enroll(lane("hub", 0), LOCAL).ok).toBe(true);
+    h.policy.releaseLinkSession("link-a");
     expect(h.policy.getEnrollment(lane("proj", 0))).toBeNull();
     expect(h.policy.getEnrollment(lane("proj", 1))).toBeNull();
-    expect(h.policy.getEnrollment(lane("proj", 2))).not.toBeNull();
+    expect(h.policy.getEnrollment(lane("proj", 2))?.enrolledBy).toEqual(SHELL_B);
+    expect(h.policy.getHub()?.projectId).toBe("hub");
+  });
+
+  it("releases every remote Shell's lanes when this host stops listening, keeping the hub", () => {
+    const h = harness();
+    h.run("proj", 0, "s1");
+    h.run("proj", 1, "s2");
+    h.run("hub", 0, "s3");
+    expect(h.policy.enroll(lane("proj", 0), SHELL_A).ok).toBe(true);
+    expect(h.policy.enroll(lane("proj", 1), SHELL_B).ok).toBe(true);
+    expect(h.policy.enroll(lane("hub", 0), LOCAL).ok).toBe(true);
+    h.policy.releaseRemoteShells();
+    expect(h.policy.getEnrollment(lane("proj", 0))).toBeNull();
+    expect(h.policy.getEnrollment(lane("proj", 1))).toBeNull();
+    expect(h.policy.getHub()?.projectId).toBe("hub");
+    // A Shell connecting afresh may now take the lane.
+    expect(h.policy.enroll(lane("proj", 0), SHELL_B).ok).toBe(true);
+  });
+
+  it("a replaced run frees its lane for inspection, another Shell and another hub without a delivery check first", () => {
+    const h = harness();
+    h.run("proj", 0, "s1");
+    h.run("proj", 1, "s2");
+    const enrolled = h.policy.enroll(lane("proj", 0), SHELL_A);
+    const hub = h.policy.enroll(lane("proj", 1), LOCAL);
+    if (!enrolled.ok || !hub.ok) throw new Error("expected enrollments");
+
+    h.launchGenerations.set("t-s1", 99);
+    expect(
+      h.policy.checkLane({
+        lane: lane("proj", 0),
+        generation: enrolled.enrollment.generation,
+        shell: SHELL_A,
+        kind: "inspect",
+      })
+    ).toEqual({ ok: false, reason: "not-enrolled" });
+    expect(h.policy.enroll(lane("proj", 0), SHELL_B).ok).toBe(true);
+
+    h.run("proj", 1, "s2-relaunched");
+    expect(h.policy.enroll(lane("proj", 0), LOCAL)).toEqual({ ok: false, reason: "wrong-shell" });
+    h.run("proj", 2, "s3");
+    expect(h.policy.enroll(lane("proj", 2), LOCAL).ok).toBe(true);
+    expect(h.policy.getHub()?.slot).toBe(2);
+  });
+
+  it("keeps the enrollment of a PTY that isn't running, until a different one runs in its place", () => {
+    const h = harness();
+    h.run("proj", 0, "s1");
+    const enrolled = h.policy.enroll(lane(), SHELL_A);
+    if (!enrolled.ok) throw new Error("expected enrollment");
+    const base = { lane: lane(), generation: enrolled.enrollment.generation, shell: SHELL_A };
+    h.launchGenerations.delete("t-s1");
+    expect(h.policy.checkLane({ ...base, kind: "wake" })).toEqual({
+      ok: false,
+      reason: "unavailable",
+    });
+    expect(h.policy.checkLane({ ...base, kind: "inspect" }).ok).toBe(true);
+    expect(h.policy.enroll(lane(), SHELL_A)).toEqual({ ok: false, reason: "unavailable" });
+    h.launchGenerations.set("t-s1", 7);
+    expect(h.policy.checkLane({ ...base, kind: "inspect" })).toEqual({
+      ok: false,
+      reason: "not-enrolled",
+    });
+  });
+
+  it.each([
+    ["an empty project id", { projectId: "", slot: 0 }, SHELL_A],
+    ["a remote Shell with no link session", lane(), { kind: "remote", linkSessionId: "" }],
+    ["an unknown Shell kind", lane(), { kind: "peer" }],
+    ["a missing Shell", lane(), null],
+  ])("refuses %s without recording consent", (_label, ref, shell) => {
+    const h = harness();
+    h.run("proj", 0, "s1");
+    h.run("", 0, "s0");
+    expect(h.policy.enroll(ref, shell as MessagingShell)).toEqual({
+      ok: false,
+      reason: "invalid-lane",
+    });
+    expect(h.policy.getEnrollment(lane())).toBeNull();
+    expect(h.policy.getHub()).toBeNull();
+  });
+
+  it("a lane withdrawn by its Shell can be enrolled again, under a new generation", () => {
+    const h = harness();
+    h.run("proj", 0, "s1");
+    const first = h.policy.enroll(lane(), SHELL_A);
+    if (!first.ok) throw new Error("expected enrollment");
+    expect(h.policy.unenroll(lane(), SHELL_A, first.enrollment.generation)).toBe(true);
+    const second = h.policy.enroll(lane(), SHELL_A);
+    if (!second.ok) throw new Error("expected enrollment");
+    expect(second.enrollment.generation).not.toBe(first.enrollment.generation);
+    expect(h.policy.unenroll(lane(), SHELL_A, first.enrollment.generation)).toBe(false);
+    expect(
+      h.policy.checkLane({
+        lane: lane(),
+        generation: first.enrollment.generation,
+        shell: SHELL_A,
+        kind: "admit",
+      })
+    ).toEqual({ ok: false, reason: "stale-generation" });
   });
 
   it("hands out copies, so a caller can't rewrite who a lane answers to", () => {
@@ -320,7 +422,7 @@ describe("AssistantMessagingPolicy", () => {
   it("disposes once: unsubscribes from session events and forgets every enrollment and the pause", () => {
     const h = harness();
     h.run("proj", 0, "s1");
-    h.policy.enroll(lane(), SHELL_A);
+    expect(h.policy.enroll(lane(), SHELL_A).ok).toBe(true);
     h.policy.setPaused(true);
     expect(h.listeners.size).toBe(1);
     h.policy.dispose();
