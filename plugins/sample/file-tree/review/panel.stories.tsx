@@ -83,3 +83,12 @@ export const UnreadableDirectory: PanelStory = {
 export const Disconnected: PanelStory = {
   fixtures: { channels: { root: hostResponses.disconnected() } },
 };
+
+// Declaration order, which a native module namespace does not keep.
+export const __namedExportsOrder = [
+  "Empty",
+  "Loading",
+  "Populated",
+  "UnreadableDirectory",
+  "Disconnected",
+];

@@ -1,4 +1,5 @@
 import { Fragment, StrictMode, createElement, useEffect } from "react";
+import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 import { resetHostChannelCache } from "../../react/useCachedHostChannel.js";
@@ -135,7 +136,21 @@ export function mountComposedPanelStory(
   // and leaves the page as it was.
   let theme = applyPreviewTheme(themeRoot, options.theme ?? DEFAULT_PREVIEW_THEME_ID);
 
-  const panel = createPreviewPanelController(composed.args);
+  let disposed = false;
+  let reloadQueued = false;
+  const panel = createPreviewPanelController(composed.args, {
+    // Calls in one tick coalesce into one reload, as the host's do.
+    onReloadRequested: () => {
+      if (reloadQueued) return;
+      reloadQueued = true;
+      queueMicrotask(() => {
+        reloadQueued = false;
+        if (disposed) return;
+        panel.clearViewState();
+        void remount();
+      });
+    },
+  });
   const host = createMockViewHost({
     pluginId: panel.pluginId,
     channels: composed.fixtures.channels,
@@ -153,38 +168,17 @@ export function mountComposedPanelStory(
     }
   };
 
-  let root: Root;
   const canvasElement = doc.createElement("div");
-  let current: PendingMount | null = null;
-  try {
-    cleanups.push(host.install());
-    // The cached-channel cache is module state shared by every view in the
-    // document; a previous story's answers must not leak into this one.
-    resetHostChannelCache();
-
-    for (const [name, value] of Object.entries(panel.styleRootAttributes)) {
-      canvasElement.setAttribute(name, value);
-    }
-    canvasElement.style.height = "100%";
-    container.replaceChildren(canvasElement);
-    cleanups.push(() => canvasElement.remove());
-    const releaseStyles = options.styles?.registerRoot(canvasElement);
-    if (releaseStyles) cleanups.push(releaseStyles);
-
-    root = createRoot(canvasElement, {
-      // A view that throws while rendering never commits, so the mount would
-      // otherwise wait forever. React 19 reports it here instead.
-      onUncaughtError: (error) => current?.reject(error),
-    });
-    cleanups.push(() => root.unmount());
-  } catch (error) {
-    runCleanups();
-    throw error;
-  }
-
+  let root!: Root;
   let generation = 0;
-  let disposed = false;
   let published: PreviewReadiness | null = null;
+  /** The current attempt's pending mount, until its probe fires. */
+  let pending: PendingMount | null = null;
+  /** Why the mounted view stopped rendering, after it had mounted. */
+  let crashed: string | null = null;
+  /** Mount (and, the first time, `play`) for the current attempt. */
+  let content: Promise<string | null> = Promise.resolve(null);
+  let attemptKey = 0;
 
   function publish(readiness: PreviewReadiness | null): void {
     published = readiness;
@@ -202,45 +196,78 @@ export function mountComposedPanelStory(
       }
     }
   }
-  cleanups.push(() => publish(null));
 
-  const styleFailure = (): PreviewReadiness | null => {
+  const styleFailure = (): string | null => {
     const failure = options.styles?.failure() ?? null;
-    return failure === null
-      ? null
-      : { status: "failed", reason: `styles failed to install: ${failure}` };
+    return failure === null ? null : `styles failed to install: ${failure}`;
   };
 
-  // A class that shows up after the page said ready, and does not compile,
-  // takes the ready state back: a capture taken now would be half-styled.
-  const unsubscribeStyles = options.styles?.subscribe?.(() => {
+  /** Take a ready page back: what it shows is no longer complete. */
+  function revoke(reason: string): void {
     if (disposed || published?.status !== "ready") return;
-    const failed = styleFailure();
-    if (failed) publish(failed);
-  });
-  if (unsubscribeStyles) cleanups.push(unsubscribeStyles);
+    publish({ status: "failed", reason });
+  }
 
-  async function settle(mounted: Promise<void>, runPlay: boolean): Promise<PreviewReadiness> {
-    const fail = (reason: string): PreviewReadiness => ({ status: "failed", reason });
+  function onUncaughtError(error: unknown): void {
+    if (pending) {
+      pending.reject(error);
+      return;
+    }
+    // After the mount: React has torn the view down, so its attempt is over.
+    crashed = `view stopped rendering: ${errorText(error)}`;
+    panel.disposeAttempt();
+    revoke(crashed);
+  }
+
+  /** Render a fresh attempt. Never throws: a refusal is a failed mount. */
+  function render(): Promise<void> {
+    attemptKey += 1;
+    const mount = pendingMount();
+    pending = mount;
+    crashed = null;
+    let settled = false;
+    const onMounted = () => {
+      if (settled) return;
+      settled = true;
+      if (pending === mount) pending = null;
+      mount.resolve();
+    };
+    try {
+      const tree = createElement(
+        Fragment,
+        null,
+        // Keyed per attempt, so a remount is a new instance rather than a re-render.
+        createElement(composed.component, { ...panel.props(), key: attemptKey }),
+        createElement(MountProbe, { onMounted })
+      );
+      root.render(options.strictMode === false ? tree : createElement(StrictMode, null, tree));
+    } catch (error) {
+      if (pending === mount) pending = null;
+      mount.reject(error);
+    }
+    return mount.promise;
+  }
+
+  async function mountContent(mounted: Promise<void>, runPlay: boolean): Promise<string | null> {
     try {
       await mounted;
     } catch (error) {
-      return fail(`story did not mount: ${errorText(error)}`);
+      return `story did not mount: ${errorText(error)}`;
     }
     if (runPlay && composed.play) {
       try {
         await composed.play({ host, panel, canvasElement });
       } catch (error) {
-        return fail(`play failed: ${errorText(error)}`);
+        return `play failed: ${errorText(error)}`;
       }
     }
-    // Feature-detected: jsdom has no `document.fonts`.
-    const fonts = (doc as Document & { fonts?: { ready?: PromiseLike<unknown> } }).fonts;
-    try {
-      await fonts?.ready;
-    } catch (error) {
-      return fail(`fonts did not load: ${errorText(error)}`);
-    }
+    return null;
+  }
+
+  async function settle(contentReady: Promise<string | null>): Promise<PreviewReadiness> {
+    const fail = (reason: string): PreviewReadiness => ({ status: "failed", reason });
+    const contentFailure = await contentReady;
+    if (contentFailure) return fail(contentFailure);
     try {
       await options.kit?.ready;
     } catch (error) {
@@ -251,47 +278,81 @@ export function mountComposedPanelStory(
     } catch (error) {
       return fail(`styles did not settle: ${errorText(error)}`);
     }
-    return styleFailure() ?? { status: "ready" };
+    // Last, so a face the kit or the styles brought into use is counted.
+    // Feature-detected: jsdom has no `document.fonts`. `ready` fulfils even
+    // when a face failed, so failures are read off the faces themselves.
+    const fonts = (doc as Partial<Pick<Document, "fonts">>).fonts;
+    if (fonts) {
+      await fonts.ready;
+      const failedFamilies: string[] = [];
+      fonts.forEach((face) => {
+        if (face.status === "error") failedFamilies.push(face.family);
+      });
+      if (failedFamilies.length > 0) return fail(`font did not load: ${failedFamilies[0]}`);
+    }
+    if (crashed) return fail(crashed);
+    const failure = styleFailure();
+    return failure ? fail(failure) : { status: "ready" };
   }
 
   /** Re-arm readiness and publish it for the latest generation only. */
-  function track(mounted: Promise<void>, runPlay: boolean): Promise<PreviewReadiness> {
+  function track(contentReady: Promise<string | null>): Promise<PreviewReadiness> {
     const mine = ++generation;
     publish(null);
-    return settle(mounted, runPlay).then((readiness) => {
+    return settle(contentReady).then((readiness) => {
       if (mine === generation && !disposed) publish(readiness);
       return readiness;
     });
   }
 
-  let attemptKey = 0;
-
-  function render(): Promise<void> {
-    attemptKey += 1;
-    const pending = pendingMount();
-    current = pending;
-    let settled = false;
-    const onMounted = () => {
-      if (settled) return;
-      settled = true;
-      pending.resolve();
-    };
-    const tree = createElement(
-      Fragment,
-      null,
-      // Keyed per attempt, so a remount is a new instance rather than a re-render.
-      createElement(composed.component, { ...panel.props(), key: attemptKey }),
-      createElement(MountProbe, { onMounted })
-    );
-    try {
-      root.render(options.strictMode === false ? tree : createElement(StrictMode, null, tree));
-    } catch (error) {
-      pending.reject(error);
-    }
-    return pending.promise;
+  function remount(): Promise<PreviewReadiness> {
+    // The outgoing view unmounts first, its cleanups run, and only then is its
+    // signal aborted and the record read for the next attempt — the host's
+    // order, so state persisted from a cleanup comes back.
+    flushSync(() => root.render(null));
+    panel.disposeAttempt();
+    content = mountContent(render(), false);
+    return track(content);
   }
 
-  const ready = track(render(), true);
+  let ready: Promise<PreviewReadiness>;
+  try {
+    cleanups.push(host.install());
+    // The cached-channel cache is module state shared by every view in the
+    // document; a previous story's answers must not leak into this one.
+    resetHostChannelCache();
+
+    for (const [name, value] of Object.entries(panel.styleRootAttributes)) {
+      canvasElement.setAttribute(name, value);
+    }
+    canvasElement.style.height = "100%";
+    container.replaceChildren(canvasElement);
+    cleanups.push(() => canvasElement.remove());
+    const releaseStyles = options.styles?.registerRoot(canvasElement);
+    if (releaseStyles) cleanups.push(releaseStyles);
+
+    // A view that throws while rendering never commits, so its mount would
+    // otherwise wait forever. React 19 reports it here instead.
+    root = createRoot(canvasElement, { onUncaughtError });
+    cleanups.push(() => root.unmount());
+    cleanups.push(() => publish(null));
+
+    // A class that shows up after the page said ready, and does not compile,
+    // takes the ready state back: a capture taken now would be half-styled.
+    const unsubscribeStyles = options.styles?.subscribe?.(() => {
+      const failure = styleFailure();
+      if (failure) revoke(failure);
+    });
+    if (unsubscribeStyles) cleanups.push(unsubscribeStyles);
+
+    content = mountContent(render(), true);
+    ready = track(content);
+  } catch (error) {
+    disposed = true;
+    runCleanups();
+    panel.disposeAttempt();
+    throw error;
+  }
 
   return {
     host,
@@ -303,12 +364,11 @@ export function mountComposedPanelStory(
     ready,
     setTheme(themeId) {
       theme = applyPreviewTheme(themeRoot, themeId);
-      return track(Promise.resolve(), false);
+      // The attempt's own mount and `play` still gate it: switching theme
+      // mid-`play`, or after a failed mount, is not a ready page.
+      return track(content);
     },
-    remount() {
-      const mounted = render().then(() => panel.retirePreviousAttempts());
-      return track(mounted, false);
-    },
+    remount,
     unmount() {
       if (disposed) return;
       disposed = true;

@@ -247,7 +247,7 @@ describe("createPreviewPanelController", () => {
   });
 
   it("ignores setters from an attempt that has been torn down", () => {
-    const panel = createPreviewPanelController();
+    const panel = createPreviewPanelController({ pluginId: "acme.p" });
     const first = panel.props();
     first.setHasUnsavedChanges?.(true);
     first.setMenuItems?.([{ actionId: "acme.p.run" }]);
@@ -261,6 +261,30 @@ describe("createPreviewPanelController", () => {
     first.setHasUnsavedChanges?.(true);
     expect(panel.reloadRequests).toBe(0);
     expect(panel.hasUnsavedChanges).toBe(false);
+  });
+
+  it("vets menu items the way the host does", () => {
+    const panel = createPreviewPanelController({ pluginId: "acme.p" });
+    const props = panel.props();
+    props.setMenuItems?.([{ actionId: "other.p.run" }]);
+    expect(panel.menuItems).toBe(null);
+    expect(panel.rejectedMenuItems).toHaveLength(1);
+    props.setMenuItems?.([{ actionId: "acme.p.run", label: "Run" }]);
+    expect(panel.menuItems).toEqual([{ actionId: "acme.p.run", label: "Run" }]);
+  });
+
+  it("reads versions through the host's decoder", () => {
+    expect(createPreviewPanelController({ stateVersion: 2 }).props().stateVersion).toBe(0);
+    expect(
+      createPreviewPanelController({ stateVersion: 2, initialArgs: { a: 1 } }).props().stateVersion
+    ).toBe(2);
+    expect(() =>
+      createPreviewPanelController({
+        stateVersion: 2,
+        initialStateVersion: 3,
+        initialArgs: { a: 1 },
+      }).props()
+    ).toThrow(/newer than the 2/);
   });
 
   it("aborts panelRemovedSignal only when the panel is removed", () => {
@@ -316,6 +340,17 @@ describe("stories", () => {
       helper: "not a story",
     };
     expect(listPanelStories(module).map((story) => story.name)).toEqual(["Empty", "Still loading"]);
+  });
+
+  it("follows __namedExportsOrder and skips exports that are not stories", () => {
+    const module = {
+      default: { component: () => null },
+      Alpha: {},
+      Beta: { args: {} },
+      config: { width: 300 },
+      __namedExportsOrder: ["Beta", "config", "Alpha"],
+    };
+    expect(listPanelStories(module).map((story) => story.exportName)).toEqual(["Beta", "Alpha"]);
   });
 });
 
@@ -507,6 +542,117 @@ describe("mountPanelStory", () => {
     notify?.();
     expect(target.getAttribute(PREVIEW_READY_ATTRIBUTE)).toBe("failed");
     expect(target.getAttribute(PREVIEW_FAILURE_ATTRIBUTE)).toMatch(/late class/);
+  });
+
+  it("hands a remount what the outgoing view persisted from its cleanup", async () => {
+    function SavesOnUnmount({ initialArgs, persistState }: PanelViewProps) {
+      useEffect(() => () => void persistState?.({ saved: true }), [persistState]);
+      return <p>{initialArgs?.["saved"] === true ? "restored" : "fresh"}</p>;
+    }
+    const preview = await mount({ component: SavesOnUnmount }, undefined, {
+      container: container(),
+      strictMode: false,
+    });
+    expect(preview.canvasElement.textContent).toBe("fresh");
+    let remounted!: Promise<unknown>;
+    void act(() => {
+      remounted = preview.remount();
+    });
+    await act(async () => {
+      expect(await remounted).toEqual({ status: "ready" });
+    });
+    expect(preview.canvasElement.textContent).toBe("restored");
+  });
+
+  it("aborts the outgoing attempt only after its cleanups ran", async () => {
+    const order: string[] = [];
+    function Watches({ disposeSignal }: PanelViewProps) {
+      useEffect(() => {
+        disposeSignal.addEventListener("abort", () => order.push("aborted"));
+        return () => void order.push(`cleanup (aborted: ${disposeSignal.aborted})`);
+      }, [disposeSignal]);
+      return null;
+    }
+    const preview = await mount({ component: Watches }, undefined, {
+      container: container(),
+      strictMode: false,
+    });
+    let remounted!: Promise<unknown>;
+    void act(() => {
+      remounted = preview.remount();
+    });
+    await act(async () => {
+      await remounted;
+    });
+    expect(order).toEqual(["cleanup (aborted: false)", "aborted"]);
+  });
+
+  it("reloads on a request: a new attempt, with the panel's header state cleared", async () => {
+    let reload: (() => void) | undefined;
+    function Reloads({ requestReload, setMenuItems }: PanelViewProps) {
+      useEffect(() => {
+        reload = requestReload;
+      }, [requestReload]);
+      useEffect(() => setMenuItems?.([{ actionId: "preview.plugin.run" }]), [setMenuItems]);
+      return null;
+    }
+    const preview = await mount({ component: Reloads }, undefined, {
+      container: container(),
+      strictMode: false,
+    });
+    await act(async () => {
+      await preview.ready;
+    });
+    const first = reload;
+    await act(async () => {
+      first?.();
+      first?.();
+      await Promise.resolve();
+    });
+    expect(preview.panel.reloadRequests).toBe(2);
+    expect(reload).not.toBe(first);
+    // The new attempt published its entries again after the reload cleared them.
+    expect(preview.panel.menuItems).toHaveLength(1);
+  });
+
+  it("fails a mount the host would refuse, and keeps failing across a theme switch", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const preview = await mount(
+      counterMeta,
+      { args: { stateVersion: 1, initialStateVersion: 2, initialArgs: { count: 1 } } },
+      { container: container() }
+    );
+    await act(async () => {
+      expect(await preview.ready).toMatchObject({ status: "failed" });
+      expect(await preview.setTheme("daintree")).toMatchObject({ status: "failed" });
+    });
+    consoleError.mockRestore();
+  });
+
+  it("takes ready back when the view stops rendering after it mounted", async () => {
+    const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const previous = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      function Breaks({ pluginId }: PanelViewProps) {
+        const [broken, setBroken] = useState(false);
+        usePluginEvent(pluginId, "break", () => setBroken(true));
+        if (broken) throw new Error("late failure");
+        return <p>fine</p>;
+      }
+      const target = container();
+      const preview = mountPanelStory({ component: Breaks }, undefined, { container: target });
+      mounted.push(preview);
+      expect(await preview.ready).toEqual({ status: "ready" });
+      preview.host.push("break", null);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(target.getAttribute(PREVIEW_READY_ATTRIBUTE)).toBe("failed");
+      expect(target.getAttribute(PREVIEW_FAILURE_ATTRIBUTE)).toMatch(/late failure/);
+    } finally {
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = previous;
+      consoleError.mockRestore();
+    }
   });
 
   it("leaves the page untouched when the theme is unknown", () => {

@@ -276,6 +276,21 @@ describe("pluginStyleRuntime — install failures are observable", () => {
     }
   });
 
+  it("reports classes dropped at the candidate ceiling", async () => {
+    const failures: Array<{ phase: string; error: string }> = [];
+    const runtime = await createPluginStyleRuntime(document, {
+      onInstallFailure: (failure) => failures.push(failure),
+    });
+    try {
+      const classes = Array.from({ length: 16_385 }, (_, i) => `w-[${i}px]`).join(" ");
+      runtime.registerRoot(mountRoot(`<span class="${classes}"></span>`));
+      expect(failures.map((failure) => failure.phase)).toContain("rebuild");
+      expect(failures.some((failure) => /ceiling/.test(failure.error))).toBe(true);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
   it("keeps working when the failure listener throws", async () => {
     const runtime = await createPluginStyleRuntime(document, {
       onInstallFailure: () => {

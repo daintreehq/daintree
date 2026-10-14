@@ -316,6 +316,12 @@ export async function createPluginStyleRuntime(
         // it `added` stays empty, the early return below skips the compaction
         // check entirely, and the ceiling is permanent.
         void compact();
+        // Dropped, not queued: they reach the compiler again only when the DOM
+        // carrying them changes, so until then they have no CSS.
+        reportInstallFailure(options, {
+          phase: "rebuild",
+          error: `candidate ceiling of ${MAX_TRACKED_CANDIDATES} reached`,
+        });
         break;
       }
       added.push(token);

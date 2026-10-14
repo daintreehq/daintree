@@ -422,6 +422,12 @@ declare const MAX_EXTENSION_STATE_BYTES: number;
 /** Why a `persistState` patch was refused. */
 type ExtensionStateRejection = "not-serializable" | "too-large";
 
+/** A published menu entry after the host vetted it, its `actionId` in the instance's namespace. */
+interface PublishedPanelMenuItem {
+    readonly actionId: string;
+    readonly label?: string;
+}
+
 /**
  * Names the plugin a style root belongs to. Mirrors the host's own stamp
  * (`src/services/plugin/pluginStyleOwner.ts`), so a portal the view spreads
@@ -430,15 +436,20 @@ type ExtensionStateRejection = "not-serializable" | "too-large";
 declare const PLUGIN_STYLE_OWNER_ATTRIBUTE = "data-daintree-plugin-owner";
 interface PreviewPanelPropsOptions {
     panelId?: string;
+    /** The plugin's runtime id — its manifest `name` for an installed plugin. */
     pluginId?: string;
-    /** The persisted bag the view mounts with, as `initialArgs`. */
+    /** The bag on the panel record, which the view mounts with as `initialArgs`. */
     initialArgs?: Record<string, unknown>;
     /**
      * The `stateVersion` the panel kind declares. Every accepted `persistState`
      * write is stamped with it, as the host stamps a registered kind's writes.
      */
     stateVersion?: number;
-    /** What `initialArgs` was written against. Defaults to {@link stateVersion}. */
+    /**
+     * The version the record's bag was written at. Defaults to
+     * {@link stateVersion} when there is a bag. Above `stateVersion`, the host
+     * refuses the bag rather than mount the view on it, and so does the preview.
+     */
     initialStateVersion?: number;
     worktreeId?: string;
     runningActions?: readonly string[];
@@ -459,32 +470,44 @@ type PersistStateRecord = {
     accepted: false;
     reason: ExtensionStateRejection;
 };
+/** Hooks the mount wires in; a controller on its own only records. */
+interface PreviewPanelControllerHooks {
+    /** A live attempt asked to be reloaded. */
+    onReloadRequested?: () => void;
+}
 interface PreviewPanelController {
     readonly panelId: string;
     readonly pluginId: string;
     /** What the host marks the view's style root with, and hands the view to spread on portals. */
     readonly styleRootAttributes: Readonly<Record<string, string>>;
-    /** Props for the next mount. Each call starts a fresh view attempt. */
+    /**
+     * Props for a new view attempt, read from the panel record as it stands
+     * now. Throws when the host would refuse to mount the view at all — a bag
+     * written at a newer version than the kind declares.
+     */
     props(): PanelViewProps;
-    /** The bag the panel record holds now — what the next mount reads as `initialArgs`. */
+    /** The bag the panel record holds now — what the next attempt reads as `initialArgs`. */
     readonly persistedState: Record<string, unknown> | undefined;
     /** The version the panel record holds now. */
     readonly persistedStateVersion: number | undefined;
     readonly persistCalls: readonly PersistStateRecord[];
-    /** The latest `setMenuItems` list, or `null`. */
-    readonly menuItems: readonly PanelMenuItemContribution[] | null;
+    /** The panel's menu entries as the host accepted them, or `null`. */
+    readonly menuItems: readonly PublishedPanelMenuItem[] | null;
+    /** Why each menu list the host would ignore whole was refused. */
+    readonly rejectedMenuItems: readonly string[];
     /** Toolbar button state by `actionId`, as last set. */
     readonly toolbarItems: ReadonlyMap<string, PluginPanelToolbarItemState>;
     readonly hasUnsavedChanges: boolean;
-    /** How many times the view asked to be reloaded. */
+    /** How many times a live attempt asked to be reloaded. */
     readonly reloadRequests: number;
     /**
-     * Abort every attempt but the current one. Called once the next attempt has
-     * mounted: React has run the outgoing view's cleanups by then, which is when
-     * the host aborts its signal.
+     * Clear what a reload clears: the panel's menu entries and toolbar state.
+     * A temporary remount keeps them, since they belong to the panel.
      */
+    clearViewState(): void;
+    /** Abort every attempt but the current one. */
     retirePreviousAttempts(): void;
-    /** Abort every attempt's `disposeSignal`, as a final unmount does. */
+    /** Abort every attempt's `disposeSignal`, as unmounting the view does. */
     disposeAttempt(): void;
     /** Abort `panelRemovedSignal`, as permanently closing the panel does. */
     removePanel(): void;
@@ -492,9 +515,10 @@ interface PreviewPanelController {
 /**
  * Build the `PanelViewProps` a plugin view receives, backed by a mock panel
  * record. `persistState` runs the host's own rules (`shared/utils/extensionState`):
- * the same merge, serializability check, 64KB cap and version stamping.
+ * the same merge, serializability check, 64KB cap and version stamping; each
+ * attempt reads the record through the host's own version decoder.
  */
-declare function createPreviewPanelController(options?: PreviewPanelPropsOptions): PreviewPanelController;
+declare function createPreviewPanelController(options?: PreviewPanelPropsOptions, hooks?: PreviewPanelControllerHooks): PreviewPanelController;
 
 /** One of Daintree's built-in themes, as the preview offers it. */
 interface PreviewTheme {
@@ -568,7 +592,12 @@ interface ListedPanelStory {
 }
 /** `PopulatedWithErrors` → `Populated With Errors`, as CSF names stories. */
 declare function storyNameFromExport(exportName: string): string;
-/** The stories in a module, in export order (or `__namedExportsOrder`, when given). */
+/**
+ * The stories in a module. In `__namedExportsOrder` when the module exports
+ * one — the CSF convention, and the only way to keep declaration order, since
+ * a native module namespace lists its exports alphabetically — else in the
+ * order the namespace gives. Only exports shaped like a story are listed.
+ */
 declare function listPanelStories(module: PanelStoriesModule): ListedPanelStory[];
 /** A story with the meta folded in: what is actually mounted. */
 interface ComposedPanelStory {

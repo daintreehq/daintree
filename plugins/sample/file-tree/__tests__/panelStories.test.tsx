@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { act } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import {
   listPanelStories,
   mountPanelStory,
@@ -25,9 +25,6 @@ async function show(story: PanelStory): Promise<HTMLElement> {
   });
   await act(async () => {
     await preview?.ready;
-    // The view's listings are serialized through one queue of host calls;
-    // let it drain.
-    for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
   });
   return container;
 }
@@ -51,17 +48,23 @@ describe("sample file tree stories", () => {
 
   it("Empty shows the no-worktree state", async () => {
     const container = await show(stories.Empty);
-    expect(container.querySelector("[data-testid=file-tree-empty]")).not.toBeNull();
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid=file-tree-empty]")).not.toBeNull()
+    );
   });
 
   it("Loading renders the tree with no rows while the listing is outstanding", async () => {
     const container = await show(stories.Loading);
-    expect(container.querySelector("[data-testid=file-tree-view]")).not.toBeNull();
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid=file-tree-view]")).not.toBeNull()
+    );
     expect(rowNames(container)).toEqual([]);
   });
 
   it("Populated restores the expanded directory and the selection", async () => {
     const container = await show(stories.Populated);
+    // The listings arrive through one serialized queue of host calls.
+    await waitFor(() => expect(rowNames(container)).toContain("styles.css"));
     const names = rowNames(container);
     // Expanded: `src`'s children follow it directly. Collapsed: `docs` has none.
     expect(names.slice(names.indexOf("src"), names.indexOf("src") + 4)).toEqual([
@@ -84,11 +87,15 @@ describe("sample file tree stories", () => {
 
   it("UnreadableDirectory marks the directory the host refused", async () => {
     const container = await show(stories.UnreadableDirectory);
-    expect(container.querySelector("[data-testid='file-tree-failed-docs']")).not.toBeNull();
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid='file-tree-failed-docs']")).not.toBeNull()
+    );
   });
 
   it("Disconnected falls back to the empty state", async () => {
     const container = await show(stories.Disconnected);
-    expect(container.querySelector("[data-testid=file-tree-empty]")).not.toBeNull();
+    await waitFor(() =>
+      expect(container.querySelector("[data-testid=file-tree-empty]")).not.toBeNull()
+    );
   });
 });

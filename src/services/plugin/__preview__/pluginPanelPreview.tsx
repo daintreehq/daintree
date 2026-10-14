@@ -5,6 +5,8 @@ import {
   type MountedPanelPreview,
   type PanelStoriesModule,
   type PreviewStyleHost,
+  PREVIEW_FAILURE_ATTRIBUTE,
+  PREVIEW_READY_ATTRIBUTE,
 } from "@daintreehq/plugin-sdk/testing/preview";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { createHostPreviewStyles } from "./hostPreviewStyles";
@@ -29,28 +31,14 @@ import "@/index.css";
  * `data-daintree-preview-failure`.
  */
 
-const modules = import.meta.glob<PanelStoriesModule>("/plugins/**/review/panel.stories.tsx", {
-  eager: true,
-});
+// Lazy, so one plugin's broken stories file cannot stop another's from opening.
+const loaders = import.meta.glob<PanelStoriesModule>("/plugins/**/review/panel.stories.tsx");
 
 const pluginKeyOf = (file: string) =>
   file.replace(/^\/plugins\//, "").replace(/\/review\/panel\.stories\.tsx$/, "");
-const byPlugin = new Map(Object.entries(modules).map(([file, mod]) => [pluginKeyOf(file), mod]));
+const byPlugin = new Map(Object.entries(loaders).map(([file, load]) => [pluginKeyOf(file), load]));
 
 const params = new URLSearchParams(window.location.search);
-const pluginKey = params.get("plugin") ?? [...byPlugin.keys()][0];
-const storiesModule = pluginKey ? byPlugin.get(pluginKey) : undefined;
-if (!storiesModule) {
-  throw new Error(
-    `No panel.stories.tsx for "${pluginKey}". Known: ${[...byPlugin.keys()].join(", ")}`
-  );
-}
-const stories = listPanelStories(storiesModule);
-const storyName = params.get("story") ?? stories[0]?.exportName;
-const story = stories.find((candidate) => candidate.exportName === storyName);
-if (!story) {
-  throw new Error(`No story "${storyName}". Known: ${stories.map((s) => s.exportName).join(", ")}`);
-}
 
 document.body.style.background = "var(--color-surface-canvas)";
 document.body.style.margin = "0";
@@ -68,50 +56,85 @@ function navigate(key: string, value: string) {
   window.location.search = params.toString();
 }
 
-const shell = document.getElementById("root")!;
-const toolbar = document.createElement("div");
-toolbar.style.cssText = "display:flex;gap:8px;padding:8px;font:12px system-ui";
-const container = document.createElement("div");
-container.style.width = `${Number(params.get("width") ?? "640")}px`;
-container.style.height = `${Number(params.get("height") ?? "480")}px`;
-container.style.background = "var(--color-surface-panel)";
-shell.replaceChildren(toolbar, container);
+/**
+ * A page that cannot even mount must still say so: whatever waits on the
+ * readiness attribute is waiting for `ready` or `failed`, never for nothing.
+ */
+function publishBootstrapFailure(error: unknown): void {
+  const root = document.documentElement;
+  root.setAttribute(PREVIEW_READY_ATTRIBUTE, "failed");
+  root.setAttribute(
+    PREVIEW_FAILURE_ATTRIBUTE,
+    `preview did not start: ${formatErrorMessage(error, String(error))}`
+  );
+}
 
-let preview: MountedPanelPreview | null = null;
+async function bootstrap(): Promise<void> {
+  const pluginKey = params.get("plugin") ?? [...byPlugin.keys()][0];
+  const load = pluginKey ? byPlugin.get(pluginKey) : undefined;
+  if (!pluginKey || !load) {
+    throw new Error(
+      `No panel.stories.tsx for "${pluginKey}". Known: ${[...byPlugin.keys()].join(", ")}`
+    );
+  }
+  const storiesModule = await load();
+  const stories = listPanelStories(storiesModule);
+  const storyName = params.get("story") ?? stories[0]?.exportName;
+  const story = stories.find((candidate) => candidate.exportName === storyName);
+  if (!story) {
+    throw new Error(
+      `No story "${storyName}". Known: ${stories.map((s) => s.exportName).join(", ")}`
+    );
+  }
 
-toolbar.append(
-  select("Plugin", [...byPlugin.keys()], pluginKey!, (value) => {
-    params.delete("story");
-    navigate("plugin", value);
-  }),
-  select(
-    "Story",
-    stories.map((s) => s.exportName),
-    story.exportName,
-    (value) => navigate("story", value)
-  ),
-  // In place, without a reload: the theme engine's variables are swapped on
-  // the document root and readiness settles again.
-  select(
-    "Theme",
-    PREVIEW_THEMES.map((theme) => theme.id),
-    params.get("theme") ?? "daintree",
-    (value) => {
-      params.set("theme", value);
-      window.history.replaceState(null, "", `?${params.toString()}`);
-      void preview?.setTheme(value);
-    }
-  )
-);
+  const shell = document.getElementById("root")!;
+  const toolbar = document.createElement("div");
+  toolbar.style.cssText = "display:flex;gap:8px;padding:8px;font:12px system-ui";
+  const container = document.createElement("div");
+  container.style.width = `${Number(params.get("width") ?? "640")}px`;
+  container.style.height = `${Number(params.get("height") ?? "480")}px`;
+  container.style.background = "var(--color-surface-panel)";
+  shell.replaceChildren(toolbar, container);
 
-// A runtime that will not start is a styling failure like any other: the page
-// still mounts, and reports `failed` rather than a half-styled `ready`.
-const styles: PreviewStyleHost = await createHostPreviewStyles().catch((error: unknown) => {
-  const reason = `the style runtime did not start: ${formatErrorMessage(error, String(error))}`;
-  return { registerRoot: () => () => {}, failure: () => reason };
-});
-preview = mountPanelStory(storiesModule.default, story.story, {
-  container,
-  theme: params.get("theme") ?? "daintree",
-  styles,
-});
+  let preview: MountedPanelPreview | null = null;
+  toolbar.append(
+    select("Plugin", [...byPlugin.keys()], pluginKey, (value) => {
+      params.delete("story");
+      navigate("plugin", value);
+    }),
+    select(
+      "Story",
+      stories.map((s) => s.exportName),
+      story.exportName,
+      (value) => navigate("story", value)
+    ),
+    // In place, without a reload: the theme engine's variables are swapped on
+    // the document root and readiness settles again.
+    select(
+      "Theme",
+      PREVIEW_THEMES.map((theme) => theme.id),
+      params.get("theme") ?? "daintree",
+      (value) => {
+        params.set("theme", value);
+        window.history.replaceState(null, "", `?${params.toString()}`);
+        void preview?.setTheme(value);
+      }
+    )
+  );
+
+  // A runtime that will not start is a styling failure like any other: the
+  // page still mounts, and reports `failed` rather than a half-styled `ready`.
+  const styles: PreviewStyleHost = await createHostPreviewStyles().catch((error: unknown) => {
+    const reason = `the style runtime did not start: ${formatErrorMessage(error, String(error))}`;
+    return { registerRoot: () => () => {}, failure: () => reason };
+  });
+  // Kit-backed panels need #13315's browser build of the kit before they can
+  // render here; until then the page waits on no kit.
+  preview = mountPanelStory(storiesModule.default, story.story, {
+    container,
+    theme: params.get("theme") ?? "daintree",
+    styles,
+  });
+}
+
+bootstrap().catch(publishBootstrapFailure);

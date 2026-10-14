@@ -1,5 +1,4 @@
 import type {
-  PanelMenuItemContribution,
   PanelViewProps,
   PluginPanelToolbarItemState,
   PluginSettingsViewContext,
@@ -9,6 +8,11 @@ import {
   applyExtensionStatePatch,
   type ExtensionStateRejection,
 } from "../../../../../shared/utils/extensionState.js";
+import { decodePanelExtensionState } from "../../../../../shared/utils/panelExtensionState.js";
+import {
+  normalizePanelMenuItems,
+  type PublishedPanelMenuItem,
+} from "../../../../../shared/utils/pluginPanelMenuItems.js";
 
 /**
  * Names the plugin a style root belongs to. Mirrors the host's own stamp
@@ -19,15 +23,20 @@ export const PLUGIN_STYLE_OWNER_ATTRIBUTE = "data-daintree-plugin-owner";
 
 export interface PreviewPanelPropsOptions {
   panelId?: string;
+  /** The plugin's runtime id — its manifest `name` for an installed plugin. */
   pluginId?: string;
-  /** The persisted bag the view mounts with, as `initialArgs`. */
+  /** The bag on the panel record, which the view mounts with as `initialArgs`. */
   initialArgs?: Record<string, unknown>;
   /**
    * The `stateVersion` the panel kind declares. Every accepted `persistState`
    * write is stamped with it, as the host stamps a registered kind's writes.
    */
   stateVersion?: number;
-  /** What `initialArgs` was written against. Defaults to {@link stateVersion}. */
+  /**
+   * The version the record's bag was written at. Defaults to
+   * {@link stateVersion} when there is a bag. Above `stateVersion`, the host
+   * refuses the bag rather than mount the view on it, and so does the preview.
+   */
   initialStateVersion?: number;
   worktreeId?: string;
   runningActions?: readonly string[];
@@ -45,32 +54,45 @@ export type PersistStateRecord =
   | { patch: Record<string, unknown>; accepted: true }
   | { patch: Record<string, unknown>; accepted: false; reason: ExtensionStateRejection };
 
+/** Hooks the mount wires in; a controller on its own only records. */
+export interface PreviewPanelControllerHooks {
+  /** A live attempt asked to be reloaded. */
+  onReloadRequested?: () => void;
+}
+
 export interface PreviewPanelController {
   readonly panelId: string;
   readonly pluginId: string;
   /** What the host marks the view's style root with, and hands the view to spread on portals. */
   readonly styleRootAttributes: Readonly<Record<string, string>>;
-  /** Props for the next mount. Each call starts a fresh view attempt. */
+  /**
+   * Props for a new view attempt, read from the panel record as it stands
+   * now. Throws when the host would refuse to mount the view at all — a bag
+   * written at a newer version than the kind declares.
+   */
   props(): PanelViewProps;
-  /** The bag the panel record holds now — what the next mount reads as `initialArgs`. */
+  /** The bag the panel record holds now — what the next attempt reads as `initialArgs`. */
   readonly persistedState: Record<string, unknown> | undefined;
   /** The version the panel record holds now. */
   readonly persistedStateVersion: number | undefined;
   readonly persistCalls: readonly PersistStateRecord[];
-  /** The latest `setMenuItems` list, or `null`. */
-  readonly menuItems: readonly PanelMenuItemContribution[] | null;
+  /** The panel's menu entries as the host accepted them, or `null`. */
+  readonly menuItems: readonly PublishedPanelMenuItem[] | null;
+  /** Why each menu list the host would ignore whole was refused. */
+  readonly rejectedMenuItems: readonly string[];
   /** Toolbar button state by `actionId`, as last set. */
   readonly toolbarItems: ReadonlyMap<string, PluginPanelToolbarItemState>;
   readonly hasUnsavedChanges: boolean;
-  /** How many times the view asked to be reloaded. */
+  /** How many times a live attempt asked to be reloaded. */
   readonly reloadRequests: number;
   /**
-   * Abort every attempt but the current one. Called once the next attempt has
-   * mounted: React has run the outgoing view's cleanups by then, which is when
-   * the host aborts its signal.
+   * Clear what a reload clears: the panel's menu entries and toolbar state.
+   * A temporary remount keeps them, since they belong to the panel.
    */
+  clearViewState(): void;
+  /** Abort every attempt but the current one. */
   retirePreviousAttempts(): void;
-  /** Abort every attempt's `disposeSignal`, as a final unmount does. */
+  /** Abort every attempt's `disposeSignal`, as unmounting the view does. */
   disposeAttempt(): void;
   /** Abort `panelRemovedSignal`, as permanently closing the panel does. */
   removePanel(): void;
@@ -79,10 +101,12 @@ export interface PreviewPanelController {
 /**
  * Build the `PanelViewProps` a plugin view receives, backed by a mock panel
  * record. `persistState` runs the host's own rules (`shared/utils/extensionState`):
- * the same merge, serializability check, 64KB cap and version stamping.
+ * the same merge, serializability check, 64KB cap and version stamping; each
+ * attempt reads the record through the host's own version decoder.
  */
 export function createPreviewPanelController(
-  options: PreviewPanelPropsOptions = {}
+  options: PreviewPanelPropsOptions = {},
+  hooks: PreviewPanelControllerHooks = {}
 ): PreviewPanelController {
   const panelId = options.panelId ?? "preview-panel";
   const pluginId = options.pluginId ?? "preview.plugin";
@@ -93,9 +117,14 @@ export function createPreviewPanelController(
   });
 
   let persistedState = options.initialArgs;
-  let persistedStateVersion = options.initialStateVersion ?? options.stateVersion;
+  // A record with no bag carries no version, as a freshly spawned panel does.
+  let persistedStateVersion =
+    persistedState === undefined
+      ? options.initialStateVersion
+      : (options.initialStateVersion ?? options.stateVersion);
   const persistCalls: PersistStateRecord[] = [];
-  let menuItems: readonly PanelMenuItemContribution[] | null = null;
+  let menuItems: readonly PublishedPanelMenuItem[] | null = null;
+  const rejectedMenuItems: string[] = [];
   const toolbarItems = new Map<string, PluginPanelToolbarItemState>();
   let hasUnsavedChanges = false;
   let reloadRequests = 0;
@@ -123,8 +152,18 @@ export function createPreviewPanelController(
     pluginId,
     styleRootAttributes,
     props() {
-      // The outgoing attempt's setters go dead now; its signal aborts later,
-      // after its cleanups (see `retirePreviousAttempts`).
+      const decoded = decodePanelExtensionState({
+        state: persistedState,
+        persistedVersion: persistedStateVersion,
+        declaredVersion: options.stateVersion,
+      });
+      if (!decoded.ok) {
+        throw new Error(
+          `the panel's state was written at version ${decoded.persistedVersion}, newer than the ${decoded.declaredVersion} this kind declares, so the host refuses to mount it`
+        );
+      }
+      // The outgoing attempt's setters go dead now; its signal is aborted by
+      // whoever retires it, after its cleanups.
       const current = new AbortController();
       attempt = current;
       openAttempts.add(current);
@@ -137,7 +176,9 @@ export function createPreviewPanelController(
         : {
             persistState,
             requestReload: () => {
-              if (live()) reloadRequests += 1;
+              if (!live()) return;
+              reloadRequests += 1;
+              hooks.onReloadRequested?.();
             },
             setHasUnsavedChanges: (value: boolean) => {
               if (live()) hasUnsavedChanges = value;
@@ -145,10 +186,18 @@ export function createPreviewPanelController(
             setToolbarItemState: (actionId: string, state: PluginPanelToolbarItemState | null) => {
               if (!live()) return;
               if (state === null) toolbarItems.delete(actionId);
-              else toolbarItems.set(actionId, state);
+              else toolbarItems.set(actionId, structuredClone(state));
             },
-            setMenuItems: (items: readonly PanelMenuItemContribution[] | null) => {
-              if (live()) menuItems = items && items.length > 0 ? items : null;
+            setMenuItems: (items: unknown) => {
+              if (!live()) return;
+              // The host's own vetting: a foreign, duplicate or oversized list
+              // is ignored whole.
+              const result = normalizePanelMenuItems(items, pluginId, pluginId);
+              if (!result.ok) {
+                rejectedMenuItems.push(result.error);
+                return;
+              }
+              menuItems = result.items.length > 0 ? result.items : null;
             },
           };
       return {
@@ -158,8 +207,8 @@ export function createPreviewPanelController(
         panelRemovedSignal: panelRemoved.signal,
         // A snapshot, as the host hands it: the view's own writes do not reach
         // the mounted attempt.
-        ...(persistedState !== undefined ? { initialArgs: structuredClone(persistedState) } : {}),
-        ...(persistedStateVersion !== undefined ? { stateVersion: persistedStateVersion } : {}),
+        ...(decoded.state !== undefined ? { initialArgs: structuredClone(decoded.state) } : {}),
+        stateVersion: decoded.version,
         ...(options.worktreeId !== undefined ? { worktreeId: options.worktreeId } : {}),
         ...(options.runningActions !== undefined ? { runningActions: options.runningActions } : {}),
         ...(options.settingsContext !== undefined
@@ -179,12 +228,17 @@ export function createPreviewPanelController(
     get menuItems() {
       return menuItems;
     },
+    rejectedMenuItems,
     toolbarItems,
     get hasUnsavedChanges() {
       return hasUnsavedChanges;
     },
     get reloadRequests() {
       return reloadRequests;
+    },
+    clearViewState() {
+      menuItems = null;
+      toolbarItems.clear();
     },
     retirePreviousAttempts() {
       for (const open of openAttempts) {

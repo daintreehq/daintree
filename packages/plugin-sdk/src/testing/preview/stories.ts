@@ -67,7 +67,20 @@ export function storyNameFromExport(exportName: string): string {
     .trim();
 }
 
-/** The stories in a module, in export order (or `__namedExportsOrder`, when given). */
+const STORY_KEYS = new Set(["name", "args", "fixtures", "play"]);
+
+/** A plain object carrying nothing but story fields — not a config or fixture export. */
+function isStoryShaped(value: unknown): value is PanelStory {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  return Object.keys(value).every((key) => STORY_KEYS.has(key));
+}
+
+/**
+ * The stories in a module. In `__namedExportsOrder` when the module exports
+ * one — the CSF convention, and the only way to keep declaration order, since
+ * a native module namespace lists its exports alphabetically — else in the
+ * order the namespace gives. Only exports shaped like a story are listed.
+ */
 export function listPanelStories(module: PanelStoriesModule): ListedPanelStory[] {
   const order = Array.isArray(module.__namedExportsOrder)
     ? (module.__namedExportsOrder as unknown[]).filter((n): n is string => typeof n === "string")
@@ -76,9 +89,8 @@ export function listPanelStories(module: PanelStoriesModule): ListedPanelStory[]
   for (const exportName of order) {
     if (exportName === "default" || exportName.startsWith("__")) continue;
     const story = module[exportName];
-    if (typeof story !== "object" || story === null) continue;
-    const typed = story as PanelStory;
-    stories.push({ exportName, name: typed.name ?? storyNameFromExport(exportName), story: typed });
+    if (!isStoryShaped(story)) continue;
+    stories.push({ exportName, name: story.name ?? storyNameFromExport(exportName), story });
   }
   return stories;
 }
