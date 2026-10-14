@@ -15,6 +15,10 @@ const previewHostsAdded =
   !!previewHost || !!new URLSearchParams(window.location.search).get("hosts");
 
 const previewLink = new URLSearchParams(window.location.search).get("link") ?? "connected";
+// `?fleet=macs` adds four Mac hosts beside this machine, every other one disconnected;
+// `?fleet=mixed` gives them one of each link state, a refused build among them;
+// `?fleet=long` names them the way a build farm does, differing only at the end.
+const previewFleet = new URLSearchParams(window.location.search).get("fleet");
 
 /** The window's own host answers with the link the toolbar is seeded with, so chip and menu agree. */
 function previewConnection(current: boolean): HostListEntry["connection"] {
@@ -40,30 +44,60 @@ function previewConnection(current: boolean): HostListEntry["connection"] {
   }
 }
 
+const FLEET_HANDSHAKE = {
+  version: "0.42.0",
+  commit: "preview",
+  protocolVersion: 1,
+  platform: "darwin" as const,
+  arch: "arm64" as const,
+};
+
+/** The other hosts' links under `?fleet=mixed`, by name. */
+const MIXED_LINKS: Record<string, HostListEntry["connection"]> = {
+  "studio-01": { status: "connecting", attempt: 1 },
+  "studio-03": { status: "unreachable", lastSeenAt: Date.now() - 3 * 3_600_000, detail: null },
+  "studio-04": {
+    status: "version-mismatch",
+    mismatch: { kind: "version", local: "0.43.0", remote: "0.42.0" },
+    remote: FLEET_HANDSHAKE,
+  },
+};
+
 function previewHostEntry(name: string): HostListEntry {
+  const current = name === previewHost;
   return {
     descriptor: {
       id: name,
       name,
       connection: { kind: "ssh", target: name },
-      platform: "linux",
+      platform: previewFleet ? "darwin" : "linux",
       arch: "x64",
       lastHandshake: null,
       lastSeenAt: 1_764_000_000_000,
       addedAt: 1_764_000_000_000,
       notificationsEnabled: false,
     },
-    connection: previewConnection(name === previewHost),
+    connection:
+      !current && previewFleet === "mixed" && MIXED_LINKS[name]
+        ? MIXED_LINKS[name]
+        : previewConnection(current),
     summary: null,
   };
 }
 
-export const PREVIEW_HOSTS: HostListEntry[] = previewHostsAdded
-  ? [
-      previewHostEntry(previewHost ?? "studio-01"),
-      ...(previewHost === "build-east-02" ? [] : [previewHostEntry("build-east-02")]),
-    ]
-  : [];
+const FLEET =
+  previewFleet === "long"
+    ? [1, 2, 3, 4].map((n) => `gregs-mac-studio-build-east-0${n}`)
+    : ["studio-01", "studio-02", "studio-03", "studio-04"];
+
+export const PREVIEW_HOSTS: HostListEntry[] = !previewHostsAdded
+  ? []
+  : previewFleet
+    ? FLEET.map(previewHostEntry)
+    : [
+        previewHostEntry(previewHost ?? "studio-01"),
+        ...(previewHost === "build-east-02" ? [] : [previewHostEntry("build-east-02")]),
+      ];
 
 if (previewHost) window.__DAINTREE_HOST_ID__ = { id: previewHost };
 

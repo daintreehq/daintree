@@ -192,6 +192,8 @@ export function describeHostMenuState(
     case "unreachable":
       // The machine answered; Daintree there isn't hosting, which setting up fixes.
       if (connection.hostModeOff) return { state: "Host mode off", note: null };
+      // The same answer the chip gives: SSH reached it and refused the login.
+      if (connection.stoppedRetrying) return { state: "Can't log in", note: null };
       return {
         state: "Unreachable",
         note:
@@ -202,6 +204,39 @@ export function describeHostMenuState(
     case "driven-elsewhere":
       return { state: "Connected", note: `${connection.driver.clientName} has control` };
   }
+}
+
+/**
+ * When the row's note is an age ("Last seen 3 hours ago"), its words and the
+ * moment, so the menu can draw it with its exact time one hover away. Mirrors
+ * the notes {@link describeHostMenuState} writes; null for every other note.
+ */
+export function hostMenuNoteAge(row: HostMenuRow): { prefix: string; at: number } | null {
+  const connection = row.connection;
+  if (row.isLocal || !connection) return null;
+  if (connection.status === "connected" && connection.quietSince !== undefined) {
+    return { prefix: "Last heard ", at: connection.quietSince };
+  }
+  if (
+    connection.status === "unreachable" &&
+    !connection.hostModeOff &&
+    !connection.stoppedRetrying &&
+    row.lastSeenAt !== null
+  ) {
+    return { prefix: "Last seen ", at: row.lastSeenAt };
+  }
+  return null;
+}
+
+/**
+ * Whether the row's link is a problem worth its own mark: the same set the
+ * chip marks for its own host. Connecting and not connected are not.
+ */
+export function hostMenuRowHasTrouble(row: HostMenuRow): boolean {
+  const connection = row.connection;
+  if (!connection) return false;
+  if (connection.status === "connected") return connection.quietSince !== undefined;
+  return connection.status === "unreachable" || connection.status === "version-mismatch";
 }
 
 /** CPU and memory pressure as last reported; null when the host measured neither. */
