@@ -146,6 +146,7 @@ describe("remote-only renderer modules stay out of builds without Remote Hosts",
   it("loads them only behind a direct build-define gate", () => {
     const sites = scan.dynamicSites.filter((site) => REMOTE_ONLY.includes(site.target));
     expect(sites.map((site) => rel(site.target)).sort()).toEqual([
+      "src/components/Hosts/Overview/HostSparkline.tsx",
       "src/components/Hosts/Overview/HostsOverviewHost.tsx",
       "src/components/Hosts/Overview/OtherHostsWorktrees.tsx",
       "src/components/Hosts/Overview/WorktreePlacementRow.tsx",

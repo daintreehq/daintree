@@ -10,7 +10,8 @@ import { HollowCircle, SpinnerCircle } from "@/components/icons";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
-import { HostSparkline } from "@/components/Hosts/Overview/HostSparkline";
+import { LazyHostSparkline } from "@/components/Hosts/Overview/LazyHostOverviewParts";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cpuSeries } from "@/components/Hosts/Overview/overviewModel";
 import { describeBuildMismatch } from "@/components/Settings/Hosts/hostLabels";
 import {
@@ -41,10 +42,7 @@ export function HostSwitcherHeader() {
   return (
     <div
       aria-hidden="true"
-      className={cn(
-        HOST_SWITCHER_GRID,
-        "px-3 pb-1 pt-0.5 text-2xs text-text-secondary"
-      )}
+      className={cn(HOST_SWITCHER_GRID, "px-3 pb-1 pt-0.5 text-2xs text-text-secondary")}
     >
       <span className="pl-[45px]">Host</span>
       <span>Agents</span>
@@ -64,8 +62,7 @@ const WarningGlyph = SEVERITY_GLYPH.warning;
  * repaint rather than erase.
  */
 function LinkMark({ tone }: { tone: HostLinkTone }) {
-  const Glyph =
-    tone === "attention" ? WarningGlyph : tone === "connecting" ? CircleDashed : Circle;
+  const Glyph = tone === "attention" ? WarningGlyph : tone === "connecting" ? CircleDashed : Circle;
   return (
     <span className="flex h-5 w-3 shrink-0 items-center justify-center" aria-hidden="true">
       <Glyph
@@ -141,7 +138,13 @@ function AgentCounts({ summary }: { summary: HostMetricsSummary }) {
   );
 }
 
-function CpuCell({ summary, history }: { summary: HostMetricsSummary; history: readonly HostMetricsSummary[] }) {
+function CpuCell({
+  summary,
+  history,
+}: {
+  summary: HostMetricsSummary;
+  history: readonly HostMetricsSummary[];
+}) {
   const cpu = summary.cpuPercent;
   if (cpu === null) return <Dash label="CPU not measured" />;
   const series = cpuSeries(history.slice(0, SPARK_SAMPLES));
@@ -150,7 +153,7 @@ function CpuCell({ summary, history }: { summary: HostMetricsSummary; history: r
   return (
     <span className="flex items-center gap-1.5">
       {measured >= MIN_SPARK_SAMPLES ? (
-        <HostSparkline
+        <LazyHostSparkline
           values={series}
           windowSize={SPARK_SAMPLES}
           label="CPU over the last 5 minutes"
@@ -197,7 +200,7 @@ function MemoryCell({ summary }: { summary: HostMetricsSummary }) {
           <span
             key={step}
             className={cn(
-              "w-1 rounded-[1px]",
+              "w-1 rounded-xs",
               step === 0 ? "h-1.5" : step === 1 ? "h-2" : "h-2.5",
               step < level.lit ? level.fill : "bg-border-strong"
             )}
@@ -247,7 +250,9 @@ function metaLine(row: HostMenuRow, summary: HostMetricsSummary | null, now: num
   }
   if (connection?.status === "connected" && connection.buildMismatch) {
     // The short form; the full one names the build in the tooltip.
-    warnings.push(capitalize(describeBuildMismatch(connection.buildMismatch).replace(/ \(.*\)$/, "")));
+    warnings.push(
+      capitalize(describeBuildMismatch(connection.buildMismatch).replace(/ \(.*\)$/, ""))
+    );
   }
   const facts: string[] = [];
   if (summary) {
@@ -314,6 +319,7 @@ export function HostSwitcherRow({
   // The layout follows the link; a live host that hasn't reported yet shows unknowns.
   const live = tone === "live";
   const meta = metaLine(row, summary, now);
+  const fullMeta = metaTitle(row);
   return (
     <button
       id={`host-switcher-${row.hostId}`}
@@ -349,9 +355,14 @@ export function HostSwitcherRow({
             )}
           </span>
           {meta && (
-            <span className="truncate text-xs text-text-secondary" title={metaTitle(row)}>
-              {meta}
-            </span>
+            // A build warning shows its short form, so its full text is always on offer.
+            <TruncatedTooltip
+              content={fullMeta ?? meta}
+              isTruncated={fullMeta ? true : undefined}
+              focusable={false}
+            >
+              <span className="truncate text-xs text-text-secondary">{meta}</span>
+            </TruncatedTooltip>
           )}
         </span>
       </span>

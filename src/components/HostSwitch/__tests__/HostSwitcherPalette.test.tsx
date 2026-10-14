@@ -55,6 +55,7 @@ vi.mock("@/utils/logger", () => ({
 
 import { HostSwitcherPalette } from "../HostSwitcherPalette";
 import { usePaletteStore } from "@/store/paletteStore";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   consumeDeferredPaletteFocusRestore,
   consumePaletteFocusRestoreSuppression,
@@ -139,7 +140,7 @@ afterEach(() => {
 });
 
 function openPalette() {
-  render(<HostSwitcherPalette />);
+  render(<HostSwitcherPalette />, { wrapper: TooltipProvider });
   act(() => usePaletteStore.getState().openPalette("host-switcher"));
 }
 
@@ -155,7 +156,7 @@ describe("HostSwitcherPalette", () => {
       hosts: [host("h1", "studio-01", { status: "disconnected" })],
       localSummary: null,
     };
-    render(<HostSwitcherPalette />);
+    render(<HostSwitcherPalette />, { wrapper: TooltipProvider });
     expect(document.querySelector("[data-host-id]")).toBeNull();
   });
 
@@ -285,7 +286,7 @@ describe("HostSwitcherPalette", () => {
   });
 
   it("moves to another host once the host list arrives after opening", () => {
-    const { rerender } = render(<HostSwitcherPalette />);
+    const { rerender } = render(<HostSwitcherPalette />, { wrapper: TooltipProvider });
     act(() => usePaletteStore.getState().openPalette("host-switcher"));
     expect(row("local").getAttribute("aria-selected")).toBe("true");
     hostList.value = {
@@ -298,7 +299,7 @@ describe("HostSwitcherPalette", () => {
 
   it("leaves the cursor where the user put it when hosts arrive after opening", () => {
     hostList.value = { hosts: [], localSummary: null };
-    const { rerender } = render(<HostSwitcherPalette />);
+    const { rerender } = render(<HostSwitcherPalette />, { wrapper: TooltipProvider });
     act(() => usePaletteStore.getState().openPalette("host-switcher"));
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
     hostList.value = {
