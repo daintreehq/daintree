@@ -14,10 +14,10 @@ const shared = {
   // on either one can delete the other's freshly written output.
   clean: false,
   dts: sharedDts,
-  external: ["zod", "react"],
+  external: ["zod", "react", "react-dom"],
 } satisfies Options;
 
-// One JS build for all five entries, but the `testing` and `data` declarations
+// One JS build for all six entries, but the `testing` and `data` declarations
 // each come from their own dts-only pass. When either shares a dts bundle with
 // `index` (`data` does through `editFile`'s `PluginFsApi`), tsup's dts bundler hoists their common `shared/types/plugin` declarations
 // into a chunk file and `dist/index.d.ts` collapses to a handful of re-export
@@ -40,6 +40,7 @@ export default defineConfig((override) => {
       files: "src/files.ts",
       data: "src/data.ts",
       testing: "src/testing.ts",
+      "testing-preview": "src/testing-preview.ts",
     },
     dts: {
       ...shared.dts,
@@ -68,6 +69,13 @@ export default defineConfig((override) => {
     {
       ...shared,
       entry: { data: "src/data.ts" },
+      dts: { ...shared.dts, only: true },
+    },
+    {
+      ...shared,
+      // `testing/preview`, the mock view host. Its own pass for the same reason
+      // as `react`: it reaches `shared/types/plugin.ts` too.
+      entry: { "testing-preview": "src/testing-preview.ts" },
       dts: { ...shared.dts, only: true },
     },
   ];

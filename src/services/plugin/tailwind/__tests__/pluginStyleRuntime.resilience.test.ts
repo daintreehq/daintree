@@ -226,3 +226,74 @@ describe("pluginStyleRuntime — compaction", () => {
     }
   });
 });
+
+describe("pluginStyleRuntime — install failures are observable", () => {
+  it("reports a failed rebuild while still keeping the previous sheet", async () => {
+    const failures: unknown[] = [];
+    const runtime = await createPluginStyleRuntime(document, {
+      onInstallFailure: (failure) => failures.push(failure),
+    });
+    try {
+      const root = mountRoot(`<span class="gap-2"></span>`);
+      runtime.registerRoot(root);
+      expect(failures).toEqual([]);
+
+      failNextBuild = true;
+      root.innerHTML = `<span class="gap-2 uppercase"></span>`;
+      await afterObserver();
+
+      expect(failures).toEqual([
+        { phase: "rebuild", error: "simulated build failure", candidates: 1 },
+      ]);
+      expect(installedCss()).toContain(".gap-2");
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it("reports a failed compaction and keeps the existing sheet", async () => {
+    const failures: unknown[] = [];
+    const runtime = await createPluginStyleRuntime(document, {
+      compactionThreshold: 2,
+      onInstallFailure: (failure) => failures.push(failure),
+    });
+    try {
+      const stale = mountRoot(`<span class="p-1 p-2 p-3"></span>`);
+      const unregister = runtime.registerRoot(stale);
+      const live = mountRoot(`<span class="p-9"></span>`);
+      runtime.registerRoot(live);
+
+      failNextBuild = true;
+      unregister();
+      stale.remove();
+      await afterObserver();
+      await afterObserver();
+
+      expect(failures).toEqual([{ phase: "compaction", error: "simulated build failure" }]);
+      expect(installedCss()).toContain(".p-9");
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it("keeps working when the failure listener throws", async () => {
+    const runtime = await createPluginStyleRuntime(document, {
+      onInstallFailure: () => {
+        throw new Error("listener broke");
+      },
+    });
+    try {
+      const root = mountRoot();
+      runtime.registerRoot(root);
+      failNextBuild = true;
+      root.innerHTML = `<span class="p-4"></span>`;
+      await afterObserver();
+
+      root.innerHTML = `<span class="p-4"></span>`;
+      await afterObserver();
+      expect(installedCss()).toContain(".p-4");
+    } finally {
+      runtime.dispose();
+    }
+  });
+});
