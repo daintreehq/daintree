@@ -30,6 +30,12 @@ import {
   type ConfigImportSectionReport,
 } from "../../shared/types/configBundle.js";
 import type { ConfigBundleSections } from "../utils/configBundleIO.js";
+import { readAgentDefaults, restoreAgentDefaults, setAgentDefaults } from "./agentDefaults.js";
+import {
+  isStorableAssistantAgentId,
+  isStorableDefaultAgent,
+  type AgentDefaultsPatch,
+} from "../../shared/types/ipc/agentDefaults.js";
 
 /**
  * Reads and writes the portable configuration sections behind Export/Import
@@ -140,6 +146,11 @@ const THEME_FIELD_LABELS: Record<string, string> = {
   preferredLightSchemeId: "Light theme",
   colorVisionMode: "Color vision",
   accentColorOverride: "Accent color",
+};
+
+const AGENT_DEFAULT_FIELD_LABELS: Record<string, string> = {
+  assistantAgentId: "Assistant agent",
+  defaultAgent: "Default agent",
 };
 
 const NOTIFICATION_FIELD_LABELS: Record<string, string> = {
@@ -266,6 +277,21 @@ function describeChanges(
         return named(key, kind, recordName(incomingRecord, key), recordName(currentRecord, key));
       case "agentSettings":
         return { key, kind, label: getEffectiveAgentConfig(key)?.name ?? key };
+      case "agentDefaults": {
+        const show = (value: unknown) =>
+          value === null
+            ? "None"
+            : typeof value === "string"
+              ? (getEffectiveAgentConfig(value)?.name ?? value)
+              : undefined;
+        return {
+          key,
+          kind,
+          label: AGENT_DEFAULT_FIELD_LABELS[key] ?? humanizeKey(key),
+          from: kind === "update" ? show(currentRecord[key]) : undefined,
+          to: show(incomingRecord[key]),
+        };
+      }
       case "keybindingOverrides":
         return { key, kind, label: shortcutLabel(key) };
       case "appTheme": {
@@ -335,6 +361,7 @@ export class ConfigBundleService {
     this.handlers = [
       this.userAgentRegistrySection(),
       this.agentSettingsSection(),
+      this.agentDefaultsSection(),
       this.keybindingOverridesSection(),
       this.appThemeSection(),
       this.notificationSettingsSection(),
@@ -628,6 +655,68 @@ export class ConfigBundleService {
       },
       restore: async (snapshot) => {
         store.set("agentSettings.agents", (snapshot ?? {}) as Record<string, unknown>);
+      },
+    };
+  }
+
+  private agentDefaultsSection(): SectionHandler {
+    // Only leaves the host actually has travel, so exporting from a host that
+    // never chose a default can't turn into a clear on the machine importing it.
+    const isKnownLeaf = (key: string): key is keyof AgentDefaultsPatch =>
+      key === "assistantAgentId" || key === "defaultAgent";
+    const isStorable = (key: keyof AgentDefaultsPatch, value: unknown) =>
+      value === null ||
+      (key === "assistantAgentId"
+        ? isStorableAssistantAgentId(value)
+        : isStorableDefaultAgent(value));
+
+    return {
+      id: "agentDefaults",
+      read: async () => readAgentDefaults(),
+      diff: (incoming, current) => {
+        const known = isRecord(incoming)
+          ? Object.fromEntries(Object.entries(incoming).filter(([key]) => isKnownLeaf(key)))
+          : incoming;
+        return diffRecord(known, current);
+      },
+      apply: async (incoming, current) => {
+        const results: ConfigImportLeafResult[] = [];
+        if (!isRecord(incoming)) return results;
+        const currentRecord = isRecord(current) ? current : {};
+
+        const patch: AgentDefaultsPatch = {};
+        const pending: Array<keyof AgentDefaultsPatch> = [];
+        for (const [key, value] of Object.entries(incoming)) {
+          if (!isKnownLeaf(key)) {
+            results.push(skippedLeaf(key, "Not a supported default agent setting"));
+            continue;
+          }
+          if (!isStorable(key, value)) {
+            results.push(skippedLeaf(key, "Not a valid agent"));
+            continue;
+          }
+          if (Object.hasOwn(currentRecord, key) && sameValue(value, currentRecord[key])) {
+            results.push(unchangedLeaf(key));
+            continue;
+          }
+          (patch as Record<string, unknown>)[key] = value;
+          pending.push(key);
+        }
+
+        if (pending.length > 0) setAgentDefaults(patch);
+
+        const readBack = readAgentDefaults();
+        for (const key of pending) {
+          results.push(
+            Object.hasOwn(readBack, key) && sameValue(readBack[key], patch[key])
+              ? { key, status: "applied" }
+              : skippedLeaf(key, "Value did not persist")
+          );
+        }
+        return results;
+      },
+      restore: async (snapshot) => {
+        restoreAgentDefaults(isRecord(snapshot) ? (snapshot as AgentDefaultsPatch) : {});
       },
     };
   }

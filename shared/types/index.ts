@@ -205,6 +205,10 @@ export type {
   ServiceConnectivityStatus,
   ServiceConnectivityPayload,
   ServiceConnectivitySnapshot,
+  // Host-owned agent defaults (#13345)
+  AgentDefaultsSnapshot,
+  AgentDefaultsPatch,
+  AgentDefaultsLegacyCandidates,
   // Project presence types
   ProjectPresenceState,
   ProjectPresenceEntry,

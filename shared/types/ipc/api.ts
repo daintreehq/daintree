@@ -1034,6 +1034,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: import("./connectivity.js").ServiceConnectivityPayload) => void
     ): () => void;
   };
+  // get / set / migrateLegacy come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  agentDefaults: GeneratedElectronAPI["agentDefaults"] & {
+    onChanged(
+      callback: (snapshot: import("./agentDefaults.js").AgentDefaultsSnapshot) => void
+    ): () => void;
+  };
   // getSnapshot comes from GeneratedElectronAPI; onChanged is a renderer-only subscription.
   projectPresence: GeneratedElectronAPI["projectPresence"] & {
     onChanged(callback: () => void): () => void;

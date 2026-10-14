@@ -4,8 +4,9 @@ import { z } from "zod";
  * Portable configuration bundle (#11889).
  *
  * A single versioned JSON file carrying the configuration worth moving to a
- * second machine: custom agents, per-agent flags, keybinding overrides, theme,
- * notification preferences, the worktree path pattern, and global recipes.
+ * second machine: custom agents, per-agent flags, the default and assistant
+ * agents, keybinding overrides, theme, notification preferences, the worktree
+ * path pattern, and global recipes.
  *
  * Deliberately NOT a dump of `StoreSchema`. Machine-local runtime state (window
  * geometry, open panels, active worktree, install records, audit history) and
@@ -31,6 +32,7 @@ export const CONFIG_BUNDLE_MAX_BYTES = 2 * 1024 * 1024;
 export const CONFIG_BUNDLE_SECTION_IDS = [
   "userAgentRegistry",
   "agentSettings",
+  "agentDefaults",
   "keybindingOverrides",
   "appTheme",
   "notificationSettings",
@@ -43,6 +45,7 @@ export type ConfigBundleSectionId = (typeof CONFIG_BUNDLE_SECTION_IDS)[number];
 export const CONFIG_BUNDLE_SECTION_LABELS: Record<ConfigBundleSectionId, string> = {
   userAgentRegistry: "Custom agents",
   agentSettings: "Agent settings",
+  agentDefaults: "Default agents",
   keybindingOverrides: "Keyboard shortcuts",
   appTheme: "Theme",
   notificationSettings: "Notifications",

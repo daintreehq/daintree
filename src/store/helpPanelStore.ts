@@ -8,6 +8,9 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
+import { legacyHelpPanelAgentId } from "./persistence/agentDefaultsLegacy";
+import { agentDefaultsClient } from "@/clients/agentDefaultsClient";
+import { logError } from "@/utils/logger";
 import { getAssistantSupportedAgentIds } from "../../shared/config/agentRegistry";
 import { isBuiltInAgentId } from "../../shared/config/agentIds";
 import {
@@ -19,6 +22,77 @@ import {
 
 function isAssistantSupportedAgentId(value: unknown): value is string {
   return typeof value === "string" && getAssistantSupportedAgentIds().includes(value);
+}
+
+/** What this view knows about the CLIs on the host it's attached to. */
+export interface AssistantAgentAvailability {
+  /** False until a real probe lands; before that no agent counts as uninstalled. */
+  hasRealData: boolean;
+  isInstalled: (agentId: string) => boolean;
+}
+
+/**
+ * The agent this view can launch for the host's choice, and the choice it
+ * can't use. The host's value is never rewritten here: the CLI may be
+ * installed later, and a dropped choice is explained rather than forgotten.
+ */
+export function resolveAssistantAgent(
+  hostAgentId: string | null,
+  availability: AssistantAgentAvailability | null
+): { preferredAgentId: string | null; unavailableAgentId: string | null } {
+  if (!hostAgentId) return { preferredAgentId: null, unavailableAgentId: null };
+  if (!isAssistantSupportedAgentId(hostAgentId)) {
+    // A built-in demoted from tier:"stable" is a drop worth explaining. A
+    // user-defined agent may only be waiting on its registry, which loads after
+    // boot, so it's held back without a banner until it resolves.
+    return {
+      preferredAgentId: null,
+      unavailableAgentId: isBuiltInAgentId(hostAgentId) ? hostAgentId : null,
+    };
+  }
+  if (
+    availability?.hasRealData &&
+    isBuiltInAgentId(hostAgentId) &&
+    !availability.isInstalled(hostAgentId)
+  ) {
+    return { preferredAgentId: null, unavailableAgentId: hostAgentId };
+  }
+  return { preferredAgentId: hostAgentId, unavailableAgentId: null };
+}
+
+/**
+ * A person's pick in Settings, waiting to be applied to the live session in
+ * this view. Kept apart from the default itself (#13345): the default is the
+ * host's and changes under every window at once on an import or a pick
+ * elsewhere, but only the view where someone chose should replace a session.
+ */
+export interface AgentSwitchRequest {
+  id: number;
+  agentId: string;
+}
+
+let agentSwitchRequestSeq = 0;
+let assistantAgentWriteEpoch = 0;
+// The host's last word on the assistant agent and the availability it was last
+// resolved against, so a failed save falls back to what the host holds — not
+// to an earlier optimistic pick that never landed either.
+let acknowledgedAssistantAgentId: string | null = null;
+let lastAssistantAvailability: AssistantAgentAvailability | null = null;
+
+function resolvedAssistantPatch(
+  state: Pick<HelpPanelState, "dismissedDroppedAgentId">,
+  hostAgentId: string | null,
+  availability: AssistantAgentAvailability | null
+): Pick<HelpPanelState, "hostAssistantAgentId" | "preferredAgentId" | "droppedPreferredAgentId"> {
+  const { preferredAgentId, unavailableAgentId } = resolveAssistantAgent(hostAgentId, availability);
+  return {
+    hostAssistantAgentId: hostAgentId,
+    preferredAgentId,
+    droppedPreferredAgentId:
+      unavailableAgentId !== null && unavailableAgentId !== state.dismissedDroppedAgentId
+        ? unavailableAgentId
+        : null,
+  };
 }
 
 export const HELP_PANEL_MIN_WIDTH = 320;
@@ -114,7 +188,15 @@ interface HelpPanelState {
   sessions: Record<number, HelpSessionSlotState>;
   /** Which lane the panel body is showing. Always a key of `sessions`. */
   activeSlot: number;
+  /**
+   * The assistant agent this view launches: the host's choice when it's
+   * usable here, otherwise null. Derived from `hostAssistantAgentId` and
+   * never persisted to this machine (#13345).
+   */
   preferredAgentId: string | null;
+  /** The host's assistant agent as stored there (`helpAssistant.agentId`). */
+  hostAssistantAgentId: string | null;
+  agentSwitchRequest: AgentSwitchRequest | null;
   /**
    * User consent to auto-launch a billed agent session when the panel opens.
    * Defaults to false so opening the panel never starts (and bills) a session
@@ -124,12 +206,14 @@ interface HelpPanelState {
    */
   autoLaunchEnabled: boolean;
   /**
-   * Set at rehydration when a persisted preferredAgentId was dropped because the
-   * agent is no longer an assistant backend (CLI uninstalled or demoted from
-   * tier:"stable"). Transient (never persisted) — drives a one-shot banner so
-   * the silent null-out is explained instead of leaving a blank empty state.
+   * The host's assistant agent when this view can't use it — demoted from
+   * tier:"stable", or its CLI isn't installed on the host. Transient (never
+   * persisted) — drives a one-shot banner so the null preference is explained
+   * instead of leaving a blank empty state.
    */
   droppedPreferredAgentId: string | null;
+  /** A dropped agent the banner was dismissed for, so a re-sync can't bring it back. */
+  dismissedDroppedAgentId: string | null;
   introDismissed: boolean;
   /**
    * Captured resume sessions, keyed by `assistantSlotKey(projectId, slot)`.
@@ -172,7 +256,20 @@ interface HelpPanelActions {
   /** Drop a lane. Never removes the last one: the panel always has slot 0. */
   closeSlot: (slot: number) => void;
   setActiveSlot: (slot: number) => void;
-  setPreferredAgent: (agentId: string | null) => void;
+  /**
+   * A person choosing the assistant agent: shown at once, saved on the host,
+   * and, unless `switchSession` is false, queued to replace this view's live
+   * session (#8353).
+   */
+  setPreferredAgent: (agentId: string | null, options?: { switchSession?: boolean }) => void;
+  /** Mirror the host's assistant agent. Never writes back, never switches a session. */
+  syncHostAssistantAgent: (
+    hostAgentId: string | null,
+    availability: AssistantAgentAvailability | null
+  ) => void;
+  /** Re-resolve the current choice after the host's CLI availability changed. */
+  refreshAssistantAvailability: (availability: AssistantAgentAvailability | null) => void;
+  clearAgentSwitchRequest: (id: number) => void;
   setAutoLaunchEnabled: (enabled: boolean) => void;
   clearDroppedPreferredAgent: () => void;
   dismissIntro: () => void;
@@ -202,8 +299,11 @@ const initialState: HelpPanelState = {
   sessions: { [DEFAULT_ASSISTANT_SLOT]: emptySlot() },
   activeSlot: DEFAULT_ASSISTANT_SLOT,
   preferredAgentId: null,
+  hostAssistantAgentId: null,
+  agentSwitchRequest: null,
   autoLaunchEnabled: false,
   droppedPreferredAgentId: null,
+  dismissedDroppedAgentId: null,
   introDismissed: false,
   hibernateSessions: {},
   focusRequest: 0,
@@ -270,12 +370,11 @@ function sanitizeHibernateSessions(value: unknown): Record<string, HelpHibernate
 
 type HelpPanelPersistedState = Pick<
   HelpPanelState,
-  "width" | "preferredAgentId" | "autoLaunchEnabled" | "introDismissed" | "hibernateSessions"
+  "width" | "autoLaunchEnabled" | "introDismissed" | "hibernateSessions"
 >;
 
 const HELP_PANEL_PERSISTED_DEFAULTS: HelpPanelPersistedState = {
   width: HELP_PANEL_DEFAULT_WIDTH,
-  preferredAgentId: null,
   autoLaunchEnabled: false,
   introDismissed: false,
   hibernateSessions: {},
@@ -300,7 +399,6 @@ function toHelpPanelPersisted(state: Partial<HelpPanelState> | undefined): HelpP
       typeof state.width === "number"
         ? Math.min(Math.max(state.width, HELP_PANEL_MIN_WIDTH), HELP_PANEL_MAX_WIDTH)
         : HELP_PANEL_PERSISTED_DEFAULTS.width,
-    preferredAgentId: typeof state.preferredAgentId === "string" ? state.preferredAgentId : null,
     autoLaunchEnabled: state.autoLaunchEnabled === true,
     introDismissed: state.introDismissed === true,
     hibernateSessions: sanitizeHibernateSessions(state.hibernateSessions),
@@ -314,12 +412,10 @@ function toHelpPanelPersisted(state: Partial<HelpPanelState> | undefined): HelpP
  * view neither drops a sibling's session nor resurrects one it (or a sibling)
  * intentionally cleared. Leaves the v5 hydration `merge` untouched.
  *
- * `preferredAgentId` is compared against the raw baseline, which is correct for
- * built-in assistant agents (validated synchronously at hydration, so baseline
- * and in-memory agree). The narrow residual: a user/plugin agent invalidated at
- * hydration only because its registry had not loaded yet can, across two
- * simultaneously-open views, converge to a null preference — recoverable by
- * re-selecting it, and no worse than the pre-fix full-replace clobber.
+ * The pre-v7 `preferredAgentId` is carried forward from disk, and only from
+ * disk, until a local window has moved it to the host and deleted it (#13345).
+ * A remote-bound view writing first therefore can't erase this machine's
+ * value before it migrates, and nothing in memory can put it back once gone.
  */
 function mergeHelpPanelPersistedWrite({
   baseline,
@@ -333,11 +429,6 @@ function mergeHelpPanelPersistedWrite({
   const inc = toHelpPanelPersisted(incoming.state);
   const merged: HelpPanelPersistedState = {
     width: pickFieldByWriterDelta(base.width, inc.width, disk.width),
-    preferredAgentId: pickFieldByWriterDelta(
-      base.preferredAgentId,
-      inc.preferredAgentId,
-      disk.preferredAgentId
-    ),
     autoLaunchEnabled: pickFieldByWriterDelta(
       base.autoLaunchEnabled,
       inc.autoLaunchEnabled,
@@ -354,7 +445,14 @@ function mergeHelpPanelPersistedWrite({
       disk.hibernateSessions
     ),
   };
-  return { version: incoming.version, state: merged };
+  const legacyAgentId = legacyHelpPanelAgentId(onDisk.state);
+  return {
+    version: incoming.version,
+    state:
+      legacyAgentId === undefined
+        ? merged
+        : ({ ...merged, preferredAgentId: legacyAgentId } as HelpPanelPersistedState),
+  };
 }
 
 export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
@@ -387,14 +485,15 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
                 conversationTouched: false,
               },
             },
-            // Only initialize the preference on first launch. An explicit user
-            // choice (made via Settings) must survive terminal re-binds —
-            // overwriting it here is what made #8353's agent switch a no-op.
-            preferredAgentId: s.preferredAgentId ?? agentId,
+            // The preference is the host's and is never seeded from a launch
+            // (#13345): a session that started on the sole installed agent
+            // didn't choose a default for every window on the host. Overwriting
+            // it here was also what made #8353's agent switch a no-op.
             // A launched session is a successful recovery — drop the stale
             // banner so it can't resurface if the panel later returns to the
             // empty state.
             droppedPreferredAgentId: null,
+            dismissedDroppedAgentId: s.droppedPreferredAgentId ?? s.dismissedDroppedAgentId,
           };
         }),
 
@@ -462,12 +561,69 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       setActiveSlot: (slot) =>
         set((s) => (s.sessions[slot] && s.activeSlot !== slot ? { activeSlot: slot } : s)),
 
-      setPreferredAgent: (agentId) =>
-        set({ preferredAgentId: agentId, droppedPreferredAgentId: null }),
+      setPreferredAgent: (agentId, options) => {
+        const epoch = ++assistantAgentWriteEpoch;
+        const switchSession = options?.switchSession !== false;
+        set({
+          hostAssistantAgentId: agentId,
+          preferredAgentId: agentId,
+          droppedPreferredAgentId: null,
+          dismissedDroppedAgentId: null,
+          agentSwitchRequest:
+            switchSession && agentId ? { id: ++agentSwitchRequestSeq, agentId } : null,
+        });
+        void Promise.resolve()
+          .then(() => agentDefaultsClient.set({ assistantAgentId: agentId }))
+          .then((snapshot) => {
+            if (epoch === assistantAgentWriteEpoch) {
+              acknowledgedAssistantAgentId = snapshot?.assistantAgentId ?? null;
+            }
+          })
+          .catch((error: unknown) => {
+            logError("Failed to save the assistant agent", error);
+            // Only the latest pick rolls back, and to what the host holds.
+            if (epoch !== assistantAgentWriteEpoch) return;
+            set((s) => ({
+              ...resolvedAssistantPatch(s, acknowledgedAssistantAgentId, lastAssistantAvailability),
+              agentSwitchRequest: null,
+            }));
+          });
+      },
+
+      syncHostAssistantAgent: (hostAgentId, availability) => {
+        acknowledgedAssistantAgentId = hostAgentId;
+        lastAssistantAvailability = availability;
+        set((s) => {
+          const next = resolvedAssistantPatch(s, hostAgentId, availability);
+          return s.hostAssistantAgentId === next.hostAssistantAgentId &&
+            s.preferredAgentId === next.preferredAgentId &&
+            s.droppedPreferredAgentId === next.droppedPreferredAgentId
+            ? s
+            : next;
+        });
+      },
+
+      refreshAssistantAvailability: (availability) => {
+        lastAssistantAvailability = availability;
+        set((s) => {
+          const next = resolvedAssistantPatch(s, s.hostAssistantAgentId, availability);
+          return s.preferredAgentId === next.preferredAgentId &&
+            s.droppedPreferredAgentId === next.droppedPreferredAgentId
+            ? s
+            : next;
+        });
+      },
+
+      clearAgentSwitchRequest: (id) =>
+        set((s) => (s.agentSwitchRequest?.id === id ? { agentSwitchRequest: null } : s)),
 
       setAutoLaunchEnabled: (enabled) => set({ autoLaunchEnabled: enabled }),
 
-      clearDroppedPreferredAgent: () => set({ droppedPreferredAgentId: null }),
+      clearDroppedPreferredAgent: () =>
+        set((s) => ({
+          droppedPreferredAgentId: null,
+          dismissedDroppedAgentId: s.droppedPreferredAgentId ?? s.dismissedDroppedAgentId,
+        })),
 
       dismissIntro: () => set({ introDismissed: true }),
 
@@ -563,29 +719,20 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
       // instead of bare projectId (#12108). The v5 → v6 key rewrite happens in
       // `sanitizeHibernateSessions`, which every read path already funnels
       // through, so no separate migration step can be skipped.
-      version: 6,
+      // v7: `preferredAgentId` is the host's and no longer persisted here
+      // (#13345). A v6 value stays on disk only until a local window moves it.
+      version: 7,
       migrate: (persistedState) => persistedState as HelpPanelState & HelpPanelActions,
       partialize: (state): HelpPanelPersistedState => ({
         width: state.width,
-        preferredAgentId: state.preferredAgentId,
         autoLaunchEnabled: state.autoLaunchEnabled,
         introDismissed: state.introDismissed,
         hibernateSessions: state.hibernateSessions,
       }),
       merge: (persistedState: unknown, currentState) => {
+        // A persisted `preferredAgentId` is ignored: the assistant agent comes
+        // from the host (#13345), and a v6 value is only migration input.
         const persisted = persistedState as Partial<HelpPanelState>;
-        // Capture a built-in preference that's no longer a valid assistant
-        // backend (demoted from tier:"stable") so the empty state can explain
-        // the silent null-out instead of appearing blank. Restricted to built-in
-        // IDs: the user agent registry loads asynchronously after this synchronous
-        // rehydration, so a still-valid user-defined agent would otherwise be
-        // false-flagged as dropped on every restart. A null/missing preference is
-        // a clean first-run state, not a drop.
-        const droppedPreferredAgentId =
-          isBuiltInAgentId(persisted.preferredAgentId) &&
-          !isAssistantSupportedAgentId(persisted.preferredAgentId)
-            ? persisted.preferredAgentId
-            : null;
         return {
           ...currentState,
           // The assistant can auto-launch as soon as it opens. Starting every
@@ -596,15 +743,11 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
             typeof persisted.width === "number"
               ? Math.min(Math.max(persisted.width, HELP_PANEL_MIN_WIDTH), HELP_PANEL_MAX_WIDTH)
               : currentState.width,
-          preferredAgentId: isAssistantSupportedAgentId(persisted.preferredAgentId)
-            ? persisted.preferredAgentId
-            : null,
           // Default false for everyone, including returning users (v4 had no
           // such field) — the issue is surprise billing, so preserving the old
           // auto-launch for existing installs would preserve the reported bug.
           // A malformed (non-boolean) stored value normalizes to false too.
           autoLaunchEnabled: persisted.autoLaunchEnabled === true,
-          droppedPreferredAgentId,
           introDismissed:
             typeof persisted.introDismissed === "boolean"
               ? persisted.introDismissed
@@ -620,7 +763,7 @@ registerPersistedStore({
   storeId: "helpPanelStore",
   store: useHelpPanelStore,
   persistedStateType:
-    "Pick<HelpPanelState, 'width' | 'preferredAgentId' | 'autoLaunchEnabled' | 'introDismissed' | 'hibernateSessions'>",
+    "Pick<HelpPanelState, 'width' | 'autoLaunchEnabled' | 'introDismissed' | 'hibernateSessions'>",
 });
 
 // Frozen module singleton so the "closed lane" answer keeps a stable identity

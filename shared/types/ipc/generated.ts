@@ -32,6 +32,18 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string];
     result: boolean;
   };
+  "agent-defaults:get": {
+    args: [];
+    result: import("./agentDefaults.js").AgentDefaultsSnapshot;
+  };
+  "agent-defaults:migrate-legacy": {
+    args: [candidates: import("./agentDefaults.js").AgentDefaultsSnapshot];
+    result: import("./agentDefaults.js").AgentDefaultsSnapshot;
+  };
+  "agent-defaults:set": {
+    args: [patch: import("./agentDefaults.js").AgentDefaultsSnapshot];
+    result: import("./agentDefaults.js").AgentDefaultsSnapshot;
+  };
   "agent-session:clear": {
     args: [payload: { worktreeId?: string | undefined }];
     result: void;

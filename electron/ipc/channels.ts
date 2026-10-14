@@ -1245,6 +1245,12 @@ export const CHANNELS = {
   // Performance capture channels
   PERF_FLUSH_RENDERER_MARKS: "perf:flush-renderer-marks",
 
+  // Host-owned agent defaults: assistant agent + default terminal agent (#13345)
+  AGENT_DEFAULTS_GET: "agent-defaults:get",
+  AGENT_DEFAULTS_SET: "agent-defaults:set",
+  AGENT_DEFAULTS_MIGRATE_LEGACY: "agent-defaults:migrate-legacy",
+  AGENT_DEFAULTS_CHANGED: "agent-defaults:changed",
+
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",

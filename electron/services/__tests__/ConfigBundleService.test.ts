@@ -28,9 +28,19 @@ const mockStore = vi.hoisted(() => {
     node[last] = value;
   }
 
+  function remove(path: string): void {
+    const parts = path.split(".");
+    const last = parts.pop() as string;
+    const parent = read(parts.join("."));
+    if (parent !== null && typeof parent === "object") {
+      delete (parent as Record<string, unknown>)[last];
+    }
+  }
+
   return {
     get: vi.fn((path: string, fallback?: unknown) => read(path) ?? fallback),
     set: vi.fn((path: string, value: unknown) => write(path, value)),
+    delete: vi.fn((path: string) => remove(path)),
   };
 });
 
@@ -80,6 +90,9 @@ const mockProjectStore = vi.hoisted(() => ({
 const ALLOWED_SOUNDS = vi.hoisted(() => new Set(["chime.wav", "ping.wav"]));
 
 vi.mock("../../store.js", () => ({ store: mockStore }));
+
+const broadcastMock = vi.hoisted(() => vi.fn());
+vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: broadcastMock }));
 
 vi.mock("../UserAgentRegistryService.js", () => ({
   UserAgentRegistryService: mockUserAgentRegistryService,
@@ -141,6 +154,7 @@ beforeEach(() => {
   storeState.current = {
     userAgentRegistry: {},
     agentSettings: { agents: {} },
+    helpAssistant: { tier: "core" },
     keybindingOverrides: { overrides: {} },
     appTheme: {},
     notificationSettings: { completedSoundFile: "chime.wav", quietHoursEnabled: false },
@@ -481,6 +495,92 @@ describe("ConfigBundleService.apply", () => {
     await service.apply(bundle);
 
     expect(mockProjectStore.recipes).toHaveLength(1);
+  });
+});
+
+describe("ConfigBundleService agent defaults (#13345)", () => {
+  it("exports only the defaults the host actually has", async () => {
+    const { service } = makeService();
+    expect((await service.collect()).agentDefaults).toEqual({});
+
+    mockStore.set("helpAssistant.agentId", "claude");
+    mockStore.set("agentSettings.defaultAgent", null);
+    expect((await service.collect()).agentDefaults).toEqual({
+      assistantAgentId: "claude",
+      defaultAgent: null,
+    });
+  });
+
+  it("applies both defaults, tells every window, and changes nothing on a re-import", async () => {
+    const { service } = makeService();
+    const bundle = { agentDefaults: { assistantAgentId: "claude", defaultAgent: "codex" } };
+
+    const first = await service.apply(bundle);
+    expect(statusFor(first, "agentDefaults", "assistantAgentId")?.status).toBe("applied");
+    expect(statusFor(first, "agentDefaults", "defaultAgent")?.status).toBe("applied");
+    expect(mockStore.get("helpAssistant.agentId")).toBe("claude");
+    expect(mockStore.get("agentSettings.defaultAgent")).toBe("codex");
+    expect(broadcastMock).toHaveBeenCalledWith("agent-defaults:changed", {
+      assistantAgentId: "claude",
+      defaultAgent: "codex",
+    });
+
+    const second = await service.apply(bundle);
+    expect(statusFor(second, "agentDefaults", "assistantAgentId")?.status).toBe("unchanged");
+    expect(statusFor(second, "agentDefaults", "defaultAgent")?.status).toBe("unchanged");
+  });
+
+  it("applies an explicit clear over a host that never had a default", async () => {
+    const { service } = makeService();
+
+    const report = await service.apply({ agentDefaults: { defaultAgent: null } });
+
+    expect(statusFor(report, "agentDefaults", "defaultAgent")?.status).toBe("applied");
+    const slot = mockStore.get("agentSettings") as Record<string, unknown>;
+    expect(Object.hasOwn(slot, "defaultAgent")).toBe(true);
+    expect(slot.defaultAgent).toBeNull();
+  });
+
+  it("skips values that aren't agents and keys it doesn't know", async () => {
+    mockStore.set("agentSettings.defaultAgent", "codex");
+    const { service } = makeService();
+
+    const report = await service.apply({
+      agentDefaults: { defaultAgent: "not-a-built-in", assistantAgentId: 7, theme: "x" },
+    });
+
+    expect(statusFor(report, "agentDefaults", "defaultAgent")?.status).toBe("skipped");
+    expect(statusFor(report, "agentDefaults", "assistantAgentId")?.status).toBe("skipped");
+    expect(statusFor(report, "agentDefaults", "theme")?.status).toBe("skipped");
+    expect(mockStore.get("agentSettings.defaultAgent")).toBe("codex");
+  });
+
+  it("rolls back to a host with no default at all, not to a cleared one", async () => {
+    mockProjectStore.addGlobalRecipe.mockRejectedValue(new Error("recipes.json is read-only"));
+    const { service } = makeService();
+
+    const report = await service.apply({
+      agentDefaults: { assistantAgentId: "claude" },
+      globalRecipes: [{ id: "r1", name: "Fleet", terminals: [] }],
+    });
+
+    expect(report.outcome).toBe("rolled-back");
+    expect(Object.hasOwn(mockStore.get("helpAssistant") as object, "agentId")).toBe(false);
+  });
+
+  it("names both defaults and their agents in the preview", async () => {
+    mockStore.set("agentSettings.defaultAgent", "codex");
+    const { service } = makeService();
+
+    const preview = await service.preview({
+      agentDefaults: { assistantAgentId: "claude", defaultAgent: null, stray: 1 },
+    });
+
+    const section = preview.find((p) => p.section === "agentDefaults");
+    expect(section).toMatchObject({ add: 1, update: 1, unchanged: 0 });
+    const labels = (section?.changes ?? []).map((c) => c.label);
+    expect(labels).toEqual(["Default agent", "Assistant agent"]);
+    expect(section?.changes?.[0]).toMatchObject({ to: "None" });
   });
 });
 

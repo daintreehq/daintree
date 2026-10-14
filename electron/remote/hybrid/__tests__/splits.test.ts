@@ -232,6 +232,7 @@ describe("app:hydrate and app:boot", () => {
     hostHomeDir: "/home/greg",
     hostTmpDir: "/tmp",
     projects: [{ id: "p1" }],
+    agentDefaults: { assistantAgentId: "codex", defaultAgent: null },
   };
 
   it("takes host fields from the host and Shell fields from here", async () => {
@@ -257,6 +258,8 @@ describe("app:hydrate and app:boot", () => {
       focusMode: true,
     });
     expect(result.terminalConfig).toEqual({ fontSize: 15, scrollbackLines: 5000 });
+    // The assistant agent and default agent are the host's (#13345).
+    expect(result.agentDefaults).toEqual({ assistantAgentId: "codex", defaultAgent: null });
   });
 
   it("boots from the host hydrate with this machine's crash gate", async () => {

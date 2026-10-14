@@ -495,11 +495,13 @@ export function AgentSettings({
               }
               value={defaultAgent ?? NO_DEFAULT_AGENT}
               onValueChange={(value) =>
-                setDefaultAgent(value === NO_DEFAULT_AGENT ? undefined : (value as DefaultAgentId))
+                void setDefaultAgent(
+                  value === NO_DEFAULT_AGENT ? undefined : (value as DefaultAgentId)
+                )
               }
               options={defaultAgentOptions}
               isModified={defaultAgent !== undefined}
-              onReset={() => setDefaultAgent(undefined)}
+              onReset={() => void setDefaultAgent(undefined)}
             />
             <SettingsSwitchCard
               id="agents-skip-permissions"

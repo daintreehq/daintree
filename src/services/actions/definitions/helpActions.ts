@@ -309,6 +309,10 @@ async function resumeHelpPastSession(args: {
     });
     return { outcome: "unavailable" };
   }
+  // Resuming a conversation is its own choice of agent: a Settings pick still
+  // waiting for a session must not replace this one once it binds (#13345).
+  const pendingSwitch = useHelpPanelStore.getState().agentSwitchRequest;
+  if (pendingSwitch) useHelpPanelStore.getState().clearAgentSwitchRequest(pendingSwitch.id);
   // Queued before the lane appears: a brand-new lane's first input sync would
   // otherwise auto-launch a blank session into it.
   controller.launchWhenReady({

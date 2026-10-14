@@ -1,80 +1,52 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
-import {
-  createSafeJSONStorage,
-  readLocalStorageItemSafely,
-  safeJSONParse,
-} from "./persistence/safeStorage";
-import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
-import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
+import { agentDefaultsClient } from "@/clients/agentDefaultsClient";
+import { logError } from "@/utils/logger";
+import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 
 export type DefaultAgentId = BuiltInAgentId;
 
-function isValidAgentId(value: unknown): value is DefaultAgentId {
-  return typeof value === "string" && (BUILT_IN_AGENT_IDS as readonly string[]).includes(value);
-}
-
-interface AgentPreferences {
+interface AgentPreferencesState {
+  /**
+   * The host's default agent for new terminals and automated workflows
+   * (#13345). A mirror of `agentSettings.defaultAgent` in the host's main
+   * process, so it follows the host this window is attached to, never this
+   * machine. Undefined when the host has none.
+   */
   defaultAgent: DefaultAgentId | undefined;
+  /** A person's choice: shown at once and saved on the host. */
+  setDefaultAgent: (agent: DefaultAgentId | undefined) => Promise<void>;
+  /** Mirror what the host holds. Never writes back, so a push can't echo. */
+  applyHostDefaultAgent: (agent: DefaultAgentId | null | undefined) => void;
 }
 
-interface AgentPreferencesState extends AgentPreferences {
-  setDefaultAgent: (agent: DefaultAgentId | undefined) => void;
+let writeEpoch = 0;
+// The host's last word, so a failed save falls back to what the host holds —
+// not to an earlier optimistic choice that never landed either.
+let acknowledgedDefaultAgent: DefaultAgentId | undefined;
+
+function toMirror(agent: unknown): DefaultAgentId | undefined {
+  return isBuiltInAgentId(agent) ? agent : undefined;
 }
 
-const DEFAULT_PREFERENCES: AgentPreferences = {
+export const useAgentPreferencesStore = create<AgentPreferencesState>()((set, get) => ({
   defaultAgent: undefined,
-};
 
-export const useAgentPreferencesStore = create<AgentPreferencesState>()(
-  persist(
-    (set) => ({
-      ...DEFAULT_PREFERENCES,
-      setDefaultAgent: (agent) => set({ defaultAgent: agent }),
-    }),
-    {
-      name: "daintree-agent-preferences",
-      storage: createSafeJSONStorage(),
-      version: 0,
-      migrate: (persistedState) => persistedState as AgentPreferencesState,
-      merge: (persistedState, currentState) => {
-        const persisted = persistedState as Partial<AgentPreferencesState> | null;
-
-        // persistedState is null only when the store has never been written to localStorage.
-        // If it's non-null (including an empty object from a cleared preference), trust it
-        // and skip migration so that an explicit setDefaultAgent(undefined) is not undone.
-        if (persisted !== null) {
-          const raw = persisted?.defaultAgent;
-          return {
-            ...currentState,
-            defaultAgent: isValidAgentId(raw) ? raw : undefined,
-          };
-        }
-
-        // One-time migration: read defaultAgent from the old toolbar preferences key.
-        // We access localStorage directly here because getItem on StateStorage can return
-        // a Promise in async storage implementations, but localStorage is always synchronous.
-        try {
-          const oldRaw = readLocalStorageItemSafely("daintree-toolbar-preferences");
-          const oldData = safeJSONParse<{
-            state?: { launcher?: { defaultAgent?: unknown } };
-          }>(oldRaw, { store: "agentPreferencesStore", key: "daintree-toolbar-preferences" }, {});
-          const migrated = oldData?.state?.launcher?.defaultAgent;
-          if (isValidAgentId(migrated)) {
-            return { ...currentState, defaultAgent: migrated };
-          }
-        } catch {
-          // Migration failure is non-fatal — fall through to default.
-        }
-
-        return { ...currentState };
-      },
+  setDefaultAgent: async (agent) => {
+    const epoch = ++writeEpoch;
+    set({ defaultAgent: agent });
+    try {
+      const snapshot = await agentDefaultsClient.set({ defaultAgent: agent ?? null });
+      if (epoch === writeEpoch) acknowledgedDefaultAgent = toMirror(snapshot?.defaultAgent);
+    } catch (error) {
+      logError("Failed to save the default agent", error);
+      // Only the latest choice rolls back, and to what the host holds.
+      if (epoch === writeEpoch) set({ defaultAgent: acknowledgedDefaultAgent });
     }
-  )
-);
+  },
 
-registerPersistedStore({
-  storeId: "agentPreferencesStore",
-  store: useAgentPreferencesStore,
-  persistedStateType: "{ defaultAgent: DefaultAgentId | undefined }",
-});
+  applyHostDefaultAgent: (agent) => {
+    const next = toMirror(agent);
+    acknowledgedDefaultAgent = next;
+    if (get().defaultAgent !== next) set({ defaultAgent: next });
+  },
+}));

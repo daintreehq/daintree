@@ -151,17 +151,20 @@ export class HibernationManager {
   }
 
   maybeArm(inputs: HelpSessionInputs): void {
-    const { isOpen, terminalId, preferredAgentId } = inputs;
+    const { isOpen, terminalId } = inputs;
     if (isOpen || !terminalId) {
       this.clearTimer();
       this._hibernateArmedFor = null;
       return;
     }
-    // Already armed for this exact terminal+agent — leave the timer.
+    // Already armed for this exact terminal+agent — leave the timer. Compared
+    // against the lane's running agent, the same one captured below: the
+    // assistant default is the host's and can differ from the live session
+    // (#13345), which used to re-arm the countdown on every input sync.
     if (
       this._hibernateArmedFor &&
       this._hibernateArmedFor.terminalId === terminalId &&
-      this._hibernateArmedFor.agentId === preferredAgentId
+      this._hibernateArmedFor.agentId === this.host.getSlotState().agentId
     ) {
       return;
     }
