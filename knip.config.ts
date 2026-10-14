@@ -141,6 +141,7 @@ const baseConfig: KnipConfig = {
     "src/components/ui/__preview__/closeDismissCopyPreview.tsx",
     "src/components/ui/__preview__/dialogConfirmationsPreview.tsx",
     "src/components/ui/__preview__/errorsCalloutsPreview.tsx",
+    "src/components/Worktree/__preview__/lifecycleApprovalPreview.tsx",
     "src/components/ui/__preview__/focusRingsPreview.tsx",
     "src/components/ui/__preview__/handrolledButtonsPreview.tsx",
     "src/components/ui/__preview__/labelsBadgesPreview.tsx",

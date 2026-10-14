@@ -847,6 +847,79 @@ export class WorktreeLifecycleService {
   }
 
   /**
+   * The resource block a setup run provisions, and the prefix its commands
+   * carry in a command review. Prefers `resources` (plural) over `resource`,
+   * then falls back to the project settings environment the worktree is in.
+   */
+  private async resolveSetupResource(
+    config: DaintreeLifecycleConfig | null,
+    environmentId: string | undefined,
+    worktreeMode: () => string | undefined,
+    projectRootPath: string
+  ): Promise<{
+    resource: ResourceConfig | undefined;
+    environments: ResolvedResourceEnvironments | null;
+    labelPrefix: string | undefined;
+  }> {
+    if (config?.resources) {
+      const named = ownResource(config.resources, environmentId);
+      if (named) {
+        return { resource: named, environments: null, labelPrefix: `Resource "${environmentId}"` };
+      }
+      if (config.resources["default"]) {
+        return {
+          resource: config.resources["default"],
+          environments: null,
+          labelPrefix: 'Resource "default"',
+        };
+      }
+      const [first] = Object.keys(config.resources);
+      if (first !== undefined) {
+        return {
+          resource: config.resources[first],
+          environments: null,
+          labelPrefix: `Resource "${first}"`,
+        };
+      }
+    }
+    if (config?.resource) {
+      return { resource: config.resource, environments: null, labelPrefix: "Resource" };
+    }
+
+    const envKey = worktreeMode();
+    if (envKey && envKey !== "local") {
+      const envs = await this.resolveProjectResourceEnvironments(projectRootPath);
+      const resource = ownResource(envs?.environments, envKey);
+      if (resource) {
+        return { resource, environments: envs, labelPrefix: `Environment "${envKey}"` };
+      }
+    }
+    return { resource: undefined, environments: null, labelPrefix: undefined };
+  }
+
+  /**
+   * Label of the review group whose commands provision the resource a setup
+   * run would provision, when that block has provision commands.
+   */
+  async setupProvisionLabel(
+    worktreePath: string,
+    projectRootPath: string,
+    environmentId: string | undefined,
+    worktreeMode: string | undefined
+  ): Promise<string | undefined> {
+    const config = (await this.resolveConfig(worktreePath, projectRootPath))?.config ?? null;
+    const { resource, labelPrefix } = await this.resolveSetupResource(
+      config,
+      environmentId,
+      () => worktreeMode,
+      projectRootPath
+    );
+    return resource?.provision?.some((command) => command.length > 0)
+      ? `${labelPrefix} provision`
+      : undefined;
+  }
+
+  /**
    * Orchestrate the setup phase for a worktree: load+resolve config, cache
    * resource metadata on the monitor, run any setup commands, and report
    * progress via the monitor's lifecycle status.
@@ -873,34 +946,13 @@ export class WorktreeLifecycleService {
     const projectRootPath = ctx.projectRootPath;
     const resolvedConfig = await this.resolveConfig(worktreePath, projectRootPath);
     const config = resolvedConfig?.config ?? null;
-    let resourceEnvironments: ResolvedResourceEnvironments | null = null;
-
-    // Resolve resource config: prefer resources (plural) over resource (singular)
-    let resolvedResource = config?.resource;
-    if (config?.resources) {
-      const named = ownResource(config.resources, environmentId);
-      if (named) {
-        resolvedResource = named;
-      } else if (config.resources["default"]) {
-        resolvedResource = config.resources["default"];
-      } else {
-        const keys = Object.keys(config.resources);
-        if (keys.length > 0) {
-          resolvedResource = config.resources[keys[0]];
-        }
-      }
-    }
-
-    // Fallback: resolve from project settings resourceEnvironments
-    if (!resolvedResource) {
-      const monitor = ctx.getMonitor(worktreeId);
-      const envKey = monitor?.worktreeMode;
-      if (envKey && envKey !== "local") {
-        const envs = await this.resolveProjectResourceEnvironments(projectRootPath);
-        resolvedResource = ownResource(envs?.environments, envKey);
-        if (resolvedResource) resourceEnvironments = envs;
-      }
-    }
+    const { resource: resolvedResource, environments: resourceEnvironments } =
+      await this.resolveSetupResource(
+        config,
+        environmentId,
+        () => ctx.getMonitor(worktreeId)?.worktreeMode,
+        projectRootPath
+      );
 
     const resourceApproved = resolvedResource
       ? await this.isResourceApproved(resolvedConfig, resourceEnvironments, projectRootPath)

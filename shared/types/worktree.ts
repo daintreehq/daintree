@@ -140,6 +140,12 @@ export interface LifecycleCommandReviewSource {
 export interface LifecycleCommandReview {
   fingerprint: string;
   sources: LifecycleCommandReviewSource[];
+  /**
+   * Approving resumes a setup this worktree skipped, and that setup goes on to
+   * provision a resource: the label of the group whose commands it runs. The
+   * group appears in `sources` only while its commands are unapproved.
+   */
+  provisionAfterSetup?: string;
 }
 
 /** Longest failure text carried on a setup status. See {@link WorktreeSetupStatus.error}. */
