@@ -47,20 +47,28 @@ export function initAgentDefaultsSync(): () => void {
   // Bumped by every push. A reply to a request that started before the latest
   // push is older than that push and is dropped.
   let pushSeq = 0;
+  // The newest snapshot this view took as the host's word. Cleanup follows it,
+  // not a reply a later push already overtook.
+  let accepted: AgentDefaultsSnapshot | undefined;
   const remote = isRemoteWindow();
   // Read before anything else in this view can write, so a store that
   // rewrites its own blob on boot can't drop a value before it's sent.
   const candidates = remote ? {} : readLegacyAgentDefaults();
 
+  const accept = (snapshot: AgentDefaultsSnapshot) => {
+    accepted = snapshot;
+    applySnapshot(snapshot);
+  };
+
   const applyIfCurrent = (snapshot: AgentDefaultsSnapshot | undefined, startedAt: number) => {
     if (disposed || !snapshot || pushSeq !== startedAt) return;
-    applySnapshot(snapshot);
+    accept(snapshot);
   };
 
   const unsubscribePush = agentDefaultsClient.onChanged((snapshot) => {
     if (disposed) return;
     pushSeq += 1;
-    applySnapshot(snapshot);
+    accept(snapshot);
   });
 
   // Availability decides whether the host's choice is usable here, so it
@@ -108,10 +116,9 @@ export function initAgentDefaultsSync(): () => void {
     try {
       if (hasLegacyAgentDefaults(candidates)) {
         const migrationStartedAt = pushSeq;
-        settled = await agentDefaultsClient.migrateLegacy(candidates);
-        applyIfCurrent(settled, migrationStartedAt);
+        applyIfCurrent(await agentDefaultsClient.migrateLegacy(candidates), migrationStartedAt);
       }
-      clearLegacyAgentDefaults(settled);
+      if (!disposed && accepted) clearLegacyAgentDefaults(accepted);
     } catch (error) {
       // The legacy values stay put, so the next local boot tries again.
       logWarn("[agentDefaults] couldn't move this machine's agent defaults to the host", {

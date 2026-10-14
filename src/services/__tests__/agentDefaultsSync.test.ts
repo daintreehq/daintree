@@ -212,6 +212,27 @@ describe("initAgentDefaultsSync (#13345)", () => {
     expect(useHelpPanelStore.getState().preferredAgentId).toBe("codex");
   });
 
+  it("cleans up against the host's newest word, not a reply a push overtook", async () => {
+    putLegacy("help-panel-storage", { preferredAgentId: "claude" });
+    let resolveMigration: (snapshot: AgentDefaultsSnapshot) => void = () => {};
+    clientMock.migrateLegacy.mockReturnValue(
+      new Promise((resolve) => (resolveMigration = resolve))
+    );
+    boot({});
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    // An import rolled back to "never set" after the host took the value.
+    clientMock.push({});
+    resolveMigration({ assistantAgentId: "claude" });
+    await settle();
+
+    expect(stored("help-panel-storage")).toEqual({
+      state: { preferredAgentId: "claude" },
+      version: 6,
+    });
+  });
+
   it("refetches the host's defaults after a dropped link", async () => {
     boot({ assistantAgentId: "claude" });
     dispose = initAgentDefaultsSync();
