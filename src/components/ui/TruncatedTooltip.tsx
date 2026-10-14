@@ -33,6 +33,13 @@ export interface TruncatedTooltipProps {
    * then a pointer disclosure only.
    */
   focusable?: boolean;
+  /**
+   * Show the full text without hover — for a row the arrow keys are on, where
+   * there is no DOM focus to open it. Still only while the text is cut.
+   */
+  open?: boolean;
+  /** Told when a controlled `open` is dismissed (Escape, another tooltip opening). */
+  onOpenChange?: (open: boolean) => void;
 }
 
 export function TruncatedTooltip({
@@ -44,6 +51,8 @@ export function TruncatedTooltip({
   disabled,
   isTruncated: isTruncatedProp,
   focusable = true,
+  open,
+  onOpenChange,
 }: TruncatedTooltipProps) {
   const ownDetection = useTruncationDetection();
   const isTruncated = isTruncatedProp ?? ownDetection.isTruncated;
@@ -68,7 +77,7 @@ export function TruncatedTooltip({
   return (
     // The tooltip IS the content here (the untruncated text), so it stays as
     // long as the user is reading it — no auto-dismiss.
-    <Tooltip open={showTooltip ? undefined : false} autoDismiss={false}>
+    <Tooltip open={showTooltip ? open : false} onOpenChange={onOpenChange} autoDismiss={false}>
       <TooltipTrigger asChild>{React.cloneElement(children, extraProps)}</TooltipTrigger>
       <TooltipContent side={side} align={align} className={contentClassName}>
         {content}

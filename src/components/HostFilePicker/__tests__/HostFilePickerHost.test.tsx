@@ -125,6 +125,12 @@ function confirmButton(label: string): HTMLButtonElement {
   return screen.getByRole("button", { name: label }) as HTMLButtonElement;
 }
 
+// A row's name renders in two parts (the cuttable head, the kept end and
+// extension), so rows are found by the option's full accessible name.
+const findRow = (name: string) => screen.findByRole("option", { name });
+const getRow = (name: string) => screen.getByRole("option", { name });
+const queryRow = (name: string) => screen.queryByRole("option", { name });
+
 function openPick(request: Parameters<typeof pickHostPaths>[0]): Promise<string[] | null> {
   let picked!: Promise<string[] | null>;
   act(() => {
@@ -220,7 +226,7 @@ describe("HostFilePickerHost", () => {
         request: { mode: "file", title: "Choose file" },
       });
     });
-    await screen.findByText("notes.md");
+    await findRow("notes.md");
     fireEvent.click(confirmButton("Cancel"));
     await waitFor(() =>
       expect(answerHostPick).toHaveBeenCalledWith({ requestId: "req-2", paths: null })
@@ -230,21 +236,21 @@ describe("HostFilePickerHost", () => {
   it("serves renderer callers too, and never chooses from a folder that failed to open", async () => {
     render(<HostFilePickerHost />);
     const picked = openPick({ mode: "file", title: "Attach files", multiple: true });
-    await screen.findByText("notes.md");
-    fireEvent.click(screen.getByText("notes.md"));
-    expect(confirmButton("Choose").getAttribute("aria-disabled")).toBeNull();
+    await findRow("notes.md");
+    fireEvent.click(getRow("notes.md"));
+    expect(confirmButton("Select 1 file").getAttribute("aria-disabled")).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Folder path"), { target: { value: "/nope" } });
     fireEvent.keyDown(screen.getByLabelText("Folder path"), { key: "Enter" });
     await screen.findByText(/doesn't exist/);
-    expect(confirmButton("Choose").getAttribute("aria-disabled")).toBe("true");
-    expect(screen.queryByText("notes.md")).toBeNull();
+    expect(confirmButton("Select files").getAttribute("aria-disabled")).toBe("true");
+    expect(queryRow("notes.md")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Home" }));
-    await screen.findByText("notes.md");
-    expect(confirmButton("Choose").getAttribute("aria-disabled")).toBe("true");
-    fireEvent.click(screen.getByText("notes.md"));
-    fireEvent.click(confirmButton("Choose"));
+    await findRow("notes.md");
+    expect(confirmButton("Select files").getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(getRow("notes.md"));
+    fireEvent.click(confirmButton("Select 1 file"));
     await expect(picked).resolves.toEqual(["/home/greg/notes.md"]);
   });
 
@@ -284,9 +290,9 @@ describe("HostFilePickerHost", () => {
     listDirectory.mockRejectedValueOnce(new Error("The host isn't connected."));
     void openPick({ mode: "file", title: "Choose file" });
     await screen.findByText(/isn't connected/);
-    expect(confirmButton("Choose").getAttribute("aria-disabled")).toBe("true");
+    expect(confirmButton("Select file").getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await screen.findByText("notes.md");
+    await findRow("notes.md");
     expect(screen.queryByText(/isn't connected/)).toBeNull();
     expect(listDirectory).toHaveBeenCalledTimes(2);
   });
@@ -294,7 +300,7 @@ describe("HostFilePickerHost", () => {
   it("names the active option to assistive technology as the arrow keys move", async () => {
     render(<HostFilePickerHost />);
     void openPick({ mode: "file", title: "Choose file" });
-    await screen.findByText("notes.md");
+    await findRow("notes.md");
     const listbox = screen.getByRole("listbox");
     const options = screen.getAllByRole("option");
     expect(listbox.getAttribute("aria-activedescendant")).toBe(options[0]!.id);

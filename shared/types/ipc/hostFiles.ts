@@ -31,7 +31,10 @@ export interface HostPickRequest {
   /** Allow choosing more than one file (files only). */
   multiple?: boolean;
   title: string;
-  /** Label of the confirming button; defaults per mode. */
+  /**
+   * Label of the confirming button; defaults per mode. In a multi-file picker
+   * it is a verb the chosen count follows ("Attach" → "Attach 3 files").
+   */
   buttonLabel?: string;
   /** Absolute host path to start in; falls back to the host's home. */
   defaultPath?: string;
