@@ -1,20 +1,20 @@
 {
-  "count": 2975,
+  "count": 1128,
   "byRule": {
-    "@typescript-eslint/no-explicit-any": 51,
-    "@typescript-eslint/no-floating-promises": 80,
+    "@typescript-eslint/no-explicit-any": 48,
+    "@typescript-eslint/no-floating-promises": 58,
     "@typescript-eslint/no-unsafe-type-assertion": 477,
-    "component-contract/no-arbitrary-text-size": 6,
-    "component-contract/no-legacy-daintree-utilities": 854,
-    "component-contract/no-raw-radius": 488,
-    "component-contract/no-text-color-slash-alpha": 506,
-    "component-contract/no-unpaired-outline-suppression": 34,
+    "component-contract/no-arbitrary-text-size": 5,
+    "component-contract/no-legacy-daintree-utilities": 44,
+    "component-contract/no-raw-radius": 10,
+    "component-contract/no-text-color-slash-alpha": 26,
+    "component-contract/no-unpaired-outline-suppression": 13,
     "no-restricted-imports": 5,
-    "no-restricted-syntax": 367,
-    "no-useless-assignment": 16,
+    "no-restricted-syntax": 351,
+    "no-useless-assignment": 13,
     "preserve-caught-error": 40,
-    "react-compiler/react-compiler": 16,
-    "react-hooks/exhaustive-deps": 34
+    "react-compiler/react-compiler": 15,
+    "react-hooks/exhaustive-deps": 22
   },
-  "updatedAt": "2026-09-12T09:20:58.656Z"
+  "updatedAt": "2026-10-14T02:12:41.298Z"
 }
