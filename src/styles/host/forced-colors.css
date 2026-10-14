@@ -48,7 +48,7 @@
      tick and the leading icons are drawn in secondary ink, which stayed
      zinc-grey on the white canvas at ~2.6:1. A highlighted row is an outline
      here, not a fill, so its marks stay on Canvas too. */
-  [role="menu"] svg[class*="text-text-"] {
+  [role="menu"] svg:is(.text-text-primary, .text-text-secondary, .text-text-muted) {
     color: CanvasText !important;
   }
 
