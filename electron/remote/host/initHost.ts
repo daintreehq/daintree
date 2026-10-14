@@ -17,6 +17,9 @@ declare module "../runtime.js" {
   }
 }
 
+/** How often the host re-reads which views have a live assistant, beside the PTY events. */
+export const ASSISTANT_SWEEP_MS = 30_000;
+
 /**
  * The same conditions a local view's eviction floor checks (#11157, #12108),
  * read here where the assistant runs: an unrevoked help session pinned to this
@@ -81,9 +84,15 @@ export function initRemoteHostsHost(
   };
   watchPty();
   const offOpened = sessionHost.onEndpointOpened(watchPty);
+  // Not every end is an exit: a pty-host that dies mid-capture emits none, and
+  // a revoke before the kill client is wired kills nothing. A slow sweep stops
+  // the view those leave protected from staying so until something else changes.
+  const sweep = setInterval(refresh, ASSISTANT_SWEEP_MS);
+  sweep.unref?.();
   return {
     sessionHost,
     dispose() {
+      clearInterval(sweep);
       offOpened();
       watched?.off("spawn-result", refresh);
       watched?.off("exit", refresh);

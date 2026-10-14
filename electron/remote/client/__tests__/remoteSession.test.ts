@@ -90,6 +90,8 @@ import { HostModeOffError, createDirectTransport, type LinkTransport } from "../
 import { WindowHostBinding } from "../WindowHostBinding.js";
 import { installHostMetricsHostWith } from "../../metrics/hostMetricsHost.js";
 import { MetricsLinkMethod } from "../../metrics/linkMethods.js";
+import { LinkMethod } from "../../host/linkMethods.js";
+import type { LinkSession } from "../../link/session.js";
 import { ControlKind } from "../../link/messages.js";
 
 const HOST_CHANNEL = "git:get-file-diff";
@@ -171,6 +173,7 @@ async function startHarness(
     maxEndpoints?: number;
     reverseRequests?: ReverseRequestAnswerer;
     assistantLive?: SessionHostOptions["assistantLive"];
+    resumeGraceMs?: number;
   } = {}
 ) {
   const dir = await makeTempDir();
@@ -189,7 +192,7 @@ async function startHarness(
     location,
     handshake: TEST_HANDSHAKE,
     hostName: "studio",
-    resumeGraceMs: 150,
+    resumeGraceMs: options.resumeGraceMs ?? 150,
     session: { pingIntervalMs: 0, idleTimeoutMs: 0, laneLimits },
   });
   await server.listen();
@@ -759,23 +762,33 @@ describe("remote session wiring", () => {
   describe("assistant liveness (#13349)", () => {
     /** Endpoint handle → the project its live assistant was launched for. */
     const live = new Map<number, string>();
-    const startWithAssistants = () =>
+    const startWithAssistants = (options: { resumeGraceMs?: number } = {}) =>
       startHarness({
+        ...options,
         assistantLive: (endpoint) => live.get(endpoint.handle) === endpoint.projectId,
       });
     const handleOf = (projectId: string) => getEndpointRegistry().getForProject(projectId)[0]!.handle;
 
+    /** The host's side of each link, to say things its SessionHost wouldn't. */
+    function captureHostSessions(): LinkSession[] {
+      const sessions: LinkSession[] = [];
+      cleanups.push(h.server.onSession((ctx) => sessions.push(ctx.session)));
+      return sessions;
+    }
+
     beforeEach(() => live.clear());
 
     it("tells the Shell which view has a live assistant on the host, through a dropped link", async () => {
-      await startWithAssistants();
+      // A grace long enough that the reconnect below is always a resume.
+      await startWithAssistants({ resumeGraceMs: 10_000 });
       await connect();
       await invoke(HOST_CHANNEL, VIEW_A, {});
       await invoke(HOST_CHANNEL, VIEW_B, {});
       const connection = h.manager.get(HOST_ID)!;
+      const endpoint = getEndpointRegistry().getForProject("proj-1")[0]!;
       expect(connection.hasLiveAssistant(VIEW_A)).toBe(false);
 
-      live.set(handleOf("proj-1"), "proj-1");
+      live.set(endpoint.handle, "proj-1");
       h.sessionHost.refreshAssistants();
       await waitFor(() => connection.hasLiveAssistant(VIEW_A));
       expect(connection.hasLiveAssistant(VIEW_B)).toBe(false);
@@ -785,6 +798,7 @@ describe("remote session wiring", () => {
       h.allowConnect.value = false;
       for (const socket of h.sockets.splice(0)) socket.destroy();
       await waitFor(() => h.frontendCounts.at(-1) === 0);
+      await waitFor(() => connection.unavailableEnvelope() !== null);
       expect(connection.hasLiveAssistant(VIEW_A)).toBe(true);
 
       // It quits while nobody is attached to hear; the resumed session says so.
@@ -793,26 +807,55 @@ describe("remote session wiring", () => {
       h.allowConnect.value = true;
       await waitFor(() => connection.unavailableEnvelope() === null);
       await waitFor(() => !connection.hasLiveAssistant(VIEW_A));
+      expect(getEndpointRegistry().getForProject("proj-1")).toEqual([endpoint]);
     });
 
-    it("forgets a view's assistant when the view goes or moves to another project", async () => {
+    it("forgets a view's assistant when the view goes, so a reopened endpoint starts clear", async () => {
       await startWithAssistants();
       await connect();
       await invoke(HOST_CHANNEL, VIEW_A, {});
-      await invoke(HOST_CHANNEL, VIEW_B, {});
       const connection = h.manager.get(HOST_ID)!;
       live.set(handleOf("proj-1"), "proj-1");
-      live.set(handleOf("proj-2"), "proj-2");
       h.sessionHost.refreshAssistants();
-      await waitFor(() => connection.hasLiveAssistant(VIEW_A) && connection.hasLiveAssistant(VIEW_B));
+      await waitFor(() => connection.hasLiveAssistant(VIEW_A));
 
       h.sink.gone(VIEW_A);
+      await invoke(HOST_CHANNEL, VIEW_A, {});
       expect(connection.hasLiveAssistant(VIEW_A)).toBe(false);
+    });
 
-      // The host revokes an assistant whose view moves project.
+    it("takes the host's word only for the project the view is on now, and only well-formed", async () => {
+      // No reader: the host's SessionHost says nothing, so every answer here is
+      // one this test sends, and what the Shell does with it is its own doing.
+      await startHarness();
+      const hostSessions = captureHostSessions();
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      const say = (projectId: string, live: unknown) =>
+        hostSessions.at(-1)!.call(LinkMethod.ENDPOINT_ASSISTANT, {
+          endpoints: [{ endpointId: "view-12", projectId, live }],
+        });
+
+      await say("proj-2", true);
+      expect(connection.hasLiveAssistant(VIEW_B)).toBe(true);
+
+      // The host revokes the assistant of a view that moves project, and the
+      // Shell doesn't wait to be told.
       projectKeys.set(VIEW_B, `${HOST_ID}:proj-1`);
       await invoke(HOST_CHANNEL, VIEW_B, {});
       expect(connection.hasLiveAssistant(VIEW_B)).toBe(false);
+
+      // Said about the project it left, either way: ignored.
+      await say("proj-2", true);
+      expect(connection.hasLiveAssistant(VIEW_B)).toBe(false);
+      await say("proj-1", true);
+      expect(connection.hasLiveAssistant(VIEW_B)).toBe(true);
+      await say("proj-2", false);
+      expect(connection.hasLiveAssistant(VIEW_B)).toBe(true);
+
+      await expect(say("proj-1", "no")).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(connection.hasLiveAssistant(VIEW_B)).toBe(true);
     });
 
     it("starts over with no assistants on a fresh session", async () => {

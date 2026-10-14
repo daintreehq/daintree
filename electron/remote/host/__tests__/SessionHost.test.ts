@@ -9,7 +9,7 @@ import type { EnqueueResult } from "../../link/scheduler.js";
 import type { LinkSession } from "../../link/session.js";
 import type { HostSessionContext, HostSessionExpired } from "../HostServer.js";
 import { LinkMethod } from "../linkMethods.js";
-import { SessionHost } from "../SessionHost.js";
+import { ASSISTANT_RETRY_MS, SessionHost } from "../SessionHost.js";
 
 type Listener = (body: unknown) => void;
 
@@ -589,21 +589,74 @@ describe("SessionHost assistant liveness (#13349)", () => {
     });
   });
 
-  it("owes the Shell an answer whose delivery failed", async () => {
+  const coded = (code: string) => Object.assign(new Error(code), { code });
+  const sentAssistants = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls.filter(([method]) => method === LinkMethod.ENDPOINT_ASSISTANT);
+
+  it("asks an attached Shell again when it failed to take an answer", async () => {
+    // A missed start would leave the view open to eviction until some other
+    // terminal spawned or exited, so the retry can't wait for one.
     const link = fakeLink();
     fake.attach("s1", link);
     open(link, "view-1", "p1");
-    link.call.mockRejectedValueOnce(new Error("UNSUPPORTED"));
+    link.call.mockRejectedValueOnce(coded("RATE_LIMITED"));
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+    await flush();
+    expect(sentAssistants(link)).toHaveLength(1);
+
+    vi.advanceTimersByTime(ASSISTANT_RETRY_MS);
+    expect(sentAssistants(link)).toHaveLength(2);
+    expect(sentAssistants(link)[1]![1]).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", live: true }],
+    });
+  });
+
+  it("doesn't keep asking a Shell from before the call", async () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.call.mockRejectedValueOnce(coded("UNSUPPORTED"));
     liveAssistants.set(handleOf("p1"), "p1");
     sessions.refreshAssistants();
     await flush();
 
+    vi.advanceTimersByTime(ASSISTANT_RETRY_MS);
     sessions.refreshAssistants();
-    const sent = link.call.mock.calls.filter(([method]) => method === LinkMethod.ENDPOINT_ASSISTANT);
-    expect(sent).toHaveLength(2);
-    expect(sent[1]![1]).toEqual({
-      endpoints: [{ endpointId: "view-1", projectId: "p1", live: true }],
+    expect(sentAssistants(link)).toHaveLength(1);
+  });
+
+  it("answers for the other views when one view's read throws, and keeps what it last said", () => {
+    const failing = new Set<string>();
+    sessions.dispose();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: endpoints,
+      assistantLive: (endpoint) => {
+        if (failing.has(endpoint.projectId ?? "")) throw new Error("backends unreadable");
+        return liveAssistants.get(endpoint.handle) === endpoint.projectId;
+      },
     });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+
+    failing.add("p1");
+    liveAssistants.set(handleOf("p2"), "p2");
+    expect(() => sessions.refreshAssistants()).not.toThrow();
+    expect(assistantCalls(link).at(-1)!.payload).toEqual({
+      endpoints: [{ endpointId: "view-2", projectId: "p2", live: true }],
+    });
+
+    // Readable again and unchanged: nothing to correct.
+    failing.clear();
+    sessions.refreshAssistants();
+    expect(assistantCalls(link)).toHaveLength(2);
+    error.mockRestore();
   });
 
   it("says nothing more about a view whose endpoint closed", () => {

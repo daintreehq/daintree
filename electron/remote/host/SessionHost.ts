@@ -114,6 +114,8 @@ export type TransportChangeListener = (endpointIds: string[], attached: boolean)
 const DEFAULT_OVER_HIGH_WATER_GRACE_MS = 5_000;
 const DEFAULT_ACTIVITY_WINDOW_MS = 5 * 60_000;
 const DEFAULT_MAX_ENDPOINTS_PER_SESSION = 256;
+/** How soon an attached Shell that failed to take an assistant answer is asked again. */
+export const ASSISTANT_RETRY_MS = 1_000;
 /** Shell machines whose last project a host remembers; the oldest is dropped first. */
 const MAX_REMEMBERED_CLIENTS = 64;
 
@@ -134,6 +136,8 @@ interface SessionState {
    * link drops, so a resumed Shell hears every endpoint again.
    */
   assistantTold: Map<string, boolean>;
+  /** A retry of answers the attached Shell failed to take; cleared with its link. */
+  assistantRetry: ReturnType<typeof setTimeout> | null;
   overHighWaterTimer: ReturnType<typeof setTimeout> | null;
   handle: EndpointSessionHandle;
   /** When the Shell last used this host through a view; null until it does. */
@@ -332,6 +336,7 @@ export class SessionHost {
         stale: new Set(),
         staleReason: "reattached",
         assistantTold: new Map(),
+        assistantRetry: null,
         overHighWaterTimer: null,
         handle: undefined as unknown as EndpointSessionHandle,
         lastActiveAt: null,
@@ -448,6 +453,8 @@ export class SessionHost {
     state.link = null;
     state.resyncing = false;
     this.clearOverHighWater(state);
+    if (state.assistantRetry) clearTimeout(state.assistantRetry);
+    state.assistantRetry = null;
   }
 
   private openEndpoint(state: SessionState, clientEndpointId: string, projectId: string | null) {
@@ -643,12 +650,24 @@ export class SessionHost {
       payload.endpoints.push({ endpointId: id, projectId: endpoint.projectId, live });
     }
     if (payload.endpoints.length === 0) return;
-    void link.call(LinkMethod.ENDPOINT_ASSISTANT, payload).catch(() => {
-      // The Shell may not have heard: owe it these answers again, for the next
-      // refresh while this link lives or the full announcement on reattach.
+    void link.call(LinkMethod.ENDPOINT_ASSISTANT, payload).catch((error: unknown) => {
+      // A Shell from before this call refuses it, and always will.
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === "UNSUPPORTED" || code === "VALIDATION") return;
+      // The Shell may not have heard: owe it these answers again. A link that
+      // dropped hears everything when it reattaches; one still attached (its
+      // request allowance was full, say) is asked again shortly, since a
+      // missed start leaves its view open to eviction until something else
+      // changes.
       for (const { endpointId, live } of payload.endpoints) {
         if (state.assistantTold.get(endpointId) === live) state.assistantTold.delete(endpointId);
       }
+      if (state.link !== link || !link.isOpen || state.assistantRetry) return;
+      state.assistantRetry = setTimeout(() => {
+        state.assistantRetry = null;
+        this.announceAssistants(state);
+      }, ASSISTANT_RETRY_MS);
+      state.assistantRetry.unref?.();
     });
   }
 

@@ -1060,6 +1060,32 @@ describe("ProjectViewManager — eviction safety", () => {
         expect(evictedProjectIds()).toEqual(["proj-a"]);
       });
 
+      it("never asks a host about a view of this machine's own project", async () => {
+        const askHost = vi.fn(() => true);
+        const managerWithLimit = new ProjectViewManager(win as never, {
+          dirname: "/test",
+          paintGateTimeoutMs: 0,
+          paintGateHardTimeoutMs: 0,
+          warmPaintGateTimeoutMs: 0,
+          warmPaintGateHardTimeoutMs: 0,
+          cachedProjectViews: 2,
+          assistantBackendsForProject,
+          isTerminalLive,
+          remoteAssistantLive: askHost,
+        });
+        const wcA = createMockWebContents();
+        managerWithLimit.registerInitialView(
+          { webContents: wcA, setBounds: vi.fn() } as never,
+          "proj-a",
+          "/a"
+        );
+
+        await leaveFor(managerWithLimit, "proj-b", "proj-c");
+
+        expect(evictedProjectIds()).toEqual(["proj-a"]);
+        expect(askHost).not.toHaveBeenCalled();
+      });
+
       it("won't give it to another window while its assistant is live (#13274)", async () => {
         const managerWithLimit = makeManager(3);
         const wcR = await withRemoteView(managerWithLimit);
