@@ -14,7 +14,11 @@ import { InsetSurface } from "@/components/ui/insetSurface";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import { getVisibleTabbableElements, TRUNCATION_DISCLOSURE_ATTR } from "@/lib/accessibility";
+import {
+  getVisibleTabbableElements,
+  INTERACTIVE_CONTROL_SELECTOR,
+  TRUNCATION_DISCLOSURE_ATTR,
+} from "@/lib/accessibility";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useOverlayState } from "@/hooks/useOverlayState";
@@ -423,15 +427,13 @@ export function AppDialog({
         // tabbable.
         // Nor on a truncated label made tabbable only to show its full text:
         // focus there opens its tooltip the moment the dialog appears.
-        const tabbable = getVisibleTabbableElements(root);
-        target =
-          tabbable.find(
-            (el) =>
-              !el.hasAttribute(DIALOG_CLOSE_ATTR) && !el.hasAttribute(TRUNCATION_DISCLOSURE_ATTR)
-          ) ??
-          tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ??
-          tabbable[0] ??
-          null;
+        // The marker can also land on a real control (a custom `Button` child
+        // looks non-interactive to the tooltip), so only a non-control counts.
+        const tabbable = getVisibleTabbableElements(root).filter(
+          (el) =>
+            !el.hasAttribute(TRUNCATION_DISCLOSURE_ATTR) || el.matches(INTERACTIVE_CONTROL_SELECTOR)
+        );
+        target = tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ?? tabbable[0] ?? null;
       }
       if (target) {
         target.focus();
