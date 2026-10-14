@@ -288,6 +288,37 @@ describe("HostServer authentication", () => {
     expect(env).toEqual({ __daintreeIpcEnvelope: true, ok: true, data: "project:get-all" });
   });
 
+  it("logs a Shell retrying into the same refusal once, and again after it gets a session", async () => {
+    const server = await startServer();
+    const refusals = () =>
+      logged("main:HostServer").filter(
+        (entry) => entry.message === "Remote Shell refused at handshake"
+      );
+    for (let i = 0; i < 3; i++) {
+      const raw = await rawHello("f".repeat(64), "c1");
+      await closedSocket(raw.socket);
+    }
+    expect(refusals()).toEqual([
+      {
+        message: "Remote Shell refused at handshake",
+        context: {
+          reason: "unauthorized",
+          clientId: "c1",
+          clientName: "n",
+          requestedSessionId: null,
+        },
+      },
+    ]);
+
+    const accepted = await rawHello(server.token, "c1");
+    await waitFor(() => server.sessions.length === 1);
+    const again = await rawHello("f".repeat(64), "c1");
+    await closedSocket(again.socket);
+    expect(refusals()).toHaveLength(2);
+    expect(JSON.stringify(logged("main:HostServer"))).not.toContain(server.token);
+    accepted.socket.destroy();
+  });
+
   it("rejects a wrong token as unauthorized and never exposes the session", async () => {
     const server = await startServer();
     const seen: unknown[] = [];

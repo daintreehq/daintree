@@ -35,18 +35,21 @@ afterEach(async () => {
 
 function failingTransport(detail: string): LinkTransport & {
   opens: number;
+  message: string;
   detail: string | (() => string);
-  hostModeOff: boolean;
+  /** "access" fails as ssh refusing the login does, which stops the retries. */
+  kind: "unreachable" | "access";
 } {
   const t = {
     opens: 0,
+    message: "unreachable",
     detail: detail as string | (() => string),
-    hostModeOff: false,
+    kind: "unreachable" as "unreachable" | "access",
     async open() {
       t.opens++;
       const said = typeof t.detail === "function" ? t.detail() : t.detail;
-      if (t.hostModeOff) throw new HostModeOffError(said);
-      throw new TransportError("unreachable", said);
+      if (t.kind === "access") throw new SshAccessError(said);
+      throw new TransportError(t.message, said);
     },
   };
   return t;
@@ -107,36 +110,43 @@ describe("LinkClient backoff", () => {
           hostId: "host-studio",
           attempt: 1,
           previousSessionId: null,
+          failure: "unreachable",
           detail: "Connection timed out",
           retryInMs: 1,
         },
       },
     ]);
+    const failures = () => lines().filter((line) => line.message === "Remote host unreachable");
 
-    // Only the per-attempt forward path differs: still the same failure.
+    // Only the per-attempt forward socket's nonce differs: still the same failure.
     let seenBefore = transport.opens;
     let nonce = 0;
     transport.detail = () =>
       `connect ENOENT /tmp/daintree/l-1a2b3c4d-${(++nonce).toString(16).padStart(8, "0")}.sock`;
     await waitFor(() => transport.opens >= seenBefore + 3);
-    expect(lines().filter((line) => line.message === "Remote host unreachable")).toHaveLength(2);
-    expect(lines().at(-1)?.context).toMatchObject({ detail: expect.stringContaining("ENOENT") });
+    expect(failures()).toHaveLength(2);
+    expect(failures().at(-1)?.context).toMatchObject({
+      detail: expect.stringContaining("ENOENT /tmp/daintree/"),
+    });
 
+    // The same retrying failure, until ssh refuses the login and retrying stops: that is news.
     seenBefore = transport.opens;
-    transport.detail = "Connection refused";
+    transport.message = "ssh couldn't log in to the host";
+    transport.detail = "Permission denied (publickey).";
     await waitFor(() => transport.opens >= seenBefore + 3);
-    expect(lines().filter((line) => line.message === "Remote host unreachable")).toHaveLength(3);
-    expect(lines().at(-1)?.context).toMatchObject({ detail: "Connection refused" });
-
-    // The same words, but now it stops retrying: that is news.
-    transport.hostModeOff = true;
+    expect(failures()).toHaveLength(3);
+    transport.kind = "access";
     await waitFor(() => {
       const state = client!.getState();
       return state.status === "unreachable" && state.retryAt === null;
     });
-    expect(lines().at(-1)?.context).toMatchObject({
-      detail: "Connection refused",
-      hostModeOff: true,
+    expect(failures()).toHaveLength(4);
+    expect(failures().at(-1)?.context).toEqual({
+      hostId: "host-studio",
+      attempt: expect.any(Number),
+      previousSessionId: null,
+      failure: "ssh couldn't log in to the host",
+      detail: "Permission denied (publickey).",
       stoppedRetrying: true,
     });
   });

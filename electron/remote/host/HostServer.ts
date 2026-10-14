@@ -117,16 +117,8 @@ export function describeMismatch(mismatch: HandshakeMismatch): string {
   }
 }
 
-/** Ids and names only: a HELLO also carries the token and the resume secret. */
-function logRefused(hello: HelloMessage, reason: string, extra: { detail?: string } = {}): void {
-  logger.info("Remote Shell refused at handshake", {
-    reason,
-    clientId: hello.client.clientId,
-    clientName: hello.client.clientName,
-    requestedSessionId: hello.resumeSessionId,
-    ...extra,
-  });
-}
+/** Shells whose last refusal is remembered, so one retrying against it logs once. */
+const MAX_REMEMBERED_REFUSALS = 64;
 
 export class HostServer {
   readonly token: string;
@@ -152,6 +144,8 @@ export class HostServer {
   private readonly sessionListeners = new Set<(ctx: HostSessionContext) => void>();
   private readonly expiredListeners = new Set<(info: HostSessionExpired) => void>();
   private readonly detachedListeners = new Set<(info: HostSessionDetached) => void>();
+  /** The last refusal logged per client id, until that client gets a session. */
+  private readonly loggedRefusals = new Map<string, string>();
   private readonly now: () => number;
 
   constructor(private readonly options: HostServerOptions) {
@@ -396,22 +390,48 @@ export class HostServer {
     }
   }
 
+  /**
+   * Ids and names only: a HELLO also carries the token and the resume secret.
+   * A Shell retrying into the same refusal (busy, a stale token) logs it once.
+   */
+  private logRefused(hello: HelloMessage, reason: string, extra: { detail?: string } = {}): void {
+    const clientId = hello.client.clientId;
+    const signature = `${reason}|${extra.detail ?? ""}`;
+    const repeat = this.loggedRefusals.get(clientId) === signature;
+    this.loggedRefusals.delete(clientId);
+    this.loggedRefusals.set(clientId, signature);
+    while (this.loggedRefusals.size > MAX_REMEMBERED_REFUSALS) {
+      const oldest = this.loggedRefusals.keys().next().value;
+      if (oldest === undefined) break;
+      this.loggedRefusals.delete(oldest);
+    }
+    const line = {
+      reason,
+      clientId,
+      clientName: hello.client.clientName,
+      requestedSessionId: hello.resumeSessionId,
+      ...extra,
+    };
+    if (repeat) logger.debug("Remote Shell refused at handshake", line);
+    else logger.info("Remote Shell refused at handshake", line);
+  }
+
   private onHello(session: LinkSession, hello: HelloMessage): void {
     const local = this.options.handshake;
     if (this.closing) {
-      logRefused(hello, "shutting-down");
+      this.logRefused(hello, "shutting-down");
       session.reject({ reason: "shutting-down", handshake: null, detail: null });
       return;
     }
     if (!tokensEqual(hello.token, this.token)) {
-      logRefused(hello, "unauthorized");
+      this.logRefused(hello, "unauthorized");
       session.reject({ reason: "unauthorized", handshake: null, detail: null });
       return;
     }
     // A different version or commit is let in: the client warns and runs best effort.
     const mismatch = compareHandshake(local, hello.handshake);
     if (mismatch && isBlockingMismatch(mismatch)) {
-      logRefused(hello, mismatch.kind === "protocol" ? "protocol" : "version-mismatch", {
+      this.logRefused(hello, mismatch.kind === "protocol" ? "protocol" : "version-mismatch", {
         detail: describeMismatch(mismatch),
       });
       void this.rejectBuild(session, mismatch);
@@ -421,7 +441,7 @@ export class HostServer {
     const clientId = hello.client.clientId;
     // "local" names this host's own windows to the lease; no Shell may claim it.
     if (clientId === LOCAL_CLIENT_ID) {
-      logRefused(hello, "protocol", { detail: "reserved client id" });
+      this.logRefused(hello, "protocol", { detail: "reserved client id" });
       session.reject({ reason: "protocol", handshake: null, detail: null });
       return;
     }
@@ -466,7 +486,7 @@ export class HostServer {
             ? "client-mismatch"
             : "secret-mismatch";
     if (!resumed && !this.makeRoomForSession()) {
-      logRefused(hello, "busy");
+      this.logRefused(hello, "busy");
       session.reject({ reason: "busy", handshake: null, detail: null });
       return;
     }
@@ -493,6 +513,7 @@ export class HostServer {
       },
     });
     this.live.set(id, ctx);
+    this.loggedRefusals.delete(clientId);
     const who = { sessionId: id, clientId, clientName: hello.client.clientName };
     if (resumedFrom === "live-link") {
       logger.info("Remote session resumed over a new link", { ...who, replacedLiveLink: true });

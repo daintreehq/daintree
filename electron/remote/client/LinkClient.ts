@@ -106,12 +106,20 @@ const SHORT_SESSION_MS = 5_000;
 
 /**
  * A failure's detail with what changes on every attempt taken out (the
- * per-attempt forward socket's path, nonces), so the same failure repeating
- * is recognised as the same.
+ * per-attempt forward socket's nonce, a Chromium log line's pid and time), so
+ * the same failure repeating is recognised as the same.
  */
 function failureShape(detail: string | null): string {
   if (detail === null) return "";
-  return detail.replace(/\/[^\s'"()]+/g, "<path>").replace(/\b[0-9a-f]{8,}\b/gi, "<id>");
+  return detail.replace(/\[\d+:\d+\/\d+\.\d+:/g, "[").replace(/\b[0-9a-f]{8,}\b/gi, "<id>");
+}
+
+/** Enough of a failure's detail to diagnose it: a probe's whole reply is remote text. */
+const MAX_LOGGED_DETAIL_CHARS = 300;
+
+function clipDetail(detail: string | null): string | null {
+  if (detail === null || detail.length <= MAX_LOGGED_DETAIL_CHARS) return detail;
+  return `${detail.slice(0, MAX_LOGGED_DETAIL_CHARS)}…`;
 }
 
 /** Past the 5 s ping and its answer: long enough that one is overdue, well short of the 20 s idle timeout. */
@@ -233,6 +241,8 @@ export class LinkClient {
         hostModeOff: err instanceof HostModeOffError,
         // Nothing a later attempt does differently would change these.
         parked: err instanceof HostModeOffError || err instanceof SshAccessError,
+        // The transport's own words for what failed; its detail is often null.
+        ...(err instanceof TransportError ? { failure: err.message } : {}),
       });
       return;
     }
@@ -481,16 +491,22 @@ export class LinkClient {
 
   private fail(
     detail: string | null,
-    options: { hostModeOff?: boolean; parked?: boolean } = {}
+    options: { hostModeOff?: boolean; parked?: boolean; failure?: string } = {}
   ): void {
     this.failures++;
     const { initialMs = 500, maxMs = 30_000, jitter = 0.3 } = this.options.backoff ?? {};
     const base = Math.min(maxMs, initialMs * 2 ** Math.min(this.failures - 1, 30));
     const delay = Math.max(0, Math.round(base * (1 - jitter * this.random())));
     const retry = options.parked ? "stopped" : "scheduled";
-    const signature = `${failureShape(detail)}|${options.hostModeOff ? "host-mode-off" : ""}|${retry}`;
+    const signature = [
+      options.failure ?? "",
+      failureShape(detail),
+      options.hostModeOff ? "host-mode-off" : "",
+      retry,
+    ].join("|");
     this.logFailure("Remote host unreachable", signature, {
-      detail,
+      ...(options.failure ? { failure: options.failure } : {}),
+      detail: clipDetail(detail),
       ...(options.hostModeOff ? { hostModeOff: true } : {}),
       ...(options.parked ? { stoppedRetrying: true } : { retryInMs: delay }),
     });
