@@ -6,11 +6,12 @@ import {
   ExitedCircle,
   DoneCircle,
   UnreadCircle,
-  CircleDashed,
-  CircleDot,
-  CirclePause,
-  CircleSlash,
+  BlockedCircle,
+  ParkedCircle,
+  SnoozedCircle,
+  IdleCircle,
 } from "@/components/icons";
+import { SESSION_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { FleetBand } from "@/lib/fleetAttention";
 import type { AgentState } from "@shared/types/agent";
 
@@ -78,19 +79,19 @@ const NEUTRAL_TONE = "text-text-secondary";
  *   apart too.
  */
 export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>> = {
-  blocked: CircleSlash,
+  blocked: BlockedCircle,
   "needs-you": HollowCircle,
   quiet: SpinnerCircle,
   review: UnreadCircle,
   running: SpinnerCircle,
   done: DoneCircle,
-  parked: CirclePause,
+  parked: ParkedCircle,
   // Dashed rather than paused: a park is held, a snooze is merely silent for
   // now, and the two must not share a shape when the row's only other
   // difference between them is a word. The dash is the same signal the project
   // switcher's snoozed dot uses, so one vocabulary covers both surfaces.
-  snoozed: CircleDashed,
-  idle: CircleDot,
+  snoozed: SnoozedCircle,
+  idle: IdleCircle,
 };
 
 /**
@@ -157,8 +158,10 @@ export function PilotRunState({ band, agentState }: PilotRunStateProps) {
   // The two refinements the row can make that the band alone cannot. Everything
   // else takes the band's own shape, so there is no second list to drift.
   if (band === "running") {
+    // Directing wears its own blue here as on every other surface: it is the
+    // user's own draft, and the working green would claim the agent is busy.
     return agentState === "directing" ? (
-      <InteractingCircle className={className} />
+      <InteractingCircle className={`size-3.5 shrink-0 ${SESSION_COLORS.directing}`} />
     ) : (
       <SpinnerCircle className={`${className} animate-spin-slow motion-reduce:animate-none`} />
     );

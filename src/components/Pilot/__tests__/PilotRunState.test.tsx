@@ -68,9 +68,11 @@ describe("PilotRunState", () => {
     expect(toneOf("running")).not.toBe(toneOf("done"));
   });
 
-  it("keeps the directing refinement inside the working tone", () => {
-    // Directing is a person typing at a working agent, not a different state.
-    expect(toneOf("running", "directing")).toBe(toneOf("running"));
+  it("draws the directing refinement in the directing blue every other surface uses", () => {
+    // A person typing at a working agent: the working green would claim the
+    // agent is busy, and the sidebar, dock and pane header already say blue.
+    expect(toneOf("running", "directing")).toBe("text-category-blue");
+    expect(toneOf("running", "directing")).not.toBe(toneOf("running"));
   });
 
   it("keeps the exited refinement inside the quiet tone", () => {

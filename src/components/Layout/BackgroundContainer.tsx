@@ -496,7 +496,13 @@ function BackgroundSingleItem({
             )}
             {StateIcon && stateLabel && (
               <span className="inline-flex items-center gap-1 shrink-0">
-                <StateIcon className={cn("h-2.5 w-2.5", stateColor)} />
+                <StateIcon
+                  className={cn(
+                    "h-2.5 w-2.5",
+                    stateColor,
+                    agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                  )}
+                />
                 <span>{stateLabel}</span>
               </span>
             )}

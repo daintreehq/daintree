@@ -79,7 +79,7 @@ describe("dock chips", () => {
     // Every state or activity glyph in the dock's chips takes the shared size.
     for (const file of ["DockedTerminalItem.tsx", "DockedTabGroup.tsx", "DockActivityCue.tsx"]) {
       const glyphs = Array.from(
-        read(file).matchAll(/<(StateIcon|SpinnerCircle|CheckCircle2)\s+className=\{([^}]+)\}/g),
+        read(file).matchAll(/<(StateIcon|SpinnerCircle|DoneCircle)\s+className=\{([^}]+)\}/g),
         (m) => m[2]!
       );
       expect(glyphs.length, file).toBeGreaterThan(0);

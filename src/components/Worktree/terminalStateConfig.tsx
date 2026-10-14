@@ -1,4 +1,3 @@
-import { Circle } from "lucide-react";
 import type { AgentState } from "@/types";
 import {
   SpinnerCircle,
@@ -6,6 +5,7 @@ import {
   InteractingCircle,
   ExitedCircle,
   DoneCircle,
+  IdleCircle,
   UnreadCircle,
 } from "@/components/icons";
 import { pluralize } from "@/lib/pluralize";
@@ -15,7 +15,7 @@ export const STATE_ICONS = {
   working: SpinnerCircle,
   waiting: HollowCircle,
   directing: InteractingCircle,
-  idle: Circle,
+  idle: IdleCircle,
   completed: DoneCircle,
   exited: ExitedCircle,
 } satisfies Record<AgentState, React.ComponentType<{ className?: string }>>;
