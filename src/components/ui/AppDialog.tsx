@@ -135,6 +135,13 @@ export interface AppDialogProps {
   zIndex?: DialogZIndex;
   placement?: DialogPlacement;
   initialFocus?: DialogInitialFocus;
+  /**
+   * Re-applies {@link initialFocus} whenever this value changes while the dialog
+   * stays open. For a queue-driven singleton that promotes the next request into
+   * the same open dialog: without it, focus stays on the button that answered the
+   * last request, so the next request opens with its primary focused.
+   */
+  focusResetKey?: string | number;
   restoreFocusTo?: RestoreFocusTarget;
   /**
    * Try `restoreFocusTo` before the trigger, not only once the trigger is gone —
@@ -230,6 +237,7 @@ export function AppDialog({
   zIndex = "modal",
   placement = "center",
   initialFocus,
+  focusResetKey,
   restoreFocusTo,
   preferRestoreFocusTo = false,
   onCloseComplete,
@@ -398,6 +406,17 @@ export function AppDialog({
     }
   }, [isOpen, effectiveInitialFocus, restoreFocus]);
 
+  const focusResetKeyRef = useRef(focusResetKey);
+  useLayoutEffect(() => {
+    if (focusResetKeyRef.current === focusResetKey) return;
+    focusResetKeyRef.current = focusResetKey;
+    if (!isOpen || effectiveInitialFocus === "none") return;
+    // Focus left on the last request's button is a leftover, not a choice.
+    focusAtOpenRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    initialFocusOwedRef.current = true;
+  }, [focusResetKey, isOpen, effectiveInitialFocus]);
+
   useEffect(() => {
     if (!isOpen || !shouldRender || !initialFocusOwedRef.current) return;
     const frame = requestAnimationFrame(() => {
@@ -431,7 +450,7 @@ export function AppDialog({
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [isOpen, shouldRender, effectiveInitialFocus]);
+  }, [isOpen, shouldRender, effectiveInitialFocus, focusResetKey]);
 
   useEffect(() => {
     return () => {
