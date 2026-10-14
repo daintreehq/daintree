@@ -259,6 +259,19 @@ describe("AssistantMessagingRuntime", () => {
     expect(second.ok && second.value.hasMore).toBe(false);
   });
 
+  it("ends a page before the results would outgrow one MCP result", () => {
+    runLane("s1");
+    const enrollment = enroll();
+    const ids = ["a", "b", "c"].map((ch) => send(enrollment, ch.repeat(15_000)).taskId);
+    const first = runtime.getInbox("s1", {});
+    if (!first.ok) throw new Error(first.code);
+    expect(first.value.messages.map((m) => m.taskId)).toEqual(ids.slice(0, 2));
+    expect(first.value.hasMore).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(first.value))).toBeLessThan(51_200);
+    const rest = runtime.getInbox("s1", { cursor: first.value.cursor });
+    expect(rest.ok && rest.value.messages.map((m) => m.taskId)).toEqual(ids.slice(2));
+  });
+
   it("refuses to admit a body for anything but a standing enrollment", () => {
     runLane("s1");
     const enrollment = enroll();

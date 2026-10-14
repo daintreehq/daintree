@@ -93,6 +93,24 @@ describe("AssistantInbox", () => {
     expect(inbox.getResponses(entry.key)).toEqual([]);
   });
 
+  it("refuses a body too large to hand over whole once fenced and serialized", () => {
+    const inbox = new AssistantInbox({ now: () => 0 });
+    // Under the character limit, but each NUL serializes to six bytes.
+    const body = "\u0000".repeat(16_000);
+    expect(() => inbox.admit(record(body), { body, provenance: PROVENANCE })).toThrow(
+      expect.objectContaining({ code: "VALIDATION" })
+    );
+  });
+
+  it("holds answers for a bounded number of exchanges, closed ones included", () => {
+    const inbox = new AssistantInbox({ now: () => 0, maxResponseTasks: 1 });
+    const first = inbox.admit(record("a"), { body: "a", provenance: PROVENANCE });
+    inbox.respond(first, "completed", "done");
+    inbox.drop(first.taskId);
+    const second = inbox.admit(record("b"), { body: "b", provenance: PROVENANCE });
+    expect(inbox.canRespond(second.taskId)).toBe(false);
+  });
+
   it("finds an entry only for its own receiver", () => {
     const inbox = new AssistantInbox({ now: () => 0 });
     const entry = inbox.admit(record("a"), { body: "a", provenance: PROVENANCE });

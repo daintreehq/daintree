@@ -53,13 +53,18 @@ function openExchangeDatabase(): Database.Database | null {
   }
 }
 
-/** Highest generation any kept exchange names, so a new enrollment never matches an old record. */
-function retainedGenerationFloor(store: AssistantExchangeStore): number {
-  try {
-    return store.maxReceiverGeneration();
-  } catch {
-    return 0;
-  }
+/**
+ * Issues exchange generations above the highest one any kept record names, so
+ * a new enrollment never matches a record addressed to an earlier one. Until
+ * the store has answered that, it refuses rather than guess: an unreadable
+ * store is not an empty one. Asks again at the next enrollment.
+ */
+function seededGenerationIssuer(store: AssistantExchangeStore): () => number {
+  let issue: (() => number) | null = null;
+  return () => {
+    issue ??= createExchangeGenerationIssuer(store.maxReceiverGeneration());
+    return issue();
+  };
 }
 
 /**
@@ -76,7 +81,7 @@ export function installAssistantMessagingPolicy(
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     isHostMessagingEnabled: deps.isHostMessagingEnabled,
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
-    newExchangeGeneration: createExchangeGenerationIssuer(retainedGenerationFloor(store)),
+    newExchangeGeneration: seededGenerationIssuer(store),
   });
   let revision = 0;
   let hadHosts = deps.hasHosts();

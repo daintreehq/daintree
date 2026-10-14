@@ -97,7 +97,10 @@ export interface AssistantMessagingPolicyDeps {
   platform?: NodeJS.Platform;
   now?: () => number;
   newGeneration?: () => string;
-  /** Issues {@link LaneEnrollment.exchangeGeneration}; must never repeat or go backwards. */
+  /**
+   * Issues {@link LaneEnrollment.exchangeGeneration}; must never repeat or go
+   * backwards. Throws when it can't vouch for that, and the enrollment is refused.
+   */
   newExchangeGeneration?: () => number;
 }
 
@@ -209,11 +212,20 @@ export class AssistantMessagingPolicy {
     const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
     const launchGeneration = running ? this.deps.getLiveGeneration(running.terminalId) : null;
     if (!running || launchGeneration === null) return { ok: false, reason: "unavailable" };
+    let exchangeGeneration: number;
+    try {
+      exchangeGeneration = this.newExchangeGeneration();
+    } catch (err) {
+      // No generation known to be above every stored record: enrolling now
+      // could match one addressed to an earlier enrollment.
+      console.error("[AssistantMessaging] Couldn't issue an exchange generation:", err);
+      return { ok: false, reason: "unavailable" };
+    }
     const enrollment: LaneEnrollment = {
       projectId: lane.projectId,
       slot: lane.slot,
       generation: this.newGeneration(),
-      exchangeGeneration: this.newExchangeGeneration(),
+      exchangeGeneration,
       sessionId: running.sessionId,
       terminalId: running.terminalId,
       launchGeneration,

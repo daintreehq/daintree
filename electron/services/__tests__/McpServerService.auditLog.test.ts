@@ -570,6 +570,30 @@ describe("McpServerService", () => {
       expect(record.errorCode).toBeUndefined();
     });
 
+    it("keeps an assistant reply's text out of the audit even when the call is refused (#13335)", async () => {
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client
+        .callTool({
+          name: "assistant.reply",
+          arguments: { taskId: "BODY-SENTINEL", state: "completed", text: "BODY-SENTINEL ok" },
+        })
+        .catch(() => {});
+
+      const records = getAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].toolId).toBe("assistant.reply");
+      expect(records[0].argsSummary).not.toContain("BODY-SENTINEL");
+      expect(JSON.parse(records[0].argsSummary)).toEqual({
+        taskId: null,
+        state: "completed",
+        textChars: "BODY-SENTINEL ok".length,
+      });
+    });
+
     it("records error and confirmation-pending dispatches separately", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
         if (payload.actionId === "recipe.run" && !payload.confirmed) {

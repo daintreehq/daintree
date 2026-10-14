@@ -173,17 +173,26 @@ describe("assistant messaging audit entries carry no body (#13335)", () => {
   const SHORT = "BODY-SENTINEL ok";
   const LONG = `BODY-SENTINEL ${"x".repeat(10_000)}`;
   const HOST = "HOST-SENTINEL";
+  const TASK = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
   it.each([SHORT, LONG])("summarizes a reply's arguments without its text", (text) => {
     const summary = summarizeMcpArgs(
-      projectAuditArgs("assistant.reply", { taskId: "task-1", state: "completed", text })
+      projectAuditArgs("assistant.reply", { taskId: TASK, state: "completed", text })
     );
     expect(summary).not.toContain("BODY-SENTINEL");
     expect(JSON.parse(summary)).toEqual({
-      taskId: "task-1",
+      taskId: TASK,
       state: "completed",
       textChars: text.length,
     });
+  });
+
+  it("drops a task id that is not one the store mints, however id-shaped", () => {
+    const summary = summarizeMcpArgs(
+      projectAuditArgs("assistant.reply", { taskId: "BODY-SENTINEL", state: "completed", text: "x" })
+    );
+    expect(summary).not.toContain("BODY-SENTINEL");
+    expect(JSON.parse(summary).taskId).toBeNull();
   });
 
   it("measures, never keeps, a malformed reply's fields", () => {
@@ -202,7 +211,7 @@ describe("assistant messaging audit entries carry no body (#13335)", () => {
   it("summarizes an inbox page by its size, without bodies or sender labels", () => {
     const result = {
       messages: [SHORT, LONG].map((body, i) => ({
-        taskId: `task-${i}`,
+        taskId: i === 0 ? TASK : "not-a-uuid",
         messageId: `msg-${i}`,
         contextId: "ctx",
         state: "submitted",
@@ -220,7 +229,7 @@ describe("assistant messaging audit entries carry no body (#13335)", () => {
     expect(projectAuditResult("assistant.getInbox", result)).toEqual({
       messageCount: 2,
       bodyChars: SHORT.length + LONG.length,
-      taskIds: ["task-0", "task-1"],
+      taskIds: [TASK, null],
       cursor: 2,
       hasMore: false,
     });

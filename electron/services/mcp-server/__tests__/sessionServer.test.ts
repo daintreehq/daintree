@@ -4430,6 +4430,19 @@ describe("assistant inbox tools (#13335)", () => {
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
+  it("answers with no view to reach, since nothing it does touches a renderer", async () => {
+    const { deps, access } = laneDeps({ available: true });
+    (deps.requestManifest as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("no view"));
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "assistant.getInbox", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(access.getInbox).toHaveBeenCalled();
+    expect(deps.requestManifest).not.toHaveBeenCalled();
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
   it("refuses arguments outside the schema without echoing them", async () => {
     const { deps, access } = laneDeps({ available: true });
     const server = createSessionServer("sess", deps);

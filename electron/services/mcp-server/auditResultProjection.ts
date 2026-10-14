@@ -97,8 +97,12 @@ function projectHandbackCarrier(result: unknown): unknown {
   return { ...record, ...reduceRows("terminals"), ...reduceRows("results") };
 }
 
-/** An id shaped like the ones Daintree mints; anything else is only measured. */
-const AUDIT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
+/**
+ * A task id as the exchange store mints it, a UUID. Anything else a caller
+ * sent is dropped: a short id-shaped string can still be a few words of a
+ * message.
+ */
+const AUDIT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REPLY_STATES: ReadonlySet<string> = new Set(["input-required", "completed"]);
 
 function auditId(value: unknown): string | null {

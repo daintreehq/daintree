@@ -23,8 +23,17 @@ export const ASSISTANT_MESSAGING_TOOL_IDS: ReadonlySet<string> = new Set([
 export const ASSISTANT_MESSAGE_MAX_CHARS = 16_000;
 /** Most messages one `assistant.getInbox` call returns. */
 export const ASSISTANT_INBOX_PAGE_MAX = 10;
-/** Body characters one `assistant.getInbox` call carries across its messages. */
-export const ASSISTANT_INBOX_PAGE_MAX_CHARS = 32_000;
+/**
+ * Most UTF-8 bytes one message takes in a result once fenced and serialized as
+ * JSON, where a control character can cost six. Checked when a body is
+ * admitted, so the largest message still fits one result whole.
+ */
+export const ASSISTANT_MESSAGE_MAX_SERIALIZED_BYTES = 40_000;
+/**
+ * Serialized bytes one `assistant.getInbox` call carries across its messages,
+ * under the MCP server's per-result cap; a first message always fits.
+ */
+export const ASSISTANT_INBOX_PAGE_MAX_BYTES = 44_000;
 /** Longest sending-host or sending-lane label kept, after control characters go. */
 export const ASSISTANT_PROVENANCE_LABEL_MAX_CHARS = 120;
 /** Most hops a message may have taken to get here. */

@@ -172,6 +172,7 @@ import { REPLY_WAIT_DEFAULT_SECONDS, WaitSecondsSchema } from "../../../shared/t
 import type { ReplyWait, ReplyWaiterService } from "./replyWaiter.js";
 import {
   ASSISTANT_GET_INBOX_TOOL,
+  ASSISTANT_MESSAGING_TOOL_IDS,
   ASSISTANT_REPLY_TOOL,
 } from "../../../shared/types/assistantMessaging.js";
 import {
@@ -1651,16 +1652,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               .flatMap((grant) => [...grant.allowedTools])
               .filter((toolId) => isGenericNativeGrantEligible(toolId))
           );
+          const permittedActionIds = new Set<string>([
+            ...getReachableActionIds(tier, rendererOwnedOrigin, sessionSurface.paneApproval === true),
+            ...perToolGrantedActionIds,
+            ...nativeGrantedActionIds,
+          ]);
+          // The inbox tools are offered only while this session's own lane is
+          // enrolled (#13335), whatever its tier or grants; discovery agrees.
+          if (!laneMessagingAvailable()) {
+            for (const id of ASSISTANT_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
+          }
           return {
-            permittedActionIds: new Set<string>([
-              ...getReachableActionIds(
-                tier,
-                rendererOwnedOrigin,
-                sessionSurface.paneApproval === true
-              ),
-              ...perToolGrantedActionIds,
-              ...nativeGrantedActionIds,
-            ]),
+            permittedActionIds,
             callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
             requestedActionId: readRequestedActionId(args),
             ...(listPaging ? { listPaging } : {}),

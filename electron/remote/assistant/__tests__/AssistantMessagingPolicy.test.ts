@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   HelpSessionEndedEvent,
   RunningLaneSession,
@@ -453,6 +453,19 @@ describe("AssistantMessagingPolicy", () => {
     expect(second.enrollment.exchangeGeneration).toBeGreaterThan(
       first.enrollment.exchangeGeneration
     );
+  });
+
+  it("refuses to enroll when no exchange generation can be vouched for", () => {
+    const h = harness({
+      newExchangeGeneration: () => {
+        throw new Error("store unreadable");
+      },
+    });
+    h.run("proj", 0, "s1");
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(h.policy.enroll(lane(), SHELL_A)).toEqual({ ok: false, reason: "unavailable" });
+    spy.mockRestore();
+    expect(h.policy.getEnrollment(lane())).toBeNull();
   });
 
   it("issues exchange generations above its floor even when the clock steps back", () => {
