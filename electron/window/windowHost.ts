@@ -10,6 +10,11 @@ import { getRemoteService, requireRemoteService } from "../remote/runtime.js";
 export interface WindowHostService {
   windowHost(windowId: number): HostId;
   viewHost(webContentsId: number): HostId;
+  /**
+   * Whether a view of a host's project has that host's Daintree Assistant
+   * pinned to it, live. Closing the view would revoke it there (#13349).
+   */
+  viewHasLiveAssistant?(webContentsId: number): boolean;
   /** The name the user knows a host by, or null for one this machine doesn't list. */
   hostName?(hostId: HostId): string | null;
   switchWindowToLocal(windowId: number, projectId: string): Promise<SwitchWindowHostResult>;

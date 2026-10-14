@@ -41,6 +41,7 @@ function fakeManager() {
       noteActiveProject: ReturnType<typeof vi.fn>;
       whenReady: ReturnType<typeof vi.fn>;
       boundViews: () => number[];
+      hasLiveAssistant: (webContentsId: number) => boolean;
     }
   >();
   const listeners = new Set<(hostId: string, state: HostConnectionState) => void>();
@@ -48,6 +49,8 @@ function fakeManager() {
     status: "connected" as string,
     readiness: "ready" as string,
     bound: [] as number[],
+    /** Views a host says have its live assistant pinned to them, by host. */
+    liveAssistants: new Map<string, Set<number>>(),
     /** What the host remembers this Shell last showed there. */
     last: null as { projectId: string; path: string; name: string } | null,
     touch: vi.fn(),
@@ -73,6 +76,8 @@ function fakeManager() {
           noteActiveProject: vi.fn(),
           whenReady: vi.fn(async () => manager.readiness),
           boundViews: () => [...manager.bound],
+          hasLiveAssistant: (webContentsId: number) =>
+            manager.liveAssistants.get(hostId)?.has(webContentsId) === true,
         };
         connections.set(hostId, connection);
       }
@@ -225,6 +230,22 @@ describe("RemoteHostsClient", () => {
     // A local project view keeps running here even inside that window.
     keys.set(8, "proj-1");
     expect(router.hostForSender(8)).toBeNull();
+  });
+
+  it("asks a view's own host whether its assistant is live, and no host for a local view (#13349)", () => {
+    manager.connect("studio-01");
+    manager.liveAssistants.set("studio-01", new Set([6, 8]));
+    keys.set(6, "studio-01:proj-1");
+    keys.set(7, "studio-01:proj-2");
+    keys.set(8, "proj-1");
+    keys.set(9, "studio-02:proj-1");
+
+    expect(client.viewHasLiveAssistant(6)).toBe(true);
+    expect(client.viewHasLiveAssistant(7)).toBe(false);
+    // Whatever a host says about a view it doesn't own.
+    expect(client.viewHasLiveAssistant(8)).toBe(false);
+    // A host with no connection says nothing.
+    expect(client.viewHasLiveAssistant(9)).toBe(false);
   });
 
   it("puts the binding back when the view can't be moved, so the two never name different hosts", async () => {

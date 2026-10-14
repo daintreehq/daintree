@@ -108,12 +108,21 @@ function readProcessMemoryKb(proc: Electron.ProcessMetric): number {
  * Agent state is deliberately not consulted: the assistant can dispatch a
  * sub-agent or background shell and go idle while that work runs on, which is
  * precisely the case the issue reports losing.
+ *
+ * A view of a host's project is asked of its host instead (#13349). Its
+ * assistant runs there, pinned to this view's endpoint, and closing the view
+ * closes the endpoint and revokes it the same way; the host checks the same
+ * three conditions and tells this Shell the answer.
  */
 export function hasLiveAssistantBackend(
   host: ProjectViewManager,
   projectId: string,
   entry: ViewEntry
 ): boolean {
+  if (!isLocalViewKey(projectId)) {
+    const wc = entry.view.webContents;
+    return !wc.isDestroyed() && host.remoteAssistantLive?.(wc.id) === true;
+  }
   const backends = host.assistantBackendsForProject?.(projectId) ?? [];
   if (backends.length === 0) return false;
   const wc = entry.view.webContents;

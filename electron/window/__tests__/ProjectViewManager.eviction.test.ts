@@ -222,6 +222,10 @@ const assistantBackendsForProject = (projectId: string) => {
   return backend ? [backend] : [];
 };
 const isTerminalLive = (terminalId: string): boolean => liveTerminals.has(terminalId);
+// A host project's view is asked of its host instead (#13349): the views whose
+// host says a live assistant is pinned to them.
+const liveRemoteViews = new Set<number>();
+const remoteAssistantLive = (webContentsId: number): boolean => liveRemoteViews.has(webContentsId);
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
@@ -241,6 +245,7 @@ import {
   backgroundRestoreCapacity,
 } from "../ProjectViewEvictionController.js";
 import { recordSwapPressure, SWAP_PRESSURE_STALE_MS } from "../../services/systemSwapPressure.js";
+import { toHostScopedKey } from "../../../shared/types/remoteHosts.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
 // served metrics cached by the previous test's differently-mocked sweep.
@@ -312,6 +317,7 @@ describe("ProjectViewManager — eviction safety", () => {
     mockGetAppMetrics.mockReturnValue([]);
     assistantBackends.clear();
     liveTerminals.clear();
+    liveRemoteViews.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -689,6 +695,7 @@ describe("ProjectViewManager — eviction safety", () => {
         cachedProjectViews,
         assistantBackendsForProject,
         isTerminalLive,
+        remoteAssistantLive,
       });
     }
 
@@ -987,6 +994,107 @@ describe("ProjectViewManager — eviction safety", () => {
 
       expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toEqual(["proj-b"]);
       expect(evictedProjectIds()).toEqual(["proj-a"]);
+    });
+
+    describe("a view of a host's project (#13349)", () => {
+      const remoteKey = toHostScopedKey("studio-02", "proj-r");
+
+      /** proj-a locally, then the host's project, which the user then leaves. */
+      async function withRemoteView(mgr: ProjectViewManager) {
+        const wcA = createMockWebContents();
+        mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/a");
+        await mgr.switchToHostProject("studio-02", "proj-r", "/srv/r");
+        await flushImmediates();
+        const wcR = mgr.getAllViews().find((v) => v.projectId === remoteKey)!.view
+          .webContents as unknown as ReturnType<typeof createMockWebContents>;
+        return wcR;
+      }
+
+      async function leaveFor(mgr: ProjectViewManager, ...projectIds: string[]) {
+        for (const projectId of projectIds) {
+          await mgr.switchTo(projectId, `/path/${projectId}`);
+          await flushImmediates();
+        }
+      }
+
+      it("keeps it out of the LRU pool while its host reports a live assistant", async () => {
+        // The issue's sequence: the user leaves the host's view and works
+        // locally. Its assistant runs on the host, where closing this view
+        // would revoke it, so none of this machine's sessions speak for it.
+        const managerWithLimit = makeManager(2);
+        const wcR = await withRemoteView(managerWithLimit);
+        liveRemoteViews.add(wcR.id);
+
+        await leaveFor(managerWithLimit, "proj-b", "proj-c", "proj-d");
+
+        const remaining = managerWithLimit.getAllViews().map((v) => v.projectId);
+        expect(remaining).toContain(remoteKey);
+        expect(wcR.close).not.toHaveBeenCalled();
+        expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+      });
+
+      it("evicts it like any other view when its host reports none", async () => {
+        const managerWithLimit = makeManager(2);
+        const wcR = await withRemoteView(managerWithLimit);
+
+        await leaveFor(managerWithLimit, "proj-b", "proj-c");
+
+        expect(evictedProjectIds()).toEqual(["proj-a", remoteKey]);
+        expect(wcR.close).toHaveBeenCalled();
+      });
+
+      it("keeps it through the forced reclaim", async () => {
+        const managerWithLimit = makeManager(3);
+        const wcR = await withRemoteView(managerWithLimit);
+        await leaveFor(managerWithLimit, "proj-b");
+        liveRemoteViews.add(wcR.id);
+
+        managerWithLimit.reclaimCachedViewsUnderPressure();
+
+        expect(
+          managerWithLimit
+            .getAllViews()
+            .map((v) => v.projectId)
+            .sort()
+        ).toEqual(["proj-b", remoteKey]);
+        expect(evictedProjectIds()).toEqual(["proj-a"]);
+      });
+
+      it("never asks a host about a view of this machine's own project", async () => {
+        const askHost = vi.fn(() => true);
+        const managerWithLimit = new ProjectViewManager(win as never, {
+          dirname: "/test",
+          paintGateTimeoutMs: 0,
+          paintGateHardTimeoutMs: 0,
+          warmPaintGateTimeoutMs: 0,
+          warmPaintGateHardTimeoutMs: 0,
+          cachedProjectViews: 2,
+          assistantBackendsForProject,
+          isTerminalLive,
+          remoteAssistantLive: askHost,
+        });
+        const wcA = createMockWebContents();
+        managerWithLimit.registerInitialView(
+          { webContents: wcA, setBounds: vi.fn() } as never,
+          "proj-a",
+          "/a"
+        );
+
+        await leaveFor(managerWithLimit, "proj-b", "proj-c");
+
+        expect(evictedProjectIds()).toEqual(["proj-a"]);
+        expect(askHost).not.toHaveBeenCalled();
+      });
+
+      it("won't give it to another window while its assistant is live (#13274)", async () => {
+        const managerWithLimit = makeManager(3);
+        const wcR = await withRemoteView(managerWithLimit);
+        await leaveFor(managerWithLimit, "proj-b");
+        expect(managerWithLimit.canReleaseCachedView(remoteKey)).toBe(true);
+
+        liveRemoteViews.add(wcR.id);
+        expect(managerWithLimit.canReleaseCachedView(remoteKey)).toBe(false);
+      });
     });
 
     it("still evicts a crashed cached view that has a live assistant backend", async () => {
@@ -2222,6 +2330,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     mockGetAppMetrics.mockReturnValue([]);
     assistantBackends.clear();
     liveTerminals.clear();
+    liveRemoteViews.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
