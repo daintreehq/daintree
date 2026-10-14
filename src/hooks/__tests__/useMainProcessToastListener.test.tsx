@@ -12,7 +12,13 @@ const switchToHostMock = vi.hoisted(() =>
     Promise.resolve()
   )
 );
-vi.mock("@/components/Hosts/hostSwitching", () => ({ switchToHost: switchToHostMock }));
+const notifyHostSwitchFailureMock = vi.hoisted(() =>
+  vi.fn<(hostId: string, error: unknown, retry: () => void, options?: { title?: string }) => void>()
+);
+vi.mock("@/components/Hosts/hostSwitching", () => ({
+  switchToHost: switchToHostMock,
+  notifyHostSwitchFailure: notifyHostSwitchFailureMock,
+}));
 
 vi.mock("@/lib/notify", () => ({
   notify: (...args: [NotifyPayload]) => notifyMock(...args),
@@ -26,6 +32,7 @@ type ToastCallback = (payload: {
   rateLimitKey?: string;
   priority?: "high" | "low" | "watch";
   action?: { label: string; ipcChannel: string; data?: string };
+  hostSwitchFailure?: { hostId: string; projectId: string; code: string | null };
 }) => void;
 
 let capturedCallback: ToastCallback | null = null;
@@ -85,6 +92,36 @@ describe("useMainProcessToastListener", () => {
     }
     expect(switchToHostMock).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+
+  it("hands a failed host restore to the shared host-switch presenter", async () => {
+    renderHook(() => useMainProcessToastListener());
+    notifyHostSwitchFailureMock.mockClear();
+    switchToHostMock.mockClear();
+    act(() => {
+      capturedCallback!({
+        type: "error",
+        title: "Couldn't reopen this window on Studio",
+        message: "Daintree isn't running in Host mode on Studio.",
+        action: {
+          label: "Retry",
+          ipcChannel: "remote-hosts:switch-window-host",
+          data: JSON.stringify({ hostId: "studio-01", projectId: "p1" }),
+        },
+        hostSwitchFailure: { hostId: "studio-01", projectId: "p1", code: "HOST_MODE_OFF" },
+      });
+    });
+    await vi.waitFor(() => expect(notifyHostSwitchFailureMock).toHaveBeenCalledTimes(1));
+    expect(notifyMock).not.toHaveBeenCalled();
+    const [hostId, error, retry, options] = notifyHostSwitchFailureMock.mock.calls[0]!;
+    expect(hostId).toBe("studio-01");
+    expect(error).toMatchObject({
+      code: "HOST_MODE_OFF",
+      userMessage: "Daintree isn't running in Host mode on Studio.",
+    });
+    expect(options).toEqual({ title: "Couldn't reopen this window on Studio" });
+    retry();
+    expect(switchToHostMock).toHaveBeenCalledWith("studio-01", false, "p1");
   });
 
   it("subscribes to onShowToast on mount and cleans up on unmount", () => {

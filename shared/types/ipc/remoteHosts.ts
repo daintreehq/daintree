@@ -78,6 +78,12 @@ export interface PendingHostSwitch {
    * started on the host, `opening` once the host is answering.
    */
   phase: "connecting" | "starting" | "opening";
+  /**
+   * Past the point of no return: the window is moving and can no longer be
+   * cancelled, but its new view isn't showing yet. Typing stays held until
+   * the pending switch clears, so nothing lands in the view being left.
+   */
+  committed?: true;
 }
 
 export interface CancelPendingSwitchPayload {

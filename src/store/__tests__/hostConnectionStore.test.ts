@@ -40,6 +40,29 @@ describe("hostConnectionStore", () => {
     expect(selectHostBannerVariant(useHostConnectionStore.getState())).toBe("reconnecting");
   });
 
+  it("names Host mode off and an ssh refusal apart from a host that can't be reached", () => {
+    const store = useHostConnectionStore.getState();
+    store.bindHost("studio-01", "studio-01");
+    const variant = () => selectHostBannerVariant(useHostConnectionStore.getState());
+    store.applyConnection({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      hostModeOff: true,
+      stoppedRetrying: true,
+    });
+    expect(variant()).toBe("host-mode-off");
+    store.applyConnection({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "Permission denied (publickey).",
+      stoppedRetrying: true,
+    });
+    expect(variant()).toBe("access-denied");
+    store.applyConnection({ status: "unreachable", lastSeenAt: null, detail: "timed out" });
+    expect(variant()).toBe("unreachable");
+  });
+
   it("prefers the link's record of when it last heard from the host over noticing the drop", () => {
     const store = useHostConnectionStore.getState();
     store.bindHost("studio-01", "studio-01");

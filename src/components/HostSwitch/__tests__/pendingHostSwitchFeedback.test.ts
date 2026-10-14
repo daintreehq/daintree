@@ -8,6 +8,10 @@ vi.mock("@/lib/notify", () => ({ notify: m.notify }));
 import { useNotificationStore } from "@/store/notificationStore";
 import { usePendingHostSwitchStore } from "@/store/pendingHostSwitchStore";
 import { pendingHostSwitchTitle, watchPendingHostSwitch } from "../pendingHostSwitchFeedback";
+import {
+  _resetTerminalInputGateForTesting,
+  isHostSwitchPending,
+} from "@/services/terminal/inputGate";
 
 function pending(overrides: Partial<PendingHostSwitch> = {}): PendingHostSwitch {
   return {
@@ -59,6 +63,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  _resetTerminalInputGateForTesting();
   vi.useRealTimers();
 });
 
@@ -155,6 +160,49 @@ describe("watchPendingHostSwitch", () => {
     await flushMicrotasks();
     expect(usePendingHostSwitchStore.getState().pending).toBeNull();
     second.stop();
+  });
+
+  it("drops Cancel once the switch has committed, and keeps typing held until it clears", () => {
+    const { send, stop } = harness();
+    send(pending({ phase: "opening", projectName: "api" }));
+    vi.advanceTimersByTime(400);
+    expect((m.notify.mock.calls[0]![0] as NotifyCall).actions.map((a) => a.label)).toEqual([
+      "Cancel",
+    ]);
+
+    send(pending({ phase: "opening", projectName: "api", committed: true }));
+    expect(update).toHaveBeenLastCalledWith("toast-1", expect.objectContaining({ actions: [] }));
+    expect(isHostSwitchPending()).toBe(true);
+
+    send(null);
+    expect(isHostSwitchPending()).toBe(false);
+    stop();
+  });
+
+  it("asks again when a cached view is shown, so a switch that ended while it was parked lets go", async () => {
+    let revealed: (() => void) | null = null;
+    let answer: PendingHostSwitch | null = pending();
+    const api = {
+      onEvent: vi.fn(() => () => {}),
+      getPendingSwitch: vi.fn(async () => answer),
+    };
+    const stop = watchPendingHostSwitch(api, {
+      onViewRevealed: (callback) => {
+        revealed = callback;
+        return () => void (revealed = null);
+      },
+    });
+    await flushMicrotasks();
+    expect(isHostSwitchPending()).toBe(true);
+
+    answer = null;
+    revealed!();
+    await flushMicrotasks();
+    expect(api.getPendingSwitch).toHaveBeenCalledTimes(2);
+    expect(usePendingHostSwitchStore.getState().pending).toBeNull();
+    expect(isHostSwitchPending()).toBe(false);
+    stop();
+    expect(revealed).toBeNull();
   });
 
   it("shows a notice held back in the background once the window is looked at again", () => {

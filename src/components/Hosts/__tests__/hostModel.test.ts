@@ -240,6 +240,26 @@ describe("hostChipStatus", () => {
     expect(hostChipStatus(false, { status: "disconnected" }, null)).toBe("disconnected");
   });
 
+  it("names what the host answered instead of calling it unreachable", () => {
+    const hostModeOff: HostConnectionState = {
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: null,
+      hostModeOff: true,
+      stoppedRetrying: true,
+    };
+    const refused: HostConnectionState = {
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "Permission denied (publickey).",
+      stoppedRetrying: true,
+    };
+    expect(hostChipStatus(false, hostModeOff, null)).toBe("host-mode-off");
+    expect(hostChipStatusText(hostChipStatus(false, hostModeOff, null))).toBe("host mode off");
+    expect(hostChipStatus(false, refused, null)).toBe("access-denied");
+    expect(hostChipStatusText(hostChipStatus(false, refused, null))).toBe("can't log in");
+  });
+
   it("reports a lease held elsewhere only while the link is up", () => {
     expect(hostChipStatus(false, CONNECTED, "greg-mbp")).toBe("driven-elsewhere");
     expect(

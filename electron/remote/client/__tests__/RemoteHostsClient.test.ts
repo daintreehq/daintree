@@ -307,9 +307,13 @@ describe("RemoteHostsClient", () => {
         "connecting",
         "opening",
         "opening",
+        "opening",
         null,
       ]);
       expect(seen[2]).toMatchObject({ hostName: "studio-01", projectName: "proj-1" });
+      // Committed, and still pending until the new view shows.
+      expect(seen[3]).toMatchObject({ switchId: seen[2]!.switchId, committed: true });
+      expect(seen[2]!.committed).toBeUndefined();
       expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
     });
 
@@ -369,7 +373,7 @@ describe("RemoteHostsClient", () => {
       expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(false);
     });
 
-    it("has nothing to cancel once the switch has committed", async () => {
+    it("has nothing to cancel once committed, but stays pending until the new view shows", async () => {
       let releaseOpen!: () => void;
       vi.mocked(windows.openRemoteProject).mockImplementationOnce(
         () => new Promise<void>((resolve) => (releaseOpen = resolve))
@@ -381,9 +385,56 @@ describe("RemoteHostsClient", () => {
       });
       await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
 
-      expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      // The old view is still on screen: typing stays held, but Cancel is gone.
+      const pending = client.getPendingSwitch(ctxFor(5, 1));
+      expect(pending).toMatchObject({ hostId: "studio-01", committed: true });
+      expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId: pending!.switchId })).toBe(false);
+      client.refreshPendingSwitches("studio-01");
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toEqual(pending);
+
       releaseOpen();
       await expect(switching).resolves.toMatchObject({ outcome: "switched" });
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      expect(pendingEvents().at(-1)).toBeNull();
+    });
+
+    it("keeps typing held for a committed switch when a newer one is cancelled first", async () => {
+      let releaseOpen!: () => void;
+      vi.mocked(windows.openRemoteProject).mockImplementationOnce(
+        () => new Promise<void>((resolve) => (releaseOpen = resolve))
+      );
+      const first = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
+      const committed = client.getPendingSwitch(ctxFor(5, 1))!;
+      expect(committed.committed).toBe(true);
+
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>(() => {}));
+      const second = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-2",
+      });
+      await vi.waitFor(() =>
+        expect(client.getPendingSwitch(ctxFor(5, 1))?.switchId).not.toBe(committed.switchId)
+      );
+      const newer = client.getPendingSwitch(ctxFor(5, 1))!;
+      expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId: newer.switchId })).toBe(true);
+      await expect(second).resolves.toMatchObject({ outcome: "superseded" });
+
+      // The first is still moving the window: its views hear about it again.
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toEqual(committed);
+      expect(pendingEvents().at(-1)).toEqual(committed);
+
+      releaseOpen();
+      await expect(first).resolves.toMatchObject({ outcome: "switched" });
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      expect(pendingEvents().at(-1)).toBeNull();
     });
 
     it("settles a first switch whose window closes before it ever bound", async () => {
@@ -535,6 +586,27 @@ describe("RemoteHostsClient", () => {
         client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
       ).rejects.toMatchObject({ code: "HOST_MODE_OFF" });
       expect(bindings.get(1)).toBe("local");
+    });
+
+    it("says at once, in ssh's words, when ssh couldn't log in", async () => {
+      manager.readiness = "stopped-retrying";
+      const link = manager.connect("studio-01");
+      link.linkState = {
+        status: "unreachable",
+        detail: "greg@studio-01: Permission denied (publickey).",
+      } as typeof link.linkState;
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).rejects.toMatchObject({
+        code: "HOST_SSH_ACCESS_DENIED",
+        userMessage: expect.stringContaining("greg@studio-01: Permission denied (publickey)"),
+      });
+      expect(bindings.get(1)).toBe("local");
+
+      // Not a new window either: it could never show the host.
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true })
+      ).rejects.toMatchObject({ code: "HOST_SSH_ACCESS_DENIED" });
     });
 
     it("refuses when the host never answers, rather than moving the window blind", async () => {

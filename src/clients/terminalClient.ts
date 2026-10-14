@@ -36,6 +36,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   getTerminalInputBlock,
   isTerminalInputBlocked,
+  isTerminalReplyBlocked,
   terminalInputBlockedError,
 } from "@/services/terminal/inputGate";
 
@@ -444,6 +445,22 @@ if (typeof window !== "undefined") {
   }
 }
 
+function sendInput(id: string, data: string): void {
+  if (messagePort) {
+    maybeStartEchoProbe(id);
+    try {
+      messagePort.postMessage({ type: "write", id, data });
+    } catch (error) {
+      logWarn("[TerminalClient] MessagePort write failed, clearing port", { error });
+      messagePort = null;
+
+      window.electron.terminal.write(id, data);
+    }
+  } else {
+    window.electron.terminal.write(id, data);
+  }
+}
+
 export const terminalClient = {
   spawn: (options: TerminalSpawnOptions): Promise<string> => {
     if (options.id) closedIds.delete(options.id);
@@ -455,19 +472,18 @@ export const terminalClient = {
     // another frontend drives: replaying it later would land keystrokes the
     // user can no longer see the context for.
     if (isTerminalInputBlocked()) return;
-    if (messagePort) {
-      maybeStartEchoProbe(id);
-      try {
-        messagePort.postMessage({ type: "write", id, data });
-      } catch (error) {
-        logWarn("[TerminalClient] MessagePort write failed, clearing port", { error });
-        messagePort = null;
+    sendInput(id, data);
+  },
 
-        window.electron.terminal.write(id, data);
-      }
-    } else {
-      window.electron.terminal.write(id, data);
-    }
+  /**
+   * A reply xterm writes on the terminal's own behalf (a cursor or device
+   * report, a focus change). It still goes while the window is on its way to
+   * another host: the terminal is live and on screen until the switch lands,
+   * and a program left waiting on its query can hang.
+   */
+  writeReply: (id: string, data: string): void => {
+    if (isTerminalReplyBlocked()) return;
+    sendInput(id, data);
   },
 
   /**
@@ -507,6 +523,8 @@ export const terminalClient = {
     // Main refuses the whole submission over one path it cannot attach, so a
     // chip that could never be an attachment (a UNC share, say) is dropped
     // here and simply stays text — the draft still goes out.
+    const blocked = getTerminalInputBlock();
+    if (blocked) return Promise.reject(terminalInputBlockedError(blocked));
     const attachable = imagePaths.filter(isImageAttachmentPath).slice(0, MAX_SUBMIT_IMAGE_PATHS);
     return attachable.length === 0
       ? window.electron.terminal.submit(id, text)

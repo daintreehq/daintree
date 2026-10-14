@@ -67,6 +67,58 @@ describe("terminal input gate", () => {
     expect(terminal.write).toHaveBeenCalledTimes(1);
   });
 
+  it("drops everything typed while the window switches to another host, and never replays it", async () => {
+    gate.setSwitchInputBlock({ kind: "switching", hostName: "studio-02" });
+    expect(gate.isHostSwitchPending()).toBe(true);
+    typeEverything();
+    await expect(terminalClient.submit("t-1", "echo hi")).rejects.toMatchObject({
+      code: "CANCELLED",
+      message: "Not sent: this window is switching to studio-02",
+    });
+    expect(terminal.write).not.toHaveBeenCalled();
+    expect(terminal.sendKey).not.toHaveBeenCalled();
+    expect(terminal.broadcastWrite).not.toHaveBeenCalled();
+    expect(terminal.submit).not.toHaveBeenCalled();
+
+    gate.setSwitchInputBlock(null);
+    expect(gate.isHostSwitchPending()).toBe(false);
+    expect(terminal.write).not.toHaveBeenCalled();
+    terminalClient.write("t-1", "z");
+    expect(terminal.write).toHaveBeenCalledTimes(1);
+    expect(terminal.write).toHaveBeenCalledWith("t-1", "z");
+  });
+
+  it("still answers the program's queries while switching, but not while the link is down", () => {
+    gate.setSwitchInputBlock({ kind: "switching", hostName: "studio-02" });
+    terminalClient.writeReply("t-1", "\x1b[12;4R");
+    expect(terminal.write).toHaveBeenCalledWith("t-1", "\x1b[12;4R");
+
+    gate.setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
+    terminalClient.writeReply("t-1", "\x1b[I");
+    expect(terminal.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an image submission like any other while switching", async () => {
+    gate.setSwitchInputBlock({ kind: "switching", hostName: "studio-02" });
+    await expect(
+      terminalClient.submitWithImages("t-1", "look /tmp/a.png", ["/tmp/a.png"])
+    ).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(terminalClient.submitWithImages("t-1", "plain", [])).rejects.toMatchObject({
+      code: "CANCELLED",
+    });
+    expect(terminal.submit).not.toHaveBeenCalled();
+  });
+
+  it("keeps a lost link's block when a pending switch ends, and ranks it first", () => {
+    gate.setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
+    gate.setSwitchInputBlock({ kind: "switching", hostName: "studio-02" });
+    expect(gate.getTerminalInputBlock()).toEqual({ kind: "disconnected", hostName: "studio-01" });
+    gate.setSwitchInputBlock(null);
+    expect(gate.isTerminalInputBlocked()).toBe(true);
+    terminalClient.write("t-1", "x");
+    expect(terminal.write).not.toHaveBeenCalled();
+  });
+
   it("still resizes while blocked: geometry is not input", () => {
     gate.setHostInputBlock({ kind: "disconnected", hostName: "studio-01" });
     terminalClient.resize("t-1", 80, 24);

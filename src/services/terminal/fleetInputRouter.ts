@@ -1,4 +1,5 @@
 import { terminalClient } from "@/clients";
+import { isHostSwitchPending } from "./inputGate";
 
 export type FleetInputBroadcastHandler = (originId: string, data: string) => boolean;
 
@@ -21,6 +22,8 @@ export function resetFleetInputBroadcastHandlerForTests(): void {
 
 export function writeTerminalInputOrFleet(originId: string, data: string): void {
   if (data.length === 0) return;
+  // Not to the fleet either: what was typed for this window goes nowhere until it lands.
+  if (isHostSwitchPending()) return;
 
   if (fleetInputBroadcastHandler?.(originId, data)) {
     return;

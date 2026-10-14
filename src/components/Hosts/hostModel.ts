@@ -232,6 +232,10 @@ export type HostChipStatus =
   | "quiet"
   | "connecting"
   | "unreachable"
+  /** ssh reached the machine; Daintree there isn't running in Host mode. */
+  | "host-mode-off"
+  /** ssh reached the machine and couldn't log in (auth or host key). */
+  | "access-denied"
   | "version-mismatch"
   | "build-differs"
   | "disconnected"
@@ -256,6 +260,11 @@ export function hostChipStatus(
       return connection.buildMismatch ? "build-differs" : "connected";
     case "local":
       return drivenBy ? "driven-elsewhere" : "connected";
+    case "unreachable":
+      // The machine answered in both; what it said is the state, not "unreachable".
+      if (connection.hostModeOff) return "host-mode-off";
+      if (connection.stoppedRetrying) return "access-denied";
+      return "unreachable";
     default:
       return connection.status;
   }
@@ -270,6 +279,10 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
       return "connecting…";
     case "unreachable":
       return "unreachable";
+    case "host-mode-off":
+      return "host mode off";
+    case "access-denied":
+      return "can't log in";
     case "version-mismatch":
       return "can't connect";
     case "disconnected":

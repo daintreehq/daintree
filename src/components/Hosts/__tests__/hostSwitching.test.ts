@@ -24,7 +24,8 @@ import {
   registerHostProjectPickerHost,
 } from "@/components/HostSwitch/hostProjectPickerRequests";
 import { takePendingHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
-import { switchToHost } from "../hostSwitching";
+import { takePendingHostSettings } from "@/components/Settings/Hosts/hostSettingsRequests";
+import { notifyHostSwitchFailure, switchToHost } from "../hostSwitching";
 
 const HANDSHAKE = {
   version: "1.3.0",
@@ -132,6 +133,50 @@ describe("switchToHost", () => {
     expect(toast.actions.map((action) => action.label)).toEqual(["Set up…"]);
     toast.actions[0]!.onClick();
     expect(takePendingHostUpdate()).toBe("h1");
+  });
+
+  it("says what ssh said and offers the host's settings when ssh couldn't log in", async () => {
+    m.hosts = [
+      studio({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "Permission denied (publickey).",
+        stoppedRetrying: true,
+      }),
+    ];
+    m.switchWindowHost.mockRejectedValue(
+      new ClientAppError(
+        "HOST_SSH_ACCESS_DENIED",
+        "ssh couldn't log in to studio-01",
+        "ssh couldn't log in to studio-01: Permission denied (publickey)."
+      )
+    );
+    await switchToHost("h1", false);
+    const toast = m.notify.mock.calls[0]![0] as {
+      message: string;
+      actions: Array<{ label: string; onClick: () => void }>;
+    };
+    expect(toast.message).toBe("ssh couldn't log in to studio-01: Permission denied (publickey).");
+    expect(toast.actions.map((action) => action.label)).toEqual(["Settings…"]);
+    toast.actions[0]!.onClick();
+    expect(takePendingHostSettings()).toEqual({ kind: "detail", hostId: "h1" });
+    const opened = m.dispatchEvent.mock.calls.at(-1)![0] as CustomEvent;
+    expect(opened.detail).toEqual({ tab: "hosts" });
+  });
+
+  it("titles a failure as its caller asks, keeping the same recovery", () => {
+    m.hosts = [studio({ status: "unreachable", lastSeenAt: null, detail: null })];
+    const retry = vi.fn();
+    notifyHostSwitchFailure("h1", new ClientAppError("HOST_DISCONNECTED", "gone"), retry, {
+      title: "Couldn't reopen this window on studio-01",
+    });
+    const toast = m.notify.mock.calls[0]![0] as {
+      title: string;
+      actions: Array<{ label: string; onClick: () => void }>;
+    };
+    expect(toast.title).toBe("Couldn't reopen this window on studio-01");
+    toast.actions[0]!.onClick();
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("offers a retry for any other failure", async () => {

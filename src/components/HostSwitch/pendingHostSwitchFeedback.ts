@@ -30,6 +30,15 @@ interface RemoteHostsSwitchApi {
   cancelPendingSwitch?: (payload: { switchId: string }) => Promise<boolean>;
 }
 
+interface WatchOptions {
+  /**
+   * Told each time this view is shown again after being cached behind another
+   * project. Main tells only the views attached to a window, so one parked
+   * mid-switch asks afresh rather than keep a switch that has since ended.
+   */
+  onViewRevealed?: (callback: () => void) => () => void;
+}
+
 /**
  * Keep this view told where its window's switch to a host is, and show it
  * once it has taken long enough to notice. A fast switch shows nothing; a slow
@@ -37,23 +46,32 @@ interface RemoteHostsSwitchApi {
  * goes away however the switch ends. No success notice: the window moving is
  * the news.
  */
-export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
+export function watchPendingHostSwitch(
+  api: RemoteHostsSwitchApi,
+  options: WatchOptions = {}
+): () => void {
   const store = usePendingHostSwitchStore;
-  let heardEvent = false;
+  /** Bumped by every event, so an answer to a question asked before one is stale. */
+  let heard = 0;
   let disposed = false;
   const stopEvents = api.onEvent?.((event) => {
     if (disposed || event.type !== "switch-pending") return;
-    heardEvent = true;
+    heard += 1;
     store.getState().setPending(event.pending);
   });
-  // A view that mounts while its window is already switching asks once; an
-  // event that arrived meanwhile is newer than this answer.
-  void api.getPendingSwitch?.().then(
-    (pending) => {
-      if (!disposed && !heardEvent) store.getState().setPending(pending);
-    },
-    () => {}
-  );
+  // A view that mounts (or is shown again) while its window is switching asks;
+  // an event that arrived meanwhile is newer than this answer.
+  const ask = () => {
+    const askedAt = heard;
+    void api.getPendingSwitch?.().then(
+      (pending) => {
+        if (!disposed && heard === askedAt) store.getState().setPending(pending);
+      },
+      () => {}
+    );
+  };
+  ask();
+  const stopRevealed = options.onViewRevealed?.(ask);
 
   let shownFor: string | null = null;
   let notificationId: string | null = null;
@@ -84,6 +102,20 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
     stillWorking = false;
   };
 
+  // Offered only until the switch commits: past that the window is moving.
+  const cancelActions = (pending: PendingHostSwitch) =>
+    pending.committed
+      ? []
+      : [
+          {
+            label: "Cancel",
+            variant: "secondary" as const,
+            onClick: () => {
+              void api.cancelPendingSwitch?.({ switchId: pending.switchId }).catch(() => {});
+            },
+          },
+        ];
+
   const show = (pending: PendingHostSwitch) => {
     if (notificationId) return;
     if (stillWorkingTimer) clearTimeout(stillWorkingTimer);
@@ -96,15 +128,7 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
         title: pendingHostSwitchTitle(pending),
         message: WAITING_MESSAGE,
         duration: 0,
-        actions: [
-          {
-            label: "Cancel",
-            variant: "secondary",
-            onClick: () => {
-              void api.cancelPendingSwitch?.({ switchId: pending.switchId }).catch(() => {});
-            },
-          },
-        ],
+        actions: cancelActions(pending),
       }) || null;
     if (stillWorking) {
       if (notificationId) {
@@ -134,6 +158,7 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
         useNotificationStore.getState().updateNotification(notificationId, {
           title: pendingHostSwitchTitle(pending),
           message: stillWorking ? STILL_WORKING_MESSAGE : WAITING_MESSAGE,
+          actions: cancelActions(pending),
         });
       }
       return;
@@ -155,6 +180,7 @@ export function watchPendingHostSwitch(api: RemoteHostsSwitchApi): () => void {
     disposed = true;
     focusSource?.removeEventListener("focus", showWhenFocused);
     stopEvents?.();
+    stopRevealed?.();
     stopStore();
     withdraw();
     store.getState().setPending(null);

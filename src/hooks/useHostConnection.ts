@@ -36,6 +36,7 @@ import { isUnknownOutcomeError, resolveUnknownOutcome } from "@/utils/resolveUnk
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { primeHostPreviewCapability } from "@/components/FileViewer/filePreviewKinds";
+import { watchHostConnectionAnnouncements } from "@/components/Recovery/hostConnectionAnnouncements";
 
 /** The remote host this view runs on, or null when it runs on this machine. */
 export function getViewHostId(): HostId | null {
@@ -681,6 +682,8 @@ function beginSync(): () => void {
 
   // Fetched up front so the first preview this view builds already carries it.
   if (hostId !== null) void primeHostPreviewCapability();
+  // Each change of the link is said once for the window, never by its banner or panes.
+  if (hostId !== null) disposers.push(watchHostConnectionAnnouncements(hostId));
 
   // Saves held while the link was down go out only after the lease is re-read
   // and any resync in flight (a fresh session's rehydrate) has finished.

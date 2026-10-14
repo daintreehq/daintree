@@ -60,6 +60,18 @@ describe("TerminalInputBlockBanner", () => {
     expect(status.querySelectorAll("button")).toHaveLength(0);
   });
 
+  it("never announces from a pane: the window says each change once", () => {
+    for (const block of [
+      { kind: "disconnected", hostName: "studio-01" },
+      { kind: "lease-unknown", hostName: "studio-01" },
+      { kind: "driven-elsewhere", driverName: "greg-mbp" },
+    ] as const) {
+      const { unmount } = render(<TerminalInputBlockBanner block={block} />);
+      expect(screen.getByRole("status").getAttribute("aria-live")).toBe("off");
+      unmount();
+    }
+  });
+
   it("names the machine that drives the project", () => {
     render(
       <TerminalInputBlockBanner block={{ kind: "driven-elsewhere", driverName: "greg-mbp" }} />

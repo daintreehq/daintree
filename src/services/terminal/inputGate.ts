@@ -18,12 +18,19 @@ export type TerminalInputBlock =
       /** A window on the host's own screen drives, and `driverName` is the host's. */
       driverIsHostScreen?: boolean;
     }
-  | { kind: "lease-unknown"; hostName: string };
+  | { kind: "lease-unknown"; hostName: string }
+  /**
+   * The window is on its way to another host. Until it lands, what the user
+   * types would reach a terminal they are leaving, so it goes nowhere.
+   */
+  | { kind: "switching"; hostName: string };
 
 type LeaseBlock = Extract<TerminalInputBlock, { kind: "driven-elsewhere" | "lease-unknown" }>;
+type SwitchBlock = Extract<TerminalInputBlock, { kind: "switching" }>;
 
 let hostBlock: TerminalInputBlock | null = null;
 let leaseBlock: LeaseBlock | null = null;
+let switchBlock: SwitchBlock | null = null;
 const listeners = new Set<() => void>();
 const unblockListeners = new Set<() => void>();
 
@@ -51,6 +58,7 @@ function sameBlock(a: TerminalInputBlock | null, b: TerminalInputBlock | null): 
     );
   }
   if (a.kind === "lease-unknown" && b.kind === "lease-unknown") return a.hostName === b.hostName;
+  if (a.kind === "switching" && b.kind === "switching") return a.hostName === b.hostName;
   return false;
 }
 
@@ -72,6 +80,18 @@ export function setLeaseInputBlock(block: LeaseBlock | null) {
   if (sameBlock(leaseBlock, block)) return;
   const wasBlocked = isTerminalInputBlocked();
   leaseBlock = block;
+  emit(wasBlocked);
+}
+
+/**
+ * This window's switch to another host, while one is pending (null once it
+ * lands, fails or is cancelled). Type-ahead is dropped, never replayed: the
+ * window it was meant for may not be the one it lands in.
+ */
+export function setSwitchInputBlock(block: SwitchBlock | null) {
+  if (sameBlock(switchBlock, block)) return;
+  const wasBlocked = isTerminalInputBlocked();
+  switchBlock = block;
   emit(wasBlocked);
 }
 
@@ -102,13 +122,31 @@ export function subscribeDriveLeaseSnapshot(listener: () => void): () => void {
   return () => leaseSnapshotListeners.delete(listener);
 }
 
-/** A lost link outranks a lease: nothing reaches the host either way, and reconnecting comes first. */
+/**
+ * A lost link outranks a lease: nothing reaches the host either way, and
+ * reconnecting comes first. A pending switch ranks last, as the one that ends
+ * on its own.
+ */
 export function getTerminalInputBlock(): TerminalInputBlock | null {
-  return hostBlock ?? leaseBlock;
+  return hostBlock ?? leaseBlock ?? switchBlock;
+}
+
+/**
+ * Whether the link or the lease holds input back, a pending switch aside: the
+ * terminal still on screen during a switch keeps answering its program's
+ * queries, which are not typing.
+ */
+export function isTerminalReplyBlocked(): boolean {
+  return hostBlock !== null || leaseBlock !== null;
+}
+
+/** Whether this window is on its way to another host, whatever else blocks input. */
+export function isHostSwitchPending(): boolean {
+  return switchBlock !== null;
 }
 
 export function isTerminalInputBlocked(): boolean {
-  return hostBlock !== null || leaseBlock !== null;
+  return hostBlock !== null || leaseBlock !== null || switchBlock !== null;
 }
 
 export function subscribeTerminalInputGate(listener: () => void): () => void {
@@ -136,20 +174,26 @@ export function getTerminalInputBlockMessage(block: TerminalInputBlock): string 
         : `Read-only · ${block.driverName} has control`;
     case "lease-unknown":
       return `Read-only until ${block.hostName} confirms who has control of this project`;
+    case "switching":
+      return `Not sent: this window is switching to ${block.hostName}`;
   }
 }
 
 /** The error a gated submit rejects with, so callers see a typed reason rather than a hang. */
 export function terminalInputBlockedError(block: TerminalInputBlock): ClientAppError {
   const message = getTerminalInputBlockMessage(block);
-  return block.kind === "driven-elsewhere"
-    ? new ClientAppError("DRIVEN_ELSEWHERE", message, message)
-    : new ClientAppError("HOST_DISCONNECTED", message, message);
+  if (block.kind === "driven-elsewhere") {
+    return new ClientAppError("DRIVEN_ELSEWHERE", message, message);
+  }
+  // Refused here before anything left, so there is no outcome to look up.
+  if (block.kind === "switching") return new ClientAppError("CANCELLED", message, message);
+  return new ClientAppError("HOST_DISCONNECTED", message, message);
 }
 
 export function _resetTerminalInputGateForTesting(): void {
   hostBlock = null;
   leaseBlock = null;
+  switchBlock = null;
   leaseSnapshot = null;
   listeners.clear();
   unblockListeners.clear();

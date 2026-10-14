@@ -8,6 +8,7 @@ import {
   type TerminalListenerInstallDeps,
 } from "../TerminalListenerInstaller";
 import { hashPerfLine, PERF_MARKS } from "../../../../shared/perf/marks";
+import { _resetTerminalInputGateForTesting, setSwitchInputBlock } from "../inputGate";
 
 const writeTerminalInputOrFleetMock = vi.hoisted(() => vi.fn());
 const isRendererPerfCaptureActiveMock = vi.hoisted(() => vi.fn(() => false));
@@ -45,8 +46,10 @@ vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
   };
 });
 
+const writeReplyMock = vi.hoisted(() => vi.fn<(id: string, data: string) => void>());
+
 vi.mock("@/clients", () => ({
-  terminalClient: { write: vi.fn() },
+  terminalClient: { write: vi.fn(), writeReply: writeReplyMock },
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -478,6 +481,51 @@ describe("installTerminalBoundListeners", () => {
     expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
     expect(deps.onUserInput).not.toHaveBeenCalled();
     expect(deps.clearDirectingState).not.toHaveBeenCalled();
+  });
+
+  it("drops input before it counts as typing while the window switches hosts", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged();
+    const deps = makeDeps();
+
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(
+      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+      managed,
+      "t1",
+      deps
+    );
+
+    setSwitchInputBlock({ kind: "switching", hostName: "studio-02" });
+    try {
+      captured.onData!("ls\r");
+      captured.onData!("\x1b");
+      captured.onKey!({ domEvent: { key: "Enter" } as Partial<KeyboardEvent> });
+
+      expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+      expect(deps.noteUserInput).not.toHaveBeenCalled();
+      expect(deps.onUserInput).not.toHaveBeenCalled();
+      expect(deps.clearDirectingState).not.toHaveBeenCalled();
+      expect(deps.onEnterPressed).not.toHaveBeenCalled();
+      expect(writeReplyMock).not.toHaveBeenCalled();
+
+      // The program's own queries are still answered, and still never count as typing.
+      captured.onData!("\x1b[12;4R");
+      captured.onData!("\x1b[I");
+      captured.onData!("\x1b[<0;10;5M");
+      expect(writeReplyMock.mock.calls).toEqual([
+        ["t1", "\x1b[12;4R"],
+        ["t1", "\x1b[I"],
+      ]);
+      expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+      expect(deps.noteUserInput).not.toHaveBeenCalled();
+    } finally {
+      _resetTerminalInputGateForTesting();
+    }
+
+    captured.onData!("z");
+    expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith("t1", "z");
   });
 
   it("clears directing state on escape but not on regular input", () => {

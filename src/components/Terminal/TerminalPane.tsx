@@ -581,8 +581,23 @@ function TerminalPaneComponent({
   const inputBlock = useTerminalInputBlock();
   // Another screen drives: the composer shows its draft as it types, read-only.
   const followsDriver = inputBlock?.kind === "driven-elsewhere";
+  // A pending host switch is the window's to explain (its progress notice);
+  // a strip here would flash on every pane for a switch that lands at once.
+  const paneInputBlock = inputBlock?.kind === "switching" ? null : inputBlock;
+  // On its way to another host, the draft stays put rather than going to the
+  // terminal being left (refused submits would otherwise clear it).
+  const hostSwitchPending = inputBlock?.kind === "switching";
   const isHybridInputDisabled =
-    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting || followsDriver;
+    isBackendDisconnected ||
+    isBackendRecovering ||
+    isInputLocked ||
+    isRestarting ||
+    followsDriver ||
+    hostSwitchPending;
+  // Focus routing ignores a pending switch: moving focus to xterm for it would
+  // flip the pane's stored preference, so a switch that fails or comes back
+  // would leave the keyboard off the composer the user was in.
+  const isHybridInputDisabledForFocus = isHybridInputDisabled && !hostSwitchPending;
 
   const isHibernated = useIsHibernated(id);
 
@@ -1097,7 +1112,7 @@ function TerminalPaneComponent({
       focusTarget: getTerminalFocusTarget({
         preferredTarget: preferredTerminalFocusTarget,
         hasHybridInputSurface: showHybridInputBar,
-        isInputDisabled: isHybridInputDisabled,
+        isInputDisabled: isHybridInputDisabledForFocus,
         hybridInputEnabled,
       }),
       ...readXtermSelectionState(id),
@@ -1130,7 +1145,7 @@ function TerminalPaneComponent({
     showHybridInputBar,
     hybridInputEnabled,
     preferredTerminalFocusTarget,
-    isHybridInputDisabled,
+    isHybridInputDisabledForFocus,
   ]);
 
   useEffect(() => {
@@ -1150,7 +1165,7 @@ function TerminalPaneComponent({
         focusTarget: getTerminalFocusTarget({
           preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
           hasHybridInputSurface: showHybridInputBar,
-          isInputDisabled: isHybridInputDisabled,
+          isInputDisabled: isHybridInputDisabledForFocus,
           hybridInputEnabled,
         }),
         ...readXtermSelectionState(id),
@@ -1172,7 +1187,13 @@ function TerminalPaneComponent({
       terminalInstanceService.focus(id);
       return containerRef.current?.contains(document.activeElement) ?? false;
     });
-  }, [id, isHeldForRecovery, showHybridInputBar, isHybridInputDisabled, hybridInputEnabled]);
+  }, [
+    id,
+    isHeldForRecovery,
+    showHybridInputBar,
+    isHybridInputDisabledForFocus,
+    hybridInputEnabled,
+  ]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
@@ -1444,9 +1465,9 @@ function TerminalPaneComponent({
       {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
           terminal rather than over it. Nothing for a plain terminal. */}
       {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
-      <BannerSlot visible={inputBlock !== null || controlConfirmed}>
-        {inputBlock ? (
-          <TerminalInputBlockBanner block={inputBlock} panelId={id} />
+      <BannerSlot visible={paneInputBlock !== null || controlConfirmed}>
+        {paneInputBlock ? (
+          <TerminalInputBlockBanner block={paneInputBlock} panelId={id} />
         ) : (
           controlConfirmed && <ControlConfirmedBanner />
         )}

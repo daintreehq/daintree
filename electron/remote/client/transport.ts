@@ -1,6 +1,7 @@
 import net from "node:net";
 import type { Duplex } from "node:stream";
 import { readDiscoveryFile } from "../host/discoveryFile.js";
+import { SSH_ACCESS_DENIED } from "../../../shared/utils/sshRefusal.js";
 
 /**
  * How a link client reaches a host. The SSH transport forwards a local socket
@@ -45,9 +46,6 @@ export class SshAccessError extends TransportError {
     this.name = "SshAccessError";
   }
 }
-
-const SSH_ACCESS_DENIED =
-  /Permission denied \(|Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|No more authentication methods|Too many authentication failures|host key for .* has changed/i;
 
 /** Whether ssh's stderr says it couldn't log in, rather than couldn't reach the host. */
 export function isSshAccessDenied(stderr: string): boolean {

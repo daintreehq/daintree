@@ -141,8 +141,33 @@ describe("restoreRemoteWindows", () => {
         ipcChannel: REMOTE_RESTORE_RETRY_CHANNEL,
         data: JSON.stringify({ hostId: "studio-01", projectId: PROJECT }),
       },
+      hostSwitchFailure: { hostId: "studio-01", projectId: PROJECT, code: "HOST_DISCONNECTED" },
     });
     expect(getPendingRemoteRestore(3)).toBe(KEY);
+    warn.mockRestore();
+  });
+
+  it("names the failure for the shared presenter, so ssh refusals aren't offered a bare Retry", async () => {
+    fakeClient(async () => {
+      throw new AppError({
+        code: "HOST_SSH_ACCESS_DENIED",
+        message: "ssh couldn't log in to Studio",
+        userMessage: "ssh couldn't log in to Studio: Permission denied (publickey).",
+      });
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    noteRemoteWindowRestore(3, KEY);
+    remoteWindowReady(3);
+    const { d, sent } = deps(new Set([3]));
+    await restoreRemoteWindows(d);
+    expect(sent[0]!.payload).toMatchObject({
+      message: expect.stringContaining("Permission denied (publickey)"),
+      hostSwitchFailure: {
+        hostId: "studio-01",
+        projectId: PROJECT,
+        code: "HOST_SSH_ACCESS_DENIED",
+      },
+    });
     warn.mockRestore();
   });
 

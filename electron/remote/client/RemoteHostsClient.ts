@@ -26,6 +26,7 @@ import type {
 import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { sshAccessDenied } from "./sshAccessError.js";
 import { rememberRemoteWorkspaceTitle } from "../../window/windowTitle.js";
 import { discardFromAllProjectHistories } from "../../services/ProjectHistoryService.js";
 import { getRemoteService } from "../runtime.js";
@@ -211,8 +212,14 @@ export class RemoteHostsClient {
   private readonly projectOffers = new Map<number, HostId>();
   /** Each window's newest switch request; abandoning it settles the wait it is in. */
   private readonly switchTickets = new Map<number, { seq: number; abandon: () => void }>();
-  /** A window's switch to a host that hasn't committed yet, as its views are told. */
+  /** A window's switch to a host that hasn't landed yet, as its views are told. */
   private readonly pendingSwitches = new Map<number, PendingHostSwitch>();
+  /**
+   * A window's committed switch whose view isn't showing yet. A newer request
+   * can take over what the views are told; if that one gives up first, they
+   * are told about this one again, since it is still moving the window.
+   */
+  private readonly committedSwitches = new Map<number, PendingHostSwitch>();
   private readonly switchChains = new Map<number, Promise<void>>();
   /**
    * Hosts being removed or re-pointed, with the target they had: from the
@@ -625,6 +632,7 @@ export class RemoteHostsClient {
     const announce = (phase: PendingHostSwitch["phase"]): void => {
       if (pendingWindowId === null || ticket === null || !ticket.isCurrent()) return;
       const current = this.pendingSwitches.get(pendingWindowId);
+      if (current?.switchId === ticket.id && current.committed) return;
       if (
         current?.switchId === ticket.id &&
         current.phase === phase &&
@@ -642,9 +650,27 @@ export class RemoteHostsClient {
     };
     const settlePending = (): void => {
       if (pendingWindowId === null || ticket === null) return;
-      if (this.pendingSwitches.get(pendingWindowId)?.switchId === ticket.id) {
-        this.publishPendingSwitch(pendingWindowId, null);
+      if (this.committedSwitches.get(pendingWindowId)?.switchId === ticket.id) {
+        this.committedSwitches.delete(pendingWindowId);
       }
+      if (this.pendingSwitches.get(pendingWindowId)?.switchId === ticket.id) {
+        // An earlier switch still opening keeps typing held until it lands.
+        this.publishPendingSwitch(
+          pendingWindowId,
+          this.committedSwitches.get(pendingWindowId) ?? null
+        );
+      }
+    };
+    // No longer on offer to cancel, but still pending until the window's new
+    // view is showing: until then the old one is on screen, and what is typed
+    // there must not reach it.
+    const commitPending = (): void => {
+      if (pendingWindowId === null || ticket === null) return;
+      const current = this.pendingSwitches.get(pendingWindowId);
+      if (current?.switchId !== ticket.id || current.committed) return;
+      const committed: PendingHostSwitch = { ...current, committed: true };
+      this.committedSwitches.set(pendingWindowId, committed);
+      this.publishPendingSwitch(pendingWindowId, committed);
     };
     try {
       return await this.runSwitch(
@@ -655,7 +681,7 @@ export class RemoteHostsClient {
         ticket,
         superseded,
         announce,
-        settlePending,
+        commitPending,
         (name) => void (pendingProjectName = name)
       );
     } finally {
@@ -703,6 +729,15 @@ export class RemoteHostsClient {
       if (readiness === "version-mismatch") throw versionMismatch(hostId);
       if (readiness === "host-mode-off")
         throw hostModeOff(this.options.registry.get(hostId)?.name ?? hostId);
+      if (readiness === "stopped-retrying") {
+        // ssh couldn't log in (Host mode off is ruled out above). It won't
+        // change by waiting, and a new window could never show the host either.
+        const link = hostConnection.linkState;
+        throw sshAccessDenied(
+          this.options.registry.get(hostId)?.name ?? hostId,
+          link.status === "unreachable" ? link.detail : null
+        );
+      }
       if (readiness !== "ready") {
         // A new window can show the host's project list while it connects;
         // anything that has to find a project there needs the host's answer.
@@ -964,7 +999,12 @@ export class RemoteHostsClient {
   refreshPendingSwitches(hostId: HostId): void {
     const phase = this.options.isStarting?.(hostId) ? "starting" : "connecting";
     for (const [windowId, pending] of this.pendingSwitches) {
-      if (pending.hostId !== hostId || pending.phase === "opening" || pending.phase === phase) {
+      if (
+        pending.hostId !== hostId ||
+        pending.committed ||
+        pending.phase === "opening" ||
+        pending.phase === phase
+      ) {
         continue;
       }
       this.publishPendingSwitch(windowId, { ...pending, phase });
@@ -987,7 +1027,7 @@ export class RemoteHostsClient {
     const windowId = this.windowOf(ctx);
     if (windowId === null) return false;
     const pending = this.pendingSwitches.get(windowId);
-    if (!pending || pending.switchId !== payload?.switchId) return false;
+    if (!pending || pending.switchId !== payload?.switchId || pending.committed) return false;
     this.supersedePendingSwitch(windowId);
     return true;
   }
@@ -1024,6 +1064,7 @@ export class RemoteHostsClient {
       this.switchTickets.get(windowId)?.abandon();
       this.switchTickets.delete(windowId);
       this.pendingSwitches.delete(windowId);
+      this.committedSwitches.delete(windowId);
       this.options.bindings.release(windowId);
     });
   }
