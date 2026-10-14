@@ -334,16 +334,15 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(screen.queryByText(/^\$0\.42/)).toBeNull();
   });
 
-  it("draws a seen hand-back as the solid done glyph, with no tinted ring", () => {
+  it("draws a seen hand-back as the white finished ring, with no chip around it", () => {
     mockTerminal = { id: "t1", agentState: "waiting" };
     setHandBack({ stoppedAt: 1, seenAt: 2 });
 
     render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
 
     const chip = screen.getByRole("status", { name: "Agent state: finished" });
-    expect(chip.className).toContain("border-transparent");
-    expect(chip.className).not.toMatch(/\bbg-/);
-    expect(chip.className).toContain("text-completed");
+    expect(chip.className).not.toMatch(/\b(bg|border)-/);
+    expect(chip.className).toContain("text-text-primary");
     expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: waiting");
   });
 
@@ -354,8 +353,8 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
 
     const chip = screen.getByRole("status", { name: "Agent state: unread" });
-    expect(chip.className).toContain("border-transparent");
-    expect(chip.className).not.toMatch(/\bbg-/);
+    expect(chip.className).not.toMatch(/\b(bg|border)-/);
+    expect(chip.className).toContain("text-unread");
     expect(chip.className).not.toContain("state-waiting");
     // The tooltip names what was observed, not the coerced display state.
     expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: finished");
@@ -369,6 +368,7 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
 
     const chip = screen.getByRole("status", { name: /^Agent state: waiting/ });
     expect(chip.className).toContain("text-waiting");
+    expect(chip.className).not.toMatch(/\b(bg|border)-/);
   });
 
   it("marks the glyph with a dot for this terminal's undismissed errors only", () => {

@@ -99,7 +99,7 @@ function segmentIsHued(
  *
  * Only `needs-you` escalates, and only because it has somewhere to escalate
  * TO: `blocked` has a mark of its own. `finished` holds `review` and `done`,
- * the solid dot and the solid check: it draws the unread dot while it holds a
+ * the solid dot and the ringed check: it draws the unread dot while it holds a
  * hand-back nobody has read and the check once every one has been, and
  * `segmentQualifier` below puts the same fact into the segment's spoken name.
  *

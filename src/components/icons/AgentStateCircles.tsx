@@ -125,13 +125,8 @@ export function AskingCircle({ className, ...props }: CircleProps) {
   );
 }
 
-// The solid pair: a settled session is a disc in its state colour with one mark
-// cut out of it, never a ring — a ring is the waiting family. The mark is cut
-// with `evenodd` rather than drawn over the disc in a second colour, so it
-// survives forced colours, where every fill collapses to the same system colour.
-const SOLID_DISC = "M1.333 8a6.667 6.667 0 1 0 13.334 0a6.667 6.667 0 1 0 -13.334 0Z";
-
-// Finished: the disc with a check cut out of it.
+// Finished: the ring with a check in it, the same circle as the rest of the
+// family so a settled agent still reads as one of the state glyphs.
 export function DoneCircle({ className, ...props }: CircleProps) {
   return (
     <svg
@@ -142,18 +137,29 @@ export function DoneCircle({ className, ...props }: CircleProps) {
       data-agent-state-glyph=""
       {...props}
     >
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
       <path
-        d={`${SOLID_DISC}M5.517 7.657L7.1 9.14L10.457 5.583L11.543 6.617L7.1 11.26L4.483 8.743Z`}
-        fill="currentColor"
-        fillRule="evenodd"
+        d="M5.5 8L7.17 9.67L10.5 6.33"
+        stroke="currentColor"
+        strokeWidth="1.333"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
 }
 
+// The unread disc's edge sits where the spinner's and every ring's outer edge
+// does (r 6 + half the 1.333 stroke), so at the same box size all three read
+// as the same diameter.
+const SOLID_DISC = "M1.333 8a6.667 6.667 0 1 0 13.334 0a6.667 6.667 0 1 0 -13.334 0Z";
+
 // Unread: an agent that handed its turn back and the user has not read it yet —
-// the disc with a dot cut out of it. Neutral, never the waiting hue: it is not
-// asking for anything, and amber is kept for the agents that are.
+// a solid disc with a dot cut out of it, the one filled glyph, so it stands out
+// from the rings. Never the waiting hue: it is not asking for anything, and
+// amber is kept for the agents that are. The dot is cut with `evenodd` rather
+// than drawn over the disc in a second colour, so it survives forced colours,
+// where every fill collapses to the same system colour.
 export function UnreadCircle({ className, ...props }: CircleProps) {
   return (
     <svg

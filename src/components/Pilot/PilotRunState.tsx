@@ -51,9 +51,9 @@ const NEUTRAL_TONE = "text-text-secondary";
  *
  * Three of these marks are the app's own standards and are not this surface's
  * to reinterpret: the green spinner is working, the amber hollow circle is
- * waiting, and the solid disc is settled — a check cut out of it for done, a
- * dot for unread. The sidebar, the dock, the assistant header and the panel
- * chrome all say the same things the same ways.
+ * waiting, the ring with a check is finished, and the solid disc with a dot
+ * cut out of it is an unread hand-back. The sidebar, the dock, the assistant
+ * header and the panel chrome all say the same things the same ways.
  *
  * So the invariant here is NOT that every band draws a different shape — it is
  * that no two bands share a shape AND a tone, and that among the bands wearing
@@ -66,9 +66,9 @@ const NEUTRAL_TONE = "text-text-secondary";
  *   hand. It does not animate, which is the other half of what it means. The
  *   row spells "quiet 12m" beside it in words, so the pair is never separated
  *   by colour alone.
- * - `done` is the solid check in the settled tone, and `review` (an unread
- *   hand-back) the solid dot in the primary tone: the same pair the pane
- *   chip and the sidebar draw.
+ * - `done` is the ring with a check in the settled tone, and `review` (an
+ *   unread hand-back) the solid dot in the primary tone: the same shapes the
+ *   pane header and the sidebar draw.
  * - `idle` takes the dotted circle — alive, at rest, nothing running. It used
  *   to share the hollow circle with `needs-you`, which is the one collision
  *   worth removing: it left the amber hollow circle meaning waiting while a
