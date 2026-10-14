@@ -36,22 +36,33 @@ const stateName = params.get("state") ?? "several-hosts";
 
 const LONG_NAME = "gregs-macbook-pro-16-inch-2024-office-upstairs";
 
-const host = (id: string, name: string, connected = true): HostListEntry =>
-  ({
-    descriptor: {
-      id,
-      name,
-      connection: { kind: "ssh", target: name },
-      platform: "darwin",
-      arch: "arm64",
-      lastHandshake: null,
-      lastSeenAt: Date.now(),
-      addedAt: 1,
-      notificationsEnabled: false,
-    },
-    connection: connected ? { status: "connected", rttMs: 12 } : { status: "disconnected" },
-    summary: null,
-  }) as HostListEntry;
+const host = (id: string, name: string, connected = true): HostListEntry => ({
+  descriptor: {
+    id,
+    name,
+    connection: { kind: "ssh", target: name },
+    platform: "darwin",
+    arch: "arm64",
+    lastHandshake: null,
+    lastSeenAt: Date.now(),
+    addedAt: 1,
+    notificationsEnabled: false,
+  },
+  connection: connected
+    ? {
+        status: "connected",
+        rttMs: 12,
+        handshake: {
+          version: "0.43.0",
+          commit: "preview",
+          protocolVersion: 1,
+          platform: "darwin",
+          arch: "arm64",
+        },
+      }
+    : { status: "disconnected" },
+  summary: null,
+});
 
 const STUDIO = host("studio-01", "studio-01");
 const BUILD = host("build-box", "build-box");
@@ -238,6 +249,9 @@ installPreviewShims({
   },
 });
 
+// Long enough for the first render to settle before the host drops mid-session.
+const HOST_DROP_DELAY_MS = 150;
+
 if (state.drop) {
   const dropId = state.drop;
   setTimeout(() => {
@@ -251,7 +265,7 @@ if (state.drop) {
         connection: { status: "disconnected" },
       } as RemoteHostsEvent);
     }
-  }, 150);
+  }, HOST_DROP_DELAY_MS);
 }
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
