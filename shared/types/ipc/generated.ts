@@ -2178,6 +2178,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: void;
   };
+  "settings-copy:apply": {
+    args: [payload: import("./settingsCopy.js").SettingsCopyApplyPayload];
+    result: import("../configBundle.js").ConfigImportReport;
+  };
+  "settings-copy:preview": {
+    args: [payload: import("./settingsCopy.js").SettingsCopyPreviewPayload];
+    result: import("./settingsCopy.js").SettingsCopyPreview;
+  };
   "shortcut-hints:get-counts": {
     args: [];
     result: Record<string, number>;

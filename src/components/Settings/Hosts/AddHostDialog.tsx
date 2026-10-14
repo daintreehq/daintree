@@ -39,6 +39,11 @@ import type {
 } from "@shared/types/ipc/remoteHosts";
 import { HostCommand } from "./HostCommand";
 import {
+  awaitFirstConnect,
+  requestHostCopySettings,
+  takeFirstConnect,
+} from "./hostCopySettingsRequests";
+import {
   defaultHostName,
   deliveryLabel,
   localNameSuggestion,
@@ -242,6 +247,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       (descriptor) => {
         const record = { hostId: descriptor.id, name: descriptor.name };
         setSaved(record);
+        awaitFirstConnect(descriptor.id);
         return record;
       },
       (err: unknown) => {
@@ -325,8 +331,14 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     run(
       () => remoteHostsClient.connectAndSettle(host.hostId),
       (state) => {
-        if (isUsable(state)) onClose();
-        else setOutcome(state);
+        if (!isUsable(state)) {
+          setOutcome(state);
+          return;
+        }
+        onClose();
+        // A host's first connection, once: offer to copy this machine's
+        // settings so it doesn't start from defaults.
+        if (takeFirstConnect(host.hostId)) requestHostCopySettings(host.hostId);
       }
     );
 

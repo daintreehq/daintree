@@ -286,6 +286,9 @@ describe("events:push split", () => {
     expect(acceptLocalPushForRemoteView(CHANNELS.KEEP_AWAKE_STATE_CHANGED, [{}])).toBe(true);
     expect(acceptHostPush(CHANNELS.APP_CONFIG_RELOADED, [])).toBe(true);
     expect(acceptLocalPushForRemoteView(CHANNELS.APP_CONFIG_RELOADED, [])).toBe(true);
+    // Settings copied to the host refresh its remote windows as well as its own.
+    expect(acceptHostPush(CHANNELS.CONFIG_BUNDLE_IMPORTED, [])).toBe(true);
+    expect(acceptLocalPushForRemoteView(CHANNELS.CONFIG_BUNDLE_IMPORTED, [])).toBe(true);
   });
 
   it("keeps plain host and Shell channels on their own side", () => {

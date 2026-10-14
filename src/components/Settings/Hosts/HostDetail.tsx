@@ -13,6 +13,8 @@ import { useSettingsSubpage } from "../SettingsSubpage";
 import { AddHostDialog } from "./AddHostDialog";
 import { ChangeHostTargetDialog } from "./ChangeHostTargetDialog";
 import { HostPluginsSection } from "./HostPluginsSection";
+import { HostCopySettingsSection } from "./HostCopySettingsSection";
+import { takeFirstConnect } from "./hostCopySettingsRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
 import { buildLabel, connectionLabel, describeBuildDifference, platformLabel } from "./hostLabels";
@@ -28,6 +30,8 @@ interface HostDetailProps {
   openUpdate?: boolean;
   /** Scroll to this host's plugins (the switch notice's "Review"). */
   focusPlugins?: boolean;
+  /** Just added and connected: scroll to Copy settings and offer it. */
+  offerCopySettings?: boolean;
   /** Opened from the keyboard: focus the header's way back once it is there. */
   focusBackOnMount?: boolean;
 }
@@ -94,6 +98,7 @@ export function HostDetail({
   onBack,
   openUpdate = false,
   focusPlugins = false,
+  offerCopySettings = false,
   focusBackOnMount = false,
 }: HostDetailProps) {
   const { descriptor, connection, summary } = entry;
@@ -179,6 +184,19 @@ export function HostDetail({
   useEffect(() => {
     if (focusPlugins) document.getElementById("host-plugins")?.scrollIntoView({ block: "start" });
   }, [focusPlugins]);
+
+  // A host added here that first connects after the add flow closed still
+  // gets the one offer, the first time it is seen connected.
+  const [offered, setOffered] = useState(offerCopySettings);
+  useEffect(() => {
+    if (connected && takeFirstConnect(descriptor.id)) setOffered(true);
+  }, [connected, descriptor.id]);
+
+  useEffect(() => {
+    if (offered) {
+      document.getElementById("host-copy-settings")?.scrollIntoView({ block: "start" });
+    }
+  }, [offered]);
 
   const connect = () => {
     setConnecting(true);
@@ -420,6 +438,12 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
+      <HostCopySettingsSection
+        hostId={descriptor.id}
+        hostName={hostName}
+        connected={connected}
+        offered={offered}
+      />
       <HostPluginsSection hostId={descriptor.id} hostName={hostName} connected={connected} />
       <HostPluginViewConsents hostId={descriptor.id} hostName={hostName} />
       <HostClipboardGrants hostId={descriptor.id} hostName={hostName} />

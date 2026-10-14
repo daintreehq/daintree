@@ -14,6 +14,7 @@ import { broadcastToRenderer, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { isStorableDefaultAgent } from "../../../shared/types/ipc/agentDefaults.js";
 import { createApplicationMenu } from "../../menu.js";
+import { registerConfigReloader } from "../../services/configBundleRuntime.js";
 
 const RESERVED_AGENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -301,6 +302,8 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
     // @ts-expect-error: handler returns {success: true} — pending migration to throw AppError on failure and return void on success. See #6020.
     typedHandle(CHANNELS.APP_RELOAD_CONFIG, handleReloadConfig)
   );
+  // Settings copied to this machine as a host reload this same registry instance.
+  handlers.push(registerConfigReloader(handleReloadConfig));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

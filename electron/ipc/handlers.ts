@@ -91,6 +91,7 @@ import { registerProjectMatchHandlers } from "./handlers/projectMatch.js";
 import { registerHostMetricsHandlers } from "./handlers/hostMetrics.js";
 import { registerPortForwardsHandlers } from "./handlers/portForwards.js";
 import { registerPluginParityHandlers } from "./handlers/pluginParity.js";
+import { registerSettingsCopyHandlers } from "./handlers/settingsCopy.js";
 import { isEitherRemoteRoleSupported } from "../remote/buildGate.js";
 import { registerSitePreviewHandlers } from "./handlers/sitePreview.js";
 import { registerWebviewEmulationHandlers } from "./handlers/webviewEmulation.js";
@@ -281,6 +282,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
       register(() => registerHostMetricsHandlers());
       register(() => registerPortForwardsHandlers());
       register(() => registerPluginParityHandlers());
+      register(() => registerSettingsCopyHandlers());
     }
   } catch (error) {
     runCleanups(cleanupFunctions);

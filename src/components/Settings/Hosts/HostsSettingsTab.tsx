@@ -19,6 +19,7 @@ import {
 } from "./hostSettingsRequests";
 import { onHostUpdateRequest, takePendingHostUpdate } from "./hostUpdateRequests";
 import { onHostPluginsRequest, takePendingHostPlugins } from "./hostPluginRequests";
+import { onHostCopySettingsRequest, takePendingHostCopySettings } from "./hostCopySettingsRequests";
 import { clientErrorText } from "@/utils/clientAppError";
 
 /** A to Z as people number machines (studio-2 before studio-10), like every other host list. */
@@ -64,6 +65,7 @@ export default function HostsSettingsTab() {
   const [pluginsRequest, setPluginsRequest] = useState<{ hostId: HostId; seq: number } | null>(
     null
   );
+  const [copyRequest, setCopyRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
 
   useEffect(() => {
     const open = (hostId: HostId) => {
@@ -114,12 +116,27 @@ export default function HostsSettingsTab() {
     return onHostPluginsRequest(open);
   }, []);
 
+  useEffect(() => {
+    const open = (hostId: HostId) => {
+      setAddOpen(false);
+      setDetailHostId(hostId);
+      setUpdateRequest(null);
+      setPluginsRequest(null);
+      setCopyRequest((prev) => ({ hostId, seq: (prev?.seq ?? 0) + 1 }));
+    };
+    const pending = takePendingHostCopySettings();
+    if (pending) open(pending);
+    return onHostCopySettingsRequest(open);
+  }, []);
+
   const detail = detailHostId
     ? (hosts.find((entry) => entry.descriptor.id === detailHostId) ?? null)
     : null;
   if (detail) {
     const openUpdate = updateRequest?.hostId === detail.descriptor.id;
     const focusPlugins = !openUpdate && pluginsRequest?.hostId === detail.descriptor.id;
+    const offerCopySettings =
+      !openUpdate && !focusPlugins && copyRequest?.hostId === detail.descriptor.id;
     return (
       <HostDetail
         key={
@@ -127,18 +144,22 @@ export default function HostsSettingsTab() {
             ? `update-${detail.descriptor.id}-${updateRequest.seq}`
             : focusPlugins
               ? `plugins-${detail.descriptor.id}-${pluginsRequest.seq}`
-              : `detail-${detail.descriptor.id}`
+              : offerCopySettings
+                ? `copy-${detail.descriptor.id}-${copyRequest.seq}`
+                : `detail-${detail.descriptor.id}`
         }
         entry={detail}
         focusBackOnMount={focusBackFor === detail.descriptor.id}
         openUpdate={openUpdate}
         focusPlugins={focusPlugins}
+        offerCopySettings={offerCopySettings}
         onBack={(viaKeyboard) => {
           returnFocusTo.current = { hostId: detail.descriptor.id, visible: viaKeyboard === true };
           setFocusBackFor(null);
           setDetailHostId(null);
           setUpdateRequest(null);
           setPluginsRequest(null);
+          setCopyRequest(null);
         }}
       />
     );
