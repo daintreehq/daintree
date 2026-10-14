@@ -307,9 +307,13 @@ describe("RemoteHostsClient", () => {
         "connecting",
         "opening",
         "opening",
+        "opening",
         null,
       ]);
       expect(seen[2]).toMatchObject({ hostName: "studio-01", projectName: "proj-1" });
+      // Committed, and still pending until the new view shows.
+      expect(seen[3]).toMatchObject({ switchId: seen[2]!.switchId, committed: true });
+      expect(seen[2]!.committed).toBeUndefined();
       expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
     });
 
@@ -369,7 +373,7 @@ describe("RemoteHostsClient", () => {
       expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId })).toBe(false);
     });
 
-    it("has nothing to cancel once the switch has committed", async () => {
+    it("has nothing to cancel once committed, but stays pending until the new view shows", async () => {
       let releaseOpen!: () => void;
       vi.mocked(windows.openRemoteProject).mockImplementationOnce(
         () => new Promise<void>((resolve) => (releaseOpen = resolve))
@@ -381,9 +385,17 @@ describe("RemoteHostsClient", () => {
       });
       await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
 
-      expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      // The old view is still on screen: typing stays held, but Cancel is gone.
+      const pending = client.getPendingSwitch(ctxFor(5, 1));
+      expect(pending).toMatchObject({ hostId: "studio-01", committed: true });
+      expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId: pending!.switchId })).toBe(false);
+      client.refreshPendingSwitches("studio-01");
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toEqual(pending);
+
       releaseOpen();
       await expect(switching).resolves.toMatchObject({ outcome: "switched" });
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      expect(pendingEvents().at(-1)).toBeNull();
     });
 
     it("settles a first switch whose window closes before it ever bound", async () => {

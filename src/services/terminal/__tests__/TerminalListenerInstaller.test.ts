@@ -46,8 +46,10 @@ vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
   };
 });
 
+const writeReplyMock = vi.hoisted(() => vi.fn<(id: string, data: string) => void>());
+
 vi.mock("@/clients", () => ({
-  terminalClient: { write: vi.fn() },
+  terminalClient: { write: vi.fn(), writeReply: writeReplyMock },
 }));
 
 vi.mock("@/utils/logger", () => ({
@@ -506,6 +508,18 @@ describe("installTerminalBoundListeners", () => {
       expect(deps.onUserInput).not.toHaveBeenCalled();
       expect(deps.clearDirectingState).not.toHaveBeenCalled();
       expect(deps.onEnterPressed).not.toHaveBeenCalled();
+      expect(writeReplyMock).not.toHaveBeenCalled();
+
+      // The program's own queries are still answered, and still never count as typing.
+      captured.onData!("\x1b[12;4R");
+      captured.onData!("\x1b[I");
+      captured.onData!("\x1b[<0;10;5M");
+      expect(writeReplyMock.mock.calls).toEqual([
+        ["t1", "\x1b[12;4R"],
+        ["t1", "\x1b[I"],
+      ]);
+      expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+      expect(deps.noteUserInput).not.toHaveBeenCalled();
     } finally {
       _resetTerminalInputGateForTesting();
     }

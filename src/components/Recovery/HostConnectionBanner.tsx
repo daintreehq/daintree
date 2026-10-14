@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { reconnectHost } from "@/hooks/useHostConnection";
@@ -108,19 +109,8 @@ export function HostConnectionBanner() {
   }
 
   if (variant === "access-denied" && hostId !== null) {
-    // Fixed outside Daintree (a key, known_hosts), then connected again; the
+    // Fixed outside Daintree (a key, known_hosts), then tried again; the
     // host's details show the whole of what ssh said.
-    const accessDeniedActions: BannerAction[] = [
-      { id: "reconnect", label: "Retry", variant: "primary", onClick: reconnectHost },
-      {
-        id: "host-settings",
-        label: "Settings…",
-        onClick: () => {
-          requestHostSettings({ kind: "detail", hostId });
-          openHostsSettingsTab();
-        },
-      },
-    ];
     return (
       <InlineStatusBanner
         title={title}
@@ -129,7 +119,19 @@ export function HostConnectionBanner() {
         role="status"
         ariaLive="off"
         animated={false}
-        actions={accessDeniedActions}
+        action={{ id: "reconnect", label: "Retry", variant: "primary", onClick: reconnectHost }}
+        trailingSlot={
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              requestHostSettings({ kind: "detail", hostId });
+              openHostsSettingsTab();
+            }}
+          >
+            Settings…
+          </Button>
+        }
       />
     );
   }

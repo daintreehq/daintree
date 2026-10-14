@@ -131,6 +131,15 @@ export function getTerminalInputBlock(): TerminalInputBlock | null {
   return hostBlock ?? leaseBlock ?? switchBlock;
 }
 
+/**
+ * Whether the link or the lease holds input back, a pending switch aside: the
+ * terminal still on screen during a switch keeps answering its program's
+ * queries, which are not typing.
+ */
+export function isTerminalReplyBlocked(): boolean {
+  return hostBlock !== null || leaseBlock !== null;
+}
+
 /** Whether this window is on its way to another host, whatever else blocks input. */
 export function isHostSwitchPending(): boolean {
   return switchBlock !== null;

@@ -47,16 +47,17 @@ export function hostLinkAnnouncement(
   next: HostLinkEpisode,
   previous: HostLinkEpisode,
   hostName: string,
-  everConnected: boolean
+  /** The link was up before the episode being left (or, for `lost`, before this one). */
+  wasUp: boolean
 ): string | null {
   switch (next) {
     case "up":
       if (previous === "up") return null;
-      return previous === "disconnected"
-        ? `Connected to ${hostName}`
-        : `Reconnected to ${hostName}`;
+      return previous === "lost" && wasUp
+        ? `Reconnected to ${hostName}`
+        : `Connected to ${hostName}`;
     case "lost":
-      return everConnected
+      return previous === "up" && wasUp
         ? `Connection to ${hostName} lost. Terminals are read-only until it reconnects.`
         : `${hostName} is unreachable. Terminals are read-only until it reconnects.`;
     case "host-mode-off":
@@ -71,6 +72,17 @@ export function hostLinkAnnouncement(
 }
 
 /**
+ * What this view last said about its host's link, kept past a watcher: the
+ * layout that runs the watcher is replaced once the view's state has loaded,
+ * and a fresh watcher must not say the same outage again.
+ */
+let said: { hostId: string | null; episode: HostLinkEpisode; lostFromUp: boolean } = {
+  hostId: null,
+  episode: "up",
+  lostFromUp: false,
+};
+
+/**
  * Say each change of this view's host link once, through the app's one
  * persistent announcer. The banner and the panes' strips stay silent: the
  * banner remounts across back-off cycles and every pane would repeat it. A
@@ -78,26 +90,35 @@ export function hostLinkAnnouncement(
  */
 export function watchHostConnectionAnnouncements(): () => void {
   const store = useHostConnectionStore;
-  let current: HostLinkEpisode = hostLinkEpisode(selectHostBannerVariant(store.getState())) ?? "up";
+  const hostId = store.getState().hostId;
   // A view that opens onto a link already down says so, once the gate passes.
-  let announced: HostLinkEpisode = "up";
+  if (said.hostId !== hostId) said = { hostId, episode: "up", lostFromUp: false };
+  let current: HostLinkEpisode =
+    hostLinkEpisode(selectHostBannerVariant(store.getState()), said.episode) ?? said.episode;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const settle = () => {
     if (timer) clearTimeout(timer);
     timer = null;
-    if (current === announced) return;
+    if (current === said.episode) return;
     timer = setTimeout(() => {
       timer = null;
-      if (current === announced) return;
+      if (current === said.episode) return;
       const state = store.getState();
+      const previous = said.episode;
+      // Up before this loss: the link this view had, not one it never got.
+      const wasUp = current === "lost" ? state.everConnected : said.lostFromUp;
       const message = hostLinkAnnouncement(
         current,
-        announced,
+        previous,
         state.hostName ?? state.hostId ?? "The host",
-        state.everConnected
+        wasUp
       );
-      announced = current;
+      said = {
+        hostId,
+        episode: current,
+        lostFromUp: current === "lost" ? previous === "up" && state.everConnected : false,
+      };
       if (message) useAnnouncerStore.getState().announce(message, "polite");
     }, UI_DOHERTY_THRESHOLD);
   };
@@ -115,4 +136,8 @@ export function watchHostConnectionAnnouncements(): () => void {
     if (timer) clearTimeout(timer);
     timer = null;
   };
+}
+
+export function _resetHostConnectionAnnouncementsForTesting(): void {
+  said = { hostId: null, episode: "up", lostFromUp: false };
 }

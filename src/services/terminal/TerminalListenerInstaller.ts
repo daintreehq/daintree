@@ -965,8 +965,13 @@ export function installTerminalBoundListeners(
 
   const inputDisposable = terminal.onData((data) => {
     if (managed.isInputLocked) return;
-    // Dropped before it counts as typing: the window is leaving this terminal.
-    if (isHostSwitchPending()) return;
+    if (isHostSwitchPending()) {
+      // Typing is dropped before it counts as typing: the window is leaving
+      // this terminal. Its program's queries still get their answers, since
+      // the terminal is live and on screen until the switch lands.
+      if (isTerminalReply(data)) terminalClient.writeReply(id, data);
+      return;
+    }
     if (!isTerminalReply(data) && !isMouseReport(data)) deps.noteUserInput(id);
     const nonKeyboard = isNonKeyboardInput(data);
     if (nonKeyboard) {

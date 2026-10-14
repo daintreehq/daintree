@@ -626,6 +626,7 @@ export class RemoteHostsClient {
     const announce = (phase: PendingHostSwitch["phase"]): void => {
       if (pendingWindowId === null || ticket === null || !ticket.isCurrent()) return;
       const current = this.pendingSwitches.get(pendingWindowId);
+      if (current?.switchId === ticket.id && current.committed) return;
       if (
         current?.switchId === ticket.id &&
         current.phase === phase &&
@@ -647,6 +648,15 @@ export class RemoteHostsClient {
         this.publishPendingSwitch(pendingWindowId, null);
       }
     };
+    // No longer on offer to cancel, but still pending until the window's new
+    // view is showing: until then the old one is on screen, and what is typed
+    // there must not reach it.
+    const commitPending = (): void => {
+      if (pendingWindowId === null || ticket === null) return;
+      const current = this.pendingSwitches.get(pendingWindowId);
+      if (current?.switchId !== ticket.id || current.committed) return;
+      this.publishPendingSwitch(pendingWindowId, { ...current, committed: true });
+    };
     try {
       return await this.runSwitch(
         askingWindowId,
@@ -656,7 +666,7 @@ export class RemoteHostsClient {
         ticket,
         superseded,
         announce,
-        settlePending,
+        commitPending,
         (name) => void (pendingProjectName = name)
       );
     } finally {
@@ -974,7 +984,12 @@ export class RemoteHostsClient {
   refreshPendingSwitches(hostId: HostId): void {
     const phase = this.options.isStarting?.(hostId) ? "starting" : "connecting";
     for (const [windowId, pending] of this.pendingSwitches) {
-      if (pending.hostId !== hostId || pending.phase === "opening" || pending.phase === phase) {
+      if (
+        pending.hostId !== hostId ||
+        pending.committed ||
+        pending.phase === "opening" ||
+        pending.phase === phase
+      ) {
         continue;
       }
       this.publishPendingSwitch(windowId, { ...pending, phase });
@@ -997,7 +1012,7 @@ export class RemoteHostsClient {
     const windowId = this.windowOf(ctx);
     if (windowId === null) return false;
     const pending = this.pendingSwitches.get(windowId);
-    if (!pending || pending.switchId !== payload?.switchId) return false;
+    if (!pending || pending.switchId !== payload?.switchId || pending.committed) return false;
     this.supersedePendingSwitch(windowId);
     return true;
   }

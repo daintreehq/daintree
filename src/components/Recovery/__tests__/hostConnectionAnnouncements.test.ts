@@ -4,6 +4,7 @@ import type { HostConnectionState } from "@shared/types/remoteHosts";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import {
+  _resetHostConnectionAnnouncementsForTesting,
   hostLinkAnnouncement,
   hostLinkEpisode,
   watchHostConnectionAnnouncements,
@@ -30,11 +31,13 @@ function spoken(): string[] {
 }
 
 const announce = vi.fn();
+const realAnnounce = useAnnouncerStore.getState().announce;
 let stop: (() => void) | null = null;
 
 beforeEach(() => {
   vi.useFakeTimers();
   announce.mockReset();
+  _resetHostConnectionAnnouncementsForTesting();
   useAnnouncerStore.setState({ announce });
   useHostConnectionStore.getState().reset();
   useHostConnectionStore.setState({
@@ -49,6 +52,8 @@ beforeEach(() => {
 afterEach(() => {
   stop?.();
   stop = null;
+  useAnnouncerStore.setState({ announce: realAnnounce });
+  useHostConnectionStore.getState().reset();
   vi.useRealTimers();
 });
 
@@ -114,6 +119,46 @@ describe("watchHostConnectionAnnouncements", () => {
     link(CONNECTED);
     vi.advanceTimersByTime(400);
     expect(spoken()).toEqual(["Disconnected from studio-01.", "Connected to studio-01"]);
+  });
+
+  it("calls a failed retry after an ssh refusal unreachable, not a lost connection", () => {
+    stop = watchHostConnectionAnnouncements();
+    link({ status: "unreachable", lastSeenAt: null, detail: null, stoppedRetrying: true });
+    vi.advanceTimersByTime(400);
+    link(RECONNECTING);
+    vi.advanceTimersByTime(1_000);
+    link(UNREACHABLE);
+    vi.advanceTimersByTime(400);
+    expect(spoken()).toEqual([
+      "ssh couldn't log in to studio-01.",
+      "studio-01 is unreachable. Terminals are read-only until it reconnects.",
+    ]);
+  });
+
+  it("says connected, not reconnected, when a host first reached after failing comes up", () => {
+    useHostConnectionStore.setState({ connection: null, everConnected: false });
+    stop = watchHostConnectionAnnouncements();
+    link(UNREACHABLE);
+    vi.advanceTimersByTime(400);
+    useHostConnectionStore.setState({ connection: CONNECTED, everConnected: true });
+    vi.advanceTimersByTime(400);
+    expect(spoken()).toEqual([
+      "studio-01 is unreachable. Terminals are read-only until it reconnects.",
+      "Connected to studio-01",
+    ]);
+  });
+
+  it("doesn't say an outage again when the layout running it is replaced", () => {
+    stop = watchHostConnectionAnnouncements();
+    link(UNREACHABLE);
+    vi.advanceTimersByTime(400);
+    stop();
+    stop = watchHostConnectionAnnouncements();
+    vi.advanceTimersByTime(1_000);
+    expect(spoken()).toHaveLength(1);
+    link(CONNECTED);
+    vi.advanceTimersByTime(400);
+    expect(spoken()[1]).toBe("Reconnected to studio-01");
   });
 
   it("stops listening and drops a pending announcement when torn down", () => {

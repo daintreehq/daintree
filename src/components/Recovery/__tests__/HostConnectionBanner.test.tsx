@@ -215,6 +215,16 @@ describe("getHostConnectionBannerCopy", () => {
     );
   });
 
+  it("quotes the refusal itself when ssh trails it with a closed connection", () => {
+    const detail =
+      "greg@studio-01: Permission denied (publickey).\nConnection closed by UNKNOWN port 65535";
+    expect(
+      getHostConnectionBannerCopy("access-denied", "studio-01", null, 0, detail).description
+    ).toBe(
+      "ssh said: greg@studio-01: Permission denied (publickey). Not retrying until you connect again."
+    );
+  });
+
   it("drops the last-seen clause when nothing was ever seen", () => {
     expect(getHostConnectionBannerCopy("unreachable", "studio-01", null).title).toBe(
       "studio-01 is unreachable"

@@ -15,7 +15,10 @@ export function usePendingHostSwitchSync(): void {
     void import("@/components/HostSwitch/pendingHostSwitchFeedback").then(
       ({ watchPendingHostSwitch }) => {
         if (disposed) return;
-        stop = watchPendingHostSwitch(window.electron?.remoteHosts ?? {});
+        stop = watchPendingHostSwitch(window.electron?.remoteHosts ?? {}, {
+          onViewRevealed: (callback) =>
+            window.electron?.app?.onViewRevealed?.(() => callback()) ?? (() => {}),
+        });
       },
       () => {}
     );

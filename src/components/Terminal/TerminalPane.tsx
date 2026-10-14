@@ -584,8 +584,16 @@ function TerminalPaneComponent({
   // A pending host switch is the window's to explain (its progress notice);
   // a strip here would flash on every pane for a switch that lands at once.
   const paneInputBlock = inputBlock?.kind === "switching" ? null : inputBlock;
+  // On its way to another host, the draft stays put rather than going to the
+  // terminal being left (refused submits would otherwise clear it).
+  const hostSwitchPending = inputBlock?.kind === "switching";
   const isHybridInputDisabled =
-    isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting || followsDriver;
+    isBackendDisconnected ||
+    isBackendRecovering ||
+    isInputLocked ||
+    isRestarting ||
+    followsDriver ||
+    hostSwitchPending;
 
   const isHibernated = useIsHibernated(id);
 
