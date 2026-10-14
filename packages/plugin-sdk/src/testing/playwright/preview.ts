@@ -118,8 +118,11 @@ export type RestylePanel = (classes: string[]) => Promise<string | null>;
 
 const RUNTIME_STYLE_ID = "daintree-panel-preview-runtime-styles";
 
-/** Compile what the rendered panel uses beyond the build's classes, and install it. */
-async function restyleFromDom(page: Page, restyle: RestylePanel): Promise<void> {
+/**
+ * Compile what the rendered panel uses beyond the build's classes, and install
+ * it. True when that installed anything.
+ */
+async function restyleFromDom(page: Page, restyle: RestylePanel): Promise<boolean> {
   const classes = await page.evaluate((attribute) => {
     const found = new Set<string>();
     for (const root of document.querySelectorAll(`[${attribute}]`)) {
@@ -130,7 +133,7 @@ async function restyleFromDom(page: Page, restyle: RestylePanel): Promise<void> 
     return [...found];
   }, PLUGIN_STYLE_ROOT_ATTRIBUTE);
   const css = await restyle(classes);
-  if (css === null) return;
+  if (css === null) return false;
   await page.evaluate(
     ([id, text]) => {
       let style = document.getElementById(id);
@@ -143,6 +146,25 @@ async function restyleFromDom(page: Page, restyle: RestylePanel): Promise<void> 
     },
     [RUNTIME_STYLE_ID, css] as const
   );
+  return true;
+}
+
+/**
+ * Restyle until a pass changes nothing: a class the new CSS lays out can add
+ * another one (a measured width set as an arbitrary value), which needs CSS too.
+ */
+async function settleRuntimeStyles(page: Page, restyle: RestylePanel): Promise<void> {
+  let previous: string | null = null;
+  for (let pass = 0; pass < 5; pass++) {
+    if (!(await restyleFromDom(page, restyle))) return;
+    const installed = await page.evaluate(
+      (id) => document.getElementById(id)?.textContent ?? null,
+      RUNTIME_STYLE_ID
+    );
+    if (installed === previous) return;
+    previous = installed;
+    await nextFrames(page);
+  }
 }
 
 export interface TeardownState {
@@ -229,7 +251,7 @@ export function createPreview(
         problems.throwIfAny(what);
       };
       await assertReady();
-      if (restyle) await restyleFromDom(page, restyle);
+      if (restyle) await settleRuntimeStyles(page, restyle);
       // Again here, for a face something after the mount brought into use.
       const failedFont = await page.evaluate(async () => {
         await document.fonts.ready;

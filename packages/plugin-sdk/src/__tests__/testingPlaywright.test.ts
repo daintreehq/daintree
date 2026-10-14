@@ -316,8 +316,10 @@ function fakePage(state: {
   readiness: { status: string | null; reason: string | null };
   frames?: string[];
   font?: string | null;
+  classes?: string[];
 }) {
   const gotos: string[] = [];
+  let installed: string | null = null;
   const page = {
     goto: vi.fn(async (url: string) => {
       gotos.push(url);
@@ -326,9 +328,16 @@ function fakePage(state: {
       if (state.readiness.status === null) throw new Error("Timeout");
     }),
     evaluate: vi.fn(async (fn: (...args: unknown[]) => unknown, arg?: unknown) => {
+      const source = fn.toString();
+      // Installing the runtime stylesheet, and reading it back.
+      if (Array.isArray(arg) && source.includes("textContent =")) {
+        installed = String(arg[1]);
+        return undefined;
+      }
+      if (source.includes("getElementById")) return installed;
       if (Array.isArray(arg)) return state.readiness;
       // The classes under the style root.
-      if (typeof arg === "string") return [];
+      if (source.includes("classList")) return state.classes ?? [];
       if (fn.toString().includes("fonts")) return state.font ?? null;
       return undefined;
     }),
@@ -502,7 +511,7 @@ describe("createPreview", () => {
   });
 
   it("installs CSS for classes the rendered panel uses beyond the build's", async () => {
-    const { page } = fakePage({ readiness: ready });
+    const { page } = fakePage({ readiness: ready, classes: ["w-[327px]"] });
     const { testInfo } = fakeTestInfo();
     const restyle = vi.fn(async () => ".w-\\[327px\\]{}");
     const { preview } = createPreview(
@@ -516,11 +525,13 @@ describe("createPreview", () => {
     );
     await preview.open("Empty");
     await preview.snap("Empty");
-    expect(restyle).toHaveBeenCalledTimes(1);
+    expect(restyle).toHaveBeenCalledWith(["w-[327px]"]);
     const installs = vi
       .mocked(page.evaluate)
       .mock.calls.filter(([, arg]) => Array.isArray(arg) && arg[1] === ".w-\\[327px\\]{}");
-    expect(installs).toHaveLength(1);
+    // A second pass finds the same sheet already in place, and stops.
+    expect(installs).toHaveLength(2);
+    expect(restyle).toHaveBeenCalledTimes(2);
   });
 
   it("fails finish() on a browser problem after the last capture", async () => {
