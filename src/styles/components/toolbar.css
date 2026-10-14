@@ -176,32 +176,6 @@
   color: var(--remote-chip-quiet-ink, var(--theme-text-secondary));
 }
 
-/* Increased contrast wants solid chrome, not light: the pool and its patches
- * go, and the chip keeps its lit edge, which the global rule widens to 2px
- * like every other button's. Kept apart from the forced-colours block below
- * on purpose (macOS fires only this one). */
-@media (prefers-contrast: more) {
-  .surface-toolbar[data-remote-window]::before,
-  .surface-toolbar[data-remote-window]::after,
-  .host-chip-remote::before {
-    display: none;
-  }
-}
-
-/* Forced colours drop gradients and shadows anyway; the patches would be
- * forced to Canvas squares, so they go too. The glyph takes button ink. */
-@media (forced-colors: active) {
-  .surface-toolbar[data-remote-window]::before,
-  .surface-toolbar[data-remote-window]::after,
-  .host-chip-remote::before {
-    display: none;
-  }
-
-  .host-chip-source {
-    color: ButtonText;
-  }
-}
-
 /* ── backdrop-filter fallbacks ──
  * The translucent material relies on GPU compositing and ignores the OS
  * "reduce transparency" accessibility preference. Engines without
@@ -242,6 +216,32 @@
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background-color: var(--theme-surface-toolbar);
+  }
+}
+
+/* Increased contrast wants solid chrome, not light: the pool and its patches
+ * go, and the chip keeps its lit edge, which the global rule widens to 2px
+ * like every other button's. Kept apart from the forced-colours block below
+ * on purpose (macOS fires only this one). */
+@media (prefers-contrast: more) {
+  .surface-toolbar[data-remote-window]::before,
+  .surface-toolbar[data-remote-window]::after,
+  .host-chip-remote::before {
+    display: none;
+  }
+}
+
+/* Forced colours drop gradients and shadows anyway; the patches would be
+ * forced to Canvas squares, so they go too. The glyph takes button ink. */
+@media (forced-colors: active) {
+  .surface-toolbar[data-remote-window]::before,
+  .surface-toolbar[data-remote-window]::after,
+  .host-chip-remote::before {
+    display: none;
+  }
+
+  .host-chip-source {
+    color: ButtonText;
   }
 }
 
