@@ -11225,6 +11225,35 @@ describe("assistant skip preference (#12874)", () => {
     help.sessionStore.grantCache.dispose();
   });
 
+  // A remote Shell that still raised its dialog (#13368) — a move of its
+  // window, or a Shell too old to take the stamp — sends the decision back,
+  // and the audit must not claim the call ran without asking.
+  it.each([{ decision: "approved" }, { decision: "rejected" }, { decision: "timeout" }])(
+    "audits a skip-stamped call the Shell still asked about as asked ($decision)",
+    async ({ decision }) => {
+      const help = skipServer({ origin: "help", skipped: true });
+      help.dispatchAction.mockResolvedValue({
+        result:
+          decision === "approved"
+            ? { ok: true, result: { ok: 1 } }
+            : { ok: false, error: { code: "USER_REJECTED", message: "no" } },
+        confirmationDecision: decision,
+      });
+      await help.server.connect(makeMockTransport());
+
+      await callTool(help.server, {
+        name: "worktree.delete",
+        arguments: { worktreeId: "wt-1" },
+      });
+
+      expect(help.dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+      const audit = lastAudit(help.appendAuditRecord);
+      expect(audit.confirmationDecision).toBe(decision);
+      expect(audit).not.toHaveProperty("authorization");
+      help.sessionStore.grantCache.dispose();
+    }
+  );
+
   // The issue's own case (#13135): a core help session deleting a worktree an
   // earlier session made. Skip runs it; ask raises the ordinary modal. Neither
   // is refused, and nothing about it depends on the session having created it.

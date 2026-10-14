@@ -114,3 +114,14 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "worktree.waitForPullRequest",
   "worktree.waitUntilReady",
 ]);
+
+/**
+ * Host-dispatchable actions that always ask the person at this Shell, even
+ * when the host says its assistant runs under "Never ask" (#13368). Both move
+ * or reopen this window, which the list above admits only because the person
+ * here approves every move.
+ */
+export const HOST_ALWAYS_ASKS_ACTION_IDS: ReadonlySet<string> = new Set([
+  "host.switch",
+  "project.openOnHost",
+]);

@@ -3837,6 +3837,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // Compute the duration once so the audit record and the live strip
         // report the same wall-clock, not two reads a few µs apart (#9759).
         const durationMs = Date.now() - startedAt;
+        // A decision only comes back from a dialog that was raised, so a call
+        // stamped `skip-preference` that carries one was asked after all — by
+        // a remote Shell that keeps asking for a move of its window, or one
+        // too old to take the stamp (#13368). The decision says what happened.
+        const recordedAuthorization: McpDispatchAuthorization | undefined =
+          dispatchAuthorization === "skip-preference" && confirmationDecision !== undefined
+            ? undefined
+            : dispatchAuthorization;
         try {
           appendAuditRecord({
             toolId: actionId,
@@ -3847,8 +3855,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             startedAt,
             outcome: settledOutcome,
             confirmationDecision,
-            ...(dispatchAuthorization !== undefined
-              ? { authorization: dispatchAuthorization }
+            ...(recordedAuthorization !== undefined
+              ? { authorization: recordedAuthorization }
               : {}),
             capturedTurnId,
           });

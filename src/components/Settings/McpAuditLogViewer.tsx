@@ -334,12 +334,14 @@ function DispatchRow({
         {record.result === "unauthorized" && record.tierHint === null && (
           <div className="mt-0.5 text-text-secondary">Not permitted at any tier</div>
         )}
-        {/* Never shown as "confirmed": nobody was asked (#12874). */}
-        {record.authorization === "skip-preference" && (
-          <div className="mt-0.5 text-text-secondary">
-            Confirmation skipped — Daintree confirmations setting
-          </div>
-        )}
+        {/* Never shown as "confirmed": nobody was asked (#12874). A decision
+            beside the stamp means a remote Shell asked anyway (#13368). */}
+        {record.authorization === "skip-preference" &&
+          record.confirmationDecision === undefined && (
+            <div className="mt-0.5 text-text-secondary">
+              Confirmation skipped — Daintree confirmations setting
+            </div>
+          )}
       </div>
       <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
         <div>

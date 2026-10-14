@@ -49,6 +49,17 @@ describe("McpAuditLogViewer", () => {
     ).toHaveLength(1);
   });
 
+  it("does not claim a skip for a row whose dialog was answered (#13368)", () => {
+    renderViewer([
+      {
+        ...dispatch("1", "worktree.createWithRecipe"),
+        authorization: "skip-preference",
+        confirmationDecision: "approved",
+      } as McpLogRecord,
+    ]);
+    expect(screen.queryByText("Confirmation skipped — Daintree confirmations setting")).toBeNull();
+  });
+
   it("offers a way out of a filter that matches nothing", () => {
     renderViewer([dispatch("1", "worktree.list")]);
     fireEvent.change(screen.getByLabelText("Filter audit by tool name"), {

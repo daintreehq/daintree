@@ -104,6 +104,85 @@ describe("view reverse requests", () => {
     });
   });
 
+  it("runs the host assistant's call under its Never ask without this Shell's dialog", async () => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: 1 } });
+
+    const answer = await ask("mcp:dispatch-action", {
+      actionId: "worktree.createWithRecipe",
+      args: { branchName: "work", recipeId: "inrepo-work" },
+      confirmed: true,
+      sessionOrigin: "help",
+      authorization: "skip-preference",
+    });
+
+    expect(m.dispatchActionForHost).toHaveBeenCalledWith(
+      11,
+      "worktree.createWithRecipe",
+      { branchName: "work", recipeId: "inrepo-work" },
+      true,
+      undefined,
+      "external",
+      { authorization: "skip-preference" },
+      { userAgent: 'Agent on host "Studio Mac"', token4LastChars: "" }
+    );
+    expect(answer).toEqual({ result: { ok: true, result: 1 } });
+  });
+
+  it.each([
+    ["an agent pane", { sessionOrigin: "assistant-pane", authorization: "skip-preference" }],
+    ["an api-key client", { sessionOrigin: "external", authorization: "skip-preference" }],
+    ["another authorization", { sessionOrigin: "help", authorization: "native-grant" }],
+    ["no authorization", { sessionOrigin: "help" }],
+    [
+      "an unconfirmed call",
+      { sessionOrigin: "help", authorization: "skip-preference", confirmed: false },
+    ],
+  ])("asks this Shell for %s even when the host claims a skip", async (_label, fields) => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: null } });
+    await ask("mcp:dispatch-action", {
+      actionId: "worktree.delete",
+      args: { worktreeId: "/srv/wt" },
+      confirmed: true,
+      ...fields,
+    });
+    expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toBeUndefined();
+  });
+
+  it.each(["host.switch", "project.openOnHost"])(
+    "always asks before %s moves this window, Never ask or not",
+    async (actionId) => {
+      installViewReverseRequests();
+      m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: null } });
+      await ask("mcp:dispatch-action", {
+        actionId,
+        args: { hostId: "local" },
+        confirmed: true,
+        sessionOrigin: "help",
+        authorization: "skip-preference",
+      });
+      expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+      expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toBeUndefined();
+    }
+  );
+
+  it("still raises an approval-only request's dialog under Never ask", async () => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: null } });
+    await ask("mcp:dispatch-action", {
+      actionId: "terminal.new",
+      args: {},
+      confirmed: true,
+      sessionOrigin: "help",
+      authorization: "skip-preference",
+      approvalOnly: true,
+    });
+    expect(m.dispatchActionForHost.mock.calls[0]?.[3]).toBe(false);
+    expect(m.dispatchActionForHost.mock.calls[0]?.[6]).toEqual({ approvalOnly: true });
+  });
+
   it("passes an approval-only request through, still unconfirmed", async () => {
     installViewReverseRequests();
     m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: null } });

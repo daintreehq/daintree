@@ -8,7 +8,10 @@ import {
 import { AppError } from "../../utils/errorTypes.js";
 import { NOTIFICATION_SHOW_METHOD, showHostNotification } from "../hybrid/notifications.js";
 import { getRemoteService } from "../runtime.js";
-import { HOST_DISPATCHABLE_ACTION_IDS } from "./hostDispatchableActions.js";
+import {
+  HOST_ALWAYS_ASKS_ACTION_IDS,
+  HOST_DISPATCHABLE_ACTION_IDS,
+} from "./hostDispatchableActions.js";
 import { registerReverseRequestMethod } from "./reverseRequests.js";
 
 export { HOST_DISPATCHABLE_ACTION_IDS };
@@ -21,6 +24,11 @@ export { HOST_DISPATCHABLE_ACTION_IDS };
  * binding says which project and worktree), `sessionOrigin` (a host's session
  * is never one of this Shell's assistant surfaces) and `offerSessionApproval`
  * (an approval this Shell would not honour on the next call).
+ *
+ * One exception (#13368): the assistant's confirmations preference is
+ * host-owned, so only the host can say a call falls under "Never ask". A call
+ * the host confirmed for its own assistant under `skip-preference` runs
+ * without this Shell's dialog — see `honoursSkipPreference`.
  */
 const McpDispatchPayloadSchema = z.object({
   actionId: z.string().min(1).max(256),
@@ -34,7 +42,27 @@ const McpDispatchPayloadSchema = z.object({
   // dialog's shape (a protected close lists the panels to tick), never whether
   // one is shown, so it is taken as-is.
   approvalReason: z.enum(["above-tier", "protected-close"]).optional(),
+  authorization: z.string().max(64).optional(),
 });
+
+type McpDispatchPayload = z.infer<typeof McpDispatchPayloadSchema>;
+
+/**
+ * Whether a host's dispatch carries its assistant's standing "Never ask"
+ * (#12874), the one confirmation this Shell takes from a host. The host stamps
+ * `skip-preference` only on its own assistant's calls (#13137), so an agent
+ * pane or api-key client on the host still raises this Shell's dialog. An
+ * approval-only request exists to ask, and a move of this window always does.
+ */
+function honoursSkipPreference(request: McpDispatchPayload): boolean {
+  return (
+    request.confirmed &&
+    request.sessionOrigin === "help" &&
+    request.authorization === "skip-preference" &&
+    request.approvalOnly !== true &&
+    !HOST_ALWAYS_ASKS_ACTION_IDS.has(request.actionId)
+  );
+}
 
 export function isHostDispatchableAction(actionId: string): boolean {
   return HOST_DISPATCHABLE_ACTION_IDS.has(actionId);
@@ -138,21 +166,26 @@ async function dispatchAction(
     };
   }
   const service = await loadMcpServerService();
-  // Never pre-confirmed: a confirm-gated action raises this Shell's own dialog,
-  // naming the host that asked, exactly as a local MCP client's would.
+  // Otherwise never pre-confirmed: a confirm-gated action raises this Shell's
+  // own dialog, naming the host that asked, exactly as a local MCP client's
+  // would. The origin stays `external` either way: the skip rides on
+  // `authorization`, not on posing as one of this Shell's assistant surfaces.
+  const skipPreference = honoursSkipPreference(request);
   const envelope = await service.dispatchActionForHost(
     webContentsId,
     request.actionId,
     request.args,
-    false,
+    skipPreference,
     undefined,
     "external",
-    request.approvalOnly
-      ? {
-          approvalOnly: true,
-          ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
-        }
-      : undefined,
+    skipPreference
+      ? { authorization: "skip-preference" }
+      : request.approvalOnly
+        ? {
+            approvalOnly: true,
+            ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
+          }
+        : undefined,
     describeHost(hostId)
   );
   // Only what the host reads back: this machine's view identity stays here,
