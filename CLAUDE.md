@@ -11,7 +11,7 @@ Electron IDE for orchestrating AI coding agents — many agent terminals running
 ```bash
 npm run dev            # Main + Renderer (Vite)
 npm test -- <path>     # the ONLY way to run unit tests locally: the files you changed
-npm test               # full vitest suite: CI only (4 shards). NEVER run it locally
+npm test               # full vitest suite: CI only (6 shards). NEVER run it locally
 npm run check          # typecheck + codegen/guard checks + lint and e2e-wait ratchets + format:check
 npm run fix            # prettier --write + eslint --fix
 npm run build          # production build
@@ -59,13 +59,13 @@ React Compiler is enabled (`babel-plugin-react-compiler`, `target: "19"`). A bai
 
 ## Definition of done
 
-1. **NEVER run the full unit suite locally.** Not mid-work, not before a commit, not before opening a PR, not "at the end", not because a skill or runbook says to. A bare `npm test` / `npx vitest run` takes 15-20 minutes of a locked-up machine, and every task paying that makes the work take forever. GitHub CI runs the full suite on every PR (4 shards); that is the gate. Locally, run only the test files covering what you changed (`npm test -- <path>`), plus typecheck and lint. If CI then finds a failure elsewhere, fix it from the CI log.
+1. **NEVER run the full unit suite locally.** Not mid-work, not before a commit, not before opening a PR, not "at the end", not because a skill or runbook says to. A bare `npm test` / `npx vitest run` takes 15-20 minutes of a locked-up machine, and every task paying that makes the work take forever. GitHub CI runs the full suite on every PR (6 shards); that is the gate. Locally, run only the test files covering what you changed (`npm test -- <path>`), plus typecheck and lint. If CI then finds a failure elsewhere, fix it from the CI log.
 2. Run `npm run check` for anything touching types, IPC, keybindings, plugin manifests, or lint-visible code.
 3. Scale verification to the change. A small edit does not need build + E2E + full check stacked on top.
 4. Report the commands actually run and their real results. `prettier` prints "All files formatted correctly" while exiting 1 — trust the exit code, not the summary.
 5. Never weaken a test, suppress a warning, or widen a baseline to make a change pass.
 
-CI on PRs: `check` + vitest (4 shards, plus a separate `perf-liveness` job) + build + smoke, Ubuntu only, no E2E. `ci-ok` is the sole required check.
+CI on PRs: `npm run check` split into `static` (typecheck, guards, format) and `lint` (ESLint ratchet), vitest (6 shards, plus a separate `perf-liveness` job), and build + smoke, all starting at once with nothing gated on anything else; Ubuntu only, no E2E. `ci-ok` is the sole required check.
 
 **E2E is expensive and locks up the machine — never decide to run it yourself.** Run only the spec or bucket the user names, and only when they ask. Full cross-platform validation goes through the `stabilize` workflow (`.agents/skills/stabilize/`), never a local sweep and never as part of a merge. E2E runs against the built app, so a stale or failed `npm run build:e2e` silently tests the old bundle.
 

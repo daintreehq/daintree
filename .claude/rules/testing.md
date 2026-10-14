@@ -12,7 +12,7 @@ paths:
 
 ## Unit tests (vitest)
 
-**NEVER run the full suite locally** (`npm test`, `npx vitest run` with no path). It takes 15-20 minutes and GitHub CI runs it on every PR in 4 shards. Run only the test files that cover what you changed: `npm test -- <path>`. This holds at every stage, including before a commit or PR, and overrides any skill or runbook step that says to run the whole suite. A failure CI finds outside your files gets fixed from the CI log.
+**NEVER run the full suite locally** (`npm test`, `npx vitest run` with no path). It takes 15-20 minutes and GitHub CI runs it on every PR in 6 shards. Run only the test files that cover what you changed: `npm test -- <path>`. This holds at every stage, including before a commit or PR, and overrides any skill or runbook step that says to run the whole suite. A failure CI finds outside your files gets fixed from the CI log.
 
 **No jest-dom in this repo.** Only `@testing-library/react` is installed, so `toBeInTheDocument`, `toHaveAttribute` and friends throw "Invalid Chai property". Use plain DOM reads.
 
@@ -49,7 +49,7 @@ Freeze behaviour is unobservable under Playwright's focus emulation — use `npm
 
 ## What CI actually runs
 
-On PRs and pushes: `npm run check`, vitest in 4 shards (the perf scenario liveness guard runs as its own `perf-liveness` job), and build + preload-backdoor check + smoke — Ubuntu only, no E2E. `ci-ok` is the sole required check.
+On PRs and pushes: `npm run check` (split across the parallel `static` and `lint` jobs), vitest in 6 shards (the perf scenario liveness guard runs as its own `perf-liveness` job), and build + preload-backdoor check + smoke — Ubuntu only, no E2E. `ci-ok` is the sole required check.
 
 Budget and perf scripts are intentionally out of CI pre-1.0 (dormancy note in `ci.yml`). `test-ratio` runs on PRs but is informational and always exits 0.
 
