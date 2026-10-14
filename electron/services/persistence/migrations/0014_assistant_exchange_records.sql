@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS `assistant_exchanges` (
 CREATE UNIQUE INDEX IF NOT EXISTS `assistant_exchanges_sender_message_idx` ON `assistant_exchanges` (`sender_id`,`message_id`);--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS `assistant_exchanges_sender_revision_idx` ON `assistant_exchanges` (`sender_id`,`revision`);--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS `assistant_exchanges_receiver_revision_idx` ON `assistant_exchanges` (`receiver_host_id`,`receiver_lane_id`,`enrollment_generation`,`revision`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `assistant_exchanges_revision_idx` ON `assistant_exchanges` (`revision`);--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS `assistant_exchanges_expires_idx` ON `assistant_exchanges` (`expires_at`) WHERE `tombstoned_at` IS NULL;--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS `assistant_exchanges_purge_idx` ON `assistant_exchanges` (`purge_after`) WHERE `tombstoned_at` IS NOT NULL;--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS `assistant_exchange_clock` (

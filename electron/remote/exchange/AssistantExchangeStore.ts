@@ -146,6 +146,20 @@ function requireGeneration(value: unknown): number {
   return value;
 }
 
+function requireDuration(value: number, field: string): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`Exchange ${field} must be a positive, finite duration`);
+  }
+  return value;
+}
+
+function requireLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw refuse("VALIDATION", "Exchange page limit must be a positive integer");
+  }
+  return Math.min(MAX_LIST_LIMIT, value);
+}
+
 function isTerminal(row: ExchangeRow): boolean {
   return TERMINAL_EXCHANGE_STATES.has(row.state);
 }
@@ -221,11 +235,20 @@ export class AssistantExchangeStore {
     options: AssistantExchangeStoreOptions = {}
   ) {
     this.now = options.now ?? Date.now;
-    this.ttlMs = options.ttlMs ?? EXCHANGE_TTL_MS;
-    this.tombstoneRetentionMs = options.tombstoneRetentionMs ?? EXCHANGE_TOMBSTONE_RETENTION_MS;
-    this.auditRetentionMs = options.auditRetentionMs ?? EXCHANGE_AUDIT_RETENTION_MS;
+    this.ttlMs = requireDuration(options.ttlMs ?? EXCHANGE_TTL_MS, "TTL");
+    this.tombstoneRetentionMs = requireDuration(
+      options.tombstoneRetentionMs ?? EXCHANGE_TOMBSTONE_RETENTION_MS,
+      "tombstone retention"
+    );
+    this.auditRetentionMs = requireDuration(
+      options.auditRetentionMs ?? EXCHANGE_AUDIT_RETENTION_MS,
+      "audit retention"
+    );
     this.newTaskId = options.newTaskId ?? randomUUID;
-    const retryWindowMs = options.retryWindowMs ?? EXCHANGE_RETRY_WINDOW_MS;
+    const retryWindowMs = requireDuration(
+      options.retryWindowMs ?? EXCHANGE_RETRY_WINDOW_MS,
+      "retry window"
+    );
     if (this.tombstoneRetentionMs <= retryWindowMs) {
       throw new Error("Exchange tombstones must be kept longer than the retry window");
     }
@@ -247,7 +270,10 @@ export class AssistantExchangeStore {
         `Exchange reference task ids must be a list of at most ${MAX_REFERENCE_TASK_IDS}`
       );
     }
-    const referenceTaskIds = input.referenceTaskIds.map((id) => requireId(id, "reference task id"));
+    // Array.from visits holes, so a sparse list can't slip a null past validation.
+    const referenceTaskIds = Array.from(input.referenceTaskIds, (id) =>
+      requireId(id, "reference task id")
+    );
     if (typeof input.body !== "string") {
       throw refuse("VALIDATION", "Exchange body must be a string");
     }
@@ -313,17 +339,17 @@ export class AssistantExchangeStore {
   }
 
   /**
-   * Call before anything leaves for the receiver. Once recorded, a delivery
-   * that never reports back stays unknown across a restart; it is never
-   * attempted a second time, because a duplicate wake is tolerable and
+   * Call before anything leaves for the receiver. Once an attempt, an
+   * observed fact or an unknown outcome is on record, the exchange is never
+   * sent again, across restarts too: a duplicate wake is tolerable and
    * duplicate execution isn't.
    */
   beginDelivery(actor: ExchangeActor, key: ExchangeKey): ExchangeRecord {
     return this.transition(actor, key, (row) => {
-      if (row.delivery_attempted_at !== null) {
+      if (mayHaveDelivered(row)) {
         throw refuse(
           "OUTCOME_UNKNOWN",
-          `Exchange ${row.message_id} was already sent once and is not sent again`
+          `Exchange ${row.message_id} may already have been delivered and is not sent again`
         );
       }
       if (isTerminal(row)) {
@@ -449,7 +475,7 @@ export class AssistantExchangeStore {
     if (!Number.isSafeInteger(cursor) || cursor < 0) {
       throw refuse("VALIDATION", "Exchange cursor must be a non-negative integer");
     }
-    const pageSize = Math.max(1, Math.min(MAX_LIST_LIMIT, Math.floor(limit)));
+    const pageSize = requireLimit(limit);
     return this.read((sqlite) => {
       const clock = this.readClock(sqlite);
       const reset = cursor < clock.min_cursor;
@@ -487,13 +513,14 @@ export class AssistantExchangeStore {
    * drops old audit rows. Bounded per call; `hasMore` asks for another.
    */
   sweep(limit = MAX_LIST_LIMIT): ExchangeSweepResult {
+    const batch = requireLimit(limit);
     return this.write((sqlite) => {
       const now = this.now();
       const due = this.statement(
         sqlite,
-        "SELECT * FROM assistant_exchanges WHERE tombstoned_at IS NULL AND expires_at <= ? ORDER BY expires_at LIMIT ?"
-      ).all(now, limit + 1) as ExchangeRow[];
-      const expiring = due.slice(0, limit);
+        "SELECT * FROM assistant_exchanges WHERE tombstoned_at IS NULL AND expires_at <= ? ORDER BY expires_at, revision LIMIT ?"
+      ).all(now, batch + 1) as ExchangeRow[];
+      const expiring = due.slice(0, batch);
       for (const row of expiring) {
         const next: Partial<ExchangeRow> = {
           tombstoned_at: now,
@@ -507,11 +534,21 @@ export class AssistantExchangeStore {
         this.apply(sqlite, row, "expired", next, now);
       }
 
-      const stale = this.statement(
+      // Purge only from the bottom of the revision order, stopping at the first
+      // row that must stay. Every retained row then sits above `min_cursor`,
+      // so a listing restarted after a reset pages forward without tripping
+      // the reset again.
+      const oldest = this.statement(
         sqlite,
-        "SELECT * FROM assistant_exchanges WHERE tombstoned_at IS NOT NULL AND purge_after <= ? ORDER BY purge_after LIMIT ?"
-      ).all(now, limit + 1) as ExchangeRow[];
-      const purging = stale.slice(0, limit);
+        "SELECT * FROM assistant_exchanges ORDER BY revision LIMIT ?"
+      ).all(batch + 1) as ExchangeRow[];
+      const purgeable = (row: ExchangeRow | undefined) =>
+        row !== undefined && row.tombstoned_at !== null && (row.purge_after ?? Infinity) <= now;
+      const purging: ExchangeRow[] = [];
+      for (const row of oldest.slice(0, batch)) {
+        if (!purgeable(row)) break;
+        purging.push(row);
+      }
       if (purging.length > 0) {
         const purgedThrough = Math.max(...purging.map((row) => row.revision));
         const remove = this.statement(sqlite, "DELETE FROM assistant_exchanges WHERE task_id = ?");
@@ -530,13 +567,16 @@ export class AssistantExchangeStore {
       const auditPurged = this.statement(
         sqlite,
         "DELETE FROM assistant_exchange_audit WHERE revision IN (SELECT revision FROM assistant_exchange_audit WHERE purge_after <= ? ORDER BY revision LIMIT ?)"
-      ).run(now, limit).changes;
+      ).run(now, batch).changes;
 
       return {
         expired: expiring.length,
         purged: purging.length,
         auditPurged,
-        hasMore: due.length > limit || stale.length > limit || auditPurged >= limit,
+        hasMore:
+          due.length > batch ||
+          (purging.length === batch && purgeable(oldest[batch])) ||
+          auditPurged >= batch,
       };
     });
   }

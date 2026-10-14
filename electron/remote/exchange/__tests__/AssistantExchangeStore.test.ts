@@ -76,6 +76,20 @@ describe("AssistantExchangeStore", () => {
       }[]
     ).map((row) => ({ revision: row.revision, ...JSON.parse(row.attributes) }));
 
+  const drain = (actor: SenderActor, from: number, limit: number) => {
+    const seen: string[] = [];
+    let cursor = from;
+    let reset = false;
+    for (let pages = 0; pages < 50; pages++) {
+      const page = store.listChangesSince(actor, cursor, limit);
+      reset ||= page.reset;
+      seen.push(...page.records.map((r) => r.messageId));
+      cursor = page.cursor;
+      if (!page.hasMore) return { seen, cursor, reset };
+    }
+    throw new Error("listing never finished");
+  };
+
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-exchange-"));
     dbPath = path.join(tmpDir, "exchange.db");
@@ -125,6 +139,12 @@ describe("AssistantExchangeStore", () => {
       } catch (error) {
         expect(String((error as Error).message)).not.toContain("tangerine");
       }
+    });
+
+    it("refuses a reference list with holes in it", () => {
+      expect(() => store.create(shellA, input({ referenceTaskIds: new Array<string>(1) }))).toThrow(
+        expect.objectContaining({ code: "VALIDATION" })
+      );
     });
 
     it("scopes message ids per sender, so two Shells never collide", () => {
@@ -278,6 +298,27 @@ describe("AssistantExchangeStore", () => {
       );
     });
 
+    it("never sends an exchange whose outcome was left unknown, across a restart", () => {
+      store.create(shellA, input());
+      store.markAmbiguous(shellA, keyA);
+      sqlite.close();
+      open();
+
+      expect(() => store.beginDelivery(shellA, keyA)).toThrow(
+        expect.objectContaining({ code: "OUTCOME_UNKNOWN" })
+      );
+      expect(store.get(shellA, keyA)?.delivery.attemptedAt).toBeNull();
+    });
+
+    it("never sends an exchange the receiver was already seen to accept", () => {
+      store.create(shellA, input());
+      store.recordDelivery(lane, keyA, "accepted");
+
+      expect(() => store.beginDelivery(shellA, keyA)).toThrow(
+        expect.objectContaining({ code: "OUTCOME_UNKNOWN" })
+      );
+    });
+
     it("records ambiguity alongside the state and keeps it across a restart", () => {
       store.create(shellA, input());
       store.setState(lane, keyA, "working");
@@ -324,15 +365,16 @@ describe("AssistantExchangeStore", () => {
       for (let i = 0; i < 5; i++) {
         store.create(shellA, input({ messageId: `m-${i}`, body: `body ${i}` }));
       }
-      const seen: string[] = [];
-      let cursor = 0;
-      for (;;) {
-        const page = store.listChangesSince(shellA, cursor, 2);
-        seen.push(...page.records.map((r) => r.messageId));
-        cursor = page.cursor;
-        if (!page.hasMore) break;
+      expect(drain(shellA, 0, 2).seen).toEqual(["m-0", "m-1", "m-2", "m-3", "m-4"]);
+    });
+
+    it("refuses page limits that would make a read or sweep unbounded", () => {
+      for (const limit of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect(() => store.listChangesSince(shellA, 0, limit)).toThrow(
+          expect.objectContaining({ code: "VALIDATION" })
+        );
+        expect(() => store.sweep(limit)).toThrow(expect.objectContaining({ code: "VALIDATION" }));
       }
-      expect(seen).toEqual(["m-0", "m-1", "m-2", "m-3", "m-4"]);
     });
 
     it("rolls the whole transition back when the audit write fails", () => {
@@ -425,6 +467,31 @@ describe("AssistantExchangeStore", () => {
       expect(fresh.revision).toBeGreaterThan(sawTombstone.cursor);
     });
 
+    it("pages a reset listing forward without looping when sweeps run in small batches", () => {
+      for (const id of ["a", "b", "c"]) store.create(shellA, input({ messageId: id, body: id }));
+      const stale = store.listChangesSince(shellA, 0).cursor;
+
+      clock += 24 * HOUR;
+      store.sweep(1);
+      clock += 48 * HOUR;
+      // "a" is due for purge, but "c" still sits below it unswept, so nothing
+      // is purged yet: purging past it would strand "c" under the reset line.
+      expect(store.sweep(1).purged).toBe(0);
+      expect(store.sweep(1).purged).toBe(1);
+
+      const listing = drain(shellA, stale, 1);
+      expect(listing.reset).toBe(true);
+      expect(listing.seen).toEqual(["b", "c"]);
+    });
+
+    it("refuses invalid retention settings", () => {
+      expect(() => new AssistantExchangeStore(sqlite, { ttlMs: -1 })).toThrow();
+      expect(() => new AssistantExchangeStore(sqlite, { retryWindowMs: Number.NaN })).toThrow();
+      expect(
+        () => new AssistantExchangeStore(sqlite, { tombstoneRetentionMs: Number.POSITIVE_INFINITY })
+      ).toThrow();
+    });
+
     it("refuses a store whose tombstones would not outlive the retry window", () => {
       expect(
         () =>
@@ -471,8 +538,9 @@ describe("AssistantExchangeStore", () => {
     it("drops audit rows after their own retention", () => {
       store.create(shellA, input());
       clock += 72 * HOUR;
-      expect(store.sweep().auditPurged).toBeGreaterThan(0);
-      expect(auditRows().every((r) => r["daintree.exchange.event"] !== "created")).toBe(true);
+      expect(store.sweep().auditPurged).toBe(1);
+      // The expiry this sweep just recorded is newer than the retention line and stays.
+      expect(auditRows().map((r) => r["daintree.exchange.event"])).toEqual(["expired"]);
     });
   });
 });
