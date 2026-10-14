@@ -818,6 +818,35 @@ export function resolveAppTheme(id: string, customSchemes: AppColorScheme[] = []
   return getAppThemeById(id, customSchemes) ?? BUILT_IN_APP_SCHEMES[0]!;
 }
 
+/** The light bevel: a true white top lip, the right elevation direction on near-white chrome. */
+const LIGHT_BEVEL = "0 1px 0 rgba(255, 255, 255, 0.6) inset";
+
+/**
+ * Variables that follow the theme's polarity rather than a token. The host
+ * stylesheet's `:root` stays the dark source of truth for the shadow and pill
+ * stacks, so dark adds only the dialog plane; light re-expresses the floating
+ * shadows on the engine's cool-slate source with a white bevel, lifts dialogs
+ * and category pills onto the elevated plane, and raises the pill mixes (12%
+ * over near-white is sub-JND). They live here, not in a `.light` rule, so a
+ * page that applies only the theme's variables (the plugin preview) draws
+ * light dialogs as the app does.
+ */
+const POLARITY_VARIABLES: Record<AppColorScheme["type"], Record<string, string>> = {
+  dark: {
+    "--theme-surface-dialog": "var(--theme-surface-panel)",
+  },
+  light: {
+    "--theme-surface-dialog": "var(--theme-surface-panel-elevated)",
+    "--shadow-overlay": `${LIGHT_BEVEL}, var(--theme-shadow-floating)`,
+    "--shadow-modal": `${LIGHT_BEVEL}, var(--theme-shadow-dialog)`,
+    "--shadow-dock-popover": `${LIGHT_BEVEL}, var(--theme-shadow-dialog)`,
+    "--shadow-dock-panel-popover": `${LIGHT_BEVEL}, var(--theme-shadow-dialog)`,
+    "--pill-surface": "var(--color-surface-panel-elevated)",
+    "--category-subtle-mix": "20%",
+    "--category-border-mix": "34%",
+  },
+};
+
 export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, string> {
   const entries = Object.entries(scheme.tokens).map(([token, value]) => [
     `--theme-${token}`,
@@ -825,6 +854,7 @@ export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, 
   ]);
   const variables = Object.fromEntries(entries);
   variables["--theme-color-mode"] = scheme.type;
+  Object.assign(variables, POLARITY_VARIABLES[scheme.type]);
   if (scheme.extensions) {
     for (const [extensionName, extensionValue] of Object.entries(scheme.extensions)) {
       if (typeof extensionValue === "string" && extensionValue.trim()) {

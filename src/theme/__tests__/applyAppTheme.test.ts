@@ -72,6 +72,30 @@ describe("applyAppThemeToRoot", () => {
 
     expect(root.style.getPropertyValue("--custom-foo")).toBe("");
   });
+
+  it("carries the light chrome on light and hands it back to the stylesheet on dark", () => {
+    const root = document.createElement("div");
+    const lightOnly = ["--shadow-overlay", "--shadow-modal", "--pill-surface"];
+
+    applyAppThemeToRoot(root, createTestScheme("test-light", "light"));
+    expect(root.style.getPropertyValue("--theme-surface-dialog")).toContain(
+      "--theme-surface-panel-elevated"
+    );
+    expect(root.style.getPropertyValue("--shadow-modal")).toContain("--theme-shadow-dialog");
+
+    applyAppThemeToRoot(root, createTestScheme("test-dark", "dark"));
+    expect(root.style.getPropertyValue("--theme-surface-dialog")).toBe(
+      "var(--theme-surface-panel)"
+    );
+    // The dark shadow and pill stacks are the stylesheet's :root defaults.
+    for (const name of lightOnly) expect(root.style.getPropertyValue(name)).toBe("");
+  });
+
+  it("lets a theme's own extension override the light chrome", () => {
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, createTestScheme("test-light", "light", { "shadow-modal": "none" }));
+    expect(root.style.getPropertyValue("--shadow-modal")).toBe("none");
+  });
 });
 
 import { WORKTREE_COLOR_PALETTE } from "@shared/theme/worktreeColors";

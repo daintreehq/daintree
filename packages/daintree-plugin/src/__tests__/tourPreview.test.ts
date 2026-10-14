@@ -272,8 +272,15 @@ describe("preview page", () => {
     expect(css).toContain("box-sizing: border-box");
     expect(css).toContain(".tour-click-ring");
     // Host-derived variables tokens like bg-surface-dialog resolve through.
-    expect(css).toMatch(
-      /\.light \{[^}]*--theme-surface-dialog: var\(--theme-surface-panel-elevated\)/
+    expect(css).toMatch(/:root \{[^}]*--shadow-modal:/);
+  });
+
+  it("lifts dialogs onto the elevated plane on a light theme, from the theme alone", () => {
+    expect(previewTheme("bondi").css).toContain(
+      "--theme-surface-dialog: var(--theme-surface-panel-elevated);"
+    );
+    expect(previewTheme("daintree").css).toContain(
+      "--theme-surface-dialog: var(--theme-surface-panel);"
     );
   });
 

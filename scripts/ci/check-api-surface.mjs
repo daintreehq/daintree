@@ -3,7 +3,7 @@
 //
 // The package is the public type surface third-party plugins compile against,
 // exposed through its entry points — `.`, `./react`, `./files`, `./data`,
-// `./testing` and `./testing/preview` (each `dist/<entry>.d.ts`), plus the hand-written `./plugin-ui` and `./view-globals` declarations. Nothing else in CI notices when a code change alters
+// `./testing` and `./testing/preview` (each `dist/<entry>.d.ts`), plus the hand-written `./plugin-ui`, `./testing/plugin-ui` and `./view-globals` declarations. Nothing else in CI notices when a code change alters
 // that exported shape: only runtime contract tests are gated. This guard
 // snapshots the built declarations into git-tracked report files so any change
 // to the surface forces a reviewed, committed update.
@@ -67,6 +67,14 @@ const ENTRIES = [
     name: "./plugin-ui",
     dist: path.join(root, "packages/plugin-sdk/plugin-ui.d.ts"),
     snapshot: path.join(root, "packages/plugin-sdk/api-report/plugin-ui.d.ts"),
+  },
+  // Hand-written: the types of the kit's browser build, a re-export of the
+  // ambient `@daintreehq/plugin-ui` declaration above. The build itself fails
+  // when its runtime exports leave HOST_FACADE_REQUIRED_EXPORTS.
+  {
+    name: "./testing/plugin-ui",
+    dist: path.join(root, "packages/plugin-sdk/testing-plugin-ui.d.ts"),
+    snapshot: path.join(root, "packages/plugin-sdk/api-report/testing-plugin-ui.d.ts"),
   },
   // Hand-written for the same reason: the ambient `window.electron.plugin`
   // declaration for plugin views, shipped as-is.

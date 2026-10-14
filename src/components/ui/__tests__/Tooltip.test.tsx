@@ -4,7 +4,7 @@ import { act, fireEvent, render } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FixedDropdownVisibleContext } from "../fixed-dropdown";
-import { Tooltip, TooltipTrigger, TooltipContent } from "../tooltip";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../tooltip";
 import { TOOLTIP_MOTION_CLASS, TOOLTIP_PRESS_DISMISSED_MOTION_CLASS } from "../overlayMotion";
 import { _resetForTests, dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 import {
@@ -12,7 +12,8 @@ import {
   armTooltipFocusSuppression,
 } from "@/lib/tooltipFocusSuppression";
 
-const { rootSpy, mountSpy, primeOnEventSpy, contentSpy } = vi.hoisted(() => ({
+const { rootSpy, mountSpy, primeOnEventSpy, contentSpy, providerSpy } = vi.hoisted(() => ({
+  providerSpy: vi.fn(),
   rootSpy: vi.fn<(props: { open?: boolean; onOpenChange?: (open: boolean) => void }) => void>(),
   mountSpy: vi.fn(),
   primeOnEventSpy: vi.fn(),
@@ -24,7 +25,10 @@ vi.mock("../radix-loader", () => {
   // hand React new component types on every render and remount the trigger.
   const primitives = {
     TooltipPrimitive: {
-      Provider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+      Provider: ({ children }: { children: React.ReactNode }) => {
+        providerSpy();
+        return <>{children}</>;
+      },
       Root: (props: {
         open?: boolean;
         onOpenChange?: (open: boolean) => void;
@@ -867,5 +871,29 @@ describe("Tooltip — focus-open suppression around an overlay close", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("Tooltip wrapper — provider", () => {
+  beforeEach(() => providerSpy.mockClear());
+
+  const tooltip = (
+    <Tooltip>
+      <TooltipTrigger>Copy</TooltipTrigger>
+      <TooltipContent>Copy to clipboard</TooltipContent>
+    </Tooltip>
+  );
+
+  it("brings its own provider on a page that mounts none", () => {
+    const { getByText } = render(tooltip);
+    expect(getByText("Copy")).toBeTruthy();
+    expect(providerSpy).toHaveBeenCalled();
+  });
+
+  it("uses the app's provider when one is above it", () => {
+    render(<TooltipProvider>{tooltip}</TooltipProvider>);
+    // The outer provider renders once; a second of its own would re-render
+    // with every pass of the tooltip.
+    expect(providerSpy).toHaveBeenCalledTimes(1);
   });
 });

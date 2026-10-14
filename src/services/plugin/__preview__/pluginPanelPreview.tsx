@@ -9,6 +9,7 @@ import {
   PREVIEW_READY_ATTRIBUTE,
 } from "@daintreehq/plugin-sdk/testing/preview";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { whenPluginUiReady } from "@/pluginUi/kit";
 import { createHostPreviewStyles } from "./hostPreviewStyles";
 import "@/index.css";
 
@@ -128,12 +129,13 @@ async function bootstrap(): Promise<void> {
     const reason = `the style runtime did not start: ${formatErrorMessage(error, String(error))}`;
     return { registerRoot: () => () => {}, failure: () => reason };
   });
-  // Kit-backed panels need #13315's browser build of the kit before they can
-  // render here; until then the page waits on no kit.
+  // Any story may render the UI kit, so readiness waits on it: a capture taken
+  // before the kit's chunk is in would show its components' empty fallbacks.
   preview = mountPanelStory(storiesModule.default, story.story, {
     container,
     theme: params.get("theme") ?? "daintree",
     styles,
+    kit: { ready: whenPluginUiReady() },
   });
 }
 

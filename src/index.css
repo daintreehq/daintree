@@ -32,6 +32,19 @@
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
+/* The real bold face, so `font-bold` mono is drawn rather than synthesized. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: optional;
+  font-weight: 700;
+  src: url(../node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-700-normal.woff2)
+    format("woff2");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 /* Post-reveal text re-raster (src/utils/revealTextReraster.ts). An inherited,
  * visually inert text-shadow is a pure paint invalidation: it repaints every
  * text run without relayout or reshaping, so a cached project view's first
@@ -150,8 +163,9 @@ code.hljs {
   /* Dialog surface is polarity-aware (consumed via `bg-surface-dialog`). `:root`
      is the dark source of truth: dark dialogs sit on `surface-panel` (the
      historical look), not the lightest `surface-panel-elevated` plane, whose
-     grey reads as washed-out against the near-black workbench. The `.light`
-     block overrides to the elevated plane (the round-2 light-contrast audit). */
+     grey reads as washed-out against the near-black workbench. Light themes get
+     the elevated plane from the theme engine (`POLARITY_VARIABLES` in
+     shared/theme/themes.ts, the round-2 light-contrast audit). */
   --theme-surface-dialog: var(--theme-surface-panel);
 
   /* Z-index tier system
@@ -192,11 +206,11 @@ code.hljs {
   /* Legacy floating-chrome shadow stack. The :root values are the ORIGINAL
    * black-derived stack and remain the dark-mode source of truth (byte-for-byte
    * unchanged). E7 re-expresses this on top of the single cool-slate engine
-   * source (--theme-shadow-floating/-dialog) ONLY on light, in the `.light`
-   * block below — on light the old stack re-derived every layer from
-   * --theme-shadow-color (pure black on 6/7 light themes) and baked a DARK inset
-   * top-highlight, a black hairline on the element's top edge (wrong direction
-   * on near-white). On light the inset top-highlight becomes a true white
+   * source (--theme-shadow-floating/-dialog) ONLY on light, in the theme
+   * engine's `POLARITY_VARIABLES` (shared/theme/themes.ts) — on light the old
+   * stack re-derived every layer from --theme-shadow-color (pure black on 6/7
+   * light themes) and baked a DARK inset top-highlight, a black hairline on the
+   * element's top edge (wrong direction on near-white). On light the inset top-highlight becomes a true white
    * bevel. */
   --shadow-overlay:
     0 1px 0 var(--theme-overlay-soft) inset,
@@ -278,9 +292,9 @@ code.hljs {
    * mix the category hue
    * into --pill-surface at --category-subtle-mix / --category-border-mix.
    * The :root defaults reproduce the ORIGINAL behavior (mix into surface-canvas
-   * at 12% / 28%) so DARK is byte-for-byte unchanged. On light (the `.light`
-   * block below) the base is re-pointed to the elevated plane — category pills
-   * render on elevated/floating chrome, so mixing into canvas produced a fill
+   * at 12% / 28%) so DARK is byte-for-byte unchanged. On light (the theme
+   * engine's `POLARITY_VARIABLES`) the base is re-pointed to the elevated
+   * plane — category pills render on elevated/floating chrome, so mixing into canvas produced a fill
    * DARKER than its real container (an inverted figure-ground; a Fleet pill on
    * elevated read recessed) — and the mix strength is raised because 12% over a
    * near-white surface is sub-JND. Consumers on a different surface can locally
@@ -350,30 +364,6 @@ code.hljs {
   --dock-padding-y: 0.5rem;
   --dock-gap: 0.5rem;
   --dock-item-height: 2.25rem;
-}
-
-/* E7 — On light, re-express the legacy floating-chrome shadow stack on top of
- * the single cool-slate engine source (--theme-shadow-floating/-dialog), and
- * flip the inset top-highlight to a true white bevel (rgba(255,255,255,0.6)) —
- * a 1px lifted top lip, the correct elevation direction on near-white chrome.
- * The black-derived :root stack stays the dark source of truth. The `.light`
- * class is toggled on the root by applyAppThemeToRoot. */
-.light {
-  /* See the `.dark` note: light dialogs stay on the elevated plane. */
-  --theme-surface-dialog: var(--theme-surface-panel-elevated);
-  --shadow-overlay: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-floating);
-  --shadow-modal: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-dialog);
-  --shadow-dock-popover: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-dialog);
-  --shadow-dock-panel-popover: 0 1px 0 rgba(255, 255, 255, 0.6) inset, var(--theme-shadow-dialog);
-
-  /* B1 — on light, re-point the pill blend surface to the elevated plane (the
-   * surface category pills actually render on) and raise the hue mix. 12% over a
-   * near-white surface is sub-JND; 20% clears a visible fill while staying within
-   * passive-pill (not actionable-control) loudness. --category-border-mix is
-   * bumped slightly so the pill edge stays legible against the brighter fill. */
-  --pill-surface: var(--color-surface-panel-elevated);
-  --category-subtle-mix: 20%;
-  --category-border-mix: 34%;
 }
 
 .dark {
