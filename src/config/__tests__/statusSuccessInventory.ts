@@ -204,20 +204,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Finished task; the row auto-clears after AUTO_CLEAR_DELAY",
     },
   ],
-  "src/components/Pulse/ProjectPulseCard.tsx": [
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the last CI run on the branch",
-    },
-    {
-      category: "outcome",
-      signature: "var(--color-status-success)",
-      expectedOccurrences: 1,
-      rationale: "Counted result chip; the only success caller is the merged-PR count",
-    },
-  ],
   "src/components/Pulse/PulseSummary.tsx": [
     {
       category: "domain",
@@ -553,5 +539,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 61;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 63;
+export const EXPECTED_STATUS_SUCCESS_SITES = 59;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 61;
