@@ -44,13 +44,34 @@ import "@/index.css";
  * Query parameters:
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?fixture=rest             one state; required
+ *   ?width=&preset=&rotated=&fit=&dpr=   override the fixture's pane width and device state
  */
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
 const fixtureParam = params.get("fixture") ?? "rest";
 const fixtureName: FixtureName = isFixtureName(fixtureParam) ? fixtureParam : "rest";
-const fixture: DevPreviewChromeFixture = FIXTURES[fixtureName];
+const fixture: DevPreviewChromeFixture = withOverrides(FIXTURES[fixtureName]);
+
+/**
+ * `?width=`, `?preset=`, `?rotated=`, `?fit=` and `?dpr=` override the named
+ * fixture, so one fixture can be swept across pane widths and device states
+ * without a fixture per combination.
+ */
+function withOverrides(base: DevPreviewChromeFixture): DevPreviewChromeFixture {
+  const next = { ...base };
+  const width = Number(params.get("width"));
+  if (Number.isFinite(width) && width > 0) next.width = width;
+  const preset = params.get("preset");
+  if (preset) next.viewportPreset = preset as DevPreviewChromeFixture["viewportPreset"];
+  const rotated = params.get("rotated");
+  if (rotated !== null) next.viewportRotated = rotated === "1";
+  const fit = params.get("fit");
+  if (fit !== null) next.viewportFit = fit === "1";
+  const dpr = Number(params.get("dpr"));
+  if (dpr === 1 || dpr === 2 || dpr === 3) next.viewportDpr = dpr;
+  return next;
+}
 
 const noop = () => {};
 const PANE_HEIGHT = 300;
