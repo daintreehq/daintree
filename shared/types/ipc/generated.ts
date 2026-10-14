@@ -954,6 +954,10 @@ export interface GeneratedIpcInvokeMap {
     args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
     result: void;
   };
+  "help:adopt-detached-session": {
+    args: [projectId: string, rawSlot?: number | undefined];
+    result: import("./help.js").HelpAdoptResult | null;
+  };
   "help:discard-conversation": {
     args: [projectId: string, rawSlot?: number | undefined];
     result: void;
@@ -984,7 +988,13 @@ export interface GeneratedIpcInvokeMap {
   };
   "help:peek-pending-hibernation": {
     args: [projectId: string, rawSlot?: number | undefined];
-    result: { agentId: string; agentSessionId: string; cwd: string; panelWasOpen: boolean } | null;
+    result: {
+      agentId: string;
+      agentSessionId: string;
+      cwd: string;
+      panelWasOpen: boolean;
+      live?: boolean | undefined;
+    } | null;
   };
   "help:provision-session": {
     args: [

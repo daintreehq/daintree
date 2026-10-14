@@ -79,6 +79,8 @@ const helpSessions = vi.hoisted(() => ({
   revoked: [] as number[],
   /** Sessions provisioned and not yet revoked, by the view handle they are pinned to. */
   live: [] as Array<{ handle: number; helpSessionId: string }>,
+  detached: [] as number[],
+  adopted: [] as Array<{ projectId: string; slot: number; handle: number }>,
 }));
 vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: {
@@ -110,6 +112,27 @@ vi.mock("../../services/HelpSessionService.js", () => ({
           terminalId: `terminal-${helpSessionId}`,
           slot: 0,
         })),
+    detachByWebContentsId: async (id: number) => {
+      helpSessions.detached.push(id);
+    },
+    adoptDetachedSession: async (projectId: string, slot: number, handle: number) => {
+      helpSessions.adopted.push({ projectId, slot, handle });
+      return {
+        status: "adopted",
+        lane: {
+          sessionId: "session-1",
+          terminalId: "terminal-assistant",
+          agentId: "claude",
+          cwd: null,
+          title: null,
+          agentState: null,
+          waitingReason: null,
+          lastStateChange: null,
+          cols: null,
+          rows: null,
+        },
+      };
+    },
     revokeSession: async () => undefined,
     addSessionEndedListener: () => () => {},
     getRunningLaneSession: () => null,
@@ -167,6 +190,8 @@ afterEach(async () => {
   helpSessions.provisioned.length = 0;
   helpSessions.revoked.length = 0;
   helpSessions.live.length = 0;
+  helpSessions.detached.length = 0;
+  helpSessions.adopted.length = 0;
 });
 
 async function harness(): Promise<RemoteHarness> {
@@ -401,13 +426,14 @@ describe("host handlers with no window here, over the real link", () => {
       );
       expect(helpSessions.provisioned).toHaveLength(2);
 
-      // The view going (its endpoint closes on the host) takes its sessions
-      // with it, and the host's log says the Shell closed it.
+      // The view going (its endpoint closes on the host) leaves its assistant
+      // running, detached, for the next view of the project (#13360), and the
+      // host's log says the Shell closed it.
       logBuffer.clear();
       view.destroy();
       await waitUntil(
-        () => helpSessions.revoked.length === 2,
-        "the remote view's help sessions revoked"
+        () => helpSessions.detached.length === 1,
+        "the remote view's help sessions detached"
       );
       expect(helpLog().map((entry) => entry.context)).toEqual([
         expect.objectContaining({
@@ -425,6 +451,50 @@ describe("host handlers with no window here, over the real link", () => {
           .getFiltered({ sources: ["main:SessionHost"] })
           .find((entry) => entry.message === "Remote view endpoint closed")?.context
       ).toMatchObject({ endpointId: endpoint.endpointId, cause: "client-closed" });
+      expect(helpLog().map((entry) => entry.message)).toEqual([
+        "Detaching a remote view's help sessions",
+      ]);
+      expect(helpSessions.detached).toEqual([endpoint.handle]);
+      expect(helpSessions.revoked).toEqual([endpoint.handle]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "help: the next remote view of a project takes over its running assistant; another project's can't",
+    async () => {
+      const r = await harness();
+      cleanups.push(registerHelpHandlers());
+      const view = r.addView(VIEW_A, "proj-1");
+      await r.openStreams(view);
+      const endpoint = getEndpointRegistry().getRemote()[0]!;
+
+      const adopted = data<{ status: string; lane?: { terminalId: string } } | null>(
+        await r.invoke(CHANNELS.HELP_ADOPT_DETACHED_SESSION, view, "proj-1", 0)
+      );
+      expect(adopted).toMatchObject({
+        status: "adopted",
+        lane: { terminalId: "terminal-assistant" },
+      });
+      // The host's binding of the view decides whose assistant it may take.
+      expect(helpSessions.adopted).toEqual([
+        { projectId: "proj-1", slot: 0, handle: endpoint.handle },
+      ]);
+
+      const foreign = data<unknown>(
+        await r.invoke(CHANNELS.HELP_ADOPT_DETACHED_SESSION, view, "proj-2", 0)
+      );
+      expect(foreign).toBeNull();
+      expect(helpSessions.adopted).toHaveLength(1);
+
+      // Taken over, the assistant is the view's like one it launched: its
+      // endpoint closing detaches it again.
+      view.destroy();
+      await waitUntil(
+        () => helpSessions.detached.length === 1,
+        "the adopting view's sessions detached"
+      );
+      expect(helpSessions.detached).toEqual([endpoint.handle]);
     },
     TEST_TIMEOUT_MS
   );

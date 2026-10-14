@@ -1111,6 +1111,18 @@ export class McpServerService {
   }
 
   /**
+   * Retire a help bearer's live transports and nothing else (#13360): a view
+   * took the assistant over, and a transport's pin is fixed when it is built.
+   * The bearer stays valid, so the client's next call reconnects and its
+   * handshake pins it to the new view. The ownership principal is left alone
+   * — the assistant is the same session, and what it launched is still its own.
+   */
+  resetHelpTransports(rawToken: string): void {
+    const tokenHash = this.httpLifecycle.findHelpBearerHash(rawToken);
+    if (tokenHash !== null) this.disconnectBearer(tokenHash);
+  }
+
+  /**
    * Emitter wired into the {@link SessionStore}'s `GrantCache` at
    * construction time. Writes an audit-log entry and pushes a targeted
    * lifecycle event to the renderer pinned at session handshake. Send

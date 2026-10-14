@@ -453,12 +453,15 @@ export function HelpPanel({
         // Offer Resume only for an agent that is still installed AND an entry
         // the controller can resume by exact id (#13205). A non-resumable agent,
         // or an entry with no id (a Codex lane never captured), would dead-end
-        // in `_spawnResumed` and start fresh, so "Resume" would lie.
+        // in `_spawnResumed` and start fresh, so "Resume" would lie. A lane
+        // whose assistant is still running on the host (#13360) needs neither:
+        // the launch takes the live process over instead of resuming anything.
         const canResume =
           pendingAgentId != null &&
-          supportedInstalledAgentIds.includes(pendingAgentId) &&
-          !!pending?.agentSessionId &&
-          buildResumeCommand(pendingAgentId, pending.agentSessionId) !== undefined;
+          (pending?.live === true ||
+            (supportedInstalledAgentIds.includes(pendingAgentId) &&
+              !!pending?.agentSessionId &&
+              buildResumeCommand(pendingAgentId, pending.agentSessionId) !== undefined));
         setResumablePending(
           canResume ? { workspaceId: activeWorkspaceId, agentId: pendingAgentId } : null
         );

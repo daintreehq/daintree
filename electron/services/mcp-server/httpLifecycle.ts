@@ -1810,6 +1810,16 @@ export class HttpLifecycle {
         !this.deps.sessionStore.httpSessions.has(newSessionId)
       ) {
         discardUninitializedSession();
+      } else if (
+        pin !== null &&
+        transport.sessionId !== undefined &&
+        this.resolveSessionPin(authHeader)?.webContentsId !== pin.webContentsId
+      ) {
+        // The bearer's pin moved while this handshake was out — a view took
+        // the assistant over (#13360), which retires the bearer's transports —
+        // but this one only registered afterwards, still holding the pin it
+        // resolved first. Retire it as well; the client reconnects onto the new pin.
+        this.deps.sessionStore.revokeSession(transport.sessionId);
       }
     } catch (err) {
       console.error("[MCP] Streamable HTTP request failed:", err);

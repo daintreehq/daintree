@@ -880,6 +880,37 @@ describe("McpServerService", () => {
     expect(store.sessionCredentialMap.size).toBe(0);
   });
 
+  it("retires a help transport that registered after a take-over moved its pin (#13360)", async () => {
+    const { window } = createMockWindow();
+    await service.start(window);
+    const helpToken = "help-token-taken-over";
+    service.setHelpTokenValidator((token) => (token === helpToken ? "core" : false));
+    // The handshake reads the pin once; a view taking the assistant over
+    // re-pins it before the transport registers, so every later read sees the
+    // new view. That transport was not among the ones the take-over retired.
+    const pins = [-3, -4];
+    service.setHelpSessionWebContentsResolver((token) =>
+      token === helpToken ? (pins.length > 1 ? pins.shift()! : pins[0]!) : null
+    );
+    const httpSessions = (
+      service as unknown as { sessionStore: { httpSessions: Map<string, unknown> } }
+    ).sessionStore.httpSessions;
+
+    await connectHttpClient(service.currentPort!, { Authorization: `Bearer ${helpToken}` }).then(
+      ({ transport }) => httpTransports.push(transport),
+      // Retired straight after initializing, the client's follow-up may 404.
+      () => undefined
+    );
+    expect(httpSessions.size).toBe(0);
+
+    // Reconnecting, it resolves the new pin and stays.
+    const again = await connectHttpClient(service.currentPort!, {
+      Authorization: `Bearer ${helpToken}`,
+    });
+    httpTransports.push(again.transport);
+    expect(httpSessions.size).toBe(1);
+  });
+
   it("requires a fresh session after api-key rotation rather than adopting the old one", async () => {
     // Rotation leaves live transports allocated. The old key is refused
     // outright; the new key is a different credential, so it cannot pick up a

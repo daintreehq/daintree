@@ -1133,3 +1133,162 @@ describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
     ctrl.stop();
   });
 });
+
+describe("HelpSessionController — taking over a running host assistant (#13360)", () => {
+  const help = () =>
+    window.electron.help as unknown as {
+      adoptDetachedSession?: ReturnType<typeof vi.fn>;
+      getFolderPath: ReturnType<typeof vi.fn>;
+      provisionSession: ReturnType<typeof vi.fn>;
+      takePendingHibernation: ReturnType<typeof vi.fn>;
+      markTerminal: ReturnType<typeof vi.fn>;
+    };
+  const lane = {
+    sessionId: "sess-live",
+    terminalId: "terminal-live",
+    agentId: "claude",
+    cwd: "/host/repo",
+    title: "Claude",
+    agentState: "waiting",
+    waitingReason: "approval",
+    lastStateChange: 1234,
+    cols: 120,
+    rows: 40,
+  };
+
+  afterEach(() => {
+    delete help().adoptDetachedSession;
+  });
+
+  it("shows the running assistant instead of launching, before the version probe or any claim", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "adopted", lane });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("terminal-live");
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(help().adoptDetachedSession).toHaveBeenCalledWith("p1", 0);
+    // A pane on the PTY the host already runs: nothing spawned or provisioned.
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingId: "terminal-live",
+        launchAgentId: "claude",
+        cwd: "/host/repo",
+        location: "overlay",
+        excludeFromPersistence: true,
+        removeOnExit: true,
+        agentState: "waiting",
+        waitingReason: "approval",
+        initialTerminalGeometry: { cols: 120, rows: 40 },
+      })
+    );
+    expect(
+      (window.electron as unknown as { system: { getAgentVersion: ReturnType<typeof vi.fn> } })
+        .system.getAgentVersion
+    ).not.toHaveBeenCalled();
+    expect(help().takePendingHibernation).not.toHaveBeenCalled();
+    expect(help().provisionSession).not.toHaveBeenCalled();
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
+      "terminal-live",
+      "claude",
+      "sess-live"
+    );
+    expect(help().markTerminal).toHaveBeenCalledWith("terminal-live");
+    expect(ctrl.getSnapshot().phase).toBe("live");
+    // The conversation never stopped, so there is no resume to announce.
+    expect(ctrl.getSnapshot().showResumeBanner).toBe(false);
+    ctrl.stop();
+  });
+
+  it("never provisions over a running assistant another view holds on a restore-only launch", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "occupied" });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(help().takePendingHibernation).not.toHaveBeenCalled();
+    expect(help().provisionSession).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    expect(ctrl.getSnapshot().launchError).toBeNull();
+    ctrl.stop();
+  });
+
+  it("launches as before when the lane has no running assistant", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "absent" });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, resumeOnly: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    // Past the take-over, the restore-only flow runs its own claim as it always did.
+    expect(help().takePendingHibernation).toHaveBeenCalledWith("p1", 0);
+    ctrl.stop();
+  });
+
+  it("doesn't ask on a launch that means to replace the assistant", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "adopted", lane });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true, seedPrompt: "Explain this project" },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(help().adoptDetachedSession).not.toHaveBeenCalled();
+    expect(help().provisionSession).toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("leaves the assistant running when the launch is superseded mid-take-over", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "adopted", lane });
+    panelStoreState.addPanel = vi.fn().mockImplementation(async () => {
+      ctrl["_launchGen"] = 8;
+      return "terminal-live";
+    });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    // Only this view's pane goes; the PTY is the host's, never killed from here.
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("terminal-live", {
+      backendAlreadyClosed: true,
+    });
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
+    expect(help().provisionSession).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+});

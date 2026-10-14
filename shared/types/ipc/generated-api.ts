@@ -408,6 +408,9 @@ export interface GeneratedElectronAPI {
     fetch(...args: IpcInvokeMap["git:fetch"]["args"]): Promise<IpcInvokeMap["git:fetch"]["result"]>;
   };
   help: {
+    adoptDetachedSession(
+      ...args: IpcInvokeMap["help:adopt-detached-session"]["args"]
+    ): Promise<IpcInvokeMap["help:adopt-detached-session"]["result"]>;
     discardConversation(
       ...args: IpcInvokeMap["help:discard-conversation"]["args"]
     ): Promise<IpcInvokeMap["help:discard-conversation"]["result"]>;

@@ -296,6 +296,7 @@ export const CHANNEL_LEASE_POLICY = {
   "help-assistant:get-live-session-status": "free",
   "help-assistant:get-settings": "free",
   "help-assistant:set-settings": "free",
+  "help:adopt-detached-session": "driver",
   "help:discard-conversation": "driver",
   "help:get-folder-path": "free",
   "help:get-pinned-action-context": "free",
@@ -785,6 +786,7 @@ export const CHANNEL_LEASE_TARGETS = {
   "git:unstage-all": CWD_ARG,
   "git:unstage-file": CWD_FIELD,
   "git:unstage-files": CWD_FIELD,
+  "help:adopt-detached-session": PROJECT_ARG,
   "help:discard-conversation": PROJECT_ARG,
   "help:provision-session": [
     { from: "project", at: [0, "projectId"] },
