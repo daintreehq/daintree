@@ -50,12 +50,20 @@ describe("agentDefaults IPC namespace", () => {
     expect(result).toEqual({ assistantAgentId: "codex" });
   });
 
-  it("answers a set with the host's snapshot after the write", async () => {
+  it("answers a set with the host's snapshot read after the write", async () => {
+    let stored: Record<string, unknown> = { assistantAgentId: "codex" };
+    serviceMock.setAgentDefaults.mockImplementationOnce(((patch: Record<string, unknown>) => {
+      stored = { ...stored, ...patch };
+      return true;
+    }) as never);
+    serviceMock.readAgentDefaults.mockImplementationOnce((() => stored) as never);
     const set = agentDefaultsNamespace.ops.set.handler as unknown as (
       patch: Record<string, unknown>
     ) => Promise<unknown>;
 
-    await expect(set({ defaultAgent: null })).resolves.toEqual({ assistantAgentId: "codex" });
-    expect(serviceMock.setAgentDefaults).toHaveBeenCalledWith({ defaultAgent: null });
+    await expect(set({ defaultAgent: null })).resolves.toEqual({
+      assistantAgentId: "codex",
+      defaultAgent: null,
+    });
   });
 });

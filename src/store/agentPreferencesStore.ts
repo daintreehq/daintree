@@ -20,25 +20,33 @@ interface AgentPreferencesState {
 }
 
 let writeEpoch = 0;
+// The host's last word, so a failed save falls back to what the host holds —
+// not to an earlier optimistic choice that never landed either.
+let acknowledgedDefaultAgent: DefaultAgentId | undefined;
+
+function toMirror(agent: unknown): DefaultAgentId | undefined {
+  return isBuiltInAgentId(agent) ? agent : undefined;
+}
 
 export const useAgentPreferencesStore = create<AgentPreferencesState>()((set, get) => ({
   defaultAgent: undefined,
 
   setDefaultAgent: async (agent) => {
     const epoch = ++writeEpoch;
-    const previous = get().defaultAgent;
     set({ defaultAgent: agent });
     try {
-      await agentDefaultsClient.set({ defaultAgent: agent ?? null });
+      const snapshot = await agentDefaultsClient.set({ defaultAgent: agent ?? null });
+      if (epoch === writeEpoch) acknowledgedDefaultAgent = toMirror(snapshot?.defaultAgent);
     } catch (error) {
-      // A newer choice owns the value now; only the latest write rolls back.
-      if (epoch === writeEpoch && get().defaultAgent === agent) set({ defaultAgent: previous });
       logError("Failed to save the default agent", error);
+      // Only the latest choice rolls back, and to what the host holds.
+      if (epoch === writeEpoch) set({ defaultAgent: acknowledgedDefaultAgent });
     }
   },
 
   applyHostDefaultAgent: (agent) => {
-    const next = isBuiltInAgentId(agent) ? agent : undefined;
+    const next = toMirror(agent);
+    acknowledgedDefaultAgent = next;
     if (get().defaultAgent !== next) set({ defaultAgent: next });
   },
 }));

@@ -286,19 +286,11 @@ test.describe.serial("MCP: terminal notices reach the pane that asked", () => {
     port = (await page.evaluate(() => (window as any).electron.mcpServer.getStatus())).port;
 
     // The assistant runs whichever agent the user picked; this machine may have
-    // several installed, so pick Claude the way the settings tab stores it.
-    await page.evaluate(() => {
-      const key = "help-panel-storage";
-      let blob: { state?: Record<string, unknown>; version?: number };
-      try {
-        blob = JSON.parse(window.localStorage.getItem(key) ?? "{}");
-      } catch {
-        blob = {};
-      }
-      blob.state = { ...(blob.state ?? {}), preferredAgentId: "claude" };
-      blob.version = blob.version ?? 6;
-      window.localStorage.setItem(key, JSON.stringify(blob));
-    });
+    // several installed, so pick Claude where the settings tab stores it: on
+    // the host (#13345).
+    await page.evaluate(() =>
+      (window as any).electron.agentDefaults.set({ assistantAgentId: "claude" })
+    );
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.locator('[aria-label="Toggle sidebar"]')).toBeVisible({ timeout: T_LONG });
 

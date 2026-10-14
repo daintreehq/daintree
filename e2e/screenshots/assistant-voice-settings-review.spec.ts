@@ -419,20 +419,9 @@ async function openSettingsAt(page: Page, tab: string): Promise<void> {
   });
 }
 
-/** Seed (or clear) the help panel's persisted preferred agent, merged into what is there. */
+/** Set (or clear) the assistant agent on the host, where it lives since #13345. */
 async function seedPreferredAgent(page: Page, agentId: string | null): Promise<void> {
-  await page.evaluate((id) => {
-    const key = "help-panel-storage";
-    let blob: { state?: Record<string, unknown>; version?: number };
-    try {
-      blob = JSON.parse(window.localStorage.getItem(key) ?? "{}");
-    } catch {
-      blob = {};
-    }
-    blob.state = { ...(blob.state ?? {}), preferredAgentId: id };
-    blob.version = blob.version ?? 6;
-    window.localStorage.setItem(key, JSON.stringify(blob));
-  }, agentId);
+  await page.evaluate((id) => window.electron.agentDefaults.set({ assistantAgentId: id }), agentId);
 }
 
 /** Reload the project view so every tab and store mounts fresh against the new stubs. */

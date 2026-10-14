@@ -33,6 +33,7 @@ import { initAgentDefaultsSync } from "../agentDefaultsSync";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { notifyHostResync } from "@/store/hostResyncSignal";
 
 function boot(agentDefaults?: AgentDefaultsSnapshot) {
   bootMock.getSafeBootPromise.mockResolvedValue({ ok: true, result: { agentDefaults } });
@@ -74,7 +75,7 @@ describe("initAgentDefaultsSync (#13345)", () => {
       dismissedDroppedAgentId: null,
       agentSwitchRequest: null,
     });
-    useCliAvailabilityStore.setState({ hasRealData: false });
+    useCliAvailabilityStore.setState({ hasRealData: false, lastCheckedAt: null });
   });
 
   afterEach(() => {
@@ -165,7 +166,73 @@ describe("initAgentDefaultsSync (#13345)", () => {
     dispose = initAgentDefaultsSync();
     await settle();
 
+    expect(clientMock.migrateLegacy).toHaveBeenCalledWith({ defaultAgent: "codex" });
     expect(localStorage.getItem("daintree-agent-preferences")).not.toBeNull();
+  });
+
+  it("keeps the source of a default the host didn't confirm holding", async () => {
+    // A host whose store fell back to memory answers without the leaf.
+    putLegacy("daintree-agent-preferences", { defaultAgent: "codex" });
+    clientMock.migrateLegacy.mockResolvedValue({});
+    boot({});
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    expect(localStorage.getItem("daintree-agent-preferences")).not.toBeNull();
+  });
+
+  it("never sends a fresh remote host this Shell's values", async () => {
+    hostMock.isRemoteWindow.mockReturnValue(true);
+    putLegacy("help-panel-storage", { preferredAgentId: "claude" });
+    putLegacy("daintree-agent-preferences", { defaultAgent: "codex" });
+    boot({});
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    expect(clientMock.migrateLegacy).not.toHaveBeenCalled();
+    expect(useHelpPanelStore.getState().preferredAgentId).toBeNull();
+    expect(useAgentPreferencesStore.getState().defaultAgent).toBeUndefined();
+    expect(localStorage.getItem("daintree-agent-preferences")).not.toBeNull();
+  });
+
+  it("lets a push that lands during migration stand over the migration's reply", async () => {
+    putLegacy("help-panel-storage", { preferredAgentId: "claude" });
+    let resolveMigration: (snapshot: AgentDefaultsSnapshot) => void = () => {};
+    clientMock.migrateLegacy.mockReturnValue(
+      new Promise((resolve) => (resolveMigration = resolve))
+    );
+    boot({});
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    clientMock.push({ assistantAgentId: "codex" });
+    resolveMigration({ assistantAgentId: "claude" });
+    await settle();
+
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("codex");
+  });
+
+  it("refetches the host's defaults after a dropped link", async () => {
+    boot({ assistantAgentId: "claude" });
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    clientMock.get.mockResolvedValue({ assistantAgentId: "codex", defaultAgent: "gemini" });
+    notifyHostResync();
+    await settle();
+
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("codex");
+    expect(useAgentPreferencesStore.getState().defaultAgent).toBe("gemini");
+  });
+
+  it("does nothing without the agent defaults bridge", () => {
+    Object.defineProperty(window, "electron", { value: {}, configurable: true, writable: true });
+    putLegacy("daintree-agent-preferences", { defaultAgent: "codex" });
+
+    dispose = initAgentDefaultsSync();
+
+    expect(clientMock.onChanged).not.toHaveBeenCalled();
+    expect(bootMock.getSafeBootPromise).not.toHaveBeenCalled();
   });
 
   it("re-resolves the assistant agent when the host's CLI availability lands", async () => {
@@ -176,6 +243,7 @@ describe("initAgentDefaultsSync (#13345)", () => {
 
     useCliAvailabilityStore.setState((state) => ({
       hasRealData: true,
+      lastCheckedAt: Date.now(),
       availability: { ...state.availability, claude: "missing" },
     }));
 
@@ -183,5 +251,21 @@ describe("initAgentDefaultsSync (#13345)", () => {
     expect(useHelpPanelStore.getState().droppedPreferredAgentId).toBe("claude");
     expect(useHelpPanelStore.getState().hostAssistantAgentId).toBe("claude");
     expect(clientMock.set).not.toHaveBeenCalled();
+  });
+
+  it("doesn't drop the host's choice on this machine's startup cache alone", async () => {
+    boot({ assistantAgentId: "claude" });
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    // The cache can describe whichever host last wrote it.
+    useCliAvailabilityStore.setState((state) => ({
+      hasRealData: true,
+      lastCheckedAt: null,
+      availability: { ...state.availability, claude: "missing" },
+    }));
+
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("claude");
+    expect(useHelpPanelStore.getState().droppedPreferredAgentId).toBeNull();
   });
 });

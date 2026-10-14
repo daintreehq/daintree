@@ -263,6 +263,58 @@ describe("helpPanelStore persistence migration", () => {
       expect(store.getState().agentSwitchRequest).toBeNull();
     });
 
+    it("rolls back to what the host holds, not to an earlier pick that also failed", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().syncHostAssistantAgent("codex", null);
+      agentDefaultsClientMock.set.mockRejectedValue(new Error("link down"));
+
+      store.getState().setPreferredAgent("claude");
+      store.getState().setPreferredAgent("gemini");
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      expect(store.getState().hostAssistantAgentId).toBe("codex");
+      expect(store.getState().preferredAgentId).toBe("codex");
+    });
+
+    it("keeps a value the host confirmed by push even if the save then fails", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().syncHostAssistantAgent("codex", null);
+      let rejectSave: (error: Error) => void = () => {};
+      agentDefaultsClientMock.set.mockReturnValueOnce(
+        new Promise((_resolve, reject) => (rejectSave = reject))
+      );
+
+      store.getState().setPreferredAgent("claude");
+      await Promise.resolve();
+      // Another window's identical pick reaches the host first.
+      store.getState().syncHostAssistantAgent("claude", null);
+      rejectSave(new Error("link down"));
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      expect(store.getState().preferredAgentId).toBe("claude");
+    });
+
+    it("doesn't take an availability refresh as the host's word", async () => {
+      installLocalStorage({});
+      const { useHelpPanelStore: store } = await import("../helpPanelStore");
+      store.getState().syncHostAssistantAgent("codex", null);
+      let rejectSave: (error: Error) => void = () => {};
+      agentDefaultsClientMock.set.mockReturnValueOnce(
+        new Promise((_resolve, reject) => (rejectSave = reject))
+      );
+
+      store.getState().setPreferredAgent("claude");
+      await Promise.resolve();
+      store.getState().refreshAssistantAvailability({ hasRealData: true, isInstalled: () => true });
+      expect(store.getState().preferredAgentId).toBe("claude");
+      rejectSave(new Error("link down"));
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+      expect(store.getState().preferredAgentId).toBe("codex");
+    });
+
     it("clearAgentSwitchRequest() only clears the request it names", async () => {
       installLocalStorage({});
       const { useHelpPanelStore: store } = await import("../helpPanelStore");

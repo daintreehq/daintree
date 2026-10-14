@@ -119,6 +119,34 @@ describe("agentDefaults", () => {
     expect(readAgentDefaults()).toEqual({ defaultAgent: null });
   });
 
+  it("ignores payloads that aren't a plain object of known leaves", () => {
+    const hostile = JSON.parse('{"__proto__": {"assistantAgentId": "claude"}}') as object;
+    const inherited = Object.create({ assistantAgentId: "claude" }) as object;
+    const array = Object.assign([], { assistantAgentId: "claude" });
+
+    for (const payload of [null, "claude", 7, array, hostile, inherited]) {
+      expect(setAgentDefaults(payload as never)).toBe(false);
+      migrateLegacyAgentDefaults(payload as never);
+    }
+
+    expect(readAgentDefaults()).toEqual({});
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
+  it("still tells every window about a leaf that landed before a later write threw", () => {
+    const write = fakeStore.set.getMockImplementation()!;
+    fakeStore.set.mockImplementationOnce(write).mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+
+    expect(() => setAgentDefaults({ assistantAgentId: "claude", defaultAgent: "codex" })).toThrow(
+      "disk full"
+    );
+    expect(broadcastMock).toHaveBeenCalledWith("agent-defaults:changed", {
+      assistantAgentId: "claude",
+    });
+  });
+
   describe("migrateLegacyAgentDefaults", () => {
     it("lands each candidate on a host that never had one", () => {
       const result = migrateLegacyAgentDefaults({ assistantAgentId: "claude", defaultAgent: null });

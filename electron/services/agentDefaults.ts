@@ -67,20 +67,40 @@ function sameLeaf(leaf: Leaf, value: unknown): boolean {
   return hasLeaf(leaf) && readSlot(leaf)?.[LEAF_LOCATION[leaf].field] === value;
 }
 
+function isPayload(value: unknown): value is AgentDefaultsSnapshot {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Runs a batch of leaf writes and tells every window about whatever landed,
+ * even when a later write in the batch throws — a view must not keep showing
+ * a value the host has already moved past.
+ */
+function writeBatch(write: (landed: () => void) => void): boolean {
+  let changed = false;
+  try {
+    write(() => {
+      changed = true;
+    });
+  } finally {
+    if (changed) broadcast();
+  }
+  return changed;
+}
+
 /** Writes each valid leaf the patch names. Returns whether anything changed. */
 export function setAgentDefaults(patch: AgentDefaultsPatch): boolean {
-  if (!patch || typeof patch !== "object") return false;
-  let changed = false;
-  for (const leaf of LEAVES) {
-    if (!Object.hasOwn(patch, leaf)) continue;
-    const value = patch[leaf];
-    if (value === undefined || !isStorableLeaf(leaf, value)) continue;
-    if (sameLeaf(leaf, value)) continue;
-    writeLeaf(leaf, value);
-    changed = true;
-  }
-  if (changed) broadcast();
-  return changed;
+  if (!isPayload(patch)) return false;
+  return writeBatch((landed) => {
+    for (const leaf of LEAVES) {
+      if (!Object.hasOwn(patch, leaf)) continue;
+      const value = patch[leaf];
+      if (value === undefined || !isStorableLeaf(leaf, value)) continue;
+      if (sameLeaf(leaf, value)) continue;
+      writeLeaf(leaf, value);
+      landed();
+    }
+  });
 }
 
 /**
@@ -93,18 +113,18 @@ export function setAgentDefaults(patch: AgentDefaultsPatch): boolean {
 export function migrateLegacyAgentDefaults(
   candidates: AgentDefaultsLegacyCandidates
 ): AgentDefaultsSnapshot {
-  let changed = false;
-  if (candidates && typeof candidates === "object") {
-    for (const leaf of LEAVES) {
-      if (!Object.hasOwn(candidates, leaf)) continue;
-      const value = candidates[leaf];
-      if (value === undefined || !isStorableLeaf(leaf, value)) continue;
-      if (hasLeaf(leaf)) continue;
-      writeLeaf(leaf, value);
-      changed = true;
-    }
+  if (isPayload(candidates)) {
+    writeBatch((landed) => {
+      for (const leaf of LEAVES) {
+        if (!Object.hasOwn(candidates, leaf)) continue;
+        const value = candidates[leaf];
+        if (value === undefined || !isStorableLeaf(leaf, value)) continue;
+        if (hasLeaf(leaf)) continue;
+        writeLeaf(leaf, value);
+        landed();
+      }
+    });
   }
-  if (changed) broadcast();
   return readAgentDefaults();
 }
 
@@ -114,20 +134,20 @@ export function migrateLegacyAgentDefaults(
  * never had a default leaves it eligible for migration again, as it was.
  */
 export function restoreAgentDefaults(snapshot: AgentDefaultsSnapshot): void {
-  const source = snapshot && typeof snapshot === "object" ? snapshot : {};
-  let changed = false;
-  for (const leaf of LEAVES) {
-    const present = Object.hasOwn(source, leaf) && source[leaf] !== undefined;
-    if (!present) {
-      if (!hasLeaf(leaf)) continue;
-      deleteLeaf(leaf);
-      changed = true;
-      continue;
+  const source: AgentDefaultsSnapshot = isPayload(snapshot) ? snapshot : {};
+  writeBatch((landed) => {
+    for (const leaf of LEAVES) {
+      const present = Object.hasOwn(source, leaf) && source[leaf] !== undefined;
+      if (!present) {
+        if (!hasLeaf(leaf)) continue;
+        deleteLeaf(leaf);
+        landed();
+        continue;
+      }
+      const value = source[leaf]!;
+      if (!isStorableLeaf(leaf, value) || sameLeaf(leaf, value)) continue;
+      writeLeaf(leaf, value);
+      landed();
     }
-    const value = source[leaf]!;
-    if (!isStorableLeaf(leaf, value) || sameLeaf(leaf, value)) continue;
-    writeLeaf(leaf, value);
-    changed = true;
-  }
-  if (changed) broadcast();
+  });
 }

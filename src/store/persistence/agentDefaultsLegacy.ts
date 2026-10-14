@@ -2,6 +2,7 @@ import {
   isStorableAssistantAgentId,
   isStorableDefaultAgent,
   type AgentDefaultsLegacyCandidates,
+  type AgentDefaultsSnapshot,
 } from "@shared/types/ipc/agentDefaults";
 import { backupKeyFor, readLocalStorageItemSafely } from "./safeStorage";
 
@@ -113,30 +114,39 @@ function stripField(name: string, strip: (state: Record<string, unknown>) => boo
 }
 
 /**
- * Removes every legacy copy once the host has answered, so neither a stale
- * view nor a later boot can feed one back in (#11036: copy forward, then
- * delete the source).
+ * Removes the legacy copies of each default the host now holds, so neither a
+ * stale view nor a later boot can feed one back in (#11036: copy forward, then
+ * delete the source). A default the host didn't confirm keeps its source —
+ * that covers a host whose store fell back to memory, and a source that
+ * couldn't be read this time.
  */
-export function clearLegacyAgentDefaults(): void {
-  const ls = storage();
-  if (ls) {
-    for (const key of [LEGACY_AGENT_PREFERENCES_KEY, backupKeyFor(LEGACY_AGENT_PREFERENCES_KEY)]) {
-      try {
-        ls.removeItem(key);
-      } catch {
-        // Retried on the next local boot.
+export function clearLegacyAgentDefaults(settled: AgentDefaultsSnapshot): void {
+  if (Object.hasOwn(settled, "defaultAgent")) {
+    const ls = storage();
+    if (ls) {
+      for (const key of [
+        LEGACY_AGENT_PREFERENCES_KEY,
+        backupKeyFor(LEGACY_AGENT_PREFERENCES_KEY),
+      ]) {
+        try {
+          ls.removeItem(key);
+        } catch {
+          // Retried on the next local boot.
+        }
       }
     }
+    stripField(LEGACY_TOOLBAR_PREFERENCES_KEY, (state) => {
+      const launcher = state.launcher;
+      if (!isRecord(launcher) || !Object.hasOwn(launcher, "defaultAgent")) return false;
+      delete launcher.defaultAgent;
+      return true;
+    });
   }
-  stripField(LEGACY_HELP_PANEL_KEY, (state) => {
-    if (!Object.hasOwn(state, "preferredAgentId")) return false;
-    delete state.preferredAgentId;
-    return true;
-  });
-  stripField(LEGACY_TOOLBAR_PREFERENCES_KEY, (state) => {
-    const launcher = state.launcher;
-    if (!isRecord(launcher) || !Object.hasOwn(launcher, "defaultAgent")) return false;
-    delete launcher.defaultAgent;
-    return true;
-  });
+  if (Object.hasOwn(settled, "assistantAgentId")) {
+    stripField(LEGACY_HELP_PANEL_KEY, (state) => {
+      if (!Object.hasOwn(state, "preferredAgentId")) return false;
+      delete state.preferredAgentId;
+      return true;
+    });
+  }
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LEGACY_AGENT_PREFERENCES_KEY,
   LEGACY_HELP_PANEL_KEY,
@@ -24,7 +24,10 @@ function stateOf(key: string): unknown {
 
 describe("legacy agent defaults (#13345)", () => {
   beforeEach(() => localStorage.clear());
-  afterEach(() => localStorage.clear());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
 
   it("finds nothing on a machine that never chose either default", () => {
     expect(readLegacyAgentDefaults()).toEqual({});
@@ -70,7 +73,7 @@ describe("legacy agent defaults (#13345)", () => {
     expect(readLegacyAgentDefaults()).toEqual({});
   });
 
-  it("clears every legacy copy and leaves the rest of each blob intact", () => {
+  it("clears every legacy copy of what the host confirmed, leaving the rest of each blob intact", () => {
     put(LEGACY_HELP_PANEL_KEY, { width: 412, preferredAgentId: "claude" }, 6);
     put(backupKeyFor(LEGACY_HELP_PANEL_KEY), { width: 412, preferredAgentId: "claude" }, 6);
     put(LEGACY_AGENT_PREFERENCES_KEY, { defaultAgent: "codex" });
@@ -78,8 +81,9 @@ describe("legacy agent defaults (#13345)", () => {
     put(LEGACY_TOOLBAR_PREFERENCES_KEY, {
       launcher: { defaultAgent: "gemini", alwaysShowDevServer: true },
     });
+    put(backupKeyFor(LEGACY_TOOLBAR_PREFERENCES_KEY), { launcher: { defaultAgent: "gemini" } });
 
-    clearLegacyAgentDefaults();
+    clearLegacyAgentDefaults({ assistantAgentId: "claude", defaultAgent: "codex" });
 
     expect(readLegacyAgentDefaults()).toEqual({});
     expect(stateOf(LEGACY_HELP_PANEL_KEY)).toEqual({ width: 412 });
@@ -89,11 +93,37 @@ describe("legacy agent defaults (#13345)", () => {
     expect(stateOf(LEGACY_TOOLBAR_PREFERENCES_KEY)).toEqual({
       launcher: { alwaysShowDevServer: true },
     });
+    expect(stateOf(backupKeyFor(LEGACY_TOOLBAR_PREFERENCES_KEY))).toEqual({ launcher: {} });
+  });
+
+  it("keeps the source of a default the host didn't confirm holding", () => {
+    put(LEGACY_HELP_PANEL_KEY, { width: 412, preferredAgentId: "claude" }, 6);
+    put(LEGACY_AGENT_PREFERENCES_KEY, { defaultAgent: "codex" });
+
+    clearLegacyAgentDefaults({ defaultAgent: null });
+
+    expect(readLegacyAgentDefaults()).toEqual({ assistantAgentId: "claude" });
+    expect(localStorage.getItem(LEGACY_AGENT_PREFERENCES_KEY)).toBeNull();
+  });
+
+  it("treats a localStorage that throws as having nothing, and never throws itself", () => {
+    put(LEGACY_HELP_PANEL_KEY, { preferredAgentId: "claude" }, 6);
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+
+    expect(readLegacyAgentDefaults()).toEqual({});
+    expect(() =>
+      clearLegacyAgentDefaults({ assistantAgentId: "claude", defaultAgent: "codex" })
+    ).not.toThrow();
   });
 
   it("leaves a corrupt blob for its own store's recovery to handle", () => {
     localStorage.setItem(LEGACY_HELP_PANEL_KEY, "{not-json");
-    clearLegacyAgentDefaults();
+    clearLegacyAgentDefaults({ assistantAgentId: "claude" });
     expect(localStorage.getItem(LEGACY_HELP_PANEL_KEY)).toBe("{not-json");
   });
 });

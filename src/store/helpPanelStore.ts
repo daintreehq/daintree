@@ -73,6 +73,27 @@ export interface AgentSwitchRequest {
 
 let agentSwitchRequestSeq = 0;
 let assistantAgentWriteEpoch = 0;
+// The host's last word on the assistant agent and the availability it was last
+// resolved against, so a failed save falls back to what the host holds — not
+// to an earlier optimistic pick that never landed either.
+let acknowledgedAssistantAgentId: string | null = null;
+let lastAssistantAvailability: AssistantAgentAvailability | null = null;
+
+function resolvedAssistantPatch(
+  state: Pick<HelpPanelState, "dismissedDroppedAgentId">,
+  hostAgentId: string | null,
+  availability: AssistantAgentAvailability | null
+): Pick<HelpPanelState, "hostAssistantAgentId" | "preferredAgentId" | "droppedPreferredAgentId"> {
+  const { preferredAgentId, unavailableAgentId } = resolveAssistantAgent(hostAgentId, availability);
+  return {
+    hostAssistantAgentId: hostAgentId,
+    preferredAgentId,
+    droppedPreferredAgentId:
+      unavailableAgentId !== null && unavailableAgentId !== state.dismissedDroppedAgentId
+        ? unavailableAgentId
+        : null,
+  };
+}
 
 export const HELP_PANEL_MIN_WIDTH = 320;
 export const HELP_PANEL_MAX_WIDTH = 800;
@@ -246,6 +267,8 @@ interface HelpPanelActions {
     hostAgentId: string | null,
     availability: AssistantAgentAvailability | null
   ) => void;
+  /** Re-resolve the current choice after the host's CLI availability changed. */
+  refreshAssistantAvailability: (availability: AssistantAgentAvailability | null) => void;
   clearAgentSwitchRequest: (id: number) => void;
   setAutoLaunchEnabled: (enabled: boolean) => void;
   clearDroppedPreferredAgent: () => void;
@@ -434,7 +457,7 @@ function mergeHelpPanelPersistedWrite({
 
 export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       ...initialState,
 
       toggle: () => set((s) => ({ isOpen: !s.isOpen })),
@@ -540,7 +563,6 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
 
       setPreferredAgent: (agentId, options) => {
         const epoch = ++assistantAgentWriteEpoch;
-        const previous = get();
         const switchSession = options?.switchSession !== false;
         set({
           hostAssistantAgentId: agentId,
@@ -552,45 +574,45 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
         });
         void Promise.resolve()
           .then(() => agentDefaultsClient.set({ assistantAgentId: agentId }))
+          .then((snapshot) => {
+            if (epoch === assistantAgentWriteEpoch) {
+              acknowledgedAssistantAgentId = snapshot?.assistantAgentId ?? null;
+            }
+          })
           .catch((error: unknown) => {
             logError("Failed to save the assistant agent", error);
-            // A newer choice, or a host push since, owns the value now; only a
-            // write that is still the latest word rolls back.
+            // Only the latest pick rolls back, and to what the host holds.
             if (epoch !== assistantAgentWriteEpoch) return;
-            if (get().hostAssistantAgentId !== agentId) return;
-            set({
-              hostAssistantAgentId: previous.hostAssistantAgentId,
-              preferredAgentId: previous.preferredAgentId,
-              droppedPreferredAgentId: previous.droppedPreferredAgentId,
-              dismissedDroppedAgentId: previous.dismissedDroppedAgentId,
+            set((s) => ({
+              ...resolvedAssistantPatch(s, acknowledgedAssistantAgentId, lastAssistantAvailability),
               agentSwitchRequest: null,
-            });
+            }));
           });
       },
 
-      syncHostAssistantAgent: (hostAgentId, availability) =>
+      syncHostAssistantAgent: (hostAgentId, availability) => {
+        acknowledgedAssistantAgentId = hostAgentId;
+        lastAssistantAvailability = availability;
         set((s) => {
-          const { preferredAgentId, unavailableAgentId } = resolveAssistantAgent(
-            hostAgentId,
-            availability
-          );
-          const dropped =
-            unavailableAgentId !== null && unavailableAgentId !== s.dismissedDroppedAgentId
-              ? unavailableAgentId
-              : null;
-          if (
-            s.hostAssistantAgentId === hostAgentId &&
-            s.preferredAgentId === preferredAgentId &&
-            s.droppedPreferredAgentId === dropped
-          ) {
-            return s;
-          }
-          return {
-            hostAssistantAgentId: hostAgentId,
-            preferredAgentId,
-            droppedPreferredAgentId: dropped,
-          };
-        }),
+          const next = resolvedAssistantPatch(s, hostAgentId, availability);
+          return s.hostAssistantAgentId === next.hostAssistantAgentId &&
+            s.preferredAgentId === next.preferredAgentId &&
+            s.droppedPreferredAgentId === next.droppedPreferredAgentId
+            ? s
+            : next;
+        });
+      },
+
+      refreshAssistantAvailability: (availability) => {
+        lastAssistantAvailability = availability;
+        set((s) => {
+          const next = resolvedAssistantPatch(s, s.hostAssistantAgentId, availability);
+          return s.preferredAgentId === next.preferredAgentId &&
+            s.droppedPreferredAgentId === next.droppedPreferredAgentId
+            ? s
+            : next;
+        });
+      },
 
       clearAgentSwitchRequest: (id) =>
         set((s) => (s.agentSwitchRequest?.id === id ? { agentSwitchRequest: null } : s)),

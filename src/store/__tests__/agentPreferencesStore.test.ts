@@ -77,6 +77,34 @@ describe("agentPreferencesStore (host mirror, #13345)", () => {
     expect(store.getState().defaultAgent).toBe("gemini");
   });
 
+  it("rolls back to what the host holds, not to an earlier choice that also failed", async () => {
+    const store = await loadStore();
+    store.getState().applyHostDefaultAgent("claude");
+    clientMock.set.mockRejectedValue(new Error("link down"));
+
+    const first = store.getState().setDefaultAgent("codex");
+    await store.getState().setDefaultAgent("gemini");
+    await first;
+
+    expect(store.getState().defaultAgent).toBe("claude");
+  });
+
+  it("keeps a value the host confirmed by push even if the save then fails", async () => {
+    const store = await loadStore();
+    store.getState().applyHostDefaultAgent("claude");
+    let rejectSave: (error: Error) => void = () => {};
+    clientMock.set.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (rejectSave = reject))
+    );
+
+    const pending = store.getState().setDefaultAgent("codex");
+    store.getState().applyHostDefaultAgent("codex");
+    rejectSave(new Error("link down"));
+    await pending;
+
+    expect(store.getState().defaultAgent).toBe("codex");
+  });
+
   it("mirrors the host without writing back", async () => {
     const store = await loadStore();
 
