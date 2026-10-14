@@ -1,5 +1,6 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { EXCHANGE_RETRY_WINDOW_MS } from "../exchange/AssistantExchangeStore.js";
 import type { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
 import type { CreateDisposition, ExchangeChanges, ExchangeRecord } from "../exchange/types.js";
 import type { LinkSession } from "../link/session.js";
@@ -34,6 +35,17 @@ export type AssistantSendResult =
   | { status: "unknown"; messageId: string };
 
 const CALL_TIMEOUT_MS = 15_000;
+
+/**
+ * What the host answers before it records anything: no authenticated sender,
+ * no consent for the lane, an earlier generation, no support at all. A
+ * resend of a recorded messageId is answered from its record ahead of these.
+ */
+const DEFINITE_REFUSALS: ReadonlySet<string> = new Set([
+  "PERMISSION",
+  "STALE_GENERATION",
+  "UNSUPPORTED",
+]);
 const MAX_RECONCILE_PAGES = 200;
 
 function codeOf(error: unknown): string | null {
@@ -113,26 +125,32 @@ export class AssistantExchangeClient {
 
   /**
    * Send one message. The journal holds it before anything leaves, so an
-   * answer lost on the way back resolves by its messageId later; a send whose
-   * outcome is still unknown is looked up before it is sent again.
+   * answer lost on the way back resolves by its messageId later. Sending the
+   * same messageId again is safe: the host answers from its record, and
+   * refuses one reused for a different message.
    */
   async send(hostId: HostId, payload: AssistantSendPayload): Promise<AssistantSendResult> {
     this.checkHost(hostId, "admit");
+    const { journal } = this.deps;
+    if (journal.get(hostId, payload.messageId)?.lapsedAt != null) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: `Exchange ${payload.messageId} went unanswered past its retry window; send it as a new message`,
+      });
+    }
     const session = await this.open(hostId);
     await this.authenticate(hostId, session);
-    const { journal } = this.deps;
-    if (journal.get(hostId, payload.messageId)?.unresolvedAt != null) {
-      const found = await this.lookUp(hostId, session, payload.messageId);
-      if (found) return { status: "accepted", disposition: "existing", record: found };
-    }
-    journal.noteSending(hostId, payload.messageId);
+    const attempt = journal.noteSending(hostId, payload.messageId);
     let answer: unknown;
     try {
       answer = await session.call(AssistantLinkMethod.SEND, payload, { timeoutMs: this.timeoutMs });
     } catch (error) {
       if (isUnknownOutcome(error)) return { status: "unknown", messageId: payload.messageId };
-      // The host answered and refused: nothing of this send is on record there.
-      journal.markNotReceived(hostId, payload.messageId);
+      // Refused before anything was recorded there. Any other error leaves the
+      // attempt unresolved, for a lookup to settle.
+      if (DEFINITE_REFUSALS.has(codeOf(error) ?? "")) {
+        journal.abandonAttempt(hostId, payload.messageId, attempt);
+      }
       if (codeOf(error) === "UNSUPPORTED") throw unsupported(hostId, error);
       throw error;
     }
@@ -191,15 +209,18 @@ export class AssistantExchangeClient {
     const session = given && given.isOpen ? given : await this.open(hostId);
     await this.authenticate(hostId, session);
     const { journal } = this.deps;
+    // A listing that restarts from the beginning, read to its end, is the host's whole set.
+    let restartedAt: number | null = null;
     for (let page = 0; page < MAX_RECONCILE_PAGES; page++) {
-      const changes = await this.listPage(
-        hostId,
-        session,
-        journal.cursor(hostId),
-        MAX_EXCHANGE_PAGE
-      );
+      const cursor = journal.cursor(hostId);
+      const mark = journal.mark();
+      const changes = await this.listPage(hostId, session, cursor, MAX_EXCHANGE_PAGE);
+      if (changes.reset) restartedAt = mark;
       journal.applyChanges(hostId, changes);
-      if (!changes.hasMore) break;
+      if (!changes.hasMore) {
+        if (restartedAt !== null) journal.pruneUnseen(hostId, restartedAt);
+        break;
+      }
     }
     for (const messageId of journal.unresolved(hostId)) {
       await this.lookUp(hostId, session, messageId);
@@ -236,13 +257,16 @@ export class AssistantExchangeClient {
     session: LinkSession,
     messageId: string
   ): Promise<ExchangeRecord | null> {
+    const { journal } = this.deps;
+    // The attempt this lookup is about: a send started after it is not settled by its answer.
+    const attempt = journal.get(hostId, messageId)?.unresolvedAt ?? null;
     const answer = await this.call(hostId, session, AssistantLinkMethod.GET_EXCHANGE, {
       messageId,
     });
-    const { journal } = this.deps;
     if (answer === null) {
-      if (journal.get(hostId, messageId)?.unresolvedAt != null)
-        journal.markNotReceived(hostId, messageId);
+      if (attempt !== null) {
+        journal.resolveMissing(hostId, messageId, attempt, EXCHANGE_RETRY_WINDOW_MS);
+      }
       return null;
     }
     const parsed = ExchangeRecordSchema.safeParse(answer);

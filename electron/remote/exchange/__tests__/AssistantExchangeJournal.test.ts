@@ -58,11 +58,12 @@ describe("AssistantExchangeJournal", () => {
   let sqlite: Database.Database;
   let journal: AssistantExchangeJournal;
   let credentials: number;
+  let clock: number;
 
   const open = () => {
     sqlite = openDb(dbPath, migrationsFolder).sqlite;
     journal = new AssistantExchangeJournal(sqlite, {
-      now: () => 500,
+      now: () => clock,
       newCredential: () => `credential-${++credentials}`,
     });
   };
@@ -71,6 +72,7 @@ describe("AssistantExchangeJournal", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-exchange-journal-"));
     dbPath = path.join(dir, "shell.db");
     credentials = 0;
+    clock = 500;
     open();
   });
 
@@ -105,16 +107,59 @@ describe("AssistantExchangeJournal", () => {
 
   it("keeps a send unresolved until the host answers or says it never got it", () => {
     journal.credential("studio");
-    journal.noteSending("studio", "lost");
+    const lost = journal.noteSending("studio", "lost");
     journal.noteSending("studio", "arrived");
     expect(journal.unresolved("studio")).toEqual(["arrived", "lost"]);
 
     journal.recordAnswer("studio", record("arrived", 2));
-    journal.markNotReceived("studio", "lost");
+    journal.resolveMissing("studio", "lost", lost, 60_000);
     expect(journal.unresolved("studio")).toEqual([]);
     // Never on the host: nothing of it is kept, so its id is free to send again.
     expect(journal.get("studio", "lost")).toBeNull();
     expect(journal.get("studio", "arrived")?.record?.revision).toBe(2);
+  });
+
+  it("settles only the attempt an answer was about, never a later send of the same id", () => {
+    journal.credential("studio");
+    const first = journal.noteSending("studio", "m-1");
+    const second = journal.noteSending("studio", "m-1");
+    expect(second).toBeGreaterThan(first);
+
+    journal.resolveMissing("studio", "m-1", first, 60_000);
+    journal.abandonAttempt("studio", "m-1", first);
+    expect(journal.get("studio", "m-1")?.unresolvedAt).toBe(second);
+
+    journal.abandonAttempt("studio", "m-1", second);
+    expect(journal.get("studio", "m-1")).toBeNull();
+  });
+
+  it("marks a send lapsed, not missing, once the host may have purged what it took", () => {
+    journal.credential("studio");
+    const attempt = journal.noteSending("studio", "m-1");
+    clock += 60_001;
+    journal.resolveMissing("studio", "m-1", attempt, 60_000);
+    expect(journal.get("studio", "m-1")).toMatchObject({
+      unresolvedAt: null,
+      lapsedAt: clock,
+      record: null,
+    });
+  });
+
+  it("drops records a full listing from the beginning no longer has, keeping sends still in doubt", () => {
+    journal.credential("studio");
+    journal.recordAnswer("studio", record("purged", 1));
+    journal.recordAnswer("studio", record("kept", 2));
+    journal.noteSending("studio", "in-doubt");
+    clock += 10;
+    const mark = journal.mark();
+    journal.applyChanges("studio", {
+      records: [record("kept", 2)],
+      cursor: 9,
+      hasMore: false,
+      reset: true,
+    });
+    journal.pruneUnseen("studio", mark);
+    expect(journal.list("studio").map((entry) => entry.messageId)).toEqual(["kept", "in-doubt"]);
   });
 
   it("never replaces a newer record with an older one, wherever the older one came from", () => {

@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS `assistant_exchange_journal` (
 	`message_id` text NOT NULL,
 	`sent_at` integer NOT NULL,
 	`unresolved_at` integer,
+	`lapsed_at` integer,
 	`record` text,
 	`updated_at` integer NOT NULL,
 	PRIMARY KEY (`host_id`, `message_id`)

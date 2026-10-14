@@ -13,6 +13,11 @@ export interface JournalEntry {
    * it under a new id.
    */
   unresolvedAt: number | null;
+  /**
+   * Set when a send's outcome stayed unknown past the retry window: the host
+   * having no record no longer proves it never arrived, so its id is not sent again.
+   */
+  lapsedAt: number | null;
   /** The host's record; null until the host answered with one. */
   record: ExchangeRecord | null;
   updatedAt: number;
@@ -23,6 +28,7 @@ interface JournalRow {
   message_id: string;
   sent_at: number;
   unresolved_at: number | null;
+  lapsed_at: number | null;
   record: string | null;
   updated_at: number;
 }
@@ -38,6 +44,7 @@ function toEntry(row: JournalRow): JournalEntry {
     messageId: row.message_id,
     sentAt: row.sent_at,
     unresolvedAt: row.unresolved_at,
+    lapsedAt: row.lapsed_at,
     record: row.record === null ? null : (JSON.parse(row.record) as ExchangeRecord),
     updatedAt: row.updated_at,
   };
@@ -90,16 +97,29 @@ export class AssistantExchangeJournal {
     return row?.cursor ?? 0;
   }
 
-  /** Before a send leaves: from here on its outcome is unknown until the host says. */
-  noteSending(hostId: string, messageId: string): void {
-    const now = this.now();
-    this.sqlite
-      .prepare(
-        `INSERT INTO assistant_exchange_journal (host_id, message_id, sent_at, unresolved_at, record, updated_at)
-         VALUES (?, ?, ?, ?, NULL, ?)
-         ON CONFLICT(host_id, message_id) DO UPDATE SET unresolved_at = excluded.unresolved_at, updated_at = excluded.updated_at`
-      )
-      .run(hostId, messageId, now, now, now);
+  /**
+   * Before a send leaves: from here on its outcome is unknown until the host
+   * says. Returns this attempt's mark, later than any earlier attempt's, so
+   * an answer about an earlier attempt never settles this one.
+   */
+  noteSending(hostId: string, messageId: string): number {
+    return this.sqlite.transaction(() => {
+      const now = this.now();
+      const previous = this.sqlite
+        .prepare(
+          "SELECT unresolved_at FROM assistant_exchange_journal WHERE host_id = ? AND message_id = ?"
+        )
+        .get(hostId, messageId) as { unresolved_at: number | null } | undefined;
+      const attempt = Math.max(now, (previous?.unresolved_at ?? 0) + 1);
+      this.sqlite
+        .prepare(
+          `INSERT INTO assistant_exchange_journal (host_id, message_id, sent_at, unresolved_at, record, updated_at)
+           VALUES (?, ?, ?, ?, NULL, ?)
+           ON CONFLICT(host_id, message_id) DO UPDATE SET unresolved_at = excluded.unresolved_at, updated_at = excluded.updated_at`
+        )
+        .run(hostId, messageId, now, attempt, now);
+      return attempt;
+    })();
   }
 
   /** The host's answer for one exchange; never replaces a newer revision with an older one. */
@@ -107,18 +127,44 @@ export class AssistantExchangeJournal {
     this.sqlite.transaction(() => this.upsert(hostId, record))();
   }
 
-  /** The host has no record of a send: it never arrived, and may be sent again under its id. */
-  markNotReceived(hostId: string, messageId: string): void {
+  /**
+   * The host refused `attempt` outright, so it left nothing there. Settles
+   * only that attempt: a later one stays unresolved.
+   */
+  abandonAttempt(hostId: string, messageId: string, attempt: number): void {
+    this.settle(hostId, messageId, attempt, "forget");
+  }
+
+  /**
+   * A lookup found no record of `attempt`. Within the retry window that means
+   * it never arrived (the host keeps every record it took far longer), and the
+   * id may be sent again; past it, the record may have been purged, so the
+   * send is marked lapsed instead.
+   */
+  resolveMissing(hostId: string, messageId: string, attempt: number, retryWindowMs: number): void {
+    this.settle(
+      hostId,
+      messageId,
+      attempt,
+      this.now() - attempt <= retryWindowMs ? "forget" : "lapse"
+    );
+  }
+
+  /** The clock's reading, to mark where a listing that restarts from the beginning began. */
+  mark(): number {
+    return this.now();
+  }
+
+  /**
+   * After a listing restarted from the beginning and was read to its end:
+   * records the host no longer listed were purged there, and go here too.
+   */
+  pruneUnseen(hostId: string, since: number): void {
     this.sqlite
       .prepare(
-        "DELETE FROM assistant_exchange_journal WHERE host_id = ? AND message_id = ? AND record IS NULL"
+        "DELETE FROM assistant_exchange_journal WHERE host_id = ? AND record IS NOT NULL AND unresolved_at IS NULL AND updated_at < ?"
       )
-      .run(hostId, messageId);
-    this.sqlite
-      .prepare(
-        "UPDATE assistant_exchange_journal SET unresolved_at = NULL, updated_at = ? WHERE host_id = ? AND message_id = ?"
-      )
-      .run(this.now(), hostId, messageId);
+      .run(hostId, since);
   }
 
   /** One page of the host's changes and the cursor after it, together or not at all. */
@@ -174,6 +220,35 @@ export class AssistantExchangeJournal {
     })();
   }
 
+  private settle(
+    hostId: string,
+    messageId: string,
+    attempt: number,
+    outcome: "forget" | "lapse"
+  ): void {
+    this.sqlite.transaction(() => {
+      const row = this.sqlite
+        .prepare(
+          "SELECT unresolved_at, record FROM assistant_exchange_journal WHERE host_id = ? AND message_id = ?"
+        )
+        .get(hostId, messageId) as
+        { unresolved_at: number | null; record: string | null } | undefined;
+      if (!row || row.unresolved_at !== attempt) return;
+      const now = this.now();
+      if (row.record === null && outcome === "forget") {
+        this.sqlite
+          .prepare("DELETE FROM assistant_exchange_journal WHERE host_id = ? AND message_id = ?")
+          .run(hostId, messageId);
+        return;
+      }
+      this.sqlite
+        .prepare(
+          "UPDATE assistant_exchange_journal SET unresolved_at = NULL, lapsed_at = ?, updated_at = ? WHERE host_id = ? AND message_id = ?"
+        )
+        .run(row.record === null ? now : null, now, hostId, messageId);
+    })();
+  }
+
   private upsert(hostId: string, record: ExchangeRecord): void {
     const existing = this.sqlite
       .prepare("SELECT record FROM assistant_exchange_journal WHERE host_id = ? AND message_id = ?")
@@ -187,7 +262,7 @@ export class AssistantExchangeJournal {
       .prepare(
         `INSERT INTO assistant_exchange_journal (host_id, message_id, sent_at, unresolved_at, record, updated_at)
          VALUES (?, ?, ?, NULL, ?, ?)
-         ON CONFLICT(host_id, message_id) DO UPDATE SET unresolved_at = NULL, record = excluded.record, updated_at = excluded.updated_at`
+         ON CONFLICT(host_id, message_id) DO UPDATE SET unresolved_at = NULL, lapsed_at = NULL, record = excluded.record, updated_at = excluded.updated_at`
       )
       .run(hostId, record.messageId, record.createdAt, JSON.stringify(record), now);
   }

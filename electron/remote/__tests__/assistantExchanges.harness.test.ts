@@ -403,12 +403,23 @@ describe("assistant exchanges over the real link", () => {
       );
       expect(onHost).toHaveLength(1);
 
-      // A reconcile settles the rest: one the host has, and one it never got.
+      // The same id for a different message is refused, and the journal keeps what the host took.
+      await expect(
+        b.client.send(HOST_ID, { ...payload, body: "something else entirely" })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(b.journal.get(HOST_ID, "lost")?.record?.taskId).toBe(onHost[0]!.taskId);
+
+      // The link drops; the next session settles the rest as it opens: one the
+      // host has, and one it never got.
       b.loseNextSendAnswer = true;
       await b.client.send(HOST_ID, { ...payload, messageId: "lost-2" });
       b.journal.noteSending(HOST_ID, "never-arrived");
-      await b.client.reconcile(HOST_ID);
-      expect(b.journal.unresolved(HOST_ID)).toEqual([]);
+      await b.link.stop();
+      b.link.start();
+      await waitUntil(
+        () => b.journal.unresolved(HOST_ID).length === 0,
+        "Shell B's next session to settle its unresolved sends"
+      );
       expect(b.journal.get(HOST_ID, "lost-2")?.record?.state).toBe("submitted");
       expect(b.journal.get(HOST_ID, "never-arrived")).toBeNull();
       expect(b.journal.cursor(HOST_ID)).toBeGreaterThan(0);
@@ -432,6 +443,16 @@ describe("assistant exchanges over the real link", () => {
       await shellA().reconcile(HOST_ID);
       const cursorBefore = new AssistantExchangeJournal(db.sqlite).cursor(HOST_ID);
       expect(cursorBefore).toBeGreaterThan(0);
+      // Each lane's wake is typed while neither Shell is reading: changes they
+      // have yet to hear of.
+      const store = requireRemoteService("assistantExchangeStore");
+      for (const { record } of [fromA, fromB]) {
+        store.recordDelivery(
+          { kind: "receiver", ...record.receiver },
+          { senderId: record.senderId, messageId: record.messageId },
+          "wake-typed"
+        );
+      }
 
       // Everything stops; only what's on disk survives.
       for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -444,11 +465,17 @@ describe("assistant exchanges over the real link", () => {
       b = await startShellB(r, openFile("shell-b.db"));
 
       const a = shellA();
-      // The new session reconciled from the saved cursor as it opened.
-      await a.reconcile(HOST_ID);
-      expect(new AssistantExchangeJournal(db.sqlite).cursor(HOST_ID)).toBeGreaterThanOrEqual(
-        cursorBefore
+      // Each Shell's new session read on from its saved cursor as it opened, with no call made.
+      const journalA = new AssistantExchangeJournal(db.sqlite);
+      await waitUntil(
+        () =>
+          journalA.get(HOST_ID, "m-1")?.record?.delivery.wakeTypedAt != null &&
+          b.journal.get(HOST_ID, "m-1")?.record?.delivery.wakeTypedAt != null,
+        "both Shells to reconcile as their sessions open"
       );
+      expect(journalA.cursor(HOST_ID)).toBeGreaterThan(cursorBefore);
+      expect(journalA.get(HOST_ID, "m-1")?.record?.taskId).toBe(fromA.record.taskId);
+      expect(b.journal.get(HOST_ID, "m-1")?.record?.taskId).toBe(fromB.record.taskId);
       expect(await a.get(HOST_ID, "m-1")).toMatchObject({ taskId: fromA.record.taskId });
       expect(await b.client.get(HOST_ID, "m-1")).toMatchObject({ taskId: fromB.record.taskId });
 
@@ -463,10 +490,61 @@ describe("assistant exchanges over the real link", () => {
         record: { taskId: fromA.record.taskId },
       });
 
-      // Still apart: B's cancel reaches only B's exchange.
+      // Still apart: B's cancel reaches only B's exchange, and with its wake
+      // already typed it is a recorded request, not a cancellation.
       await b.client.cancel(HOST_ID, "m-1");
-      expect(await a.get(HOST_ID, "m-1")).toMatchObject({ state: "submitted" });
-      expect(await b.client.get(HOST_ID, "m-1")).toMatchObject({ state: "canceled" });
+      expect(await a.get(HOST_ID, "m-1")).toMatchObject({ cancelRequestedAt: null });
+      const canceled = await b.client.get(HOST_ID, "m-1");
+      expect(canceled?.state).toBe("submitted");
+      expect(canceled?.cancelRequestedAt).not.toBeNull();
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "knows a sender only by the credential its session presented, never by anything in a payload",
+    async () => {
+      db.sqlite = openFile("app.db");
+      const r = await harness();
+      prepare(r);
+      const generation = enrollOnHost(hostSessionOf(r, null), 0);
+      const fromA = await shellA().send(HOST_ID, message({ generation }));
+      if (fromA.status !== "accepted") throw new Error("not accepted");
+      const b = await startShellB(r, openFile("shell-b.db"));
+      const raw = b.link.session!;
+      const call = (method: string, payload: unknown) => raw.call(method, payload);
+
+      // Unauthenticated, nothing answers.
+      for (const [method, payload] of [
+        [AssistantLinkMethod.SEND, message({ slot: 1, generation: "g" })],
+        [AssistantLinkMethod.GET_EXCHANGE, { messageId: "m-1" }],
+        [AssistantLinkMethod.LIST_EXCHANGES, { cursor: 0 }],
+        [AssistantLinkMethod.CANCEL_EXCHANGE, { messageId: "m-1" }],
+      ] as const) {
+        await expect(call(method, payload)).rejects.toMatchObject({ code: "PERMISSION" });
+      }
+      // Naming a sender, even A's own, is not a way in.
+      await expect(
+        call(AssistantLinkMethod.GET_EXCHANGE, {
+          messageId: "m-1",
+          senderId: fromA.record.senderId,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+
+      const mine = "b".repeat(43);
+      await call(AssistantLinkMethod.AUTHENTICATE, { credential: mine });
+      await call(AssistantLinkMethod.AUTHENTICATE, { credential: mine });
+      await expect(
+        call(AssistantLinkMethod.AUTHENTICATE, { credential: "c".repeat(43) })
+      ).rejects.toMatchObject({ code: "PERMISSION" });
+      expect(await call(AssistantLinkMethod.GET_EXCHANGE, { messageId: "m-1" })).toBeNull();
+      expect(await call(AssistantLinkMethod.LIST_EXCHANGES, { cursor: 0 })).toMatchObject({
+        records: [],
+      });
+      await expect(
+        call(AssistantLinkMethod.CANCEL_EXCHANGE, { messageId: "m-1" })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(await shellA().get(HOST_ID, "m-1")).toMatchObject({ cancelRequestedAt: null });
     },
     TEST_TIMEOUT_MS
   );
