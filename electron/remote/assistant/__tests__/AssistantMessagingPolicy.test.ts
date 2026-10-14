@@ -7,6 +7,7 @@ import {
   AssistantMessagingPolicy,
   type AssistantMessagingPolicyDeps,
   type MessagingShell,
+  createExchangeGenerationIssuer,
 } from "../AssistantMessagingPolicy.js";
 
 const LOCAL: MessagingShell = { kind: "local" };
@@ -438,6 +439,61 @@ describe("AssistantMessagingPolicy", () => {
       generation: enrolled.enrollment.generation,
       enrolledBy: SHELL_A,
     });
+  });
+
+  it("gives each enrollment an exchange generation above every earlier one (#13335)", () => {
+    const h = harness();
+    h.run("proj", 0, "s1");
+    const first = h.policy.enroll(lane(), SHELL_A);
+    if (!first.ok) throw new Error("expected enrollment");
+    expect(h.policy.unenroll(lane(), SHELL_A, first.enrollment.generation)).toBe(true);
+    const second = h.policy.enroll(lane(), SHELL_A);
+    if (!second.ok) throw new Error("expected enrollment");
+    // The harness clock never moves, so only the bump keeps them apart.
+    expect(second.enrollment.exchangeGeneration).toBeGreaterThan(
+      first.enrollment.exchangeGeneration
+    );
+  });
+
+  it("issues exchange generations above its floor even when the clock steps back", () => {
+    let clock = 5_000;
+    const issue = createExchangeGenerationIssuer(9_000, () => clock);
+    const a = issue();
+    clock = 20_000;
+    const b = issue();
+    clock = 1_000;
+    const c = issue();
+    expect(a).toBeGreaterThan(9_000);
+    expect(b).toBe(20_000);
+    expect(c).toBeGreaterThan(b);
+  });
+
+  it("tells change listeners when an enrollment begins or ends, however it ends (#13335)", () => {
+    const h = harness();
+    let changes = 0;
+    const off = h.policy.onChange(() => changes++);
+    h.run("proj", 0, "s1");
+    const enrolled = h.policy.enroll(lane(), SHELL_A);
+    if (!enrolled.ok) throw new Error("expected enrollment");
+    expect(changes).toBe(1);
+    h.policy.releaseLinkSession("link-other");
+    expect(changes).toBe(1);
+    h.policy.releaseLinkSession("link-a");
+    expect(changes).toBe(2);
+
+    h.policy.enroll(lane(), SHELL_A);
+    h.end("proj", 0, "s1");
+    expect(changes).toBe(4);
+
+    h.policy.enroll(lane(), SHELL_A);
+    // Relaunched in place: the next read drops the stale enrollment and says so.
+    h.run("proj", 0, "s2");
+    expect(h.policy.getEnrollment(lane())).toBeNull();
+    expect(changes).toBe(6);
+
+    off();
+    h.policy.enroll(lane(), SHELL_A);
+    expect(changes).toBe(6);
   });
 
   it("carries none of this on Windows", () => {

@@ -1704,6 +1704,17 @@ export class HelpSessionService {
   }
 
   /**
+   * The assistant slot a live session was provisioned for; null for an
+   * unknown, revoked or ending one. Says nothing about whether it still holds
+   * that slot — `getRunningLaneSession` answers that.
+   */
+  getSessionLane(sessionId: string): { projectId: string; slot: number } | null {
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked || record.ending) return null;
+    return { projectId: record.projectId, slot: record.slot };
+  }
+
+  /**
    * Invalidates the in-memory bearer for this session. The on-disk dir is
    * intentionally preserved across launches so the user's one-time Claude
    * Code workspace-trust acceptance for this project carries over to the

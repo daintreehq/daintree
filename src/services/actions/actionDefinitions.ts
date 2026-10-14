@@ -42,7 +42,8 @@ import { registerPluginActions } from "./definitions/pluginActions";
 import { registerSkillActions } from "./definitions/skillActions";
 import { registerHostActions } from "./definitions/hostActions";
 import { registerPortActions } from "./definitions/portActions";
-import { isRemoteShellSupported } from "@/lib/remoteHosts";
+import { isEitherRemoteRoleSupported, isRemoteShellSupported } from "@/lib/remoteHosts";
+import { registerAssistantMessagingActions } from "./definitions/assistantMessagingActions";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 
@@ -97,6 +98,9 @@ export function createActionDefinitions(
     registerHostActions(actions, callbacks);
     registerPortActions(actions, callbacks);
   }
+  // Absent where Remote Hosts are: no host, no inbox (#13335). Registered on a
+  // Shell too, since a host is shown the manifest of the view driving it.
+  if (isEitherRemoteRoleSupported()) registerAssistantMessagingActions(actions);
 
   return actions;
 }

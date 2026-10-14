@@ -170,6 +170,15 @@ import {
 } from "../../../shared/types/terminalNotify.js";
 import { REPLY_WAIT_DEFAULT_SECONDS, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
 import type { ReplyWait, ReplyWaiterService } from "./replyWaiter.js";
+import {
+  ASSISTANT_GET_INBOX_TOOL,
+  ASSISTANT_REPLY_TOOL,
+} from "../../../shared/types/assistantMessaging.js";
+import {
+  auditCodeForMessagingRefusal,
+  runAssistantMessagingTool,
+  type AssistantMessagingAccess,
+} from "./assistantMessagingTools.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -227,6 +236,10 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // Terminal notices live in main and read the pty-host, so arming one needs
   // no project view.
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  // An enrolled lane's inbox lives in main beside its exchange records
+  // (#13335); the lane is read from the caller's bearer, never a view.
+  ASSISTANT_GET_INBOX_TOOL,
+  ASSISTANT_REPLY_TOOL,
 ]);
 /**
  * The main-process executors an owned tool can name. Kept apart from the rest
@@ -1024,6 +1037,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * not-eligible.
    */
   terminalNotify?: TerminalNotifyHandlers;
+  /**
+   * The caller's own lane's messaging (#13335), bound to this session's
+   * help-session bearer. Absent for every other bearer; then
+   * `assistant.getInbox` and `assistant.reply` are neither listed nor run.
+   */
+  assistantMessaging?: AssistantMessagingAccess;
   /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
   replyWaiter?: Pick<ReplyWaiterService, "wait">;
   /**
@@ -1238,6 +1257,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyDisplayImage,
     workspaceBinding,
     terminalNotify,
+    assistantMessaging,
     replyWaiter,
     resolveOwnPane,
     requestApproval,
@@ -1264,6 +1284,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     paneApproval: requestApproval !== undefined,
     paneSkipConfirmations: requestApproval !== undefined && deps.paneSkipConfirmations === true,
   };
+
+  // Whether this session is an enrolled lane's own assistant right now
+  // (#13335): a help-session bearer whose lane the messaging runtime still
+  // recognises. Read per listing, never cached.
+  const laneMessagingAvailable = (): boolean =>
+    assistantMessaging !== undefined &&
+    sessionStore.sessionHelpIdMap.has(sessionId) &&
+    assistantMessaging.isAvailable();
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
@@ -1405,6 +1433,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const listSurface: SessionSurfacePolicy = {
       ...sessionSurface,
       rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
+      assistantMessaging: laneMessagingAvailable(),
     };
     const tools = manifest
       .filter((entry) => shouldExposeTool(entry, tier, listSurface))
@@ -3263,6 +3292,52 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // Short-circuit: an enrolled lane's inbox and replies (#13335) live in
+        // main beside the exchange records. The lane comes from this session's
+        // help bearer alone, so the access check is the call itself: every
+        // other bearer, and a lane no longer enrolled as it was, is refused
+        // here whatever admitted the call above. Refusals are fixed text and
+        // results never carry a body into the audit (see its projections).
+        if (actionId === ASSISTANT_GET_INBOX_TOOL || actionId === ASSISTANT_REPLY_TOOL) {
+          emitToolCallStarted(false);
+          try {
+            // Help-session bearers only, as for help.displayImage: a pane or
+            // api-key bearer has no lane, whatever its tier admitted.
+            const settled = runAssistantMessagingTool(
+              actionId,
+              args,
+              assistantMessaging !== undefined && sessionStore.sessionHelpIdMap.has(sessionId)
+                ? assistantMessaging
+                : undefined
+            );
+            if (!settled.ok) {
+              outcome = {
+                kind: "result",
+                value: {
+                  ok: false,
+                  error: {
+                    code: auditCodeForMessagingRefusal(settled.code),
+                    message: settled.message,
+                  },
+                },
+              };
+              return buildToolError({ code: settled.code, message: settled.message });
+            }
+            const result = settled.value;
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: `${actionId} failed`,
+            });
+          }
+        }
+
         // Short-circuit: skills.search / skills.load run entirely in the main
         // process (#10892). The action manifest entries (renderer) carry
         // schema/tier/audit, but the skill registry — parsed plugin markdown —
@@ -3324,7 +3399,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               // against, and the same ones `tools/list` filters by — so the
               // report can never advertise a tool the listing withholds
               // (#11789, #12407).
-              { ...sessionSurface, rendererOwnedOrigin }
+              {
+                ...sessionSurface,
+                rendererOwnedOrigin,
+                assistantMessaging: laneMessagingAvailable(),
+              }
             );
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {

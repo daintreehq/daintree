@@ -4340,6 +4340,169 @@ describe("help.displayImage short-circuit (#9828)", () => {
   });
 });
 
+describe("assistant inbox tools (#13335)", () => {
+  const INBOX = {
+    messages: [
+      {
+        taskId: "task-1",
+        messageId: "msg-1",
+        contextId: "ctx",
+        state: "submitted" as const,
+        receivedAt: 1,
+        provenance: { sendingHost: "studio", sendingLane: "hub", hopCount: 1 },
+        bodyChars: 2,
+        untrustedBody: "fenced",
+      },
+    ],
+    cursor: 1,
+    hasMore: false,
+  };
+
+  function laneDeps(options: {
+    available: boolean;
+    origin?: string;
+    helpSessionId?: string | null;
+    access?: boolean;
+  }) {
+    const store = fakeSessionStore("core");
+    const mutable = store as unknown as {
+      sessionHelpIdMap: Map<string, string>;
+      sessionOriginMap: Map<string, string>;
+    };
+    const helpSessionId = options.helpSessionId === undefined ? "help-1" : options.helpSessionId;
+    mutable.sessionHelpIdMap = new Map(helpSessionId !== null ? [["sess", helpSessionId]] : []);
+    mutable.sessionOriginMap.set("sess", options.origin ?? "help");
+    const access = {
+      isAvailable: vi.fn(() => options.available),
+      getInbox: vi.fn(() => ({ ok: true as const, value: INBOX })),
+      reply: vi.fn(() => ({
+        ok: true as const,
+        value: { taskId: "task-1", state: "completed" as const, revision: 4 },
+      })),
+    };
+    const deps = fakeDeps({
+      sessionStore: store,
+      requestManifest: vi
+        .fn()
+        .mockResolvedValue([
+          makeManifestEntry("assistant.getInbox"),
+          makeManifestEntry("assistant.reply"),
+          makeManifestEntry("terminal.list"),
+        ]),
+      ...(options.access === false ? {} : { assistantMessaging: access }),
+    });
+    return { deps, access };
+  }
+
+  it("lists the tools only while the caller's own lane is enrolled", async () => {
+    const enrolled = laneDeps({ available: true });
+    const server = createSessionServer("sess", enrolled.deps);
+    await server.connect(makeMockTransport());
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["assistant.getInbox", "assistant.reply"])
+    );
+
+    const idle = laneDeps({ available: false });
+    const idleServer = createSessionServer("sess", idle.deps);
+    await idleServer.connect(makeMockTransport());
+    const names = (await listTools(idleServer)).tools.map((t) => t.name);
+    expect(names).toContain("terminal.list");
+    expect(names).not.toContain("assistant.getInbox");
+    expect(names).not.toContain("assistant.reply");
+  });
+
+  it("runs both in main against the caller's own lane", async () => {
+    const { deps, access } = laneDeps({ available: true });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const inbox = await callTool(server, { name: "assistant.getInbox", arguments: { limit: 2 } });
+    expect(inbox.isError).toBeFalsy();
+    expect(inbox.structuredContent).toEqual(INBOX);
+    expect(access.getInbox).toHaveBeenCalledWith({ limit: 2 });
+
+    const reply = await callTool(server, {
+      name: "assistant.reply",
+      arguments: { taskId: "task-1", state: "completed", text: "done" },
+    });
+    expect(reply.structuredContent).toEqual({ taskId: "task-1", state: "completed", revision: 4 });
+    expect(access.reply).toHaveBeenCalledWith({ taskId: "task-1", state: "completed", text: "done" });
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses arguments outside the schema without echoing them", async () => {
+    const { deps, access } = laneDeps({ available: true });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "assistant.reply",
+      arguments: { taskId: "task-1", state: "maybe", text: "SECRET-SENTINEL" },
+    });
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("INVALID_ARGS");
+    expect(JSON.stringify(result.content)).not.toContain("SECRET-SENTINEL");
+    expect(access.reply).not.toHaveBeenCalled();
+  });
+
+  it("refuses a session with no messaging access, whatever admitted it", async () => {
+    const { deps } = laneDeps({ available: true, access: false });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "assistant.getInbox", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("neither lists nor runs them for a bearer with no help session, even with access wired", async () => {
+    // Renderer-owned, so the tier admits it; only the missing help session refuses.
+    const { deps, access } = laneDeps({
+      available: true,
+      origin: "assistant-pane",
+      helpSessionId: null,
+    });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    expect((await listTools(server)).tools.map((t) => t.name)).not.toContain("assistant.getInbox");
+    const result = await callTool(server, { name: "assistant.getInbox", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
+    expect(access.getInbox).not.toHaveBeenCalled();
+  });
+
+  it("passes on a refusal's fixed code and words", async () => {
+    const { deps, access } = laneDeps({ available: true });
+    access.reply.mockReturnValueOnce({
+      ok: false,
+      code: "EXCHANGE_CLOSED",
+      message: "That exchange has already ended, so it takes no further answer.",
+    } as never);
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "assistant.reply",
+      arguments: { taskId: "task-1", state: "completed", text: "late" },
+    });
+    expect(toolErrorPayload(result).code).toBe("EXCHANGE_CLOSED");
+    expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "assistant.reply",
+        outcome: {
+          kind: "result",
+          value: {
+            ok: false,
+            error: expect.objectContaining({ code: "VALIDATION_ERROR" }),
+          },
+        },
+      })
+    );
+  });
+});
+
 describe("structuredContent for terminal query actions (#10676)", () => {
   // The three high-value query actions carry `mcpOutputSchema: true`, so the real
   // manifest entry the renderer reports back carries an object-typed outputSchema.
@@ -6338,6 +6501,9 @@ describe("workspace-bound external sessions (#11789)", () => {
         },
         // Executed through the injected notify service rather than a named dep.
         "terminal.notifyWhenIdle": { args: { terminalId: "t-1" } },
+        // Executed through the caller's bound messaging access (#13335).
+        "assistant.getInbox": { args: {} },
+        "assistant.reply": { args: { taskId: "task-1", state: "completed", text: "x" } },
       };
 
       function viewlessDepsFor(name: string): SessionServerDeps {

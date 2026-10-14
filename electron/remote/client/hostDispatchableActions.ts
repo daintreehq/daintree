@@ -30,7 +30,9 @@
  * Some ids here never run in this view at all. The host's MCP server answers
  * them in its own main process — the batches (`*Many`, expanded there into
  * single calls this list already carries), `terminal.notifyWhenIdle`,
- * `mcp.surface`, `help.displayImage`, `skills.*`, the reads and owned twins
+ * `mcp.surface`, `help.displayImage`, `skills.*`, `assistant.*` (a host's
+ * enrolled lane reads its inbox exactly while a Shell drives it), the reads
+ * and owned twins
  * that act after a host-side check — and their definitions here only throw.
  * They are listed because this list is also the manifest a host is shown: an
  * id left off it is a tool the host's session loses whenever a Shell drives
@@ -54,6 +56,8 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.launchMany",
   "agent.listAvailable",
   "agent.listPresets",
+  "assistant.getInbox",
+  "assistant.reply",
   "browser.captureScreenshot",
   "file.view",
   "fleet.getRunStatus",

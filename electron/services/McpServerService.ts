@@ -486,6 +486,19 @@ export class McpServerService {
     this.httpLifecycle.setHelpSessionIdResolver(resolver);
   }
 
+  /**
+   * A lane's messaging enrollment began or ended (#13335). Every assistant
+   * session re-lists, since its inbox tools are offered only while its own
+   * lane is enrolled; a transport closing meanwhile reads the new list anyway.
+   */
+  notifyAssistantMessagingChanged(): void {
+    for (const sessionId of this.sessionStore.sessionHelpIdMap.keys()) {
+      const session =
+        this.sessionStore.httpSessions.get(sessionId) ?? this.sessionStore.sessions.get(sessionId);
+      session?.server.sendToolListChanged().catch(() => {});
+    }
+  }
+
   setAssistantPaneWebContentsResolver(resolver: AssistantPaneWebContentsResolver | null): void {
     this.httpLifecycle.setAssistantPaneWebContentsResolver(resolver);
   }

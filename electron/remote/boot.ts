@@ -251,6 +251,12 @@ function startClient(options: StartRemoteHostsOptions): void {
         client.registry.get(hostId)?.assistantMessagingEnabled === true,
       hasHosts: () => client.registry.list().length > 0,
       onHostsChanged: (listener) => client.registry.onChange(listener),
+      // An enrolled lane's own inbox tools come and go with its enrollment.
+      onAvailabilityChanged: () => {
+        void import("../services/McpServerService.js")
+          .then(({ mcpServerService }) => mcpServerService.notifyAssistantMessagingChanged())
+          .catch((err) => console.error("[RemoteHosts] Couldn't re-list assistant tools:", err));
+      },
     })
   );
   // Exchanges this Shell sends to hosts' assistants: reconciled whenever a session to one opens.

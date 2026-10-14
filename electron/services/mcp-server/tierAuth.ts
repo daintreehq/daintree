@@ -26,6 +26,7 @@ import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrant
 import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
+import { ASSISTANT_MESSAGING_TOOL_IDS } from "../../../shared/types/assistantMessaging.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -144,6 +145,9 @@ export function shouldExposeTool(
   if (isWithheldFromBoundSession(entry, tier, session)) {
     return false;
   }
+  if (ASSISTANT_MESSAGING_TOOL_IDS.has(entry.id) && session.assistantMessaging !== true) {
+    return false;
+  }
   return (
     isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
     isApprovalRequestable(tier, entry.id, session.paneApproval === true)
@@ -178,6 +182,12 @@ export interface SessionSurfacePolicy {
    * see {@link isPaneAutoConfirmed}. Read as `=== true`.
    */
   paneSkipConfirmations?: boolean;
+  /**
+   * Whether this session is an assistant lane enrolled for cross-host
+   * messaging right now (#13335). Only then are its own inbox tools offered;
+   * read live per listing, and as `=== true`.
+   */
+  assistantMessaging?: boolean;
 }
 
 /**

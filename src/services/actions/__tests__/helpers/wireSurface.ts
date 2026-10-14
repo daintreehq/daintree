@@ -92,12 +92,15 @@ export async function createActionRegistry(): Promise<ActionRegistry> {
  */
 async function registerRemoteShellActions(registry: ActionRegistry): Promise<void> {
   await withRendererSelf(async () => {
-    const [{ registerHostActions }, { registerPortActions }] = await Promise.all([
-      import("../../definitions/hostActions"),
-      import("../../definitions/portActions"),
-    ]);
+    const [{ registerHostActions }, { registerPortActions }, { registerAssistantMessagingActions }] =
+      await Promise.all([
+        import("../../definitions/hostActions"),
+        import("../../definitions/portActions"),
+        import("../../definitions/assistantMessagingActions"),
+      ]);
     registerHostActions(registry, noopCallbacks());
     registerPortActions(registry, noopCallbacks());
+    registerAssistantMessagingActions(registry);
   });
 }
 

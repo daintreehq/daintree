@@ -28,6 +28,7 @@ import {
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { detectHandback } from "../pty/HandbackDetector.js";
 import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
+import { fenceFor } from "../../../shared/utils/quoteFence.js";
 
 /**
  * The caller's own pane, resolved from its credential and never from anything
@@ -458,13 +459,6 @@ function cutToNewestChars(text: string, max: number): string {
   const cut = text.slice(-max);
   const firstBreak = cut.indexOf("\n");
   return firstBreak !== -1 && firstBreak < cut.length - 1 ? cut.slice(firstBreak + 1) : cut;
-}
-
-/** A fence longer than any backtick run in `text`, so the quote cannot close early. */
-function fenceFor(text: string): string {
-  let longest = 0;
-  for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
-  return "`".repeat(Math.max(3, longest + 1));
 }
 
 /**

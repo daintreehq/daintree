@@ -32,7 +32,7 @@ import type {
   McpWorkspaceBinding,
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
-import { projectAuditResult } from "./auditResultProjection.js";
+import { projectAuditArgs, projectAuditResult } from "./auditResultProjection.js";
 import { helpOwnershipPrincipal } from "./resourceOwnership.js";
 import { SessionBindingError, WorkspaceBindingError } from "./rendererBridge.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
@@ -56,6 +56,7 @@ import {
   resolveTokenTier,
 } from "./tierAuth.js";
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
+import { bindAssistantMessaging } from "./assistantMessagingTools.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
@@ -2259,7 +2260,9 @@ export class HttpLifecycle {
           () => ({
             sessionId: payload.sessionId,
             toolId: payload.toolId,
-            argsSummary: summarizeMcpArgs(payload.args, (s) => scrubSecrets(sanitizePath(s))),
+            argsSummary: summarizeMcpArgs(projectAuditArgs(payload.toolId, payload.args), (s) =>
+              scrubSecrets(sanitizePath(s))
+            ),
             startedAt: payload.startedAt,
             danger: payload.danger,
             ...(turnId !== null ? { turnId } : {}),
@@ -2352,6 +2355,10 @@ export class HttpLifecycle {
       ...(this.deps.terminalNotify !== undefined
         ? { terminalNotify: this.deps.terminalNotify }
         : {}),
+      // The lane is whichever help session this transport is bound to (#13335).
+      assistantMessaging: bindAssistantMessaging(() =>
+        this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
+      ),
       // A pane bearer's own terminal is fixed for the bearer's life and was
       // resolved at handshake; a help lane's is read per call, because its
       // binding follows the PTY that currently serves it.
@@ -2391,7 +2398,9 @@ export class HttpLifecycle {
             : undefined;
         this.deps.auditService.appendRecord({
           ...recordInput,
-          argsSummary: summarizeMcpArgs(input.args, (s) => scrubSecrets(sanitizePath(s))),
+          argsSummary: summarizeMcpArgs(projectAuditArgs(input.toolId, input.args), (s) =>
+            scrubSecrets(sanitizePath(s))
+          ),
           ...(turnId !== null ? { turnId } : {}),
           ...(helpSessionId !== null ? { helpSessionId } : {}),
           ...(resultSummary !== null ? { resultSummary } : {}),

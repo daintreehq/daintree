@@ -703,7 +703,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // full, measured at 115_487 B: their trimmed descriptions and the `hostId`,
   // `newWindow`, `projectId` and `worktree` arguments. In-app only, so the
   // external ceiling above does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 116_300;
+  // 116_300 → 118_600 for #13335's `assistant.getInbox` and `assistant.reply`,
+  // measured at 118_560 B: their descriptions, arguments and output schemas,
+  // which are a hard contract for the provenance and fenced body each message
+  // carries. Offered only to an enrolled lane's assistant, so the external
+  // ceiling above does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 118_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
