@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ChevronDown } from "lucide-react";
 import { resolveAppTheme } from "@shared/theme/themes";
-import type { DevPreviewPanelData } from "@shared/types/panel";
+import type { DevPreviewPanelData, ViewportPresetId } from "@shared/types/panel";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
@@ -14,6 +14,7 @@ import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { BrowserToolbar } from "@/components/Browser/BrowserToolbar";
 import { focusWebviewPage } from "@/components/Browser/browserUtils";
 import { SiteBuilderButton } from "../../../../plugins/builtin/sveltekit-builder/renderer/SiteBuilderButton";
+import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
 import { normalizeDevPreviewUrl, toDevServerAddress } from "../urlSync";
 import {
   DEV_SERVER_URL,
@@ -63,7 +64,7 @@ function withOverrides(base: DevPreviewChromeFixture): DevPreviewChromeFixture {
   const width = Number(params.get("width"));
   if (Number.isFinite(width) && width > 0) next.width = width;
   const preset = params.get("preset");
-  if (preset) next.viewportPreset = preset as DevPreviewChromeFixture["viewportPreset"];
+  if (isViewportPresetId(preset)) next.viewportPreset = preset;
   const rotated = params.get("rotated");
   if (rotated !== null) next.viewportRotated = rotated === "1";
   const fit = params.get("fit");
@@ -71,6 +72,10 @@ function withOverrides(base: DevPreviewChromeFixture): DevPreviewChromeFixture {
   const dpr = Number(params.get("dpr"));
   if (dpr === 1 || dpr === 2 || dpr === 3) next.viewportDpr = dpr;
   return next;
+}
+
+function isViewportPresetId(value: string | null): value is ViewportPresetId {
+  return value !== null && Object.hasOwn(VIEWPORT_PRESETS, value);
 }
 
 const noop = () => {};
