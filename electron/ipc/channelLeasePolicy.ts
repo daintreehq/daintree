@@ -76,6 +76,10 @@ export const CHANNEL_LEASE_POLICY = {
   "artifact:apply-patch": "driver",
   "artifact:detected": "free",
   "artifact:save-to-file": "driver",
+  "assistant-messaging:changed": "free",
+  "assistant-messaging:get-state": "free",
+  "assistant-messaging:set-lane-enrolled": "free",
+  "assistant-messaging:set-paused": "free",
   // Canopy's inbox state (reads, archive, scope) is its own; what types to,
   // resizes or restores a run's terminal is checked per run in the handler.
   "canopy:answer": "handler",

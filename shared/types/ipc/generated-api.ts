@@ -49,6 +49,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["app:get-version-info"]["args"]
     ): Promise<IpcInvokeMap["app:get-version-info"]["result"]>;
   };
+  assistantMessaging: {
+    getState(
+      ...args: IpcInvokeMap["assistant-messaging:get-state"]["args"]
+    ): Promise<IpcInvokeMap["assistant-messaging:get-state"]["result"]>;
+    setLaneEnrolled(
+      ...args: IpcInvokeMap["assistant-messaging:set-lane-enrolled"]["args"]
+    ): Promise<IpcInvokeMap["assistant-messaging:set-lane-enrolled"]["result"]>;
+    setPaused(
+      ...args: IpcInvokeMap["assistant-messaging:set-paused"]["args"]
+    ): Promise<IpcInvokeMap["assistant-messaging:set-paused"]["result"]>;
+  };
   canopy: {
     answer(
       ...args: IpcInvokeMap["canopy:answer"]["args"]

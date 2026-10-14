@@ -249,6 +249,8 @@ function startClient(options: StartRemoteHostsOptions): void {
     installAssistantMessagingPolicy({
       isHostMessagingEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantMessagingEnabled === true,
+      hasHosts: () => client.registry.list().length > 0,
+      onHostsChanged: (listener) => client.registry.onChange(listener),
     })
   );
   // Exchanges this Shell sends to hosts' assistants: reconciled whenever a session to one opens.

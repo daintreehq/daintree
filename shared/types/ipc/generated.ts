@@ -126,6 +126,20 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "assistant-messaging:get-state": {
+    args: [input: import("./assistantMessaging.js").AssistantMessagingLaneRef];
+    result: import("./assistantMessaging.js").AssistantMessagingState;
+  };
+  "assistant-messaging:set-lane-enrolled": {
+    args: [
+      input: import("./assistantMessaging.js").AssistantMessagingLaneRef & { enrolled: boolean },
+    ];
+    result: import("./assistantMessaging.js").AssistantMessagingEnrollResult;
+  };
+  "assistant-messaging:set-paused": {
+    args: [paused: boolean];
+    result: boolean;
+  };
   "canopy:answer": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
     result: void;

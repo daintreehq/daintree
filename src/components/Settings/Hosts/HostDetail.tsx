@@ -18,6 +18,7 @@ import { HostPluginViewConsents } from "./HostPluginViewConsents";
 import { buildLabel, connectionLabel, describeBuildDifference, platformLabel } from "./hostLabels";
 import { describeHostForge } from "@/components/Hosts/hostForges";
 import { clientErrorText } from "@/utils/clientAppError";
+import { isWindows } from "@/lib/platform";
 
 interface HostDetailProps {
   entry: HostListEntry;
@@ -139,6 +140,21 @@ export function HostDetail({
       (err: unknown) => {
         setNotifyDraft(null);
         setNotifyError(clientErrorText(err, "Couldn't save this setting"));
+      }
+    );
+  };
+
+  const [messagingDraft, setMessagingDraft] = useState<boolean | null>(null);
+  const [messagingError, setMessagingError] = useState<string | null>(null);
+  const messagingEnabled = messagingDraft ?? descriptor.assistantMessagingEnabled;
+  const setMessaging = (next: boolean) => {
+    setMessagingDraft(next);
+    setMessagingError(null);
+    remoteHostsClient.update({ hostId: descriptor.id, assistantMessagingEnabled: next }).then(
+      () => setMessagingDraft(null),
+      (err: unknown) => {
+        setMessagingDraft(null);
+        setMessagingError(clientErrorText(err, "Couldn't save this setting"));
       }
     );
   };
@@ -314,11 +330,11 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Notifications">
+      <SettingsSection title="Communication">
         <SettingsGroup>
           <SettingsRow
             label="Notify me about this host"
-            description="Agents observed waiting on it notify you here, even while your windows show another machine. Off by default"
+            description="Agents observed waiting on it notify you here, even while your windows show another machine. Off by default."
             error={notifyError ?? undefined}
             control={({ labelId, descriptionId, disabled }) => (
               <SettingsSwitch
@@ -330,6 +346,23 @@ export function HostDetail({
               />
             )}
           />
+          {/* Cross-machine messaging isn't offered on Windows. */}
+          {!isWindows() && (
+            <SettingsRow
+              label="Allow assistant messaging with this host"
+              description="The assistant you let accept messages from other machines can message assistants on this host too. Off by default."
+              error={messagingError ?? undefined}
+              control={({ labelId, descriptionId, disabled }) => (
+                <SettingsSwitch
+                  checked={messagingEnabled}
+                  onCheckedChange={setMessaging}
+                  disabled={disabled}
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                />
+              )}
+            />
+          )}
         </SettingsGroup>
       </SettingsSection>
 

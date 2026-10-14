@@ -94,6 +94,7 @@ import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.prel
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
 import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
+import { buildAssistantMessagingPreloadBindings } from "./ipc/handlers/assistantMessaging.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
@@ -2740,6 +2741,16 @@ function buildElectronApi(): ElectronAPI {
       onStateChanged: (
         callback: (state: import("../shared/types/ipc/keepAwake.js").KeepAwakeState) => void
       ): (() => void) => _typedOn(CHANNELS.KEEP_AWAKE_STATE_CHANGED, callback),
+    },
+
+    assistantMessaging: {
+      ...buildAssistantMessagingPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (
+        callback: (
+          event: import("../shared/types/ipc/assistantMessaging.js").AssistantMessagingChangedEvent
+        ) => void
+      ): (() => void) => _typedOn(CHANNELS.ASSISTANT_MESSAGING_CHANGED, callback),
     },
 
     hibernation: {

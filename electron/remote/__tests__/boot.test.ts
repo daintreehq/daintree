@@ -72,6 +72,8 @@ const m = vi.hoisted(() => {
         (hostId: string) =>
           ({ "messaging-on": { assistantMessagingEnabled: true } })[hostId] ?? null
       ),
+      list: vi.fn(() => [{ id: "messaging-on" }]),
+      onChange: vi.fn((_l: unknown) => () => {}),
     },
     router: { name: "router" },
     dispose: vi.fn(async () => record("client.dispose")),
@@ -529,10 +531,16 @@ describe("startRemoteHosts", () => {
     await startRemoteHosts({ hostMode: false });
     expect(messaging.installAssistantMessagingPolicy).toHaveBeenCalledTimes(1);
     const [deps] = messaging.installAssistantMessagingPolicy.mock.calls[0] as [
-      { isHostMessagingEnabled(hostId: string): boolean },
+      {
+        isHostMessagingEnabled(hostId: string): boolean;
+        hasHosts(): boolean;
+        onHostsChanged(listener: () => void): () => void;
+      },
     ];
     expect(deps.isHostMessagingEnabled("messaging-on")).toBe(true);
     expect(deps.isHostMessagingEnabled("unknown-host")).toBe(false);
+    expect(deps.hasHosts()).toBe(true);
+    expect(typeof deps.onHostsChanged(() => {})).toBe("function");
     await stopRemoteHosts();
     expect(messaging.uninstall).toHaveBeenCalledTimes(1);
   });

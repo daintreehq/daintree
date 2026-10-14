@@ -52,6 +52,19 @@ export type MessagingDenial =
   | "no-hub"
   | "paused";
 
+/**
+ * Why a lane's enrollment ended without the person turning it off: its session
+ * was revoked, displaced or relaunched, its run stopped some other way, or the
+ * remote Shell that enrolled it is gone for good.
+ */
+export type EnrollmentEndReason = "revoked" | "displaced" | "relaunched" | "stopped" | "shell-gone";
+
+export interface EnrollmentEnded {
+  reason: EnrollmentEndReason;
+  at: number;
+  enrolledBy: MessagingShell;
+}
+
 export type EnrollmentResult =
   { ok: true; enrollment: LaneEnrollment } | { ok: false; reason: MessagingDenial };
 
@@ -102,6 +115,17 @@ function copyEnrollment(enrollment: LaneEnrollment): LaneEnrollment {
   return { ...enrollment, enrolledBy: { ...enrollment.enrolledBy } };
 }
 
+function endReasonFor(reason: HelpSessionEndedEvent["reason"]): EnrollmentEndReason {
+  switch (reason) {
+    case "revoked":
+    case "displaced":
+    case "relaunched":
+      return reason;
+    default:
+      return "stopped";
+  }
+}
+
 function laneKey(lane: LaneRef): string | null {
   if (!lane || typeof lane.projectId !== "string" || lane.projectId.length === 0) return null;
   if (!isValidAssistantSlot(lane.slot)) return null;
@@ -121,6 +145,10 @@ function laneKey(lane: LaneRef): string | null {
  */
 export class AssistantMessagingPolicy {
   private readonly enrollments = new Map<string, LaneEnrollment>();
+  /** Enrollments that ended without being withdrawn, kept until the lane is enrolled again. */
+  private readonly ended = new Map<string, EnrollmentEnded>();
+  private readonly changeListeners = new Set<() => void>();
+  private revision = 0;
   private paused = false;
   private readonly platform: NodeJS.Platform;
   private readonly now: () => number;
@@ -167,6 +195,8 @@ export class AssistantMessagingPolicy {
       enrolledAt: this.now(),
     };
     this.enrollments.set(key, enrollment);
+    this.ended.delete(key);
+    this.changed();
     return { ok: true, enrollment: copyEnrollment(enrollment) };
   }
 
@@ -178,22 +208,33 @@ export class AssistantMessagingPolicy {
     if (!existing || existing.generation !== generation) return false;
     if (!sameShell(existing.enrolledBy, shell)) return false;
     this.enrollments.delete(key);
+    this.ended.delete(key);
+    this.changed();
     return true;
   }
 
   /** Ends every enrollment a remote Shell made, once its link session is gone for good. */
   releaseLinkSession(linkSessionId: string): void {
+    let released = false;
     for (const [key, enrollment] of this.enrollments) {
       const by = enrollment.enrolledBy;
-      if (by.kind === "remote" && by.linkSessionId === linkSessionId) this.enrollments.delete(key);
+      if (by.kind === "remote" && by.linkSessionId === linkSessionId) {
+        this.end(key, enrollment, "shell-gone", false);
+        released = true;
+      }
     }
+    if (released) this.changed();
   }
 
   /** Ends every remote Shell's enrollments: this host stopped listening, so none can resume. */
   releaseRemoteShells(): void {
+    let released = false;
     for (const [key, enrollment] of this.enrollments) {
-      if (enrollment.enrolledBy.kind === "remote") this.enrollments.delete(key);
+      if (enrollment.enrolledBy.kind !== "remote") continue;
+      this.end(key, enrollment, "shell-gone", false);
+      released = true;
     }
+    if (released) this.changed();
   }
 
   getEnrollment(lane: LaneRef): LaneEnrollment | null {
@@ -225,12 +266,46 @@ export class AssistantMessagingPolicy {
     return null;
   }
 
+  /**
+   * Ends every enrollment whose run was replaced. A relaunch in place keeps
+   * its session and terminal ids and emits no session event, so without this
+   * it would only be noticed by the next read.
+   */
+  reconcile(): void {
+    for (const key of [...this.enrollments.keys()]) this.current(key);
+  }
+
+  /** How the lane's last enrollment ended, while it hasn't been enrolled again. */
+  getEnded(lane: LaneRef): EnrollmentEnded | null {
+    const key = laneKey(lane);
+    if (key === null) return null;
+    this.current(key);
+    const ended = this.ended.get(key);
+    return ended ? { ...ended, enrolledBy: { ...ended.enrolledBy } } : null;
+  }
+
   isPaused(): boolean {
     return this.paused;
   }
 
   setPaused(paused: boolean): void {
-    this.paused = paused === true;
+    const next = paused === true;
+    if (next === this.paused) return;
+    this.paused = next;
+    this.changed();
+  }
+
+  /** Increases on every change a listener hears about. */
+  getRevision(): number {
+    return this.revision;
+  }
+
+  /** Called after enrollment, an ended enrollment or the pause changes. */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => {
+      this.changeListeners.delete(listener);
+    };
   }
 
   /**
@@ -264,7 +339,9 @@ export class AssistantMessagingPolicy {
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.changeListeners.clear();
     this.enrollments.clear();
+    this.ended.clear();
     this.paused = false;
   }
 
@@ -293,7 +370,7 @@ export class AssistantMessagingPolicy {
       running.terminalId !== enrollment.terminalId ||
       (launchGeneration !== null && launchGeneration !== enrollment.launchGeneration);
     if (!replaced) return enrollment;
-    this.enrollments.delete(key);
+    this.end(key, enrollment, "relaunched");
     return undefined;
   }
 
@@ -311,6 +388,30 @@ export class AssistantMessagingPolicy {
     const key = laneKey({ projectId: event.projectId, slot: event.slot });
     if (key === null) return;
     const enrollment = this.enrollments.get(key);
-    if (enrollment && enrollment.sessionId === event.sessionId) this.enrollments.delete(key);
+    if (enrollment && enrollment.sessionId === event.sessionId) {
+      this.end(key, enrollment, endReasonFor(event.reason));
+    }
+  }
+
+  private end(
+    key: string,
+    enrollment: LaneEnrollment,
+    reason: EnrollmentEndReason,
+    notify = true
+  ): void {
+    this.enrollments.delete(key);
+    this.ended.set(key, { reason, at: this.now(), enrolledBy: { ...enrollment.enrolledBy } });
+    if (notify) this.changed();
+  }
+
+  private changed(): void {
+    this.revision += 1;
+    for (const listener of [...this.changeListeners]) {
+      try {
+        listener();
+      } catch {
+        // A listener's failure must not stop the others or the policy change.
+      }
+    }
   }
 }
