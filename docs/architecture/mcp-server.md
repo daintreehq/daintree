@@ -288,6 +288,7 @@ Completing the handshake alone would only convert "connection failed" into "conn
 - **Never `getCachedManifest()`.** That describes whichever _other_ window last reported a manifest — a cross-workspace isolation bug, since the bound session is specifically forbidden from routing there. The generated artifact describes nobody's view. `getCachedManifestForWorkspace` still fails closed to `null`.
 - **Discovery only.** It authorizes nothing. Renderer dispatch still goes through `dispatchActionForWorkspace`, so a viewless `tools/call` for a renderer action stays fail-closed. Confirm-gated tools are withheld either way — `sessionSurface.workspaceBound` is set from _having_ a binding, not from view liveness. What a viewless session **can** call is the main-process surface below.
 - **A dead pin is not this case.** `SessionBindingError` (destroyed pinned WebContents) still fails `tools/list` outright; only `WorkspaceBindingError` reaches the base surface.
+- **A route change is announced.** Each bound `tools/list` records the route it was answered from (a remote driver, a local view, or none, read by `describeWorkspaceRoute`). A drive-lease change, an endpoint coming or going, or a local view registering re-reads it, and a session whose route moved gets one `notifications/tools/list_changed` (`toolListRouteWatch.ts`, #13350). It is best-effort: a client with no GET stream open never hears it.
 
 ### What a viewless bound session can still call (#12316)
 

@@ -1182,6 +1182,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     caption?: string;
     altText?: string;
   }) => void;
+  /**
+   * Record where this session's `tools/list` is about to be answered from, so
+   * a later route change can tell the client its list moved (#13350). Only a
+   * workspace-bound session's route can move; absent for every other session.
+   */
+  noteToolListRoute?: () => void;
 }
 
 /**
@@ -1378,6 +1384,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // legitimately empty surface and carrying no hint that reconnecting is the
     // fix.
     if (tier === null) throw sessionGoneError();
+    // Before the fetch: a route that moves while it is in flight then reads as
+    // moved, and the client is told to list again.
+    deps.noteToolListRoute?.();
     const manifest = await resolveManifest("tools/list");
     // Origin read once for the whole listing, and the same way the dispatch
     // gate reads it, so a tool withheld here is refused there (#12407).
@@ -3569,7 +3578,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               { actions?: unknown; hasMore?: unknown } | null | undefined;
             if (!payload || !Array.isArray(payload.actions)) break;
             collected.push(...payload.actions);
-            if (payload.hasMore !== true || payload.actions.length === 0) break;
+            // Not stopped by an empty page: a Shell answering for this host
+            // narrows each page to what a host may run (#13350), so one can
+            // come back empty with more behind it.
+            if (payload.hasMore !== true) break;
             offset += ACTIONS_LIST_MAX_LIMIT;
           }
           return {

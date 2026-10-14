@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ActionManifestEntry } from "../../../shared/types/actions.js";
+import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/types/actions.js";
 import type { McpBearerIdentity } from "../../../shared/types/ipc/mcpServer.js";
 import {
   MCP_DISPATCH_ACTION_METHOD,
@@ -68,6 +68,52 @@ function describeHost(hostId: string): McpBearerIdentity {
   return { userAgent: `Agent on host "${hostName(hostId)}"`, token4LastChars: "" };
 }
 
+function isHostDispatchableEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const id = (entry as { id?: unknown }).id;
+  return typeof id === "string" && isHostDispatchableAction(id);
+}
+
+/**
+ * The registry reads answer from this view's whole action registry, which
+ * knows nothing of hosts: narrowed to what a host may run, so a host's search
+ * never turns up a tool its next call would be refused (#13350). Paging stays
+ * the view's own, since the host walks `actions.list` by it page after page.
+ */
+function narrowRegistryRead(actionId: string, result: ActionDispatchResult): ActionDispatchResult {
+  if (!result.ok || !result.result || typeof result.result !== "object") return result;
+  const payload = result.result as Record<string, unknown>;
+  if (actionId === "actions.list" && Array.isArray(payload.actions)) {
+    return {
+      ...result,
+      result: { ...payload, actions: payload.actions.filter(isHostDispatchableEntry) },
+    };
+  }
+  if (actionId === "actions.search" && Array.isArray(payload.results)) {
+    const results = payload.results.filter(isHostDispatchableEntry);
+    return { ...result, result: { ...payload, totalMatches: results.length, results } };
+  }
+  if (
+    actionId === "actions.getSchema" &&
+    payload.entry &&
+    !isHostDispatchableEntry(payload.entry)
+  ) {
+    return {
+      ...result,
+      result: {
+        ok: false,
+        entry: null,
+        policy: null,
+        error: {
+          code: "NOT_FOUND",
+          message: "No action found with that id. Use actions.search to find available actions.",
+        },
+      },
+    };
+  }
+  return result;
+}
+
 async function dispatchAction(
   hostId: string,
   webContentsId: number,
@@ -112,7 +158,7 @@ async function dispatchAction(
   // Only what the host reads back: this machine's view identity stays here,
   // and no approval is ever handed out for the host to reuse.
   return {
-    result: envelope.result,
+    result: narrowRegistryRead(request.actionId, envelope.result),
     ...(envelope.confirmationDecision !== undefined
       ? { confirmationDecision: envelope.confirmationDecision }
       : {}),

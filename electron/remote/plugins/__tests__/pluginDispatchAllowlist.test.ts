@@ -29,4 +29,27 @@ describe("HOST_PLUGIN_DISPATCHABLE_ACTION_IDS", () => {
     }
     expect(isHostPluginDispatchable("worktree.refresh")).toBe(true);
   });
+
+  it("gives a plugin the project-bound actions but not the tools only an MCP session uses", () => {
+    for (const id of ["terminal.moveToWorktree", "workspace.list", "slashCommands.list"]) {
+      expect(isHostPluginDispatchable(id)).toBe(true);
+    }
+    // The registry searches would read past the filtered catalog a plugin is
+    // given, and the rest are answered for an MCP session or closed to
+    // plugins everywhere.
+    for (const id of [
+      "actions.search",
+      "actions.list",
+      "mcp.surface",
+      "help.displayImage",
+      "skills.search",
+      "skills.load",
+      "terminal.sendKeys",
+      "agent.launchMany",
+      "terminal.notifyWhenIdle",
+    ]) {
+      expect(HOST_DISPATCHABLE_ACTION_IDS.has(id)).toBe(true);
+      expect(isHostPluginDispatchable(id)).toBe(false);
+    }
+  });
 });

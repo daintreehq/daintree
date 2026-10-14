@@ -22,12 +22,38 @@ export type McpDriveTarget =
 export type McpDriveTargetResolver = (projectId: string) => McpDriveTarget;
 
 let resolver: McpDriveTargetResolver | null = null;
+const driveTargetChangeListeners = new Set<() => void>();
 
 export function setMcpDriveTargetResolver(next: McpDriveTargetResolver | null): () => void {
   resolver = next;
+  notifyMcpDriveTargetChange();
   return () => {
-    if (resolver === next) resolver = null;
+    if (resolver !== next) return;
+    resolver = null;
+    notifyMcpDriveTargetChange();
   };
+}
+
+/**
+ * Hear that some project's drive target may have moved: a takeover, a holder
+ * leaving, routing turned on or off. Core cannot subscribe to the drive lease
+ * itself, so the remote boot reports its changes here. Returns a disposer.
+ */
+export function onMcpDriveTargetChange(listener: () => void): () => void {
+  driveTargetChangeListeners.add(listener);
+  return () => {
+    driveTargetChangeListeners.delete(listener);
+  };
+}
+
+export function notifyMcpDriveTargetChange(): void {
+  for (const listener of [...driveTargetChangeListeners]) {
+    try {
+      listener();
+    } catch (err) {
+      console.error("[MCP] Drive target change listener threw:", err);
+    }
+  }
 }
 
 /**

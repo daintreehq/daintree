@@ -26,23 +26,49 @@
  * - `project.openOnHost` only opens the switch dialog here, marked as asked
  *   for by an agent so it never opens the project on its own; every push,
  *   clone and switch in it is the person's own click.
+ *
+ * Some ids here never run in this view at all. The host's MCP server answers
+ * them in its own main process — the batches (`*Many`, expanded there into
+ * single calls this list already carries), `terminal.notifyWhenIdle`,
+ * `mcp.surface`, `help.displayImage`, `skills.*`, the reads and owned twins
+ * that act after a host-side check — and their definitions here only throw.
+ * They are listed because this list is also the manifest a host is shown: an
+ * id left off it is a tool the host's session loses whenever a Shell drives
+ * the project, though the host could still answer it (#13350). Listing one
+ * also lets an approval for it raise this Shell's dialog.
+ *
+ * `actions.search`, `actions.list` and `actions.getSchema` read this view's
+ * whole registry, so `viewRequests.ts` narrows their answers to this list.
+ *
+ * Two tools every MCP tier carries stay out: `diagnostics.openReview` collects
+ * this Shell's diagnostics, not the host's, and `copyTree.generateAndCopyFile`
+ * writes this Shell's clipboard.
  */
 export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "actions.getContext",
   "actions.getSchema",
+  "actions.list",
+  "actions.search",
   "agent.getState",
   "agent.launch",
+  "agent.launchMany",
   "agent.listAvailable",
   "agent.listPresets",
   "browser.captureScreenshot",
   "file.view",
   "fleet.getRunStatus",
+  "help.displayImage",
   "host.switch",
+  "mcp.surface",
   "project.openOnHost",
   "recipe.list",
   "recipe.run",
+  "skills.load",
+  "skills.search",
+  "slashCommands.list",
   "terminal.cancelWatch",
   "terminal.close",
+  "terminal.closeMany",
   "terminal.closeOwned",
   "terminal.getOutput",
   "terminal.getStatus",
@@ -56,18 +82,24 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "terminal.killBatch",
   "terminal.list",
   "terminal.listWatches",
+  "terminal.moveToWorktree",
   "terminal.new",
+  "terminal.notifyWhenIdle",
   "terminal.readLastMessageOwned",
   "terminal.registerWatch",
   "terminal.rename",
   "terminal.restart",
   "terminal.revealOwned",
   "terminal.sendCommand",
+  "terminal.sendCommandMany",
   "terminal.sendCommandOwned",
+  "terminal.sendKeys",
+  "terminal.sendKeysOwned",
   "terminal.setClientMetadata",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.watch",
+  "workspace.list",
   "worktree.create",
   "worktree.createWithRecipe",
   "worktree.delete",

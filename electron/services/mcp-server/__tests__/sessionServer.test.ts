@@ -510,6 +510,25 @@ describe("sessionServer tools/list handler", () => {
     expect(result.tools.map((t) => t.name)).toEqual(["actions.list"]);
   });
 
+  it("records the session's route before it fetches the listing (#13350)", async () => {
+    // A route that moves while the fetch is out must read as moved afterwards.
+    const order: string[] = [];
+    const deps = externalDeps({
+      noteToolListRoute: vi.fn(() => {
+        order.push("route");
+      }),
+      requestManifest: vi.fn(async () => {
+        order.push("fetch");
+        return [makeManifestEntry("actions.list")];
+      }),
+    });
+    const server = createSessionServer("tools-list-route", deps);
+    await server.connect(makeMockTransport());
+
+    await listTools(server);
+    expect(order).toEqual(["route", "fetch"]);
+  });
+
   it("falls back to the cached manifest, warning with the error, when requestManifest rejects", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const rejection = new Error("Manifest request timed out");
@@ -5211,6 +5230,30 @@ describe("sessionServer introspection tier filtering", () => {
       expect(call[1]).toMatchObject({ category: "git", limit: 100 });
     }
     expect(calls.map((c) => (c[1] as { offset: number }).offset)).toEqual([0, 100]);
+  });
+
+  it("walks past an empty actions.list page while the view reports more (#13350)", async () => {
+    // A Shell answering for a host narrows each page to what a host may run,
+    // so the first page can come back empty with a permitted action behind it.
+    const pages = [[], [entry("terminal.list")]];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("full"),
+      dispatchAction: vi.fn((_id: string, callArgs: unknown) => {
+        const { offset = 0 } = callArgs as { offset?: number };
+        const page = offset / 100;
+        return Promise.resolve({
+          result: {
+            ok: true as const,
+            result: { actions: pages[page] ?? [], hasMore: page < pages.length - 1 },
+          },
+        });
+      }),
+    });
+    const server = createSessionServer("s1", deps);
+    const res = await callTool(server, { name: "actions.list" });
+    expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
+      "terminal.list",
+    ]);
   });
 
   /**

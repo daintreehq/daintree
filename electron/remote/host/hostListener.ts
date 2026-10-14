@@ -9,7 +9,10 @@ import {
   describeTerminalForScope,
 } from "../../services/driveLeaseTargetResolvers.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
-import { setMcpDriveTargetResolver } from "../../services/mcp-server/driveTarget.js";
+import {
+  notifyMcpDriveTargetChange,
+  setMcpDriveTargetResolver,
+} from "../../services/mcp-server/driveTarget.js";
 import type { AttachedClientInfo } from "../../../shared/types/ipc/hostMode.js";
 import { attachHostFiles, installHostFileService } from "../files/hostInstall.js";
 import { attachHostUploads, installHostUploadService } from "../files/uploadHostInstall.js";
@@ -299,6 +302,7 @@ async function buildHostListener(
           // A closing link; its Shell resyncs on the way back.
         }
       }
+      notifyMcpDriveTargetChange();
       notify();
     })
   );

@@ -169,7 +169,7 @@ describe("view reverse requests", () => {
     "app.settings.open",
     "plugin.install",
     "acme.plugin.doThing",
-    "workspace.list",
+    "diagnostics.openReview",
     "file.openPanel",
     "file.read",
     "file.openDiff",
@@ -218,6 +218,24 @@ describe("view reverse requests", () => {
     }
   );
 
+  it.each([
+    "terminal.moveToWorktree",
+    "terminal.sendKeys",
+    "terminal.closeMany",
+    "workspace.list",
+    "slashCommands.list",
+  ])("runs %s, a project-bound action a host's orchestrator drives", async (actionId) => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({ result: { ok: true, result: null } });
+    await ask("mcp:dispatch-action", {
+      actionId,
+      args: {},
+      confirmed: false,
+      sessionOrigin: "external",
+    });
+    expect(m.dispatchActionForHost.mock.calls[0]?.[1]).toBe(actionId);
+  });
+
   it("refuses a malformed dispatch without touching the view", async () => {
     installViewReverseRequests();
     await expect(
@@ -235,6 +253,121 @@ describe("view reverse requests", () => {
     ]);
     await expect(ask("mcp:get-manifest")).resolves.toEqual([{ id: "terminal.new" }]);
     expect(m.requestManifestForHost).toHaveBeenCalledWith(11);
+  });
+
+  it("shows a host the tools its own MCP server answers, though they never run here", async () => {
+    installViewReverseRequests();
+    m.requestManifestForHost.mockResolvedValue([
+      { id: "mcp.surface" },
+      { id: "agent.launchMany" },
+      { id: "terminal.notifyWhenIdle" },
+      { id: "terminal.moveToWorktree" },
+      { id: "diagnostics.openReview" },
+    ]);
+    await expect(ask("mcp:get-manifest")).resolves.toEqual([
+      { id: "mcp.surface" },
+      { id: "agent.launchMany" },
+      { id: "terminal.notifyWhenIdle" },
+      { id: "terminal.moveToWorktree" },
+    ]);
+  });
+
+  it("narrows a registry search to what a host may run", async () => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({
+      result: {
+        ok: true,
+        result: {
+          totalMatches: 3,
+          results: [{ id: "terminal.paste" }, { id: "terminal.moveToWorktree" }, { id: 7 }],
+        },
+      },
+    });
+    const answer = await ask("mcp:dispatch-action", {
+      actionId: "actions.search",
+      args: { query: "terminal" },
+      confirmed: false,
+      sessionOrigin: "external",
+    });
+    expect(answer).toEqual({
+      result: {
+        ok: true,
+        result: { totalMatches: 1, results: [{ id: "terminal.moveToWorktree" }] },
+      },
+    });
+  });
+
+  it("narrows a registry page but keeps the view's paging, so the host walks on", async () => {
+    installViewReverseRequests();
+    m.dispatchActionForHost.mockResolvedValue({
+      result: {
+        ok: true,
+        result: {
+          actions: [{ id: "app.settings.open" }, { id: "terminal.paste" }],
+          total: 250,
+          limit: 100,
+          offset: 0,
+          hasMore: true,
+        },
+      },
+    });
+    const answer = await ask("mcp:dispatch-action", {
+      actionId: "actions.list",
+      args: { offset: 0, limit: 100 },
+      confirmed: false,
+      sessionOrigin: "external",
+    });
+    expect(answer).toEqual({
+      result: {
+        ok: true,
+        result: { actions: [], total: 250, limit: 100, offset: 0, hasMore: true },
+      },
+    });
+  });
+
+  it("answers a schema read for an action a host may not run as not found", async () => {
+    installViewReverseRequests();
+    m.dispatchActionForHost
+      .mockResolvedValueOnce({
+        result: {
+          ok: true,
+          result: { ok: true, entry: { id: "terminal.paste" }, policy: null, error: null },
+        },
+      })
+      .mockResolvedValueOnce({
+        result: {
+          ok: true,
+          result: { ok: true, entry: { id: "terminal.sendKeys" }, policy: null, error: null },
+        },
+      });
+    const read = (actionId: string) =>
+      ask("mcp:dispatch-action", {
+        actionId: "actions.getSchema",
+        args: { actionId },
+        confirmed: false,
+        sessionOrigin: "external",
+      });
+
+    await expect(read("terminal.paste")).resolves.toMatchObject({
+      result: { ok: true, result: { ok: false, entry: null, error: { code: "NOT_FOUND" } } },
+    });
+    await expect(read("terminal.sendKeys")).resolves.toMatchObject({
+      result: { ok: true, result: { ok: true, entry: { id: "terminal.sendKeys" } } },
+    });
+  });
+
+  it("passes a failed registry read back untouched", async () => {
+    installViewReverseRequests();
+    const failure = { ok: false, error: { code: "EXECUTION_ERROR", message: "renderer gone" } };
+    m.dispatchActionForHost.mockResolvedValue({ result: failure });
+    await expect(
+      ask("mcp:dispatch-action", {
+        actionId: "actions.search",
+        args: { query: "x" },
+        confirmed: false,
+        sessionOrigin: "external",
+      })
+    ).resolves.toEqual({ result: failure });
   });
 
   it("lists file.view to a host but none of the file actions that persist or read back", async () => {

@@ -9,6 +9,7 @@ import { registerProjectView, unregisterProjectView } from "../../window/webCont
 import { setProjectViewManager, setWindowRegistry } from "../../window/windowRef.js";
 import {
   ElicitRequestSchema,
+  ToolListChangedNotificationSchema,
   type ElicitResult,
   type ClientCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -1588,7 +1589,11 @@ describe("McpServerService", () => {
       return { registry, focus };
     }
 
-    async function connectBound(port: number, workspaceId?: string) {
+    async function connectBound(
+      port: number,
+      workspaceId?: string,
+      onStandaloneStream?: () => void
+    ) {
       const apiKey = getServiceApiKey();
       const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
         requestInit: {
@@ -1597,6 +1602,17 @@ describe("McpServerService", () => {
             ...(workspaceId ? { "Daintree-Workspace-Id": workspaceId } : {}),
           },
         },
+        // The server registers the GET stream notifications travel on before it
+        // answers it, so an OK answer means a notification can reach the client.
+        ...(onStandaloneStream
+          ? {
+              fetch: async (input: string | URL | Request, init?: RequestInit) => {
+                const response = await fetch(input, init);
+                if (init?.method === "GET" && response.ok) onStandaloneStream();
+                return response;
+              },
+            }
+          : {}),
       });
       const client = new Client({ name: "bound-test-client", version: "1.0.0" });
       await client.connect(transport);
@@ -1730,8 +1746,8 @@ describe("McpServerService", () => {
       // result fails a validator the production result would satisfy. In a
       // running build both surfaces project the same action definitions, so a
       // client that listed while the workspace was closed can call straight
-      // through once it opens. Nothing sends `tools/list_changed` on route
-      // recovery, so nothing would prompt a re-list anyway.
+      // through once it opens. The re-list is what the `tools/list_changed`
+      // sent on route recovery asks for (#13350), covered below.
       expect((await client.listTools()).tools.map((t) => t.name)).toEqual(
         boundManifest()
           .filter((entry) => entry.danger !== "confirm")
@@ -1740,6 +1756,35 @@ describe("McpServerService", () => {
 
       const afterOpen = await client.callTool({ name: "terminal.list", arguments: {} });
       expect(getTextResult(afterOpen).content[0].text).toBe('"from-closed-workspace"');
+    });
+
+    it("tells a bound client its tool list moved each time its route does (#13350)", async () => {
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      let streamReady!: () => void;
+      const standaloneStream = new Promise<void>((resolve) => (streamReady = resolve));
+      const client = await connectBound(service.currentPort!, CLOSED_PROJECT_ID, () =>
+        streamReady()
+      );
+      let changes = 0;
+      client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+        changes += 1;
+      });
+      await standaloneStream;
+
+      // Listed from the base surface: nothing shows the workspace yet.
+      await client.listTools();
+      const opened = boundWindow(
+        { kind: "project", workspaceId: CLOSED_PROJECT_ID, workspacePath: "/repos/c" },
+        "from-closed-workspace"
+      );
+      await vi.waitFor(() => expect(changes).toBe(1));
+
+      // Listed again from the open view, then the view goes: back to the base.
+      await client.listTools();
+      unregisterProjectView(opened.webContents.id);
+      await vi.waitFor(() => expect(changes).toBe(2));
     });
 
     it("reports no frontend attached for a viewless workspace when Host-mode routing is on", async () => {

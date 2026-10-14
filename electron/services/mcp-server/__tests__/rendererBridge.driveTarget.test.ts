@@ -158,6 +158,30 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
     });
   });
 
+  describe("describeWorkspaceRoute (#13350)", () => {
+    it("names the one local view, and nowhere once it goes or another opens beside it", () => {
+      mockProjectViews.set(WORKSPACE, [makeWebContents(41)]);
+      expect(bridge.describeWorkspaceRoute(WORKSPACE)).toBe("local:41");
+      mockProjectViews.set(WORKSPACE, [makeWebContents(41), makeWebContents(42)]);
+      expect(bridge.describeWorkspaceRoute(WORKSPACE)).toBe("none");
+      // A pane's launch view settles two views, as the manifest fetch does.
+      expect(bridge.describeWorkspaceRoute(WORKSPACE, 42)).toBe("local:42");
+      mockProjectViews.clear();
+      expect(bridge.describeWorkspaceRoute(WORKSPACE)).toBe("none");
+    });
+
+    it("names a remote driver, and a held place it cannot reach as unavailable", () => {
+      const endpoint = makeRemoteEndpoint(vi.fn());
+      mockProjectViews.set(WORKSPACE, [makeWebContents(41)]);
+      setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+      expect(bridge.describeWorkspaceRoute(WORKSPACE)).toBe(`remote:${endpoint.endpointId}`);
+      setMcpDriveTargetResolver(() => ({ state: "unavailable", reason: "reserved" }));
+      expect(bridge.describeWorkspaceRoute(WORKSPACE)).toBe("unavailable");
+      setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+      expect(bridge.describeWorkspaceRoute(WORKSPACE)).toBe("local:41");
+    });
+  });
+
   describe("with every renderer detached", () => {
     beforeEach(() => {
       setMcpDriveTargetResolver(() => ({ state: "vacant" }));
