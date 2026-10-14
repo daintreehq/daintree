@@ -127,7 +127,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
             side="bottom"
             align="start"
           >
-            <h3 className="min-w-0 truncate rounded-[var(--radius-sm)] font-mono text-xs font-semibold text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary">
+            <h3 className="min-w-0 truncate rounded-[var(--radius-sm)] font-mono text-xs font-semibold text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary">
               {event.type}
             </h3>
           </TruncatedTooltip>
@@ -158,7 +158,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
               <time
                 dateTime={new Date(event.timestamp).toISOString()}
                 tabIndex={0}
-                className="font-mono tabular-nums whitespace-nowrap rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+                className="font-mono tabular-nums whitespace-nowrap rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
               >
                 {formatTimestamp(event.timestamp)}
               </time>
@@ -304,7 +304,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
                   side="bottom"
                   align="start"
                 >
-                  <span className="min-w-0 truncate font-mono text-xs rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary">
+                  <span className="min-w-0 truncate font-mono text-xs rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary">
                     {event.id}
                   </span>
                 </TruncatedTooltip>
@@ -329,7 +329,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
                     side="bottom"
                     align="start"
                   >
-                    <span className="min-w-0 truncate font-mono text-xs rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary">
+                    <span className="min-w-0 truncate font-mono text-xs rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary">
                       {event.payload.traceId}
                     </span>
                   </TruncatedTooltip>
