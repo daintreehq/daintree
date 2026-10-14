@@ -2476,10 +2476,6 @@ body[data-performance-mode="true"] .surface-toolbar {
   background-color: var(--color-surface-toolbar) !important;
 }
 
-body[data-performance-mode="true"] .surface-toolbar[data-remote-window] {
-  background-color: var(--remote-toolbar-surface) !important;
-}
-
 /* Disable terminal glow in performance mode */
 body[data-performance-mode="true"] .terminal-selected,
 body[data-performance-mode="true"] .terminal-focused,

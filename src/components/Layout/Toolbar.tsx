@@ -2460,8 +2460,9 @@ export function Toolbar({
             aria-label="Main toolbar"
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
-            // A window working on another machine wears it across the whole strip
-            // (toolbar.css), so the difference reads before anything is read.
+            // A window working on another machine shows it as light behind the
+            // project pill and host chip (toolbar.css), so the difference reads
+            // before anything is read.
             data-remote-window={remoteWindow ? "" : undefined}
             className={cn(
               "@container/toolbar relative z-[var(--z-toolbar)] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-3 h-12 items-center px-4 shrink-0 app-drag-region surface-toolbar border-b border-divider",
