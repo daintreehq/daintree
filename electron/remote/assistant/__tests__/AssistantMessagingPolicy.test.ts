@@ -49,9 +49,14 @@ function harness(overrides: Partial<AssistantMessagingPolicyDeps> = {}) {
     });
     launchGenerations.set(terminalId, (launchGenerations.get(terminalId) ?? 0) + 1);
   };
-  const end = (projectId: string, slot: number, sessionId: string) => {
+  const end = (
+    projectId: string,
+    slot: number,
+    sessionId: string,
+    reason: HelpSessionEndedEvent["reason"] = "revoked"
+  ) => {
     for (const listener of [...listeners]) {
-      listener({ projectId, slot, sessionId, reason: "revoked" });
+      listener({ projectId, slot, sessionId, reason });
     }
   };
   return { policy, running, launchGenerations, enabledHosts, listeners, run, end };
@@ -430,5 +435,129 @@ describe("AssistantMessagingPolicy", () => {
     expect(h.listeners.size).toBe(0);
     expect(h.policy.getEnrollment(lane())).toBeNull();
     expect(h.policy.isPaused()).toBe(false);
+  });
+
+  describe("how an enrollment ended", () => {
+    it.each([
+      ["revoked", "revoked"],
+      ["displaced", "displaced"],
+      ["relaunched", "relaunched"],
+      ["probe-failed", "stopped"],
+      ["discarded", "stopped"],
+    ] as const)("records a %s session as %s", (sessionReason, reason) => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.policy.enroll(lane(), SHELL_A);
+      h.end("proj", 0, "s1", sessionReason);
+      expect(h.policy.getEnrollment(lane())).toBeNull();
+      expect(h.policy.getEnded(lane())).toEqual({ reason, at: 1_000, enrolledBy: SHELL_A });
+    });
+
+    it("records a run replaced in place as relaunched, even without a session event", () => {
+      const h = harness();
+      h.run("proj", 0, "s1", "term");
+      h.policy.enroll(lane(), LOCAL);
+      h.run("proj", 0, "s1", "term");
+      expect(h.policy.getEnded(lane())?.reason).toBe("relaunched");
+      expect(h.policy.getHub()).toBeNull();
+    });
+
+    it("records a remote Shell that is gone for good, and leaves the hub alone", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      h.policy.enroll(lane("proj", 0), SHELL_A);
+      h.policy.enroll(lane("proj", 1), LOCAL);
+      h.policy.releaseLinkSession("link-a");
+      expect(h.policy.getEnded(lane("proj", 0))?.reason).toBe("shell-gone");
+      expect(h.policy.getEnded(lane("proj", 1))).toBeNull();
+    });
+
+    it("records nothing when the person withdraws, and forgets an ending once enrolled again", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      const first = h.policy.enroll(lane(), SHELL_A);
+      if (!first.ok) throw new Error("expected enrollment");
+      h.policy.unenroll(lane(), SHELL_A, first.enrollment.generation);
+      expect(h.policy.getEnded(lane())).toBeNull();
+
+      h.policy.enroll(lane(), SHELL_A);
+      h.end("proj", 0, "s1", "displaced");
+      expect(h.policy.getEnded(lane())?.reason).toBe("displaced");
+      h.run("proj", 0, "s2");
+      expect(h.policy.enroll(lane(), SHELL_A).ok).toBe(true);
+      expect(h.policy.getEnded(lane())).toBeNull();
+    });
+
+    it("an old session's end leaves a newer enrollment and its record alone", () => {
+      const h = harness();
+      h.run("proj", 0, "s2");
+      h.policy.enroll(lane(), SHELL_A);
+      h.end("proj", 0, "s1", "revoked");
+      expect(h.policy.getEnrollment(lane())).not.toBeNull();
+      expect(h.policy.getEnded(lane())).toBeNull();
+    });
+  });
+
+  describe("change notifications", () => {
+    it("tells listeners about every real change and bumps the revision", () => {
+      const h = harness();
+      let heard = 0;
+      h.policy.onChange(() => heard++);
+      h.run("proj", 0, "s1");
+      const enrolled = h.policy.enroll(lane(), SHELL_A);
+      expect(heard).toBe(1);
+      h.policy.setPaused(true);
+      expect(heard).toBe(2);
+      h.policy.setPaused(true);
+      expect(heard).toBe(2);
+      if (!enrolled.ok) throw new Error("expected enrollment");
+      h.policy.unenroll(lane(), SHELL_A, enrolled.enrollment.generation);
+      expect(heard).toBe(3);
+      expect(h.policy.getRevision()).toBe(3);
+    });
+
+    it("stays quiet for refusals and releases that release nothing", () => {
+      const h = harness();
+      let heard = 0;
+      h.policy.onChange(() => heard++);
+      h.policy.enroll(lane(), SHELL_A);
+      h.policy.unenroll(lane(), SHELL_A, "gen-unknown");
+      h.policy.releaseLinkSession("link-a");
+      h.policy.releaseRemoteShells();
+      expect(heard).toBe(0);
+    });
+
+    it("tells listeners when a session ends an enrollment or a Shell's lanes are released", () => {
+      const h = harness();
+      let heard = 0;
+      h.run("proj", 0, "s1");
+      h.run("proj", 1, "s2");
+      h.policy.enroll(lane("proj", 0), SHELL_A);
+      h.policy.enroll(lane("proj", 1), SHELL_B);
+      h.policy.onChange(() => heard++);
+      h.end("proj", 0, "s1", "revoked");
+      expect(heard).toBe(1);
+      h.policy.releaseRemoteShells();
+      expect(heard).toBe(2);
+    });
+
+    it("keeps notifying the rest when one listener throws, and stops after unsubscribe or dispose", () => {
+      const h = harness();
+      let heard = 0;
+      h.policy.onChange(() => {
+        throw new Error("boom");
+      });
+      const off = h.policy.onChange(() => heard++);
+      h.policy.setPaused(true);
+      expect(heard).toBe(1);
+      off();
+      h.policy.setPaused(false);
+      expect(heard).toBe(1);
+      h.policy.onChange(() => heard++);
+      h.policy.dispose();
+      h.policy.setPaused(true);
+      expect(heard).toBe(1);
+    });
   });
 });

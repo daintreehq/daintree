@@ -31,7 +31,9 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { usePaletteStore } from "@/store/paletteStore";
-import { HelpPanelHeader } from "./HelpPanelHeader";
+import { HelpPanelHeader, type HelpPanelMessagingControls } from "./HelpPanelHeader";
+import { AssistantMessagingNotice } from "./AssistantMessagingNotice";
+import { useAssistantMessaging } from "@/hooks/useAssistantMessaging";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
 import {
@@ -328,6 +330,21 @@ export function HelpPanel({
         : null,
     [activeWorkspaceId, activeWorkspacePath]
   );
+  const messaging = useAssistantMessaging(activeWorkspaceId, activeSlot, sessionId);
+  const messagingLane = messaging.state?.lane;
+  const messagingControls: HelpPanelMessagingControls | null =
+    messaging.state?.available && messagingLane
+      ? {
+          enrolled: messagingLane.enrolled,
+          // Turning it on needs a running assistant; turning it off never does.
+          canChangeEnrollment:
+            !messagingLane.enrolledElsewhere && (messagingLane.enrolled || Boolean(terminalId)),
+          paused: messaging.state.paused,
+          canPause: messaging.state.canPause,
+          onEnrolledChange: messaging.setLaneEnrolled,
+          onPausedChange: messaging.setPaused,
+        }
+      : null;
 
   // The ActionContext pinned to this session at launch (#8772). Fetched once
   // per session id — the binding is fixed at provision time and only changes
@@ -1536,6 +1553,7 @@ export function HelpPanel({
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
+        messaging={messagingControls}
       />
 
       {pastSessionsMounted && (
@@ -1618,6 +1636,11 @@ export function HelpPanel({
           onOpenInstallerPage={handleOpenInstallerPage}
           onStartNewSession={handleNewSession}
           onDismissSessionRevoked={dismissSessionRevoked}
+        />
+        <AssistantMessagingNotice
+          state={messaging.state}
+          refusal={messaging.refusal}
+          onDismissRefusal={messaging.dismissRefusal}
         />
         {showTerminal ? (
           isMissingCli && agentId ? (

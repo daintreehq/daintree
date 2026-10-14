@@ -3,6 +3,7 @@ import { ChevronRight, CircleHelp, CircleStop, Ellipsis, History, RotateCw } fro
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -54,6 +55,18 @@ function AssistantStateAnnouncer({ agentState }: { agentState: AgentState | null
   );
 }
 
+/** Cross-machine messaging for the lane on screen; absent while there's nothing to control. */
+export interface HelpPanelMessagingControls {
+  enrolled: boolean;
+  /** False while the lane isn't running, or another machine holds its consent. */
+  canChangeEnrollment: boolean;
+  paused: boolean;
+  /** A remote window shows the host's pause but can't change it. */
+  canPause: boolean;
+  onEnrolledChange: (enrolled: boolean) => void;
+  onPausedChange: (paused: boolean) => void;
+}
+
 interface HelpPanelHeaderProps {
   /** The state of the lane on screen. Announced only — the strip draws it. */
   agentState: AgentState | null | undefined;
@@ -65,6 +78,7 @@ interface HelpPanelHeaderProps {
   onOpenDocs: () => void;
   onClose: () => void;
   isFocused?: boolean;
+  messaging?: HelpPanelMessagingControls | null;
 }
 
 export function HelpPanelHeader({
@@ -77,6 +91,7 @@ export function HelpPanelHeader({
   onOpenDocs,
   onClose,
   isFocused = false,
+  messaging = null,
 }: HelpPanelHeaderProps) {
   // The panel closes on Escape through the escape stack, which the global
   // keybinding layer pops at window capture — before Radix's menu sees the key.
@@ -157,6 +172,28 @@ export function HelpPanelHeader({
             <CircleHelp className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Open docs
           </DropdownMenuItem>
+          {messaging && (
+            <>
+              <DropdownMenuSeparator />
+              {/* Labels stay put whatever the state; the check mark carries it. */}
+              <DropdownMenuCheckboxItem
+                checked={messaging.enrolled}
+                disabled={!messaging.canChangeEnrollment}
+                onCheckedChange={(checked) => messaging.onEnrolledChange(checked === true)}
+                data-testid="assistant-header-accept-messages"
+              >
+                Accept messages from other machines
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={messaging.paused}
+                disabled={!messaging.canPause}
+                onCheckedChange={(checked) => messaging.onPausedChange(checked === true)}
+                data-testid="assistant-header-pause-messages"
+              >
+                Pause messages between machines
+              </DropdownMenuCheckboxItem>
+            </>
+          )}
           {canEndSession && (
             <>
               <DropdownMenuSeparator />

@@ -154,6 +154,7 @@ import type {
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
+import type { AssistantMessagingChangedEvent } from "./assistantMessaging.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
@@ -1326,6 +1327,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   keepAwake: GeneratedElectronAPI["keepAwake"] & {
     onStateChanged(callback: (state: KeepAwakeState) => void): () => void;
+  };
+  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
+  assistantMessaging: GeneratedElectronAPI["assistantMessaging"] & {
+    onChanged(callback: (event: AssistantMessagingChangedEvent) => void): () => void;
   };
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   hibernation: GeneratedElectronAPI["hibernation"] & {

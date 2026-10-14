@@ -99,6 +99,12 @@ export const CHANNEL_LOCALITY = {
   "artifact:apply-patch": "host",
   "artifact:detected": "host",
   "artifact:save-to-file": "hybrid",
+  // Consent and the pause live with the assistants they govern: a remote
+  // window's lanes are the host's, enrolled as that window's link session.
+  "assistant-messaging:changed": "host",
+  "assistant-messaging:get-state": "host",
+  "assistant-messaging:set-lane-enrolled": "host",
+  "assistant-messaging:set-paused": "host",
   // Canopy reads the agents of the machine it runs on, which for a remote
   // window is the host. Only its backdrop, a picture of this window, is the Shell's.
   "canopy:answer": "host",

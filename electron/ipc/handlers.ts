@@ -25,6 +25,7 @@ import { registerHibernationHandlers } from "./handlers/hibernation.js";
 import { registerSessionRestoreHandlers } from "./handlers/sessionRestore.js";
 import { registerWindowOpeningHandlers } from "./handlers/windowOpening.js";
 import { registerKeepAwakeHandlers } from "./handlers/keepAwake.js";
+import { registerAssistantMessagingHandlers } from "./handlers/assistantMessaging.js";
 import { registerIdleTerminalHandlers } from "./handlers/idleTerminals.js";
 import { registerIdleBackgroundAutoCloseHandlers } from "./handlers/idleBackgroundAutoClose.js";
 import { registerSystemSleepHandlers } from "./handlers/systemSleep.js";
@@ -189,6 +190,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerSessionRestoreHandlers(deps));
     register(() => registerWindowOpeningHandlers(deps));
     register(() => registerKeepAwakeHandlers(deps));
+    register(() => registerAssistantMessagingHandlers());
     register(() => registerIdleTerminalHandlers(deps));
     register(() => registerIdleBackgroundAutoCloseHandlers(deps));
     register(() => registerSystemSleepHandlers(deps));

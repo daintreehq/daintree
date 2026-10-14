@@ -244,6 +244,8 @@ function startClient(options: StartRemoteHostsOptions): void {
     installAssistantMessagingPolicy({
       isHostMessagingEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantMessagingEnabled === true,
+      hasHosts: () => client.registry.list().length > 0,
+      onHostsChanged: (listener) => client.registry.onChange(listener),
     })
   );
   // Answered only once a session exists, so registering costs nothing until then.
