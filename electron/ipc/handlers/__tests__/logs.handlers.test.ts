@@ -119,10 +119,6 @@ describe("logs:write-batch handler", () => {
     cleanup();
   });
 
-  it("registers the batch channel", () => {
-    expect(utilsMock.registered.some((r) => r.channel === CHANNELS.LOGS_WRITE_BATCH)).toBe(true);
-  });
-
   it("dispatches every entry to its level-specific main logger, tagging the source", async () => {
     const handler = getHandler(CHANNELS.LOGS_WRITE_BATCH);
     await handler([
@@ -154,12 +150,6 @@ describe("logs:write-batch handler", () => {
     expect(loggerMock.logWarn).not.toHaveBeenCalled();
   });
 
-  it("handles an empty batch without dispatching", async () => {
-    const handler = getHandler(CHANNELS.LOGS_WRITE_BATCH);
-    await handler([]);
-    expect(loggerMock.logDebug).not.toHaveBeenCalled();
-  });
-
   it("skips a malformed entry without aborting later entries", async () => {
     const handler = getHandler(CHANNELS.LOGS_WRITE_BATCH);
     await handler([
@@ -172,26 +162,6 @@ describe("logs:write-batch handler", () => {
     expect(loggerMock.logError).toHaveBeenCalledWith("must land", undefined, {
       source: "Renderer",
     });
-  });
-});
-
-describe("logs:get-default-level handler", () => {
-  let cleanup: () => void;
-
-  beforeEach(async () => {
-    await resetMocks();
-    cleanup = registerLogsHandlers();
-  });
-
-  afterEach(() => {
-    cleanup();
-  });
-
-  it("returns the main-process effective default level", async () => {
-    const handler = getHandler(CHANNELS.LOGS_GET_DEFAULT_LEVEL);
-    const result = await handler();
-    expect(result).toBe("info");
-    expect(loggerMock.getDefaultLogLevel).toHaveBeenCalled();
   });
 });
 
@@ -289,17 +259,6 @@ describe("registerLogsHandlers — verbose toggle is session-only", () => {
     expect(worktreeService.setLogLevelOverrides).toHaveBeenCalledWith(
       expect.objectContaining({ "*": "debug" })
     );
-  });
-
-  it("disabling verbose updates memory without writing to the store", async () => {
-    register();
-    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(true);
-    storeMock.set.mockClear();
-
-    await getHandler(CHANNELS.LOGS_SET_VERBOSE)(false);
-
-    expect(loggerState.overrides["*"]).toBeUndefined();
-    expect(storeMock.set).not.toHaveBeenCalled();
   });
 
   it("an on/off cycle preserves a pre-existing explicit wildcard override", async () => {

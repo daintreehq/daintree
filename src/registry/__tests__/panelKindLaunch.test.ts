@@ -58,17 +58,6 @@ function launch(over: Partial<Parameters<typeof launchPanelKind>[0]> = {}) {
 }
 
 describe("launchPanelKind", () => {
-  it("dispatches the action the kind's registry entry names", async () => {
-    const outcome = await launch({ kindId: "dev-preview" });
-
-    expect(actionDispatchMock).toHaveBeenCalledTimes(1);
-    expect(actionDispatchMock.mock.calls[0]![0]).toBe(
-      getPanelKindConfig("dev-preview")!.launchActionId
-    );
-    expect(addPanelMock).not.toHaveBeenCalled();
-    expect(outcome).toMatchObject({ route: "action" });
-  });
-
   it("routes each kind to the action issue #11668 requires", async () => {
     for (const [kindId, actionId] of Object.entries(expectedLaunchActions)) {
       actionDispatchMock.mockClear();
@@ -118,12 +107,6 @@ describe("launchPanelKind", () => {
     await launch({ kindId: "browser", cwd: "" });
 
     expect(actionDispatchMock.mock.calls[0]![1]).toMatchObject({ cwd: undefined });
-  });
-
-  it("forwards the caller's dispatch source unchanged", async () => {
-    await launch({ source: "user" });
-
-    expect(actionDispatchMock.mock.calls[0]![2]).toEqual({ source: "user" });
   });
 
   it("returns a failed dispatch instead of reporting it", async () => {

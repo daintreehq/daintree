@@ -51,12 +51,6 @@ describe("FigureRail", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders one thumbnail per figure in arrival order", () => {
-    render(<FigureRail figures={[makeFigure(1), makeFigure(2), makeFigure(3)]} />);
-    const thumbs = screen.getAllByTestId("figure-thumbnail");
-    expect(thumbs).toHaveLength(3);
-  });
-
   it("shows a skeleton while a thumbnail image is pending, and drops it once loaded", () => {
     const { container } = render(<FigureRail figures={[makeFigure(1)]} />);
     expect(container.querySelector(".animate-pulse-delayed")).not.toBeNull();
@@ -116,15 +110,6 @@ describe("FigureRail", () => {
     other.focus();
     fireEvent.error(screen.getByAltText("Alt 1"));
     expect(document.activeElement).toBe(other);
-  });
-
-  it("gives each failed thumbnail a figure-scoped retry label", () => {
-    render(<FigureRail figures={[makeFigure(1), makeFigure(2)]} />);
-    fireEvent.error(screen.getByAltText("Alt 1"));
-    fireEvent.error(screen.getByAltText("Alt 2"));
-
-    expect(screen.getByRole("button", { name: "Retry figure 1" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Retry figure 2" })).toBeTruthy();
   });
 
   it("sets referrerPolicy=no-referrer on thumbnail images", () => {
@@ -368,30 +353,9 @@ describe("FigureRail", () => {
     expect(screen.queryByTestId("figure-lightbox")).toBeNull();
   });
 
-  it("closes the lightbox via its close button", () => {
-    render(<FigureRail figures={[makeFigure(1)]} />);
-    fireEvent.load(screen.getByAltText("Alt 1"));
-    fireEvent.click(screen.getByRole("button", { name: "Figure 1: Caption 1" }));
-    expect(screen.getByTestId("figure-lightbox")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
-    expect(screen.queryByTestId("figure-lightbox")).toBeNull();
-  });
-
   // Animated WebP (#10278) plays via the native image decoder; the render path
   // must hand the original URL straight to a plain <img> with no poster/still
   // swap, in both the thumbnail and the lightbox, so the animation can loop.
-  it("passes an animated WebP url through unmodified to the thumbnail img", () => {
-    const url = "https://daintree.org/demo-loop.webp";
-    render(<FigureRail figures={[makeFigure(1, { url })]} />);
-
-    const img = screen.getByAltText("Alt 1");
-    expect(img.getAttribute("src")).toBe(url);
-    // No still-frame substitution: the rendered element is a plain <img>, not a
-    // <canvas>/<video> poster surface.
-    expect(img.tagName).toBe("IMG");
-  });
-
   it("opens an animated WebP figure in the lightbox with the same unmodified url, and it becomes visible on load", () => {
     const url = "https://daintree.org/demo-loop.webp";
     render(<FigureRail figures={[makeFigure(1, { url })]} />);

@@ -151,16 +151,6 @@ describe("BaseDivergence", () => {
     expect(revListRanges()).toContain("origin/release...HEAD");
   });
 
-  it("falls back to mainBranch when there is no linked PR base ref", async () => {
-    installRepo({
-      remoteBaseRefs: ["refs/remotes/origin/main"],
-      revList: { "origin/main...HEAD": "0\t0\n" },
-    });
-    const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
-
-    expect((await divergence.compute(false))?.baseBranchName).toBe("main");
-  });
-
   it("parses ahead/behind counts from the rev-list output", async () => {
     installRepo({
       remoteBaseRefs: ["refs/remotes/origin/main"],

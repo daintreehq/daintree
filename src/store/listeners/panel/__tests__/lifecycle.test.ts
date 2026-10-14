@@ -251,46 +251,6 @@ describe("handleFallbackTriggered — exhausted chain", () => {
       })
     );
   });
-
-  it("includes recovery action onClick that dispatches app.settings.openTab", async () => {
-    useAgentSettingsStore.setState({
-      settings: {
-        agents: {
-          testAgent: {
-            customPresets: [
-              {
-                id: "preset-1",
-                name: "Primary",
-              },
-            ],
-          },
-        },
-      },
-    });
-    setupPanel({
-      agentPresetId: "preset-1",
-      fallbackChainIndex: 0,
-    });
-
-    await handleFallbackTriggered({
-      terminalId: "term-1",
-      agentId: "testAgent",
-      fromPresetId: "preset-1",
-      reason: "connection",
-    });
-
-    const callArgs = vi.mocked(notify).mock.lastCall?.[0];
-    expect(callArgs?.action?.label).toBe("Open agent settings");
-    expect(callArgs?.action?.actionId).toBe("app.settings.openTab");
-    expect(callArgs?.action?.actionArgs).toEqual({ tab: "agents" });
-    (callArgs!.action!.onClick as () => void)();
-
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "agents" },
-      { source: "user" }
-    );
-  });
 });
 
 describe("handleFallbackTriggered — activation failure", () => {

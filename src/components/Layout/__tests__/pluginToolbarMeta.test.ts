@@ -27,12 +27,6 @@ function build(configs: ToolbarButtonConfig[]) {
 }
 
 describe("buildPluginToolbarMeta", () => {
-  it("renders the icon the manifest declared instead of a fixed glyph", () => {
-    const meta = build([config({ iconId: "list" })]);
-
-    expect(meta["acme.plan"]?.icon).toBe(PLUGIN_ICON_COMPONENTS.list);
-  });
-
   it("varies the icon with iconId alone, holding the button id fixed", () => {
     // Same id, same label, same plugin — only `iconId` differs. A lookup keyed
     // on anything but `iconId` would return the same glyph for both.

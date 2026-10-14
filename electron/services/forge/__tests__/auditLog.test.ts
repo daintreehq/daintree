@@ -206,10 +206,6 @@ describe("ForgeAuditService anomaly detection", () => {
 });
 
 describe("summarizeForgeArgs redaction", () => {
-  it("returns empty string for validateToken — never any token derivative", () => {
-    expect(summarizeForgeArgs("validateToken", "ghp_secrettoken")).toBe("");
-  });
-
   it("returns empty string for validateToken with the { providerId, token } payload shape (#9985)", () => {
     // The handler now passes the full payload object; the redaction must
     // continue to drop both the token and the provider id.

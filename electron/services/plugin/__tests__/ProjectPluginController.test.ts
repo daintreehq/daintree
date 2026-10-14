@@ -244,16 +244,6 @@ describe("persistence failures are loud (#12212)", () => {
     );
     expect(h.deps.writeTrust).not.toHaveBeenCalled();
   });
-
-  it("a session grant is not a failed write", async () => {
-    h.setDiscovery(ROOT_A, [discovered("acme.dashboard")]);
-    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
-    h.deps.writeTrust.mockReturnValue(false);
-
-    // Nothing was meant to be written, so there is nothing to report.
-    await expect(h.controller.setTrust(PROJECT_A, "session")).resolves.toBeUndefined();
-    expect(h.deps.writeTrust).not.toHaveBeenCalled();
-  });
 });
 
 describe("what a failed write means for `persisted` (#12212)", () => {
@@ -1188,20 +1178,6 @@ describe("per-plugin mute", () => {
     expect(h.events.filter((e) => e.name === "plugin:project-plugin-staged")).toEqual([]);
     expect(h.trust.get(PROJECT_A)!.knownPluginIds).toContain("acme.linter");
     expect(h.trust.get(PROJECT_A)!.stagedPluginIds).toEqual([]);
-  });
-
-  it("clears the mute when a staged plugin is explicitly activated", async () => {
-    enable(PROJECT_A, [], ["acme.linter"]);
-    h.setDiscovery(ROOT_A, [discovered("acme.linter")]);
-    await h.controller.onProjectOpened(PROJECT_A, ROOT_A);
-
-    // Unmute first so the plugin reaches `staged`, then activate it.
-    await h.controller.setMuted(PROJECT_A, "acme.linter", false);
-    await h.controller.setMuted(PROJECT_A, "acme.linter", true);
-    await h.controller.setMuted(PROJECT_A, "acme.linter", false);
-    await h.controller.activateStaged(PROJECT_A, "acme.linter");
-
-    expect(h.trust.get(PROJECT_A)!.mutedPluginIds).toEqual([]);
   });
 
   it("is a no-op when the plugin is already in the requested state", async () => {

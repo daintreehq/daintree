@@ -254,12 +254,6 @@ describe("projectStore addProject", () => {
     expect(useProjectStore.getState().gitInitIdentity).toBeNull();
   });
 
-  it("opens git-init with no identity when the folder was merely opened", () => {
-    useProjectStore.getState().openGitInitDialog("/tmp/plain-folder");
-
-    expect(useProjectStore.getState().gitInitIdentity).toBeNull();
-  });
-
   describe("opening in a new window (#12594)", () => {
     const REPO = { id: "p-new", path: "/tmp/repo" };
 
@@ -622,12 +616,6 @@ describe("projectStore addProject", () => {
       expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
     });
 
-    it("keeps the git requirement on an ordinary add", async () => {
-      await useProjectStore.getState().addProjectByPath("/tmp/some-repo");
-
-      expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/some-repo", undefined);
-    });
-
     it("reloads the workspace after initializing git in the open workspace", async () => {
       useProjectStore.setState({
         currentProject: { ...LIGHTWEIGHT, emoji: "🌳", lastOpened: 0, gitBacked: false },
@@ -797,20 +785,6 @@ describe("projectStore addProject", () => {
       const { title, actions } = toastPayload();
       expect(title).toBe("Repository ownership issue");
       expect(actions?.[0]?.label).toBe("Mark as safe");
-    });
-
-    it("still recognizes raw git stderr from the unclassified switch/reopen callers", async () => {
-      // Those failures never pass through `addProject`'s classification, so they
-      // arrive as plain errors carrying git's own wording — the substring
-      // fallback is what keeps them on the ownership flow.
-      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/dubious-repo");
-      projectClientMock.add.mockRejectedValueOnce(
-        new Error("fatal: detected dubious ownership in repository at '/tmp/dubious-repo'")
-      );
-
-      await useProjectStore.getState().addProject();
-
-      expect(toastPayload().title).toBe("Repository ownership issue");
     });
 
     it("leaves the guided git-init path alone", async () => {

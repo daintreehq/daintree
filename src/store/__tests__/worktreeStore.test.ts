@@ -99,6 +99,7 @@ type MockPreMaximizeLayout = {
 } | null;
 const terminalStoreState = {
   panelsById: {} as Record<string, MockTerminal>,
+  panelIdsByWorktreeId: {} as Record<string, string[]>,
   panelIds: [] as string[],
   tabGroups: new Map<string, MockTabGroup>(),
   activeDockTerminalId: null as string | null,
@@ -157,7 +158,24 @@ vi.mock("@/store/panelStore", () => ({
   },
 }));
 
-import { useWorktreeSelectionStore } from "../worktreeStore";
+import {
+  createDeletedWorktreeRecord,
+  getDeletedWorktreeTerminalIds,
+  getPinnedDeletedWorktreeAnchorId,
+  persistMruList,
+  recordSidebarWorktreeOrder,
+  useWorktreeSelectionStore,
+  type DeletedWorktree,
+} from "../worktreeStore";
+import {
+  _resetHostOwnedWritesForTesting,
+  setHostOwnedWriteFlushBarrier,
+} from "../persistence/hostOwnedWrites";
+import {
+  _resetTerminalInputGateForTesting,
+  setHostInputBlock,
+  setLeaseInputBlock,
+} from "@/services/terminal/inputGate";
 import { setFleetArmedIdsAccessor, setFleetLastArmedIdAccessor } from "../storeAccessors";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
@@ -257,6 +275,23 @@ describe("worktreeStore", () => {
     expect(createDialog.initialIssue).toBeNull();
   });
 
+  it("stores onCreated callback when opening dialog", () => {
+    const callback = vi.fn();
+    useWorktreeSelectionStore.getState().openCreateDialog(null, { onCreated: callback });
+
+    const state = useWorktreeSelectionStore.getState();
+    expect(state.createDialog.isOpen).toBe(true);
+    expect(state.createDialog.onCreated).toBe(callback);
+  });
+
+  it("clears onCreated callback when closing dialog", () => {
+    const callback = vi.fn();
+    useWorktreeSelectionStore.getState().openCreateDialog(null, { onCreated: callback });
+    useWorktreeSelectionStore.getState().closeCreateDialog();
+
+    expect(useWorktreeSelectionStore.getState().createDialog.onCreated).toBeUndefined();
+  });
+
   it("openBulkCreateDialog stores onComplete callback", () => {
     const onComplete = vi.fn();
     const issue = makeIssue({ number: 1, title: "issue" });
@@ -287,18 +322,6 @@ describe("worktreeStore", () => {
     const { bulkCreateDialog } = useWorktreeSelectionStore.getState();
     expect(bulkCreateDialog.isOpen).toBe(false);
     expect(bulkCreateDialog.onComplete).toBeUndefined();
-  });
-
-  it("opening bulk dialog twice replaces onComplete — no stale callback carryover", () => {
-    const cbA = vi.fn();
-    const cbB = vi.fn();
-    useWorktreeSelectionStore.getState().openBulkCreateDialog([], cbA);
-    useWorktreeSelectionStore.getState().closeBulkCreateDialog();
-    useWorktreeSelectionStore.getState().openBulkCreateDialog([], cbB);
-
-    const { bulkCreateDialog } = useWorktreeSelectionStore.getState();
-    expect(bulkCreateDialog.onComplete).toBe(cbB);
-    expect(bulkCreateDialog.onComplete).not.toBe(cbA);
   });
 
   it("openCreateDialogForPR does not throw when window is unavailable", () => {
@@ -690,13 +713,6 @@ describe("worktreeStore", () => {
       expect(useWorktreeSelectionStore.getState().pendingCreations.has("/abs/path")).toBe(false);
     });
 
-    it("reset clears all pending creations", () => {
-      useWorktreeSelectionStore.getState().addPendingCreation("/abs/a", { branch: "feature/a" });
-      useWorktreeSelectionStore.getState().addPendingCreation("/abs/b", { branch: "feature/b" });
-      useWorktreeSelectionStore.getState().reset();
-      expect(useWorktreeSelectionStore.getState().pendingCreations.size).toBe(0);
-    });
-
     describe("on a Windows host", () => {
       beforeEach(() => {
         _resetHostPlatformForTests();
@@ -924,13 +940,6 @@ describe("worktreeStore", () => {
   });
 
   describe("fleet scope", () => {
-    it("starts inactive with no previous worktree or token captured", () => {
-      const state = useWorktreeSelectionStore.getState();
-      expect(state.isFleetScopeActive).toBe(false);
-      expect(state._previousActiveWorktreeId).toBeNull();
-      expect(state._fleetScopeToken).toBeNull();
-    });
-
     it("enterFleetScope captures current activeWorktreeId and mints a token", () => {
       useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
       const token = useWorktreeSelectionStore.getState().enterFleetScope();
@@ -1040,16 +1049,6 @@ describe("worktreeStore", () => {
       const state = useWorktreeSelectionStore.getState();
       expect(state.activeWorktreeId).toBe("wt-temp");
       expect(state.restoreWorktreeId).toBe("wt-root");
-    });
-
-    it("reset clears fleet scope state", () => {
-      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-active" });
-      useWorktreeSelectionStore.getState().enterFleetScope();
-      useWorktreeSelectionStore.getState().reset();
-      const state = useWorktreeSelectionStore.getState();
-      expect(state.isFleetScopeActive).toBe(false);
-      expect(state._previousActiveWorktreeId).toBeNull();
-      expect(state._fleetScopeToken).toBeNull();
     });
 
     it("enterFleetScope clears any active maximize so the scope grid is visible", () => {
@@ -1744,6 +1743,515 @@ describe("worktreeStore", () => {
         // ...but an inactive worktree's park is none of fleet scope's business.
         expect(stashedFor("wt-b")?.maximizedId).toBe("b1");
       });
+    });
+  });
+
+  const appError = (code: string, message: string) => new Error(`[AppError|${code}] ${message}`);
+
+  async function drain(): Promise<void> {
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  function activeWrites(): unknown[] {
+    return appSetStateMock.mock.calls
+      .map(([payload]) => payload as Record<string, unknown>)
+      .filter((payload) => "activeWorktreeId" in payload)
+      .map((payload) => payload.activeWorktreeId);
+  }
+
+  function mruWrites(): unknown[] {
+    return appSetStateMock.mock.calls
+      .map(([payload]) => payload as Record<string, unknown>)
+      .filter((payload) => "mruList" in payload)
+      .map((payload) => payload.mruList);
+  }
+
+  let unique = 0;
+  /** Ids fresh per test, so the store's module-level "already saved" memory never dedupes them. */
+  const id = (name: string) => `${name}-${++unique}`;
+
+  describe("worktreeStore host-owned saves", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      appSetStateMock.mockResolvedValue(undefined);
+      _resetTerminalInputGateForTesting();
+      _resetHostOwnedWritesForTesting();
+      useWorktreeSelectionStore.getState().reset();
+    });
+
+    afterEach(() => {
+      _resetHostOwnedWritesForTesting();
+      _resetTerminalInputGateForTesting();
+    });
+
+    it("a local view saves and reports a real failure as before", async () => {
+      const wt = id("wt");
+      appSetStateMock.mockRejectedValueOnce(new Error("EACCES"));
+      useWorktreeSelectionStore.getState().setActiveWorktree(wt);
+      await drain();
+      expect(activeWrites()).toEqual([wt]);
+      expect(logErrorWithContextMock).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ operation: "persist_active_worktree", errorType: "filesystem" })
+      );
+    });
+
+    it("makes no active-worktree or MRU save while another screen drives the project", async () => {
+      setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "laptop", projectId: "proj-1" });
+      useWorktreeSelectionStore.getState().setActiveWorktree(id("wt"));
+      persistMruList([id("mru")]);
+      await drain();
+      expect(appSetStateMock).not.toHaveBeenCalled();
+      expect(logErrorWithContextMock).not.toHaveBeenCalled();
+    });
+
+    it("doesn't log a DRIVEN_ELSEWHERE refusal as an error", async () => {
+      appSetStateMock.mockRejectedValue(
+        appError("DRIVEN_ELSEWHERE", "app:set-state changes proj-1, which another window drives")
+      );
+      useWorktreeSelectionStore.getState().setActiveWorktree(id("wt"));
+      persistMruList([id("mru")]);
+      await drain();
+      expect(appSetStateMock).toHaveBeenCalledTimes(2);
+      expect(logErrorWithContextMock).not.toHaveBeenCalled();
+    });
+
+    it("flushes the latest save lost to a reconnect once the link is back", async () => {
+      let releaseBarrier!: () => void;
+      setHostOwnedWriteFlushBarrier(() => new Promise<void>((r) => (releaseBarrier = r)));
+      const [first, second] = [id("wt"), id("wt")];
+      const list = [id("mru")];
+      appSetStateMock.mockRejectedValue(
+        appError("HOST_DISCONNECTED", "Link to host closed: host e2e-host is connecting")
+      );
+      setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
+      // The first write went out as the link dropped; the second waits for it.
+      setHostInputBlock(null);
+      useWorktreeSelectionStore.getState().setActiveWorktree(first);
+      persistMruList(list);
+      await drain();
+      setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
+      useWorktreeSelectionStore.getState().setActiveWorktree(second);
+      await drain();
+      expect(logErrorWithContextMock).not.toHaveBeenCalled();
+      expect(activeWrites()).toEqual([first]);
+
+      appSetStateMock.mockResolvedValue(undefined);
+      setHostInputBlock(null);
+      await drain();
+      // Not before the lease is re-read and a fresh session's rehydrate is done.
+      expect(activeWrites()).toEqual([first]);
+      releaseBarrier();
+      await drain();
+      expect(activeWrites()).toEqual([first, second]);
+      expect(mruWrites()).toEqual([list, list]);
+    });
+
+    it("drops a save held through a reconnect when someone else took the project over", async () => {
+      const wt = id("wt");
+      setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
+      useWorktreeSelectionStore.getState().setActiveWorktree(wt);
+      persistMruList([id("mru")]);
+      await drain();
+      // The lease refresh after reconnecting learns of the takeover.
+      setHostOwnedWriteFlushBarrier(async () =>
+        setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "laptop", projectId: "proj-1" })
+      );
+      setHostInputBlock(null);
+      await drain();
+      expect(appSetStateMock).not.toHaveBeenCalled();
+    });
+
+    it("a switch back to the saved worktree cancels a held switch away from it", async () => {
+      const [home, away] = [id("wt"), id("wt")];
+      useWorktreeSelectionStore.getState().setActiveWorktree(home);
+      await drain();
+      setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
+      useWorktreeSelectionStore.getState().setActiveWorktree(away);
+      await drain();
+      useWorktreeSelectionStore.getState().setActiveWorktree(home);
+      await drain();
+      setHostInputBlock(null);
+      await drain();
+      expect(activeWrites()).toEqual([home]);
+    });
+
+    it("returning to the saved worktree while a different pick is in flight saves it again, and the lost pick never replays", async () => {
+      const [home, away] = [id("wt"), id("wt")];
+      useWorktreeSelectionStore.getState().setActiveWorktree(home);
+      await drain();
+      let loseAway!: (error: Error) => void;
+      appSetStateMock.mockImplementationOnce(() => new Promise((_, reject) => (loseAway = reject)));
+      useWorktreeSelectionStore.getState().setActiveWorktree(away);
+      await drain();
+      useWorktreeSelectionStore.getState().setActiveWorktree(home);
+      await drain();
+      setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
+      loseAway(appError("HOST_DISCONNECTED", "Link to host closed"));
+      await drain();
+      setHostInputBlock(null);
+      await drain();
+      expect(activeWrites()).toEqual([home, away, home]);
+    });
+
+    it("stops trusting what it last saved once another screen drove the project", async () => {
+      const [home, driversPick] = [id("wt"), id("wt")];
+      useWorktreeSelectionStore.getState().setActiveWorktree(home);
+      await drain();
+      setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "laptop", projectId: "proj-1" });
+      // Taking over reads the driver's pick back without saving it (the rehydrate).
+      useWorktreeSelectionStore.getState().setActiveWorktree(driversPick, { persist: false });
+      setLeaseInputBlock(null);
+      useWorktreeSelectionStore.getState().setActiveWorktree(home);
+      await drain();
+      expect(activeWrites()).toEqual([home, home]);
+    });
+
+    it("repeating a pick that is still in flight keeps it eligible to be held if the link loses it", async () => {
+      const wt = id("wt");
+      let lose!: (error: Error) => void;
+      appSetStateMock.mockImplementationOnce(() => new Promise((_, reject) => (lose = reject)));
+      useWorktreeSelectionStore.getState().setActiveWorktree(wt);
+      await drain();
+      useWorktreeSelectionStore.getState().setActiveWorktree(wt, { persist: true });
+      await drain();
+      setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
+      lose(appError("HOST_DISCONNECTED", "Link to host closed"));
+      await drain();
+      setHostInputBlock(null);
+      await drain();
+      expect(activeWrites()).toEqual([wt, wt]);
+    });
+  });
+});
+
+function makeDeleted(overrides: Partial<DeletedWorktree> = {}): DeletedWorktree {
+  return {
+    id: "wt-1",
+    title: "feature/x",
+    path: "/repo/wt-1",
+    deletedAt: 1000,
+    expiresAt: null,
+    holdReason: null,
+    pinnedBeforeWorktreeId: null,
+    ...overrides,
+  };
+}
+
+function setPanels(
+  entries: Array<{ id: string; worktreeId: string; location?: MockTerminal["location"] }>
+): void {
+  terminalStoreState.panelIdsByWorktreeId = {};
+  terminalStoreState.panelsById = {};
+  for (const entry of entries) {
+    const location = entry.location ?? "grid";
+    terminalStoreState.panelsById[entry.id] = {
+      id: entry.id,
+      worktreeId: entry.worktreeId,
+      location,
+    };
+    const bucket = terminalStoreState.panelIdsByWorktreeId[entry.worktreeId];
+    if (bucket) bucket.push(entry.id);
+    else terminalStoreState.panelIdsByWorktreeId[entry.worktreeId] = [entry.id];
+  }
+}
+
+describe("deleted worktrees", () => {
+  beforeEach(() => {
+    setPanels([]);
+    recordSidebarWorktreeOrder([]);
+    useWorktreeSelectionStore.getState().reset();
+  });
+
+  describe("getDeletedWorktreeTerminalIds", () => {
+    it("returns only panels that dismissing would actually close", () => {
+      setPanels([
+        { id: "live", worktreeId: "wt-1" },
+        { id: "docked", worktreeId: "wt-1", location: "dock" },
+        { id: "trashed", worktreeId: "wt-1", location: "trash" },
+        { id: "assistant", worktreeId: "wt-1", location: "overlay" },
+        { id: "dialog", worktreeId: "wt-1", location: "dialog" },
+        { id: "elsewhere", worktreeId: "wt-2" },
+      ]);
+
+      // Must mirror bulkTrashByWorktree's filter so the confirm's count matches
+      // what confirming closes.
+      expect(getDeletedWorktreeTerminalIds("wt-1")).toEqual(["live", "docked"]);
+    });
+
+    it("returns empty for a worktree with no panels", () => {
+      setPanels([{ id: "a", worktreeId: "other" }]);
+      expect(getDeletedWorktreeTerminalIds("wt-1")).toEqual([]);
+    });
+  });
+
+  describe("placement anchor", () => {
+    it("reports null for a worktree that was not visible", () => {
+      recordSidebarWorktreeOrder(["a", "b"]);
+      expect(getPinnedDeletedWorktreeAnchorId("hidden")).toBeNull();
+    });
+  });
+
+  describe("addDeletedWorktree", () => {
+    it("keeps the first record when the same id is added twice", () => {
+      const store = useWorktreeSelectionStore.getState();
+      store.addDeletedWorktree(makeDeleted({ deletedAt: 1000, pinnedBeforeWorktreeId: "first" }));
+      store.addDeletedWorktree(makeDeleted({ deletedAt: 9999, pinnedBeforeWorktreeId: "second" }));
+
+      const stored = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1");
+      expect(stored?.deletedAt).toBe(1000);
+      expect(stored?.pinnedBeforeWorktreeId).toBe("first");
+    });
+  });
+
+  describe("dismissDeletedWorktree", () => {
+    it("removes the row", () => {
+      const store = useWorktreeSelectionStore.getState();
+      store.addDeletedWorktree(makeDeleted());
+      store.dismissDeletedWorktree("wt-1");
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(false);
+    });
+
+    it("leaves state untouched for an unknown id", () => {
+      const store = useWorktreeSelectionStore.getState();
+      store.addDeletedWorktree(makeDeleted());
+      const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+      store.dismissDeletedWorktree("nope");
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+    });
+  });
+
+  describe("setDeletedWorktreeCleanupState", () => {
+    it("moves the deadline and the hold reason in a single update", () => {
+      const store = useWorktreeSelectionStore.getState();
+      store.addDeletedWorktree(makeDeleted());
+
+      const seen: Array<{ expiresAt: number | null; holdReason: string | null }> = [];
+      const unsubscribe = useWorktreeSelectionStore.subscribe((state) => {
+        const row = state.deletedWorktrees.get("wt-1");
+        if (row) seen.push({ expiresAt: row.expiresAt, holdReason: row.holdReason });
+      });
+      store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: "drag" });
+      unsubscribe();
+
+      // One emission carrying both fields — two sequential writes would publish a
+      // torn frame (new deadline, stale reason) to every sidebar subscriber.
+      expect(seen).toEqual([{ expiresAt: 5_000, holdReason: "drag" }]);
+    });
+
+    it("returns the same state when neither field changes", () => {
+      const store = useWorktreeSelectionStore.getState();
+      store.addDeletedWorktree(makeDeleted({ expiresAt: 5_000, holdReason: "agent" }));
+      const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+      store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: "agent" });
+
+      // The sweep calls this every second; an unconditional clone would re-render
+      // the whole sidebar at 1 Hz.
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+    });
+
+    it("writes when only the hold reason changes", () => {
+      const store = useWorktreeSelectionStore.getState();
+      store.addDeletedWorktree(makeDeleted({ expiresAt: 5_000, holdReason: "drag" }));
+      store.setDeletedWorktreeCleanupState("wt-1", { expiresAt: 5_000, holdReason: null });
+
+      expect(
+        useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.holdReason
+      ).toBeNull();
+    });
+
+    it("leaves state untouched for an unknown id", () => {
+      const store = useWorktreeSelectionStore.getState();
+      store.addDeletedWorktree(makeDeleted());
+      const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+      store.setDeletedWorktreeCleanupState("nope", { expiresAt: 1, holdReason: null });
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+    });
+  });
+
+  describe("pruneDeletedWorktrees", () => {
+    it("drops a row once its last terminal is gone", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      useWorktreeSelectionStore.getState().addDeletedWorktree(makeDeleted());
+
+      useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set());
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(true);
+
+      setPanels([]);
+      useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set());
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(false);
+    });
+
+    it("treats a terminal moved to another worktree as gone", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      useWorktreeSelectionStore.getState().addDeletedWorktree(makeDeleted());
+
+      setPanels([{ id: "t1", worktreeId: "wt-live" }]);
+      useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set(["wt-live"]));
+
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(false);
+    });
+
+    it("treats trashing the last terminal as gone", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      useWorktreeSelectionStore.getState().addDeletedWorktree(makeDeleted());
+
+      setPanels([{ id: "t1", worktreeId: "wt-1", location: "trash" }]);
+      useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set());
+
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(false);
+    });
+
+    it("drops a row whose id a live worktree reclaimed", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      useWorktreeSelectionStore.getState().addDeletedWorktree(makeDeleted());
+
+      // A workspace-host restart re-hydrates the worktree we had already
+      // recorded as deleted; the real row owns the id from here on.
+      useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set(["wt-1"]));
+
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(false);
+    });
+
+    it("keeps rows that still hold terminals", () => {
+      setPanels([
+        { id: "t1", worktreeId: "wt-1" },
+        { id: "t2", worktreeId: "wt-2" },
+      ]);
+      const store = useWorktreeSelectionStore.getState();
+      store.addDeletedWorktree(makeDeleted({ id: "wt-1" }));
+      store.addDeletedWorktree(makeDeleted({ id: "wt-2" }));
+
+      setPanels([{ id: "t2", worktreeId: "wt-2" }]);
+      useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set());
+
+      const remaining = useWorktreeSelectionStore.getState().deletedWorktrees;
+      expect(remaining.has("wt-1")).toBe(false);
+      expect(remaining.has("wt-2")).toBe(true);
+    });
+
+    it("returns the same state object when nothing is stale", () => {
+      setPanels([{ id: "t1", worktreeId: "wt-1" }]);
+      useWorktreeSelectionStore.getState().addDeletedWorktree(makeDeleted());
+      const before = useWorktreeSelectionStore.getState().deletedWorktrees;
+
+      useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set());
+
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees).toBe(before);
+    });
+  });
+
+  describe("clearRestoreTarget", () => {
+    it("demotes a matching durable restore target without touching the active selection", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", restoreWorktreeId: "wt-1" });
+      useWorktreeSelectionStore.getState().clearRestoreTarget("wt-1");
+
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBeNull();
+      expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+    });
+
+    it("no-ops when a different worktree is the restore target", () => {
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", restoreWorktreeId: "wt-2" });
+      useWorktreeSelectionStore.getState().clearRestoreTarget("wt-1");
+
+      expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-2");
+    });
+
+    it("scrubs a matching fleet-parked restore snapshot so scope exit can't resurrect it", () => {
+      useWorktreeSelectionStore.setState({ _previousRestoreWorktreeId: "wt-1" });
+      useWorktreeSelectionStore.getState().clearRestoreTarget("wt-1");
+
+      expect(useWorktreeSelectionStore.getState()._previousRestoreWorktreeId).toBeNull();
+    });
+  });
+
+  describe("deleted-worktree group expansion (#11260)", () => {
+    function addRows(count: number): void {
+      setPanels(Array.from({ length: count }, (_, i) => ({ id: `t${i}`, worktreeId: `wt-${i}` })));
+      for (let i = 0; i < count; i++) {
+        useWorktreeSelectionStore
+          .getState()
+          .addDeletedWorktree(makeDeleted({ id: `wt-${i}`, title: `feature/${i}` }));
+      }
+    }
+
+    it("latches shut once dismissals drop the cohort below the threshold", () => {
+      addRows(3);
+      useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+
+      useWorktreeSelectionStore.getState().dismissDeletedWorktree("wt-0");
+      // Two rows still form a group, so the expansion the user chose survives.
+      expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(true);
+
+      useWorktreeSelectionStore.getState().dismissDeletedWorktree("wt-1");
+      expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+    });
+
+    it("latches shut when pruning empties the cohort", () => {
+      addRows(3);
+      useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+      setPanels([{ id: "t0", worktreeId: "wt-0" }]);
+      useWorktreeSelectionStore.getState().pruneDeletedWorktrees(new Set());
+
+      expect(useWorktreeSelectionStore.getState().deletedWorktrees.size).toBe(1);
+      expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+    });
+
+    it("does not inherit a stale expansion into the next burst", () => {
+      addRows(3);
+      useWorktreeSelectionStore.getState().toggleDeletedWorktreeGroupExpanded();
+      for (let i = 0; i < 3; i++) {
+        useWorktreeSelectionStore.getState().dismissDeletedWorktree(`wt-${i}`);
+      }
+      addRows(3);
+
+      expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+    });
+  });
+
+  describe("createDeletedWorktreeRecord", () => {
+    beforeEach(() => {
+      recordSidebarWorktreeOrder([]);
+    });
+
+    it("names the row after the branch when one is known", () => {
+      const record = createDeletedWorktreeRecord("/repo/wt-1", {
+        title: "feature/x",
+        path: "/repo/wt-1",
+      });
+      expect(record.title).toBe("feature/x");
+      expect(record.path).toBe("/repo/wt-1");
+    });
+
+    it("falls back to the folder name for a detached-HEAD worktree", () => {
+      const record = createDeletedWorktreeRecord("/repo/wt-1", { path: "/repo/wt-1" });
+      expect(record.title).toBe("wt-1");
+    });
+
+    it("derives both path and title from the id when nothing else survives", () => {
+      // A worktree id IS its path, so a reconstructed row still has a
+      // recognisable name after git has forgotten the worktree entirely.
+      const record = createDeletedWorktreeRecord("/repo/feature-x");
+      expect(record.path).toBe("/repo/feature-x");
+      expect(record.title).toBe("feature-x");
+    });
+
+    it("reads the last segment of a Windows-style path", () => {
+      const record = createDeletedWorktreeRecord("C:\\repo\\feature-x");
+      expect(record.title).toBe("feature-x");
+    });
+
+    it("still produces a usable title for a path that is nothing but separators", () => {
+      // The invariant is that the sidebar always has something to render — the
+      // particular wording is not the contract.
+      const record = createDeletedWorktreeRecord("///");
+      expect(record.title.trim().length).toBeGreaterThan(0);
+    });
+
+    it("anchors the row to the neighbour it sat above in the sidebar", () => {
+      recordSidebarWorktreeOrder(["wt-a", "wt-b", "wt-c"]);
+      expect(createDeletedWorktreeRecord("wt-b").pinnedBeforeWorktreeId).toBe("wt-c");
+      expect(createDeletedWorktreeRecord("wt-c").pinnedBeforeWorktreeId).toBeNull();
     });
   });
 });

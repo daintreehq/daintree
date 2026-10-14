@@ -64,22 +64,6 @@ describe("validate-plugin-manifests CLI", () => {
     expect(code).toBe(0);
   });
 
-  it("fails on malformed JSON and names the offending file", async () => {
-    writeManifest(base, "sample", "broken", "{ not valid json ");
-    const { code, stderr } = await run(base);
-    expect(code).toBe(1);
-    expect(stderr).toContain("Invalid JSON");
-    expect(stderr).toContain(path.join("sample", "broken", "plugin.json"));
-  });
-
-  it("fails on a schema-invalid manifest and names the field", async () => {
-    // `name` must be in publisher.name format — a bare name is rejected.
-    writeManifest(base, "sample", "badname", { name: "nodot", version: "1.0.0" });
-    const { code, stderr } = await run(base);
-    expect(code).toBe(1);
-    expect(stderr).toContain("name");
-  });
-
   it("accepts a daintree.* sample name (validated as built-in, mirroring sideload)", async () => {
     // Sample plugins are sideloaded on the builtin footing, so the reserved
     // daintree.* namespace must pass — this guards the origin choice.

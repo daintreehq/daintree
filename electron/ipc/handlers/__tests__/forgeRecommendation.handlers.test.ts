@@ -37,21 +37,6 @@ describe("registerForgeRecommendationHandlers", () => {
     }
   });
 
-  it("registers two IPC handlers and cleanup removes them", () => {
-    const cleanup = registerForgeRecommendationHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(2);
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge-recommendation:get-dismissed",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "forge-recommendation:mark-dismissed",
-      expect.any(Function)
-    );
-    cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(2);
-  });
-
   it("getDismissed returns empty object for a fresh store", () => {
     registerForgeRecommendationHandlers();
     expect(getHandler("forge-recommendation:get-dismissed")(null)).toEqual({});

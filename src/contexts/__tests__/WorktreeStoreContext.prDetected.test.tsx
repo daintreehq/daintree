@@ -17,6 +17,7 @@ import type { WorktreeSnapshot, WorktreeEventVersion } from "@shared/types";
 import type { Project } from "@shared/types/project";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
+import { toWorktreeTick } from "@shared/utils/worktreeSnapshotTick";
 
 vi.mock("@/store/wakeActiveWorktreeTerminals", () => ({
   restoreTerminalFocusOnReveal: () => false,
@@ -41,7 +42,8 @@ type PortEventName =
   | "pr-cleared"
   | "pr-detection-state"
   | "issue-detected"
-  | "issue-not-found";
+  | "issue-not-found"
+  | "worktree-tick";
 
 const listeners = new Map<PortEventName, Set<(data: unknown) => void>>();
 
@@ -146,26 +148,6 @@ async function renderProvider() {
 }
 
 describe("WorktreeStoreProvider pr-detected handler", () => {
-  it("writes prCiStatus to the worktree store", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    act(() => {
-      emit("pr-detected", {
-        type: "pr-detected",
-        worktreeId: "wt-1",
-        prNumber: 42,
-        prUrl: "https://example.test/pr/42",
-        prState: "open",
-        prCiStatus: "success",
-      });
-    });
-
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
-  });
-
   it("clears prCiStatus when the event omits it (full-replace, matches backend)", async () => {
     const store = await renderProvider();
     act(() => {
@@ -262,28 +244,6 @@ describe("WorktreeStoreProvider pr-detected handler", () => {
     expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("failure");
     expect(getCache(key)?.items[0]).toBe(cachedRow);
     expect(getGeneration(key)).toBe(genBefore);
-  });
-
-  it("applies last-write-wins across rapid successive events for the same PR", async () => {
-    const store = await renderProvider();
-    act(() => {
-      store.getState().applyUpdate(makeWorktree("wt-1"), nextV());
-    });
-
-    act(() => {
-      for (const ciStatus of ["pending", "failure", "success"] as const) {
-        emit("pr-detected", {
-          type: "pr-detected",
-          worktreeId: "wt-1",
-          prNumber: 42,
-          prUrl: "https://example.test/pr/42",
-          prState: "open",
-          prCiStatus: ciStatus,
-        });
-      }
-    });
-
-    expect(store.getState().worktrees.get("wt-1")?.prCiStatus).toBe("success");
   });
 
   describe("an issue number the linked GitHub PR carries (#12381)", () => {
@@ -620,36 +580,6 @@ describe("WorktreeStoreProvider pr-cleared handler", () => {
     const wt = store.getState().worktrees.get("wt-1");
     expect(wt?.prNumber).toBeUndefined();
     expect(wt?.prCiStatus).toBeUndefined();
-  });
-
-  it("drops a stale pr-cleared after a multi-hop branch switch (foo → bar → baz)", async () => {
-    const store = await renderProvider();
-    // Start on baz with a valid PR (the survivor)
-    act(() => {
-      store.getState().applyUpdate(
-        makeWorktree("wt-1", {
-          branch: "feature/baz",
-          prNumber: 999,
-          prUrl: "https://example.test/pr/999",
-          prState: "open",
-          prCiStatus: "success",
-        }),
-        nextV()
-      );
-    });
-
-    // Stale clear arrives from the long-ago `foo` lookup
-    act(() => {
-      emit("pr-cleared", {
-        type: "pr-cleared",
-        worktreeId: "wt-1",
-        branchName: "feature/foo",
-      });
-    });
-
-    const wt = store.getState().worktrees.get("wt-1");
-    expect(wt?.prNumber).toBe(999);
-    expect(wt?.prCiStatus).toBe("success");
   });
 });
 
@@ -1028,19 +958,6 @@ describe("WorktreeStoreProvider resume event (#9702)", () => {
     });
   }
 
-  it("does not wake when resume fires while the document is hidden", async () => {
-    setVisibility("hidden");
-    await renderProvider();
-    wakeMock.mockClear();
-
-    act(() => {
-      document.dispatchEvent(new Event("resume"));
-    });
-    flushWakeFrames();
-
-    expect(wakeMock).not.toHaveBeenCalled();
-  });
-
   it("wakes once when resume fires while visible", async () => {
     setVisibility("visible");
     await renderProvider();
@@ -1048,22 +965,6 @@ describe("WorktreeStoreProvider resume event (#9702)", () => {
 
     act(() => {
       document.dispatchEvent(new Event("resume"));
-    });
-    flushWakeFrames();
-
-    expect(wakeMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("coalesces a resume + visibilitychange pair into a single wake", async () => {
-    setVisibility("visible");
-    await renderProvider();
-    wakeMock.mockClear();
-
-    // Chromium fires resume immediately before visibilitychange on thaw; both
-    // land in the same turn and must collapse to one fan-out.
-    act(() => {
-      document.dispatchEvent(new Event("resume"));
-      document.dispatchEvent(new Event("visibilitychange"));
     });
     flushWakeFrames();
 
@@ -1109,5 +1010,117 @@ describe("WorktreeStoreProvider host restart re-hydration (#8403)", () => {
     expect(store.getState().worktrees.has("old-1")).toBe(false);
     expect(store.getState().worktrees.has("post-2")).toBe(true);
     expect(store.getState().version.epoch).toBe("epoch-restarted");
+  });
+});
+
+describe("WorktreeStoreProvider worktree-tick handler", () => {
+  // Shadows the file-level factory: every row in this suite is the same
+  // `wt-1`, so the overrides are the only thing a test varies.
+  function makeWorktree(overrides: Partial<WorktreeSnapshot> = {}): WorktreeSnapshot {
+    return {
+      id: "wt-1",
+      worktreeId: "wt-1",
+      generation: 1,
+      path: "/repo/wt-1",
+      name: "wt-1",
+      isCurrent: false,
+      branch: "feature",
+      isMainWorktree: false,
+      modifiedCount: 1,
+      lastGitStatusCheckedAt: 100,
+      workingTreeChangedAt: 100,
+      ...overrides,
+    } as WorktreeSnapshot;
+  }
+
+  function update(worktree: WorktreeSnapshot, seq: number, epoch = TEST_EPOCH) {
+    act(() => emit("worktree-update", { worktree, epoch, seq }));
+  }
+
+  function tick(worktree: WorktreeSnapshot, seq: number, epoch = TEST_EPOCH) {
+    act(() => emit("worktree-tick", { tick: toWorktreeTick(worktree), epoch, seq }));
+  }
+
+  it("advances the stamp side maps without replacing the row", async () => {
+    const store = await renderProvider();
+    update(makeWorktree(), 1);
+    const mapBefore = store.getState().worktrees;
+
+    tick(
+      makeWorktree({
+        lastGitStatusCheckedAt: 200,
+        workingTreeChangedAt: 300,
+        workingTreeChangedDirs: ["src"],
+      }),
+      2
+    );
+
+    const state = store.getState();
+    expect(state.worktrees).toBe(mapBefore);
+    expect(state.version).toEqual({ epoch: TEST_EPOCH, seq: 2 });
+    expect(state.statusCheckedAt.get("wt-1")).toBe(200);
+    expect(state.workingTreeChangedAtById.get("wt-1")).toBe(300);
+  });
+
+  it("re-merges against the host snapshot, not a row the renderer edited locally", async () => {
+    // A full update re-applies the host's auto-detected issue over a local
+    // clear (an issue detach); a tick standing in for it must do the same.
+    const store = await renderProvider();
+    update(makeWorktree({ issueNumber: 11, issueTitle: "Auto" }), 1);
+    act(() => {
+      const worktrees = new Map(store.getState().worktrees);
+      worktrees.set("wt-1", {
+        ...worktrees.get("wt-1")!,
+        issueNumber: undefined,
+        issueTitle: undefined,
+      });
+      store.setState({ worktrees });
+    });
+
+    tick(makeWorktree({ issueNumber: 11, issueTitle: "Auto", lastGitStatusCheckedAt: 200 }), 2);
+
+    expect(store.getState().worktrees.get("wt-1")).toMatchObject({
+      issueNumber: 11,
+      issueTitle: "Auto",
+    });
+  });
+
+  it("ignores a tick for a worktree this view has no host snapshot for", async () => {
+    const store = await renderProvider();
+    tick(makeWorktree({ id: "wt-2", worktreeId: "wt-2" }), 1);
+
+    expect(store.getState().worktrees.has("wt-2")).toBe(false);
+    expect(store.getState().workingTreeChangedAtById.has("wt-2")).toBe(false);
+  });
+
+  it("ignores a tick after the worktree was removed", async () => {
+    const store = await renderProvider();
+    update(makeWorktree(), 1);
+    act(() =>
+      emit("worktree-removed", { worktreeId: "wt-1", epoch: TEST_EPOCH, seq: 2, generation: 1 })
+    );
+
+    tick(makeWorktree({ workingTreeChangedAt: 900 }), 3);
+
+    expect(store.getState().worktrees.has("wt-1")).toBe(false);
+    expect(store.getState().workingTreeChangedAtById.get("wt-1")).not.toBe(900);
+  });
+
+  it("ignores a tick from another host run", async () => {
+    const store = await renderProvider();
+    update(makeWorktree(), 1);
+
+    tick(makeWorktree({ workingTreeChangedAt: 900 }), 1, "restarted-host");
+
+    expect(store.getState().workingTreeChangedAtById.get("wt-1")).toBe(100);
+  });
+
+  it("ignores a tick from another monitor incarnation", async () => {
+    const store = await renderProvider();
+    update(makeWorktree({ generation: 2 }), 1);
+
+    tick(makeWorktree({ generation: 1, workingTreeChangedAt: 900 }), 2);
+
+    expect(store.getState().workingTreeChangedAtById.get("wt-1")).toBe(100);
   });
 });

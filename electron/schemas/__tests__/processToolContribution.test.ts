@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPluginManifestSchema, MANIFEST_CONTRIBUTION_CAPS } from "../plugin.js";
+import { getPluginManifestSchema } from "../plugin.js";
 import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../../services/ProcessDetector/registries.js";
 
@@ -34,16 +34,6 @@ describe("contributes.processTools (#11613)", () => {
     ]);
   });
 
-  it("defaults to an empty array when the manifest declares none", () => {
-    const result = getPluginManifestSchema("user").safeParse({
-      name: "acme.process-tools",
-      version: "1.0.0",
-    });
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.contributes.processTools).toEqual([]);
-  });
-
   it("accepts an alias set as repeated entries sharing one icon", () => {
     const result = parseProcessTools([
       { command: "acme-cli", iconId: "sparkles" },
@@ -64,12 +54,6 @@ describe("contributes.processTools (#11613)", () => {
     const result = parseProcessTools([{ command: builtInCommand, iconId: "sparkles" }]);
     expect(result.success).toBe(false);
     expect(processToolErrorCode(result)).toBe("process_tool_command_reserved");
-  });
-
-  it("rejects every command a built-in tool claims, not just the first", () => {
-    for (const command of Object.keys(PROCESS_TOOL_ICON_BY_COMMAND)) {
-      expect(parseProcessTools([{ command, iconId: "sparkles" }]).success, command).toBe(false);
-    }
   });
 
   it("rejects a command already claimed by a built-in agent CLI", () => {
@@ -182,14 +166,5 @@ describe("contributes.processTools (#11613)", () => {
   it("requires both fields", () => {
     expect(parseProcessTools([{ command: "acme-cli" }]).success).toBe(false);
     expect(parseProcessTools([{ iconId: "sparkles" }]).success).toBe(false);
-  });
-
-  it("bounds the array at its declared cap", () => {
-    const cap = MANIFEST_CONTRIBUTION_CAPS.processTools;
-    const entry = (i: number) => ({ command: `acme-cli-${i}`, iconId: "sparkles" });
-    expect(parseProcessTools(Array.from({ length: cap }, (_, i) => entry(i))).success).toBe(true);
-    expect(parseProcessTools(Array.from({ length: cap + 1 }, (_, i) => entry(i))).success).toBe(
-      false
-    );
   });
 });

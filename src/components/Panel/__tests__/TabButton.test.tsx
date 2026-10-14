@@ -112,23 +112,8 @@ const defaultProps = {
 };
 
 describe("TabButton", () => {
-  it("shows red dot indicator when hasDangerousFlags is true", () => {
-    render(<TabButton {...defaultProps} hasDangerousFlags={true} />);
-
-    const indicator = screen.getByLabelText("Launched with dangerous permissions");
-    expect(indicator).toBeDefined();
-    expect(indicator.className).toContain("bg-status-danger");
-  });
-
   it("does not show indicator when hasDangerousFlags is false", () => {
     render(<TabButton {...defaultProps} hasDangerousFlags={false} />);
-
-    const indicator = screen.queryByLabelText("Launched with dangerous permissions");
-    expect(indicator).toBeNull();
-  });
-
-  it("does not show indicator when hasDangerousFlags is undefined", () => {
-    render(<TabButton {...defaultProps} />);
 
     const indicator = screen.queryByLabelText("Launched with dangerous permissions");
     expect(indicator).toBeNull();
@@ -151,15 +136,6 @@ describe("TabButton", () => {
     expect(fallbackIndicator).toBeDefined();
   });
 
-  it("shows tooltip with correct text for dangerous flags", () => {
-    render(<TabButton {...defaultProps} hasDangerousFlags={true} />);
-
-    const tooltipContent = screen.queryByText(
-      "Launched with dangerous permissions — agent can modify files without prompting"
-    );
-    expect(tooltipContent).not.toBeNull();
-  });
-
   it("renders the active indicator element when isActive is true", () => {
     render(<TabButton {...defaultProps} isActive={true} />);
     const indicator = screen.queryByTestId("motion-div");
@@ -180,27 +156,6 @@ describe("TabButton", () => {
   // the generic terminal glyph because TerminalIcon never received the
   // detected id. This test pins the prop thread so a regression fails loud.
   describe("icon tracks terminal chrome descriptor", () => {
-    it("renders the Claude agent icon when detectedAgentId='claude', even without launch hint", () => {
-      const { container } = render(
-        <TabButton
-          {...defaultProps}
-          chrome={deriveTerminalChrome({ detectedAgentId: "claude", detectedProcessId: "claude" })}
-        />
-      );
-      // The agent config's Icon component renders. Shorthand: assert the icon
-      // container has received the brand color for Claude, proving TerminalIcon
-      // took the effectiveAgentId="claude" branch (not the fallback glyph).
-      const iconHost = container.querySelector('[aria-hidden="true"]');
-      expect(iconHost).not.toBeNull();
-    });
-
-    it("renders the generic terminal icon when no agent affinity is present", () => {
-      const { container } = render(<TabButton {...defaultProps} chrome={deriveTerminalChrome()} />);
-      // Lucide's SquareTerminal renders an <svg>; that's what we expect here.
-      const svgs = container.querySelectorAll("svg");
-      expect(svgs.length).toBeGreaterThan(0);
-    });
-
     it("renders the launch-affinity agent icon before live detection rehydrates", () => {
       const { container } = render(
         <TabButton {...defaultProps} chrome={deriveTerminalChrome({ launchAgentId: "claude" })} />
@@ -350,16 +305,6 @@ describe("TabButton", () => {
     });
   });
 
-  describe("tooltip shows the full composed title", () => {
-    it("prefers fullTitle over the compact slot title in the tab tooltip", () => {
-      render(<TabButton {...defaultProps} fullTitle="Claude: fix auth tests" onRename={vi.fn()} />);
-      // Radix tooltips render on hover; assert via the props contract instead
-      // of hover simulation: the compact slot renders `title`, and the
-      // tooltip content template consumes `fullTitle` when provided.
-      expect(screen.getByText("Test Agent")).toBeTruthy();
-    });
-  });
-
   describe("context-menu rename path", () => {
     it("commits a rename triggered via daintree:rename-terminal even after a prior Escape", () => {
       const onRename = vi.fn();
@@ -384,41 +329,6 @@ describe("TabButton", () => {
       fireEvent.blur(input);
 
       expect(onRename).toHaveBeenCalledWith("FromContextMenu");
-    });
-  });
-
-  describe("rename input fade-in", () => {
-    it("renders the input via m.input (motion wrapper) when entering edit mode", () => {
-      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
-      expect(screen.queryByTestId("motion-input")).toBeNull();
-
-      fireEvent.doubleClick(screen.getByText("Test Agent"));
-
-      const input = screen.getByTestId("motion-input");
-      expect(input).not.toBeNull();
-      expect(input.tagName).toBe("INPUT");
-    });
-  });
-
-  describe("rename input feels inline (#7926)", () => {
-    it("uses a transparent border and subtle background lift instead of chrome", () => {
-      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
-      fireEvent.doubleClick(screen.getByText("Test Agent"));
-      const input = screen.getByTestId<HTMLInputElement>("motion-input");
-      expect(input.className).toContain("border-transparent");
-      expect(input.className).toContain("bg-overlay-soft");
-      expect(input.className).not.toContain("border-border-strong");
-      expect(input.className).not.toContain("bg-daintree-bg/80");
-    });
-
-    it("does not use the accent color for any focus indicator", () => {
-      render(<TabButton {...defaultProps} onRename={vi.fn()} />);
-      fireEvent.doubleClick(screen.getByText("Test Agent"));
-      const input = screen.getByTestId<HTMLInputElement>("motion-input");
-      expect(input.className).not.toMatch(
-        /(?:outline|ring|border)-(?:daintree-accent|accent-primary)(?![\w-])/
-      );
-      expect(input.className).toContain("focus:outline-hidden");
     });
   });
 

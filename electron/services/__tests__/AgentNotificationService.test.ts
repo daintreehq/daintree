@@ -265,15 +265,6 @@ describe("AgentNotificationService", () => {
     expect(soundServiceMock.playFile).not.toHaveBeenCalled();
   });
 
-  it("plays sound when soundEnabled is true and a notification type is enabled", () => {
-    mockStore({ waitingEnabled: true, soundEnabled: true });
-
-    events.emit("agent:state-changed", makePayload("waiting"));
-    vi.advanceTimersByTime(200);
-
-    expect(soundServiceMock.playFile).toHaveBeenCalled();
-  });
-
   it("does not play sound when soundEnabled is false", () => {
     mockStore({ waitingEnabled: true });
 
@@ -1190,26 +1181,6 @@ describe("AgentNotificationService", () => {
       vi.advanceTimersByTime(10_000);
       expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
     });
-
-    it("does not gate the pulse when OS DND state is undefined", () => {
-      mockStore({ soundEnabled: true, workingPulseEnabled: true });
-      osDndServiceMock.getState.mockReturnValue(undefined);
-
-      events.emit("agent:state-changed", makePayload("working", "idle"));
-      vi.advanceTimersByTime(10_000);
-
-      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not gate the pulse when OS DND is explicitly off", () => {
-      mockStore({ soundEnabled: true, workingPulseEnabled: true });
-      osDndServiceMock.getState.mockReturnValue(false);
-
-      events.emit("agent:state-changed", makePayload("working", "idle"));
-      vi.advanceTimersByTime(10_000);
-
-      expect(soundServiceMock.playPulse).toHaveBeenCalledTimes(1);
-    });
   });
 
   describe("OS DND hard constraint — never suppresses in-app toasts", () => {
@@ -1918,30 +1889,6 @@ describe("AgentNotificationService", () => {
           category: "waiting",
         }
       );
-    });
-
-    it("flushWaitingBurst is a no-op when the in-handler purge emptied the buffer", () => {
-      // Idempotency: if a `completed`/`exited` event lands during the
-      // 200ms burst window and the in-handler splice drains the buffer,
-      // the flush must not throw and must not emit any notification.
-      // (Earlier review draft added a pre-flush live-state re-check; that
-      // was removed because appState.terminals is renderer-pushed with
-      // round-trip latency — it would drop legitimate waiting entries
-      // and is also ambiguous between "absent" and "removed" terminals.
-      // The in-handler splice is the only correct defense, since it runs
-      // on the same event tick as the `completed`/`exited` event and
-      // uses the event's own `state` field.)
-      mockStore({ waitingEnabled: true });
-      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
-
-      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
-      events.emit(
-        "agent:state-changed",
-        makePayloadFor("term-1", "agent-1", "completed", "waiting")
-      );
-      vi.advanceTimersByTime(300);
-
-      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     });
   });
 

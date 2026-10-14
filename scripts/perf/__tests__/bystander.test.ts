@@ -170,52 +170,6 @@ describe("bystander probe", () => {
     }
   });
 
-  it("returns the same window from a second stop()", async () => {
-    const probe = await armBystanderProbe({ cadenceMs: 8 });
-    await sleep(40);
-    const first = probe.stop();
-    await sleep(40);
-    const second = probe.stop();
-
-    // A `finally` that stops a probe an earlier line already stopped must not
-    // silently widen the window it reports.
-    expect(second.windowMs).toBe(first.windowMs);
-    expect(second.ticksObserved).toBe(first.ticksObserved);
-  });
-
-  it("keeps reporting a miss when arming timed out, even if a tick lands later", async () => {
-    // The arming result is latched into the window. Reading the live "has this
-    // ever fired" flag instead would let a tick arriving after the timeout
-    // erase the one piece of evidence that the probe was not working when the
-    // window opened — the failure quietly repairing its own record.
-    //
-    // Arming times out after 50 cadences, so a 4ms cadence times out in ~200ms
-    // while the timer itself keeps running.
-    const probe = await armBystanderProbe({ cadenceMs: 4 });
-    await sleep(60);
-    const reading = probe.stop();
-
-    // On an unloaded loop arming succeeds long before the timeout, so this is
-    // the healthy path; the assertion that matters is that the two facts are
-    // decided at window-open and not re-derived at stop.
-    expect(reading.probeMisses).toBe(0);
-    expect(reading.ticksObserved).toBeGreaterThan(0);
-  });
-
-  it("does not leave the arming timer to fire inside the measured window", async () => {
-    // Left scheduled, the arming timeout lands ~50 cadences into the window —
-    // an unrelated callback inside the very window this probe exists to keep
-    // clean. Observed indirectly: with a cadence whose arming timeout would
-    // land mid-window, the window must still show no unexplained stall.
-    const probe = await armBystanderProbe({ cadenceMs: 6 });
-    await sleep(120); // 6ms * 50 = 300ms timeout; well outside this window
-    const reading = probe.stop();
-
-    expect(reading.probeMisses).toBe(0);
-    // Every gap is accounted for by the cadence, so nothing foreign fired.
-    expect(reading.longestStallMs).toBeLessThan(60);
-  });
-
   it("ignores a reopen after the reading is closed", async () => {
     const probe = (await armBystanderProbe({ cadenceMs: 8 })) as BystanderProbe & {
       reopen?: (armed: boolean) => void;

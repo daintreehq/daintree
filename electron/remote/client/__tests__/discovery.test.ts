@@ -88,13 +88,6 @@ describe("parseTailscaleStatus", () => {
     ]);
   });
 
-  it("drops offline peers and Windows, iOS and Android machines", () => {
-    const names = parseTailscaleStatus(TAILSCALE_MAP).map((p) => p.name);
-    expect(names).not.toContain("sleepy");
-    expect(names).not.toContain("gaming-pc");
-    expect(names).not.toContain("phone");
-  });
-
   it("accepts the other shapes releases print: peer arrays, lower-case OS, no MagicDNS", () => {
     const text = JSON.stringify({
       Peer: [

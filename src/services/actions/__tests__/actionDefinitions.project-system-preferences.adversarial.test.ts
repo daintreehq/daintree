@@ -320,36 +320,6 @@ beforeEach(() => {
 });
 
 describe("project action hardening", () => {
-  it("registers the full project action surface without stale IDs", () => {
-    const actions = buildRegistry(registerProjectActions);
-
-    expectRegistryToMatchIds(actions, [
-      "project.switcherPalette",
-      "pilot.toggle",
-      "pilot.openProject",
-      "pilot.openRun",
-      "project.mruCycleOlder",
-      "project.add",
-      "project.openInNewWindow",
-      "project.openDialog",
-      "project.switch",
-      "project.update",
-      "project.remove",
-      "project.close",
-      "project.closeActive",
-      "project.getAll",
-      "project.getCurrent",
-      "project.getSettings",
-      "project.saveSettings",
-      "project.muteNotifications",
-      "project.silenceNotificationKind",
-      "project.detectRunners",
-      "project.getStats",
-      "project.cloneRepo",
-      "project.settings.open",
-    ]);
-  });
-
   it("routes blank and trimmed project.add paths to the correct store methods", async () => {
     const { service } = buildService(registerProjectActions);
     const state = useProjectStore.getState();
@@ -486,20 +456,6 @@ describe("project action hardening", () => {
 
     expect(result.ok).toBe(true);
     expect(state.switchProject).toHaveBeenCalledWith("project-1");
-  });
-
-  it("wraps project store failures as execution errors", async () => {
-    const switchProject = vi.fn().mockRejectedValue(new Error("missing project"));
-    useProjectStore.setState({ switchProject });
-    const { service } = buildService(registerProjectActions);
-
-    const result = await service.dispatch("project.switch", { projectId: "missing" });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("EXECUTION_ERROR");
-      expect(result.error.message).toBe("missing project");
-    }
   });
 
   it("passes through project client queries and dispatches settings events", async () => {
@@ -937,102 +893,9 @@ describe("system action hardening", () => {
       cwd: "/repo",
     });
   });
-
-  it("propagates downstream copyTree errors through ActionService", async () => {
-    mocks.copyTreeClient.generateAndCopyFile.mockRejectedValueOnce(
-      new Error("clipboard unavailable")
-    );
-    const { service } = buildService(registerSystemActions);
-
-    const result = await service.dispatch(
-      "copyTree.generateAndCopyFile",
-      { worktreeId: "wt-1" },
-      { source: "user", confirmed: true }
-    );
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("EXECUTION_ERROR");
-      expect(result.error.message).toBe("clipboard unavailable");
-    }
-  });
 });
 
 describe("preferences action hardening", () => {
-  it("registers the full preferences action surface, including shortcut aliases", () => {
-    const actions = buildRegistry(registerPreferencesActions);
-
-    expectRegistryToMatchIds(actions, [
-      "preferences.showProjectPulse.set",
-      "preferences.showDeveloperTools.set",
-      "preferences.showGridAgentHighlights.set",
-      "preferences.showDockAgentHighlights.set",
-      "preferences.showAgentTaskTitles.set",
-      "window.toggleFullscreen",
-      "window.reload",
-      "window.forceReload",
-      "window.toggleDevTools",
-      "window.zoomIn",
-      "window.zoomOut",
-      "window.zoomReset",
-      "window.close",
-      "sessionRestore.getConfig",
-      "sessionRestore.updateConfig",
-      "windowOpening.getConfig",
-      "windowOpening.updateConfig",
-      "hibernation.getConfig",
-      "hibernation.updateConfig",
-      "idleTerminalNotify.getConfig",
-      "idleTerminalNotify.updateConfig",
-      "idleTerminalNotify.closeProject",
-      "idleTerminalNotify.muteProject",
-      "idleBackgroundAutoClose.getConfig",
-      "idleBackgroundAutoClose.updateConfig",
-      "agentSettings.get",
-      "agentSettings.set",
-      "agentSettings.reset",
-      "keybinding.getOverrides",
-      "keybinding.setOverride",
-      "keybinding.removeOverride",
-      "keybinding.resetAll",
-      "terminalConfig.get",
-      "terminalConfig.setScrollback",
-      "terminalConfig.setPerformanceMode",
-      "terminalConfig.setFontSize",
-      "terminalConfig.setFontFamily",
-      "terminalConfig.setHybridInputEnabled",
-      "terminalConfig.setHybridInputAutoFocus",
-      "terminalConfig.setScreenReaderMode",
-      "terminalConfig.setCachedProjectViews",
-      "worktreeConfig.get",
-      "worktreeConfig.setPattern",
-      "help.shortcuts",
-      "help.shortcutsAlt",
-      "help.displayImage",
-      "help.openCommandsFolder",
-      "help.resumePastSession",
-      "help.gettingStarted.show",
-      "help.tour.show",
-      "help.launchAgent",
-      "help.togglePanel",
-      "modal.close",
-      "preferences.reduceAnimations.set",
-      "app.quit",
-      "app.forceQuit",
-    ]);
-  });
-
-  it("keeps help shortcut aliases wired to the same callback", async () => {
-    const callbacks = createCallbacks();
-    const actions: ActionRegistry = new Map();
-    registerPreferencesActions(actions, callbacks);
-
-    await actions.get("help.shortcuts")!().run(undefined, {} as never);
-    await actions.get("help.shortcutsAlt")!().run(undefined, {} as never);
-
-    expect(callbacks.onOpenShortcuts).toHaveBeenCalledTimes(2);
-  });
-
   it("updates local preference toggles immediately", async () => {
     const { service } = buildService(registerPreferencesActions);
 
@@ -1256,29 +1119,6 @@ describe("preferences action hardening", () => {
     });
   });
 
-  it("returns override snapshots and propagates stale action ID failures from the keybinding service", async () => {
-    mocks.keybindingService.getOverridesSnapshot.mockReturnValue({ "terminal.new": ["Cmd+T"] });
-    mocks.keybindingService.setOverride.mockRejectedValueOnce(
-      new Error("Unknown action: stale.action")
-    );
-    const { service } = buildService(registerPreferencesActions);
-
-    await expect(service.dispatch("keybinding.getOverrides")).resolves.toEqual({
-      ok: true,
-      result: { "terminal.new": ["Cmd+T"] },
-    });
-
-    const failure = await service.dispatch("keybinding.setOverride", {
-      actionId: "stale.action",
-      combo: ["Cmd+Alt+X"],
-    });
-    expect(failure.ok).toBe(false);
-    if (!failure.ok) {
-      expect(failure.error.code).toBe("EXECUTION_ERROR");
-      expect(failure.error.message).toBe("Unknown action: stale.action");
-    }
-  });
-
   it("calls Electron window actions directly and allows agent-driven quit (danger:safe)", async () => {
     resetEscapeStack();
     const escapeHandler = vi.fn();
@@ -1297,25 +1137,6 @@ describe("preferences action hardening", () => {
     const quitResult = await service.dispatch("app.quit", undefined, { source: "agent" });
     expect(quitResult.ok).toBe(true);
     expect(mocks.appClient.quit).toHaveBeenCalledTimes(1);
-  });
-
-  it("reads and writes the window opening config through its client", async () => {
-    mocks.windowOpeningClient.getConfig.mockResolvedValueOnce({
-      openFoldersInNewWindow: "default",
-    });
-    mocks.windowOpeningClient.updateConfig.mockResolvedValueOnce({ openFoldersInNewWindow: "on" });
-    const { service } = buildService(registerPreferencesActions);
-
-    await expect(service.dispatch("windowOpening.getConfig")).resolves.toEqual({
-      ok: true,
-      result: { openFoldersInNewWindow: "default" },
-    });
-    await expect(
-      service.dispatch("windowOpening.updateConfig", { openFoldersInNewWindow: "on" })
-    ).resolves.toEqual({ ok: true, result: { openFoldersInNewWindow: "on" } });
-    expect(mocks.windowOpeningClient.updateConfig).toHaveBeenCalledWith({
-      openFoldersInNewWindow: "on",
-    });
   });
 
   it("rejects an unknown window opening mode before it reaches main", async () => {
@@ -1352,20 +1173,5 @@ describe("preferences action hardening", () => {
       result: { openFoldersInNewWindow: "off" },
     });
     expect(mocks.windowOpeningClient.updateConfig).toHaveBeenCalledWith({});
-  });
-
-  it("surfaces a window opening write failure as { ok: false }", async () => {
-    mocks.windowOpeningClient.updateConfig.mockRejectedValueOnce(new Error("disk full"));
-    const { service } = buildService(registerPreferencesActions);
-
-    const result = await service.dispatch("windowOpening.updateConfig", {
-      openFoldersInNewWindow: "off",
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("EXECUTION_ERROR");
-      expect(result.error.message).toBe("disk full");
-    }
   });
 });

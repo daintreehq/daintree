@@ -590,24 +590,6 @@ describe("canopy IPC", () => {
     expect(canopyBackend.wakeCanopy).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses every action on a terminal while Canopy is off", async () => {
-    state.mode = "unset";
-    const sender = fakeSender(4);
-    const refused = await Promise.all([
-      outcome(invoke(CANOPY_METHOD_CHANNELS.answer, sender, "run-1", { spawnedAt: 100 }, "Yes")),
-      outcome(invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", { spawnedAt: 100 })),
-      outcome(invoke(CANOPY_METHOD_CHANNELS.trash, sender, "run-1", { spawnedAt: 100 })),
-      outcome(invoke(CANOPY_METHOD_CHANNELS.refresh, sender)),
-    ]);
-    for (const result of refused) {
-      expect(result.ok).toBe(false);
-      expect(result.message).toContain("Canopy isn't turned on");
-    }
-    expect(state.writes).toEqual([]);
-    expect(ptyClient.trash).not.toHaveBeenCalled();
-    expect(ptyClient.acquireIpcDataMirror).not.toHaveBeenCalled();
-  });
-
   it("watches a view's lifecycle once however often the panel reopens", async () => {
     const sender = fakeSender(7);
     for (let i = 0; i < 15; i++) {

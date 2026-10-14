@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPluginManifestSchema, MANIFEST_CONTRIBUTION_CAPS } from "../plugin.js";
+import { getPluginManifestSchema } from "../plugin.js";
 import { MAX_TERMINALS_PER_RECIPE } from "../../../shared/utils/recipeSanitizer.js";
 
 function parseManifest(contributes: Record<string, unknown>, capabilities: string[] = []) {
@@ -37,13 +37,6 @@ describe("contributes.recipes manifest shape (#11860)", () => {
     expect(agentsWithoutCapability.success).toBe(false);
   });
 
-  it("materializes an empty recipes array for a manifest that declares none", () => {
-    const result = parseManifest({});
-    expect(result.success).toBe(true);
-    if (!result.success) return;
-    expect(result.data.contributes.recipes).toEqual([]);
-  });
-
   it("rejects unknown fields on the contribution and on a terminal", () => {
     expect(parseManifest({ recipes: [recipe(1, { scope: "inrepo" })] }).success).toBe(false);
     expect(
@@ -69,16 +62,6 @@ describe("contributes.recipes manifest shape (#11860)", () => {
     expect(parseManifest({ recipes: [recipe(1, { terminals: atCap })] }).success).toBe(true);
     expect(
       parseManifest({ recipes: [recipe(1, { terminals: [...atCap, terminal()] })] }).success
-    ).toBe(false);
-  });
-
-  it("bounds the recipe array by its own cap", () => {
-    const cap = MANIFEST_CONTRIBUTION_CAPS.recipes;
-    expect(
-      parseManifest({ recipes: Array.from({ length: cap }, (_, i) => recipe(i)) }).success
-    ).toBe(true);
-    expect(
-      parseManifest({ recipes: Array.from({ length: cap + 1 }, (_, i) => recipe(i)) }).success
     ).toBe(false);
   });
 

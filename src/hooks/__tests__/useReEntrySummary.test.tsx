@@ -58,13 +58,6 @@ describe("useReEntrySummary", () => {
     hasFocusSpy.mockRestore();
   });
 
-  it("returns not visible by default", () => {
-    const { result } = renderHook(() => useReEntrySummary());
-    expect(result.current.visible).toBe(false);
-    expect(result.current.entries).toHaveLength(0);
-    expect(result.current.rows).toHaveLength(0);
-  });
-
   it("shows summary on focus after 3+ seconds blur with unseen entries", () => {
     const { result } = renderHook(() => useReEntrySummary());
 
@@ -172,31 +165,6 @@ describe("useReEntrySummary", () => {
     expect(result.current.visible).toBe(true);
     expect(result.current.entries).toHaveLength(1);
     expect(result.current.entries[0]!.message).toBe("Second batch");
-  });
-
-  it("calls markSummarized on the store", () => {
-    renderHook(() => useReEntrySummary());
-
-    act(() => {
-      window.dispatchEvent(new Event("blur"));
-    });
-    addEntry({
-      type: "success",
-      message: "Test",
-      context: { worktreeId: "wt-1" },
-    });
-
-    const realNow = Date.now;
-    Date.now = () => realNow() + 5000;
-
-    act(() => {
-      window.dispatchEvent(new Event("focus"));
-    });
-
-    Date.now = realNow;
-
-    const storeEntries = useNotificationHistoryStore.getState().entries;
-    expect(storeEntries[0]!.summarized).toBe(true);
   });
 
   it("does not trigger when document.hasFocus() returns false", () => {

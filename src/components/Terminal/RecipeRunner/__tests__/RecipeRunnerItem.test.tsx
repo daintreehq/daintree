@@ -13,6 +13,19 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: () => null,
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
+// Rendered inline so the menu's items can be read without driving Radix's
+// right-click open path; the ownership tests are about which actions are offered.
+vi.mock("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
+  ContextMenuItem: ({ children, onSelect }: { children: ReactNode; onSelect?: () => void }) => (
+    <div role="menuitem" onClick={onSelect}>
+      {children}
+    </div>
+  ),
+  ContextMenuSeparator: () => <hr />,
+}));
 import { RecipeRunnerItem } from "../RecipeRunnerItem";
 import {
   basePressTreatment,
@@ -147,6 +160,34 @@ describe("RecipeRunnerItem — scope indicator", () => {
 
       fireEvent.click(option);
       expect(onRun).toHaveBeenCalledWith("shadowed");
+    }
+  );
+});
+
+const pluginRecipe: TerminalRecipe = {
+  ...recipe,
+  id: "acme.tools.alpha",
+  origin: { kind: "plugin", pluginId: "acme.tools", contributionId: "alpha" },
+};
+
+const menuLabels = () => screen.getAllByRole("menuitem").map((el) => el.textContent?.trim());
+
+describe("RecipeRunnerItem — the context menu offers only what the recipe's owner allows", () => {
+  it.each(["grid", "list"] as const)(
+    "never offers a mutation the store rejects for a plugin recipe (%s mode)",
+    (mode) => {
+      for (const candidate of [recipe, pluginRecipe]) {
+        const { unmount } = renderItem(mode, { recipe: candidate });
+        const labels = menuLabels();
+        const pluginOwned = candidate.origin?.kind === "plugin";
+        const mutatesContent = labels.filter((l) => l === "Edit" || l?.startsWith("Delete"));
+        // Content edits belong to whoever owns the content; everything else
+        // (run, duplicate, pin) is the user's on any recipe.
+        expect(mutatesContent.length > 0).toBe(!pluginOwned);
+        expect(labels).toContain("Run");
+        expect(labels).toContain("Duplicate");
+        unmount();
+      }
     }
   );
 });

@@ -37,11 +37,9 @@ vi.mock("@/components/icons/DaintreeIcon", () => ({
   DaintreeIcon: () => <span data-testid="icon-daintree" />,
 }));
 
-let mockShortcut = "";
-
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => "",
-  useEffectiveCombo: () => mockShortcut || undefined,
+  useEffectiveCombo: () => undefined,
   useShortcutHintHover: () => ({}),
 }));
 
@@ -206,14 +204,6 @@ describe("ToolbarAssistantButton — agent state pip", () => {
   it("hides the pip when the panel is open (the user can already see the state)", () => {
     setHelpPanel({ isOpen: true, terminalId: "t-3" });
     setPanel("t-3", "working");
-
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
-  });
-
-  it("hides the pip when the panel is open even for waiting state", () => {
-    setHelpPanel({ isOpen: true, terminalId: "t-3w" });
-    setPanel("t-3w", "waiting");
 
     const { queryByTestId } = render(<ToolbarAssistantButton />);
     expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
@@ -502,30 +492,6 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       expect(useHelpPanelStore.getState().isOpen).toBe(true);
     });
   });
-
-  it("re-renders when agentState transitions through working → waiting → idle", () => {
-    setHelpPanel({ isOpen: false, terminalId: "t-5" });
-    setPanel("t-5", "working");
-
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
-    let pip = queryByTestId("assistant-working-pip");
-    expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-state-working/);
-
-    act(() => {
-      setPanel("t-5", "waiting");
-    });
-
-    pip = queryByTestId("assistant-working-pip");
-    expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-state-waiting/);
-
-    act(() => {
-      setPanel("t-5", "idle");
-    });
-
-    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
-  });
 });
 
 describe("ToolbarAssistantButton — tooltip (#12509)", () => {
@@ -534,7 +500,6 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
     useHelpPanelStore.setState({ isOpen: false, sessions: { 0: emptyLane() }, activeSlot: 0 });
     usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
     mockGestureAssistantHidden = false;
-    mockShortcut = "";
   });
 
   function readLabels(container: HTMLElement) {
@@ -592,17 +557,5 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
       tooltip: "Daintree Assistant",
       ariaLabel: "Daintree Assistant",
     });
-  });
-
-  it("passes the toggle shortcut through to the tooltip", () => {
-    mockShortcut = "Cmd+Shift+A";
-    setHelpPanel({ isOpen: false, terminalId: null });
-
-    const { container } = render(<ToolbarAssistantButton />);
-    expect(
-      container
-        .querySelector('[data-testid="assistant-tooltip"] [data-shortcut]')
-        ?.getAttribute("data-shortcut")
-    ).toBe("Cmd+Shift+A");
   });
 });

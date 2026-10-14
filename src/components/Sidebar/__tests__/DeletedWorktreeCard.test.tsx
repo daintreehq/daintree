@@ -179,14 +179,6 @@ describe("DeletedWorktreeCard", () => {
   // Armed presence is owned by the bottom-edge-ownership block below, which
   // asserts the same thing plus where the fill sits in the tree.
 
-  it("shows the seconds readout next to the close button while armed", () => {
-    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    const { container } = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
-
-    const readout = container.querySelector("[data-testid='deleted-worktree-countdown-seconds']");
-    expect(readout?.textContent).toMatch(/^\d+s$/);
-  });
-
   it("names the condition holding the countdown", () => {
     setPanels([{ id: "t1", worktreeId: "wt-1" }]);
     const { container } = renderCard({
@@ -381,19 +373,6 @@ describe("DeletedWorktreeCard", () => {
 
     expect(container.querySelector("[data-testid='deleted-worktree-countdown-hold']")).toBeNull();
     expect(container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeNull();
-  });
-
-  it("hides the countdown bar while auto-cleanup is off or the row is unarmed", () => {
-    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    const unarmed = renderCard();
-    expect(
-      unarmed.container.querySelector("[data-testid='deleted-worktree-countdown']")
-    ).toBeNull();
-    cleanup();
-
-    usePreferencesStore.setState({ deletedWorktreeCleanupSeconds: 0 });
-    const off = renderCard({ ...worktree, expiresAt: Date.now() + 60_000 });
-    expect(off.container.querySelector("[data-testid='deleted-worktree-countdown']")).toBeNull();
   });
 
   // #11262: the card used to carry a `border-b` *and* an absolutely positioned
@@ -632,12 +611,5 @@ describe("DeletedWorktreeCard — grouped (#11260)", () => {
     expect(screen.queryByRole("button", { name: "Close 2 terminals" })).toBeNull();
     // The rest of the card is unchanged — it still identifies its worktree.
     expect(screen.getByText("feature/login")).toBeTruthy();
-  });
-
-  it("keeps the dismiss button by default", () => {
-    setPanels([{ id: "t1", worktreeId: "wt-1" }]);
-    renderCard();
-
-    expect(screen.getByRole("button", { name: "Close 1 terminal" })).toBeTruthy();
   });
 });

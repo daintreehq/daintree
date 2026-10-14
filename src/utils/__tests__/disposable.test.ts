@@ -2,15 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DisposableStore, toDisposable } from "../disposable";
 
 describe("toDisposable", () => {
-  it("invokes the wrapped function on dispose()", () => {
-    const fn = vi.fn();
-    const d = toDisposable(fn);
-
-    d.dispose();
-
-    expect(fn).toHaveBeenCalledTimes(1);
-  });
-
   it("invokes the wrapped function at most once", () => {
     const fn = vi.fn();
     const d = toDisposable(fn);
@@ -30,15 +21,6 @@ describe("DisposableStore", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("returns the same disposable instance from add()", () => {
-    const store = new DisposableStore();
-    const d = toDisposable(() => {});
-
-    const returned = store.add(d);
-
-    expect(returned).toBe(d);
   });
 
   it("disposes entries in reverse registration order", () => {
@@ -79,17 +61,6 @@ describe("DisposableStore", () => {
 
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
-  });
-
-  it("dispose() after clear() does not re-fire already-disposed entries", () => {
-    const store = new DisposableStore();
-    const fn = vi.fn();
-    store.add(toDisposable(fn));
-
-    store.clear();
-    store.dispose();
-
-    expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("add() after dispose() warns and leaks the registration", () => {

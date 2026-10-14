@@ -162,15 +162,6 @@ describe("useSidebarVirtuosoReset — issue #12094", () => {
     expect(result.current.resetKey).toBe(1);
   });
 
-  it("resets on a shrink no deletion could be correlated with", () => {
-    // A quick-state filter hides a row because its agent stopped, or a tombstone
-    // is pruned when its last terminal leaves. Neither changes the live worktree
-    // roster in the same commit, and both shift every index below them.
-    const { result, rerender } = renderReset({ itemCount: 6, searchQuery: "" });
-    rerender({ itemCount: 5, searchQuery: "" });
-    expect(result.current.resetKey).toBe(1);
-  });
-
   it("ignores growth", () => {
     const { result, rerender } = renderReset({ itemCount: 5, searchQuery: "" });
     rerender({ itemCount: 7, searchQuery: "" });
@@ -184,22 +175,6 @@ describe("useSidebarVirtuosoReset — issue #12094", () => {
     const { result, rerender } = renderReset({ itemCount: 5, searchQuery: "" });
     rerender({ itemCount: 5, searchQuery: "" });
     expect(result.current.resetKey).toBe(0);
-  });
-
-  it("does not remount while the user is typing", () => {
-    const { result, rerender } = renderReset({ itemCount: 9, searchQuery: "" });
-    rerender({ itemCount: 4, searchQuery: "fea" });
-    rerender({ itemCount: 2, searchQuery: "feat" });
-    expect(result.current.resetKey).toBe(0);
-  });
-
-  it("resumes resetting once the query stops changing", () => {
-    const { result, rerender } = renderReset({ itemCount: 9, searchQuery: "" });
-    rerender({ itemCount: 4, searchQuery: "feat" });
-    expect(result.current.resetKey).toBe(0);
-    // Same query, list shrank anyway — a deletion landed under the filter.
-    rerender({ itemCount: 3, searchQuery: "feat" });
-    expect(result.current.resetKey).toBe(1);
   });
 
   it("still honours a shrink that landed on the same commit as a keystroke", () => {

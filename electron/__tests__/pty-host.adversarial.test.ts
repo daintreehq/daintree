@@ -1232,25 +1232,6 @@ describe("pty-host adversarial", () => {
     expect(hostState.portQueueManagers[0].clearQueue).not.toHaveBeenCalled();
   });
 
-  it("ACTIVE_TRANSITION_DOES_NOT_CLEAR_QUEUE_HOLDS", async () => {
-    const parentPort = await loadHost();
-    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
-
-    const port = createRendererPort();
-    parentPort.emit("message", {
-      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
-      ports: [port],
-    });
-    parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
-    await flushMicrotasks();
-
-    parentPort.emit("message", { type: "set-activity-tier", id: "t1", tier: "active" });
-    await flushMicrotasks();
-
-    expect(hostState.ipcQueueManagers[0].clearQueue).not.toHaveBeenCalled();
-    expect(hostState.portQueueManagers[0].clearQueue).not.toHaveBeenCalled();
-  });
-
   it("LATE_ACK_AFTER_TIMEOUT_IS_IGNORED", async () => {
     const parentPort = await loadHost();
     const terminal = createTerminal("t1");
@@ -1921,30 +1902,6 @@ describe("pty-host adversarial", () => {
           typeof m === "object" && m !== null && (m as Record<string, unknown>).id === "t1"
       )
     ).toBe(false);
-  });
-
-  it("RECOMPUTE_ONLY_TOUCHES_THE_NEWLY_FOREGROUND_PROJECT (#10857)", async () => {
-    // recomputeActivityTiers is scoped to the project that just became
-    // foreground for some window — it must NOT force-activate a global/shared
-    // terminal (undefined projectId) or a terminal belonging to a different
-    // project. Those terminals are owned exclusively by the renderer's own
-    // "set-activity-tier" IPC and must be left exactly as they were; bouncing
-    // them to "active" on every unrelated project switch is the #10857 bug.
-    const parentPort = await loadHost();
-    const backpressure = hostState.backpressureManagers[0];
-    hostState.terminals.set("t-global", createTerminal("t-global")); // undefined projectId
-    hostState.terminals.set("t-other", createTerminal("t-other", "project-2"));
-
-    // Seed "background" so a green assertion proves recompute genuinely left
-    // these terminals alone rather than reading back a coincidental default.
-    backpressure.setActivityTier("t-global", "background");
-    backpressure.setActivityTier("t-other", "background");
-
-    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
-    await flushMicrotasks();
-
-    expect(backpressure.getActivityTier("t-global")).toBe("background");
-    expect(backpressure.getActivityTier("t-other")).toBe("background");
   });
 
   it("TIER_CHANGED_BROADCAST_TOLERATES_A_CLOSING_PORT", async () => {

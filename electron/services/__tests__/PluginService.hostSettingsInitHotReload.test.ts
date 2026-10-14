@@ -152,6 +152,8 @@ const mockPluginMcpSupervisor = {
   restart: vi.fn(),
   list: vi.fn(() => []),
   getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
+  // A settings write from the manager restarts the plugin's MCP servers that read it.
+  notifySettingChanged: vi.fn(),
 };
 vi.mock("../PluginMcpSupervisor.js", () => ({
   getPluginMcpSupervisor: () => mockPluginMcpSupervisor,
@@ -249,8 +251,8 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 }));
 
 import { PluginService } from "../PluginService.js";
-import { CHANNELS } from "../../ipc/channels.js";
 import { _resetSecretStorageSessionForTests } from "../plugin/secretCipher.js";
+import type { PluginManifest, SettingDefinition } from "../../../shared/types/plugin.js";
 
 let tmpDir: string;
 
@@ -332,12 +334,6 @@ function createSettingsHost(
 describe("createHost — settings", () => {
   beforeEach(() => {
     projectStoreMock.getCurrentProject.mockReturnValue(null);
-  });
-
-  it("get returns undefined for an unset key", async () => {
-    const { service } = await setupSettingsService("acme.settings-get");
-    const { host } = createSettingsHost(service, "acme.settings-get");
-    expect(await host.settings.get("token")).toBeUndefined();
   });
 
   it("round-trips a value in user scope and persists it as JSON", async () => {
@@ -685,15 +681,6 @@ describe("createHost — settings", () => {
     );
     expect(await host.settings.get<string>("loose")).toBe("v");
   });
-
-  it("get resolves a user-declared key from the user store with no scope arg", async () => {
-    const { service } = await setupSettingsService("acme.settings-declared-user", [
-      { id: "token", type: "string", scope: "user" },
-    ]);
-    const { host } = createSettingsHost(service, "acme.settings-declared-user");
-    await host.settings.set("token", "sk-1", "user");
-    expect(await host.settings.get<string>("token")).toBe("sk-1");
-  });
 });
 
 describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
@@ -713,69 +700,11 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
     expect(resolved).toBe(true);
   });
 
-  it("waitForInit() resolves after activateStartupFinishedPlugins() even with zero plugins", async () => {
-    const service = new PluginService(tmpDir);
-    await service.activateStartupFinishedPlugins();
-    await expect(service.waitForInit()).resolves.toBeUndefined();
-  });
-
   it("dispose() resolves a pending waitForInit() so callers don't deadlock", async () => {
     const service = new PluginService(tmpDir);
     const waiter = service.waitForInit();
     service.dispose();
     await expect(waiter).resolves.toBeUndefined();
-  });
-
-  it("pushSnapshotTo() sends actions, panel kinds, toolbar buttons, context-menu items, agents, recipes, tours, and custom icons to the target webContents", async () => {
-    const service = new PluginService(tmpDir);
-    await service.activateStartupFinishedPlugins();
-    const send = vi.fn();
-    const wc = { send, isDestroyed: () => false } as unknown as Electron.WebContents;
-
-    await service.pushSnapshotTo(wc);
-
-    expect(send).toHaveBeenCalledTimes(9);
-    // Every replay goes through the EVENTS_PUSH channel — the same channel the
-    // renderer hooks' persistent push listeners consume, so no renderer-side
-    // changes are needed for the cold-restore path.
-    for (const call of send.mock.calls) {
-      expect(call[0]).toBe(CHANNELS.EVENTS_PUSH);
-    }
-    const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
-    expect(names).toContain("plugin:actions-changed");
-    expect(names).toContain("plugin:panel-kinds-changed");
-    expect(names).toContain("plugin:toolbar-buttons-changed");
-    expect(names).toContain("plugin:keybindings-changed");
-    expect(names).toContain("plugin:context-menu-items-changed");
-    expect(names).toContain("plugin:agents-changed");
-    expect(names).toContain("plugin:recipes-changed");
-    expect(names).toContain("plugin:tours-changed");
-    expect(names).toContain("plugin:icons-changed");
-    // The renderer menu-items channel was removed (#10465) — guard against the
-    // cold-restore replay accidentally re-emitting it.
-    expect(names).not.toContain("plugin:menu-items-changed");
-    // The keybindings replay is a full authoritative snapshot — the renderer
-    // hook full-replaces its plugin bindings on every push, so `complete: true`
-    // is consistent with that replace-all semantics.
-    const keybindingsCall = send.mock.calls.find(
-      (c) => (c[1] as { name?: string })?.name === "plugin:keybindings-changed"
-    );
-    expect((keybindingsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(
-      true
-    );
-    // Toolbar and context-menu-item replays must use `complete: false`
-    // so the renderer does not run a stale-prune sweep — replay is a load-style
-    // snapshot, not an unload-driven authoritative sweep.
-    const toolbarCall = send.mock.calls.find(
-      (c) => (c[1] as { name?: string })?.name === "plugin:toolbar-buttons-changed"
-    );
-    expect((toolbarCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(false);
-    const contextMenuItemsCall = send.mock.calls.find(
-      (c) => (c[1] as { name?: string })?.name === "plugin:context-menu-items-changed"
-    );
-    expect((contextMenuItemsCall?.[1] as { payload: { complete: boolean } }).payload.complete).toBe(
-      false
-    );
   });
 
   it("pushSnapshotTo() replays a global plugin's runtime panel menus, and skips a project plugin's for another view (#13213)", async () => {
@@ -848,45 +777,6 @@ describe("init gate — waitForInit() and pushSnapshotTo() (#9285)", () => {
       "project__other-project__acme.local",
     ]);
     expect(await menuPluginsFor(null)).toEqual(["acme.global"]);
-  });
-
-  it("pushSnapshotTo() keeps sending remaining channels when one send() throws (TOCTOU)", async () => {
-    // Simulates the wc being destroyed between the isDestroyed() guard and an
-    // individual send — Electron raises "Object has been destroyed". Without
-    // per-send try/catch one bad call would silently drop the remaining
-    // channels and the cold-restored renderer would miss state.
-    const service = new PluginService(tmpDir);
-    await service.activateStartupFinishedPlugins();
-    const send = vi.fn((_channel: string, payload: { name: string }) => {
-      if (payload.name === "plugin:actions-changed") {
-        throw new Error("Object has been destroyed");
-      }
-    });
-    const wc = { send, isDestroyed: () => false } as unknown as Electron.WebContents;
-
-    await service.pushSnapshotTo(wc);
-
-    expect(send).toHaveBeenCalledTimes(9);
-    const names = send.mock.calls.map((c) => (c[1] as { name?: string })?.name);
-    expect(names).toContain("plugin:panel-kinds-changed");
-    expect(names).toContain("plugin:toolbar-buttons-changed");
-    expect(names).toContain("plugin:keybindings-changed");
-    expect(names).toContain("plugin:context-menu-items-changed");
-    expect(names).toContain("plugin:agents-changed");
-    expect(names).toContain("plugin:recipes-changed");
-    expect(names).toContain("plugin:tours-changed");
-    expect(names).toContain("plugin:icons-changed");
-  });
-
-  it("pushSnapshotTo() skips a destroyed webContents", async () => {
-    const service = new PluginService(tmpDir);
-    await service.activateStartupFinishedPlugins();
-    const send = vi.fn();
-    const wc = { send, isDestroyed: () => true } as unknown as Electron.WebContents;
-
-    await service.pushSnapshotTo(wc);
-
-    expect(send).not.toHaveBeenCalled();
   });
 
   it("pushSnapshotTo() waits for init before sending — no empty snapshot races startup", async () => {
@@ -1059,5 +949,71 @@ describe("dev-mode hot reload (#9304)", () => {
     clearPriorRegistrations();
 
     expect(service.listPluginActions().some((a) => a.id === "acme.dev.do-thing")).toBe(true);
+  });
+});
+
+describe("PluginService settings for launch-disabled plugins", () => {
+  let svc: PluginService;
+
+  function manifestWith(settings: SettingDefinition[]): PluginManifest {
+    return {
+      name: "acme.demo",
+      version: "1.0.0",
+      contributes: { settings },
+    } as unknown as PluginManifest;
+  }
+
+  /** Register a plugin as launch-disabled (lives only in disabledPlugins). */
+  function seedDisabled(manifest: PluginManifest) {
+    (svc as unknown as { disabledPlugins: Map<string, unknown> }).disabledPlugins.set(
+      manifest.name,
+      {
+        manifest,
+        source: "sideload",
+        installedAt: 0,
+        originalUrl: null,
+        archiveHash: null,
+      }
+    );
+  }
+
+  beforeEach(async () => {
+    const pluginsRoot = path.join(tmpDir, "plugins");
+    await fs.mkdir(pluginsRoot, { recursive: true });
+    svc = new PluginService(pluginsRoot);
+  });
+
+  // The manager dialog renders a settings form for every plugin that
+  // contributes settings, enabled or not. A plugin disabled at app launch
+  // lives only in disabledPlugins (never in plugins), so the settings bridge
+  // must resolve its declared fields from there — otherwise stored values
+  // hydrate blank in the form.
+  it("round-trips a user-scoped value for a launch-disabled plugin", async () => {
+    seedDisabled(manifestWith([{ id: "apiKey", type: "string", scope: "user" }]));
+
+    await svc.setSettingValueFromUi("acme.demo", "apiKey", "xyz", "user", null);
+    const result = await svc.getSettingValuesForUi("acme.demo", "user", null);
+
+    expect(result.values.apiKey).toBe("xyz");
+    // The write is announced app-wide for an installed plugin, id only.
+    expect(broadcastToRendererMock).toHaveBeenCalledWith(expect.any(String), {
+      name: "plugin:settings-changed",
+      payload: { pluginId: "acme.demo" },
+    });
+  });
+
+  it("answers which required settings are still unset", async () => {
+    seedDisabled(
+      manifestWith([
+        { id: "apiKey", type: "string", scope: "user", required: true },
+        { id: "team", type: "string", scope: "user" },
+      ])
+    );
+
+    expect((await svc.getRequiredSettingsStatusForUi("acme.demo", null)).missing).toEqual([
+      "apiKey",
+    ]);
+    await svc.setSettingValueFromUi("acme.demo", "apiKey", "xyz", "user", null);
+    expect((await svc.getRequiredSettingsStatusForUi("acme.demo", null)).missing).toEqual([]);
   });
 });

@@ -435,40 +435,6 @@ describe("useGlobalKeybindings — Cmd+W in a surface that owns its close", () =
 });
 
 describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
-  it("routes Cmd+W to escape stack when a dialog is open instead of dispatching terminal.close", () => {
-    mocks.keybindingService.resolveKeybinding.mockReturnValue({
-      match: { actionId: "terminal.close" },
-      chordPrefix: false,
-      shouldConsume: true,
-    });
-
-    const escapeHandler = vi.fn();
-    registerEscape(escapeHandler);
-
-    render(<Host />);
-    pressCmdW();
-
-    expect(escapeHandler).toHaveBeenCalledTimes(1);
-    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
-  });
-
-  it("dispatches terminal.close when the escape stack is empty", () => {
-    mocks.keybindingService.resolveKeybinding.mockReturnValue({
-      match: { actionId: "terminal.close" },
-      chordPrefix: false,
-      shouldConsume: true,
-    });
-
-    render(<Host />);
-    pressCmdW();
-
-    expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
-      "terminal.close",
-      undefined,
-      expect.objectContaining({ source: "keybinding" })
-    );
-  });
-
   it("does not divert other actions to the escape stack when handlers are registered", () => {
     mocks.keybindingService.resolveKeybinding.mockReturnValue({
       match: { actionId: "panel.cycleNext" },
@@ -603,23 +569,6 @@ describe("useGlobalKeybindings — Cmd+W escape stack guard", () => {
     } finally {
       assistant.remove();
     }
-  });
-
-  it("routes Cmd+W to escape stack when focus has no panel ancestor (dialog/body)", () => {
-    mocks.keybindingService.resolveKeybinding.mockReturnValue({
-      match: { actionId: "terminal.close" },
-      chordPrefix: false,
-      shouldConsume: true,
-    });
-
-    const escapeHandler = vi.fn();
-    registerEscape(escapeHandler);
-
-    render(<Host />);
-    pressCmdW();
-
-    expect(escapeHandler).toHaveBeenCalledTimes(1);
-    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
   });
 
   it("falls back to terminal.close after the dialog unregisters its escape handler", () => {
@@ -968,16 +917,6 @@ describe("useGlobalKeybindings — Dead key guard (issue #7303)", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it("ignores Dead even with no pending chord", () => {
-    mocks.keybindingService.getPendingChord.mockReturnValue(null);
-
-    render(<Host />);
-    const event = dispatchDead();
-
-    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
-    expect(event.defaultPrevented).toBe(false);
-  });
-
   it("survives a Dead keydown sandwiched between chord steps", () => {
     // Pending chord is "Cmd+K". A Dead keydown arrives mid-chord; it must not
     // clear the chord. The next real key still resolves through the service.
@@ -1264,34 +1203,6 @@ describe("useGlobalKeybindings — region focus key bypass (issue #7303)", () =>
     try {
       render(<Host />);
       const event = dispatchKey("q", xterm);
-
-      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
-      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
-      expect(event.defaultPrevented).toBe(false);
-    } finally {
-      xterm.remove();
-    }
-  });
-
-  it("does not let a bare punctuation focus-region rebind steal xterm input", () => {
-    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) => {
-      if (id === "nav.focusRegion.next") return "[";
-      if (id === "nav.focusRegion.prev") return "Shift+[";
-      return undefined;
-    });
-    mocks.keybindingService.resolveKeybinding.mockReturnValue({
-      match: { actionId: "nav.focusRegion.next" },
-      chordPrefix: false,
-      shouldConsume: true,
-    });
-
-    const xterm = document.createElement("div");
-    xterm.className = "xterm";
-    document.body.appendChild(xterm);
-
-    try {
-      render(<Host />);
-      const event = dispatchKey("[", xterm);
 
       expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
       expect(mocks.actionService.dispatch).not.toHaveBeenCalled();

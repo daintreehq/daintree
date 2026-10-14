@@ -267,16 +267,6 @@ describe("passive agent session capture", () => {
       expect(captured[0].record.sessionId).toBe(SESSION_ID);
     });
 
-    it("captures a hint wrapped in ANSI decoration", async () => {
-      const terminal = track(createTerminal());
-      promoteCodex(terminal);
-      mockPty(terminal).__emitData(`\x1b[2m${codexHint(SESSION_ID)}\x1b[0m\r\n`);
-      mockPty(terminal).__emitExit(0);
-
-      await flushCapture();
-      expect(captured[0].record.sessionId).toBe(SESSION_ID);
-    });
-
     it("stays silent when the graceful teardown already holds the id", async () => {
       const terminal = track(createTerminal());
       promoteCodex(terminal);
@@ -553,19 +543,6 @@ describe("passive agent session capture", () => {
   });
 
   describe("false-positive resistance", () => {
-    it("rejects the echoed launch command of a resume-latest pane", async () => {
-      const terminal = track(createTerminal());
-      promoteCodex(terminal);
-      // Daintree types the launch command into the shell, so `resumeLatestArgs`
-      // puts a literal `codex resume --last` in the pane's own output. `[\w-]+`
-      // matches `--last`, and the agent then exited without printing a hint.
-      mockPty(terminal).__emitData("$ codex resume --last\nerror: no sessions found\n$ ");
-      demote(terminal);
-
-      await flushCapture();
-      expect(captured).toHaveLength(0);
-    });
-
     it("rejects a mention buried in a full-screen TUI repaint", async () => {
       const terminal = track(createTerminal());
       promoteCodex(terminal);

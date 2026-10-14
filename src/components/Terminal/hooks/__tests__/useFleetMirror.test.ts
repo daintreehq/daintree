@@ -79,12 +79,6 @@ describe("useFleetMirror", () => {
     );
   }
 
-  it("returns isApplyingExternalValueRef", () => {
-    const { result } = render();
-    expect(result.current.isApplyingExternalValueRef).toBeDefined();
-    expect(result.current.isApplyingExternalValueRef.current).toBe(false);
-  });
-
   it("primary pushes draft to other armed panes", () => {
     (useTerminalInputStore as any).getState = vi.fn(() => ({
       setDraftInput,

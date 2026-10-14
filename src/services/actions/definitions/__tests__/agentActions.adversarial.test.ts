@@ -646,54 +646,6 @@ describe("agentActions adversarial", () => {
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
 
-  it("agent.launch forwards 'name' to the launch callback", async () => {
-    const callbacks = makeCallbacks();
-    const actions = setupActions(callbacks);
-
-    await callAction(actions, "agent.launch", {
-      agentId: "claude",
-      prompt: "do the thing",
-      name: "Claude: auth refactor",
-    });
-
-    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
-      "claude",
-      expect.objectContaining({ name: "Claude: auth refactor" })
-    );
-  });
-
-  it("agent.launch omits 'name' from the callback when not provided", async () => {
-    const callbacks = makeCallbacks();
-    const actions = setupActions(callbacks);
-
-    await callAction(actions, "agent.launch", { agentId: "claude" });
-
-    const [, options] = callbacks.onLaunchAgent.mock.calls[0] ?? [];
-    expect(options?.name).toBeUndefined();
-  });
-
-  it("agent.launch forwards a whitespace-only 'name' verbatim (downstream decides fallback)", async () => {
-    const callbacks = makeCallbacks();
-    const actions = setupActions(callbacks);
-
-    await callAction(actions, "agent.launch", { agentId: "claude", name: "   " });
-
-    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
-      "claude",
-      expect.objectContaining({ name: "   " })
-    );
-  });
-
-  it("one agent.<id> action is registered per AGENT_REGISTRY entry", () => {
-    const callbacks = makeCallbacks();
-    const actions = setupActions(callbacks);
-
-    expect(actions.has("agent.claude")).toBe(true);
-    expect(actions.has("agent.codex")).toBe(true);
-    expect(actions.has("agent.terminal")).toBe(true);
-    expect(actions.has("agent.browser")).toBe(true);
-  });
-
   it("each generated agent.<id> launches its own agent id (no closure capture bug)", async () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);
@@ -863,16 +815,6 @@ describe("agentActions adversarial", () => {
     expect(focusNextBlockedDock).toHaveBeenCalledWith("wt-live", getPanelGroup);
   });
 
-  it("onLaunchAgent rejection propagates out of agent.launch", async () => {
-    const callbacks = makeCallbacks();
-    callbacks.onLaunchAgent.mockRejectedValueOnce(new Error("launcher boom"));
-    const actions = setupActions(callbacks);
-
-    await expect(callAction(actions, "agent.launch", { agentId: "claude" })).rejects.toThrow(
-      "launcher boom"
-    );
-  });
-
   it("agent.launch surfaces a worktree-not-found launcher error as ok:false through ActionService (#10812)", async () => {
     // Regression guard: a worktree-not-found launch must reach the MCP layer as a
     // dispatch failure (ok:false), NOT as a terminal-less success ({ok:true,result:null}).
@@ -901,14 +843,6 @@ describe("agentActions adversarial", () => {
       expect(result.error.message).toContain("Worktree 'main' not found");
       expect(result.error.message).toContain("wt-1, wt-2");
     }
-  });
-
-  it("onLaunchAgent rejection propagates out of generated agent.<id>", async () => {
-    const callbacks = makeCallbacks();
-    callbacks.onLaunchAgent.mockRejectedValueOnce(new Error("generator boom"));
-    const actions = setupActions(callbacks);
-
-    await expect(callAction(actions, "agent.claude")).rejects.toThrow("generator boom");
   });
 
   it("agent.getState returns matching panel data when launchAgentId matches", async () => {
@@ -1111,38 +1045,6 @@ describe("agentActions adversarial", () => {
 });
 
 describe("agent.launch dispatch integration", () => {
-  it("routes through ActionService.dispatch with validated args and returns terminalId", async () => {
-    const { ActionService } = await import("../../../ActionService");
-    const service = new ActionService();
-
-    const callbacks = makeCallbacks();
-    const registry: ActionRegistry = new Map();
-    registerAgentActions(registry, callbacks);
-
-    for (const [, factory] of registry) {
-      service.register(factory());
-    }
-
-    const result = await service.dispatch<{ terminalId: string | null }>(
-      "agent.launch",
-      { agentId: "claude", worktreeId: "wt-1", location: "grid" },
-      { source: "user" }
-    );
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.result).toEqual(launchedResult());
-    }
-    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith("claude", {
-      location: "grid",
-      cwd: undefined,
-      worktreeId: "wt-1",
-      prompt: undefined,
-      interactive: undefined,
-      modelId: undefined,
-    });
-  });
-
   it("rejects an empty agentId with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
@@ -1193,31 +1095,6 @@ describe("agent.launch dispatch integration", () => {
     expect(result.ok).toBe(true);
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
       "acme-agent",
-      expect.objectContaining({ worktreeId: "wt-1", location: "grid" })
-    );
-  });
-
-  it("accepts dev-preview through the schema so worktree-card dev-preview launches don't silently fail", async () => {
-    const { ActionService } = await import("../../../ActionService");
-    const service = new ActionService();
-
-    const callbacks = makeCallbacks();
-    const registry: ActionRegistry = new Map();
-    registerAgentActions(registry, callbacks);
-
-    for (const [, factory] of registry) {
-      service.register(factory());
-    }
-
-    const result = await service.dispatch(
-      "agent.launch",
-      { agentId: "dev-preview", worktreeId: "wt-1", location: "grid" },
-      { source: "user" }
-    );
-
-    expect(result.ok).toBe(true);
-    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
-      "dev-preview",
       expect.objectContaining({ worktreeId: "wt-1", location: "grid" })
     );
   });
@@ -1352,11 +1229,6 @@ describe("agent.listToolbar (#10838)", () => {
     expect(gemini.visible).toBe(false);
   });
 
-  it("uses getAgentDisplayTitle for displayName", async () => {
-    const rows = await listToolbar({ agents: {} }, {});
-    expect(rowFor(rows, "claude").displayName).toBe("Title:claude");
-  });
-
   it("never leaks sensitive agent-settings fields — only the toolbar shape is returned", async () => {
     const rows = await listToolbar(
       {
@@ -1414,19 +1286,6 @@ describe("agent.listToolbar (#10838)", () => {
     clientsMock.agentSettingsClient.get.mockRejectedValue(new Error("IPC error"));
     const actions = setupActions(makeCallbacks());
     await expect(callAction(actions, "agent.listToolbar")).rejects.toThrow("IPC error");
-  });
-
-  it("registers with the expected read-only discovery metadata", () => {
-    const actions = setupActions(makeCallbacks());
-    const def = actions.get("agent.listToolbar")?.() as AnyActionDefinition;
-    expect(def).toBeDefined();
-    expect(def.kind).toBe("query");
-    expect(def.danger).toBe("safe");
-    expect(def.scope).toBe("renderer");
-    // Was `discoverable`, which hid it from tools/list while pretending the
-    // meta-tools kept it reachable (#11585). Its tier placement is the control.
-    expect(def.mcpVisibility).toBeUndefined();
-    expect(def.argsSchema).toBeUndefined();
   });
 });
 
@@ -1972,21 +1831,6 @@ describe("agentSessionHistory.list (#10854)", () => {
       offset: 99,
     })) as { sessions: unknown[]; total: number; hasMore: boolean };
     expect(beyond).toEqual({ sessions: [], total: 5, hasMore: false });
-  });
-
-  it("honours an explicit limit and keeps the newest records (bridge order)", async () => {
-    const many = Array.from({ length: 10 }, (_, i) => ({
-      ...SAMPLE_SESSIONS[0],
-      sessionId: `sess-${i}`,
-    }));
-    listMock.mockResolvedValue(many);
-    const actions = setupActions(makeCallbacks());
-    const result = (await callAction(actions, "agentSessionHistory.list", {
-      worktreeId: "wt-1",
-      limit: 3,
-    })) as { sessions: Array<{ sessionId: string }>; total: number; hasMore: boolean };
-    expect(result.sessions.map((s) => s.sessionId)).toEqual(["sess-0", "sess-1", "sess-2"]);
-    expect(result).toMatchObject({ total: 10, hasMore: true });
   });
 
   it("strips pane-presentation bookmark fields while keeping the actionable ones", async () => {

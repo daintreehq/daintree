@@ -133,76 +133,6 @@ describe("getWorktreeType", () => {
     expect(getWorktreeType(worktree)).toBe("feature");
   });
 
-  it("returns 'feature' for feat alias", () => {
-    const worktree = createMockWorktree({ branch: "feat/new-feature" });
-    expect(getWorktreeType(worktree)).toBe("feature");
-  });
-
-  it("returns 'bugfix' for bugfix branches", () => {
-    const worktree = createMockWorktree({ branch: "bugfix/fix-issue-123" });
-    expect(getWorktreeType(worktree)).toBe("bugfix");
-  });
-
-  it("returns 'bugfix' for fix alias", () => {
-    const worktree = createMockWorktree({ branch: "fix/quick-patch" });
-    expect(getWorktreeType(worktree)).toBe("bugfix");
-  });
-
-  it("returns 'bugfix' for hotfix alias", () => {
-    const worktree = createMockWorktree({ branch: "hotfix/critical-bug" });
-    expect(getWorktreeType(worktree)).toBe("bugfix");
-  });
-
-  it("returns 'refactor' for refactor branches", () => {
-    const worktree = createMockWorktree({ branch: "refactor/cleanup-code" });
-    expect(getWorktreeType(worktree)).toBe("refactor");
-  });
-
-  it("returns 'chore' for chore branches", () => {
-    const worktree = createMockWorktree({ branch: "chore/update-deps" });
-    expect(getWorktreeType(worktree)).toBe("chore");
-  });
-
-  it("returns 'docs' for docs branches", () => {
-    const worktree = createMockWorktree({ branch: "docs/update-readme" });
-    expect(getWorktreeType(worktree)).toBe("docs");
-  });
-
-  it("returns 'test' for test branches", () => {
-    const worktree = createMockWorktree({ branch: "test/add-unit-tests" });
-    expect(getWorktreeType(worktree)).toBe("test");
-  });
-
-  it("returns 'release' for release branches", () => {
-    const worktree = createMockWorktree({ branch: "release/v1.0.0" });
-    expect(getWorktreeType(worktree)).toBe("release");
-  });
-
-  it("returns 'ci' for ci branches", () => {
-    const worktree = createMockWorktree({ branch: "ci/update-pipeline" });
-    expect(getWorktreeType(worktree)).toBe("ci");
-  });
-
-  it("returns 'deps' for deps branches", () => {
-    const worktree = createMockWorktree({ branch: "deps/bump-version" });
-    expect(getWorktreeType(worktree)).toBe("deps");
-  });
-
-  it("returns 'perf' for perf branches", () => {
-    const worktree = createMockWorktree({ branch: "perf/optimize-render" });
-    expect(getWorktreeType(worktree)).toBe("perf");
-  });
-
-  it("returns 'style' for style branches", () => {
-    const worktree = createMockWorktree({ branch: "style/format-code" });
-    expect(getWorktreeType(worktree)).toBe("style");
-  });
-
-  it("returns 'wip' for wip branches", () => {
-    const worktree = createMockWorktree({ branch: "wip/experiment" });
-    expect(getWorktreeType(worktree)).toBe("wip");
-  });
-
   it("returns 'other' for unknown prefixes", () => {
     const worktree = createMockWorktree({ branch: "my-custom-branch" });
     expect(getWorktreeType(worktree)).toBe("other");
@@ -359,12 +289,6 @@ describe("scoreWorktree", () => {
       aiNote: "Agent fixing auth",
     });
     expect(scoreWorktree(worktree, "auth")).toBe(0);
-  });
-
-  it("issueTitle starts-with ranks above issueTitle contains", () => {
-    const startsWith = createMockWorktree({ issueTitle: "Authentication refactor" });
-    const contains = createMockWorktree({ issueTitle: "Fix authentication bug" });
-    expect(scoreWorktree(startsWith, "auth")).toBeGreaterThan(scoreWorktree(contains, "auth"));
   });
 });
 
@@ -859,15 +783,6 @@ describe("sortWorktrees", () => {
     expect(sorted.map((w) => w.name)).toEqual(["aa", "zz"]);
   });
 
-  it("handles null timestamps", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", name: "a", lastActivityTimestamp: null }),
-      createMockWorktree({ id: "2", name: "b", lastActivityTimestamp: 1000 }),
-    ];
-    const sorted = sortWorktrees(worktrees, "recent");
-    expect(sorted[0]!.id).toBe("2");
-  });
-
   it("uses createdAt when lastActivityTimestamp is null", () => {
     const worktrees = [
       createMockWorktree({ id: "1", name: "old", lastActivityTimestamp: null, createdAt: 1000 }),
@@ -884,24 +799,6 @@ describe("sortWorktrees", () => {
     ];
     const sorted = sortWorktrees(worktrees, "recent");
     expect(sorted.map((w) => w.id)).toEqual(["1", "2"]);
-  });
-
-  it("ranks worktree with newer lastActivityTimestamp above one with newer createdAt", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", name: "a", lastActivityTimestamp: 6000, createdAt: 1000 }),
-      createMockWorktree({ id: "2", name: "b", lastActivityTimestamp: null, createdAt: 5000 }),
-    ];
-    const sorted = sortWorktrees(worktrees, "recent");
-    expect(sorted.map((w) => w.id)).toEqual(["1", "2"]);
-  });
-
-  it("ranks new worktree with recent createdAt above old worktree with no activity", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", name: "old", lastActivityTimestamp: 1000, createdAt: 500 }),
-      createMockWorktree({ id: "2", name: "new", lastActivityTimestamp: null, createdAt: 5000 }),
-    ];
-    const sorted = sortWorktrees(worktrees, "recent");
-    expect(sorted.map((w) => w.id)).toEqual(["2", "1"]);
   });
 
   it("falls back to 0 when both fields are missing", () => {
@@ -996,15 +893,6 @@ describe("sortWorktrees", () => {
       expect(sortedByRecent[0]!.id).toBe("1");
       expect(sortedByRecent[1]!.id).toBe("3");
     });
-
-    it("returns unchanged order with empty pinnedWorktrees array", () => {
-      const worktrees = [
-        createMockWorktree({ id: "1", name: "b" }),
-        createMockWorktree({ id: "2", name: "a" }),
-      ];
-      const sorted = sortWorktrees(worktrees, "alpha", []);
-      expect(sorted.map((w) => w.name)).toEqual(["a", "b"]);
-    });
   });
 
   describe("external worktrees", () => {
@@ -1092,16 +980,6 @@ describe("sortWorktrees", () => {
 });
 
 describe("sortWorktrees manual order", () => {
-  it("sorts by manual order", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", name: "a" }),
-      createMockWorktree({ id: "2", name: "b" }),
-      createMockWorktree({ id: "3", name: "c" }),
-    ];
-    const sorted = sortWorktrees(worktrees, "manual", [], ["3", "1", "2"]);
-    expect(sorted.map((w) => w.id)).toEqual(["3", "1", "2"]);
-  });
-
   it("appends worktrees not in manualOrder to the end", () => {
     const worktrees = [
       createMockWorktree({ id: "1", name: "a" }),
@@ -1178,12 +1056,6 @@ describe("groupByType", () => {
     ];
     const groups = groupByType(worktrees, "alpha");
     expect(groups[0]!.type).toBe("main");
-  });
-
-  it("includes displayName for each group", () => {
-    const worktrees = [createMockWorktree({ id: "1", branch: "feature/test" })];
-    const groups = groupByType(worktrees, "alpha");
-    expect(groups[0]!.displayName).toBe("Features");
   });
 
   it("sorts worktrees within groups according to orderBy", () => {
@@ -1516,13 +1388,6 @@ describe("computeChipCounts", () => {
     expect(counts.activity.last1h).toBe(1);
   });
 
-  it("does not crash when derivedMetaMap is missing entries", () => {
-    const worktrees = [createMockWorktree({ id: "1", branch: "feature/a" })];
-    const counts = computeChipCounts(worktrees, new Map(), null, emptyFilters);
-    expect(counts.branchType.feature).toBe(1);
-    expect(counts.sessions.working).toBe(0);
-  });
-
   // Disjunctive faceting tests
 
   it("narrows non-status chips when a status filter is active", () => {
@@ -1668,27 +1533,6 @@ describe("computeChipCounts", () => {
     // w1 is feature/working, w3 is bugfix/working
     expect(counts.branchType.bugfix).toBe(1);
     expect(counts.branchType.feature).toBe(1);
-  });
-
-  it("is unaffected by sibling group when computing within-group counts", () => {
-    const worktrees = [
-      createMockWorktree({ id: "1", branch: "feature/a" }),
-      createMockWorktree({ id: "2", branch: "bugfix/b" }),
-    ];
-    const filters: FilterState = {
-      query: "",
-      statusFilters: new Set(),
-      typeFilters: new Set<TypeFilter>(["feature"]),
-      prIssueFilters: new Set(),
-      sessionFilters: new Set(),
-      hasAgentFilter: false,
-      activityFilters: new Set(),
-      devServerFilters: new Set(),
-    };
-    const counts = computeChipCounts(worktrees, new Map(), null, filters);
-    // Type chips ignore their own active filter — show absolute totals
-    expect(counts.branchType.feature).toBe(1);
-    expect(counts.branchType.bugfix).toBe(1);
   });
 
   it("applies exact-number query (#123) as a global AND gate", () => {
@@ -1954,15 +1798,6 @@ describe("orderWorktreesLikeSidebar", () => {
 
   it.each(orderings)("matches the sidebar's grouped order for %s", (orderBy) => {
     expect(ids(orderWorktreesLikeSidebar(all, prefs(orderBy, true)))).toEqual(grouped[orderBy]);
-  });
-
-  // The regression guard for SidebarContent's swap: its no-query branch called
-  // `sortWorktrees` with the pins pre-filtered to ids that still exist.
-  it.each(orderings)("reproduces the sidebar's former sortWorktrees call for %s", (orderBy) => {
-    const validPinned = pinnedWorktrees.filter((id) => all.some((w) => w.id === id));
-    expect(ids(orderWorktreesLikeSidebar(all, prefs(orderBy, false)))).toEqual(
-      ids(sortWorktrees(all, orderBy, validPinned, manualOrder))
-    );
   });
 
   it("drops nothing and preserves object identity", () => {

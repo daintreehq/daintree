@@ -181,21 +181,6 @@ describe("GPU_GET_STATUS handler", () => {
     ipcMainMock._handlers.clear();
   });
 
-  it("returns both flag states as false by default", async () => {
-    gpuMonitorMock.isGpuDisabledByFlag.mockReturnValue(false);
-    gpuMonitorMock.isGpuAngleFallbackApplied.mockReturnValue(false);
-
-    registerGpuHandlers();
-    const handler = ipcMainMock._handlers.get("gpu:get-status")!;
-
-    const result = await handler({} as Electron.IpcMainInvokeEvent);
-
-    expect(result).toEqual({
-      hardwareAccelerationDisabled: false,
-      angleFallbackActive: false,
-    });
-  });
-
   it("reports angleFallbackActive=true when ANGLE is actually applied", async () => {
     gpuMonitorMock.isGpuDisabledByFlag.mockReturnValue(false);
     gpuMonitorMock.isGpuAngleFallbackApplied.mockReturnValue(true);

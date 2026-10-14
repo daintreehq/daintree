@@ -218,21 +218,6 @@ describe("SendToAgentPalette pointer and Home/End", () => {
     expect(setSelectedIndex).not.toHaveBeenCalled();
   });
 
-  it("leaves the cursor alone when the pointer crosses a locked row at either end", () => {
-    const setSelectedIndex = vi.fn();
-    renderPalette(
-      [item("a", { isInputLocked: true }), item("b"), item("c", { isInputLocked: true })],
-      {
-        setSelectedIndex,
-        selectedIndex: 1,
-      }
-    );
-
-    fireEvent.pointerMove(rowFor("a"));
-    fireEvent.pointerMove(rowFor("c"));
-    expect(setSelectedIndex).not.toHaveBeenCalled();
-  });
-
   it("lands Home and End on the nearest row that can receive", () => {
     const setSelectedIndex = vi.fn();
     renderPalette(

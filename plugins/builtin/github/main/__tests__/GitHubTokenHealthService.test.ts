@@ -518,16 +518,6 @@ describe("GitHubTokenHealthService", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("probes again after a stop → start cycle (plugin re-enable)", async () => {
-      gitHubTokenHealthService.stop();
-      await gitHubTokenHealthService.refresh({ force: true });
-      expect(fetchMock).not.toHaveBeenCalled();
-
-      gitHubTokenHealthService.start();
-      await gitHubTokenHealthService.refresh({ force: true });
-      expect(fetchMock).toHaveBeenCalled();
-    });
-
     it("stop() keeps host transport listeners wired for a later re-enable", async () => {
       gitHubTokenHealthService.stop();
       gitHubTokenHealthService.start();

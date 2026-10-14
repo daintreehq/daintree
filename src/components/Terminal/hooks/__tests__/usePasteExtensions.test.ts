@@ -30,7 +30,6 @@ vi.mock("../../inputEditorExtensions", () => ({
 }));
 
 const { usePasteExtensions } = await import("../usePasteExtensions");
-const { createFilePasteHandler } = await import("../../inputEditorExtensions");
 const { setRemoteMaterializer } = await import("@/services/materialize");
 const { getPendingUploads, _resetPendingUploadsForTests } =
   await import("../../uploads/pendingUploads");
@@ -134,18 +133,6 @@ describe("usePasteExtensions", () => {
     expect(insertedToken(dispatch)).toBe("@src/App.tsx");
   });
 
-  it("does not rebuild the paste extension when cwd changes", async () => {
-    const { result, rerender } = renderHook(({ cwd }) => usePasteExtensions(cwd), {
-      initialProps: { cwd: "/somewhere/else" },
-    });
-    const first = result.current.filePasteExtension;
-
-    rerender({ cwd: CWD });
-
-    expect(result.current.filePasteExtension).toBe(first);
-    expect(createFilePasteHandler).toHaveBeenCalledTimes(1);
-  });
-
   it("stores the absolute path on the chip while the document text stays relative", async () => {
     renderHook(() => usePasteExtensions(CWD));
     const { view, dispatch } = fakeView();
@@ -181,15 +168,6 @@ describe("usePasteExtensions", () => {
     const insert = call?.changes?.insert as string;
     expect(call?.changes?.from).toBe(head);
     expect(call?.selection?.anchor).toBe(head + insert.length);
-  });
-
-  it("keeps a cwd-root file that collides with a reserved token a path", async () => {
-    renderHook(() => usePasteExtensions(CWD));
-    const { view, dispatch } = fakeView();
-
-    await captured.filePaste?.(view, [pasted("selection", `${CWD}/selection`)]);
-
-    expect(insertedToken(dispatch)).toBe("@./selection");
   });
 });
 

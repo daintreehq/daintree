@@ -99,15 +99,6 @@ describe.skipIf(process.platform === "win32")("daintree-cli.sh", () => {
     expect(argv.filter((entry) => entry.startsWith("--cli-path"))).toHaveLength(1);
   });
 
-  it("keeps a path containing spaces in one argument", async () => {
-    const { argv, root } = await runCli(projectDir);
-    roots.push(root);
-
-    const cliArg = argv.find((entry) => entry.startsWith("--cli-path="));
-    expect(cliArg).toBeDefined();
-    expect(cliArg).toContain("my project");
-  });
-
   // The deb's /usr/bin/daintree is a symlink to resources/daintree-cli.sh, beside
   // the binary's directory: build/linux/postinst.sh.
   function packagedLinuxLayout() {

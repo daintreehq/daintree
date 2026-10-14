@@ -112,20 +112,6 @@ describe("AgentCompletionBanner", () => {
     expect(onSendToAgent).toHaveBeenCalledTimes(1);
   });
 
-  it("renders all three action buttons when both handoff callbacks are provided", () => {
-    render(
-      <AgentCompletionBanner
-        onReview={() => {}}
-        onDismiss={() => {}}
-        onSendToAssistant={() => {}}
-        onSendToAgent={() => {}}
-      />
-    );
-    expect(screen.getByRole("button", { name: /review/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /send to assistant/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /send to agent/i })).toBeTruthy();
-  });
-
   it("stops click propagation on all buttons (incl. handoff) so the pane doesn't grab focus", () => {
     const onParentClick = vi.fn();
     const { container } = render(

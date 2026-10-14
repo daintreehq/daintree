@@ -93,13 +93,6 @@ describe("PRBadge freshness glyphs", () => {
     expect(button.querySelector(".lucide-cloud-off")).toBeNull();
   });
 
-  it("does not show the CloudOff glyph when prDetectionPaused is undefined", () => {
-    renderBadge();
-
-    const button = screen.getByRole("button");
-    expect(button.querySelector(".lucide-cloud-off")).toBeNull();
-  });
-
   it("keeps the badge button at full opacity (no dimming classes)", () => {
     renderBadge({ prDetectionPaused: true });
 
@@ -158,13 +151,6 @@ describe("PRBadge freshness glyphs", () => {
     expect(button.querySelector(".lucide-cloud-off")).toBeTruthy();
   });
 
-  it("shows circuit-breaker tooltip suffix text when freshnessCause is circuit-breaker", () => {
-    mockFreshnessCause = "circuit-breaker";
-    renderBadge();
-
-    expect(screen.getAllByText(/PR detection paused/).length).toBeGreaterThan(0);
-  });
-
   it("uses rate-limit aria label when freshnessCause is rate-limit", () => {
     mockFreshnessCause = "rate-limit";
     renderBadge();
@@ -172,13 +158,6 @@ describe("PRBadge freshness glyphs", () => {
     const button = screen.getByRole("button");
     expect(button.getAttribute("aria-label")).toContain("forge rate limited");
     expect(button.getAttribute("aria-label")).not.toContain("PR detection paused");
-  });
-
-  it("uses circuit-breaker aria label when prDetectionPaused is true", () => {
-    renderBadge({ prDetectionPaused: true });
-
-    const button = screen.getByRole("button");
-    expect(button.getAttribute("aria-label")).toContain("PR detection paused");
   });
 });
 

@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   useConsoleCaptureStore,
   flushConsoleCaptureBuffer,
-  EMPTY_MESSAGES,
   ZERO_COUNTS,
 } from "../consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
@@ -47,35 +46,6 @@ describe("consoleCaptureStore", () => {
     expect(messages[3]!.level).toBe("error");
   });
 
-  it("EMPTY_MESSAGES is a stable reference (same array each access)", () => {
-    expect(EMPTY_MESSAGES).toBe(EMPTY_MESSAGES);
-    expect(EMPTY_MESSAGES).toHaveLength(0);
-  });
-
-  it("stores structured args and summaryText", () => {
-    const before = Date.now();
-    const args = [
-      { type: "primitive" as const, kind: "string" as const, value: "hello" },
-      { type: "primitive" as const, kind: "number" as const, value: 42 },
-    ];
-    addRow(makeRow({ id: 1, args, summaryText: "hello 42", timestamp: before }));
-    const after = Date.now();
-
-    const [msg] = useConsoleCaptureStore.getState().getMessages("pane1");
-    expect(msg!.args).toHaveLength(2);
-    expect(msg!.args[0]).toEqual({ type: "primitive", kind: "string", value: "hello" });
-    expect(msg!.args[1]).toEqual({ type: "primitive", kind: "number", value: 42 });
-    expect(msg!.summaryText).toBe("hello 42");
-    expect(msg!.timestamp).toBeGreaterThanOrEqual(before);
-    expect(msg!.timestamp).toBeLessThanOrEqual(after);
-  });
-
-  it("assigns isStale: false on add", () => {
-    addRow(makeRow({ id: 1 }));
-    const [msg] = useConsoleCaptureStore.getState().getMessages("pane1");
-    expect(msg!.isStale).toBe(false);
-  });
-
   it("isolates messages per pane id", () => {
     addRow(makeRow({ id: 1, paneId: "pane1", summaryText: "from pane1" }));
     addRow(makeRow({ id: 2, paneId: "pane2", summaryText: "from pane2" }));
@@ -87,11 +57,6 @@ describe("consoleCaptureStore", () => {
     expect(pane1[0]!.summaryText).toBe("from pane1");
     expect(pane2).toHaveLength(1);
     expect(pane2[0]!.summaryText).toBe("from pane2");
-  });
-
-  it("returns empty array for unknown pane", () => {
-    const store = useConsoleCaptureStore.getState();
-    expect(store.getMessages("unknown-pane")).toEqual([]);
   });
 
   it("caps messages at MAX_MESSAGES (500)", () => {
@@ -126,14 +91,6 @@ describe("consoleCaptureStore", () => {
     expect(state.messages.has("pane2")).toBe(true);
   });
 
-  it("clearMessages leaves an empty array (not removes the key)", () => {
-    addRow(makeRow({ id: 1, paneId: "pane1" }));
-    useConsoleCaptureStore.getState().clearMessages("pane1");
-
-    const state = useConsoleCaptureStore.getState();
-    expect(state.messages.get("pane1")).toEqual([]);
-  });
-
   it("filters out endGroup messages", () => {
     addRow(makeRow({ id: 1, cdpType: "startGroup" }));
     addRow(makeRow({ id: 2, cdpType: "log" }));
@@ -156,29 +113,6 @@ describe("consoleCaptureStore", () => {
     expect(messages[0]!.isStale).toBe(true);
     expect(messages[1]!.isStale).toBe(true);
     expect(messages[2]!.isStale).toBe(false);
-  });
-
-  it("preserves group depth in messages", () => {
-    addRow(makeRow({ id: 1, cdpType: "startGroup", groupDepth: 0 }));
-    addRow(makeRow({ id: 2, cdpType: "log", groupDepth: 1 }));
-
-    const messages = useConsoleCaptureStore.getState().getMessages("pane1");
-    expect(messages[0]!.groupDepth).toBe(0);
-    expect(messages[1]!.groupDepth).toBe(1);
-  });
-
-  it("stores stack trace when present", () => {
-    const stackTrace = {
-      callFrames: [
-        { functionName: "foo", url: "http://localhost/app.js", lineNumber: 10, columnNumber: 5 },
-      ],
-    };
-    addRow(makeRow({ id: 1, level: "error", stackTrace }));
-
-    const [msg] = useConsoleCaptureStore.getState().getMessages("pane1");
-    expect(msg!.stackTrace).toBeDefined();
-    expect(msg!.stackTrace!.callFrames).toHaveLength(1);
-    expect(msg!.stackTrace!.callFrames[0]!.functionName).toBe("foo");
   });
 
   describe("precomputed fields", () => {

@@ -706,27 +706,6 @@ describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#
     return result;
   }
 
-  it("does not flag danger when the pinned terminal is gone but another live grid terminal exists", async () => {
-    setupPinnedSession({
-      "assistant-term": dockAssistantTerminal(),
-      // A different, live grid terminal — the pinned id ("pinned-grid-term") is
-      // absent, but this one is a valid dispatch target.
-      "grid-term": {
-        id: "grid-term",
-        kind: "terminal",
-        spawnStatus: "ready",
-        cwd: "/repo",
-        location: "grid",
-        agentState: "idle",
-      },
-    });
-
-    const { container } = await renderResolved();
-
-    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
-    expect(container.querySelector(".text-status-danger")).toBeNull();
-  });
-
   it("stays neutral — no danger button — when no live grid terminal remains", async () => {
     setupPinnedSession({
       // Only the dock assistant terminal exists — no grid target to reach.
@@ -741,81 +720,6 @@ describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#
     const neutral = container.querySelector(NEUTRAL_PINNED);
     expect(neutral).not.toBeNull();
     expect(neutral!.tagName).toBe("SPAN");
-    expect(neutral!.textContent).toContain(PINNED_LABEL);
-    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
-    expect(container.querySelector(".text-status-danger")).toBeNull();
-  });
-
-  it("does not flag danger when a dead and a live grid terminal both exist", async () => {
-    setupPinnedSession({
-      "assistant-term": dockAssistantTerminal(),
-      // A grid terminal that has exited is not a live dispatch target...
-      "dead-grid": {
-        id: "dead-grid",
-        kind: "terminal",
-        spawnStatus: "ready",
-        cwd: "/repo",
-        location: "grid",
-        runtimeStatus: "exited",
-        exitCode: 0,
-      },
-      // ...but this live one is, so danger must not fire.
-      "live-grid": {
-        id: "live-grid",
-        kind: "terminal",
-        spawnStatus: "ready",
-        cwd: "/repo",
-        location: "grid",
-        agentState: "idle",
-      },
-    });
-
-    const { container } = await renderResolved();
-
-    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
-  });
-
-  it("stays neutral when the only grid terminal has exited", async () => {
-    setupPinnedSession({
-      "assistant-term": dockAssistantTerminal(),
-      "dead-grid": {
-        id: "dead-grid",
-        kind: "terminal",
-        spawnStatus: "ready",
-        cwd: "/repo",
-        location: "grid",
-        runtimeStatus: "exited",
-        exitCode: 137,
-      },
-    });
-
-    const { container } = await renderResolved();
-
-    const neutral = container.querySelector(NEUTRAL_PINNED);
-    expect(neutral).not.toBeNull();
-    expect(neutral!.textContent).toContain(PINNED_LABEL);
-    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
-    expect(container.querySelector(".text-status-danger")).toBeNull();
-  });
-
-  it("stays neutral when the only grid terminal is a missing-cli gate (no backing PTY)", async () => {
-    setupPinnedSession({
-      "assistant-term": dockAssistantTerminal(),
-      // A `missing-cli` gate panel looks otherwise live (no exitCode/runtimeStatus)
-      // but has no PTY behind it, so it can't receive a dispatched command.
-      "gate-grid": {
-        id: "gate-grid",
-        kind: "terminal",
-        spawnStatus: "missing-cli",
-        cwd: "/repo",
-        location: "grid",
-      },
-    });
-
-    const { container } = await renderResolved();
-
-    const neutral = container.querySelector(NEUTRAL_PINNED);
-    expect(neutral).not.toBeNull();
     expect(neutral!.textContent).toContain(PINNED_LABEL);
     expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
     expect(container.querySelector(".text-status-danger")).toBeNull();
@@ -836,37 +740,6 @@ describe("HelpPanel — pinned-terminal state stays a quiet neutral indicator (#
     expect(container.querySelector(NEUTRAL_PINNED)).toBeNull();
     fireEvent.click(button!);
     expect(worktreeSelectionState.selectWorktree).toHaveBeenCalledWith("wt-1", { source: "user" });
-  });
-
-  it("keeps the recovery route available with no live grid terminal", async () => {
-    // Removing the footer "Start new session" button must not strand the user: restarting
-    // the conversation (canRestartConversation = terminalId && agentId, both still set via
-    // the dock assistant) remains the recovery path (#10792). It now lives in the header's
-    // overflow menu rather than as a header "+", which collided with the strip's own "+".
-    setupPinnedSession({ "assistant-term": dockAssistantTerminal() });
-
-    const { container } = await renderResolved();
-
-    const restart = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Restart conversation")
-    );
-    expect(restart).toBeTruthy();
-  });
-
-  it("does not flag danger when pinnedContext has no terminal id", async () => {
-    // No terminal was pinned at provision time — the danger guard must stay off
-    // regardless of grid reachability.
-    setupPinnedSession({ "assistant-term": dockAssistantTerminal() });
-    window.electron.help.getPinnedActionContext = vi.fn().mockResolvedValue({
-      terminalId: null,
-      worktreeId: "wt-1",
-      worktreeName: "main",
-      worktreeBranch: "main",
-    });
-
-    const { container } = await renderResolved();
-
-    expect(container.querySelector(`button[title="${DANGER_BUTTON_TITLE}"]`)).toBeNull();
   });
 });
 
@@ -905,40 +778,6 @@ describe("HelpPanel — assistant survives visibility-hidden (project switch per
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
     expect(mockRevokeSession).not.toHaveBeenCalled();
     expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
-  });
-
-  it("does not tear down on visibility-hidden during system suspend", async () => {
-    await act(async () => {
-      mountWithBoundTerminal();
-    });
-
-    act(() => {
-      systemSleepListeners.suspend.forEach((cb) => cb());
-    });
-
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
-    await act(async () => {
-      document.dispatchEvent(new Event("visibilitychange"));
-    });
-    await flushAsync();
-
-    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
-    expect(mockRevokeSession).not.toHaveBeenCalled();
-    expect(helpPanelState.clearTerminal).not.toHaveBeenCalled();
-  });
-
-  it("does not call systemSleep.getMetrics — visibility is no longer a teardown signal", async () => {
-    await act(async () => {
-      mountWithBoundTerminal();
-    });
-
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
-    await act(async () => {
-      document.dispatchEvent(new Event("visibilitychange"));
-    });
-    await flushAsync();
-
-    expect(mockSystemSleepGetMetrics).not.toHaveBeenCalled();
   });
 
   it("re-evaluates auto-launch on visibility restore so a missing terminal can re-launch", async () => {

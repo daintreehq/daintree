@@ -2,7 +2,7 @@
 import { cleanup, render } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
-import { DropdownMenuActionItem } from "../dropdown-menu";
+import { DropdownMenuActionItem, DropdownMenuItem } from "../dropdown-menu";
 import { primeRadix } from "../radix-loader";
 import { keybindingService } from "@/services/KeybindingService";
 import type { ActionId } from "@shared/types/actions";
@@ -77,5 +77,39 @@ describe("DropdownMenuActionItem aria-keyshortcuts — issue #8941", () => {
     // must not render the attribute in that case (rendering an empty string
     // would mislead screen readers).
     expect(item.hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+});
+
+function renderItem(props: React.ComponentProps<typeof DropdownMenuItem>) {
+  render(
+    <DropdownMenuPrimitive.Root open>
+      <DropdownMenuPrimitive.Trigger>trigger</DropdownMenuPrimitive.Trigger>
+      <DropdownMenuPrimitive.Portal>
+        <DropdownMenuPrimitive.Content forceMount>
+          <DropdownMenuItem {...props}>Test Item</DropdownMenuItem>
+        </DropdownMenuPrimitive.Content>
+      </DropdownMenuPrimitive.Portal>
+    </DropdownMenuPrimitive.Root>
+  );
+  return document.querySelector("[role='menuitem']") as HTMLElement;
+}
+
+describe("DropdownMenuItem destructive variant", () => {
+  it("applies danger classes when destructive is true", () => {
+    const item = renderItem({ destructive: true });
+    expect(item.className).toContain("text-status-danger");
+    expect(item.className).toContain("data-[highlighted]:text-status-danger");
+    expect(item.className).toContain("data-[highlighted]:bg-status-danger/10");
+  });
+
+  it("does not apply danger classes by default", () => {
+    const item = renderItem({});
+    expect(item.className).not.toContain("text-status-danger");
+    expect(item.className).not.toContain("bg-status-danger");
+  });
+
+  it("does not forward destructive as a DOM attribute", () => {
+    const item = renderItem({ destructive: true });
+    expect(item.hasAttribute("destructive")).toBe(false);
   });
 });

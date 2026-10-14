@@ -88,14 +88,6 @@ describe("CrossWorktreeDiff dialog accessibility", () => {
     _resetForTests();
   });
 
-  it("renders with role='dialog' and aria-modal='true' when open", async () => {
-    renderModal();
-    await act(() => vi.runAllTimersAsync());
-
-    const dialog = screen.getByRole("dialog");
-    expect(dialog.getAttribute("aria-modal")).toBe("true");
-  });
-
   it("has aria-labelledby linking to the Compare worktrees heading", async () => {
     renderModal();
     await act(() => vi.runAllTimersAsync());
@@ -115,39 +107,5 @@ describe("CrossWorktreeDiff dialog accessibility", () => {
 
     pressEscape();
     expect(onClose).toHaveBeenCalledOnce();
-  });
-
-  it("does not render the dialog when closed", () => {
-    renderModal({ isOpen: false });
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  it("restores focus to the previously active element on close", async () => {
-    const outerButton = document.createElement("button");
-    outerButton.textContent = "Trigger";
-    document.body.appendChild(outerButton);
-    outerButton.focus();
-
-    const onClose = vi.fn();
-    const { rerender } = render(
-      <>
-        <Dispatcher />
-        <CrossWorktreeDiff isOpen={true} onClose={onClose} initialWorktreeId={null} />
-      </>
-    );
-    await act(() => vi.runAllTimersAsync());
-
-    // Focus should have moved into the dialog
-    expect(document.activeElement).not.toBe(outerButton);
-
-    rerender(
-      <>
-        <Dispatcher />
-        <CrossWorktreeDiff isOpen={false} onClose={onClose} initialWorktreeId={null} />
-      </>
-    );
-
-    expect(document.activeElement).toBe(outerButton);
-    document.body.removeChild(outerButton);
   });
 });

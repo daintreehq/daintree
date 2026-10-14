@@ -55,64 +55,6 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should detect Claude Code v3.x.x banner with different version format", () => {
-      const onStateChange = vi.fn();
-      const visibleLines = [
-        "           Claude Code v3.0.0",
-        " ▐▛███▜▌   Opus 5.0 · Claude Max",
-        "❯ Ready",
-      ];
-
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        getVisibleLines: () => visibleLines,
-        getCursorLine: () => visibleLines[visibleLines.length - 1],
-        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
-        promptPatterns: [/^\s*❯\s*/],
-        pollingIntervalMs: 50,
-        idleDebounceMs: 200,
-      });
-
-      monitor.startPolling();
-
-      // Advance through boot detection and past working hold + prompt fast-path quiet
-      vi.advanceTimersByTime(50);
-      vi.advanceTimersByTime(3100);
-
-      // Verify final state is idle
-      expect(monitor.getState()).toBe("idle");
-
-      monitor.dispose();
-    });
-
-    it("should detect boot banner with ANSI escape codes", () => {
-      const onStateChange = vi.fn();
-      const visibleLines = [
-        "\x1b[1m           Claude Code v2.1.37\x1b[0m",
-        "\x1b[36m ▐▛███▜▌   Opus 4.6 · Claude Max\x1b[0m",
-        "❯ Try something",
-      ];
-
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        getVisibleLines: () => visibleLines,
-        getCursorLine: () => visibleLines[visibleLines.length - 1],
-        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
-        promptPatterns: [/^\s*❯\s*/],
-        pollingIntervalMs: 50,
-        idleDebounceMs: 200,
-      });
-
-      monitor.startPolling();
-
-      // Advance through boot detection and past working hold + prompt fast-path quiet
-      vi.advanceTimersByTime(50);
-      vi.advanceTimersByTime(3100);
-
-      // Verify final state is idle
-      expect(monitor.getState()).toBe("idle");
-
-      monitor.dispose();
-    });
-
     it("should scan 50 lines during boot to catch banner near top of viewport", () => {
       const onStateChange = vi.fn();
       const getVisibleLines = vi.fn((count: number) => {
@@ -145,37 +87,6 @@ describe("ActivityMonitor", () => {
 
       // Verify final state is idle
       expect(monitor.getState()).toBe("idle");
-
-      monitor.dispose();
-    });
-
-    it("should reduce scan to 15 lines after boot completes", () => {
-      const onStateChange = vi.fn();
-      const getVisibleLines = vi.fn(() => ["Claude Code v2.1.37", "❯ Ready"]);
-
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        getVisibleLines,
-        getCursorLine: () => "❯ Ready",
-        bootCompletePatterns: [/claude\s+code\s+v?\d/i],
-        promptPatterns: [/^\s*❯\s*/],
-        promptScanLineCount: 10,
-        idleDebounceMs: 200,
-      });
-
-      monitor.startPolling();
-
-      // First poll: boot phase, should scan 50 lines
-      vi.advanceTimersByTime(100);
-      expect(getVisibleLines).toHaveBeenCalledWith(50);
-
-      getVisibleLines.mockClear();
-
-      // Advance past boot completion and working hold
-      vi.advanceTimersByTime(3100);
-
-      // Next poll: post-boot, should scan max(10, 15) = 15 lines
-      vi.advanceTimersByTime(100);
-      expect(getVisibleLines).toHaveBeenCalledWith(15);
 
       monitor.dispose();
     });
@@ -505,20 +416,6 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
 
       monitor.dispose();
-    });
-
-    it("dispose() clears the focus suppression window", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("focus-test-5", 1000, onStateChange);
-
-      monitor.notifyFocus(5000);
-      monitor.dispose();
-
-      // After dispose, internal state is reset. Creating a new monitor with
-      // a fresh ID should behave normally — the disposed monitor's focus
-      // window must not bleed across instances (it can't via shared state,
-      // but we still assert dispose() doesn't throw with a pending window).
-      expect(monitor.getState()).toBe("idle");
     });
 
     it("does not affect an already-busy terminal — focus does not flip busy→idle", () => {

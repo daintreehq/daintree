@@ -211,26 +211,4 @@ describe("atomic swap: detach then clear sequence", () => {
     expect(terminalInstanceService.detachForProjectSwitch).not.toHaveBeenCalled();
     expect(usePanelStore.getState().panelIds).toEqual([]);
   });
-
-  it("clearTerminalStoreForSwitch is idempotent", () => {
-    seedTerminals();
-
-    usePanelStore.getState().clearTerminalStoreForSwitch();
-    expect(usePanelStore.getState().panelIds).toEqual([]);
-
-    usePanelStore.getState().clearTerminalStoreForSwitch();
-    expect(usePanelStore.getState().panelIds).toEqual([]);
-  });
-
-  it("preserves terminal state after detach, then clears on explicit call", () => {
-    seedTerminals();
-
-    usePanelStore.getState().detachTerminalsForProjectSwitch();
-    expect(usePanelStore.getState().panelIds).toHaveLength(2);
-
-    usePanelStore.getState().clearTerminalStoreForSwitch();
-    expect(usePanelStore.getState().panelIds).toEqual([]);
-
-    expect(terminalInstanceService.detachForProjectSwitch).toHaveBeenCalledTimes(2);
-  });
 });

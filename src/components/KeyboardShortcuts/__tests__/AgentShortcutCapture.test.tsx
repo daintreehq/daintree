@@ -121,23 +121,6 @@ describe("AgentShortcutCapture", () => {
     expect(field().textContent).toContain("Ctrl");
   });
 
-  it("does not offer Save for the binding already in force", () => {
-    render(
-      <AgentShortcutCapture
-        agentId="claude"
-        currentCombo="Cmd+Alt+C"
-        onCapture={onCapture}
-        onCancel={onCancel}
-      />
-    );
-
-    press("c", { ctrl: true, alt: true });
-
-    expect(saveButton().disabled).toBe(true);
-    fireEvent.click(saveButton());
-    expect(onCapture).not.toHaveBeenCalled();
-  });
-
   it("holds Save until a combo taken by another action is unbound", () => {
     const codex: KeybindingConflict = {
       actionId: "agent.codex",

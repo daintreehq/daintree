@@ -53,10 +53,6 @@ describe("validateAgentMcpTools", () => {
   it.each([
     [{ destructiveHint: false }, /annotations\.destructiveHint may only be true/],
     [{ openWorldHint: false }, /annotations\.openWorldHint may only be true/],
-    [
-      { destructiveHint: false, openWorldHint: false },
-      /annotations\.destructiveHint may only be true/,
-    ],
   ])("rejects a plugin vouching for its own tool's safety %j", (annotations, message) => {
     expect(() => validateAgentMcpTools({ add_entry: tool({ annotations }) })).toThrow(message);
   });

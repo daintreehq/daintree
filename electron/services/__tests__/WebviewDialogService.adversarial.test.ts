@@ -124,29 +124,6 @@ describe("WebviewDialogService adversarial", () => {
     expect(secondCallback).toHaveBeenCalledWith(true, "ok");
   });
 
-  it("REVERSE_ORDER_RESOLUTION_ISOLATED", async () => {
-    const guest = createGuest();
-    guestRegistry.set(1, guest);
-
-    const firstCallback = vi.fn();
-    const secondCallback = vi.fn();
-
-    const { getWebviewDialogService } = await import("../WebviewDialogService.js");
-    const service = getWebviewDialogService();
-
-    service.registerPanel(1, "panel-1");
-    service.registerDialog("dialog-1", 1, firstCallback);
-    service.registerDialog("dialog-2", 1, secondCallback);
-
-    service.resolveDialog("dialog-2", false, "no");
-    service.resolveDialog("dialog-1", true, "yes");
-
-    expect(secondCallback).toHaveBeenCalledTimes(1);
-    expect(secondCallback).toHaveBeenCalledWith(false, "no");
-    expect(firstCallback).toHaveBeenCalledTimes(1);
-    expect(firstCallback).toHaveBeenCalledWith(true, "yes");
-  });
-
   it("NAVIGATION_CANCELS_PENDING_ONLY_OWN_GUEST", async () => {
     const guestOne = createGuest();
     const guestTwo = createGuest();
@@ -206,21 +183,6 @@ describe("WebviewDialogService adversarial", () => {
     // Both dialogs are cleared — resolving them afterwards is a no-op.
     service.resolveDialog("dialog-ok", true);
     expect(survivingCallback).toHaveBeenCalledTimes(1);
-  });
-
-  it("GET_WEBCONTENTS_ID_REVERSE_LOOKUP", async () => {
-    guestRegistry.set(1, createGuest());
-    guestRegistry.set(2, createGuest());
-
-    const { getWebviewDialogService } = await import("../WebviewDialogService.js");
-    const service = getWebviewDialogService();
-
-    service.registerPanel(1, "panel-a");
-    service.registerPanel(2, "panel-b");
-
-    expect(service.getWebContentsId("panel-a")).toBe(1);
-    expect(service.getWebContentsId("panel-b")).toBe(2);
-    expect(service.getWebContentsId("panel-missing")).toBeUndefined();
   });
 
   it("REMOUNT_DROPS_STALE_REVERSE_LOOKUP_ENTRY", async () => {

@@ -432,12 +432,6 @@ describe("isClaudeSessionWithoutTranscript", () => {
 });
 
 describe("getClaudePaneProjectsRoot", () => {
-  it("returns the store a terminal was launched against", () => {
-    rememberClaudePaneStore("term-1", "/home/u/.claude/projects");
-
-    expect(getClaudePaneProjectsRoot("term-1")).toBe("/home/u/.claude/projects");
-  });
-
   // Unknown and uncertain read the same: a reader of the pane's transcript has
   // no store it may use in either case, and must never guess one.
   it("returns null for a terminal never remembered, or remembered as uncertain", () => {
@@ -452,13 +446,5 @@ describe("getClaudePaneProjectsRoot", () => {
     rememberClaudePaneStore("term-1", "/b/projects");
 
     expect(getClaudePaneProjectsRoot("term-1")).toBe("/b/projects");
-  });
-
-  it("forgets a terminal once too many newer ones are remembered", () => {
-    rememberClaudePaneStore("term-oldest", "/a/projects");
-    for (let i = 0; i < 1_024; i++) rememberClaudePaneStore(`term-${i}`, "/a/projects");
-
-    expect(getClaudePaneProjectsRoot("term-oldest")).toBeNull();
-    expect(getClaudePaneProjectsRoot("term-1023")).toBe("/a/projects");
   });
 });

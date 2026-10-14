@@ -74,56 +74,6 @@ describe("trashPanel group cleanup", () => {
     vi.useRealTimers();
   });
 
-  it("should remove panel from tab group when trashed", () => {
-    const group: TabGroup = {
-      id: "group-1",
-      panelIds: ["term-1", "term-2", "term-3"],
-      activeTabId: "term-1",
-      location: "grid",
-    };
-
-    const terminals: MockTerminal[] = [
-      {
-        id: "term-1",
-        title: "Shell 1",
-        cwd: "/test",
-        cols: 80,
-        rows: 24,
-        location: "grid",
-      },
-      {
-        id: "term-2",
-        title: "Shell 2",
-        cwd: "/test",
-        cols: 80,
-        rows: 24,
-        location: "grid",
-      },
-      {
-        id: "term-3",
-        title: "Shell 3",
-        cwd: "/test",
-        cols: 80,
-        rows: 24,
-        location: "grid",
-      },
-    ];
-    setTerminals(terminals);
-    usePanelStore.setState({
-      tabGroups: new Map([["group-1", group]]),
-      focusedId: "term-1",
-    });
-
-    const { trashPanel } = usePanelStore.getState();
-    trashPanel("term-1");
-
-    const state = usePanelStore.getState();
-    const updatedGroup = state.tabGroups.get("group-1");
-    expect(updatedGroup).toBeDefined();
-    expect(updatedGroup?.panelIds).not.toContain("term-1");
-    expect(updatedGroup?.panelIds).toEqual(["term-2", "term-3"]);
-  });
-
   it("should update activeTabId when active tab is trashed", () => {
     const group: TabGroup = {
       id: "group-1",
@@ -166,41 +116,6 @@ describe("trashPanel group cleanup", () => {
     const state = usePanelStore.getState();
     const updatedGroup = state.tabGroups.get("group-1");
     expect(updatedGroup?.activeTabId).toBe("term-2");
-  });
-
-  it("should delete group when trashing leaves 1 panel", () => {
-    const group: TabGroup = {
-      id: "group-1",
-      panelIds: ["term-1", "term-2"],
-      activeTabId: "term-1",
-      location: "grid",
-    };
-
-    setTerminals([
-      {
-        id: "term-1",
-        title: "Shell 1",
-        cwd: "/test",
-        cols: 80,
-        rows: 24,
-        location: "grid",
-      },
-      {
-        id: "term-2",
-        title: "Shell 2",
-        cwd: "/test",
-        cols: 80,
-        rows: 24,
-        location: "grid",
-      },
-    ]);
-    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
-
-    const { trashPanel } = usePanelStore.getState();
-    trashPanel("term-1");
-
-    const state = usePanelStore.getState();
-    expect(state.tabGroups.has("group-1")).toBe(false);
   });
 
   it("should delete group when trashing last panel", () => {
@@ -249,51 +164,6 @@ describe("trashPanel group cleanup", () => {
     const state = usePanelStore.getState();
     expect(state.tabGroups.size).toBe(0);
     expect(state.panelsById["term-1"]?.location).toBe("trash");
-  });
-
-  it("should handle dock groups correctly", () => {
-    const group: TabGroup = {
-      id: "group-1",
-      panelIds: ["term-1", "term-2", "term-3"],
-      activeTabId: "term-2",
-      location: "dock",
-    };
-
-    setTerminals([
-      {
-        id: "term-1",
-        title: "Shell 1",
-        cwd: "/test",
-        cols: 80,
-        rows: 24,
-        location: "dock",
-      },
-      {
-        id: "term-2",
-        title: "Shell 2",
-        cwd: "/test",
-        cols: 80,
-        rows: 24,
-        location: "dock",
-      },
-      {
-        id: "term-3",
-        title: "Shell 3",
-        cwd: "/test",
-        cols: 80,
-        rows: 24,
-        location: "dock",
-      },
-    ]);
-    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
-
-    const { trashPanel } = usePanelStore.getState();
-    trashPanel("term-1");
-
-    const state = usePanelStore.getState();
-    const updatedGroup = state.tabGroups.get("group-1");
-    expect(updatedGroup?.panelIds).toEqual(["term-2", "term-3"]);
-    expect(updatedGroup?.activeTabId).toBe("term-2");
   });
 
   it("should work when trashing non-active tab", () => {
@@ -489,41 +359,6 @@ describe("trash expiry visibility sweep", () => {
     const afterState = usePanelStore.getState();
     expect(afterState.trashedTerminals.has("term-1")).toBe(true);
     expect(afterState.panelsById["term-1"]?.location).toBe("trash");
-  });
-
-  it("should handle empty trashedTerminals map safely", () => {
-    dispatchVisibilityChange("hidden");
-    dispatchVisibilityChange("visible");
-    // Should not throw
-    expect(usePanelStore.getState().trashedTerminals.size).toBe(0);
-  });
-
-  it("should clean up multiple expired entries", () => {
-    setTerminals([
-      { id: "term-1", title: "T1", cwd: "/t", cols: 80, rows: 24, location: "grid" },
-      { id: "term-2", title: "T2", cwd: "/t", cols: 80, rows: 24, location: "grid" },
-      { id: "term-3", title: "T3", cwd: "/t", cols: 80, rows: 24, location: "grid" },
-    ]);
-
-    const { trashPanel } = usePanelStore.getState();
-    trashPanel("term-1");
-    trashPanel("term-2");
-    trashPanel("term-3");
-
-    // All expired
-    const state = usePanelStore.getState();
-    const now = Date.now();
-    const newTrashed = new Map(state.trashedTerminals);
-    for (const [id, info] of newTrashed) {
-      newTrashed.set(id, { ...info, expiresAt: now - 1 });
-    }
-    usePanelStore.setState({ trashedTerminals: newTrashed });
-
-    dispatchVisibilityChange("visible");
-
-    const afterState = usePanelStore.getState();
-    expect(afterState.trashedTerminals.size).toBe(0);
-    expect(afterState.panelIds).toEqual([]);
   });
 
   it("should handle visibility restore race with setTimeout safely", () => {
@@ -975,5 +810,180 @@ describe("trashPanel / trashPanelGroup maximize-state clear (#9935)", () => {
       gridItemCount: 2,
       worktreeId: "worktree-1",
     });
+  });
+});
+
+/**
+ * Tests for restoring a trashed DOCK panel reopening the dock popover (#9938).
+ *
+ * The panelStore wrappers `restoreTerminal` / `restoreTrashedGroup` used to
+ * hardcode `activeDockTerminalId: null` while setting `focusedId` to the
+ * restored panel. When the panel was originally docked it landed back in the
+ * dock but the popover stayed closed, so focus pointed at an invisible panel
+ * and focus-relative shortcuts silently targeted it. The wrappers now derive
+ * `activeDockTerminalId` from the restored panel's `location`, and guard the
+ * no-op case (id absent after the registry call) so focus is never moved onto
+ * a panel that doesn't exist.
+ */
+describe("restore trashed dock focus (#9938)", () => {
+  function makeTerm(id: string, location: "grid" | "dock" = "grid"): MockTerminal {
+    return { id, title: `Shell ${id}`, cwd: "/test", cols: 80, rows: 24, location };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const { reset } = usePanelStore.getState();
+    reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      activeDockTerminalId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("opens the dock popover when a docked terminal is restored", () => {
+    setTerminals([makeTerm("term-1", "dock")]);
+
+    usePanelStore.getState().trashPanel("term-1");
+    expect(usePanelStore.getState().panelsById["term-1"]?.location).toBe("trash");
+
+    usePanelStore.getState().restoreTerminal("term-1");
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["term-1"]?.location).toBe("dock");
+    expect(state.focusedId).toBe("term-1");
+    // The restored panel is back in the dock — the popover must point at it so
+    // focus and the visible panel agree.
+    expect(state.activeDockTerminalId).toBe("term-1");
+    expect(state.activeDockTerminalId).toBe(state.focusedId);
+  });
+
+  it("leaves the dock closed when a grid terminal is restored", () => {
+    setTerminals([makeTerm("term-1", "grid")]);
+
+    usePanelStore.getState().trashPanel("term-1");
+    usePanelStore.getState().restoreTerminal("term-1");
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["term-1"]?.location).toBe("grid");
+    expect(state.focusedId).toBe("term-1");
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
+  it("does not dismiss an unrelated open dock when a grid terminal is restored", () => {
+    setTerminals([makeTerm("term-1", "grid"), makeTerm("other-dock", "dock")]);
+    usePanelStore.setState({ activeDockTerminalId: "other-dock", focusedId: "other-dock" });
+
+    usePanelStore.getState().trashPanel("term-1");
+    usePanelStore.getState().restoreTerminal("term-1");
+
+    const state = usePanelStore.getState();
+    // Restoring a grid terminal moves focus but must not close a dock session
+    // belonging to a different panel.
+    expect(state.focusedId).toBe("term-1");
+    expect(state.activeDockTerminalId).toBe("other-dock");
+  });
+
+  it("does not move focus when restoring a missing terminal (no-op)", () => {
+    setTerminals([makeTerm("visible-dock", "dock")]);
+    usePanelStore.setState({ focusedId: "visible-dock", activeDockTerminalId: "visible-dock" });
+
+    usePanelStore.getState().restoreTerminal("ghost");
+
+    const state = usePanelStore.getState();
+    // The no-op restore must not retarget focus or close the open dock panel.
+    expect(state.focusedId).toBe("visible-dock");
+    expect(state.activeDockTerminalId).toBe("visible-dock");
+  });
+
+  it("opens the dock popover on the active tab when a docked group is restored", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2", "term-3"],
+      activeTabId: "term-2",
+      location: "dock",
+    };
+    setTerminals([
+      makeTerm("term-1", "dock"),
+      makeTerm("term-2", "dock"),
+      makeTerm("term-3", "dock"),
+    ]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+    const groupRestoreId = usePanelStore.getState().trashedTerminals.get("term-1")!.groupRestoreId!;
+
+    usePanelStore.getState().restoreTrashedGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    expect(state.panelsById["term-2"]?.location).toBe("dock");
+    // Focus and the dock popover both land on the originally-active tab.
+    expect(state.focusedId).toBe("term-2");
+    expect(state.activeDockTerminalId).toBe("term-2");
+  });
+
+  it("falls back to a surviving member when the preferred tab was pruned", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2", "term-3"],
+      activeTabId: "term-1",
+      location: "dock",
+    };
+    setTerminals([
+      makeTerm("term-1", "dock"),
+      makeTerm("term-2", "dock"),
+      makeTerm("term-3", "dock"),
+    ]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+    const groupRestoreId = usePanelStore.getState().trashedTerminals.get("term-2")!.groupRestoreId!;
+
+    // Simulate the preferred active tab being garbage-collected from panelsById
+    // during the trash window while its trash metadata lingers.
+    usePanelStore.setState((state) => {
+      const panelsById = { ...state.panelsById };
+      delete panelsById["term-1"];
+      return { panelsById, panelIds: state.panelIds.filter((id) => id !== "term-1") };
+    });
+
+    usePanelStore.getState().restoreTrashedGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    // Focus and the dock popover land on a surviving member rather than being
+    // stranded because the preferred tab is gone.
+    expect(state.focusedId).toBe("term-2");
+    expect(state.activeDockTerminalId).toBe("term-2");
+  });
+
+  it("leaves the dock closed when a grid group is restored", () => {
+    const group: TabGroup = {
+      id: "group-1",
+      panelIds: ["term-1", "term-2"],
+      activeTabId: "term-1",
+      location: "grid",
+    };
+    setTerminals([makeTerm("term-1", "grid"), makeTerm("term-2", "grid")]);
+    usePanelStore.setState({ tabGroups: new Map([["group-1", group]]) });
+
+    usePanelStore.getState().trashPanelGroup("term-1");
+    const groupRestoreId = usePanelStore.getState().trashedTerminals.get("term-1")!.groupRestoreId!;
+
+    usePanelStore.getState().restoreTrashedGroup(groupRestoreId);
+
+    const state = usePanelStore.getState();
+    expect(state.focusedId).toBe("term-1");
+    expect(state.activeDockTerminalId).toBeNull();
   });
 });

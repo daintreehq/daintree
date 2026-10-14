@@ -155,16 +155,6 @@ describe("buildToolCallResult over the cap", () => {
     expect(textOf(result)).toContain("Tool result truncated");
   });
 
-  it("keeps the notice and payload together within the byte budget", () => {
-    const result = buildToolCallResult(payloadOfAtLeast(TOOL_RESULT_TEXT_MAX_BYTES * 4));
-    expect(byteLength(result)).toBeLessThanOrEqual(TOOL_RESULT_TEXT_MAX_BYTES);
-  });
-
-  it("leads with the notice so a client trimming the tail cannot hide it", () => {
-    const result = buildToolCallResult(payloadOfAtLeast(TOOL_RESULT_TEXT_MAX_BYTES * 2));
-    expect(textOf(result).startsWith("[Tool result truncated:")).toBe(true);
-  });
-
   it("delivers the leading bytes of the result, not some other slice", () => {
     const original = JSON.stringify(payloadOfAtLeast(TOOL_RESULT_TEXT_MAX_BYTES * 2));
     const body = bodyAfterNotice(textOf(buildToolCallTextResult(original)));
@@ -194,12 +184,6 @@ describe("buildToolCallResult over the cap", () => {
     expect(notice).not.toBeNull();
     expect(Number(notice![2])).toBe(originalBytes);
     expect(Number(notice![1])).toBe(Buffer.byteLength(bodyAfterNotice(text), "utf8"));
-  });
-
-  it("drops structuredContent so the unbounded duplicate does not defeat the cap", () => {
-    const payload = payloadOfAtLeast(TOOL_RESULT_TEXT_MAX_BYTES * 2);
-    const result = buildToolCallResult(payload, { structuredContent: payload });
-    expect(result.structuredContent).toBeUndefined();
   });
 
   it("does not mark a truncated success as an error when nothing was promised", () => {

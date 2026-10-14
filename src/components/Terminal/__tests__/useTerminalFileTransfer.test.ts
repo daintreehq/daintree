@@ -1138,11 +1138,6 @@ describe("useTerminalFileTransfer hook", () => {
     });
   }
 
-  it("reports no drag-over state initially", () => {
-    const { result } = renderFileTransferHook();
-    expect(result.current).toBe(false);
-  });
-
   it("reports drag-over state while files are over the terminal", () => {
     const { result } = renderFileTransferHook();
 

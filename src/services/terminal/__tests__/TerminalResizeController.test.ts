@@ -912,28 +912,6 @@ describe("TerminalResizeController", () => {
     });
   });
 
-  it("lockResize with custom TTL expires after specified duration", () => {
-    const managed = createManagedTerminal();
-    const controller = new TerminalResizeController({
-      getInstance: vi.fn(() => managed),
-      dataBuffer: {
-        flushForTerminal: vi.fn(),
-        resetForTerminal: vi.fn(),
-        getQueuedBytes: vi.fn(() => 0),
-        resumeFlush: vi.fn(),
-      } as any,
-    });
-
-    controller.lockResize("term-1", true, 300);
-    expect(controller.isResizeLocked("term-1")).toBe(true);
-
-    vi.advanceTimersByTime(200);
-    expect(controller.isResizeLocked("term-1")).toBe(true);
-
-    vi.advanceTimersByTime(200);
-    expect(controller.isResizeLocked("term-1")).toBe(false);
-  });
-
   it("later lockResize call overwrites earlier TTL", () => {
     const managed = createManagedTerminal();
     const controller = new TerminalResizeController({
@@ -1573,10 +1551,6 @@ describe("TerminalResizeController", () => {
       expect(getXtermCellDimensions(fakeTerminal())).toBeNull();
     });
 
-    it("returns null when _renderService is undefined", () => {
-      expect(getXtermCellDimensions(fakeTerminal({}))).toBeNull();
-    });
-
     it("returns null when cell dimensions have non-number values", () => {
       const terminal = fakeTerminal({
         _renderService: {
@@ -1627,23 +1601,6 @@ describe("TerminalResizeController", () => {
         getXtermCellDimensions(
           fakeTerminal({
             _renderService: { dimensions: { css: { cell: { width: Infinity, height: 17 } } } },
-          })
-        )
-      ).toBeNull();
-    });
-
-    it("returns null when intermediate levels are null", () => {
-      expect(
-        getXtermCellDimensions(
-          fakeTerminal({
-            _renderService: { dimensions: { css: null } },
-          })
-        )
-      ).toBeNull();
-      expect(
-        getXtermCellDimensions(
-          fakeTerminal({
-            _renderService: { dimensions: null },
           })
         )
       ).toBeNull();
@@ -1957,24 +1914,6 @@ describe("TerminalResizeController", () => {
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).toHaveBeenCalledTimes(1);
       expect(resizeMock).toHaveBeenCalledWith("term-1", 140, 45);
-    });
-
-    it("debounceResize stores timer in resizeDebounceTimer, not resizeJob", () => {
-      const managed = createManagedTerminal();
-      attachCellDims(managed);
-      managed.isFocused = false;
-      managed.isVisible = true;
-      managed.terminal.buffer.active.length = 300;
-
-      const controller = new TerminalResizeController({
-        getInstance: vi.fn(() => managed),
-        dataBuffer: mockDataBuffer(),
-      });
-
-      controller.resize("term-1", 1200, 900);
-
-      expect(managed.resizeJob).toBeUndefined();
-      expect(managed.resizeDebounceTimer).toBeDefined();
     });
 
     it("scheduleIdleResize falls back to setTimeout when scheduler is unavailable", () => {

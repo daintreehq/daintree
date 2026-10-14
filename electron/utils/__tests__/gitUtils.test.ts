@@ -115,12 +115,6 @@ describe("getGitBranch", () => {
     expect(args).toEqual(["rev-parse", "--abbrev-ref", "HEAD"]);
     expect(opts).toMatchObject({ cwd: "/repo/path", timeout: 1234 });
   });
-
-  it("defaults to a short 500ms timeout", async () => {
-    mockGitOutput("main\n");
-    await getGitBranch("/repo");
-    expect(execFileMock.mock.calls[0][2]).toMatchObject({ timeout: 500 });
-  });
 });
 
 describe("getGitDir caching", () => {

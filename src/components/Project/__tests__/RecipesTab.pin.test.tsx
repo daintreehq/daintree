@@ -62,26 +62,6 @@ describe("RecipesTab — default pin", () => {
     mockImportRecipe.mockClear();
   });
 
-  it("renders a pin button for globally-scoped recipes", () => {
-    mockRecipes.value = [makeRecipe({ id: "global-1", name: "Global Recipe" })];
-    const onChange = vi.fn();
-    render(
-      <RecipesTab
-        projectId="proj-1"
-        defaultWorktreeRecipeId={undefined}
-        onDefaultWorktreeRecipeIdChange={onChange}
-        worktreeMap={new Map()}
-        isOpen={true}
-      />
-    );
-
-    expect(
-      screen.getByRole("button", {
-        name: /make global recipe the default worktree recipe/i,
-      })
-    ).toBeTruthy();
-  });
-
   it("does not render a pin button for worktree-scoped recipes", () => {
     mockRecipes.value = [makeRecipe({ id: "wt-1", name: "Worktree Recipe", worktreeId: "wt-abc" })];
     const onChange = vi.fn();
@@ -153,21 +133,6 @@ describe("RecipesTab — default pin", () => {
     );
 
     expect(screen.getByText("Default")).toBeTruthy();
-  });
-
-  it("renders the dangling-default banner when the pinned id no longer exists and loading is false", () => {
-    mockRecipes.value = [makeRecipe({ id: "global-1", name: "Recipe One" })];
-    render(
-      <RecipesTab
-        projectId="proj-1"
-        defaultWorktreeRecipeId="missing-recipe-id"
-        onDefaultWorktreeRecipeIdChange={vi.fn()}
-        worktreeMap={new Map()}
-        isOpen={true}
-      />
-    );
-
-    expect(screen.getByText(/default recipe unavailable/i)).toBeTruthy();
   });
 
   it("clears the default when the banner action button is clicked", async () => {

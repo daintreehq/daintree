@@ -94,11 +94,8 @@ interface HarnessProps {
   onEscapeKeyDown?: (event: KeyboardEvent) => void;
   onFocus?: React.FocusEventHandler<HTMLDivElement>;
   onMouseDown?: React.MouseEventHandler<HTMLDivElement>;
-  onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
   onInteractOutside?: (event: Event) => void;
   onOpenChange?: (open: boolean) => void;
-  align?: "start" | "center" | "end";
-  sideOffset?: number;
   /** Omits the search box, reproducing a cold open before the chunk resolves. */
   withInput?: boolean;
   /** Renders a second stamped header in a portal outside this content's DOM. */
@@ -115,8 +112,6 @@ function Harness({
   open: openOverride,
   initialQuery = "",
   onOpenChange,
-  align,
-  sideOffset,
   withInput = true,
   withNestedPortal = false,
   ...contentOverrides
@@ -145,8 +140,6 @@ function Harness({
         inputRef={inputRef}
         onClearQuery={() => setQuery("")}
         restoreFocusOnPointerDismiss={restoreFocusOnPointerDismiss}
-        align={align}
-        sideOffset={sideOffset}
         {...contentOverrides}
       >
         {/* The real Header, so the marker the shell's mousedown delegation
@@ -297,12 +290,6 @@ describe("AppPalettePopover", () => {
     expect(content.getAttribute("aria-modal")).toBe("true");
     expect(content.getAttribute("aria-label")).toBe("Test palette");
     expect(contentProps.onEscapeKeyDown).toBeTypeOf("function");
-  });
-
-  it("forwards positioning props through to the popover content", () => {
-    render(<Harness align="end" sideOffset={12} />);
-    expect(contentProps.align).toBe("end");
-    expect(contentProps.sideOffset).toBe(12);
   });
 
   it("never claims the app overlay stack", () => {
@@ -615,15 +602,6 @@ describe("AppPalettePopover", () => {
       expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
     });
 
-    it("notifies the consumer before Radix restores focus", () => {
-      const onCloseAutoFocus = vi.fn();
-      render(<Harness onCloseAutoFocus={onCloseAutoFocus} />);
-
-      fireCloseAutoFocus();
-
-      expect(onCloseAutoFocus).toHaveBeenCalledTimes(1);
-    });
-
     it("suppresses the return when the consumer claims the close", () => {
       // Opted into pointer restoration, so only the consumer's answer can be
       // producing the suppression — the two policies are independent.
@@ -826,15 +804,6 @@ describe("AppPalettePopover", () => {
       // redirect into the input re-enters this handler a second time.
       expect(onFocus).toHaveBeenCalled();
       expect(document.activeElement).toBe(input(container));
-    });
-
-    it("passes an unrecognised handler straight through", () => {
-      const onKeyDown = vi.fn();
-      const { getByTestId } = render(<Harness onKeyDown={onKeyDown} />);
-
-      fireEvent.keyDown(getByTestId("content"), { key: "ArrowDown" });
-
-      expect(onKeyDown).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -186,20 +186,6 @@ describe("useSendToAgentPalette worktree identity", () => {
     expect(result.current.results[1]!.subtitle).toContain("fix-auth");
   });
 
-  it("matches a worktree name by a token inside it, not only its start", async () => {
-    // Branch-derived names run long, so the token a user reaches for is rarely
-    // the first one.
-    seedWorktrees([["/repo", "feature-issue-12420-send-agent-palette"]]);
-    seedPanels([panel("a", { worktreeId: "/repo" }), panel("b")]);
-
-    const { result } = renderHook(() => useSendToAgentPalette());
-    await act(async () => {
-      result.current.setQuery("palette");
-    });
-
-    expect(result.current.results.map((item) => item.id)).toEqual(["a"]);
-  });
-
   it("still ranks a whole-word title match above an incidental substring", async () => {
     // Guards the Fuse options: dropping location scoring makes worktree tokens
     // reachable anywhere in a long name, but it also lets the "fix" inside

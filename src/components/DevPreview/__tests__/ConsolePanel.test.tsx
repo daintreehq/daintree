@@ -99,12 +99,6 @@ describe("serializeConsoleMessage", () => {
     expect(serializeConsoleMessage(makeMessage())).toBe("[12:34:56.789] [ERR] boom");
   });
 
-  it("uses the level badge labels", () => {
-    expect(serializeConsoleMessage(makeMessage({ level: "warning" }))).toContain("[WRN]");
-    expect(serializeConsoleMessage(makeMessage({ level: "info" }))).toContain("[INF]");
-    expect(serializeConsoleMessage(makeMessage({ level: "log" }))).toContain("[LOG]");
-  });
-
   it("appends stack frames in Chrome's text format", () => {
     const msg = makeMessage({
       stackTrace: {
@@ -164,27 +158,6 @@ describe("per-row copy", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenCalledWith(
       expect.stringMatching(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] \[ERR\] row text$/)
-    );
-  });
-
-  it("includes stack frames in the copied text", async () => {
-    seedConsoleRow({
-      level: "error",
-      summaryText: "with stack",
-      stackTrace: {
-        callFrames: [
-          { functionName: "handler", url: "http://x/main.js", lineNumber: 3, columnNumber: 7 },
-        ],
-      },
-    });
-    renderPanel();
-
-    fireEvent.click(screen.getByRole("button", { name: "Copy console message" }));
-
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith(
-        expect.stringContaining("with stack\n  at handler (http://x/main.js:3:7)")
-      )
     );
   });
 
@@ -322,12 +295,6 @@ describe("toolbar copy visible", () => {
 });
 
 describe("accessibility", () => {
-  it("labels the filter input", () => {
-    renderPanel();
-    const input = screen.getByLabelText("Filter console messages");
-    expect(input.tagName).toBe("INPUT");
-  });
-
   it("exposes expand state on the group toggle, named by its label", () => {
     seedConsoleRow({ cdpType: "startGroupCollapsed", summaryText: "group header" });
     renderPanel();
@@ -348,15 +315,6 @@ describe("accessibility", () => {
 
     const toggle = screen.getByRole("button", { name: /\{a: 1\}/ });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  });
-
-  it("keeps the row copy button label constant after copying", () => {
-    seedConsoleRow({ summaryText: "stable label" });
-    renderPanel();
-
-    const button = screen.getByRole("button", { name: "Copy console message" });
-    fireEvent.click(button);
-    expect(screen.getByRole("button", { name: "Copy console message" })).toBeTruthy();
   });
 });
 

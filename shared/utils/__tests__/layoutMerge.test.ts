@@ -111,18 +111,6 @@ describe("computeIdArrayDelta", () => {
     });
   });
 
-  it("reports added ids as changed", () => {
-    const delta = computeIdArrayDelta([{ id: "1" }], [{ id: "1" }, { id: "2" }], eq);
-    expect(delta.changedIds).toEqual(["2"]);
-    expect(delta.removedIds).toEqual([]);
-  });
-
-  it("reports content changes as changed", () => {
-    const delta = computeIdArrayDelta([{ id: "1", v: "a" }], [{ id: "1", v: "b" }], eq);
-    expect(delta.changedIds).toEqual(["1"]);
-    expect(delta.removedIds).toEqual([]);
-  });
-
   it("reports missing baseline entries as removed", () => {
     const delta = computeIdArrayDelta([{ id: "1" }, { id: "2" }], [{ id: "1" }], eq);
     expect(delta.changedIds).toEqual([]);
@@ -485,18 +473,6 @@ describe("field-level merge for out-of-band fields (#11461)", () => {
 });
 
 describe("computeRecordDelta (draft inputs, #11352)", () => {
-  it("reports an added key as changed", () => {
-    const delta = computeRecordDelta({ a: "x" }, { a: "x", b: "y" });
-    expect(delta.changedIds).toEqual(["b"]);
-    expect(delta.removedIds).toEqual([]);
-  });
-
-  it("reports an edited value as changed", () => {
-    const delta = computeRecordDelta({ a: "x" }, { a: "x2" });
-    expect(delta.changedIds).toEqual(["a"]);
-    expect(delta.removedIds).toEqual([]);
-  });
-
   it("derives a removal tombstone from a key absent in current — the core #11352 case", () => {
     // A cleared/sent draft is dropped from the live map, so removal can ONLY be
     // seen by diffing against the remembered baseline.

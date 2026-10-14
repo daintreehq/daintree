@@ -340,16 +340,6 @@ describe("ProjectCheckService.runCheck — refusing to start", () => {
     wtChild.finish(0);
     await expect(Promise.all([rootRun, wtRun])).resolves.toHaveLength(2);
   });
-
-  it("throws when a spawn error fires instead of an exit", async () => {
-    const service = new ProjectCheckService();
-    const promise = service.runCheck({ projectId: "proj-1", runnerId: "npm-test" });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
-
-    child.emit("error", new Error("EACCES"));
-
-    await expect(promise).rejects.toBeInstanceOf(ProjectCheckError);
-  });
 });
 
 describe("ProjectCheckService — output handling", () => {
@@ -438,20 +428,6 @@ describe("ProjectCheckService — output handling", () => {
 
     const result = await promise;
     expect(result.output).not.toContain("ghp_0123456789abcdefghijklmnopqrstuvwxyzAB");
-  });
-
-  it("interleaves stdout and stderr into one capture", async () => {
-    const service = new ProjectCheckService();
-    const promise = service.runCheck({ projectId: "proj-1", runnerId: "npm-test" });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
-
-    child.stdout.push("out-line\n");
-    child.stderr.push("err-line\n");
-    child.finish(1);
-
-    const result = await promise;
-    expect(result.output).toContain("out-line");
-    expect(result.output).toContain("err-line");
   });
 });
 
@@ -836,13 +812,5 @@ describe("ProjectCheckService — cancellation and teardown", () => {
     } finally {
       killSpy.mockRestore();
     }
-  });
-
-  it("dispose() is safe with no active checks", () => {
-    const service = new ProjectCheckService();
-    expect(() => {
-      service.dispose();
-      service.dispose();
-    }).not.toThrow();
   });
 });

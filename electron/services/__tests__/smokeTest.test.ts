@@ -130,23 +130,6 @@ describe("runSmokeFunctionalChecks", () => {
     await expect(resultPromise).resolves.toBe(false);
     expect(wc.executeJavaScript).not.toHaveBeenCalled();
   });
-
-  it("does not run renderer IPC checks after did-fail-load", async () => {
-    const wc = createWebContents(true);
-    mockGetAppWebContents.mockReturnValue(wc as unknown as WebContents);
-
-    const { runSmokeFunctionalChecks } = await import("../smokeTest.js");
-    const resultPromise = runSmokeFunctionalChecks(
-      {} as BrowserWindow,
-      createFailingPtyClient(),
-      () => false
-    );
-
-    wc.failLoad();
-
-    await expect(resultPromise).resolves.toBe(false);
-    expect(wc.executeJavaScript).not.toHaveBeenCalled();
-  });
 });
 
 describe("runSmokeStabilitySoak", () => {

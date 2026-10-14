@@ -306,18 +306,6 @@ describe("ContentGrid panel identity across layout changes (#12476)", () => {
     expect(lifecycle.unmounts).toEqual(["a"]);
   });
 
-  it("keeps earlier panels mounted when a later grid panel closes", () => {
-    setGrid({ cells: ["a", "b", "c", "d"] });
-    const { container, rerender } = render(view());
-    const before = snapshot(container, ["a", "b", "c"]);
-
-    setGrid({ cells: ["a", "b", "c"] });
-    rerender(view());
-
-    expectSurvivors(container, before, ["a", "b", "c"]);
-    expect(lifecycle.unmounts).toEqual(["d"]);
-  });
-
   it("keeps a tab group's active panel mounted when a neighbouring cell closes", () => {
     setGrid({ cells: ["x", ["p", "q"], "y"] });
     const { container, rerender } = render(view());

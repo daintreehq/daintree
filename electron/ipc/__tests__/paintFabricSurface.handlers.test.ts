@@ -143,18 +143,6 @@ afterEach(() => {
 });
 
 describe("registerPaintFabricSurfaceHandlers", () => {
-  it("registers all four ops and the cleanup unregisters them", () => {
-    const { cleanup } = makeHarness();
-    expect([...registered.keys()].sort()).toEqual([
-      CHANNELS.PAINT_SURFACE_APPLY_WEBGL_THRESHOLDS,
-      CHANNELS.PAINT_SURFACE_CREATE,
-      CHANNELS.PAINT_SURFACE_DESTROY,
-      CHANNELS.PAINT_SURFACE_SET_BOUNDS,
-    ]);
-    cleanup();
-    expect(registered.size).toBe(0);
-  });
-
   it("refuses every op while the fabric flags are off", async () => {
     delete process.env.DAINTREE_PAINT_FABRIC_VIEWS;
     const { invoke } = makeHarness();

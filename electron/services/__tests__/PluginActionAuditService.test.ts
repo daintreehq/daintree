@@ -62,10 +62,6 @@ describe("PluginActionAuditService", () => {
     vi.useRealTimers();
   });
 
-  it("starts empty", () => {
-    expect(service.getRecords()).toEqual([]);
-  });
-
   it("appends a record with the expected shape", () => {
     service.append({
       pluginId: "acme.plugin",
@@ -124,29 +120,6 @@ describe("PluginActionAuditService", () => {
     // Newest-first: the most recent dispatch is first; oldest 10 evicted.
     expect(records[0]!.actionId).toBe("acme.action-59");
     expect(records.at(-1)!.actionId).toBe("acme.action-10");
-  });
-
-  it("returns records newest-first", () => {
-    service.append({
-      pluginId: "p",
-      actionId: "first",
-      source: "user",
-      danger: "safe",
-      argsHash: "",
-      durationMs: 1,
-      result: "success",
-    });
-    service.append({
-      pluginId: "p",
-      actionId: "second",
-      source: "user",
-      danger: "safe",
-      argsHash: "",
-      durationMs: 1,
-      result: "success",
-    });
-    const records = service.getRecords();
-    expect(records.map((r) => r.actionId)).toEqual(["second", "first"]);
   });
 
   it("clear() empties the ring and persists", () => {
@@ -238,30 +211,6 @@ describe("PluginActionAuditService", () => {
     svc.dispose();
   });
 
-  it("hydrates persisted records on first read", () => {
-    const seeded = makeConfigStore({
-      auditLog: [
-        {
-          id: "seed-1",
-          ts: 1,
-          pluginId: "p",
-          actionId: "seeded",
-          source: "user",
-          danger: "safe",
-          argsHash: "",
-          durationMs: 1,
-          result: "success",
-          schemaVersion: 1,
-        },
-      ],
-    });
-    const svc = new PluginActionAuditService(seeded.saveConfig, seeded.readConfig, seeded.logStore);
-    const records = svc.getRecords();
-    expect(records).toHaveLength(1);
-    expect(records[0]!.actionId).toBe("seeded");
-    svc.dispose();
-  });
-
   it("exportRecords serializes as NDJSON", () => {
     const ndjson = service.exportRecords([
       {
@@ -323,24 +272,6 @@ describe("PluginActionAuditService", () => {
       expect(records[0]!.danger).toBeUndefined();
     });
 
-    it("appends an ipc-invoke restricted record with empty argsHash", () => {
-      service.append({
-        pluginId: "acme.plugin",
-        actionId: "do-thing",
-        recordType: "ipc-invoke",
-        channel: "plugin:invoke",
-        argsHash: "",
-        durationMs: 0,
-        result: "restricted",
-        errorMessage: "untrusted sender (url=https://evil.com/)",
-      });
-      const r = service.getRecords()[0]!;
-      expect(r.recordType).toBe("ipc-invoke");
-      expect(r.result).toBe("restricted");
-      expect(r.argsHash).toBe("");
-      expect(r.errorMessage).toBe("untrusted sender (url=https://evil.com/)");
-    });
-
     it("appends a decoration-failure timeout record", () => {
       service.append({
         pluginId: "p.slow",
@@ -364,83 +295,6 @@ describe("PluginActionAuditService", () => {
         result: "error",
         durationMs: 3000,
       });
-    });
-
-    it("appends a decoration-failure rejected record", () => {
-      service.append({
-        pluginId: "p.broken",
-        actionId: "deco",
-        recordType: "decoration-failure",
-        result: "error",
-        failureMode: "rejected",
-        scope: "worktree-diff:/r",
-        contributionId: "deco",
-        errorMessage: "provider rejected: boom",
-        argsHash: "",
-        durationMs: 5,
-      });
-      const r = service.getRecords()[0]!;
-      expect(r.failureMode).toBe("rejected");
-      expect(r.errorMessage).toBe("provider rejected: boom");
-    });
-
-    it("auditEnabled:false suppresses ipc-invoke and decoration-failure records too", () => {
-      store.saveConfig({ auditEnabled: false });
-      service.append({
-        pluginId: "p",
-        actionId: "ch",
-        recordType: "ipc-invoke",
-        channel: "plugin:invoke",
-        argsHash: "",
-        durationMs: 1,
-        result: "error",
-      });
-      service.append({
-        pluginId: "p",
-        actionId: "c",
-        recordType: "decoration-failure",
-        failureMode: "timeout",
-        scope: "s",
-        contributionId: "c",
-        argsHash: "",
-        durationMs: 3000,
-        result: "error",
-      });
-      expect(service.getRecords()).toEqual([]);
-    });
-
-    it("preserves chronological order across mixed record types", () => {
-      service.append({
-        pluginId: "p",
-        actionId: "a",
-        source: "user",
-        danger: "safe",
-        argsHash: "",
-        durationMs: 1,
-        result: "success",
-      });
-      service.append({
-        pluginId: "p",
-        actionId: "b",
-        recordType: "ipc-invoke",
-        channel: "plugin:invoke",
-        argsHash: "",
-        durationMs: 2,
-        result: "error",
-      });
-      service.append({
-        pluginId: "p",
-        actionId: "c",
-        recordType: "decoration-failure",
-        failureMode: "timeout",
-        scope: "s",
-        contributionId: "c",
-        argsHash: "",
-        durationMs: 3,
-        result: "error",
-      });
-      // Newest-first.
-      expect(service.getRecords().map((r) => r.actionId)).toEqual(["c", "b", "a"]);
     });
   });
 

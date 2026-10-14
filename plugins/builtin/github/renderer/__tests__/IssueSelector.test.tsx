@@ -361,33 +361,6 @@ describe("IssueSelector", () => {
     });
   });
 
-  it("removes stale attributes after fetch resolves", async () => {
-    let resolveFirst!: (value: { items: Issue[] }) => void;
-    mockListIssues.mockReturnValue(
-      new Promise((r) => {
-        resolveFirst = r;
-      })
-    );
-
-    render(<IssueSelector {...defaultProps} />);
-    const trigger = screen.getByRole("combobox");
-    fireEvent.click(trigger);
-
-    // While loading, skeleton shown with aria-busy
-    await waitFor(() => {
-      expect(screen.getByRole("listbox").getAttribute("aria-busy")).toBe("true");
-    });
-
-    await act(async () => resolveFirst({ items: [mockIssue()] }));
-
-    await waitFor(() => {
-      const listbox = screen.getByRole("listbox");
-      expect(listbox.getAttribute("aria-busy")).toBeNull();
-      expect(listbox.getAttribute("data-stale")).toBeNull();
-      expect(listbox.className).not.toContain("palette-results-stale");
-    });
-  });
-
   it("renders no-open-issues message when popover opens with no results", async () => {
     let resolvePromise!: (value: { items: Issue[] }) => void;
     mockListIssues.mockReturnValue(

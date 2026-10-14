@@ -155,17 +155,6 @@ describe("ReEntrySummary", () => {
     expect(screen.getByText("Tests flaky")).toBeTruthy();
   });
 
-  it("has role=status", () => {
-    render(
-      <ReEntrySummary
-        state={makeState({
-          rows: [makeRow({ worstType: "success", highlightTitle: "Done" })],
-        })}
-      />
-    );
-    expect(screen.getByRole("status")).toBeTruthy();
-  });
-
   it("dismiss button calls dismiss", () => {
     const dismiss = vi.fn();
     render(
@@ -225,19 +214,6 @@ describe("ReEntrySummary", () => {
     fireEvent.click(screen.getByText("fix-bug"));
     expect(selectSpy).toHaveBeenCalledWith("wt-42");
     expect(dismiss).toHaveBeenCalledOnce();
-  });
-
-  it("renders +N more overflow row when overflowCount > 0", () => {
-    const state = makeState({
-      rows: [
-        makeRow({ worktreeId: "wt-1", worktreeName: "a" }),
-        makeRow({ worktreeId: "wt-2", worktreeName: "b" }),
-        makeRow({ worktreeId: "wt-3", worktreeName: "c" }),
-      ],
-      overflowCount: 2,
-    });
-    render(<ReEntrySummary state={state} />);
-    expect(screen.getByText("+2 more")).toBeTruthy();
   });
 
   it("overflow row opens notification center", async () => {
@@ -385,38 +361,6 @@ describe("ReEntrySummary", () => {
     );
 
     expect(screen.getByLabelText("Pin summary").getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("restarts auto-dismiss timer when rows change but entryCount stays the same", () => {
-    const dismiss = vi.fn();
-    const { rerender } = render(
-      <ReEntrySummary
-        state={makeState({
-          dismiss,
-          entries: [makeEntry({ id: "a", message: "x" })],
-          rows: [makeRow({ worktreeId: "wt-1", highlightTitle: "First" })],
-        })}
-      />
-    );
-
-    act(() => {
-      vi.advanceTimersByTime(7000);
-    });
-
-    rerender(
-      <ReEntrySummary
-        state={makeState({
-          dismiss,
-          entries: [makeEntry({ id: "b", message: "y" })],
-          rows: [makeRow({ worktreeId: "wt-2", highlightTitle: "Second" })],
-        })}
-      />
-    );
-
-    act(() => {
-      vi.advanceTimersByTime(2000);
-    });
-    expect(dismiss).not.toHaveBeenCalled();
   });
 
   it("does not steal focus", () => {

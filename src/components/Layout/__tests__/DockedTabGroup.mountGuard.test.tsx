@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
+import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 
 const trashPanelMock = vi.fn();
 const setActiveTabMock = vi.fn();
@@ -29,6 +30,7 @@ let mockTabGroups = new Map<string, TabGroup>();
 let capturedOnOpenChange: ((open: boolean) => void) | null = null;
 let capturedOnOpenAutoFocus: ((event: { preventDefault: () => void }) => void) | null = null;
 let capturedOnFocusOutside: ((event: { preventDefault: () => void }) => void) | null = null;
+let mockHiddenTabIds = new Set<string>();
 
 vi.mock("@/store", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -60,7 +62,7 @@ vi.mock("@/store", () => ({
 }));
 
 vi.mock("@/hooks", () => ({
-  useTabOverflow: () => new Set<string>(),
+  useTabOverflow: () => mockHiddenTabIds,
 }));
 
 vi.mock("@/store/agentSettingsStore", () => ({
@@ -218,7 +220,21 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuItem: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
+  // Forwards className so the overflow list's active-row marker can be asserted.
+  DropdownMenuItem: ({
+    children,
+    className,
+    onSelect,
+    ...rest
+  }: {
+    children: React.ReactNode;
+    className?: string;
+    onSelect?: () => void;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button className={className} onClick={onSelect} {...rest}>
+      {children}
+    </button>
+  ),
 }));
 
 vi.mock("@dnd-kit/core", () => ({
@@ -863,11 +879,260 @@ describe("DockedTabGroup drag wiring (#10797)", () => {
     // not be forwarded onto the chip.
     expect(onKeyDown).not.toHaveBeenCalled();
   });
+});
 
-  it("renders without a drag-handle provider (no listeners) without throwing", () => {
-    const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
-    expect(() =>
-      render(<DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />)
-    ).not.toThrow();
+/**
+ * DockedTabGroup — dock-popover polish (#8164).
+ *
+ * Covers three small UI/a11y polish items on the dock tab strip:
+ *   1. Duplicate-tab button uses the CopyPlus icon (not the generic Plus).
+ *   2. When the active tab has scrolled into the overflow set, the chevron
+ *      surfaces a neutral dot and the sr-only/aria-label text discloses it.
+ *   3. The active row in the overflow dropdown carries a leading accent bar.
+ */
+describe("DockedTabGroup dock-popover polish (#8164)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    trashPanelMock.mockClear();
+    setActiveTabMock.mockClear();
+    setFocusedMock.mockClear();
+    openDockTerminalMock.mockClear();
+    closeDockTerminalMock.mockClear();
+    moveTerminalToGridMock.mockClear();
+    mockActiveDockTerminalId = "t-1";
+    mockTabGroups = new Map();
+    mockTabGroups.set("g-1", makeGroup(["t-1", "t-2", "t-3"]));
+    mockHiddenTabIds = new Set<string>();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("document tab keyboard contract", () => {
+    const panels = () => [
+      makePanel({ id: "t-1" }),
+      makePanel({ id: "t-2" }),
+      makePanel({ id: "t-3" }),
+    ];
+
+    it.each(["Delete", "Backspace"])("closes the focused tab on %s", (key) => {
+      const { getByTestId } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-1")} panels={panels()} />
+      );
+      getByTestId("tab-t-2").focus();
+      act(() => {
+        getByTestId("tab-t-2").dispatchEvent(
+          new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
+        );
+      });
+      expect(trashPanelMock).toHaveBeenCalledWith("t-2");
+    });
+
+    it("names the popover body as the region the tabs switch", () => {
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-1")} panels={panels()} />
+      );
+      const body = container.querySelector('[role="tabpanel"]');
+      expect(body).not.toBeNull();
+      expect(body!.getAttribute("aria-labelledby")).toContain("t-1");
+    });
+  });
+
+  describe("duplicate-tab button icon (item 1)", () => {
+    it("renders the CopyPlus glyph, not the generic Plus", () => {
+      const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" })];
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+      );
+
+      const addTabButton = container.querySelector(
+        '[aria-label="Duplicate panel as new tab"]'
+      ) as HTMLElement | null;
+      expect(addTabButton).not.toBeNull();
+
+      // CopyPlus is a stacked-rectangle glyph (two <rect> elements), Plus is two
+      // single <path>s with no rect. This catches an accidental regression to
+      // the generic add-tab icon without coupling to internal SVG ids.
+      const svg = addTabButton!.querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg!.querySelectorAll("rect").length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("overflow chevron hidden-active cue (item 2)", () => {
+    it("folds the count into aria-label and renders no dot when the active tab is visible", () => {
+      mockHiddenTabIds = new Set<string>(["t-3"]);
+      const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" }), makePanel({ id: "t-3" })];
+
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-1")} panels={panels} />
+      );
+
+      const overflowButton = container.querySelector(
+        '[data-testid="dock-tabs-overflow"]'
+      ) as HTMLElement | null;
+      expect(overflowButton).not.toBeNull();
+      // aria-label carries the count directly — the inner sr-only span would be
+      // shadowed by aria-label per the accessible-name algorithm, so the count
+      // lives in the label itself.
+      expect(overflowButton!.getAttribute("aria-label")).toBe("Show 1 hidden tabs");
+      expect(overflowButton!.querySelector("span.bg-daintree-text\\/70")).toBeNull();
+    });
+
+    it("renders the neutral dot and discloses 'including active' when the active tab is hidden", () => {
+      mockHiddenTabIds = new Set<string>(["t-1", "t-3"]);
+      mockActiveDockTerminalId = "t-1";
+      mockTabGroups.set("g-1", makeGroup(["t-1", "t-2", "t-3"], "t-1"));
+      const panels = [makePanel({ id: "t-1" }), makePanel({ id: "t-2" }), makePanel({ id: "t-3" })];
+
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-1")} panels={panels} />
+      );
+
+      const overflowButton = container.querySelector(
+        '[data-testid="dock-tabs-overflow"]'
+      ) as HTMLElement | null;
+      expect(overflowButton).not.toBeNull();
+      expect(overflowButton!.getAttribute("aria-label")).toBe(
+        "Show 2 hidden tabs, including active"
+      );
+
+      const dot = overflowButton!.querySelector("span.bg-daintree-text\\/70");
+      expect(dot).not.toBeNull();
+      // Accent restraint: the neutral cue must NOT use any accent token.
+      expect(dot!.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
+    });
+  });
+
+  describe("overflow dropdown active marker (item 3)", () => {
+    it("marks the active row with a check, the committed-value mark, and inactive rows without it", () => {
+      mockHiddenTabIds = new Set<string>(["t-2", "t-3"]);
+      mockActiveDockTerminalId = "t-2";
+      mockTabGroups.set("g-1", makeGroup(["t-1", "t-2", "t-3"], "t-2"));
+      const panels = [
+        makePanel({ id: "t-1", title: "Visible" }),
+        makePanel({ id: "t-2", title: "Active hidden" }),
+        makePanel({ id: "t-3", title: "Inactive hidden" }),
+      ];
+
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2", "t-3"], "t-2")} panels={panels} />
+      );
+
+      const rows = Array.from(container.querySelectorAll<HTMLButtonElement>("[aria-current]"));
+      expect(rows.length).toBe(1);
+      const activeRow = rows[0]!;
+      expect(activeRow.getAttribute("aria-current")).toBe("true");
+      expect(activeRow.className).toContain("font-medium");
+      expect(activeRow.querySelector("svg.lucide-check")).not.toBeNull();
+      // A rail would read as the highlighted row, not the tab on screen.
+      expect(activeRow.className).not.toContain("before:");
+
+      // The non-active hidden row must NOT carry the active marker.
+      const allRows = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).filter(
+        (b) => b !== activeRow && b.textContent?.includes("Inactive hidden")
+      );
+      expect(allRows.length).toBeGreaterThan(0);
+      for (const row of allRows) {
+        expect(row.querySelector("svg.lucide-check")).toBeNull();
+        expect(row.className).not.toContain("font-medium");
+      }
+    });
+  });
+
+  // #11187 — plain-terminal running/finished cue aggregates across the group's
+  // tabs (any plain tab working → spinner). The real useDockActivityState helper
+  // runs here; deriveTerminalChrome is mocked to isAgent:false so tabs resolve
+  // as plain shells.
+  describe("plain-terminal group activity cue (#11187)", () => {
+    it("shows a running spinner when any plain tab in the group is working", () => {
+      const panels = [
+        makePanel({ id: "t-1" }),
+        makePanel({ id: "t-2", activityStatus: "working" }),
+      ];
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+      );
+      expect(container.querySelector('[data-dock-activity-state="working"]')).not.toBeNull();
+    });
+
+    it("announces 'command running' in the group chip accessible name while aggregating working", () => {
+      const panels = [
+        makePanel({ id: "t-1" }),
+        makePanel({ id: "t-2", activityStatus: "working" }),
+      ];
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+      );
+      const chip = container.querySelector('[data-dock-item=""]') as HTMLElement | null;
+      expect(chip).not.toBeNull();
+      expect(chip!.getAttribute("aria-label")).toContain("command running");
+    });
+
+    it("shows no cue when every plain tab is idle", () => {
+      const panels = [
+        makePanel({ id: "t-1", activityStatus: "success" }),
+        makePanel({ id: "t-2", activityStatus: "success" }),
+      ];
+      const { container } = render(
+        <DockedTabGroup group={makeGroup(["t-1", "t-2"], "t-1")} panels={panels} />
+      );
+      expect(container.querySelector("[data-dock-activity-state]")).toBeNull();
+    });
+
+    it("flashes a finished cue when the last running tab finishes, then clears it", () => {
+      const { container, rerender } = render(
+        <DockedTabGroup
+          group={makeGroup(["t-1", "t-2"], "t-1")}
+          panels={[
+            makePanel({ id: "t-1", activityStatus: "success" }),
+            makePanel({ id: "t-2", activityStatus: "working" }),
+          ]}
+        />
+      );
+      expect(container.querySelector('[data-dock-activity-state="working"]')).not.toBeNull();
+
+      rerender(
+        <DockedTabGroup
+          group={makeGroup(["t-1", "t-2"], "t-1")}
+          panels={[
+            makePanel({ id: "t-1", activityStatus: "success" }),
+            makePanel({ id: "t-2", activityStatus: "success" }),
+          ]}
+        />
+      );
+      const finished = container.querySelector('[data-dock-activity-state="finished"]');
+      expect(finished).not.toBeNull();
+      expect(finished!.querySelector("svg")).not.toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(UI_TRANSIENT_HINT_DWELL_MS);
+      });
+      expect(container.querySelector('[data-dock-activity-state="finished"]')).toBeNull();
+    });
+
+    it("does not flash a finished cue when a running tab is removed while an idle tab remains", () => {
+      const { container, rerender } = render(
+        <DockedTabGroup
+          group={makeGroup(["t-1", "t-2"], "t-1")}
+          panels={[
+            makePanel({ id: "t-1", activityStatus: "success" }),
+            makePanel({ id: "t-2", activityStatus: "working" }),
+          ]}
+        />
+      );
+      expect(container.querySelector('[data-dock-activity-state="working"]')).not.toBeNull();
+
+      // The running tab is closed; only the idle tab remains. The aggregate flips
+      // working→success but membership changed, so no false completion.
+      rerender(
+        <DockedTabGroup
+          group={makeGroup(["t-1"], "t-1")}
+          panels={[makePanel({ id: "t-1", activityStatus: "success" })]}
+        />
+      );
+      expect(container.querySelector('[data-dock-activity-state="finished"]')).toBeNull();
+    });
   });
 });

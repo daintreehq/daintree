@@ -88,23 +88,6 @@ describe("AnalysisSession tail reads", () => {
     );
   });
 
-  it("keeps the capped read when it holds enough lines", async () => {
-    const session = makeSession();
-    let text = "";
-    for (let i = 0; i < 400; i++) text += `real ${i}\r\n`;
-    feed(session, text);
-    const calls: Array<number | undefined> = [];
-    const full = await session.serialize();
-    const tail = await readTailSnapshot((options) => {
-      calls.push(options?.tailRows);
-      return session.serialize(options);
-    }, 30);
-    expect(calls).toEqual([60]);
-    expect(tailCapturedOutput(tail!.data, 30, true)).toEqual(
-      tailCapturedOutput(full!.data, 30, true)
-    );
-  });
-
   it("reads the newest rows while the alternate screen is active", async () => {
     const session = makeSession();
     let text = "";

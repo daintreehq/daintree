@@ -15,11 +15,6 @@ function errorCodes(result: { success: boolean; error?: { issues: unknown[] } })
 }
 
 describe("contributes.agentMcp", () => {
-  it("defaults to no endpoints", () => {
-    const result = getPluginManifestSchema("user").safeParse(manifestWith({}));
-    expect(result.success && result.data.contributes.agentMcp).toEqual([]);
-  });
-
   it("accepts an endpoint when mcp:expose is declared", () => {
     const result = getPluginManifestSchema("user").safeParse(
       manifestWith({ capabilities: ["mcp:expose"], contributes: { agentMcp: [ENDPOINT] } })

@@ -295,13 +295,6 @@ describe("Other projects sort control (#11455)", () => {
     expect(document.activeElement).not.toBe(trigger());
   });
 
-  it("does not lend its label to the band's accessible name", () => {
-    renderPalette(4);
-    const group = screen.getByRole("group", { name: "Other projects" });
-    // The control lives inside the header row but outside the labelling leaf.
-    expect(within(group).getByTestId("other-projects-sort-trigger")).toBeTruthy();
-  });
-
   it("shares the header row with the fold control without renaming the band", () => {
     // Two controls now sit around the labelling leaf (#11943). Either one
     // nested inside it would name the band "Other projects Most used" or

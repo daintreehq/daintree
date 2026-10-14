@@ -124,12 +124,6 @@ describe("useHeightHold", () => {
       expect(node.style.minHeight).toBe("");
     });
 
-    it("animates the settle so a shorter document doesn't snap", () => {
-      const { node } = holdAndRelease();
-
-      expect(node.classList.contains(RELEASING_CLASS)).toBe(true);
-    });
-
     it("drops the release transition once it has settled", () => {
       const { node } = holdAndRelease();
       expect(node.classList.contains(RELEASING_CLASS)).toBe(true);

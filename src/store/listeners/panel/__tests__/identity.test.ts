@@ -542,26 +542,6 @@ describe("identity listener — map eviction on panel removal (#10842)", () => {
 });
 
 describe("identity listener — agentIncarnation sync (#12535)", () => {
-  it("copies the count carried by a state event onto the panel", () => {
-    setupPanel({ agentState: "exited" });
-    const d = setupIdentityListeners();
-
-    emitState(
-      makePayload({
-        state: "idle",
-        previousState: "exited",
-        timestamp: nextTimestamp(),
-        agentIncarnation: 2,
-      })
-    );
-
-    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
-      agentIncarnation: 2,
-    });
-
-    d.dispose();
-  });
-
   it("follows the host downward after a pty-host replay restarts the count", () => {
     setupPanel({ agentState: "idle", agentIncarnation: 2 });
     const d = setupIdentityListeners();

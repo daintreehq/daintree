@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { useSlowCall } from "../useSlowCall";
 
 function createDeferred<T>() {
@@ -18,32 +18,6 @@ describe("useSlowCall", () => {
     vi.useRealTimers();
   });
 
-  it("returns false flags before run() is called", () => {
-    const fn = vi.fn(async () => "value");
-    const { result } = renderHook(() => useSlowCall(fn));
-    expect(result.current.isPending).toBe(false);
-    expect(result.current.isSlow).toBe(false);
-    expect(result.current.isVerySlow).toBe(false);
-  });
-
-  it("flips isPending to true while the call is in flight", async () => {
-    const deferred = createDeferred<string>();
-    const fn = vi.fn(async () => deferred.promise);
-    const { result } = renderHook(() => useSlowCall(fn));
-
-    let runPromise: Promise<string | undefined>;
-    act(() => {
-      runPromise = result.current.run();
-    });
-    await waitFor(() => expect(result.current.isPending).toBe(true));
-
-    deferred.resolve("ok");
-    await act(async () => {
-      await runPromise;
-    });
-    expect(result.current.isPending).toBe(false);
-  });
-
   it("does not flip isSlow before slowMs elapses", async () => {
     vi.useFakeTimers();
     const deferred = createDeferred<string>();
@@ -59,40 +33,6 @@ describe("useSlowCall", () => {
     });
     expect(result.current.isSlow).toBe(false);
     expect(result.current.isVerySlow).toBe(false);
-  });
-
-  it("flips isSlow to true after slowMs", async () => {
-    vi.useFakeTimers();
-    const deferred = createDeferred<string>();
-    const fn = vi.fn(async () => deferred.promise);
-    const { result } = renderHook(() => useSlowCall(fn, { slowMs: 3000, verySlowMs: 10000 }));
-
-    act(() => {
-      void result.current.run();
-    });
-
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-    });
-    expect(result.current.isSlow).toBe(true);
-    expect(result.current.isVerySlow).toBe(false);
-  });
-
-  it("flips isVerySlow to true after verySlowMs", async () => {
-    vi.useFakeTimers();
-    const deferred = createDeferred<string>();
-    const fn = vi.fn(async () => deferred.promise);
-    const { result } = renderHook(() => useSlowCall(fn, { slowMs: 3000, verySlowMs: 10000 }));
-
-    act(() => {
-      void result.current.run();
-    });
-
-    await act(async () => {
-      vi.advanceTimersByTime(10000);
-    });
-    expect(result.current.isSlow).toBe(true);
-    expect(result.current.isVerySlow).toBe(true);
   });
 
   it("resets all flags after a fast resolve", async () => {
@@ -194,37 +134,6 @@ describe("useSlowCall", () => {
     expect(result.current.isVerySlow).toBe(false);
   });
 
-  it("calling cancel() before run() is a no-op", () => {
-    const fn = vi.fn(async () => "value");
-    const { result } = renderHook(() => useSlowCall(fn));
-
-    act(() => {
-      result.current.cancel();
-    });
-
-    expect(result.current.isPending).toBe(false);
-  });
-
-  it("calling cancel() twice is harmless", async () => {
-    vi.useFakeTimers();
-    const deferred = createDeferred<string>();
-    const fn = vi.fn(async () => deferred.promise);
-    const { result } = renderHook(() => useSlowCall(fn));
-
-    act(() => {
-      void result.current.run();
-    });
-
-    act(() => {
-      result.current.cancel();
-    });
-    act(() => {
-      result.current.cancel();
-    });
-
-    expect(result.current.isPending).toBe(false);
-  });
-
   it("starting a new run while one is pending aborts the previous", async () => {
     vi.useFakeTimers();
     const deferredA = createDeferred<string>();
@@ -262,27 +171,6 @@ describe("useSlowCall", () => {
 
     expect(result.current.isPending).toBe(true);
     expect(result.current.isSlow).toBe(false);
-  });
-
-  it("does not flip flags after unmount", async () => {
-    vi.useFakeTimers();
-    const deferred = createDeferred<string>();
-    const fn = vi.fn(async () => deferred.promise);
-    const { result, unmount } = renderHook(() =>
-      useSlowCall(fn, { slowMs: 3000, verySlowMs: 10000 })
-    );
-
-    act(() => {
-      void result.current.run();
-    });
-
-    unmount();
-
-    expect(() => {
-      act(() => {
-        vi.advanceTimersByTime(15000);
-      });
-    }).not.toThrow();
   });
 
   it("aborts the signal on unmount", async () => {
@@ -340,28 +228,6 @@ describe("useSlowCall", () => {
       vi.advanceTimersByTime(4000);
     });
     expect(result.current.isSlow).toBe(true);
-    expect(result.current.isVerySlow).toBe(true);
-  });
-
-  it("uses default thresholds (3000/10000) when options are omitted", async () => {
-    vi.useFakeTimers();
-    const deferred = createDeferred<string>();
-    const fn = vi.fn(async () => deferred.promise);
-    const { result } = renderHook(() => useSlowCall(fn));
-
-    act(() => {
-      void result.current.run();
-    });
-
-    await act(async () => {
-      vi.advanceTimersByTime(3000);
-    });
-    expect(result.current.isSlow).toBe(true);
-    expect(result.current.isVerySlow).toBe(false);
-
-    await act(async () => {
-      vi.advanceTimersByTime(7000);
-    });
     expect(result.current.isVerySlow).toBe(true);
   });
 

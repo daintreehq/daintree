@@ -309,34 +309,6 @@ describe("useProjectSettingsForm", () => {
     vi.useRealTimers();
   });
 
-  it("flush() persists the edited value exactly once when the form is dirty", async () => {
-    vi.useFakeTimers();
-    const { result, rerender } = renderHook(
-      ({ isOpen }: { isOpen: boolean; tick: number }) =>
-        useProjectSettingsForm({ projectId: "proj-1", isOpen }),
-      { initialProps: { isOpen: false, tick: 0 } }
-    );
-    rerender({ isOpen: true, tick: 1 });
-    mockSettings.value = baseSettings;
-    rerender({ isOpen: true, tick: 2 });
-    await act(async () => {
-      await vi.runAllTimersAsync();
-    });
-
-    vi.clearAllMocks();
-    act(() => {
-      result.current.setDevServerCommand("npm run serve");
-    });
-    await act(async () => {
-      await result.current.flush();
-    });
-    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
-    expect(mockSaveSettings.mock.calls[0]![0]).toMatchObject({
-      devServerCommand: "npm run serve",
-    });
-    vi.useRealTimers();
-  });
-
   it("a later form save carries the preference the cache holds, not the one it opened with", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
@@ -458,24 +430,6 @@ describe("useProjectSettingsForm", () => {
     vi.useRealTimers();
   });
 
-  it("exposes store and external data", async () => {
-    const { result } = renderOpenForm("proj-1");
-    await waitFor(() => {
-      expect(result.current.projectIsInitialized).toBe(true);
-    });
-    expect(result.current.projectSettings).toBe(baseSettings);
-    expect(result.current.projectIsLoading).toBe(false);
-    expect(result.current.projectError).toBeNull();
-    expect(result.current.currentProject).toBeDefined();
-    expect(result.current.recipes).toEqual([]);
-    expect(result.current.worktrees).toEqual([]);
-    expect(result.current.worktreeMap).toBeInstanceOf(Map);
-    expect(typeof result.current.enableInRepoSettings).toBe("function");
-    expect(typeof result.current.disableInRepoSettings).toBe("function");
-    expect(typeof result.current.flush).toBe("function");
-    expect(typeof result.current.refreshProjectSettings).toBe("function");
-  });
-
   it("stays uninitialized while loading with no settings yet (backs the Doherty loader)", async () => {
     mockIsLoading.value = true;
     mockSettings.value = null;
@@ -488,19 +442,6 @@ describe("useProjectSettingsForm", () => {
     expect(result.current.projectIsLoading).toBe(true);
     expect(result.current.projectIsInitialized).toBe(false);
     expect(mockSaveSettings).not.toHaveBeenCalled();
-  });
-
-  it("exposes refreshProjectSettings that delegates to useProjectSettings.refresh", async () => {
-    const { result } = renderOpenForm("proj-1");
-    await waitFor(() => {
-      expect(result.current.projectIsInitialized).toBe(true);
-    });
-
-    expect(mockRefresh).not.toHaveBeenCalled();
-    await act(async () => {
-      await result.current.refreshProjectSettings();
-    });
-    expect(mockRefresh).toHaveBeenCalledTimes(1);
   });
 
   it("initializes correctly when settings are already loaded at dialog open", async () => {

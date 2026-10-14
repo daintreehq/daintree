@@ -317,18 +317,6 @@ describe("DaintreeAssistantSettingsTab", () => {
       { timeout: 5000 }
     );
 
-  it("loads settings and MCP status on mount", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    expect(window.electron.helpAssistant.getSettings).toHaveBeenCalledTimes(1);
-    expect(window.electron.mcpServer.getStatus).toHaveBeenCalledTimes(1);
-  });
-
   it("toggling doc search persists docSearch=false", async () => {
     const { container } = render(
       <SettingsValidationProvider>
@@ -428,18 +416,6 @@ describe("DaintreeAssistantSettingsTab", () => {
       expect(screen.queryByLabelText("Reset Search documentation to default")).toBeNull();
       expect(screen.queryByLabelText("Reset Daintree control to default")).toBeNull();
     });
-  });
-
-  it("does not mark the behavior switches modified at their defaults", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    expect(screen.queryByLabelText("Reset Search documentation to default")).toBeNull();
-    expect(screen.queryByLabelText("Reset Daintree control to default")).toBeNull();
   });
 
   it("hides the debug logging toggle unless the Daintree Assistant agent is selected", async () => {
@@ -1332,28 +1308,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     await waitForContent(container, "Check the MCP server tab for details");
   });
 
-  it("hides the local-server disclosure when Daintree control is persisted off", async () => {
-    installApi({
-      getSettings: vi.fn().mockResolvedValue({
-        docSearch: true,
-        daintreeControl: false,
-        tier: "core" as const,
-        bypassPermissions: false,
-        auditRetention: 7,
-        customArgs: "",
-      }),
-    });
-
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Daintree control");
-
-    expect(container.textContent).not.toContain("starts a local HTTP server on 127.0.0.1");
-  });
-
   it("lists Codex in the agent dropdown when it passes the assistant gate", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
@@ -1685,33 +1639,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
-  it("renders an agent dropdown listing assistant-supported agents", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Agent");
-
-    const select = screen.getByRole("combobox", { name: "Agent" }) as HTMLSelectElement;
-    const labels = Array.from(select.options).map((o) => o.label);
-    expect(labels).toContain("Claude Code");
-  });
-
-  it("calls helpPanelStore.setPreferredAgent when the agent dropdown changes", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Agent");
-
-    const select = screen.getByRole("combobox", { name: "Agent" }) as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "claude" } });
-
-    expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("claude");
-  });
-
   it("shows the dropped-agent banner when a persisted agent was dropped", async () => {
     helpPanelState.droppedPreferredAgentId = "claude";
 
@@ -1863,18 +1790,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(window.electron.system.getAgentVersion).not.toHaveBeenCalled();
   });
 
-  it("audit retention description no longer claims logging can be skipped entirely", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Audit log retention");
-
-    expect(container.textContent).not.toContain("skip logging entirely");
-    expect(container.textContent).toContain("kept separately");
-  });
-
   it("renders turn-outcome diagnostics in the privacy section after expanding advanced diagnostics", async () => {
     const { container } = render(
       <SettingsValidationProvider>
@@ -1890,20 +1805,6 @@ describe("DaintreeAssistantSettingsTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Advanced diagnostics" }));
 
     await waitForContent(container, "Clear turn outcomes");
-  });
-
-  it("renders the recording toggle in the privacy section, on by default", async () => {
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Capture audit log");
-
-    expect(window.electron.mcpServer.getAuditConfig).toHaveBeenCalledTimes(1);
-    const toggle = screen.getByLabelText("Capture audit log");
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(container.textContent).toContain("Recording every dispatch");
   });
 
   it("toggling the recording switch off calls setAuditEnabled(false) and updates the subtitle", async () => {

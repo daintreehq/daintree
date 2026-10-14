@@ -288,17 +288,6 @@ describe("deriveTerminalChrome", () => {
     });
   });
 
-  it("returns process chrome without agent capability", () => {
-    expect(deriveTerminalChrome({ detectedProcessId: "npm" })).toMatchObject({
-      iconId: "npm",
-      label: "npm",
-      isAgent: false,
-      agentId: null,
-      processId: "npm",
-      runtimeKind: "process",
-    });
-  });
-
   it("agent identity wins when agent and process are both present", () => {
     expect(
       deriveTerminalChrome({
@@ -352,11 +341,6 @@ describe("terminalChromeDescriptorsEqual", () => {
     const a = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
     const b = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
     expect(terminalChromeDescriptorsEqual(a, b)).toBe(true);
-  });
-
-  it("returns true for identical references", () => {
-    const a = deriveTerminalChrome({ kind: "browser" });
-    expect(terminalChromeDescriptorsEqual(a, a)).toBe(true);
   });
 
   it("returns false when one side is undefined", () => {

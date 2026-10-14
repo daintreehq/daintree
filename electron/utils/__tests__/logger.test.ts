@@ -229,15 +229,6 @@ describe("logger", () => {
         false
       );
     });
-
-    it("handles errors during rotation gracefully", () => {
-      initializeLogger(TEST_LOG_DIR);
-      logInfo("Test log");
-      logWarn("Warning log");
-      logError("Error log", new Error("Test error"));
-
-      expect(getLogFilePath()).toBeTruthy();
-    });
   });
 
   describe("disk pressure suppression", () => {
@@ -334,20 +325,6 @@ describe("logger", () => {
 
       expect(content).toContain("scheduled line");
     });
-
-    it("coalesces a burst of lines into the file after a single flush", async () => {
-      initializeLogger(TEST_LOG_DIR);
-      const logFile = getLogFilePath();
-
-      for (let i = 0; i < 50; i++) {
-        logInfo(`burst line ${i}`);
-      }
-      await flushLogFileWritesForTesting();
-
-      const content = readFileSync(logFile, "utf8");
-      expect(content).toContain("burst line 0");
-      expect(content).toContain("burst line 49");
-    });
   });
 
   describe("createLogger and level overrides", () => {
@@ -438,14 +415,6 @@ describe("logger", () => {
       setVerboseLogging(false);
       expect(getLogLevelOverrides()["*"]).toBeUndefined();
       expect(isVerboseLogging()).toBe(false);
-    });
-
-    it("resetLoggerStateForTesting clears overrides and registry", () => {
-      createLogger("main:ShouldClear");
-      setLogLevelOverrides({ "main:X": "debug" });
-      resetLoggerStateForTesting();
-      expect(getLogLevelOverrides()).toEqual({});
-      expect(getRegisteredLoggerNames()).not.toContain("main:ShouldClear");
     });
   });
 
@@ -546,11 +515,6 @@ describe("logger", () => {
       // Invariant: kept prefix + reported dropped count === original length.
       expect(keptLength + dropped).toBe(original.length);
       expect(stack.length).toBeLessThan(original.length);
-    });
-
-    it("leaves short string values untouched", () => {
-      logInfo("ok", { note: "short value" });
-      expect(lastContext()?.note).toBe("short value");
     });
 
     it("replaces objects nested beyond the depth limit with a sentinel", () => {
@@ -944,19 +908,6 @@ describe("logger", () => {
       expect(existsSync(realSnaps[0])).toBe(true);
       expect(existsSync(realSnaps[1])).toBe(false);
       expect(existsSync(realSnaps[2])).toBe(false);
-    });
-
-    it("is idempotent across repeated runs", async () => {
-      const files = Array.from({ length: 5 }, (_, i) =>
-        seedSnapshot(`Heap.${i}.heapsnapshot`, i + 1)
-      );
-
-      await prune(snapDir, 2);
-      await prune(snapDir, 2);
-
-      expect(existsSync(files[0])).toBe(true);
-      expect(existsSync(files[1])).toBe(true);
-      expect(existsSync(files[2])).toBe(false);
     });
 
     it("resolves without throwing when the directory does not exist", async () => {

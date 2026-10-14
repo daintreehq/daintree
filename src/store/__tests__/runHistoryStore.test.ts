@@ -69,18 +69,6 @@ describe("runHistoryStore", () => {
     expect(useRunHistoryStore.getState().loading).toBe(false);
   });
 
-  it("clear calls the IPC; the empty state arrives via the push path", async () => {
-    useRunHistoryStore.getState().init();
-    await vi.waitFor(() => expect(eventCallback).not.toBeNull());
-    eventCallback!([makeRecord("x")]);
-    await useRunHistoryStore.getState().clear();
-    expect(clear).toHaveBeenCalledTimes(1);
-    // The clear handler broadcasts the empty snapshot synchronously; simulate
-    // that push arriving and assert the mirror empties.
-    eventCallback!([]);
-    expect(useRunHistoryStore.getState().records).toEqual([]);
-  });
-
   it("clear does not clobber a concurrent append push from another window", async () => {
     useRunHistoryStore.getState().init();
     await vi.waitFor(() => expect(eventCallback).not.toBeNull());

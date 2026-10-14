@@ -126,14 +126,6 @@ describe("CopyTreeMenuContent", () => {
     vi.useRealTimers();
   });
 
-  it("initializes the history mirror on mount", () => {
-    // The store has no other consumer in the app, so if the menu stops calling
-    // init() the recents are permanently empty rather than merely stale.
-    seed([]);
-    renderMenu();
-    expect(initSpy).toHaveBeenCalled();
-  });
-
   it("offers the full copy while history is still hydrating", () => {
     // The pinned entry is the old one-click behavior. Gating it behind the
     // history read would make the menu strictly slower than the button it

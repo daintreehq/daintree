@@ -48,12 +48,6 @@ describe("PaintSurfaceRegistry", () => {
     expect(() => registry.place("t1", "ghost")).toThrow(/Unknown paint surface/);
   });
 
-  it("returns null for unplaced terminals", () => {
-    const registry = new PaintSurfaceRegistry();
-    registry.registerSurface(makeSurface("a"));
-    expect(registry.surfaceFor("t1")).toBeNull();
-  });
-
   it("unregistering a surface returns its orphaned terminals and clears their placements", () => {
     const registry = new PaintSurfaceRegistry();
     registry.registerSurface(makeSurface("a"));

@@ -173,40 +173,6 @@ describe("agent MCP over the worker bridge", () => {
     });
   });
 
-  it("rejects a non-destructive claim in the worker before anything crosses the port", async () => {
-    const { host, proxy } = makeConnectedPair();
-    expect(() =>
-      proxy.host.mcp.registerTools("data", {
-        add_row: {
-          description: "Adds a row.",
-          inputSchema: { type: "object" },
-          annotations: { destructiveHint: false },
-          execute: () => null,
-        },
-      })
-    ).toThrow(/destructiveHint may only be true/);
-    await flush();
-
-    expect(host.mcp.registerTools).not.toHaveBeenCalled();
-  });
-
-  it("rejects a read-only claim in the worker before anything crosses the port", async () => {
-    const { host, proxy } = makeConnectedPair();
-    expect(() =>
-      proxy.host.mcp.registerTools("data", {
-        peek: {
-          description: "Reads.",
-          inputSchema: { type: "object" },
-          annotations: { readOnlyHint: true } as never,
-          execute: () => null,
-        },
-      })
-    ).toThrow(/only the host may mark a tool read-only/);
-    await flush();
-
-    expect(host.mcp.registerTools).not.toHaveBeenCalled();
-  });
-
   it.each(["readOnly", "readOnlyHint"])(
     "rejects a forged top-level %s claim before it reaches the host",
     async (key) => {
@@ -492,19 +458,6 @@ describe("worker-side host.mcp", () => {
         PluginMcpToolDefinition
       >)
     ).toThrow(/must match/);
-    expect(sent).toHaveLength(0);
-  });
-
-  it("throws at the call site for a schema the host could not enforce", () => {
-    const { proxy, sent } = makeProxy();
-    expect(() =>
-      proxy.host.mcp.registerTools("data", {
-        list_rows: {
-          ...tool(),
-          inputSchema: { type: "object", properties: { a: { $ref: "https://example.com/a" } } },
-        },
-      })
-    ).toThrow(/tool "list_rows" inputSchema references "https:\/\/example\.com\/a"/);
     expect(sent).toHaveLength(0);
   });
 

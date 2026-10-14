@@ -59,12 +59,6 @@ describe("copyTreeClient", () => {
         "Auth flow context"
       );
     });
-
-    it("passes the name through undefined when the caller omits it", async () => {
-      await copyTreeClient.generate("wt-1", undefined, undefined, "toolbar");
-
-      expect(generateMock).toHaveBeenCalledWith("wt-1", undefined, undefined, "toolbar", undefined);
-    });
   });
 
   describe("generateAndCopyFile", () => {
@@ -79,12 +73,6 @@ describe("copyTreeClient", () => {
         "mcp",
         "Auth flow context"
       );
-    });
-
-    it("passes the name through undefined when the caller omits it", async () => {
-      await copyTreeClient.generateAndCopyFile("wt-1", undefined, "toolbar");
-
-      expect(generateAndCopyFileMock).toHaveBeenCalledWith("wt-1", undefined, "toolbar", undefined);
     });
   });
 
@@ -108,19 +96,6 @@ describe("copyTreeClient", () => {
         "inj-1",
         "mcp",
         "Auth flow context"
-      );
-    });
-
-    it("passes the name through undefined when the caller omits it", async () => {
-      await copyTreeClient.injectToTerminal("t-1", "wt-1", undefined, undefined, "terminal");
-
-      expect(injectToTerminalMock).toHaveBeenCalledWith(
-        "t-1",
-        "wt-1",
-        undefined,
-        undefined,
-        "terminal",
-        undefined
       );
     });
   });

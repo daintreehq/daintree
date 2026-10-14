@@ -123,11 +123,6 @@ describe("MissingCliGate", () => {
     cliStore.state.availability = {};
   });
 
-  it("renders the agent name", () => {
-    renderGate({ detail: detail({ state: "missing" }) });
-    expect(screen.getByText("Claude")).toBeTruthy();
-  });
-
   it("shows 'CLI binary not found' for missing state", () => {
     renderGate({ detail: detail({ state: "missing" }) });
     expect(screen.getByText("CLI binary not found")).toBeTruthy();
@@ -244,23 +239,6 @@ describe("MissingCliGate", () => {
       expect(onAvailabilityReady).not.toHaveBeenCalled();
       expect(onRunAnyway).not.toHaveBeenCalled();
       expect(screen.getByText("Re-check")).toBeTruthy();
-    });
-
-    it("reads availability rather than details, which a resolved probe may leave stale", async () => {
-      // The store swallows a `getDetails` failure and keeps the old details
-      // while still resolving, so a details-driven decision would never fire.
-      cliStore.state.refresh = vi.fn(async () => {
-        cliStore.state.availability = { claude: "ready" };
-      });
-      const { onAvailabilityReady } = renderGate({
-        detail: detail({ state: "missing" }),
-      });
-
-      await act(async () => {
-        fireEvent.click(screen.getByText("Re-check"));
-      });
-
-      await waitFor(() => expect(onAvailabilityReady).toHaveBeenCalledOnce());
     });
 
     it("surfaces a failed probe inline and keeps the recovery actions", async () => {

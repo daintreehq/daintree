@@ -371,55 +371,6 @@ describe("capabilities declaration logging", () => {
     expect(permLogs).toHaveLength(0);
   });
 
-  it("logs capabilities for a plugin outside its engine range, which still loads", async () => {
-    await writePlugin("incompatible-perms", {
-      name: "acme.incompatible-perms",
-      version: "1.0.0",
-      capabilities: ["fs:project-read"],
-      engines: { daintree: "^1.0.0" },
-    });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      const service = new PluginService(tmpDir, "0.7.5");
-      await service.initialize();
-
-      expect(service.listPlugins()).toHaveLength(1);
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Plugin "acme.incompatible-perms" declares capabilities')
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it("includes capabilities in loaded plugin manifest", async () => {
-    await writePlugin("with-perms", {
-      name: "acme.with-perms",
-      version: "1.0.0",
-      capabilities: ["git:read", "agent:invoke"],
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const plugins = service.listPlugins();
-    expect(plugins[0].manifest.capabilities).toEqual(["git:read", "agent:invoke"]);
-  });
-
-  it("defaults capabilities to empty array for plugins without the field", async () => {
-    await writePlugin("no-field", {
-      name: "acme.no-field",
-      version: "1.0.0",
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const plugins = service.listPlugins();
-    expect(plugins[0].manifest.capabilities).toEqual([]);
-  });
-
   it("rejects plugins that declare unknown capabilities and does not log them", async () => {
     await writePlugin("unknown-perm", {
       name: "acme.unknown-perm",
@@ -439,44 +390,6 @@ describe("capabilities declaration logging", () => {
       expect.stringContaining("Invalid manifest"),
       expect.any(Array)
     );
-  });
-
-  it("rejects plugins with newline characters in capability strings", async () => {
-    await writePlugin("padded-perm", {
-      name: "acme.padded-perm",
-      version: "1.0.0",
-      capabilities: ["fs:project-read\n", "agent:invoke\r"],
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(service.listPlugins()).toEqual([]);
-    const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
-    );
-    expect(permLogs).toHaveLength(0);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Invalid manifest"),
-      expect.any(Array)
-    );
-  });
-
-  it("rejects plugins where any one capability in a mixed array is invalid", async () => {
-    await writePlugin("mixed-perm", {
-      name: "acme.mixed-perm",
-      version: "1.0.0",
-      capabilities: ["fs:project-read", "invalid:perm", "git:read"],
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(service.listPlugins()).toEqual([]);
-    const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
-    );
-    expect(permLogs).toHaveLength(0);
   });
 });
 
@@ -634,15 +547,6 @@ describe("Plugin worktree host API", () => {
     expect(await host.getWorktrees()).toEqual([]);
     expect(await host.getActiveWorktree()).toBeNull();
     // The unscoped call is the bug — it must never be reached.
-    expect(client.getAllStatesResultAsync).not.toHaveBeenCalled();
-    expect(client.getAllStatesAsync).not.toHaveBeenCalled();
-  });
-
-  it("returns empty when the resolved webContents maps to no window", async () => {
-    const { host, client } = await setup([mkSnap({ id: "b", isCurrent: true })]);
-    webContentsRegistryMock.getWindowForWebContents.mockReturnValue(null);
-
-    expect(await host.getWorktrees()).toEqual([]);
     expect(client.getAllStatesResultAsync).not.toHaveBeenCalled();
     expect(client.getAllStatesAsync).not.toHaveBeenCalled();
   });

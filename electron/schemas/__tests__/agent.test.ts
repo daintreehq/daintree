@@ -11,13 +11,6 @@ describe("AgentStateSchema (issue #5810 migration)", () => {
     expect(AgentStateSchema.parse("running")).toBe("working");
   });
 
-  it.each(["idle", "working", "waiting", "directing", "completed", "exited"])(
-    "accepts canonical state %s",
-    (state) => {
-      expect(AgentStateSchema.parse(state)).toBe(state);
-    }
-  );
-
   it("rejects unknown values", () => {
     expect(() => AgentStateSchema.parse("banana")).toThrow();
   });

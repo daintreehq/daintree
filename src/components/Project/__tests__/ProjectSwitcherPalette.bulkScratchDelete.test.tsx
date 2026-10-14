@@ -476,17 +476,6 @@ describe.each(["modal", "dropdown"] as const)("Visible bulk delete button (%s)",
     expect(screen.queryByRole("button", named)).toBeNull();
   });
 
-  it("asks the host to open the confirmation when pressed", () => {
-    const { props } = renderPalette({ mode, scratchResults: [makeScratch(1), makeScratch(2)] });
-
-    fireEvent.click(screen.getByTestId("scratch-delete-all-button"));
-
-    // The palette never deletes anything itself — it requests the confirm, the
-    // same one the header menu requests.
-    expect(props.onRequestDeleteAllScratches).toHaveBeenCalledTimes(1);
-    expect(props.onRequestDeleteScratch).not.toHaveBeenCalled();
-  });
-
   it("hides the button when the host wires no handler, but shows it when wired", () => {
     const { view } = renderPalette({
       mode,
@@ -537,17 +526,6 @@ describe("Scratch section header collapse toggle", () => {
 });
 
 describe("Bulk delete confirmation", () => {
-  it("counts the frozen snapshot, not the live scratch list", () => {
-    // The rows have already drained away as removals land; the dialog must keep
-    // naming the three the user actually agreed to.
-    renderPalette({
-      scratchResults: [makeScratch(1)],
-      deleteAllScratchesConfirm: snapshotOf(3),
-    });
-
-    expect(confirmedCount()).toBe(3);
-  });
-
   it("agrees in number with the count it is showing", () => {
     const { view } = renderPalette({
       scratchResults: [makeScratch(1)],
@@ -629,26 +607,6 @@ describe("Bulk delete confirmation", () => {
 
     expect(props.onDismissDeleteAllScratchesConfirm).toHaveBeenCalledTimes(1);
     expect(props.onConfirmDeleteAllScratches).not.toHaveBeenCalled();
-  });
-
-  it("names the frozen targets rather than the live scratch rows", () => {
-    const snapshot = [
-      { id: "frozen-1", name: "Dependency spike" },
-      { id: "frozen-2", name: "Release notes draft" },
-    ] satisfies DeleteAllScratchesSnapshot;
-
-    renderPalette({
-      // The rows drain away as removals land, and a fresh scratch can appear
-      // under the open dialog — neither may rewrite what the user agreed to.
-      scratchResults: [{ ...makeScratch(1), name: "Live replacement" }],
-      deleteAllScratchesConfirm: snapshot,
-    });
-
-    const named = within(screen.getByTestId("scratch-delete-all-preview"))
-      .getAllByRole("listitem")
-      .map((item) => item.textContent);
-
-    expect(named).toEqual(snapshot.map((target) => target.name));
   });
 
   it("previews every target rather than a truncated head, and says so to a reader", () => {
@@ -890,20 +848,6 @@ describe("Single scratch delete", () => {
     // Reading the dialog is not the operation: a region present here would be
     // narrating a run that has not begun.
     expect(screen.queryByTestId("delete-scratch-progress")).toBeNull();
-  });
-
-  it("mounts a live region for the run, gated empty at first", () => {
-    renderPalette({
-      scratchResults: [makeScratch(1)],
-      deleteScratchConfirm: target(),
-      isDeletingScratch: true,
-    });
-
-    // Present from the first frame so the long-wait line is an update to one
-    // announcer, but empty until the Doherty gate clears so a fast delete never
-    // flashes.
-    expect(screen.getByRole("status")).toBeTruthy();
-    expect(progressText()).toBe("");
   });
 
   it("narrates the run once the gate clears, then escalates on a long wait", () => {

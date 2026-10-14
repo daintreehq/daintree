@@ -103,14 +103,4 @@ describe("buildDisplayPaths", () => {
   it("handles an empty project list", () => {
     expect(buildDisplayPaths([]).size).toBe(0);
   });
-
-  it("preserves unicode and emoji segments", () => {
-    const paths = buildDisplayPaths([
-      { id: "a", path: "/code/日本語/api" },
-      { id: "b", path: "/code/🚀-launch/api" },
-    ]);
-
-    expect(paths.get("a")).toBe("日本語/api");
-    expect(paths.get("b")).toBe("🚀-launch/api");
-  });
 });

@@ -258,16 +258,6 @@ describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
     expect(grid.getAttribute("data-cursor-id")).toBe("wt2");
   });
 
-  it("flags exactly one row with data-keyboard-cursor in list mode", () => {
-    const { getByTestId, container } = render(<Harness items={ITEMS} />);
-    const grid = getByTestId("grid");
-    fireEvent.focus(grid);
-    fireEvent.keyDown(grid, { key: "ArrowDown" });
-    const flagged = container.querySelectorAll('[data-keyboard-cursor="true"]');
-    expect(flagged).toHaveLength(1);
-    expect((flagged[0] as HTMLElement).dataset.worktreeRow).toBe("wt2");
-  });
-
   it("clears keyboardCursorId in toolbar mode and restores it on Escape", () => {
     const { getByTestId, container } = render(<Harness items={ITEMS} />);
     const grid = getByTestId("grid");

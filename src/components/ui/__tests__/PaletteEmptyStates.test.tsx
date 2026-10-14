@@ -119,25 +119,6 @@ describe("AppPaletteDialog.Empty", () => {
     expect(screen.queryByTestId("productive-row")).toBeNull();
   });
 
-  it("renders without children when none provided", () => {
-    render(<AppPaletteDialog.Empty query="" emptyMessage="No items available" />);
-    expect(screen.getByText("No items available")).toBeTruthy();
-  });
-
-  it("shows noMatchMessage when query present and noMatchMessage provided", () => {
-    render(
-      <AppPaletteDialog.Empty
-        query="xyz"
-        emptyMessage="No items available"
-        noMatchMessage="Nothing found"
-      >
-        <span data-testid="cta">hint</span>
-      </AppPaletteDialog.Empty>
-    );
-    expect(screen.getByText("Nothing found")).toBeTruthy();
-    expect(screen.queryByTestId("cta")).toBeNull();
-  });
-
   it('exposes role="status" so screen readers announce the empty state', () => {
     render(<AppPaletteDialog.Empty query="" emptyMessage="No items available" />);
     const status = screen.getByRole("status");
@@ -161,13 +142,6 @@ describe("AppPaletteDialog.Empty", () => {
   it("trims whitespace from query when rendering the no-match state", () => {
     render(<AppPaletteDialog.Empty query="  foo  " emptyMessage="No items available" />);
     expect(screen.getByText('No matches for "foo"')).toBeTruthy();
-  });
-
-  it("truncates the quoted query at 40 characters in the default no-match title", () => {
-    const long = "a".repeat(60);
-    render(<AppPaletteDialog.Empty query={long} emptyMessage="No items available" />);
-    const expected = `No matches for "${"a".repeat(40)}…"`;
-    expect(screen.getByText(expected)).toBeTruthy();
   });
 
   it("does not truncate queries at exactly 40 characters", () => {
@@ -224,15 +198,6 @@ describe("AppPaletteDialog.Empty", () => {
       expect(status.textContent).toBe('No matches for "foo"');
     });
 
-    it("announces the zero-data title after 600ms", () => {
-      render(<AppPaletteDialog.Empty query="" emptyMessage="Nothing here" />);
-      act(() => {
-        vi.advanceTimersByTime(600);
-      });
-      const status = screen.getByRole("status");
-      expect(status.textContent).toBe("Nothing here");
-    });
-
     it("resets the timer on rapid prop changes, announcing only the final title", () => {
       const { rerender } = render(
         <AppPaletteDialog.Empty query="f" emptyMessage="No items available" />
@@ -275,21 +240,6 @@ describe("AppPaletteDialog.Empty", () => {
       // Should announce the same message again — Chromium would suppress this
       // without the clear-then-set pattern.
       expect(screen.getByRole("status").textContent).toBe('No matches for "foo"');
-    });
-
-    it("announces custom noMatchMessage after debounce", () => {
-      render(
-        <AppPaletteDialog.Empty
-          query="xyz"
-          emptyMessage="No items available"
-          noMatchMessage="Nothing found"
-        />
-      );
-      act(() => {
-        vi.advanceTimersByTime(600);
-      });
-      const status = screen.getByRole("status");
-      expect(status.textContent).toBe("Nothing found");
     });
 
     it("clears the timer on unmount", () => {

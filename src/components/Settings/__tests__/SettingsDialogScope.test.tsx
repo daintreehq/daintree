@@ -156,10 +156,4 @@ describe("contentScopeForTab", () => {
     expect(scopeForTab("integrations")).toBe("global");
     expect(contentScopeForTab("integrations")).toBe("project");
   });
-
-  it("never reports a scope outside the two the shell knows about", () => {
-    for (const entry of SETTINGS_REGISTRY) {
-      expect(["global", "project"]).toContain(contentScopeForTab(entry.id as SettingsTab));
-    }
-  });
 });

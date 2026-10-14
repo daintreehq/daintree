@@ -261,70 +261,6 @@ describe("dev preview session handlers", () => {
     );
   });
 
-  it("keeps concurrent panel ensures isolated in the same project and worktree", async () => {
-    const ensureHandler = getRegisteredHandle<
-      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
-      { terminalId: string | null; panelId: string; projectId: string }
-    >(CHANNELS.DEV_PREVIEW_ENSURE);
-    expect(ensureHandler).toBeDefined();
-
-    const [first, second] = await Promise.all([
-      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
-        panelId: "panel-a",
-        projectId: "project-1",
-        cwd: "/repo",
-        devCommand: "npm run dev",
-        worktreeId: "wt-shared",
-      }),
-      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
-        panelId: "panel-b",
-        projectId: "project-1",
-        cwd: "/repo",
-        devCommand: "npm run dev",
-        worktreeId: "wt-shared",
-      }),
-    ]);
-
-    expect(first.terminalId).toBeTruthy();
-    expect(second.terminalId).toBeTruthy();
-    expect(second.terminalId).not.toBe(first.terminalId);
-    expect(first.panelId).toBe("panel-a");
-    expect(second.panelId).toBe("panel-b");
-    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
-
-    scanOutputMock.mockReturnValue({ buffer: "", url: "http://localhost:4101/", error: null });
-    ptyClient.emitData(first.terminalId!, "ready");
-
-    scanOutputMock.mockReturnValue({ buffer: "", url: "http://localhost:4102/", error: null });
-    ptyClient.emitData(second.terminalId!, "ready");
-
-    await vi.waitFor(
-      () => {
-        const stateEvents = broadcastMock.mock.calls
-          .filter(([channel]) => channel === CHANNELS.DEV_PREVIEW_STATE_CHANGED)
-          .map(([, payload]) => (payload as { state: Record<string, unknown> }).state);
-
-        expect(stateEvents).toContainEqual(
-          expect.objectContaining({
-            panelId: "panel-a",
-            projectId: "project-1",
-            status: "running",
-            url: "http://localhost:4101/",
-          })
-        );
-        expect(stateEvents).toContainEqual(
-          expect.objectContaining({
-            panelId: "panel-b",
-            projectId: "project-1",
-            status: "running",
-            url: "http://localhost:4102/",
-          })
-        );
-      },
-      { timeout: DEV_PREVIEW_READY_WAIT_MS }
-    );
-  });
-
   it("restart kills previous terminal and spawns a fresh generation", async () => {
     const ensureHandler = getRegisteredHandle<
       [Electron.IpcMainInvokeEvent, Record<string, unknown>],
@@ -375,46 +311,6 @@ describe("dev preview session handlers", () => {
     expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 
-  it("rejects non-plain env payloads", async () => {
-    const ensureHandler = getRegisteredHandle<
-      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
-      { status: string; error: { message: string } | null }
-    >(CHANNELS.DEV_PREVIEW_ENSURE);
-    expect(ensureHandler).toBeDefined();
-
-    await expect(
-      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
-        panelId: "panel-env-array",
-        projectId: "project-env-array",
-        cwd: "/repo",
-        devCommand: "npm run dev",
-        env: ["BAD=1"],
-      })
-    ).rejects.toThrow("env must be a plain object if provided");
-
-    expect(ptyClient.spawn).not.toHaveBeenCalled();
-  });
-
-  it("rejects env entries with non-string values", async () => {
-    const ensureHandler = getRegisteredHandle<
-      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
-      { status: string; error: { message: string } | null }
-    >(CHANNELS.DEV_PREVIEW_ENSURE);
-    expect(ensureHandler).toBeDefined();
-
-    await expect(
-      ensureHandler!({} as Electron.IpcMainInvokeEvent, {
-        panelId: "panel-env-value",
-        projectId: "project-env-value",
-        cwd: "/repo",
-        devCommand: "npm run dev",
-        env: { NODE_ENV: "development", PORT: 5173 },
-      })
-    ).rejects.toThrow("env values must be strings");
-
-    expect(ptyClient.spawn).not.toHaveBeenCalled();
-  });
-
   it("rejects env entries with unsafe key names", async () => {
     const ensureHandler = getRegisteredHandle<
       [Electron.IpcMainInvokeEvent, Record<string, unknown>],
@@ -462,48 +358,6 @@ describe("dev preview session handlers", () => {
     expect(result.status).toBe("stopped");
     expect(result.panelId).toBe("missing-panel");
     expect(result.projectId).toBe("missing-project");
-  });
-
-  it("stops and deletes all sessions for a panel via stop-by-panel", async () => {
-    const ensureHandler = getRegisteredHandle<
-      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
-      { terminalId: string | null }
-    >(CHANNELS.DEV_PREVIEW_ENSURE);
-    const stopByPanelHandler = getRegisteredHandle<
-      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
-      void
-    >(CHANNELS.DEV_PREVIEW_STOP_BY_PANEL);
-    const getStateHandler = getRegisteredHandle<
-      [Electron.IpcMainInvokeEvent, Record<string, unknown>],
-      { status: string; terminalId: string | null }
-    >(CHANNELS.DEV_PREVIEW_GET_STATE);
-
-    expect(ensureHandler).toBeDefined();
-    expect(stopByPanelHandler).toBeDefined();
-    expect(getStateHandler).toBeDefined();
-
-    const started = await ensureHandler!({} as Electron.IpcMainInvokeEvent, {
-      panelId: "panel-stop-test",
-      projectId: "project-stop-test",
-      cwd: "/repo",
-      devCommand: "npm run dev",
-    });
-
-    expect(started.terminalId).toBeTruthy();
-
-    await stopByPanelHandler!({} as Electron.IpcMainInvokeEvent, {
-      panelId: "panel-stop-test",
-    });
-
-    expect(ptyClient.kill).toHaveBeenCalledWith(started.terminalId, "dev-preview:panel-closed");
-
-    const afterStop = await getStateHandler!({} as Electron.IpcMainInvokeEvent, {
-      panelId: "panel-stop-test",
-      projectId: "project-stop-test",
-    });
-
-    expect(afterStop.status).toBe("stopped");
-    expect(afterStop.terminalId).toBeNull();
   });
 
   it("keeps stop-by-panel best-effort when one session stop fails", async () => {

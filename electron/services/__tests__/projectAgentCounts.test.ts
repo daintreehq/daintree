@@ -487,20 +487,6 @@ describe("computeProjectAgentCounts — snooze", () => {
     expect(p1.snoozed).toBe(1);
   });
 
-  it("reads as Running when one agent is snoozed-waiting and another is working", () => {
-    // The issue's headline scenario, straight through the counts.
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [agent({ id: "t1", agentState: "waiting" }), agent({ id: "t2", agentState: "working" })],
-      undefined,
-      snoozes("t1")
-    );
-
-    const p1 = counts.get("p1")!;
-    expect(p1.waiting).toBe(0);
-    expect(p1.active).toBe(1);
-  });
-
   it("keeps the subset invariants intact across a mixed snoozed/unsnoozed project", () => {
     // blocked <= waiting and unacknowledgedCompleted <= completed have to hold
     // whatever snooze suppresses, or a row renders a count it cannot explain.
@@ -593,18 +579,6 @@ describe("computeProjectAgentCounts — snooze", () => {
     expect(p1.waiting).toBe(1);
     expect(p1.snoozed).toBe(0);
     expect(p1.nextSnoozeWakeAt).toBeNull();
-  });
-
-  it("does not snooze a run whose id merely resembles another project's", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [agent({ id: "t1", agentState: "waiting" })],
-      undefined,
-      snoozes("t2")
-    );
-
-    expect(counts.get("p1")!.waiting).toBe(1);
-    expect(counts.get("p1")!.snoozed).toBe(0);
   });
 
   it("never counts an excluded terminal as snoozed", () => {

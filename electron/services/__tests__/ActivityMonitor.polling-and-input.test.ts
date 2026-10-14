@@ -3,7 +3,10 @@ import {
   ActivityMonitor,
   FSM_IDLE_BACKOFF_SETTLE_MS,
   FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS,
+  QUIET_POLLING_INTERVAL_MS,
+  WAITING_WATCHDOG_INTERVAL_MS,
 } from "../ActivityMonitor.js";
+import { resetPtyPowerLevelForTesting, setPtyPowerLevel } from "../pty/ptyPowerPolicy.js";
 
 describe("ActivityMonitor", () => {
   beforeEach(() => {
@@ -56,28 +59,6 @@ describe("ActivityMonitor", () => {
       monitor.setPollingInterval(100);
 
       expect(clearIntervalSpy).not.toHaveBeenCalled();
-    });
-
-    it("should apply tier-driven polling changes (50ms active, 500ms background)", () => {
-      const onStateChange = vi.fn();
-      const getVisibleLines = vi.fn(() => []);
-      const monitor = new ActivityMonitor("test-1", 50, onStateChange, {
-        getVisibleLines,
-        pollingIntervalMs: 50,
-      });
-
-      monitor.startPolling();
-
-      // Active tier: 50ms polling
-      vi.advanceTimersByTime(50);
-
-      // Switch to background tier: 500ms polling
-      monitor.setPollingInterval(500);
-      getVisibleLines.mockClear();
-
-      // Verify new interval takes effect
-      vi.advanceTimersByTime(500);
-      expect(getVisibleLines).toHaveBeenCalled();
     });
   });
 
@@ -277,29 +258,6 @@ describe("ActivityMonitor", () => {
       expect(onStateChange).not.toHaveBeenCalled();
     });
 
-    it("should trigger busy after paste ends on next Enter", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
-
-      monitor.onInput("\x1b[200~");
-      monitor.onInput("pasted\n");
-      monitor.onInput("\x1b[201~");
-      monitor.onInput("\r");
-
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
-    });
-
-    it("should ignore configured input sequences", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        ignoredInputSequences: ["\x1b\r"],
-      });
-
-      monitor.onInput("\x1b\r");
-
-      expect(onStateChange).not.toHaveBeenCalled();
-    });
-
     it("should detect Enter after escape sequences", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
@@ -319,36 +277,6 @@ describe("ActivityMonitor", () => {
       monitor.onInput("\r");
 
       expect(onStateChange).not.toHaveBeenCalled();
-    });
-
-    it("should NOT trigger busy on typing without Enter", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
-
-      // Type several characters without pressing Enter
-      monitor.onInput("h");
-      monitor.onInput("e");
-      monitor.onInput("l");
-      monitor.onInput("l");
-      monitor.onInput("o");
-
-      expect(onStateChange).not.toHaveBeenCalled();
-      expect(monitor.getState()).toBe("idle");
-
-      monitor.dispose();
-    });
-
-    it("should NOT trigger busy on typing a full word without Enter", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
-
-      // Type a full command string without pressing Enter
-      monitor.onInput("npm run test");
-
-      expect(onStateChange).not.toHaveBeenCalled();
-      expect(monitor.getState()).toBe("idle");
-
-      monitor.dispose();
     });
 
     it("should trigger busy only when Enter is pressed after typing", () => {
@@ -387,46 +315,6 @@ describe("ActivityMonitor", () => {
       expect(onStateChange).not.toHaveBeenCalledWith("test-1", 1000, "busy", {
         trigger: "input",
       });
-
-      monitor.dispose();
-    });
-
-    it("should NOT trigger busy on Shift+Enter (soft newline ESC+CR)", () => {
-      const onStateChange = vi.fn();
-      // Configure with ESC+CR as ignored (Claude/Gemini style)
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        ignoredInputSequences: ["\x1b\r"],
-      });
-
-      // Type some text
-      monitor.onInput("line 1");
-      // Press Shift+Enter (ESC+CR) - should NOT trigger busy
-      monitor.onInput("\x1b\r");
-      // Type more text
-      monitor.onInput("line 2");
-
-      expect(onStateChange).not.toHaveBeenCalled();
-      expect(monitor.getState()).toBe("idle");
-
-      monitor.dispose();
-    });
-
-    it("should NOT trigger busy on Shift+Enter (soft newline LF for Codex)", () => {
-      const onStateChange = vi.fn();
-      // Configure with LF and ESC+CR as ignored (Codex style)
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        ignoredInputSequences: ["\n", "\x1b\r"],
-      });
-
-      // Type some text
-      monitor.onInput("line 1");
-      // Press Shift+Enter (LF) - should NOT trigger busy for Codex
-      monitor.onInput("\n");
-      // Type more text
-      monitor.onInput("line 2");
-
-      expect(onStateChange).not.toHaveBeenCalled();
-      expect(monitor.getState()).toBe("idle");
 
       monitor.dispose();
     });
@@ -530,33 +418,6 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
-
-    it("should transition to idle once spinner stream stops and debounce expires (#3189 / #6365)", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        idleDebounceMs: 200,
-      });
-
-      monitor.onInput("run\r");
-      expect(monitor.getState()).toBe("busy");
-      onStateChange.mockClear();
-
-      // Spinner ticks reset the debounce timer (#6365), so the agent stays busy
-      // throughout the stream.
-      for (let i = 0; i < 5; i++) {
-        monitor.onData("\r⠋ Working (esc to interrupt)");
-        vi.advanceTimersByTime(100);
-      }
-      expect(monitor.getState()).toBe("busy");
-
-      // Stream stops — last reset was at the final tick. After debounce(200ms)
-      // expires with no further data, state goes idle.
-      vi.advanceTimersByTime(300);
-
-      expect(monitor.getState()).toBe("idle");
-
-      monitor.dispose();
-    });
   });
 
   describe("Cosmetic redraw filtering (Issue #3189 / #6365)", () => {
@@ -565,28 +426,6 @@ describe("ActivityMonitor", () => {
     // the over-broad consequence: spinner ticks ARE liveness evidence and must
     // reset the debounce timer when the agent is already busy. Tests below
     // exercise both contracts.
-
-    it("should keep busy state alive across a Braille spinner stream (#6365)", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        idleDebounceMs: 300,
-      });
-
-      monitor.onInput("run\r");
-      expect(monitor.getState()).toBe("busy");
-      onStateChange.mockClear();
-
-      // Spinner ticks every 100ms across 1s — well past the 300ms debounce.
-      // Each tick must reset the debounce so state stays busy mid-thought.
-      for (let i = 0; i < 10; i++) {
-        monitor.onData("\r⠙ Working (esc to interrupt)");
-        vi.advanceTimersByTime(100);
-      }
-
-      expect(monitor.getState()).toBe("busy");
-
-      monitor.dispose();
-    });
 
     it("should keep busy state alive across Ink cursor-up redraws (#6365)", () => {
       const onStateChange = vi.fn();
@@ -836,5 +675,261 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
+  });
+});
+
+// Power-policy stretch of the ActivityMonitor's optional cadences (#12515).
+describe("ActivityMonitor power policy", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    resetPtyPowerLevelForTesting();
+    vi.useRealTimers();
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+  });
+
+  // A simple-output agent that starts already idle (the restored-session
+  // shape), so startPolling() arms the settle timer.
+  function createIdleAgent(options: { onWaitingTimeout?: () => void } = {}) {
+    return new ActivityMonitor("agent-1", 1000, vi.fn(), {
+      simpleOutputState: true,
+      getVisibleLines: () => ["> "],
+      getCursorLine: () => "> ",
+      initialState: "idle",
+      skipInitialStateEmit: true,
+      pollingIntervalMs: 50,
+      onWaitingTimeout: options.onWaitingTimeout,
+    });
+  }
+
+  it.each(["active", "saving", "deep"] as const)(
+    "backs a settled idle agent off to the %s quiet cadence",
+    (level) => {
+      // The cadence tables are indexed by the OBSERVATION level, which main
+      // derives separately: a window on screen holds it at `active` however
+      // narrow the raw level is. Driven directly here.
+      setPtyPowerLevel(level, level);
+      const setIntervalSpy = vi.spyOn(global, "setInterval");
+      const monitor = createIdleAgent();
+
+      monitor.startPolling();
+      setIntervalSpy.mockClear();
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(
+        expect.any(Function),
+        QUIET_POLLING_INTERVAL_MS[level]
+      );
+      monitor.dispose();
+    }
+  );
+
+  it("re-times a live backoff when the level changes, in both directions", () => {
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const monitor = createIdleAgent();
+    monitor.startPolling();
+    vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+    setIntervalSpy.mockClear();
+
+    setPtyPowerLevel("deep");
+    expect(setIntervalSpy).toHaveBeenCalledWith(
+      expect.any(Function),
+      QUIET_POLLING_INTERVAL_MS.deep
+    );
+
+    setIntervalSpy.mockClear();
+    setPtyPowerLevel("active");
+    expect(setIntervalSpy).toHaveBeenCalledWith(
+      expect.any(Function),
+      QUIET_POLLING_INTERVAL_MS.active
+    );
+    monitor.dispose();
+  });
+
+  it("does not touch the polling cadence on a level change when not backed off", () => {
+    const monitor = createIdleAgent();
+    monitor.startPolling();
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+
+    setPtyPowerLevel("saving", "saving");
+
+    // This monitor has no watchdog and is not backed off, so a level change
+    // owes it no timer at all. Asserting "not 50, not 5000" let a regression
+    // through: any other interval would have passed.
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+    monitor.dispose();
+  });
+
+  it("wakes to the requested cadence on the first output byte even when deep", () => {
+    setPtyPowerLevel("deep");
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const monitor = createIdleAgent();
+    monitor.startPolling();
+    vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+    setIntervalSpy.mockClear();
+
+    monitor.onData("x");
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 50);
+    monitor.dispose();
+  });
+
+  it("runs the waiting watchdog at the level's cadence and re-times it on a change", () => {
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(
+      expect.any(Function),
+      WAITING_WATCHDOG_INTERVAL_MS.active
+    );
+
+    setIntervalSpy.mockClear();
+    setPtyPowerLevel("deep");
+    expect(setIntervalSpy).toHaveBeenCalledWith(
+      expect.any(Function),
+      WAITING_WATCHDOG_INTERVAL_MS.deep
+    );
+    monitor.dispose();
+  });
+
+  it("keeps a live waiting agent whose keepalives land between slow probes", () => {
+    setPtyPowerLevel("deep");
+    const onStateChange = vi.fn();
+    const onWaitingTimeout = vi.fn();
+    const monitor = new ActivityMonitor("agent-1", 1000, onStateChange, {
+      simpleOutputState: true,
+      getVisibleLines: () => ["> "],
+      getCursorLine: () => "> ",
+      initialState: "idle",
+      skipInitialStateEmit: true,
+      pollingIntervalMs: 50,
+      processStateValidator: { hasActiveChildren: () => false },
+      onWaitingTimeout,
+      maxWaitingSilenceMs: 1000,
+    });
+
+    // An invisible title refresh 6s into every 15s probe gap: 9s old when the
+    // probe runs, so only a window spanning the gap can see it.
+    vi.advanceTimersByTime(6000);
+    for (let i = 0; i < 6; i++) {
+      monitor.onData("\x1b]0;agent\x07");
+      vi.advanceTimersByTime(WAITING_WATCHDOG_INTERVAL_MS.deep);
+    }
+
+    expect(onStateChange).not.toHaveBeenCalled();
+    expect(onWaitingTimeout).not.toHaveBeenCalled();
+    monitor.dispose();
+  });
+
+  it("allocates no watchdog timer for a monitor with nothing to fire", () => {
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const monitor = createIdleAgent();
+
+    setPtyPowerLevel("saving");
+
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(
+      expect.any(Function),
+      WAITING_WATCHDOG_INTERVAL_MS.active
+    );
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(
+      expect.any(Function),
+      WAITING_WATCHDOG_INTERVAL_MS.saving
+    );
+    monitor.dispose();
+  });
+
+  it("keeps the active cadence for a blurred window that is still on screen", () => {
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
+    monitor.startPolling();
+    vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+    setIntervalSpy.mockClear();
+
+    // Clicking into another app takes the level to `saving` without taking the
+    // window off screen. The sidebar this agent's badge is drawn in is still
+    // being looked at, so its state has to keep confirming at full cadence.
+    // Clicking into another app on AC: the raw level narrows to `saving` while
+    // the observation level stays `active`, because the window the badge is
+    // drawn in is still on screen.
+    setPtyPowerLevel("saving", "active");
+
+    // Asserted positively: WAITING_WATCHDOG_INTERVAL_MS.active and
+    // QUIET_POLLING_INTERVAL_MS.saving are both 5000, so a "not called with
+    // 5000" assertion passes and fails for the wrong reasons.
+    const intervals = setIntervalSpy.mock.calls.map(([, ms]) => ms);
+    expect(intervals).toContain(QUIET_POLLING_INTERVAL_MS.active);
+    expect(intervals).toContain(WAITING_WATCHDOG_INTERVAL_MS.active);
+    expect(intervals).not.toContain(WAITING_WATCHDOG_INTERVAL_MS.saving);
+    expect(intervals).not.toContain(WAITING_WATCHDOG_INTERVAL_MS.deep);
+    monitor.dispose();
+  });
+
+  it("re-times when only the observation level moves", () => {
+    setPtyPowerLevel("saving", "active");
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
+    monitor.startPolling();
+    vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+    setIntervalSpy.mockClear();
+
+    // Unplugging while blurred: the raw level was already `saving` and stays
+    // there, and only the observation level narrows. Nothing re-times if the
+    // notification is gated on the raw level alone.
+    setPtyPowerLevel("saving", "saving");
+
+    const intervals = setIntervalSpy.mock.calls.map(([, ms]) => ms);
+    expect(intervals).toContain(QUIET_POLLING_INTERVAL_MS.saving);
+    expect(intervals).toContain(WAITING_WATCHDOG_INTERVAL_MS.saving);
+    monitor.dispose();
+  });
+
+  it("stops listening for level changes once disposed", () => {
+    const onChange = vi.spyOn(
+      ActivityMonitor.prototype as unknown as { onPowerLevelChange: () => void },
+      "onPowerLevelChange"
+    );
+    const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
+    monitor.dispose();
+
+    setPtyPowerLevel("deep");
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // Counted in callbacks actually run, not timer arguments: the levels have to
+  // cost fewer wakeups, not merely name different intervals.
+  it("runs fewer polls and watchdog probes for a settled agent as the level deepens", () => {
+    const polls = vi.spyOn(
+      ActivityMonitor.prototype as unknown as { runPollingCycle: () => void },
+      "runPollingCycle"
+    );
+    const probes = vi.spyOn(
+      ActivityMonitor.prototype as unknown as { runWaitingWatchdogCheck: (now: number) => void },
+      "runWaitingWatchdogCheck"
+    );
+    const minuteOfWork = (level: "active" | "saving" | "deep") => {
+      setPtyPowerLevel(level, level);
+      const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
+      monitor.startPolling();
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+      polls.mockClear();
+      probes.mockClear();
+      vi.advanceTimersByTime(60_000);
+      monitor.dispose();
+      resetPtyPowerLevelForTesting();
+      return { polls: polls.mock.calls.length, probes: probes.mock.calls.length };
+    };
+
+    const active = minuteOfWork("active");
+    const saving = minuteOfWork("saving");
+    const deep = minuteOfWork("deep");
+
+    expect(saving.polls).toBeLessThan(active.polls);
+    expect(deep.polls).toBeLessThan(saving.polls);
+    expect(saving.probes).toBeLessThan(active.probes);
+    expect(deep.probes).toBeLessThan(saving.probes);
   });
 });

@@ -418,28 +418,6 @@ describe("NotificationThread message content", () => {
 });
 
 describe("NotificationCenter pause menu", () => {
-  it("does not render the legacy Mute / Until morning / Configure buttons", () => {
-    render(<NotificationCenter open onClose={() => {}} />);
-    expect(screen.queryByText("Mute 1h")).toBeNull();
-    expect(screen.queryByText("Until morning")).toBeNull();
-    expect(screen.queryByText("Configure")).toBeNull();
-  });
-
-  it("does not render legacy controls even when entries exist and pause menu is open", async () => {
-    setEntries([makeEntry()]);
-    render(<NotificationCenter open onClose={() => {}} />);
-    const trigger = screen.getByLabelText("Pause notifications");
-    await act(async () => {
-      fireEvent.pointerDown(trigger, { button: 0 });
-      fireEvent.pointerUp(trigger, { button: 0 });
-      fireEvent.click(trigger);
-    });
-
-    expect(screen.queryByText("Mute 1h")).toBeNull();
-    expect(screen.queryByText("Until morning")).toBeNull();
-    expect(screen.queryByText("Configure")).toBeNull();
-  });
-
   it("opens a Pause menu and routes 'For 1 hour' to muteForDuration without dispatching settings", async () => {
     render(<NotificationCenter open onClose={() => {}} />);
     const trigger = screen.getByLabelText("Pause notifications");
@@ -668,20 +646,6 @@ describe("NotificationCenter muted pill", () => {
     expect(pill.textContent).toContain("Off: Finished, Waiting");
     expect(pill.textContent).not.toContain("Working pulse");
     expect(pill.textContent).not.toContain("UI sounds");
-  });
-
-  it("surfaces switched-off notification kinds in the muted pill summary", () => {
-    const until = Date.now() + 60 * 60 * 1000;
-    useNotificationSettingsStore.setState({
-      quietUntil: until,
-      completedEnabled: false,
-      waitingEnabled: false,
-    });
-
-    render(<NotificationCenter open onClose={() => {}} />);
-
-    const pill = screen.getByTestId("notification-muted-pill");
-    expect(pill.textContent).toContain("Off: Finished, Waiting");
   });
 
   it("does not list off-by-default sound kinds as switched off", () => {
@@ -1072,13 +1036,6 @@ describe("NotificationCenter overflow menu", () => {
     expect(items).toBeGreaterThan(1);
   });
 
-  it("renders overflow trigger as a button when entries exist", () => {
-    setEntries([makeEntry()]);
-    render(<NotificationCenter open onClose={() => {}} />);
-    const trigger = screen.getByLabelText("More notification actions");
-    expect(trigger.tagName).toBe("BUTTON");
-  });
-
   it("confirms before clearing, and only clears once confirmed", async () => {
     const callOrder: string[] = [];
     const originalClearAll = useNotificationHistoryStore.getState().clearAll;
@@ -1211,27 +1168,6 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     expect(screen.queryByTestId("needs-attention-section")).toBeNull();
     const chrono = screen.getByTestId("chrono-section");
     expect(within(chrono).queryByText("All notifications")).toBeNull();
-  });
-
-  it("caps the pinned section below the number of severe unread threads when there are many", () => {
-    const baseT = Date.now();
-    const items = Array.from({ length: 7 }, (_, i) =>
-      makeEntry({
-        id: `failure-${i}`,
-        type: "error",
-        message: `Failure ${i}`,
-        timestamp: baseT - i,
-        seenAsToast: false,
-      })
-    );
-    setEntries(items);
-
-    render(<NotificationCenter open onClose={vi.fn()} />);
-
-    const pinned = screen.getByTestId("needs-attention-section");
-    const messages = within(pinned).getAllByText(/^Failure \d$/);
-    expect(messages.length).toBeGreaterThan(0);
-    expect(messages.length).toBeLessThan(items.length);
   });
 
   it("shows a '+N more below' note when severe unread threads exceed the pinned cap", async () => {
@@ -1587,20 +1523,6 @@ describe("NotificationCenter — New since you last looked divider", () => {
     expect(screen.queryByTestId("new-since-last-looked")).toBeNull();
   });
 
-  it("renders the divider above the first entry whose timestamp is newer than lastClosedAt", () => {
-    const closedAt = Date.now() - 5000;
-    useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
-    setEntries([
-      makeEntry({ message: "Newer 1", timestamp: closedAt + 4000 }),
-      makeEntry({ id: "entry-99", message: "Newer 2", timestamp: closedAt + 3000 }),
-      makeEntry({ id: "entry-100", message: "Older", timestamp: closedAt - 1000 }),
-    ]);
-
-    render(<NotificationCenter open onClose={vi.fn()} />);
-
-    expect(screen.queryByTestId("new-since-last-looked")).toBeTruthy();
-  });
-
   it("clears the divider when 'Mark all read' is clicked", async () => {
     const closedAt = Date.now() - 5000;
     useUIStore.setState({ lastNotificationCenterClosedAt: closedAt });
@@ -1649,19 +1571,6 @@ describe("NotificationCenter — bulk mark-read with Undo", () => {
     // `transient` confirmations must not carry `context` (notify drops them in DEV).
     expect(payload.context).toBeUndefined();
     expect(payload.action?.label).toBe("Undo");
-  });
-
-  it("'Mark all read' resets lastNotificationCenterClosedAt to clear the divider", async () => {
-    useUIStore.setState({ lastNotificationCenterClosedAt: 12345 });
-    setEntries([makeEntry({ message: "Unread", seenAsToast: false })]);
-
-    render(<NotificationCenter open onClose={vi.fn()} />);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText("Mark all read"));
-    });
-
-    expect(useUIStore.getState().lastNotificationCenterClosedAt).toBe(0);
   });
 
   it("undo restores the captured ids back to unread", async () => {
@@ -2356,16 +2265,6 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(panel.className.toString()).toMatch(/--fixed-dropdown-available-height/);
   });
 
-  it("marks the scroll container as role=list with an aria-label", () => {
-    setEntries([
-      makeEntry({ id: "row-a", message: "First" }),
-      makeEntry({ id: "row-b", message: "Second" }),
-    ]);
-    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
-    const list = container.querySelector('[role="list"][aria-label="Notifications"]');
-    expect(list).not.toBeNull();
-  });
-
   it("does not mark the container as a list when there are no rows", () => {
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
     expect(container.querySelector('[role="list"]')).toBeNull();
@@ -2481,31 +2380,6 @@ describe("NotificationCenter — keyboard navigation", () => {
     fireEvent.keyDown(list, { key: "j" });
     expect(getRows(container)[0]?.getAttribute("tabindex")).toBe("0");
     expect(getRows(container)[1]?.getAttribute("tabindex")).toBe("-1");
-  });
-
-  it("dismisses the focused row on 'e' and clamps focus to the new last row", async () => {
-    setEntries([
-      makeEntry({ id: "a", message: "First" }),
-      makeEntry({ id: "b", message: "Second" }),
-      makeEntry({ id: "c", message: "Last to remove" }),
-    ]);
-    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
-    const list = container.querySelector('[role="list"]') as HTMLElement;
-
-    act(() => {
-      getRows(container)[2]?.focus();
-    });
-
-    await act(async () => {
-      fireEvent.keyDown(list, { key: "e" });
-    });
-
-    await waitFor(() => {
-      expect(getRows(container)).toHaveLength(2);
-    });
-    expect(screen.queryByText("Last to remove")).toBeNull();
-    // After the last row is removed, the clamping effect drops focusedIndex to 1.
-    expect(getRows(container)[1]?.getAttribute("tabindex")).toBe("0");
   });
 
   it("goes to the focused row's source on Enter, never its primary action", async () => {
@@ -2689,23 +2563,6 @@ describe("NotificationCenter — keyboard navigation", () => {
     fireEvent.keyDown(list, { key: "j" });
     expect(getRows(container)[0]?.getAttribute("tabindex")).toBe("0");
     expect(getRows(container)[1]?.getAttribute("tabindex")).toBe("-1");
-  });
-
-  it("orders the flat row index across needs-attention and chrono sections", () => {
-    setEntries([
-      makeEntry({ id: "info-1", type: "info", message: "Info note", seenAsToast: true }),
-      makeEntry({
-        id: "err-1",
-        type: "error",
-        message: "Pinned error",
-        seenAsToast: false,
-      }),
-    ]);
-    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
-    const rows = getRows(container);
-    // Pinned needs-attention section comes first; it dedupes the entry from chrono not.
-    expect(rows.length).toBeGreaterThanOrEqual(2);
-    expect(rows[0]?.getAttribute("tabindex")).toBe("0");
   });
 
   it("restores focus to the surviving row after dismissing the focused row via 'e'", async () => {

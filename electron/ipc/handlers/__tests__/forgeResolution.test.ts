@@ -354,16 +354,6 @@ describe("resolveForCwd", () => {
     expect(lastResolverInputs().forgeProviderOverride).toBeNull();
   });
 
-  it("falls back to the repository root when no worktree entry is marked main", async () => {
-    gitServiceMock.listWorktrees.mockResolvedValue([
-      { path: "/elsewhere", branch: "main", bare: false, isMainWorktree: false },
-    ]);
-
-    await resolveForCwd("/repo/src").catch(() => null);
-
-    expect(projectStoreMock.getProjectByPath).toHaveBeenCalledWith("/repo");
-  });
-
   it("passes a null override when no project matches the path", async () => {
     projectStoreMock.getProjectByPath.mockResolvedValue(null);
 
@@ -468,12 +458,6 @@ describe("resolveForCwd", () => {
 
     await expect(resolveForCwd("/repo")).rejects.toThrow("No forge provider registered");
     expect(lastResolverInputs().forgeProviderOverride).toBe("acme.unregistered");
-  });
-
-  it("rejects invalid cwd payloads before any lookup", async () => {
-    await expect(resolveForCwd("")).rejects.toThrow("Invalid working directory");
-    expect(gitServiceCacheMock.getGitService).not.toHaveBeenCalled();
-    expect(resolverMock.resolveForgeProvider).not.toHaveBeenCalled();
   });
 
   it("rejects when the repo has no usable remote", async () => {

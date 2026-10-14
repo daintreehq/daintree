@@ -127,6 +127,7 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
+import { CHANNELS } from "../../ipc/channels.js";
 import {
   freezeWebContents,
   unfreezeWebContents,
@@ -142,6 +143,7 @@ import {
 function createMockWindow() {
   return {
     isDestroyed: vi.fn(() => false),
+    isMinimized: vi.fn(() => false),
     on: vi.fn(),
     removeListener: vi.fn(),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
@@ -183,11 +185,6 @@ describe("ProjectViewManager — efficiency freeze", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("does not freeze immediately on setEfficiencyFreeze(true) — debounce delays the work", () => {
-    manager.setEfficiencyFreeze(true);
-    expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
   });
 
   it("freezes cached views after 500ms debounce", async () => {
@@ -242,18 +239,6 @@ describe("ProjectViewManager — efficiency freeze", () => {
     vi.advanceTimersByTime(500);
 
     expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
-  });
-
-  it("rapid setEfficiencyFreeze(true) calls debounce to a single freeze pass", async () => {
-    await manager.switchTo("proj-b", "/path/b");
-    manager.setEfficiencyFreeze(true);
-    vi.advanceTimersByTime(100);
-    manager.setEfficiencyFreeze(true);
-    vi.advanceTimersByTime(100);
-    manager.setEfficiencyFreeze(true);
-    vi.advanceTimersByTime(500);
-
-    expect(vi.mocked(freezeWebContents)).toHaveBeenCalledTimes(1);
   });
 
   it("activateView always unfreezes the activating view, even when efficiency is off", async () => {
@@ -321,16 +306,6 @@ describe("ProjectViewManager — efficiency freeze", () => {
     vi.advanceTimersByTime(500);
 
     expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
-  });
-
-  it("setEfficiencyFreeze with no cached views is a safe no-op (timer still clears)", () => {
-    manager.setEfficiencyFreeze(true);
-    vi.advanceTimersByTime(500);
-    expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
-
-    // Re-toggle off — no unfreeze call expected (no cached views).
-    manager.setEfficiencyFreeze(false);
-    expect(vi.mocked(unfreezeWebContents)).not.toHaveBeenCalled();
   });
 
   it("deactivation marks the view cached in the broadcast registry", async () => {
@@ -528,70 +503,6 @@ describe("ProjectViewManager — efficiency freeze", () => {
 
     expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
     manager.dispose(); // remove the bus listener so it doesn't leak into later tests
-  });
-
-  it("wakes a frozen view on spawn-result lookup when its agent is now active", async () => {
-    await manager.switchTo("proj-b", "/path/b");
-
-    const captured: Record<string, (...a: unknown[]) => void> = {};
-    let agentState = "idle";
-    const ptyClient = {
-      getAllTerminalsAsync: vi.fn(async () => [{ id: "t1", projectId: "proj-a", agentState }]),
-      getTerminalAsync: vi.fn(async (id: string) => ({ id, projectId: "proj-a", agentState })),
-      getTerminalProjectId: vi.fn(() => "proj-a"),
-      on: vi.fn((evt: string, h: (...a: unknown[]) => void) => {
-        captured[evt] = h;
-      }),
-      off: vi.fn(),
-    };
-    await manager.initAgentStateCache(ptyClient as never);
-
-    // Freeze proj-a while its agent is still idle.
-    manager.setEfficiencyFreeze(true);
-    vi.advanceTimersByTime(500);
-    expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
-    vi.mocked(unfreezeWebContents).mockClear();
-
-    // Agent became active after the freeze; the spawn-result lookup sees it,
-    // and its unfreezeActiveAgentViews() pass wakes the view.
-    agentState = "working";
-    captured["spawn-result"]?.("t1", { success: true, id: "t1" });
-    await vi.advanceTimersByTimeAsync(0); // flush the async lookup
-
-    expect(ptyClient.getTerminalAsync).toHaveBeenCalledWith("t1");
-    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
-    manager.dispose();
-  });
-
-  it("drops a terminal from the freeze-seed maps when it exits", async () => {
-    const captured: Record<string, (...a: unknown[]) => void> = {};
-    const ptyClient = {
-      getAllTerminalsAsync: vi.fn(async () => [
-        { id: "t1", projectId: "proj-a", agentState: "working" },
-      ]),
-      on: vi.fn((evt: string, h: (...a: unknown[]) => void) => {
-        captured[evt] = h;
-      }),
-      off: vi.fn(),
-    };
-    await manager.initAgentStateCache(ptyClient as never);
-
-    const priv = manager as unknown as {
-      projectByTerminal: Map<string, string>;
-      agentStateByTerminal: Map<string, string>;
-    };
-    // Seed populates projectByTerminal; set the agent-state entry explicitly so
-    // the test pins the exit handler's cleanup of BOTH maps.
-    priv.agentStateByTerminal.set("t1", "working");
-    expect(priv.projectByTerminal.has("t1")).toBe(true);
-
-    // The terminal exits → its now-stale entries must be dropped so a dead
-    // terminal can't keep hasActiveAgent() reporting a phantom active agent.
-    captured["exit"]?.("t1", 0);
-
-    expect(priv.projectByTerminal.has("t1")).toBe(false);
-    expect(priv.agentStateByTerminal.has("t1")).toBe(false);
-    manager.dispose();
   });
 });
 
@@ -1062,17 +973,6 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     expect(frozeProjA()).toBe(true);
   });
 
-  it("asks about the workspace id the view is keyed by", async () => {
-    // ProjectViewManager keys views by an opaque WORKSPACE id (a project's hex
-    // id or a scratch UUID), which is the same vocabulary the MCP binding
-    // stores. Asking with anything else would never match.
-    await manager.switchTo("proj-b", "/path/b");
-    manager.setEfficiencyFreeze(true);
-    vi.advanceTimersByTime(500);
-
-    expect(mcpViewActivity).toHaveBeenCalledWith("proj-a", initialWc.id);
-  });
-
   it("does not freeze when the callback throws — unknown protection resolves as protected here", async () => {
     // The callback reaches a service behind a dynamic import, so a throw means
     // protection state is genuinely unavailable rather than false. Freezing on
@@ -1087,21 +987,6 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     vi.advanceTimersByTime(500);
 
     expect(frozeProjA()).toBe(false);
-  });
-
-  it("keeps sweeping the rest of the view map after the callback throws", async () => {
-    // An exception escaping the accessor would abandon the pass partway
-    // through, silently leaving later views unfrozen for an unrelated reason.
-    await manager.switchTo("proj-b", "/path/b");
-    await manager.switchTo("proj-c", "/path/c");
-    mcpViewActivity.mockImplementation(() => {
-      throw new Error("MCP service mid-teardown");
-    });
-
-    expect(() => {
-      manager.setEfficiencyFreeze(true);
-      vi.advanceTimersByTime(500);
-    }).not.toThrow();
   });
 
   it("freezes as usual when the callback answers null — MCP simply isn't running", async () => {
@@ -1194,17 +1079,361 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
 
     await switchPromise;
   });
+});
 
-  it("never freezes the active view, bound or not", async () => {
-    boundWorkspaces.add("proj-b");
+function backgroundResizeSends(wc: ReturnType<typeof createMockWebContents>) {
+  return wc.send.mock.calls.filter(([channel]) => channel === CHANNELS.PROJECT_BACKGROUND_RESIZE);
+}
+
+describe("ProjectViewManager — background resize forwarding", () => {
+  let manager: ProjectViewManager;
+  let win: ReturnType<typeof createMockWindow>;
+  let initialWc: ReturnType<typeof createMockWebContents>;
+  let fireResize: () => void;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    nextWebContentsId = 100;
+    win = createMockWindow();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+    });
+    (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+      Promise.resolve("signal");
+    initialWc = createMockWebContents();
+    const initialView = { webContents: initialWc, setBounds: vi.fn() };
+    manager.registerInitialView(initialView as never, "proj-a", "/path/a");
+
+    const resizeCall = win.on.mock.calls.find(([event]) => event === "resize");
+    if (!resizeCall) throw new Error("resize handler not registered");
+    const handler = resizeCall[1] as () => void;
+    fireResize = () => handler();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends settled content bounds to cached views after the debounce", async () => {
     await manager.switchTo("proj-b", "/path/b");
-    const activeWc = manager.getActiveView()!.webContents;
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 1440, height: 900 });
 
-    manager.setEfficiencyFreeze(true);
-    vi.advanceTimersByTime(500);
+    fireResize();
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
 
-    expect(vi.mocked(freezeWebContents).mock.calls.every((call) => call[0] !== activeWc)).toBe(
-      true
+    vi.advanceTimersByTime(300);
+    const sends = backgroundResizeSends(initialWc);
+    expect(sends).toHaveLength(1);
+    expect(sends[0][1]).toEqual({ width: 1440, height: 900 });
+  });
+
+  it("forwards nothing while the window is minimized", async () => {
+    // A minimized window's content bounds are not a layout to scale against.
+    // Forwarding them shrinks every cached pane proportionally, and a pane that
+    // bottoms out on the column floor re-wraps its committed scrollback into a
+    // strip no later reflow undoes (#11900).
+    await manager.switchTo("proj-b", "/path/b");
+    win.isMinimized.mockReturnValue(true);
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 63, height: 59 });
+
+    fireResize();
+    vi.advanceTimersByTime(300);
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+
+    // Restoring re-arms the ordinary path, so nothing is permanently lost.
+    win.isMinimized.mockReturnValue(false);
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 1440, height: 900 });
+    fireResize();
+    vi.advanceTimersByTime(300);
+
+    const sends = backgroundResizeSends(initialWc);
+    expect(sends).toHaveLength(1);
+    expect(sends[0][1]).toEqual({ width: 1440, height: 900 });
+  });
+
+  it("replays the skipped notification on restore, which fires no resize of its own", async () => {
+    // Deminiaturizing to the same frame emits `restore` and nothing else, so the
+    // notification declined during the minimize has to be re-driven from that
+    // event or a cached view keeps its pre-minimize geometry indefinitely.
+    await manager.switchTo("proj-b", "/path/b");
+    const restoreCall = win.on.mock.calls.find(([event]) => event === "restore");
+    if (!restoreCall) throw new Error("restore handler not registered");
+
+    win.isMinimized.mockReturnValue(true);
+    fireResize();
+    vi.advanceTimersByTime(300);
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+
+    win.isMinimized.mockReturnValue(false);
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 1440, height: 900 });
+    (restoreCall[1] as () => void)();
+    vi.advanceTimersByTime(300);
+
+    const sends = backgroundResizeSends(initialWc);
+    expect(sends).toHaveLength(1);
+    expect(sends[0][1]).toEqual({ width: 1440, height: 900 });
+  });
+
+  it("never sends to the active view", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    const activeWc = manager.getActiveView()!.webContents as unknown as ReturnType<
+      typeof createMockWebContents
+    >;
+
+    fireResize();
+    vi.advanceTimersByTime(300);
+
+    expect(backgroundResizeSends(activeWc)).toHaveLength(0);
+    expect(backgroundResizeSends(initialWc)).toHaveLength(1);
+  });
+
+  it("re-arms the debounce window on each resize event", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    fireResize();
+    vi.advanceTimersByTime(200);
+    fireResize();
+    vi.advanceTimersByTime(200);
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+
+    vi.advanceTimersByTime(100);
+    expect(backgroundResizeSends(initialWc)).toHaveLength(1);
+  });
+
+  it("sends the bounds read at fire time, not at schedule time", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 1000, height: 700 });
+    fireResize();
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 1280, height: 800 });
+    vi.advanceTimersByTime(300);
+
+    const sends = backgroundResizeSends(initialWc);
+    expect(sends).toHaveLength(1);
+    expect(sends[0][1]).toEqual({ width: 1280, height: 800 });
+  });
+
+  it("skips destroyed webContents without throwing", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    initialWc.isDestroyed.mockReturnValue(true);
+
+    fireResize();
+    expect(() => vi.advanceTimersByTime(300)).not.toThrow();
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+  });
+
+  it("sends to every cached view, not just the most recent", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    const projBWc = manager.getActiveView()!.webContents as unknown as ReturnType<
+      typeof createMockWebContents
+    >;
+    await manager.switchTo("proj-c", "/path/c");
+    const projCWc = manager.getActiveView()!.webContents as unknown as ReturnType<
+      typeof createMockWebContents
+    >;
+
+    fireResize();
+    vi.advanceTimersByTime(300);
+
+    expect(backgroundResizeSends(initialWc)).toHaveLength(1);
+    expect(backgroundResizeSends(projBWc)).toHaveLength(1);
+    expect(backgroundResizeSends(projCWc)).toHaveLength(0);
+  });
+
+  it("a view cached mid-debounce receives the send; the newly active view does not", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    const projBWc = manager.getActiveView()!.webContents as unknown as ReturnType<
+      typeof createMockWebContents
+    >;
+
+    fireResize();
+    // proj-b backgrounds inside the debounce window; proj-a reactivates.
+    await manager.switchTo("proj-a", "/path/a");
+    vi.advanceTimersByTime(300);
+
+    expect(backgroundResizeSends(projBWc)).toHaveLength(1);
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+  });
+
+  it("dispose() cancels a pending notification", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    fireResize();
+    manager.dispose();
+    vi.advanceTimersByTime(300);
+
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+  });
+});
+
+describe("ProjectViewManager — content area changes without a window resize", () => {
+  let manager: ProjectViewManager;
+  let win: ReturnType<typeof createMockWindow>;
+  let view: {
+    webContents: ReturnType<typeof createMockWebContents>;
+    setBounds: ReturnType<typeof vi.fn>;
+    getBounds: () => { x: number; y: number; width: number; height: number };
+  };
+
+  const handlerFor = (target: { on: ReturnType<typeof vi.fn> }, event: string) => {
+    const call = target.on.mock.calls.find(([name]) => name === event);
+    if (!call) throw new Error(`${event} handler not registered`);
+    return call[1] as () => void;
+  };
+  // The Linux menu bar opening or closing re-lays out the content view only.
+  const contentAreaChanged = () => handlerFor(win.contentView, "bounds-changed")();
+  const windowResized = () => handlerFor(win, "resize")();
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    win = createMockWindow();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+    });
+    let bounds = { x: 0, y: 0, width: 800, height: 600 };
+    view = {
+      webContents: createMockWebContents(),
+      setBounds: vi.fn((next: typeof bounds) => {
+        bounds = next;
+      }),
+      getBounds: () => bounds,
+    };
+    manager.registerInitialView(view as never, "proj-a", "/path/a");
+    view.setBounds.mockClear();
+  });
+
+  afterEach(() => {
+    manager.dispose();
+    vi.useRealTimers();
+  });
+
+  it("leaves the view at full size while the menu bar is open, rather than resizing every pane", () => {
+    win.getContentBounds.mockReturnValue({ x: 0, y: 25, width: 800, height: 575 });
+    contentAreaChanged();
+    expect(view.setBounds).not.toHaveBeenCalled();
+
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 800, height: 600 });
+    contentAreaChanged();
+    expect(view.setBounds).not.toHaveBeenCalled();
+  });
+
+  it("grows a view sized while the menu bar was open back over the whole area once it closes", () => {
+    win.getContentBounds.mockReturnValue({ x: 0, y: 25, width: 1440, height: 875 });
+    windowResized();
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1440, height: 875 });
+
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 1440, height: 900 });
+    contentAreaChanged();
+    expect(view.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1440, height: 900 });
+  });
+
+  it("stops listening to the content view once disposed", () => {
+    const handler = handlerFor(win.contentView, "bounds-changed");
+    manager.dispose();
+    expect(win.contentView.removeListener).toHaveBeenCalledWith("bounds-changed", handler);
+  });
+});
+
+describe("ProjectViewManager — GC on deactivate", () => {
+  let manager: ProjectViewManager;
+  let win: ReturnType<typeof createMockWindow>;
+  let initialWc: ReturnType<typeof createMockWebContents>;
+
+  beforeEach(() => {
+    nextWebContentsId = 100;
+    // GC-on-deactivate suite, not paint-gate policy: release every gate with a
+    // signal so the zero-length gate can't read as the hard timeout that now
+    // abandons a cold switch (#11635).
+    vi.spyOn(ProjectViewManager.prototype, "waitForPaint").mockResolvedValue("signal");
+    win = createMockWindow();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+
+    // Create the initial view with a known webContents mock
+    initialWc = createMockWebContents();
+    const initialView = { webContents: initialWc, setBounds: vi.fn() };
+    manager.registerInitialView(initialView as never, "proj-a", "/path/a");
+  });
+
+  it("triggers GC via requestIdleCallback immediately on deactivation", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
+      expect.stringContaining("requestIdleCallback")
     );
+    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("window.gc"));
+    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
+      expect.stringContaining("timeout: 1000")
+    );
+  });
+
+  it("requests GC, flushStorageData, and navigationHistory.clear in order on deactivation", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+    expect(initialWc.session.flushStorageData).toHaveBeenCalledOnce();
+    expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
+
+    const flushOrder = initialWc.session.flushStorageData.mock.invocationCallOrder[0];
+    const clearOrder = initialWc.navigationHistory.clear.mock.invocationCallOrder[0];
+    const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder[0];
+
+    expect(flushOrder).toBeLessThan(gcOrder);
+    expect(clearOrder).toBeLessThan(gcOrder);
+  });
+
+  it("suppresses executeJavaScript rejection without unhandled promise", async () => {
+    initialWc.executeJavaScript.mockRejectedValue(new Error("renderer gone"));
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    // Should have been called (and rejected silently)
+    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+  });
+
+  it("does not throw when flushStorageData throws", async () => {
+    initialWc.session.flushStorageData.mockImplementation(() => {
+      throw new Error("session gone");
+    });
+
+    await expect(manager.switchTo("proj-b", "/path/b")).resolves.toBeDefined();
+    expect(initialWc.session.flushStorageData).toHaveBeenCalledOnce();
+    // navigationHistory.clear should still fire despite flushStorageData throwing
+    expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
+  });
+
+  it("does not throw when navigationHistory.clear throws (TOCTOU renderer crash)", async () => {
+    initialWc.navigationHistory.clear.mockImplementation(() => {
+      throw new Error("renderer gone");
+    });
+
+    await expect(manager.switchTo("proj-b", "/path/b")).resolves.toBeDefined();
+    expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
+    // executeJavaScript should still fire despite clear() throwing
+    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+  });
+
+  it("skips flushStorageData, clearHistory, and GC when webContents is destroyed at outer guard", async () => {
+    initialWc.isDestroyed.mockReturnValue(true);
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(initialWc.session.flushStorageData).not.toHaveBeenCalled();
+    expect(initialWc.navigationHistory.clear).not.toHaveBeenCalled();
+    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
   });
 });

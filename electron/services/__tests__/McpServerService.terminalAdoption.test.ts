@@ -1,11 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "events";
 
-// Hand-over decisions (#12490) are made in the service from main-side facts
-// alone — the pane's bearer, the pty-host's spawn tracking and the ownership
-// ledger — so this suite drives the service with those facts and nothing the
-// renderer could forge.
-
 const testHomeDir = vi.hoisted(
   () => `${process.cwd()}/.vitest-mcp-adoption-${Math.random().toString(36).slice(2)}`
 );
@@ -37,14 +32,15 @@ vi.mock("../../window/webContentsRegistry.js", () => ({
   getProjectForWebContents: () => null,
 }));
 
-import { McpServerService } from "../McpServerService.js";
+import { McpServerService, mcpServerService } from "../McpServerService.js";
 import { helpOwnershipPrincipal, principalOwnerKey } from "../mcp-server/resourceOwnership.js";
-import { setPtyClientRef } from "../../window/serviceRefs.js";
+import { getMcpServerServiceRef, setPtyClientRef } from "../../window/serviceRefs.js";
 import { events } from "../events.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { OrchestratorPaneIdentity } from "../McpPaneConfigService.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "../pty/PtyEventRouter.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
+import type { McpHttpSession } from "../mcp-server/shared.js";
 
 const ORCHESTRATOR: OrchestratorPaneIdentity = {
   principalId: "principal-orch",
@@ -52,6 +48,10 @@ const ORCHESTRATOR: OrchestratorPaneIdentity = {
   workspaceId: "project-a",
 };
 
+// Hand-over decisions (#12490) are made in the service from main-side facts
+// alone — the pane's bearer, the pty-host's spawn tracking and the ownership
+// ledger — so this suite drives the service with those facts and nothing the
+// renderer could forge.
 describe("McpServerService terminal hand-over (#12490)", () => {
   const service = new McpServerService();
   const terminals = new Map<string, string | null>();
@@ -391,5 +391,154 @@ describe("McpServerService help-bearer revocation (#12993)", () => {
       revoke.mockRestore();
       lookup.mockRestore();
     }
+  });
+});
+
+function fakeHttpSession(): McpHttpSession {
+  return {
+    transport: {
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as McpHttpSession["transport"],
+    server: {} as McpHttpSession["server"],
+    idleTimer: setTimeout(() => {}, 1_000_000),
+  };
+}
+
+// The composition seam #11790 depends on spans three layers that are otherwise
+// only ever tested in isolation: SessionStore's binding predicate, the bridge's
+// lease registry, and the accessor ProjectViewManager reads through the
+// callback main.ts injects. Every layer can be correct while the seam is wired
+// backwards, so this suite exercises the seam itself.
+describe("McpServerService.getWorkspaceViewActivity (#11790)", () => {
+  // One service for the suite, reset between tests. Construction subscribes to
+  // the global event bus and the sleep service, and `stop()` deliberately keeps
+  // those (they must survive a server restart) — so a fresh instance per test
+  // would leave every previous one subscribed and reachable.
+  const service: McpServerService = new McpServerService();
+
+  beforeEach(() => {
+    service._sessionStore.drain();
+    service._viewLeases.clear();
+  });
+
+  afterAll(() => {
+    service._sessionStore.drain();
+    service._sessionStore.grantCache.dispose();
+  });
+
+  /** Register a live, workspace-bound external session the way a handshake does. */
+  function bindLiveSession(sessionId: string, workspaceId: string): void {
+    service._sessionStore.httpSessions.set(sessionId, fakeHttpSession());
+    service._sessionStore.sessionOriginMap.set(sessionId, "external");
+    service._sessionStore.sessionWorkspaceMap.set(sessionId, workspaceId);
+  }
+
+  it("reports nothing protected when there are no sessions and no calls", () => {
+    expect(service.getWorkspaceViewActivity("ws-a", 101)).toEqual({
+      dispatchLease: false,
+      liveBinding: false,
+    });
+  });
+
+  it("surfaces a live binding, keyed by workspace id", () => {
+    bindLiveSession("s1", "ws-a");
+
+    expect(service.getWorkspaceViewActivity("ws-a", 101).liveBinding).toBe(true);
+    // Keyed by workspace, so an unrelated workspace on the same view is unaffected.
+    expect(service.getWorkspaceViewActivity("ws-b", 101).liveBinding).toBe(false);
+  });
+
+  it("surfaces a dispatch lease, keyed by WebContents id", () => {
+    const release = service._viewLeases.acquire(101);
+
+    // The two halves must not be crossed: the lease answers for the view, the
+    // binding for the workspace.
+    expect(service.getWorkspaceViewActivity("ws-a", 101).dispatchLease).toBe(true);
+    expect(service.getWorkspaceViewActivity("ws-a", 202).dispatchLease).toBe(false);
+    expect(service.getWorkspaceViewActivity("ws-a", 101).liveBinding).toBe(false);
+
+    release();
+    expect(service.getWorkspaceViewActivity("ws-a", 101).dispatchLease).toBe(false);
+  });
+
+  it("reports both halves independently for the same workspace and view", () => {
+    bindLiveSession("s1", "ws-a");
+    service._viewLeases.acquire(101);
+
+    expect(service.getWorkspaceViewActivity("ws-a", 101)).toEqual({
+      dispatchLease: true,
+      liveBinding: true,
+    });
+  });
+
+  it("drops the binding when the session is revoked, without touching leases", () => {
+    bindLiveSession("s1", "ws-a");
+    service._viewLeases.acquire(101);
+
+    service._sessionStore.revokeSession("s1");
+
+    expect(service.getWorkspaceViewActivity("ws-a", 101)).toEqual({
+      dispatchLease: true,
+      liveBinding: false,
+    });
+  });
+
+  it("stop() drops leases so a view is not pinned for a renderer that will never answer", async () => {
+    service._viewLeases.acquire(101);
+
+    await service.stop();
+
+    expect(service.getWorkspaceViewActivity("ws-a", 101).dispatchLease).toBe(false);
+  });
+
+  it("publishes the singleton to serviceRefs at module scope", () => {
+    // main.ts reads the activity callback through this ref. If the publication
+    // is dropped, every ProjectViewManager silently sees "not protected" and
+    // both defects come back with the whole suite still green.
+    expect(getMcpServerServiceRef()).toBe(mcpServerService);
+  });
+});
+
+// A host's MCP server reaches the local view that drives its project through
+// this machine's renderer bridge. The bridge's response listeners otherwise
+// exist only while this machine's own server runs, so the passthrough has to
+// bring them up itself, once.
+describe("McpServerService host passthroughs", () => {
+  const service = new McpServerService();
+
+  afterAll(() => {
+    service._sessionStore.drain();
+    service._sessionStore.grantCache.dispose();
+  });
+
+  it("dispatches into the named view with the host's approval options, listening once", async () => {
+    const bridge = service._bridge;
+    const setupListeners = vi.spyOn(bridge, "setupListeners").mockImplementation(() => {});
+    const envelope = { result: { ok: true as const, result: null } };
+    const dispatch = vi
+      .spyOn(bridge, "dispatchActionForWebContents")
+      .mockResolvedValue(envelope as never);
+    const manifest = vi.spyOn(bridge, "requestManifestForWebContents").mockResolvedValue([]);
+
+    await expect(
+      service.dispatchActionForHost(11, "terminal.new", { a: 1 }, true, undefined, "external", {
+        approvalOnly: true,
+      })
+    ).resolves.toBe(envelope);
+    await service.requestManifestForHost(11);
+
+    expect(dispatch).toHaveBeenCalledWith(
+      11,
+      "terminal.new",
+      { a: 1 },
+      true,
+      undefined,
+      "external",
+      {
+        approvalOnly: true,
+      }
+    );
+    expect(manifest).toHaveBeenCalledWith(11);
+    expect(setupListeners).toHaveBeenCalledTimes(1);
   });
 });

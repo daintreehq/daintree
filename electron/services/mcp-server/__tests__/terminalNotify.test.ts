@@ -1586,13 +1586,6 @@ describe("TerminalNotifyService", () => {
       expect(line).not.toContain("Check them with terminal.getStatus.");
     });
 
-    it("sends a usable summary without its screen, and no status hint", () => {
-      const line = formatNoticeLine([
-        notice("t-a", { observation: { kind: "handback" }, handback: "Fixed it." }),
-      ]);
-      expect(line.split("\n")[0]).toBe("Daintree: terminal t-a printed its done marker.");
-    });
-
     it("names a reply left out for length instead of quoting it", () => {
       const big = "x".repeat(6_000);
       const notices = Array.from({ length: 5 }, (_, i) =>

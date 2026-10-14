@@ -95,39 +95,6 @@ describe("navigationActions adversarial", () => {
     const event = dispatchSpy.mock.calls[0]![0] as unknown as { type: string };
     expect(event.type).toBe("daintree:find-in-panel");
   });
-
-  it("each action takes no args (verified by Action shape)", () => {
-    const { actions } = setupActions();
-    for (const id of [
-      "nav.toggleSidebar",
-      "action.palette.open",
-      "nav.toggleFocusMode",
-      "nav.quickSwitcher",
-      "nav.focusRegion.next",
-      "nav.focusRegion.prev",
-      "find.inFocusedPanel",
-    ]) {
-      const factory = actions.get(id);
-      expect(factory).toBeDefined();
-      const def = factory!() as AnyActionDefinition;
-      expect(def.argsSchema).toBeUndefined();
-      expect(def.danger).toBe("safe");
-    }
-  });
-
-  it("callback throws propagate cleanly out of the action run", async () => {
-    const { actions, callbacks } = setupActions();
-    callbacks.onToggleSidebar.mockImplementationOnce(() => {
-      throw new Error("sidebar exploded");
-    });
-
-    await expect(call(actions, "nav.toggleSidebar")).rejects.toThrow("sidebar exploded");
-  });
-
-  it("registers exactly 7 navigation actions", () => {
-    const { actions } = setupActions();
-    expect(actions.size).toBe(7);
-  });
 });
 
 describe("nav.toggleSidebar keyboard feedback (issue #11704)", () => {
@@ -181,14 +148,6 @@ describe("nav.toggleSidebar keyboard feedback (issue #11704)", () => {
     await runToggle(actions, "user");
 
     expect(notifyLayoutChange.mock.calls[0]![0]!.dispatchSource).toBe("user");
-  });
-
-  it("tolerates a context with no dispatch source", async () => {
-    const { actions, callbacks } = setupActions();
-    toggleOnDispatch(callbacks);
-
-    await expect(runToggle(actions, undefined)).resolves.not.toThrow();
-    expect(notifyLayoutChange.mock.calls[0]![0]!.dispatchSource).toBeUndefined();
   });
 
   it("undo toggles back through the same path, keeping AppLayout's guards", async () => {

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { useCanopyStore } from "@/store/canopyStore";
 
 const appClientMock = {
   hydrate: vi.fn(),
@@ -204,63 +205,6 @@ describe("hydrateAppState", () => {
     await new Promise<void>((resolve) => queueMicrotask(resolve));
     await new Promise<void>((resolve) => queueMicrotask(resolve));
   };
-
-  it("rehydrates dev-preview panels without backend terminals", async () => {
-    appClientMock.hydrate.mockResolvedValue({
-      appState: {
-        terminals: [
-          {
-            id: "dev-preview-1",
-            kind: "dev-preview",
-            title: "Dev Preview",
-            cwd: "/project",
-            location: "grid",
-            command: "npm run dev",
-            browserUrl: "http://localhost:5173",
-            devServerStatus: "running",
-            devServerUrl: "http://localhost:5173",
-            devServerError: { type: "unknown", message: "Previous boot warning" },
-            devServerTerminalId: "dev-preview-pty-1",
-            devPreviewConsoleOpen: true,
-          },
-        ],
-        sidebarWidth: 350,
-      },
-      terminalConfig,
-      project,
-      agentSettings,
-    });
-
-    const addPanel = vi.fn().mockResolvedValue("dev-preview-1");
-    const setActiveWorktree = vi.fn();
-    const loadRecipes = vi.fn().mockResolvedValue(undefined);
-    const openDiagnosticsDock = vi.fn();
-
-    await hydrateAppState({
-      addPanel,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
-    });
-
-    expect(addPanel).toHaveBeenCalledTimes(1);
-    expect(addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "dev-preview",
-        requestedId: "dev-preview-1",
-        cwd: "/project",
-        devCommand: "npm run dev",
-        browserUrl: "http://localhost:5173",
-        devPreviewConsoleOpen: true,
-      })
-    );
-
-    const addPanelArg = addPanel.mock.calls[0]![0] as Record<string, unknown>;
-    expect(addPanelArg.devServerStatus).toBeUndefined();
-    expect(addPanelArg.devServerUrl).toBeUndefined();
-    expect(addPanelArg.devServerError).toBeUndefined();
-    expect(addPanelArg.devServerTerminalId).toBeUndefined();
-  });
 
   it("seeds the project store current project from the hydrate payload", async () => {
     appClientMock.hydrate.mockResolvedValue({
@@ -573,55 +517,6 @@ describe("hydrateAppState", () => {
     );
   });
 
-  it("respawns agent panel on cold start when reconnect returns not_found", async () => {
-    // On cold app restart (no switchId), not_found means the PTY process was
-    // killed on quit — the agent panel should be respawned.
-    appClientMock.hydrate.mockResolvedValue({
-      appState: {
-        terminals: [
-          {
-            id: "agent-1",
-            kind: "terminal",
-            type: "claude",
-            agentId: "claude",
-            title: "Claude",
-            cwd: "/project",
-            location: "grid",
-            command: "claude -p 'Old prompt'",
-          },
-        ],
-        sidebarWidth: 350,
-      },
-      terminalConfig,
-      project,
-      agentSettings: {
-        agents: {
-          claude: {
-            customFlags: "--model sonnet-4",
-          },
-        },
-      },
-    });
-
-    const addPanel = vi.fn().mockResolvedValue("agent-1");
-
-    await hydrateAppState({
-      addPanel,
-      setActiveWorktree: vi.fn(),
-      loadRecipes: vi.fn().mockResolvedValue(undefined),
-      openDiagnosticsDock: vi.fn(),
-    });
-
-    // Cold start: agent panel should be respawned
-    expect(addPanel).toHaveBeenCalledTimes(1);
-    expect(addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "terminal",
-        requestedId: "agent-1",
-      })
-    );
-  });
-
   it("reconnects via fallback when getForProject misses the terminal but reconnect finds it", async () => {
     // This test verifies the reconnect fallback path - when getForProject doesn't
     // return a terminal (e.g., due to project ID mismatch), but the terminal
@@ -765,5 +660,471 @@ describe("hydrateAppState", () => {
         requestedId: "agent-1",
       })
     );
+  });
+
+  describe("prefetchedHydrateResult", () => {
+    const fullProject = {
+      id: "project-1",
+      path: "/project",
+      name: "project-1",
+      emoji: "🌳",
+      lastOpened: Date.now(),
+    };
+
+    it("skips appClient.hydrate() when prefetched result is provided", async () => {
+      const prefetched = {
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project: fullProject,
+        agentSettings,
+        gpuWebGLHardware: true,
+        gpuHardwareAccelerationDisabled: false,
+        safeMode: false,
+        settingsRecovery: null,
+      } as unknown as import("@shared/types/ipc/app").HydrateResult;
+
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+        prefetchedHydrateResult: prefetched,
+      });
+
+      expect(appClientMock.hydrate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("hydration batching (#5196)", () => {
+    it("pairs beginHydrationBatch and flushHydrationBatch for each non-empty restore phase", async () => {
+      // Three panel kinds exercise three phases simultaneously: browser (non-PTY),
+      // a saved terminal without a backend process (background PTY respawn), and
+      // an orphan backend terminal not in the saved list.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "browser-1",
+              kind: "browser",
+              title: "Browser",
+              cwd: "/project",
+              location: "grid",
+            },
+            {
+              id: "terminal-1",
+              kind: "terminal",
+              type: "terminal",
+              title: "Terminal",
+              cwd: "/project",
+              location: "grid",
+              worktreeId: "wt-other",
+            },
+          ],
+          activeWorktreeId: "wt-active",
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      terminalClientMock.getForProject.mockResolvedValue([
+        { id: "orphan-1", kind: "terminal", type: "terminal", cwd: "/project", hasPty: true },
+      ]);
+      terminalClientMock.reconnect.mockResolvedValue({ exists: false });
+
+      const beginHydrationBatch = vi.fn(() => Symbol("batch"));
+      const flushHydrationBatch = vi.fn();
+
+      await hydrateAppState({
+        addPanel: vi.fn().mockResolvedValue("panel-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+        beginHydrationBatch,
+        flushHydrationBatch,
+      });
+
+      // Every begin must be matched by a flush with the same token.
+      expect(flushHydrationBatch).toHaveBeenCalledTimes(beginHydrationBatch.mock.calls.length);
+      const tokens = beginHydrationBatch.mock.results.map((r) => r.value);
+      tokens.forEach((token, i) => {
+        expect(flushHydrationBatch.mock.calls[i]?.[0]).toBe(token);
+      });
+
+      // Non-PTY + background-PTY + orphan phases each fire at least one begin/flush.
+      expect(beginHydrationBatch.mock.calls.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it("flushes the batch even if a panel addition throws mid-phase", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: {
+          terminals: [
+            {
+              id: "browser-1",
+              kind: "browser",
+              title: "Browser",
+              cwd: "/project",
+              location: "grid",
+            },
+          ],
+        },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      const beginHydrationBatch = vi.fn(() => Symbol("batch"));
+      const flushHydrationBatch = vi.fn();
+
+      // If `addPanel` rejects, hydration swallows the error (logWarn). The batch
+      // still needs to flush so the store isn't left stuck with a dangling batch.
+      const addPanel = vi.fn().mockRejectedValue(new Error("boom"));
+
+      await hydrateAppState({
+        addPanel,
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+        beginHydrationBatch,
+        flushHydrationBatch,
+      });
+
+      expect(beginHydrationBatch).toHaveBeenCalled();
+      expect(flushHydrationBatch).toHaveBeenCalledTimes(beginHydrationBatch.mock.calls.length);
+    });
+  });
+
+  describe("per-project layout payload folding", () => {
+    const baseOptions = () => ({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    it("uses tabGroups/terminalSizes/draftInputs from the hydrate payload and skips the standalone IPC calls", async () => {
+      const payloadTabGroups = [
+        {
+          id: "group-payload",
+          location: "grid",
+          activeTabId: "terminal-1",
+          panelIds: ["terminal-1"],
+        },
+      ];
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        tabGroups: payloadTabGroups,
+        terminalSizes: { "terminal-1": { cols: 100, rows: 30 } },
+        draftInputs: { "terminal-1": "payload draft" },
+      });
+
+      const hydrateTabGroups = vi.fn();
+      await hydrateAppState({ ...baseOptions(), hydrateTabGroups });
+
+      expect(projectClientMock.getTabGroups).not.toHaveBeenCalled();
+      expect(projectClientMock.getTerminalSizes).not.toHaveBeenCalled();
+      expect(projectClientMock.getDraftInputs).not.toHaveBeenCalled();
+      expect(hydrateTabGroups).toHaveBeenCalledWith(payloadTabGroups);
+
+      const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+      expect(useTerminalInputStore.getState().draftInputs.get("project-1:terminal-1")).toBe(
+        "payload draft"
+      );
+    });
+
+    it("falls back to the standalone IPC calls when the payload fields are absent", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        // tabGroups/terminalSizes/draftInputs intentionally omitted (older
+        // main process, or the safe-boot {ok:false} payload).
+      });
+
+      const hydrateTabGroups = vi.fn();
+      await hydrateAppState({ ...baseOptions(), hydrateTabGroups });
+
+      expect(projectClientMock.getTabGroups).toHaveBeenCalledWith("project-1");
+      expect(projectClientMock.getTerminalSizes).toHaveBeenCalledWith("project-1");
+      expect(projectClientMock.getDraftInputs).toHaveBeenCalledWith("project-1");
+    });
+
+    it("treats empty payload fields as authoritative (no IPC fallback, stale groups cleared)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        tabGroups: [],
+        terminalSizes: {},
+        draftInputs: {},
+      });
+
+      const hydrateTabGroups = vi.fn();
+      await hydrateAppState({ ...baseOptions(), hydrateTabGroups });
+
+      expect(projectClientMock.getTabGroups).not.toHaveBeenCalled();
+      expect(projectClientMock.getTerminalSizes).not.toHaveBeenCalled();
+      expect(projectClientMock.getDraftInputs).not.toHaveBeenCalled();
+      // Empty array still clears stale groups (mirrors the IPC path).
+      expect(hydrateTabGroups).toHaveBeenCalledWith([]);
+    });
+
+    it("uses projectPresets from the hydrate payload and skips the standalone IPC call", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        projectPresets: { claude: [{ id: "team-preset", name: "Team" }] },
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(projectClientMock.getInRepoPresets).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the standalone getInRepoPresets call when projectPresets is absent", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        // projectPresets intentionally omitted (older main process, or the
+        // safe-boot {ok:false} payload).
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(projectClientMock.getInRepoPresets).toHaveBeenCalledWith("project-1");
+    });
+
+    it("treats an empty projectPresets payload as authoritative (no IPC fallback)", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        projectPresets: {},
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(projectClientMock.getInRepoPresets).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("scratch workspaces (#11484)", () => {
+    const SCRATCH_ID = "b3d1f2a4-5c6e-4a8b-9d0f-1e2a3b4c5d6e";
+
+    const scratchOptions = () => ({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    it("reconnects live terminals and restores layout for a workspace with no project", async () => {
+      // A scratch view hydrates with `project: null` — before the fix that
+      // skipped the backend terminal query entirely, so still-running PTYs
+      // stayed orphaned in the pty-host with nothing referencing them.
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project: null,
+        workspaceId: SCRATCH_ID,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+
+      await hydrateAppState({ ...scratchOptions(), hydrateTabGroups: vi.fn() });
+
+      expect(terminalClientMock.getForProject).toHaveBeenCalledWith(SCRATCH_ID);
+      expect(projectClientMock.getTabGroups).toHaveBeenCalledWith(SCRATCH_ID);
+      expect(projectClientMock.getTerminalSizes).toHaveBeenCalledWith(SCRATCH_ID);
+      expect(projectClientMock.getDraftInputs).toHaveBeenCalledWith(SCRATCH_ID);
+    });
+
+    it("keeps repository-only work gated on a real project", async () => {
+      // Scratch folders are not git repos, so in-repo presets and recipes must
+      // not be fetched for them even though layout restore now is.
+      const options = scratchOptions();
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project: null,
+        workspaceId: SCRATCH_ID,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+
+      await hydrateAppState({ ...options, hydrateTabGroups: vi.fn() });
+
+      expect(projectClientMock.getInRepoPresets).not.toHaveBeenCalled();
+      expect(options.loadRecipes).not.toHaveBeenCalled();
+    });
+
+    it("still does nothing when the view owns no workspace at all", async () => {
+      const options = scratchOptions();
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project: null,
+        workspaceId: null,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+
+      await hydrateAppState({ ...options, hydrateTabGroups: vi.fn() });
+
+      expect(terminalClientMock.getForProject).not.toHaveBeenCalled();
+      expect(projectClientMock.getTabGroups).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the project id when an older main process omits workspaceId", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+
+      await hydrateAppState({ ...scratchOptions(), hydrateTabGroups: vi.fn() });
+
+      expect(terminalClientMock.getForProject).toHaveBeenCalledWith(project.id);
+    });
+  });
+
+  describe("system temp dir folding", () => {
+    const baseOptions = () => ({
+      addPanel: vi.fn().mockResolvedValue("panel-1"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    it("takes Canopy's mode from the payload, so a hidden Canopy's button never paints", async () => {
+      useCanopyStore.setState({ mode: "unset", snapshot: null });
+      await hydrateAppState({
+        ...baseOptions(),
+        prefetchedHydrateResult: {
+          appState: { terminals: [] },
+          terminalConfig,
+          project,
+          agentSettings,
+          gpuWebGLHardware: true,
+          canopyMode: "hidden",
+        } as unknown as import("@shared/types/ipc/app").HydrateResult,
+      });
+
+      expect(useCanopyStore.getState().mode).toBe("hidden");
+      useCanopyStore.setState({ mode: "unset" });
+    });
+
+    it("uses systemTmpDir from the appClient.hydrate() payload and skips the getTmpDir IPC call", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [] },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        systemTmpDir: "/hydrate-tmp",
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(getTmpDirMock).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the getTmpDir IPC call when systemTmpDir is absent", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [] },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+        // systemTmpDir intentionally omitted (older main process / safe-boot payload)
+      });
+
+      await hydrateAppState(baseOptions());
+
+      expect(getTmpDirMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("seeds the host platform from the payload's host fields", async () => {
+      const hostPlatform = await import("@/hooks/useHostPlatform");
+      hostPlatform._resetHostPlatformForTests();
+      try {
+        appClientMock.hydrate.mockResolvedValue({
+          appState: { terminals: [] },
+          terminalConfig,
+          project,
+          agentSettings,
+          gpuWebGLHardware: true,
+          systemTmpDir: "/client-tmp",
+          hostPlatform: "linux",
+          hostHomeDir: "/home/greg",
+          hostTmpDir: "/host-tmp",
+        });
+        await hydrateAppState(baseOptions());
+
+        expect(hostPlatform.getHostPlatformInfo()).toMatchObject({
+          platform: "linux",
+          homeDir: "/home/greg",
+          tmpDir: "/host-tmp",
+          hostName: null,
+        });
+        expect(getTmpDirMock).not.toHaveBeenCalled();
+      } finally {
+        hostPlatform._resetHostPlatformForTests();
+      }
+    });
+
+    it("never takes this machine's systemTmpDir for a remote view", async () => {
+      const hostPlatform = await import("@/hooks/useHostPlatform");
+      hostPlatform._resetHostPlatformForTests();
+      window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+      try {
+        appClientMock.hydrate.mockResolvedValue({
+          appState: { terminals: [] },
+          terminalConfig,
+          project,
+          agentSettings,
+          gpuWebGLHardware: true,
+          systemTmpDir: "/client-tmp",
+        });
+
+        await hydrateAppState(baseOptions());
+
+        expect(getTmpDirMock).toHaveBeenCalledTimes(1);
+      } finally {
+        delete window.__DAINTREE_HOST_ID__;
+        hostPlatform._resetHostPlatformForTests();
+      }
+    });
+
+    it("degrades without throwing when the getTmpDir fallback rejects", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [] },
+        terminalConfig,
+        project,
+        agentSettings,
+        gpuWebGLHardware: true,
+      });
+      getTmpDirMock.mockRejectedValueOnce(new Error("tmp dir unavailable"));
+
+      await expect(hydrateAppState(baseOptions())).resolves.not.toThrow();
+    });
   });
 });

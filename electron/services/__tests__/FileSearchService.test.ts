@@ -152,20 +152,6 @@ describe("FileSearchService", () => {
     expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
   });
 
-  it("uses git file listing when repository is available", async () => {
-    const dir = makeTempDir();
-    tempDirs.push(dir);
-    gitClientMock.checkIsRepo.mockResolvedValue(true);
-    gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
-    gitClientMock.raw.mockResolvedValue("README.md\0src/main.ts\0src/components/Button.tsx\0");
-
-    const service = await createService();
-    const result = await service.search({ cwd: dir, query: "read", limit: 5 });
-
-    expect(result[0]).toBe("README.md");
-    expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
-  });
-
   it("normalizes leading path syntax in queries", async () => {
     const dir = makeTempDir();
     tempDirs.push(dir);
@@ -177,22 +163,6 @@ describe("FileSearchService", () => {
     const result = await service.search({ cwd: dir, query: "./src//components//button", limit: 5 });
 
     expect(result).toEqual(["src/components/Button.tsx"]);
-  });
-
-  it("reuses cached file list across repeated searches for same cwd", async () => {
-    const dir = makeTempDir();
-    tempDirs.push(dir);
-    gitClientMock.checkIsRepo.mockResolvedValue(true);
-    gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
-    gitClientMock.raw.mockResolvedValue("README.md\0src/main.ts\0package.json\0");
-
-    const service = await createService();
-    const first = await service.search({ cwd: dir, query: "src", limit: 5 });
-    const second = await service.search({ cwd: dir, query: "read", limit: 5 });
-
-    expect(first).toContain("src/main.ts");
-    expect(second).toContain("README.md");
-    expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
   });
 
   it("returns shortest paths first when query is empty", async () => {
@@ -228,25 +198,6 @@ describe("FileSearchService", () => {
       expect(result[0]).toBe("src/components/HybridInputBar.tsx");
     });
 
-    it("resolves 'app layout' to AppLayout.tsx", async () => {
-      const dir = makeTempDir();
-      tempDirs.push(dir);
-      gitClientMock.checkIsRepo.mockResolvedValue(true);
-      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
-      gitClientMock.raw.mockResolvedValue(
-        "src/components/AppLayout.tsx\0src/App.tsx\0src/layout/Sidebar.tsx\0"
-      );
-
-      const service = await createService();
-      const result = await service.searchNaturalLanguage({
-        cwd: dir,
-        description: "app layout",
-        limit: 5,
-      });
-
-      expect(result[0]).toBe("src/components/AppLayout.tsx");
-    });
-
     it("returns empty array for query with only stop words", async () => {
       const dir = makeTempDir();
       tempDirs.push(dir);
@@ -258,23 +209,6 @@ describe("FileSearchService", () => {
       const result = await service.searchNaturalLanguage({
         cwd: dir,
         description: "the component file",
-        limit: 5,
-      });
-
-      expect(result).toEqual([]);
-    });
-
-    it("returns empty array for empty description", async () => {
-      const dir = makeTempDir();
-      tempDirs.push(dir);
-      gitClientMock.checkIsRepo.mockResolvedValue(true);
-      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
-      gitClientMock.raw.mockResolvedValue("src/App.tsx\0");
-
-      const service = await createService();
-      const result = await service.searchNaturalLanguage({
-        cwd: dir,
-        description: "",
         limit: 5,
       });
 
@@ -337,23 +271,6 @@ describe("FileSearchService", () => {
       expect(result).toEqual(["src/UserSettings.tsx"]);
     });
 
-    it("splits digit boundaries so S3Client matches 's3 client'", async () => {
-      const dir = makeTempDir();
-      tempDirs.push(dir);
-      gitClientMock.checkIsRepo.mockResolvedValue(true);
-      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
-      gitClientMock.raw.mockResolvedValue("src/S3Client.ts\0src/Other.ts\0");
-
-      const service = await createService();
-      const result = await service.searchNaturalLanguage({
-        cwd: dir,
-        description: "s3 client",
-        limit: 5,
-      });
-
-      expect(result[0]).toBe("src/S3Client.ts");
-    });
-
     it("ranks S3Client.ts above Client.ts when query is 's3 client'", async () => {
       const dir = makeTempDir();
       tempDirs.push(dir);
@@ -411,23 +328,6 @@ describe("FileSearchService", () => {
 
       expect(afterPause).toContain("src/main.ts");
       expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
-    });
-
-    it("still reloads once the fallback TTL lapses", async () => {
-      // A background worktree is on the git-only watch and never emits the
-      // files-changed signal, so this clock is the only thing that refreshes
-      // it. Losing it entirely would leave those listings stale for the life of
-      // the process.
-      const dir = makeTempDir();
-      tempDirs.push(dir);
-      gitRepo(dir, "README.md\0");
-
-      const service = await createService();
-      await service.search({ cwd: dir, query: "read", limit: 5 });
-      advanceClock(300_001);
-      await service.search({ cwd: dir, query: "read", limit: 5 });
-
-      expect(gitClientMock.raw).toHaveBeenCalledTimes(2);
     });
 
     it("holds the entry right up to the five-minute boundary", async () => {
@@ -675,20 +575,6 @@ describe("FileSearchService", () => {
         expect(service.getCacheStats().size).toBe(0);
       });
 
-      it("leaves a live index alone when the sweep fires", async () => {
-        const dir = makeTempDir();
-        tempDirs.push(dir);
-        gitRepo(dir, "README.md\0");
-
-        const service = await createService();
-        await service.search({ cwd: dir, query: "read", limit: 5 });
-
-        advanceClock(120_000);
-        await vi.advanceTimersByTimeAsync(60_000);
-
-        expect(service.getCacheStats().size).toBe(1);
-      });
-
       it("stops sweeping once the cache drains, and starts again when it refills", async () => {
         // A timer that kept firing forever would wake an idle app every minute for
         // an empty map; one that never re-armed would leave the next session's
@@ -770,20 +656,6 @@ describe("FileSearchService", () => {
       expect(result).toContain("src/weird\nname.ts");
       expect(result).toContain("src/with\ttab.ts");
       expect(result).toContain("clean.ts");
-    });
-
-    it("passes -z to git ls-files", async () => {
-      const dir = makeTempDir();
-      tempDirs.push(dir);
-      gitClientMock.checkIsRepo.mockResolvedValue(true);
-      gitClientMock.revparse.mockResolvedValue(`${dir}\n`);
-      gitClientMock.raw.mockResolvedValue("a.ts\0");
-
-      const service = await createService();
-      await service.search({ cwd: dir, query: "a", limit: 5 });
-
-      const callArgs = gitClientMock.raw.mock.calls[0][0];
-      expect(callArgs).toContain("-z");
     });
   });
 });

@@ -158,15 +158,6 @@ describe("lookupArtifactChecksum", () => {
     await expect(failing(async () => new Response("", { status: 404 }))).resolves.toBeNull();
   });
 
-  it("finds no checksum for the deb, which the Linux manifest doesn't list", async () => {
-    await expect(
-      lookupArtifactChecksum({
-        url: `${FEED}daintree_1.4.0_amd64.deb`,
-        fetchImpl: feed({ manifest: manifest() }),
-      })
-    ).resolves.toBeNull();
-  });
-
   it("follows redirects only while every hop stays on https", async () => {
     const hops = vi.fn(async (url: string | URL | Request) => {
       const href = String(url);

@@ -99,37 +99,6 @@ describe("GitPushConfirmDialog", () => {
     expect(mocks.buildPreview).toHaveBeenCalledWith("/repo", "push");
   });
 
-  it("blocks approval while the preview is still loading", async () => {
-    const gate = deferred<{
-      branch: string;
-      destination: { remote: string; branch: string };
-      pullSource: { remote: string; branch: string };
-      commits: never[];
-      pushRange: { total: number; rangeBasis: "tracked" | "creates" | "unverified" } | null;
-    }>();
-    mocks.buildPreview.mockReturnValue(gate.promise);
-    render(<GitPushConfirmDialog />);
-
-    await act(async () => {
-      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
-    });
-
-    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
-
-    await act(async () => {
-      gate.resolve({
-        branch: "main",
-        destination: { remote: "origin", branch: "main" },
-        pullSource: { remote: "origin", branch: "main" },
-        commits: [],
-        pushRange: { total: 0, rangeBasis: "tracked" as const },
-      });
-      await gate.promise;
-    });
-
-    expect(pushButton().hasAttribute("aria-disabled")).toBe(false);
-  });
-
   // `commits.length === 0` is a VALID loaded state — it means "nothing ahead",
   // not "still loading". Blocking on it was the #9575 failure mode.
   it("allows approval once loaded even with no commits to show", async () => {

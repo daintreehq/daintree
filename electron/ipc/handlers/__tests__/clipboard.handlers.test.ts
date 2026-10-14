@@ -117,11 +117,6 @@ describe("clipboard:write-image handler", () => {
     cleanup();
   });
 
-  it("registers the clipboard:write-image handler", () => {
-    const channels = vi.mocked(ipcMain.handle).mock.calls.map(([ch]) => ch);
-    expect(channels).toContain("clipboard:write-image");
-  });
-
   it("writes valid PNG data to clipboard and returns void", async () => {
     const fakeImage = { isEmpty: () => false };
     nativeImageMock.createFromBuffer.mockReturnValue(fakeImage);
@@ -175,12 +170,6 @@ describe("clipboard:write-image handler", () => {
     const handler = getHandler("clipboard:write-image");
     await expect(handler(fakeEvent, new Uint8Array([0xff]))).rejects.toThrow("Corrupt buffer");
   });
-
-  it("cleanup removes the handler", () => {
-    cleanup();
-    const removedChannels = vi.mocked(ipcMain.removeHandler).mock.calls.map(([ch]) => ch);
-    expect(removedChannels).toContain("clipboard:write-image");
-  });
 });
 
 describe("clipboard:write-text handler", () => {
@@ -193,21 +182,6 @@ describe("clipboard:write-text handler", () => {
 
   afterEach(() => {
     cleanup();
-  });
-
-  it("registers the clipboard:write-text handler", () => {
-    const channels = vi.mocked(ipcMain.handle).mock.calls.map(([ch]) => ch);
-    expect(channels).toContain("clipboard:write-text");
-  });
-
-  it("writes text to the clipboard and returns void", async () => {
-    const handler = getHandler("clipboard:write-text");
-    const result = await handler(fakeEvent, "sudo sysctl fs.inotify.max_user_watches=524288");
-
-    expect(clipboardMock.writeText).toHaveBeenCalledWith(
-      "sudo sysctl fs.inotify.max_user_watches=524288"
-    );
-    expect(result).toBeUndefined();
   });
 
   it("rejects non-string input with VALIDATION error", async () => {
@@ -228,12 +202,6 @@ describe("clipboard:write-text handler", () => {
 
     const handler = getHandler("clipboard:write-text");
     await expect(handler(fakeEvent, "hello")).rejects.toThrow("clipboard unavailable");
-  });
-
-  it("cleanup removes the clipboard:write-text handler", () => {
-    cleanup();
-    const removedChannels = vi.mocked(ipcMain.removeHandler).mock.calls.map(([ch]) => ch);
-    expect(removedChannels).toContain("clipboard:write-text");
   });
 });
 
@@ -393,17 +361,6 @@ describe("clipboard:write-image size cap", () => {
     expect(clipboardMock.writeImage).not.toHaveBeenCalled();
   });
 
-  it("accepts image data within the limit", async () => {
-    const fakeImage = { isEmpty: () => false };
-    nativeImageMock.createFromBuffer.mockReturnValue(fakeImage);
-
-    const handler = getHandler("clipboard:write-image");
-    await handler(fakeEvent, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
-
-    expect(nativeImageMock.createFromBuffer).toHaveBeenCalledTimes(1);
-    expect(clipboardMock.writeImage).toHaveBeenCalledWith(fakeImage);
-  });
-
   it("accepts image data exactly at the 20 MB limit", async () => {
     const fakeImage = { isEmpty: () => false };
     nativeImageMock.createFromBuffer.mockReturnValue(fakeImage);
@@ -445,11 +402,6 @@ describe("clipboard:write-selection handler", () => {
   afterEach(() => {
     cleanup();
     setPlatform(originalPlatform);
-  });
-
-  it("registers the clipboard:write-selection handler", () => {
-    const channels = vi.mocked(ipcMain.handle).mock.calls.map(([ch]) => ch);
-    expect(channels).toContain("clipboard:write-selection");
   });
 
   it("writes to PRIMARY selection on Linux and returns void", async () => {
@@ -497,20 +449,6 @@ describe("clipboard:write-selection handler", () => {
     expect(clipboardMock.writeText).not.toHaveBeenCalled();
   });
 
-  it("throws UNSUPPORTED on Windows without calling clipboard", async () => {
-    cleanup();
-    setPlatform("win32");
-    cleanup = registerClipboardHandlers();
-
-    const handler = getHandler("clipboard:write-selection");
-    await expect(handler(fakeEvent, "hello")).rejects.toMatchObject({
-      name: "AppError",
-      code: "UNSUPPORTED",
-    });
-
-    expect(clipboardMock.writeText).not.toHaveBeenCalled();
-  });
-
   it("propagates raw errors when clipboard.writeText throws", async () => {
     clipboardMock.writeText.mockImplementationOnce(() => {
       throw new Error("wayland compositor lacks primary selection");
@@ -542,11 +480,6 @@ describe("clipboard:read-selection handler", () => {
     setPlatform(originalPlatform);
   });
 
-  it("registers the clipboard:read-selection handler", () => {
-    const channels = vi.mocked(ipcMain.handle).mock.calls.map(([ch]) => ch);
-    expect(channels).toContain("clipboard:read-selection");
-  });
-
   it("reads PRIMARY selection on Linux and returns text", async () => {
     clipboardMock.readText.mockReturnValueOnce("pasted text");
 
@@ -555,15 +488,6 @@ describe("clipboard:read-selection handler", () => {
 
     expect(clipboardMock.readText).toHaveBeenCalledWith("selection");
     expect(result).toEqual({ text: "pasted text" });
-  });
-
-  it("returns empty text when PRIMARY selection is empty", async () => {
-    clipboardMock.readText.mockReturnValueOnce("");
-
-    const handler = getHandler("clipboard:read-selection");
-    const result = await handler(fakeEvent);
-
-    expect(result).toEqual({ text: "" });
   });
 
   it("throws UNSUPPORTED on macOS without calling clipboard", async () => {

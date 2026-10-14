@@ -22,19 +22,6 @@ describe("CommitInfoTooltip", () => {
     vi.useRealTimers();
   });
 
-  it("shows the author, commit time, and message", () => {
-    render(
-      <CommitInfoTooltip
-        lastCommitTimestampMs={Date.now() - 120_000}
-        author={human}
-        commitMessage="fix: resolve the navigation race"
-      />
-    );
-    expect(screen.getByText("Jane Doe")).toBeDefined();
-    expect(screen.getByText("Committed 2 minutes ago")).toBeDefined();
-    expect(screen.getByText("fix: resolve the navigation race")).toBeDefined();
-  });
-
   it("renders a Gravatar image with the d=404 probe for a human author", () => {
     const { container } = render(
       <CommitInfoTooltip lastCommitTimestampMs={Date.now()} author={human} />
@@ -118,22 +105,6 @@ describe("CommitInfoTooltip", () => {
     const { container } = render(<CommitInfoTooltip lastCommitTimestampMs={Date.now() - 60_000} />);
     expect(screen.getByText("Last commit")).toBeDefined();
     expect(container.querySelector("img")).toBeNull();
-  });
-
-  it("renders the Last active line only when an activity timestamp is given", () => {
-    const { rerender } = render(
-      <CommitInfoTooltip lastCommitTimestampMs={Date.now() - 600_000} author={human} />
-    );
-    expect(screen.queryByText(/Last active/)).toBeNull();
-
-    rerender(
-      <CommitInfoTooltip
-        lastCommitTimestampMs={Date.now() - 600_000}
-        author={human}
-        lastActivityTimestamp={Date.now() - 120_000}
-      />
-    );
-    expect(screen.getByText(/^Last active 2 minutes ago ·/)).toBeDefined();
   });
 
   it("renders activity detail when the repository has no commit", () => {

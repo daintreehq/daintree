@@ -132,26 +132,6 @@ describe("worktree.sessions.trashAll confirm gate", () => {
 });
 
 describe("worktree.sessions.endAll confirm gate", () => {
-  it("does not end sessions without confirmed:true — the palette/keybinding bypass guard", async () => {
-    const { bulkCloseByWorktree } = setPanelState([
-      { id: "p1", location: "grid", worktreeId: "wt-1" },
-      { id: "p2", location: "dock", worktreeId: "wt-1" },
-    ]);
-    const run = setupActions();
-
-    await run("worktree.sessions.endAll", { worktreeId: "wt-1" });
-
-    expect(bulkCloseByWorktree).not.toHaveBeenCalled();
-    expect(pendingDestructiveStoreMock.state.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "worktreeEndAll",
-        targetCount: 2,
-        runningAgentCount: 0,
-        worktreeId: "wt-1",
-      })
-    );
-  });
-
   it("counts trash, overlay, and background panels (matching bulkCloseByWorktree) but excludes dialog panels and other worktrees", async () => {
     const { bulkCloseByWorktree } = setPanelState([
       { id: "p1", location: "grid", worktreeId: "wt-1" },

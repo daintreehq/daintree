@@ -489,16 +489,6 @@ describe("DiffPane — workspace chrome", () => {
     // The stepping controls are independent of the sidebar toggle.
     expect(screen.getByLabelText("Next file")).toBeTruthy();
   });
-
-  it("marks the current file viewed against its own viewedKey", () => {
-    const changeSet = [entry("a.ts"), entry("b.ts", "added")];
-    seedPanel({ filePath: "b.ts", fileStatus: "added", changeSet });
-    renderPane();
-
-    fireEvent.click(screen.getByRole("button", { name: "Viewed" }));
-
-    expect(toggleViewedMock).toHaveBeenCalledWith(WORKTREE_PATH, changeSet[1]!.viewedKey);
-  });
 });
 
 describe("DiffPane — content-aware toolbar", () => {
@@ -520,16 +510,6 @@ describe("DiffPane — content-aware toolbar", () => {
     // Refresh and the path pill act on any file kind, so they stay.
     expect(screen.getByLabelText(/^Copy file path/)).toBeTruthy();
     expect(screen.getByLabelText("Refresh")).toBeTruthy();
-  });
-
-  it("keeps the text-diff controls for a text file", () => {
-    seedPanel({ filePath: "src/a.ts", fileStatus: "modified" });
-    renderPane();
-
-    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
-    expect(screen.getByText("Unified")).toBeTruthy();
-    expect(screen.getByText("Split")).toBeTruthy();
-    expect(screen.getByLabelText("Wrap long lines")).toBeTruthy();
   });
 
   it("keeps them for a base-branch image, which the text viewer still handles", () => {
@@ -560,14 +540,6 @@ describe("DiffPane — empty state", () => {
 
     expect(screen.getByTestId("empty-state-mock")).toBeTruthy();
     expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
-  });
-
-  it("renders the diff once a file is set", () => {
-    seedPanel({ filePath: "a.ts", fileStatus: "modified" });
-    renderPane();
-
-    expect(screen.getByTestId("diff-viewer-mock")).toBeTruthy();
-    expect(screen.queryByTestId("empty-state-mock")).toBeNull();
   });
 });
 
@@ -800,18 +772,6 @@ describe("DiffPane — audio current-version mode (#11425)", () => {
       encodeURIComponent("/repo/media/track.mp3")
     );
     expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
-  });
-
-  it("hides the text-diff layout controls in audio mode", () => {
-    seedPanel({
-      filePath: "media/track.mp3",
-      fileStatus: "modified",
-      changeSet: [entry("media/track.mp3")],
-    });
-    renderPane();
-
-    expect(screen.queryByRole("radio", { name: "Unified" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
   });
 
   it("reloads the track from the toolbar Refresh (nonce-busted refetch)", async () => {

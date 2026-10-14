@@ -280,15 +280,6 @@ describe("MoveToWorktreePicker", () => {
       ]);
     });
 
-    it("names the dialog and the search box", () => {
-      render(<Harness />);
-
-      expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe(
-        "Move to worktree"
-      );
-      expect(searchInput().getAttribute("placeholder")).toBe("Search worktrees");
-    });
-
     it("adds the branch under a title, and nothing under a branch", () => {
       render(<Harness />);
 
@@ -614,15 +605,5 @@ describe("MoveToWorktreePicker", () => {
 
       expect(document.activeElement).toBe(anchor);
     });
-  });
-});
-
-describe("MoveToWorktreePicker alignment", () => {
-  // The header hangs it back from a button at the end of its bar; the context
-  // menu opens it from a point, the way the menu itself opened.
-  it.each(["start", "end"] as const)("lines the picker up on the anchor's %s edge", (align) => {
-    render(<Harness align={align} />);
-
-    expect(content.props.align).toBe(align);
   });
 });

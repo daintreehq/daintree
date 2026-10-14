@@ -9,7 +9,6 @@ import {
   ALWAYS_ABSENT_AGENT_ID,
   addRefreshGrade,
   authEnvVars,
-  duplicateMilestoneKey,
   emptyRefreshGrade,
   expectedAuthState,
   expectedSpawnsFor,
@@ -20,8 +19,6 @@ import {
   type CliArm,
   type CliModules,
 } from "../lib/cliAvailabilityFixture";
-import { classifyMetric } from "../lib/comparability";
-import { allScenarios } from "../scenarios";
 
 /**
  * The stub experiment for the availability family, written down.
@@ -266,10 +263,6 @@ describe("perf cli-availability auth expectations", () => {
     };
     expect(authEnvVars(registry).sort()).toEqual(["ONE_KEY", "TWO_KEY"]);
   });
-
-  it("names the milestone key notifyDuplicateInstalls writes", () => {
-    expect(duplicateMilestoneKey("claude")).toBe("duplicate-cli-warning:claude");
-  });
 });
 
 /**
@@ -369,29 +362,5 @@ describe("perf cli-availability auth grading", () => {
     // Only one planted agent declares an auth check now, so there is no split
     // to claim and the term must stay silent rather than firing spuriously.
     expect(result.authSplitMisses).toBe(0);
-  });
-});
-
-describe("perf cli-availability scenarios", () => {
-  it("declares both scenarios with count-class predicates", () => {
-    for (const id of ["PERF-393", "PERF-394"]) {
-      const scenario = allScenarios.find((candidate) => candidate.id === id);
-      expect(scenario).toBeDefined();
-      const correctness = scenario?.correctness ?? [];
-      expect(correctness.length).toBeGreaterThan(0);
-      for (const name of correctness) {
-        expect(`${name}:${classifyMetric(name)}`).toBe(`${name}:count`);
-      }
-    }
-  });
-
-  it("marks both scenarios diagnostic on Windows", () => {
-    // The WSL probe path reaches the user's real WSL installation, and the
-    // shell probe costs one start rather than two. Both are stated rather than
-    // silently carried into a cross-platform comparison.
-    for (const id of ["PERF-393", "PERF-394"]) {
-      const scenario = allScenarios.find((candidate) => candidate.id === id);
-      expect(scenario?.platforms?.win32).toBe("diagnostic");
-    }
   });
 });

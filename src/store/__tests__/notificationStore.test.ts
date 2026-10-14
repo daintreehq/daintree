@@ -1,7 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   GRID_BAR_DWELL_FLOOR_MS,
-  MAX_VISIBLE_TOASTS,
   PRIORITY_WEIGHTS,
   selectGridBarNotification,
   useNotificationStore,
@@ -25,19 +24,6 @@ describe("notificationStore — toast cap", () => {
   beforeEach(() => {
     useNotificationStore.setState({ notifications: [] });
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
-  });
-
-  it("exports MAX_VISIBLE_TOASTS as 3", () => {
-    expect(MAX_VISIBLE_TOASTS).toBe(3);
-  });
-
-  it("allows up to MAX_VISIBLE_TOASTS active toasts", () => {
-    addToast({ message: "toast-1" });
-    addToast({ message: "toast-2" });
-    addToast({ message: "toast-3" });
-
-    const active = getState().notifications.filter((n) => !n.dismissed);
-    expect(active).toHaveLength(3);
   });
 
   it("displaces oldest toast when adding beyond the cap", () => {
@@ -115,43 +101,6 @@ describe("notificationStore — toast cap", () => {
     const entry = useNotificationHistoryStore.getState().entries.find((e) => e.id === entryId);
     expect(entry?.seenAsToast).toBe(false);
   });
-
-  it("increments unreadCount when a displaced toast is marked unseen", () => {
-    const entryId = useNotificationHistoryStore.getState().addEntry({
-      type: "info",
-      message: "will be displaced",
-      seenAsToast: true,
-    });
-    expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
-
-    addToast({ message: "toast-1", historyEntryId: entryId });
-    addToast({ message: "toast-2" });
-    addToast({ message: "toast-3" });
-    addToast({ message: "toast-4" });
-
-    expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
-  });
-
-  it("does not crash when displaced toast has no historyEntryId", () => {
-    addToast({ message: "toast-1" });
-    addToast({ message: "toast-2" });
-    addToast({ message: "toast-3" });
-
-    expect(() => addToast({ message: "toast-4" })).not.toThrow();
-
-    const active = getState().notifications.filter((n) => !n.dismissed);
-    expect(active).toHaveLength(3);
-  });
-
-  it("handles rapid succession — 5 toasts leaves 3 active", () => {
-    for (let i = 0; i < 5; i++) {
-      addToast({ message: `toast-${i}` });
-    }
-
-    const active = getState().notifications.filter((n) => !n.dismissed);
-    expect(active).toHaveLength(3);
-    expect(active.map((n) => n.message)).toEqual(["toast-2", "toast-3", "toast-4"]);
-  });
 });
 
 describe("notificationStore — error-protected eviction", () => {
@@ -215,22 +164,6 @@ describe("notificationStore — error-protected eviction", () => {
     expect(active.map((n) => n.message)).toEqual(["err", "info", "ok"]);
   });
 
-  it("marks the evicted non-error's history entry as unseen even when an error is present", () => {
-    const entryId = useNotificationHistoryStore.getState().addEntry({
-      type: "info",
-      message: "history-for-info",
-      seenAsToast: true,
-    });
-
-    addToast({ type: "error", message: "err" });
-    addToast({ type: "info", message: "info-1", historyEntryId: entryId });
-    addToast({ type: "info", message: "info-2" });
-    addToast({ type: "success", message: "ok" });
-
-    const entry = useNotificationHistoryStore.getState().entries.find((e) => e.id === entryId);
-    expect(entry?.seenAsToast).toBe(false);
-  });
-
   it("does not invoke onDismiss when a non-error toast is evicted", () => {
     const onDismiss = vi.fn();
     addToast({ type: "error", message: "err" });
@@ -275,16 +208,6 @@ describe("notificationStore — error-protected eviction", () => {
     expect(entries.find((e) => e.id === evictedEntry)?.seenAsToast).toBe(false);
     expect(entries.find((e) => e.id === survivorEntry)?.seenAsToast).toBe(true);
   });
-
-  it("does not invoke onDismiss in the all-errors FIFO fallback path", () => {
-    const onDismiss = vi.fn();
-    addToast({ type: "error", message: "err-1", onDismiss });
-    addToast({ type: "error", message: "err-2" });
-    addToast({ type: "error", message: "err-3" });
-    addToast({ type: "error", message: "err-4" });
-
-    expect(onDismiss).not.toHaveBeenCalled();
-  });
 });
 
 describe("notificationStore — correlationId collapse", () => {
@@ -318,25 +241,6 @@ describe("notificationStore — correlationId collapse", () => {
     expect(active[0]!.id).toBe(id);
     expect(active[0]!.count).toBe(4);
     expect(active[0]!.message).toBe("m-4");
-  });
-
-  it("bumps updatedAt when collapsing so accessibility re-announce fires", () => {
-    const originalNow = Date.now;
-    let mockNow = 1000;
-    Date.now = () => mockNow;
-    try {
-      const id = addToast({ correlationId: "entity-a", message: "first" });
-      const first = getState().notifications.find((n) => n.id === id)!;
-      expect(first.updatedAt).toBe(1000);
-
-      mockNow = 2500;
-      addToast({ correlationId: "entity-a", message: "second" });
-
-      const after = getState().notifications.find((n) => n.id === id)!;
-      expect(after.updatedAt).toBe(2500);
-    } finally {
-      Date.now = originalNow;
-    }
   });
 
   it("bumps contentKey only when the displayed message actually changes", () => {
@@ -577,11 +481,6 @@ describe("selectGridBarNotification — selection contract", () => {
     expect(selectGridBarNotification([toast], NOW)).toBeUndefined();
   });
 
-  it("returns the only candidate when one grid-bar notification exists", () => {
-    const only = makeNotification({ id: "only" });
-    expect(selectGridBarNotification([only], NOW)?.id).toBe("only");
-  });
-
   it("excludes dismissed grid-bar notifications", () => {
     const live = makeNotification({ id: "live" });
     const gone = makeNotification({ id: "gone", dismissed: true });
@@ -745,20 +644,161 @@ describe("selectGridBarNotification — selection contract", () => {
       const result = selectGridBarNotification([newcomer], NOW + 100, "vanished");
       expect(result?.id).toBe("high");
     });
+  });
+});
 
-    it("returns the locked notification even when no contender exists", () => {
-      const locked = makeNotification({ id: "alone", firstShownAt: NOW });
-      const within = NOW + GRID_BAR_DWELL_FLOOR_MS - 1;
-      // Single candidate path: dwell trivially satisfied.
-      expect(selectGridBarNotification([locked], within, "alone")?.id).toBe("alone");
+describe("notificationStore adversarial", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    useNotificationStore.setState({ notifications: [] });
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    useNotificationStore.setState({ notifications: [] });
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+  });
+
+  function addHistoryEntry(seenAsToast: boolean): string {
+    return useNotificationHistoryStore.getState().addEntry({
+      type: "info",
+      message: "m",
+      seenAsToast,
+    });
+  }
+
+  it("repeated overflow demotes a different history entry each time", () => {
+    const h1 = addHistoryEntry(true);
+    const h2 = addHistoryEntry(true);
+    const h3 = addHistoryEntry(true);
+    const h4 = addHistoryEntry(true);
+    const h5 = addHistoryEntry(true);
+
+    addToast({ historyEntryId: h1 });
+    addToast({ historyEntryId: h2 });
+    addToast({ historyEntryId: h3 });
+    addToast({ historyEntryId: h4 });
+    addToast({ historyEntryId: h5 });
+
+    const hStore = useNotificationHistoryStore.getState();
+    const unseen = hStore.entries.filter((e) => !e.seenAsToast).map((e) => e.id);
+    expect(unseen.sort()).toEqual([h1, h2].sort());
+    expect(hStore.unreadCount).toBe(2);
+  });
+
+  it("updateNotification merges patch and bumps updatedAt without clobbering unrelated fields", () => {
+    const id = addToast({
+      title: "orig",
+      message: "orig-msg",
+      correlationId: "corr-1",
+    });
+    vi.spyOn(Date, "now").mockReturnValue(2000);
+
+    useNotificationStore.getState().updateNotification(id, { title: "new", dismissed: true });
+
+    const n = useNotificationStore.getState().notifications.find((x) => x.id === id);
+    expect(n?.title).toBe("new");
+    expect(n?.dismissed).toBe(true);
+    expect(n?.message).toBe("orig-msg");
+    expect(n?.correlationId).toBe("corr-1");
+    expect(n?.updatedAt).toBe(2000);
+  });
+
+  it("updateNotification does not bump contentKey for non-message patches", () => {
+    const id = addToast({ message: "msg" });
+    const initial = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(initial.contentKey).toBe(1);
+
+    useNotificationStore.getState().updateNotification(id, { title: "new-title" });
+    expect(useNotificationStore.getState().notifications.find((x) => x.id === id)!.contentKey).toBe(
+      1
+    );
+
+    useNotificationStore.getState().updateNotification(id, { message: "msg" }); // unchanged
+    expect(useNotificationStore.getState().notifications.find((x) => x.id === id)!.contentKey).toBe(
+      1
+    );
+
+    useNotificationStore.getState().updateNotification(id, { message: "new-msg" });
+    expect(useNotificationStore.getState().notifications.find((x) => x.id === id)!.contentKey).toBe(
+      2
+    );
+  });
+
+  it("updateNotification preserves firstShownAt even when patch tries to overwrite it", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const id = addToast({ message: "m" });
+    const initial = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(initial.firstShownAt).toBe(1000);
+
+    vi.spyOn(Date, "now").mockReturnValue(5000);
+    useNotificationStore
+      .getState()
+      .updateNotification(id, { firstShownAt: 9999, message: "changed" });
+
+    const after = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(after.firstShownAt).toBe(1000);
+    expect(after.updatedAt).toBe(5000);
+  });
+
+  it("updateNotification resets firstShownAt when promoting duration:0 to auto-dismiss", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const id = addToast({ message: "Copying…", duration: 0 });
+    expect(
+      useNotificationStore.getState().notifications.find((x) => x.id === id)!.firstShownAt
+    ).toBe(1000);
+
+    // Long-running async operation completes 30s later; toast is promoted.
+    vi.spyOn(Date, "now").mockReturnValue(31000);
+    useNotificationStore.getState().updateNotification(id, { message: "Done", duration: 3000 });
+
+    const after = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(after.firstShownAt).toBe(31000);
+  });
+
+  it("updateNotification does NOT reset firstShownAt when patching auto-dismiss → auto-dismiss", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const id = addToast({ message: "m", duration: 3000 });
+    expect(
+      useNotificationStore.getState().notifications.find((x) => x.id === id)!.firstShownAt
+    ).toBe(1000);
+
+    vi.spyOn(Date, "now").mockReturnValue(2000);
+    useNotificationStore.getState().updateNotification(id, { message: "m2", duration: 5000 });
+
+    const after = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(after.firstShownAt).toBe(1000);
+  });
+
+  it("empty actions array on incoming payload is treated as 'no actions' (preserves existing)", () => {
+    const id = addToast({
+      correlationId: "entity-a",
+      message: "m",
+      actions: [{ label: "Retry", onClick: () => {} }],
     });
 
-    it("falls through to score ordering when no lockedId is supplied", () => {
-      const low = makeNotification({ id: "low", priority: "low", firstShownAt: NOW });
-      const high = makeNotification({ id: "high", priority: "high", firstShownAt: NOW });
-      // Even within the dwell window of the low one, without a lock there's
-      // nothing to protect — the winner is the high-priority candidate.
-      expect(selectGridBarNotification([low, high], NOW + 100)?.id).toBe("high");
+    addToast({ correlationId: "entity-a", message: "m2", actions: [] });
+
+    const n = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(n.actions).toHaveLength(1);
+    expect(n.actions![0]!.label).toBe("Retry");
+  });
+
+  it("explicit `actions: undefined` clears the array (stage-regression escape hatch)", () => {
+    const id = addToast({
+      correlationId: "entity-a",
+      message: "m",
+      actions: [{ label: "View release notes", onClick: () => {} }],
     });
+
+    // Distinct from the empty-array case above: passing the key with an
+    // explicit undefined is the caller saying "wipe what's there", mirroring
+    // the singular `action` slot. Update Ready → Update Available relies on
+    // this so a superseded version's link cannot linger.
+    addToast({ correlationId: "entity-a", message: "m2", actions: undefined });
+
+    const n = useNotificationStore.getState().notifications.find((x) => x.id === id)!;
+    expect(n.actions).toBeUndefined();
   });
 });

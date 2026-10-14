@@ -12,11 +12,6 @@ describe("BrowserPaneSkeleton", () => {
     expect(el.getAttribute("aria-label")).toBe("Loading browser panel");
   });
 
-  it("has sr-only loading text", () => {
-    render(<BrowserPaneSkeleton />);
-    expect(screen.getByText("Loading browser panel")).toBeTruthy();
-  });
-
   it("accepts a custom label", () => {
     render(<BrowserPaneSkeleton label="Loading dev preview panel" />);
     const el = screen.getByRole("status");
@@ -30,13 +25,6 @@ describe("BrowserPaneSkeleton", () => {
     // header: icon + title + menu + close = 4, toolbar: 3 nav + url bar + 2 action = 6, total = 10
     expect(pulsing.length).toBe(10);
     expect(container.querySelectorAll(".animate-pulse-delayed").length).toBe(0);
-  });
-
-  it("does not animate the content area", () => {
-    const { container } = render(<BrowserPaneSkeleton />);
-    const contentArea = container.querySelector(".bg-surface-canvas");
-    expect(contentArea).toBeTruthy();
-    expect(contentArea!.className).not.toContain("animate-pulse");
   });
 
   it("hides every bone from assistive tech", () => {

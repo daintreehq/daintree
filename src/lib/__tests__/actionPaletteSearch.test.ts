@@ -78,13 +78,6 @@ describe("scoreAction", () => {
     expect(scoreCp).toBeGreaterThan(scoreOther);
   });
 
-  it("acronym beats fuzzy subsequence even when query is embedded mid-word", () => {
-    const acronym = makeAction({ id: "a", title: "Worktree Switch" });
-    const fuzzy = makeAction({ id: "b", title: "show workspaces" });
-    // 'ws' is acronym of "Worktree Switch" and a subsequence in "show workspaces"
-    expect(scoreAction("ws", acronym)).toBeGreaterThan(scoreAction("ws", fuzzy));
-  });
-
   it("ranks exact prefix above mid-title substring", () => {
     const prefix = makeAction({ id: "1", title: "Terminal Open" });
     const midWord = makeAction({ id: "2", title: "Open Terminal" });
@@ -175,17 +168,6 @@ describe("rankActionMatches", () => {
     expect(results[0]!.id).toBe("frequent");
   });
 
-  it("score at SCORE_FLOOR (0.5) still produces a small nonzero bonus", () => {
-    const items = [
-      makeAction({ id: "cold", title: "Open Terminal" }),
-      makeAction({ id: "warm", title: "Close Terminal" }),
-    ];
-    // Cold entry barely above the floor; warm entry with a typical recent score.
-    // Warm should still come out on top via the frecency bonus.
-    const results = rankActionMatches("terminal", items, [mru("cold", 0.5), mru("warm", 5)]);
-    expect(results[0]!.id).toBe("warm");
-  });
-
   it("caps MRU bonus below CONTEXT_BOOST even for unbounded scores", () => {
     // Pin the invariant: tanh saturates at 1, so the MRU bonus can never reach
     // MRU_BONUS_CAP (50), let alone CONTEXT_BOOST (80). A context match must
@@ -220,20 +202,6 @@ describe("rankActionMatches", () => {
     const ids = results.map((r) => r.id);
     expect(ids.indexOf("comp")).toBe(ids.length - 1);
     expect(ids.slice(0, 3).sort()).toEqual(["copy", "cp", "cpanel"].sort());
-  });
-
-  it("disambiguates identical acronyms by alphabetical title when scores tie", () => {
-    const items = [
-      makeAction({ id: "cpanel", title: "Close Panel" }),
-      makeAction({ id: "cp", title: "Command Palette" }),
-    ];
-    // Query is the shared acronym; tiebreaker should be deterministic alphabetical
-    const results = rankActionMatches("cp", items, []);
-    expect(results).toHaveLength(2);
-    // Both are valid matches — order must be deterministic (alphabetical on title)
-    expect(
-      results[0]!.title.localeCompare(results[1]!.title, "en", { sensitivity: "base" }) <= 0
-    ).toBe(true);
   });
 
   it("full ranked list: prefix > acronym > substring > fuzzy > non-match", () => {

@@ -111,54 +111,18 @@ describe("GettingStartedChecklist", () => {
     expect(completedButton).toBeNull();
   });
 
-  it("dispatches project.add when 'Open your project' is clicked", () => {
+  it.each([
+    ["Open your project", "project.add"],
+    ["Launch your first agent", "panel.palette"],
+    ["Start a parallel task", "worktree.createDialog.open"],
+    ["Run two agents in parallel", "panel.palette"],
+  ])("routes '%s' to its next action without marking it complete", (label, actionId) => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(label, "i") }));
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith("project.add", undefined, { source: "user" });
-  });
-
-  it("dispatches panel.palette when 'Launch your first agent' is clicked", () => {
-    render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /launch your first agent/i }));
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
-  });
-
-  it("dispatches worktree.createDialog.open when 'Start a parallel task' is clicked", () => {
-    render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /start a parallel task/i }));
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith("worktree.createDialog.open", undefined, {
-      source: "user",
-    });
-  });
-
-  it("dispatches panel.palette when 'Run two agents in parallel' is clicked and does NOT mark the item (auto-marked by useGettingStartedChecklist when 2+ agents run concurrently)", () => {
-    render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /run two agents in parallel/i }));
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, {
-      source: "user",
-    });
+    expect(dispatchMock).toHaveBeenCalledWith(actionId, undefined, { source: "user" });
     expect(defaultProps.onMarkItem).not.toHaveBeenCalled();
-  });
-
-  it("does not call onMarkItem for non-markOnClick items", () => {
-    render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
-    expect(defaultProps.onMarkItem).not.toHaveBeenCalled();
-  });
-
-  it("does not call onDismiss or onToggleCollapse when a step is clicked", () => {
-    render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /open your project/i }));
     expect(defaultProps.onDismiss).not.toHaveBeenCalled();
     expect(defaultProps.onToggleCollapse).not.toHaveBeenCalled();
   });
@@ -183,12 +147,6 @@ describe("GettingStartedChecklist", () => {
   });
 
   describe("accessibility", () => {
-    it("renders the card as a region landmark with accessible name", () => {
-      render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-      const region = screen.getByRole("region", { name: "Getting started checklist" });
-      expect(region).toBeTruthy();
-    });
-
     it("collapse button announces expanded state and controls the body", () => {
       const { rerender } = render(
         <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} collapsed={false} />
@@ -276,32 +234,9 @@ describe("GettingStartedChecklist", () => {
       fireEvent.click(dismissBtn);
       expect(defaultProps.onDismiss).toHaveBeenCalledTimes(1);
     });
-
-    it("does not call onToggleCollapse when dismiss button is clicked", () => {
-      render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-      const dismissBtn = screen.getByRole("button", { name: "Dismiss checklist" });
-      fireEvent.click(dismissBtn);
-      expect(defaultProps.onToggleCollapse).not.toHaveBeenCalled();
-    });
   });
 
   describe("Escape key", () => {
-    it("calls onToggleCollapse when Escape is pressed while focus is inside the panel", () => {
-      render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-      const region = screen.getByRole("region", { name: "Getting started checklist" });
-
-      act(() => {
-        region.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-      });
-
-      act(() => {
-        dispatchEscape();
-      });
-
-      expect(defaultProps.onToggleCollapse).toHaveBeenCalledTimes(1);
-      expect(defaultProps.onDismiss).not.toHaveBeenCalled();
-    });
-
     it("collapses without re-expanding, handing focus to the header first", () => {
       const { rerender } = render(
         <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />
@@ -375,24 +310,6 @@ describe("GettingStartedChecklist", () => {
       });
 
       expect(defaultProps.onToggleCollapse).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("tooltip structure", () => {
-    it("preserves aria-expanded and aria-controls on the toggle button after tooltip wrapping", () => {
-      render(
-        <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} collapsed={false} />
-      );
-      const toggle = screen.getByRole("button", { name: /getting started/i });
-      expect(toggle.getAttribute("aria-expanded")).toBe("true");
-      expect(toggle.getAttribute("aria-controls")).toBe("getting-started-checklist-body");
-    });
-
-    it("preserves aria-label on the dismiss button after tooltip wrapping", () => {
-      render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
-      const dismissBtn = screen.getByRole("button", { name: "Dismiss checklist" });
-      expect(dismissBtn).toBeTruthy();
-      expect(dismissBtn.getAttribute("aria-label")).toBe("Dismiss checklist");
     });
   });
 

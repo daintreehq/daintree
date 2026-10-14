@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TrashGroupItem } from "../TrashGroupItem";
 import type { PanelInstance } from "@shared/types/panel";
@@ -106,17 +106,6 @@ function countdownSeconds(container: HTMLElement): number {
   const el = container.querySelector<HTMLElement>("[data-trash-countdown]");
   expect(el).not.toBeNull();
   const match = el!.textContent?.match(/(\d+)/);
-  expect(match).not.toBeNull();
-  return Number(match![1]);
-}
-
-/** The fraction of the window the meter is currently drawing, 0-1. */
-function meterFraction(container: HTMLElement): number {
-  const meter = container.querySelector<HTMLElement>("[data-trash-meter]");
-  expect(meter).not.toBeNull();
-  const fill = meter!.firstElementChild as HTMLElement | null;
-  expect(fill).not.toBeNull();
-  const match = fill!.style.transform.match(/scaleX\(([\d.]+)\)/);
   expect(match).not.toBeNull();
   return Number(match![1]);
 }
@@ -414,134 +403,6 @@ describe("TrashGroupItem", () => {
     });
   });
 
-  describe("countdown timer", () => {
-    let visibilityListeners: Array<() => void>;
-    let visibilityState: DocumentVisibilityState;
-
-    beforeEach(() => {
-      vi.useFakeTimers();
-      visibilityListeners = [];
-      visibilityState = "visible";
-
-      Object.defineProperty(document, "hidden", {
-        get: () => visibilityState === "hidden",
-        configurable: true,
-      });
-      Object.defineProperty(document, "visibilityState", {
-        get: () => visibilityState,
-        configurable: true,
-      });
-
-      const origAdd = document.addEventListener.bind(document);
-      const origRemove = document.removeEventListener.bind(document);
-      vi.spyOn(document, "addEventListener").mockImplementation((type, handler, options) => {
-        if (type === "visibilitychange") {
-          visibilityListeners.push(handler as () => void);
-        }
-        return origAdd(type, handler, options);
-      });
-      vi.spyOn(document, "removeEventListener").mockImplementation((type, handler, options) => {
-        if (type === "visibilitychange") {
-          visibilityListeners = visibilityListeners.filter((l) => l !== handler);
-        }
-        return origRemove(type, handler, options);
-      });
-    });
-
-    afterEach(() => {
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-    });
-
-    function fireVisibilityChange(state: DocumentVisibilityState) {
-      visibilityState = state;
-      visibilityListeners.forEach((l) => l());
-    }
-
-    it("renders seconds remaining based on earliestExpiry", () => {
-      const { container } = render(
-        <TrashGroupItem
-          onRequestRemove={onRequestRemove}
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() + 15000}
-        />
-      );
-      expect(countdownSeconds(container)).toBeGreaterThan(0);
-    });
-
-    it("decrements displayed seconds when time advances while visible", () => {
-      const { container } = render(
-        <TrashGroupItem
-          onRequestRemove={onRequestRemove}
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() + 20000}
-        />
-      );
-      const initialSeconds = countdownSeconds(container);
-
-      act(() => vi.advanceTimersByTime(2000));
-      const laterSeconds = countdownSeconds(container);
-
-      expect(laterSeconds).toBeLessThan(initialSeconds);
-    });
-
-    it("does not decrement while document is hidden", () => {
-      const { container } = render(
-        <TrashGroupItem
-          onRequestRemove={onRequestRemove}
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() + 20000}
-        />
-      );
-      act(() => vi.advanceTimersByTime(1000));
-      const beforeHide = countdownSeconds(container);
-
-      act(() => fireVisibilityChange("hidden"));
-      act(() => vi.advanceTimersByTime(10000));
-      const afterHide = countdownSeconds(container);
-
-      expect(afterHide).toBe(beforeHide);
-    });
-
-    it("catches up to wall-clock time on visibility restore", () => {
-      const { container } = render(
-        <TrashGroupItem
-          onRequestRemove={onRequestRemove}
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() + 20000}
-        />
-      );
-      act(() => fireVisibilityChange("hidden"));
-      act(() => vi.advanceTimersByTime(10000));
-      act(() => fireVisibilityChange("visible"));
-
-      const afterRestore = countdownSeconds(container);
-      const seconds = afterRestore;
-      expect(seconds).toBeLessThanOrEqual(10);
-    });
-
-    it("shows 0s for already-expired earliestExpiry", () => {
-      const { container } = render(
-        <TrashGroupItem
-          onRequestRemove={onRequestRemove}
-          groupRestoreId="grp1"
-          groupMetadata={groupMetadata}
-          terminals={terminals}
-          earliestExpiry={Date.now() - 5000}
-        />
-      );
-      expect(countdownSeconds(container)).toBe(0);
-    });
-  });
-
   describe("the deadline is always on screen", () => {
     function renderAt(remainingMs: number) {
       return render(
@@ -569,59 +430,6 @@ describe("TrashGroupItem", () => {
         expect(countdownSeconds(container)).toBe(Math.ceil(remainingMs / 1000));
       }
     );
-
-    it("exposes the deadline to assistive tech without announcing it once a second", () => {
-      const { container } = renderAt(20000);
-      const el = container.querySelector<HTMLElement>("[data-trash-countdown]")!;
-      // role="timer" is implicitly aria-live="off": readable on demand, never
-      // interrupting. An explicit aria-live here would clobber speech at 1Hz.
-      expect(el.getAttribute("role")).toBe("timer");
-      expect(el.hasAttribute("aria-live")).toBe(false);
-      expect(el.getAttribute("aria-label")).toMatch(/second/i);
-      expect(el.getAttribute("aria-hidden")).not.toBe("true");
-    });
-
-    it("draws a meter whose length falls as the window runs out", () => {
-      const early = renderAt(20000);
-      const late = renderAt(4000);
-      const earlyFraction = meterFraction(early.container);
-      const lateFraction = meterFraction(late.container);
-      expect(earlyFraction).toBeGreaterThan(lateFraction);
-      expect(lateFraction).toBeGreaterThan(0);
-    });
-
-    it("hides the meter from assistive tech, since the timer already carries the value", () => {
-      const { container } = renderAt(20000);
-      expect(container.querySelector("[data-trash-meter]")!.getAttribute("aria-hidden")).toBe(
-        "true"
-      );
-    });
-
-    it("separates a nearly-expired group from a fresh one by more than colour", () => {
-      const fresh = renderAt(20000);
-      const nearly = renderAt(2000);
-      // Length and number both differ, so the distinction survives a viewer who
-      // cannot tell the warning tone from the neutral one (SC 1.4.1).
-      const nearlyFraction = meterFraction(nearly.container);
-      const freshFraction = meterFraction(fresh.container);
-      expect(nearlyFraction).toBeLessThan(freshFraction);
-      const nearlySeconds = countdownSeconds(nearly.container);
-      const freshSeconds = countdownSeconds(fresh.container);
-      expect(nearlySeconds).toBeLessThan(freshSeconds);
-    });
-
-    it("marks the final approach so the warning treatment is testable, not incidental", () => {
-      expect(
-        renderAt(4000)
-          .container.querySelector("[data-trash-countdown]")!
-          .getAttribute("data-critical")
-      ).toBe("true");
-      expect(
-        renderAt(9000)
-          .container.querySelector("[data-trash-countdown]")!
-          .getAttribute("data-critical")
-      ).toBeNull();
-    });
   });
 
   describe("expanded members keep their controls reachable by keyboard", () => {

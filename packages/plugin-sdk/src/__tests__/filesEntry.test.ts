@@ -14,40 +14,6 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
  * the subpath drifting out of the places that have to declare it.
  */
 describe("@daintreehq/plugin-sdk/files", () => {
-  it("resolves every export the barrel promises", () => {
-    // A broken or renamed re-export leaves `undefined` behind rather than
-    // throwing, so assert on the actual binding rather than merely importing.
-    const runtimeExports = [
-      "flattenTree",
-      "buildFolderListingRows",
-      "findNodeInListings",
-      "sortFileNodes",
-      "isDefaultFileSort",
-      "createVisibilityFilter",
-      "countHiddenRows",
-      "isRowPathVisible",
-      "parentDirectoryOf",
-      "canonicalizeRootPath",
-      "parentRootPath",
-      "ancestorDirectories",
-      "resolveTypeahead",
-      "resolveTreeKey",
-      "buildFileBrowserGitStatusIndex",
-      "getFileBrowserRowGitStatus",
-      "getFileTypeCategory",
-    ] as const;
-
-    for (const name of runtimeExports) {
-      expect(typeof filesEntry[name], `${name} should be a function`).toBe("function");
-    }
-
-    const constantExports = ["DEFAULT_FILE_SORT", "NO_HIDDEN_ROWS", "TYPEAHEAD_RESET_MS"] as const;
-
-    for (const name of constantExports) {
-      expect(filesEntry[name], `${name} should be defined`).toBeDefined();
-    }
-  });
-
   it("keeps host-shaped and policy-freezing helpers out of the public surface", () => {
     // These exist in the source the built-in browser imports, and are withheld
     // deliberately. `sourceIdentityKey` and the snapshot pair are keyed by

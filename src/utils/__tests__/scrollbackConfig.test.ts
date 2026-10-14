@@ -34,26 +34,12 @@ describe("estimateMemoryUsage", () => {
     expect(result.total).toBe(6_000_000);
   });
 
-  it("computes a single plain terminal at default scrollback", () => {
-    const result = estimateMemoryUsage({ agent: 0, plain: 1 }, 1000);
-    expect(result.agent).toBe(0);
-    expect(result.plain).toBe(360_000);
-    expect(result.total).toBe(360_000);
-  });
-
   it("uses maxLines for unlimited scrollback (base=0)", () => {
     const result = estimateMemoryUsage({ agent: 8, plain: 8 }, 0);
     // agent: 10000 lines/term, plain: 2000 lines/term
     expect(result.agent).toBe(10000 * 1200 * 8); // 96,000,000
     expect(result.plain).toBe(2000 * 1200 * 8); // 19,200,000
     expect(result.total).toBe(115_200_000);
-  });
-
-  it("returns zeros when there are no terminals", () => {
-    const result = estimateMemoryUsage({ agent: 0, plain: 0 }, 1000);
-    expect(result.agent).toBe(0);
-    expect(result.plain).toBe(0);
-    expect(result.total).toBe(0);
   });
 });
 

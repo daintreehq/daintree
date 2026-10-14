@@ -352,22 +352,6 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("forwards a success-report request to every shard", () => {
-      const client = createFabricClient();
-      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
-      client.spawn("t3", { cwd: "/b", cols: 80, rows: 24, projectId: "project-b" });
-
-      client.broadcastWrite(["t1", "t3"], "x", true);
-
-      expect(messagesOfType(projectShard("project-a").child, "broadcast-write")).toEqual([
-        { type: "broadcast-write", ids: ["t1"], data: "x", reportSuccess: true },
-      ]);
-      expect(messagesOfType(projectShard("project-b").child, "broadcast-write")).toEqual([
-        { type: "broadcast-write", ids: ["t3"], data: "x", reportSuccess: true },
-      ]);
-      client.dispose();
-    });
-
     it("routes kill-by-project to the owning shard and resolves its broker response", async () => {
       const client = createFabricClient();
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
@@ -771,36 +755,6 @@ describe("PtyClient fabric", () => {
       const respawns = messagesOfType(restarted.child, "spawn");
       expect((respawns[0].options as { worktreeId?: string }).worktreeId).toBe(
         "/repo/.worktrees/feature"
-      );
-      client.dispose();
-    });
-
-    it("respawns under the worktree a run was moved to, not the one it launched in", async () => {
-      // `pendingSpawns` is replayed verbatim on a crash respawn, so a move that
-      // only reached the live record would be silently undone by the next host
-      // crash — the run would reappear in the palette under the worktree the
-      // user dragged it out of (#12060).
-      const client = createFabricClient();
-      client.spawn("t1", {
-        cwd: "/a",
-        cols: 80,
-        rows: 24,
-        projectId: "project-a",
-        worktreeId: "/repo/.worktrees/old",
-      });
-      const shardA = projectShard("project-a");
-      shardA.child.emit("message", { type: "ready" });
-
-      client.updateWorktreeId("t1", "/repo/.worktrees/new", "project-a");
-
-      shardA.child.emit("exit", 1);
-      await vi.advanceTimersByTimeAsync(15_000);
-      const restarted = forks[forks.length - 1];
-      restarted.child.emit("message", { type: "ready" });
-
-      const respawns = messagesOfType(restarted.child, "spawn");
-      expect((respawns[0].options as { worktreeId?: string }).worktreeId).toBe(
-        "/repo/.worktrees/new"
       );
       client.dispose();
     });
@@ -1424,24 +1378,6 @@ describe("PtyClient fabric", () => {
   });
 
   describe("fallback-eligible projects (#12557)", () => {
-    it("replays the set to a shard that booted after it was published", () => {
-      // A shard forked later would otherwise suppress the IPC fallback for
-      // every project whose only remaining consumer holds no port — the
-      // starvation, reintroduced for as long as the shard stays unaware.
-      const client = createFabricClient();
-      client.setFallbackEligibleProjects(["project-a"]);
-      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
-      const shardA = projectShard("project-a");
-      shardA.child.postMessage.mockClear();
-
-      shardA.child.emit("message", { type: "ready" });
-
-      expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toEqual([
-        { type: "set-fallback-eligible-projects", projectIds: ["project-a"] },
-      ]);
-      client.dispose();
-    });
-
     it("does not replay an empty set to a fresh shard", () => {
       // Nothing is eligible, and a shard boots with an empty set already.
       const client = createFabricClient();

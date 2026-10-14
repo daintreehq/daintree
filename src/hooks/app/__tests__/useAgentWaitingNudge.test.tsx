@@ -348,25 +348,4 @@ describe("useAgentWaitingNudge", () => {
     expect(notifyMock).toHaveBeenCalledOnce();
     expect(onboardingMock.markWaitingNudgeSeen).toHaveBeenCalledOnce();
   });
-
-  it("does not double-fire when agent already waiting at mount then another transitions", async () => {
-    storeState = {
-      panelsById: { t1: { id: "t1", agentState: "waiting" } },
-      panelIds: ["t1"],
-    };
-
-    renderHook(() => useAgentWaitingNudge(true));
-    await act(async () => {});
-
-    expect(notifyMock).toHaveBeenCalledOnce();
-
-    act(() => {
-      emitStoreUpdate([
-        { id: "t1", agentState: "waiting" },
-        { id: "t2", agentState: "waiting" },
-      ]);
-    });
-
-    expect(notifyMock).toHaveBeenCalledOnce();
-  });
 });

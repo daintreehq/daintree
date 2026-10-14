@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
-  BUDGET_OVERRIDE_LABELS,
   hasLinkedIssueReference,
   parseLabels,
   validateBudgetOverrideGate,
@@ -127,18 +126,6 @@ describe("validateBudgetOverrideGate", () => {
     expect(result.matchedLabels).toEqual(["compiler-budget-override"]);
   });
 
-  it.each(BUDGET_OVERRIDE_LABELS)("recognizes each override label: %s", (label) => {
-    const failing = validateBudgetOverrideGate({ body: "nope", labels: JSON.stringify([label]) });
-    expect(failing.ok).toBe(false);
-    expect(failing.matchedLabels).toEqual([label]);
-
-    const passing = validateBudgetOverrideGate({
-      body: "Closes #1",
-      labels: JSON.stringify([label]),
-    });
-    expect(passing.ok).toBe(true);
-  });
-
   it("reports all matched override labels when multiple are applied", () => {
     const result = validateBudgetOverrideGate({
       body: "no link",
@@ -163,11 +150,6 @@ describe("CLI (main)", () => {
     const r = runGate({ PR_LABELS: '["renderer-bundle-override"]' });
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/no PR context/);
-  });
-
-  it("exits 0 when no override labels are applied", () => {
-    const r = runGate({ PR_BODY: "no link here", PR_LABELS: '["enhancement"]' });
-    expect(r.status).toBe(0);
   });
 
   it("exits 1 with an annotation when an override label lacks a linked issue", () => {

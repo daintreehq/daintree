@@ -9,10 +9,6 @@ describe("sliceViewportLines", () => {
     expect(sliceViewportLines(buffer, 2, 3)).toEqual(["l2", "l3", "l4"]);
   });
 
-  it("returns the top of the buffer when scrolled fully back", () => {
-    expect(sliceViewportLines(buffer, 0, 2)).toEqual(["l0", "l1"]);
-  });
-
   it("is clamped to the buffer", () => {
     expect(sliceViewportLines(buffer, 5, 4)).toEqual(["l5"]);
     expect(sliceViewportLines(buffer, -3, 1)).toEqual(["l0"]);

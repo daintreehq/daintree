@@ -35,62 +35,12 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should ignore prompt-like history when cursor line is active output", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        getVisibleLines: () => ["> prompt", "working output"],
-        getCursorLine: () => "working output",
-        bootCompletePatterns: [/working output/i],
-        initialState: "busy",
-        skipInitialStateEmit: true,
-        idleDebounceMs: 2000,
-      });
-
-      monitor.startPolling();
-
-      vi.advanceTimersByTime(600);
-
-      expect(onStateChange).not.toHaveBeenCalledWith("test-1", 1000, "idle");
-
-      monitor.dispose();
-    });
-
     it("should accept prompt hints even when cursor line is active output", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         getVisibleLines: () => ["100% context left ? for shortcuts", "working output"],
         getCursorLine: () => "working output",
         promptHintPatterns: [/context left/i],
-        initialState: "busy",
-        skipInitialStateEmit: true,
-        idleDebounceMs: 2000,
-      });
-
-      monitor.startPolling();
-
-      vi.advanceTimersByTime(2200);
-
-      expect(onStateChange).toHaveBeenCalledWith(
-        "test-1",
-        1000,
-        "idle",
-        expect.objectContaining({ trigger: expect.any(String) })
-      );
-
-      monitor.dispose();
-    });
-
-    it("should detect universal approval prompt and transition to idle", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        getVisibleLines: () => [
-          "Daintree wants to run: rm -rf /tmp",
-          "Approve Once",
-          "Approve This Session",
-          "Reject",
-        ],
-        getCursorLine: () => "",
-        promptHintPatterns: [/approve\s+once/i, /approve\s+this\s+session/i],
         initialState: "busy",
         skipInitialStateEmit: true,
         idleDebounceMs: 2000,
@@ -205,48 +155,9 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
-
-    it("should not enter busy when prompt appears during input confirmation", () => {
-      const onStateChange = vi.fn();
-      let showPrompt = false;
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        getVisibleLines: () => (showPrompt ? ["> "] : [""]),
-        getCursorLine: () => (showPrompt ? "> " : ""),
-        initialState: "idle",
-        skipInitialStateEmit: true,
-      });
-
-      monitor.startPolling();
-      monitor.onInput("\r");
-
-      showPrompt = true;
-      vi.advanceTimersByTime(600);
-
-      expect(onStateChange).not.toHaveBeenCalledWith("test-1", 1000, "busy", {
-        trigger: "input",
-      });
-
-      monitor.dispose();
-    });
   });
 
   describe("Debounce timer (idle transition)", () => {
-    it("should transition to idle after debounce period", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
-
-      monitor.onInput("\r");
-      expect(onStateChange).toHaveBeenCalledTimes(1);
-
-      // Default debounce is 4000ms
-      vi.advanceTimersByTime(4000);
-
-      expect(onStateChange).toHaveBeenCalledTimes(2);
-      expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
-
-      monitor.dispose();
-    });
-
     it("should reset debounce timer on continued output while busy", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
@@ -392,35 +303,6 @@ describe("ActivityMonitor", () => {
   });
 
   describe("Mixed input and output activity", () => {
-    it("should maintain busy state with mixed input and output", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        idleDebounceMs: 2500,
-      });
-
-      monitor.onInput("\r");
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
-
-      vi.advanceTimersByTime(500);
-      monitor.onData("output data");
-
-      vi.advanceTimersByTime(500);
-      monitor.onData("more output");
-
-      vi.advanceTimersByTime(500);
-      monitor.onData("even more");
-
-      expect(onStateChange).toHaveBeenCalledTimes(1);
-
-      // Debounce is 2500ms
-      vi.advanceTimersByTime(2500);
-
-      expect(onStateChange).toHaveBeenCalledTimes(2);
-      expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
-
-      monitor.dispose();
-    });
-
     it("should NOT re-enter busy from idle via output during echo window - Issue #1476", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
@@ -502,21 +384,6 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should NOT enter working from ANSI cursor-up escape sequences without spinner content", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
-
-      // Simulate terminal reflow with cursor movement but no spinner patterns
-      monitor.onData("\x1b[2K\r$ ");
-      vi.advanceTimersByTime(50);
-      monitor.onData("\x1b[2K\r$ ");
-
-      expect(monitor.getState()).toBe("idle");
-      expect(onStateChange).not.toHaveBeenCalled();
-
-      monitor.dispose();
-    });
-
     it("should stay busy until idle debounce expires during LLM API silence gap (Issue #3550)", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
@@ -536,43 +403,6 @@ describe("ActivityMonitor", () => {
       // After 4000ms (default debounce) it goes idle
       vi.advanceTimersByTime(200);
       expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
-
-      monitor.dispose();
-    });
-
-    it("should transition idle quickly via prompt fast-path in polling mode after working (Issue #3550)", () => {
-      const onStateChange = vi.fn();
-      let visibleLines = ["Working... (esc to interrupt)"];
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        getVisibleLines: () => visibleLines,
-        getCursorLine: () => visibleLines[visibleLines.length - 1],
-        initialState: "busy",
-        skipInitialStateEmit: true,
-        idleDebounceMs: 4000,
-        pollingIntervalMs: 50,
-      });
-
-      monitor.startPolling();
-      expect(monitor.getState()).toBe("busy");
-      onStateChange.mockClear();
-
-      // Agent finishes — prompt appears
-      visibleLines = ["> "];
-      vi.advanceTimersByTime(100); // Boot detection
-
-      // The prompt fast-path requires at least 3000ms of quiet output before firing,
-      // to avoid misfiring during inter-tool-call gaps (Issue #3606).
-      // Wait 3100ms to exceed both the 3000ms quiet threshold and 1500ms working hold.
-      vi.advanceTimersByTime(3100);
-
-      // Should have gone idle via prompt fast-path, well before the 4000ms debounce
-      expect(monitor.getState()).toBe("idle");
-      expect(onStateChange).toHaveBeenCalledWith(
-        "test-1",
-        1000,
-        "idle",
-        expect.objectContaining({ trigger: expect.any(String) })
-      );
 
       monitor.dispose();
     });

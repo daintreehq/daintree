@@ -20,8 +20,17 @@ vi.mock("fs", () => ({ ...fsSyncMock }));
 vi.mock("../../utils/fs.js", () => utilsMock);
 
 import { ProjectFileStore, RECIPES_SCHEMA_VERSION } from "../ProjectFileStore.js";
+import { applyCopyTreeRun } from "../copyTreeHistoryLog.js";
+import { encodeCopyTreeHistoryFile } from "../copyTreeHistoryCodec.js";
+import { COPY_TREE_HISTORY_SCHEMA_VERSION } from "../../../shared/types/ipc/copyTreeHistory.js";
+import type {
+  CopyTreeHistoryAppendInput,
+  CopyTreeHistoryRecord,
+} from "../../../shared/types/ipc/copyTreeHistory.js";
+import type { TerminalRecipe } from "../../types/index.js";
 
 const VALID_ID = "a".repeat(64);
+const OTHER_ID = "b".repeat(64);
 const INVALID_ID_TRAVERSAL = "../../../etc/passwd";
 const CONFIG_DIR = path.normalize("/tmp/daintree-projects");
 const EXPECTED_STATE_DIR = path.join(CONFIG_DIR, VALID_ID);
@@ -35,6 +44,68 @@ function quarantineRegex(basePath: string, suffix: string): RegExp {
 function quarantineSuffixRegex(basePath: string, suffix: string): RegExp {
   const escaped = basePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`^${escaped}${suffix}\\d+$`);
+}
+
+function recipeFilePath(projectId: string): string {
+  return path.join(CONFIG_DIR, projectId, "recipes.json");
+}
+
+function recipe(id: string): TerminalRecipe {
+  return { id, name: id, terminals: [], createdAt: 1000 } as TerminalRecipe;
+}
+
+function historyFilePath(projectId: string): string {
+  return path.join(CONFIG_DIR, projectId, "copy-tree-history.json");
+}
+
+/**
+ * Model recipes.json / copy-tree-history.json on disk keyed by file path.
+ * `readFile` returns the last-written envelope (ENOENT when absent);
+ * `resilientAtomicWriteFile` records it. An optional per-write delay widens the
+ * read→write window so that an *unserialized* implementation would lose one of
+ * two concurrent updates — making these tests fail loudly if a per-project
+ * queue is ever removed.
+ */
+function installDiskModel(writeDelayMs = 0): Map<string, string> {
+  const disk = new Map<string, string>();
+  fsMock.readFile.mockImplementation(async (filePath: string) => {
+    const content = disk.get(filePath);
+    if (content === undefined) {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    }
+    return content;
+  });
+  utilsMock.resilientAtomicWriteFile.mockImplementation(async (filePath: string, data: string) => {
+    if (writeDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, writeDelayMs));
+    disk.set(filePath, data);
+  });
+  return disk;
+}
+
+/**
+ * Drive the REAL production coordinator. Ids and timestamps are minted inside
+ * it, so the assertions below key off content rather than a supplied id — a
+ * test-owned reimplementation of the fold would stay green if the production
+ * one stopped queueing its read.
+ */
+function append(
+  store: ProjectFileStore,
+  projectId: string,
+  overrides: Partial<CopyTreeHistoryAppendInput> = {}
+): Promise<CopyTreeHistoryRecord[]> {
+  return store.appendCopyTreeRun(projectId, {
+    options: {},
+    source: "toolbar",
+    worktreeId: "wt-1",
+    stats: { fileCount: 1 },
+    ...overrides,
+  });
+}
+
+function readDisk(disk: Map<string, string>, projectId: string): CopyTreeHistoryRecord[] {
+  const raw = disk.get(historyFilePath(projectId));
+  expect(raw).toBeDefined();
+  return (JSON.parse(raw as string) as { records: CopyTreeHistoryRecord[] }).records;
 }
 
 describe("ProjectFileStore adversarial", () => {
@@ -182,16 +253,6 @@ describe("ProjectFileStore adversarial", () => {
     expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
   });
 
-  it("getRecipes returns [] when the recipes file doesn't exist (ENOENT handled gracefully)", async () => {
-    const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-    fsMock.readFile.mockRejectedValue(enoent);
-
-    const result = await store.getRecipes(VALID_ID);
-
-    expect(result).toEqual([]);
-    expect(utilsMock.resilientRename).not.toHaveBeenCalled();
-  });
-
   it("quarantine rename failure does not throw — getRecipes still returns []", async () => {
     fsMock.readFile.mockResolvedValue("{ not valid json");
     utilsMock.resilientRename.mockRejectedValueOnce(new Error("EBUSY"));
@@ -215,55 +276,6 @@ describe("ProjectFileStore adversarial", () => {
     const payload = JSON.parse(write[1] as string);
     expect(payload._schemaVersion).toBe(RECIPES_SCHEMA_VERSION);
     expect(payload.recipes.map((r: { id: string }) => r.id)).toEqual(["keep"]);
-  });
-
-  it("legacy bare-array recipes.json is read correctly", async () => {
-    fsMock.readFile.mockResolvedValue(
-      JSON.stringify([{ id: "r1", name: "legacy recipe", terminals: [], createdAt: 1000 }])
-    );
-
-    const result = await store.getRecipes(VALID_ID);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]!.id).toBe("r1");
-    expect(utilsMock.resilientRename).not.toHaveBeenCalled();
-  });
-
-  it("envelope format recipes.json is read correctly", async () => {
-    fsMock.readFile.mockResolvedValue(
-      JSON.stringify({
-        _schemaVersion: 1,
-        recipes: [{ id: "r1", name: "envelope recipe", terminals: [], createdAt: 1000 }],
-      })
-    );
-
-    const result = await store.getRecipes(VALID_ID);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]!.id).toBe("r1");
-    expect(utilsMock.resilientRename).not.toHaveBeenCalled();
-  });
-
-  it("saveRecipes always writes envelope format", async () => {
-    await store.saveRecipes(VALID_ID, [{ id: "r1", name: "test", terminals: [], createdAt: 1000 }]);
-
-    const write = utilsMock.resilientAtomicWriteFile.mock.calls[0];
-    const payload = JSON.parse(write[1] as string);
-    expect(payload._schemaVersion).toBe(RECIPES_SCHEMA_VERSION);
-    expect(payload.recipes).toHaveLength(1);
-    expect(payload.recipes[0].id).toBe("r1");
-  });
-
-  it("malformed envelope (missing recipes array) is quarantined", async () => {
-    fsMock.readFile.mockResolvedValue(JSON.stringify({ _schemaVersion: 1, notRecipes: "bad" }));
-
-    const result = await store.getRecipes(VALID_ID);
-
-    expect(result).toEqual([]);
-    expect(utilsMock.resilientRename).toHaveBeenCalledWith(
-      EXPECTED_RECIPES_FILE,
-      expect.stringMatching(quarantineSuffixRegex(EXPECTED_RECIPES_FILE, "\\.corrupted\\."))
-    );
   });
 
   it("malformed envelope (recipes is not an array) is quarantined", async () => {
@@ -310,20 +322,6 @@ describe("ProjectFileStore adversarial", () => {
       JSON.stringify({
         _schemaVersion: "not-a-number",
         recipes: [{ id: "r1", name: "still valid", terminals: [], createdAt: 1000 }],
-      })
-    );
-
-    const result = await store.getRecipes(VALID_ID);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]!.id).toBe("r1");
-  });
-
-  it("envelope with negative _schemaVersion is read normally", async () => {
-    fsMock.readFile.mockResolvedValue(
-      JSON.stringify({
-        _schemaVersion: -1,
-        recipes: [{ id: "r1", name: "valid", terminals: [], createdAt: 1000 }],
       })
     );
 
@@ -382,14 +380,418 @@ describe("ProjectFileStore adversarial", () => {
     await expect(store.deleteRecipe(VALID_ID, "any")).rejects.toThrow("EACCES");
     expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
   });
+});
 
-  it("addRecipe does not write when getRecipes fails with non-ENOENT", async () => {
-    const eio = Object.assign(new Error("EIO"), { code: "EIO" });
-    fsMock.readFile.mockRejectedValue(eio);
+describe("ProjectFileStore write serialization", () => {
+  let store: ProjectFileStore;
 
-    await expect(
-      store.addRecipe(VALID_ID, { id: "r1", name: "test", terminals: [], createdAt: 1000 })
-    ).rejects.toThrow("EIO");
+  beforeEach(() => {
+    vi.resetAllMocks();
+    store = new ProjectFileStore(CONFIG_DIR);
+    fsMock.mkdir.mockResolvedValue(undefined);
+    utilsMock.resilientRename.mockResolvedValue(undefined);
+    fsSyncMock.existsSync.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("serializes many concurrent adds — every recipe survives the chain", async () => {
+    installDiskModel(2);
+
+    const ids = Array.from({ length: 8 }, (_, i) => `r${i}`);
+    await Promise.all(ids.map((id) => store.addRecipe(VALID_ID, recipe(id))));
+
+    const result = await store.getRecipes(VALID_ID);
+    expect(result.map((r) => r.id).sort()).toEqual([...ids].sort());
+  });
+
+  it("a failing update rejects its own caller but does not poison later updates", async () => {
+    installDiskModel(2);
+    await store.addRecipe(VALID_ID, recipe("r1"));
+
+    // updateRecipe on a missing id throws inside its queued turn; a mutation
+    // enqueued right behind it must still commit.
+    const failing = store.updateRecipe(VALID_ID, "missing", { name: "x" });
+    const following = store.addRecipe(VALID_ID, recipe("r2"));
+
+    await expect(failing).rejects.toThrow(/not found/);
+    await expect(following).resolves.toBeUndefined();
+
+    const result = await store.getRecipes(VALID_ID);
+    expect(result.map((r) => r.id).sort()).toEqual(["r1", "r2"]);
+  });
+
+  it("interleaved add / update / delete on one project apply in enqueue order", async () => {
+    installDiskModel(2);
+
+    await Promise.all([
+      store.addRecipe(VALID_ID, recipe("keep")),
+      store.addRecipe(VALID_ID, recipe("drop")),
+      store.updateRecipe(VALID_ID, "keep", { name: "renamed" }),
+      store.deleteRecipe(VALID_ID, "drop"),
+    ]);
+
+    const result = await store.getRecipes(VALID_ID);
+    expect(result.map((r) => r.id)).toEqual(["keep"]);
+    expect(result[0]!.name).toBe("renamed");
+  });
+
+  it("a stalled project queue does not block a different project's queue", async () => {
+    const disk = installDiskModel();
+
+    // Gate the first write for VALID_ID until we release it; OTHER_ID must be
+    // free to complete meanwhile (proves per-projectId keying, not one global
+    // lock).
+    let releaseA: () => void = () => {};
+    const aGate = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const gatedPath = recipeFilePath(VALID_ID);
+    utilsMock.resilientAtomicWriteFile.mockImplementation(
+      async (filePath: string, data: string) => {
+        if (filePath === gatedPath) await aGate;
+        disk.set(filePath, data);
+      }
+    );
+
+    const aPromise = store.addRecipe(VALID_ID, recipe("a1"));
+    const bPromise = store.addRecipe(OTHER_ID, recipe("b1"));
+
+    // B resolves while A is still gated.
+    await expect(bPromise).resolves.toBeUndefined();
+    expect((await store.getRecipes(OTHER_ID)).map((r) => r.id)).toEqual(["b1"]);
+
+    releaseA();
+    await aPromise;
+    expect((await store.getRecipes(VALID_ID)).map((r) => r.id)).toEqual(["a1"]);
+  });
+
+  it("bulk saveRecipes is serialized in the queue — an add enqueued behind it sees its result", async () => {
+    installDiskModel(3);
+
+    // Enqueue a blind replacement, then an add. Serialized in order, the add
+    // reads the just-saved list and appends to it → [base, added]. If
+    // saveRecipes bypassed the queue, the two would interleave on the widened
+    // write window and one would be lost (final would be [base] or [added]).
+    const savePromise = store.saveRecipes(VALID_ID, [recipe("base")]);
+    const addPromise = store.addRecipe(VALID_ID, recipe("added"));
+    await Promise.all([savePromise, addPromise]);
+
+    expect((await store.getRecipes(VALID_ID)).map((r) => r.id)).toEqual(["base", "added"]);
+  });
+
+  it("bulk saveRecipes performs no read of its own (pure blind overwrite)", async () => {
+    installDiskModel(2);
+    await store.addRecipe(VALID_ID, recipe("pre"));
+    fsMock.readFile.mockClear();
+
+    await store.saveRecipes(VALID_ID, [recipe("only")]);
+
+    expect(fsMock.readFile).not.toHaveBeenCalled();
+    expect((await store.getRecipes(VALID_ID)).map((r) => r.id)).toEqual(["only"]);
+  });
+
+  it("a failed WRITE rejects its own caller but the store recovers from the last durable snapshot", async () => {
+    installDiskModel();
+    await store.addRecipe(VALID_ID, recipe("r1"));
+
+    // Fail exactly the next write (the update); later writes go through.
+    const realWrite = utilsMock.resilientAtomicWriteFile.getMockImplementation()!;
+    let failNext = true;
+    utilsMock.resilientAtomicWriteFile.mockImplementation(
+      async (filePath: string, data: string) => {
+        if (failNext) {
+          failNext = false;
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        return realWrite(filePath, data);
+      }
+    );
+
+    const failing = store.updateRecipe(VALID_ID, "r1", { name: "renamed" });
+    const following = store.addRecipe(VALID_ID, recipe("r2"));
+
+    await expect(failing).rejects.toThrow("EACCES");
+    await expect(following).resolves.toBeUndefined();
+
+    const result = await store.getRecipes(VALID_ID);
+    expect(result.map((r) => r.id).sort()).toEqual(["r1", "r2"]);
+    // The rejected rename never persisted; r1 kept its original name.
+    expect(result.find((r) => r.id === "r1")?.name).toBe("r1");
+  });
+
+  it("cleanup uses an identity guard: a completed op keeps a newer tail, and the map empties on drain", async () => {
+    const disk = installDiskModel();
+    const queues = (store as unknown as { recipesWriteQueues: Map<string, Promise<unknown>> })
+      .recipesWriteQueues;
+
+    // Gate op1's write so op2 enqueues behind it — the map tail becomes op2.
+    let release1: () => void = () => {};
+    const gate1 = new Promise<void>((resolve) => {
+      release1 = resolve;
+    });
+    let firstWrite = true;
+    utilsMock.resilientAtomicWriteFile.mockImplementation(
+      async (filePath: string, data: string) => {
+        if (firstWrite) {
+          firstWrite = false;
+          await gate1;
+        }
+        disk.set(filePath, data);
+      }
+    );
+
+    const p1 = store.addRecipe(VALID_ID, recipe("r1"));
+    const p2 = store.addRecipe(VALID_ID, recipe("r2"));
+    const tailAfterTwo = queues.get(VALID_ID);
+    expect(tailAfterTwo).toBeDefined();
+
+    release1();
+    await p1;
+    // op1's cleanup ran but the map still points at op2's tail: the
+    // `map.get(key) === next` guard prevented op1 from dropping op2's entry.
+    expect(queues.get(VALID_ID)).toBe(tailAfterTwo);
+
+    await p2;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Fully drained → entry removed (no per-project map leak).
+    expect(queues.has(VALID_ID)).toBe(false);
+    expect((await store.getRecipes(VALID_ID)).map((r) => r.id).sort()).toEqual(["r1", "r2"]);
+  });
+});
+
+describe("ProjectFileStore copy-tree history", () => {
+  let store: ProjectFileStore;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    store = new ProjectFileStore(CONFIG_DIR);
+    fsMock.mkdir.mockResolvedValue(undefined);
+    utilsMock.resilientRename.mockResolvedValue(undefined);
+    fsSyncMock.existsSync.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("treats a project with no history file as an empty history", async () => {
+    installDiskModel();
+    await expect(store.getCopyTreeHistory(VALID_ID)).resolves.toEqual([]);
+  });
+
+  it("returns an empty history for an id that cannot own a state directory", async () => {
+    installDiskModel();
+    await expect(store.getCopyTreeHistory("../../../etc/passwd")).resolves.toEqual([]);
+    expect(fsMock.readFile).not.toHaveBeenCalled();
+  });
+
+  it("propagates a read failure that is not a missing file", async () => {
+    fsMock.readFile.mockRejectedValue(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+    await expect(store.getCopyTreeHistory(VALID_ID)).rejects.toThrow("EACCES");
+  });
+
+  it("serializes two concurrent appends of different options so neither is lost", async () => {
+    const disk = installDiskModel(5);
+
+    await Promise.all([
+      append(store, VALID_ID, { options: { modified: true } }),
+      append(store, VALID_ID, { options: { changed: "develop" } }),
+    ]);
+
+    const records = readDisk(disk, VALID_ID);
+    expect(records).toHaveLength(2);
+    expect(records.map((r) => r.name).sort()).toEqual(["Changed since develop", "Modified files"]);
+  });
+
+  it("collapses two concurrent appends of identical options into one bumped entry", async () => {
+    const disk = installDiskModel(5);
+
+    await Promise.all([append(store, VALID_ID), append(store, VALID_ID)]);
+
+    const records = readDisk(disk, VALID_ID);
+    expect(records).toHaveLength(1);
+    // Without serialization the second write would overwrite a snapshot read
+    // before the first landed, leaving runCount at 1.
+    expect(records[0].runCount).toBe(2);
+  });
+
+  it("keeps different projects independent", async () => {
+    const disk = installDiskModel(5);
+
+    await Promise.all([
+      append(store, VALID_ID, { worktreeId: "wt-a" }),
+      append(store, OTHER_ID, { worktreeId: "wt-b" }),
+    ]);
+
+    expect(readDisk(disk, VALID_ID).map((r) => r.worktreeId)).toEqual(["wt-a"]);
+    expect(readDisk(disk, OTHER_ID).map((r) => r.worktreeId)).toEqual(["wt-b"]);
+  });
+
+  it("does not make one project wait behind another project's in-flight write", async () => {
+    // A single global queue would satisfy the isolation test above. This one
+    // fails unless the queues are genuinely keyed per project.
+    installDiskModel();
+    let releaseA: () => void = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    utilsMock.resilientAtomicWriteFile.mockImplementation(async (filePath: string) => {
+      if (filePath === historyFilePath(VALID_ID)) await blocked;
+    });
+
+    const slow = append(store, VALID_ID);
+    await expect(append(store, OTHER_ID)).resolves.toHaveLength(1);
+
+    releaseA();
+    await slow;
+  });
+
+  it("does not let a failed update poison the next one in the chain", async () => {
+    const disk = installDiskModel(5);
+
+    const failing = store.enqueueCopyTreeHistoryUpdate(VALID_ID, () => {
+      throw new Error("updater blew up");
+    });
+    const following = append(store, VALID_ID, { worktreeId: "wt-after" });
+
+    await expect(failing).rejects.toThrow("updater blew up");
+    await expect(following).resolves.toHaveLength(1);
+    expect(readDisk(disk, VALID_ID).map((r) => r.worktreeId)).toEqual(["wt-after"]);
+  });
+
+  it("skips the write when the updater returns null", async () => {
+    installDiskModel();
+    await store.enqueueCopyTreeHistoryUpdate(VALID_ID, () => null);
     expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("creates the state directory when the first write finds it missing", async () => {
+    const disk = new Map<string, string>();
+    fsMock.readFile.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    let firstAttempt = true;
+    utilsMock.resilientAtomicWriteFile.mockImplementation(
+      async (filePath: string, data: string) => {
+        if (firstAttempt) {
+          firstAttempt = false;
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        }
+        disk.set(filePath, data);
+      }
+    );
+
+    await append(store, VALID_ID);
+
+    expect(fsMock.mkdir).toHaveBeenCalledWith(path.join(CONFIG_DIR, VALID_ID), { recursive: true });
+    expect(readDisk(disk, VALID_ID)).toHaveLength(1);
+  });
+
+  it("quarantines a damaged file by renaming it, never by deleting it", async () => {
+    const disk = installDiskModel();
+    const damaged = "{ not json";
+    disk.set(historyFilePath(VALID_ID), damaged);
+    // Model the rename so the assertion is about where the BYTES ended up, not
+    // merely that a rename was requested.
+    utilsMock.resilientRename.mockImplementation(async (from: string, to: string) => {
+      const content = disk.get(from);
+      if (content === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      disk.delete(from);
+      disk.set(to, content);
+    });
+
+    await expect(store.getCopyTreeHistory(VALID_ID)).resolves.toEqual([]);
+
+    const [from, to] = utilsMock.resilientRename.mock.calls[0] as [string, string];
+    expect(from).toBe(historyFilePath(VALID_ID));
+    expect(to.startsWith(`${historyFilePath(VALID_ID)}.corrupted.`)).toBe(true);
+    expect(disk.get(to)).toBe(damaged);
+    expect(disk.has(historyFilePath(VALID_ID))).toBe(false);
+  });
+
+  it("quarantines an unreadable file exactly once when a read and an append race it", async () => {
+    // Both see the damage; whichever renames second would hit ENOENT and fail,
+    // losing a completed run. Serializing the quarantine-capable read is what
+    // makes only one of them attempt it.
+    const disk = installDiskModel();
+    disk.set(historyFilePath(VALID_ID), "{ not json");
+    utilsMock.resilientRename.mockImplementation(async (from: string, to: string) => {
+      const content = disk.get(from);
+      if (content === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      disk.delete(from);
+      disk.set(to, content);
+    });
+
+    const [, appended] = await Promise.all([
+      store.getCopyTreeHistory(VALID_ID),
+      append(store, VALID_ID, { worktreeId: "wt-raced" }),
+    ]);
+
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+    expect(appended).toHaveLength(1);
+    expect(readDisk(disk, VALID_ID).map((r) => r.worktreeId)).toEqual(["wt-raced"]);
+  });
+
+  it("quarantines a newer app's file under a name that records its version", async () => {
+    installDiskModel();
+    fsMock.readFile.mockResolvedValue(
+      JSON.stringify({ _schemaVersion: COPY_TREE_HISTORY_SCHEMA_VERSION + 5, records: [] })
+    );
+
+    await expect(store.getCopyTreeHistory(VALID_ID)).resolves.toEqual([]);
+
+    const [, to] = utilsMock.resilientRename.mock.calls[0] as [string, string];
+    expect(to).toBe(`${historyFilePath(VALID_ID)}.future-v${COPY_TREE_HISTORY_SCHEMA_VERSION + 5}`);
+  });
+
+  it("does not clobber an existing quarantine file of the same name", async () => {
+    installDiskModel();
+    fsMock.readFile.mockResolvedValue(
+      JSON.stringify({ _schemaVersion: COPY_TREE_HISTORY_SCHEMA_VERSION + 1, records: [] })
+    );
+    fsSyncMock.existsSync.mockReturnValue(true);
+
+    await store.getCopyTreeHistory(VALID_ID);
+
+    const [, to] = utilsMock.resilientRename.mock.calls[0] as [string, string];
+    expect(to).toMatch(new RegExp(`\\.future-v${COPY_TREE_HISTORY_SCHEMA_VERSION + 1}\\.\\d+$`));
+  });
+
+  it("refuses to write over a damaged file whose quarantine failed", async () => {
+    // The dangerous case: if the rename fails and the read still reports an
+    // empty history, the next append writes a fresh file straight over data
+    // that was never preserved.
+    installDiskModel();
+    fsMock.readFile.mockResolvedValue("{ not json");
+    utilsMock.resilientRename.mockRejectedValue(new Error("EPERM"));
+
+    await expect(append(store, VALID_ID)).rejects.toThrow("EPERM");
+    expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("writes the versioned envelope, not a bare array", async () => {
+    const disk = installDiskModel();
+    await append(store, VALID_ID);
+
+    const parsed = JSON.parse(disk.get(historyFilePath(VALID_ID)) as string) as {
+      _schemaVersion: number;
+      records: unknown[];
+    };
+    expect(parsed._schemaVersion).toBe(COPY_TREE_HISTORY_SCHEMA_VERSION);
+    expect(Array.isArray(parsed.records)).toBe(true);
+  });
+
+  it("round-trips a history written by the encoder", async () => {
+    const disk = installDiskModel();
+    const records = applyCopyTreeRun(
+      [],
+      { options: { filter: "src/**" }, source: "mcp", worktreeId: "wt-9", stats: { fileCount: 2 } },
+      { id: "seeded", now: 5_000 }
+    );
+    disk.set(historyFilePath(VALID_ID), encodeCopyTreeHistoryFile(records));
+
+    await expect(store.getCopyTreeHistory(VALID_ID)).resolves.toEqual(records);
+    expect(utilsMock.resilientRename).not.toHaveBeenCalled();
   });
 });

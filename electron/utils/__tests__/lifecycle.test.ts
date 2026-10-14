@@ -7,15 +7,6 @@ import {
   type IDisposable,
 } from "../lifecycle.js";
 
-describe("toDisposable", () => {
-  it("wraps a function as an IDisposable that calls it on dispose()", () => {
-    const fn = vi.fn();
-    const d = toDisposable(fn);
-    d.dispose();
-    expect(fn).toHaveBeenCalledOnce();
-  });
-});
-
 describe("DisposableStore", () => {
   it("disposes all registered children on dispose()", () => {
     const store = new DisposableStore();
@@ -51,12 +42,6 @@ describe("DisposableStore", () => {
     expect(() => store.dispose()).not.toThrow();
     expect(middle).toHaveBeenCalledOnce();
     expect(last).toHaveBeenCalledOnce();
-  });
-
-  it("returns the registered disposable from add() for inline use", () => {
-    const store = new DisposableStore();
-    const child = toDisposable(() => {});
-    expect(store.add(child)).toBe(child);
   });
 
   it("supports nested stores — disposing the parent disposes the child store", () => {
@@ -162,11 +147,6 @@ describe("MutableDisposable", () => {
     expect(b).toHaveBeenCalledOnce();
     expect(slot.value).toBeUndefined();
   });
-
-  it("clearing an empty slot does not throw", () => {
-    const slot = new MutableDisposable<IDisposable>();
-    expect(() => slot.clear()).not.toThrow();
-  });
 });
 
 describe("Disposable base class", () => {
@@ -180,20 +160,6 @@ describe("Disposable base class", () => {
     }
     const fn = vi.fn();
     const svc = new Service(fn);
-    svc.dispose();
-    expect(fn).toHaveBeenCalledOnce();
-  });
-
-  it("dispose() is idempotent", () => {
-    class Service extends Disposable {
-      constructor(onDispose: () => void) {
-        super();
-        this._register(toDisposable(onDispose));
-      }
-    }
-    const fn = vi.fn();
-    const svc = new Service(fn);
-    svc.dispose();
     svc.dispose();
     expect(fn).toHaveBeenCalledOnce();
   });

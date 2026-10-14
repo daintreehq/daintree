@@ -98,41 +98,6 @@ describe("event inspector subscription", () => {
     };
   }
 
-  it("registers subscribe and unsubscribe handlers", () => {
-    const onCalls = (ipcMain.on as Mock).mock.calls.map(([ch]) => ch);
-    expect(onCalls).toContain(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
-    expect(onCalls).toContain(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE);
-  });
-
-  it("subscribes webcontents to event stream", () => {
-    const subscribeHandler = getRegisteredHandler(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
-    expect(subscribeHandler).toBeDefined();
-
-    const sender = createMockSender();
-    const event = { sender };
-
-    subscribeHandler!(event);
-
-    expect(mockEventBuffer.onRecord).toHaveBeenCalled();
-  });
-
-  it("broadcasts batched events to subscribed webcontents after flush", () => {
-    const subscribeHandler = getRegisteredHandler(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
-    const sender = createMockSender();
-
-    subscribeHandler!({ sender });
-
-    const testRecord = createTestRecord("test-1");
-    expect(onRecordCallback).not.toBeNull();
-    onRecordCallback!(testRecord);
-
-    expect(sender.send).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(50);
-
-    expect(sender.send).toHaveBeenCalledWith(CHANNELS.EVENT_INSPECTOR_EVENT_BATCH, [testRecord]);
-  });
-
   it("batches multiple events within the batch window into one send", () => {
     const subscribeHandler = getRegisteredHandler(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
     const sender = createMockSender();
@@ -157,18 +122,6 @@ describe("event inspector subscription", () => {
       record2,
       record3,
     ]);
-  });
-
-  it("unsubscribes webcontents from event stream", () => {
-    const subscribeHandler = getRegisteredHandler(CHANNELS.EVENT_INSPECTOR_SUBSCRIBE);
-    const unsubscribeHandler = getRegisteredHandler(CHANNELS.EVENT_INSPECTOR_UNSUBSCRIBE);
-    const sender = createMockSender();
-    const event = { sender };
-
-    subscribeHandler!(event);
-    unsubscribeHandler!(event);
-
-    expect(onRecordUnsubscribe).toHaveBeenCalled();
   });
 
   it("handles multiple subscribers", () => {

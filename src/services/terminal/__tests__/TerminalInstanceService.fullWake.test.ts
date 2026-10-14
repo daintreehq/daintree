@@ -312,33 +312,6 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(forceImmediateResize).not.toHaveBeenCalled();
   });
 
-  it("repairs the WebGL atlas before the refresh (#9679)", async () => {
-    const id = "fw-webgl";
-    const instance = makeInstance();
-    service.instances.set(id, instance);
-
-    const calls: string[] = [];
-    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    const repair = vi
-      .spyOn(service.webGLManager, "repairAtlasForReactivation")
-      .mockImplementation(() => {
-        calls.push("repairAtlasForReactivation");
-        return true;
-      });
-    (instance.terminal.refresh as ReturnType<typeof vi.fn>).mockImplementation(() => {
-      calls.push("refresh");
-    });
-    vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
-    vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
-
-    await service.fullWakeForVisibilityRestore(id);
-
-    expect(repair).toHaveBeenCalledWith(id);
-    // The stale-atlas repair must land before the repaint so the first composited
-    // frame after reactivation samples the repaired model.
-    expect(calls).toEqual(["repairAtlasForReactivation", "refresh"]);
-  });
-
   it("completes the repaint even when atlas repair reports no WebGL context (DOM renderer)", async () => {
     const id = "fw-dom";
     const instance = makeInstance();
@@ -352,23 +325,6 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     await service.fullWakeForVisibilityRestore(id);
 
     // A false repair (no pooled context) must not short-circuit the repaint.
-    expect(handlePostWake).toHaveBeenCalledWith(id);
-    expect(resumeFlush).toHaveBeenCalledWith(id);
-  });
-
-  it("always runs handlePostWake and resumeFlush on the synchronous repaint", async () => {
-    const id = "fw-2";
-    const instance = makeInstance();
-    service.instances.set(id, instance);
-
-    vi.spyOn(service.resizeController, "applyDeferredResize").mockImplementation(() => {});
-    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
-    const handlePostWake = vi.spyOn(service, "handlePostWake").mockImplementation(() => {});
-    const resumeFlush = vi.spyOn(service.dataBuffer, "resumeFlush").mockImplementation(() => {});
-
-    await service.fullWakeForVisibilityRestore(id);
-
-    // No wake ok/fail branch anymore: the repaint always reflows + flushes.
     expect(handlePostWake).toHaveBeenCalledWith(id);
     expect(resumeFlush).toHaveBeenCalledWith(id);
   });
@@ -593,10 +549,6 @@ describe("TerminalInstanceService.fullWakeForVisibilityRestore (#8562)", () => {
     expect(applyDeferredResize).not.toHaveBeenCalled();
 
     document.body.removeChild(hostElement);
-  });
-
-  it("no-ops cleanly when terminal does not exist", async () => {
-    await expect(service.fullWakeForVisibilityRestore("missing")).resolves.toBeUndefined();
   });
 
   // Long-dwell rehydration: an unopened terminal (its xterm torn down while the

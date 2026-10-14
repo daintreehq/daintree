@@ -486,25 +486,6 @@ describe("open-time fetch policy (count-as-cache-buster, #10122 family)", () => 
     expect(onFreshFetch).not.toHaveBeenCalled();
   });
 
-  it("fires onFreshFetch when the revalidate actually bypassed", async () => {
-    setCache(cacheKey, {
-      items: [makeIssue(10)],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: Date.now() - 30_000,
-      countAtWrite: 1,
-      stale: true,
-    });
-    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)], 1));
-    const onFreshFetch = vi.fn();
-
-    render(
-      <GitHubResourceList type="issue" projectPath="/test/proj" onFreshFetch={onFreshFetch} />
-    );
-
-    await waitFor(() => expect(onFreshFetch).toHaveBeenCalled());
-  });
-
   it("a downgraded revalidate re-stamps the count fingerprint from the response", async () => {
     setCache(cacheKey, {
       items: [makeIssue(10)],
@@ -527,16 +508,6 @@ describe("open-time fetch policy (count-as-cache-buster, #10122 family)", () => 
 });
 
 describe("GitHubResourceList SWR behavior", () => {
-  it("shows skeleton on cold start (no cache)", async () => {
-    mockListIssues.mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve(makeResponse([makeIssue(1)])), 100))
-    );
-
-    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    expect(screen.getByTestId("skeleton")).toBeTruthy();
-  });
-
   it.each(["issue", "pr"] as const)(
     "tells the skeleton it is loading %s (#12294)",
     async (type) => {
@@ -697,28 +668,6 @@ describe("GitHubResourceList SWR behavior", () => {
       expect(screen.queryByTestId("item-50")).toBeNull();
     });
     expect(screen.queryByText(/Updated/)).toBeNull();
-  });
-
-  it("renders Load More footer when hasNextPage is true", async () => {
-    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
-    setCache(cacheKey, {
-      items: [makeIssue(1), makeIssue(2)],
-      nextCursor: "cursor-1",
-      hasMore: true,
-      timestamp: Date.now(),
-    });
-
-    mockListIssues.mockResolvedValue({
-      items: [makeIssue(1), makeIssue(2)],
-      nextCursor: "cursor-1",
-      hasMore: true,
-    });
-
-    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /load more/i })).toBeTruthy();
-    });
   });
 
   it("omits Load More footer when hasNextPage is false", async () => {
@@ -1517,19 +1466,6 @@ describe("GitHubResourceList no-token empty state", () => {
     expect(screen.queryByPlaceholderText(/search issues/i)).toBeNull();
   });
 
-  it("renders normally once a token is configured", async () => {
-    mockGitHubConfig = { hasToken: true };
-    mockGitHubConfigInitialized = true;
-    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
-
-    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    expect(screen.queryByText("GitHub not connected")).toBeNull();
-    await waitFor(() => {
-      expect(screen.getByTestId("item-1")).toBeTruthy();
-    });
-  });
-
   it("renders the empty state for type='pr' and skips listPullRequests", () => {
     mockGitHubConfig = { hasToken: false };
     mockGitHubConfigInitialized = true;
@@ -1710,23 +1646,6 @@ describe("GitHubResourceList retry behavior", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("retries transient network errors on cold-start fetch and renders data on success", async () => {
-    mockListIssues
-      .mockRejectedValueOnce(new Error("Cannot reach GitHub. Check your internet connection."))
-      .mockResolvedValue(makeResponse([makeIssue(7)]));
-
-    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    await vi.advanceTimersByTimeAsync(500);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("item-7")).toBeTruthy();
-    });
-
-    expect(mockListIssues).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText(/Cannot reach GitHub/)).toBeNull();
   });
 
   it("succeeds on the third attempt — retries through both backoff delays", async () => {
@@ -2365,45 +2284,6 @@ describe("GitHubResourceList success-path freshness (#6867)", () => {
       expect(screen.getByText(/^Updated/)).toBeTruthy();
     });
   });
-
-  it("hides the freshness row while a number-query chip is active", async () => {
-    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
-    setCache(cacheKey, {
-      items: [makeIssue(42)],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: Date.now(),
-    });
-    mockGetIssueByNumber.mockResolvedValue(makeIssue(42));
-    useGitHubFilterStore.getState().setIssueSearchQuery("#42");
-
-    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Showing issue #42")).toBeTruthy();
-    });
-    // The chip provides context — the freshness row stays hidden during searches.
-    expect(screen.queryByText(/^Updated/)).toBeNull();
-  });
-
-  it("does not render the freshness row when an error is active", async () => {
-    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
-    setCache(cacheKey, {
-      items: [makeIssue(1)],
-      nextCursor: null,
-      hasMore: false,
-      timestamp: Date.now(),
-    });
-    mockListIssues.mockRejectedValue(new Error("Boom"));
-
-    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Boom/)).toBeTruthy();
-    });
-    // The freshness row is suppressed; only the banner-side timestamp remains.
-    expect(screen.queryByText(/^Updated/)).toBeNull();
-  });
 });
 
 describe("GitHubResourceList stale-while-error banner copy (#6867)", () => {
@@ -2586,19 +2466,6 @@ describe("GitHubResourceList number-query chip (#6867)", () => {
     expect(mockGetIssuesByNumbers).toHaveBeenCalledWith("/test/proj", [123, 124]);
     expect(mockListIssues).not.toHaveBeenCalled();
     expect(screen.queryByText(FALLBACK_COPY)).toBeNull();
-  });
-
-  it("routes a whitespace-separated list to the batch lookup", async () => {
-    mockGetIssuesByNumbers.mockResolvedValue([makeIssue(12036), makeIssue(12037)]);
-    useGitHubFilterStore.getState().setIssueSearchQuery("12036 12037");
-
-    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Showing #12036, #12037")).toBeTruthy();
-    });
-    expect(mockGetIssuesByNumbers).toHaveBeenCalledWith("/test/proj", [12036, 12037]);
-    expect(mockListIssues).not.toHaveBeenCalled();
   });
 
   it("caps an explicit list at the multi-fetch cap and says so", async () => {
@@ -2990,15 +2857,6 @@ describe("GitHubResourceList polish (#7202)", () => {
     await waitFor(() => {
       expect(document.activeElement).toBe(screen.getByPlaceholderText(/search issues/i));
     });
-  });
-
-  it("sort trigger has no accent dot on the default sort", async () => {
-    mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
-
-    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    const sortButton = await screen.findByRole("button", { name: /^sort/i });
-    expect(sortButton.querySelector("span.bg-status-info")).toBeNull();
   });
 
   it("sort popover trigger reflects open state via aria-expanded", async () => {

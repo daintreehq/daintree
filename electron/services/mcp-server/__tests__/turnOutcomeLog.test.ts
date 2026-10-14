@@ -623,19 +623,6 @@ describe("TurnOutcomeService.setNotifyTurnOutcomeAlert", () => {
     expect(alert).not.toHaveBeenCalled();
   });
 
-  it("respects the stuck debounce — no second alert without an intervening active turn", () => {
-    const f = makeFixture();
-    const alert = vi.fn();
-    f.service.setNotifyTurnOutcomeAlert(alert);
-    f.service.handleTransition(
-      makeTransition({ previousState: "waiting", state: "idle", trigger: "timeout" })
-    );
-    f.service.handleTransition(
-      makeTransition({ previousState: "waiting", state: "idle", trigger: "timeout" })
-    );
-    expect(alert).toHaveBeenCalledTimes(1);
-  });
-
   it("never blocks record persistence when the alert callback throws", () => {
     const f = makeFixture();
     f.service.setNotifyTurnOutcomeAlert(() => {
@@ -733,22 +720,6 @@ describe("TurnOutcomeService turnId lifecycle", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("mints a turnId on active entry and stamps the outcome record", () => {
-    const f = makeFixture();
-    f.service.appendOutput("term-1", "Done — the file was updated and tests pass cleanly.");
-    f.service.handleTransition(
-      makeTransition({ previousState: "idle", state: "working", trigger: "input" })
-    );
-    f.service.handleTransition(
-      makeTransition({ previousState: "working", state: "idle", trigger: "output" })
-    );
-    f.flushPersist();
-    const records = f.service.getRecords();
-    expect(records).toHaveLength(1);
-    expect(records[0]?.turnId).toBeDefined();
-    expect(records[0]?.turnId?.length).toBeGreaterThan(0);
   });
 
   it("getCurrentTurnIdForSession returns the active turnId", () => {

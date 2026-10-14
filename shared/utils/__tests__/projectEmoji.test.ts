@@ -61,12 +61,6 @@ describe("suggestProjectEmoji", () => {
   });
 
   describe("hash fallback", () => {
-    it("is deterministic for the same name", () => {
-      const first = suggestProjectEmoji("zzquux-widget");
-      const second = suggestProjectEmoji("zzquux-widget");
-      expect(first).toBe(second);
-    });
-
     it("normalizes separators and case before hashing", () => {
       expect(suggestProjectEmoji("My-Zzquux Widget")).toBe(suggestProjectEmoji("my zzquux widget"));
     });

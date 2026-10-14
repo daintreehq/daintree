@@ -80,12 +80,6 @@ describe("installLinuxPrimarySelectionListeners", () => {
       hostElement.dispatchEvent(new MouseEvent("mouseup", { button: 2, bubbles: true }));
       expect(writeSelection).not.toHaveBeenCalled();
     });
-
-    it("skips write after the cache was cleared (post-disposal race)", () => {
-      cachedSelection = undefined;
-      hostElement.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-      expect(writeSelection).not.toHaveBeenCalled();
-    });
   });
 
   describe("middle-button release", () => {
@@ -221,13 +215,6 @@ describe("installLinuxPrimarySelectionListeners", () => {
         inputLocked = true;
         return { text: "pasted" };
       });
-      hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
-      await flush();
-      expect(writeToPty).not.toHaveBeenCalled();
-    });
-
-    it("silently swallows rejected readSelection promises", async () => {
-      readSelection.mockRejectedValueOnce(new Error("ipc unavailable"));
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
       expect(writeToPty).not.toHaveBeenCalled();

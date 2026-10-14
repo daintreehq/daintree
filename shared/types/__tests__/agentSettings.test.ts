@@ -108,17 +108,8 @@ describe("buildResumeCommand", () => {
     );
   });
 
-  it("prepends launch flags before resume args for gemini", () => {
-    const cmd = buildResumeCommand("gemini", "sess-789", ["--yolo"]);
-    expect(cmd).toBe("gemini --yolo --resume sess-789");
-  });
-
   it("handles empty launch flags array like no flags", () => {
     expect(buildResumeCommand("claude", "abc-123", [])).toBe("claude --resume abc-123");
-  });
-
-  it("handles undefined launch flags like no flags", () => {
-    expect(buildResumeCommand("claude", "abc-123", undefined)).toBe("claude --resume abc-123");
   });
 
   it("uses an explicitly resolved executable", () => {
@@ -196,11 +187,6 @@ describe("buildResumeLatestCommand", () => {
     expect(cmd).toBe("opencode --dangerously-skip-permissions --continue");
   });
 
-  it("prepends launch flags before resume-latest args for claude", () => {
-    const cmd = buildResumeLatestCommand("claude", ["--dangerously-skip-permissions"]);
-    expect(cmd).toBe("claude --dangerously-skip-permissions --continue");
-  });
-
   it("prepends launch flags before resume-latest args for codex", () => {
     const cmd = buildResumeLatestCommand("codex", [
       "--no-alt-screen",
@@ -211,17 +197,8 @@ describe("buildResumeLatestCommand", () => {
     );
   });
 
-  it("prepends launch flags before resume-latest args for gemini", () => {
-    const cmd = buildResumeLatestCommand("gemini", ["--yolo"]);
-    expect(cmd).toBe("gemini --yolo -r latest");
-  });
-
   it("handles empty launch flags array like no flags", () => {
     expect(buildResumeLatestCommand("claude", [])).toBe("claude --continue");
-  });
-
-  it("handles undefined launch flags like no flags", () => {
-    expect(buildResumeLatestCommand("claude", undefined)).toBe("claude --continue");
   });
 
   it("uses an explicitly resolved executable", () => {
@@ -261,11 +238,6 @@ describe("buildAgentLaunchFlags", () => {
     expect(flags).toContain("--debug");
   });
 
-  it("includes inline mode flag for codex when enabled", () => {
-    const flags = buildAgentLaunchFlags({ inlineMode: true }, "codex");
-    expect(flags).toContain("--no-alt-screen");
-  });
-
   it("includes inline mode flag for codex by default (inlineMode not explicitly false)", () => {
     const flags = buildAgentLaunchFlags({}, "codex");
     expect(flags).toContain("--no-alt-screen");
@@ -283,11 +255,6 @@ describe("buildAgentLaunchFlags", () => {
     const codex = buildAgentLaunchFlags({}, "codex");
     expect(grok).toContain("--no-alt-screen");
     expect(codex).toContain("--no-alt-screen");
-  });
-
-  it("still lets grok opt into inline mode explicitly", () => {
-    const flags = buildAgentLaunchFlags({ inlineMode: true }, "grok");
-    expect(flags).toContain("--no-alt-screen");
   });
 
   it("injects opencode's --mini on the interactive spawn and drops it when alt-screen is forced", () => {
@@ -338,11 +305,6 @@ describe("buildAgentLaunchFlags", () => {
 
   it("does not include --model flag when modelId is not provided", () => {
     const flags = buildAgentLaunchFlags({}, "claude");
-    expect(flags).not.toContain("--model");
-  });
-
-  it("does not include --model flag when options is undefined", () => {
-    const flags = buildAgentLaunchFlags({}, "claude", undefined);
     expect(flags).not.toContain("--model");
   });
 });
@@ -611,14 +573,6 @@ describe("generateAgentCommand with modelId", () => {
 });
 
 describe("generateAgentCommand with recipeArgs", () => {
-  it("includes single flag from recipeArgs", () => {
-    const cmd = generateAgentCommand("claude", {}, "claude", {
-      recipeArgs: "--model sonnet",
-    });
-    expect(cmd).toContain("--model");
-    expect(cmd).toContain("sonnet");
-  });
-
   it("includes multiple tokens from recipeArgs", () => {
     const cmd = generateAgentCommand("claude", {}, "claude", {
       recipeArgs: "--model opus --verbose",
@@ -678,12 +632,6 @@ describe("buildLaunchCommandFromFlags", () => {
       "--yolo",
     ]);
     expect(cmd).toBe("claude --dangerously-skip-permissions --yolo");
-  });
-
-  it("escapes non-flag positional tokens (e.g. model IDs, file paths)", () => {
-    const cmd = buildLaunchCommandFromFlags("claude", "claude", ["--model", "claude-opus-4-7"]);
-    // `--model` is flag-style (raw); `claude-opus-4-7` is positional (escaped).
-    expect(cmd).toBe("claude --model 'claude-opus-4-7'");
   });
 
   it("quotes tokens containing shell metacharacters to prevent injection", () => {

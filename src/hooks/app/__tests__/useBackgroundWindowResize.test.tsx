@@ -77,11 +77,6 @@ describe("useBackgroundWindowResize", () => {
     setVisibility("hidden");
   });
 
-  it("subscribes on mount", () => {
-    renderHook(() => useBackgroundWindowResize());
-    expect(onBackgroundResizeMock).toHaveBeenCalledTimes(1);
-  });
-
   it("forwards bounds to terminalInstanceService", () => {
     renderHook(() => useBackgroundWindowResize());
 

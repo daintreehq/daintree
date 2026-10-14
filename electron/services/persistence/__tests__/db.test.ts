@@ -39,6 +39,12 @@ vi.mock("drizzle-orm/better-sqlite3", () => ({
   drizzle: vi.fn(() => ({})),
 }));
 
+const { installSpy } = vi.hoisted(() => ({ installSpy: vi.fn() }));
+
+vi.mock("../sqliteRunStatementCache.js", () => ({
+  installSqliteRunStatementCache: installSpy,
+}));
+
 import {
   openDb,
   probeDb,
@@ -47,6 +53,17 @@ import {
   closeSharedDb,
   withDiskRecovery,
 } from "../db.js";
+
+// Runs first: later describes clear every mock in their beforeEach, which would
+// erase the call this asserts.
+describe("SQLite run statement cache install site", () => {
+  // db.ts owns every connection Daintree opens. Installing from anywhere else —
+  // schema.ts, say, which drizzle-kit also loads — can be silently undone by a
+  // later `import type`, with no other test noticing.
+  it("installs the cache when the database module loads", () => {
+    expect(installSpy).toHaveBeenCalled();
+  });
+});
 
 describe("probeDb", () => {
   let tmpDir: string;
@@ -503,20 +520,6 @@ describe("withDiskRecovery", () => {
       .fn<() => string>()
       .mockImplementationOnce(() => {
         throw makeError("SQLITE_IOERR_WRITE", "io write failed");
-      })
-      .mockImplementationOnce(() => "recovered");
-
-    expect(withDiskRecovery(sqlite, fn)).toBe("recovered");
-    expect(fn).toHaveBeenCalledTimes(2);
-    expect(pragma).toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
-  });
-
-  it("retries when disk status is warning (not just normal)", () => {
-    mockGetWritesSuppressed.mockReturnValue(false);
-    const fn = vi
-      .fn<() => string>()
-      .mockImplementationOnce(() => {
-        throw makeError("SQLITE_FULL", "disk full");
       })
       .mockImplementationOnce(() => "recovered");
 

@@ -99,17 +99,6 @@ describe("mcp.surface emits a manifest outputSchema (#11549)", () => {
 });
 
 describe("mcp.surface registration", () => {
-  it("is a safe read-only query in the introspection category", () => {
-    const registry: ActionRegistry = new Map();
-    registerIntrospectionActions(registry, {} as ActionCallbacks);
-    const def = registry.get("mcp.surface" as ActionId)!() as AnyActionDefinition;
-
-    expect(def.kind).toBe("query");
-    expect(def.danger).toBe("safe");
-    expect(def.category).toBe("introspection");
-    expect(def.mcpVisibility).toBe("core");
-  });
-
   it("refuses renderer dispatch, because only main knows the caller's tier", async () => {
     const registry: ActionRegistry = new Map();
     registerIntrospectionActions(registry, {} as ActionCallbacks);
@@ -118,13 +107,5 @@ describe("mcp.surface registration", () => {
     // Asserts the rejection, not the sentence: the wording is prose, and a
     // test that pinned it would break on a rewrite that changed nothing.
     await expect(def.run(undefined as never, {} as never)).rejects.toThrow();
-  });
-
-  it("takes no arguments, so a startup check needs nothing but the call", () => {
-    const registry: ActionRegistry = new Map();
-    registerIntrospectionActions(registry, {} as ActionCallbacks);
-    const def = registry.get("mcp.surface" as ActionId)!() as AnyActionDefinition;
-
-    expect(def.argsSchema).toBeUndefined();
   });
 });

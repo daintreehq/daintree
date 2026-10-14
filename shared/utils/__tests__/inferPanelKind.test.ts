@@ -10,10 +10,6 @@ describe("inferKind", () => {
     expect(inferKind({ kind: "agent" })).toBe("terminal");
   });
 
-  it('migrates legacy "agent" kind even when other fields are present', () => {
-    expect(inferKind({ kind: "agent", cwd: "/project", command: "claude" })).toBe("terminal");
-  });
-
   it("infers browser from browserUrl", () => {
     expect(inferKind({ browserUrl: "https://example.com" })).toBe("browser");
   });

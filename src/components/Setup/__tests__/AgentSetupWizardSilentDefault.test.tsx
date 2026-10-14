@@ -10,6 +10,12 @@ const { setTelemetryLevelMock, markPromptShownMock } = vi.hoisted(() => ({
   setTelemetryLevelMock: vi.fn(() => Promise.resolve()),
   markPromptShownMock: vi.fn(() => Promise.resolve()),
 }));
+const { setGlobalSkipPermissionsMock } = vi.hoisted(() => ({
+  setGlobalSkipPermissionsMock: vi.fn(() => Promise.resolve()),
+}));
+const { dispatchMock } = vi.hoisted(() => ({
+  dispatchMock: vi.fn(() => Promise.resolve()),
+}));
 
 vi.mock("@/lib/notify", () => ({
   notify: notifyMock,
@@ -33,6 +39,7 @@ vi.mock("framer-motion", () => {
 
 const agentSettingsStoreState = {
   setAgentPinned: vi.fn(() => Promise.resolve()),
+  setGlobalSkipPermissions: setGlobalSkipPermissionsMock,
   initialize: vi.fn(() => Promise.resolve()),
 };
 vi.mock("@/store", () => ({
@@ -74,7 +81,7 @@ vi.mock("@/clients/appThemeClient", () => ({
 }));
 
 vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: vi.fn(() => Promise.resolve()) },
+  actionService: { dispatch: dispatchMock },
 }));
 
 vi.mock("@/services/KeybindingService", () => ({
@@ -85,11 +92,20 @@ vi.mock("../useAgentSetupPoll", () => ({
   useAgentSetupPoll: () => undefined,
 }));
 
+const systemState = vi.hoisted(() => ({ fatal: false }));
+
 vi.mock("../SystemRequirementsSection", () => ({
-  SystemRequirementsSection: ({ onCheckingChange }: { onCheckingChange: (v: boolean) => void }) => {
+  SystemRequirementsSection: ({
+    onCheckingChange,
+    onFatalFailureChange,
+  }: {
+    onCheckingChange: (v: boolean) => void;
+    onFatalFailureChange: (v: boolean) => void;
+  }) => {
     React.useEffect(() => {
       onCheckingChange(false);
-    }, [onCheckingChange]);
+      onFatalFailureChange(systemState.fatal);
+    }, [onCheckingChange, onFatalFailureChange]);
     return <div data-testid="system-requirements-stub" />;
   },
 }));
@@ -99,7 +115,19 @@ vi.mock("../AgentCliStep", () => ({
 }));
 
 vi.mock("@/components/agents/AgentCard", () => ({
-  AgentCard: ({ agentId }: { agentId: string }) => <div data-testid={`agent-card-${agentId}`} />,
+  AgentCard: ({
+    agentId,
+    onToggle,
+  }: {
+    agentId: string;
+    onToggle: (id: string, checked: boolean) => void;
+  }) => (
+    <button
+      data-testid={`agent-card-${agentId}`}
+      aria-label={`select ${agentId}`}
+      onClick={() => onToggle(agentId, true)}
+    />
+  ),
 }));
 
 vi.mock("@/components/ui/AppDialog", () => {
@@ -131,7 +159,12 @@ vi.mock("@/components/ui/AppDialog", () => {
     ) : null;
   const Header = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   const Body = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
-  const Footer = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
+  const Footer = ({ children, hint }: { children: React.ReactNode; hint?: React.ReactNode }) => (
+    <div>
+      {hint}
+      {children}
+    </div>
+  );
   const Title = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   const CloseButton = () => <button data-testid="close-button-stub" />;
   Dialog.Header = Header;
@@ -551,5 +584,286 @@ describe("AgentSetupWizard first-run theme auto-select", () => {
     });
 
     expect(themeStoreMock.setSelectedSchemeIdSilent).not.toHaveBeenCalled();
+  });
+});
+
+// Navigate appearance -> agents -> privacy -> permissions. All selected agents
+// are pre-installed, so cli is skipped and the permissions step renders after
+// three Continue clicks.
+async function gotoPermissionsStep() {
+  await clickButton("Continue"); // appearance -> agents
+  await clickButton("Continue"); // agents -> privacy
+  await clickButton("Continue"); // privacy -> permissions
+}
+
+function permissionsToggle(): HTMLButtonElement {
+  const toggle = document.querySelector('button[role="switch"]') as HTMLButtonElement | null;
+  expect(toggle, "permissions toggle should be present on the permissions step").not.toBeNull();
+  return toggle!;
+}
+
+describe("AgentSetupWizard permissions step", () => {
+  beforeEach(() => {
+    notifyMock.mockClear();
+    setGlobalSkipPermissionsMock.mockClear();
+    setGlobalSkipPermissionsMock.mockImplementation(() => Promise.resolve());
+  });
+
+  it("renders the permissions step with the toggle defaulting to off", async () => {
+    await act(async () => {
+      render(
+        <AgentSetupWizard
+          isOpen
+          onClose={vi.fn()}
+          isFirstRun
+          initialAvailability={{ claude: "ready" }}
+        />
+      );
+    });
+
+    await gotoPermissionsStep();
+
+    const toggle = permissionsToggle();
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    // Accessibility: the switch points at the risk copy via aria-describedby.
+    const describedBy = toggle.getAttribute("aria-describedby");
+    expect(describedBy, "switch must wire aria-describedby to the risk copy").toBeTruthy();
+    expect(document.getElementById(describedBy!)).not.toBeNull();
+    // No autofocus on the switch.
+    expect(document.activeElement).not.toBe(toggle);
+  });
+
+  it("writes the explicit off choice and advances on Continue when the toggle is left off", async () => {
+    const onClose = vi.fn();
+    await act(async () => {
+      render(
+        <AgentSetupWizard
+          isOpen
+          onClose={onClose}
+          isFirstRun
+          initialAvailability={{ claude: "ready" }}
+        />
+      );
+    });
+
+    await gotoPermissionsStep();
+    await clickButton("Continue"); // permissions -> complete
+
+    // Explicit off is persisted so a stale `true` can't survive first-run.
+    expect(setGlobalSkipPermissionsMock).toHaveBeenCalledTimes(1);
+    expect(setGlobalSkipPermissionsMock).toHaveBeenCalledWith(false);
+    expect(notifyMock).not.toHaveBeenCalled();
+    // Advanced to the summary, not closed.
+    expect(document.body.textContent).toContain("Setup complete");
+  });
+
+  it("commits true before advancing when the toggle is enabled", async () => {
+    await act(async () => {
+      render(
+        <AgentSetupWizard
+          isOpen
+          onClose={vi.fn()}
+          isFirstRun
+          initialAvailability={{ claude: "ready" }}
+        />
+      );
+    });
+
+    await gotoPermissionsStep();
+    await act(async () => {
+      permissionsToggle().click();
+    });
+    await clickButton("Continue");
+
+    expect(setGlobalSkipPermissionsMock).toHaveBeenCalledWith(true);
+    expect(notifyMock).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Setup complete");
+  });
+
+  it("stays on the permissions step and surfaces an error when the save fails", async () => {
+    setGlobalSkipPermissionsMock.mockRejectedValueOnce(new Error("IPC down"));
+
+    const onClose = vi.fn();
+    await act(async () => {
+      render(
+        <AgentSetupWizard
+          isOpen
+          onClose={onClose}
+          isFirstRun
+          initialAvailability={{ claude: "ready" }}
+        />
+      );
+    });
+
+    await gotoPermissionsStep();
+    await act(async () => {
+      permissionsToggle().click();
+    });
+    await clickButton("Continue");
+
+    expect(setGlobalSkipPermissionsMock).toHaveBeenCalledWith(true);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+    // Did not advance — still on the permissions step, summary not shown.
+    expect(document.body.textContent).toContain("Agent permissions");
+    expect(document.body.textContent).not.toContain("Setup complete");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not write the setting when the user closes from the permissions step", async () => {
+    const onClose = vi.fn();
+    await act(async () => {
+      render(
+        <AgentSetupWizard
+          isOpen
+          onClose={onClose}
+          isFirstRun
+          initialAvailability={{ claude: "ready" }}
+        />
+      );
+    });
+
+    await gotoPermissionsStep();
+    const dismiss = document.querySelector(
+      '[data-testid="dialog-dismiss"]'
+    ) as HTMLButtonElement | null;
+    await act(async () => {
+      dismiss!.click();
+    });
+
+    // Close is not consent — the global skip setting must never be written here.
+    expect(setGlobalSkipPermissionsMock).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+});
+
+function buttonLabels(): string[] {
+  return Array.from(document.querySelectorAll("button"))
+    .map((b) => b.textContent?.trim() ?? "")
+    .filter(Boolean);
+}
+
+async function openAt(
+  availability: Record<string, string>,
+  onClose = vi.fn(),
+  hasWorkspace = true
+) {
+  await act(async () => {
+    render(
+      <AgentSetupWizard
+        isOpen
+        onClose={onClose}
+        isFirstRun={false}
+        hasWorkspace={hasWorkspace}
+        initialAvailability={availability as never}
+      />
+    );
+  });
+  return onClose;
+}
+
+/**
+ * The completion screen is the last thing a first-run user sees, so it has to
+ * resolve to a single obvious move. These assert the shape of that resolution
+ * rather than any particular label styling.
+ */
+describe("AgentSetupWizard completion action", () => {
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    notifyMock.mockClear();
+    setGlobalSkipPermissionsMock.mockClear();
+    systemState.fatal = false;
+  });
+
+  it("leads to a project, not an agent, when no workspace is open", async () => {
+    const onClose = await openAt({ claude: "ready" }, vi.fn(), false);
+    await clickButton("Continue");
+
+    // An agent launched with no workspace starts in the home directory, so the
+    // one forward move is to acquire a workspace first.
+    expect(buttonLabels().filter((l) => l !== "Close dialog")).toEqual(["Open a project"]);
+    await clickButton("Open a project");
+    expect(dispatchMock).toHaveBeenCalledWith("project.add", undefined, { source: "user" });
+    expect(dispatchMock).not.toHaveBeenCalledWith("panel.palette", undefined, expect.anything());
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves to exactly one action, and it moves forward", async () => {
+    await openAt({ claude: "ready" });
+    await clickButton("Continue"); // agents -> complete (nothing to install)
+
+    // One footer action, and it starts the work rather than merely dismissing.
+    // A companion "Done" would read as if the two differ in what they save when
+    // both just close; Escape and the header dismiss remain the way out.
+    // (CompleteStep's own suite asserts the summary body renders no buttons.)
+    expect(buttonLabels().filter((l) => l !== "Close dialog")).toEqual(["Launch an agent"]);
+  });
+
+  it("starts the work and closes when the forward action is taken", async () => {
+    const onClose = await openAt({ claude: "ready" });
+    await clickButton("Continue");
+    await clickButton("Launch an agent");
+
+    expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers rather than continues from the install step while nothing picked is usable", async () => {
+    await openAt({});
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-testid="agent-card-claude"]')!.click();
+    });
+    await clickButton("Continue"); // agents -> cli (claude is missing)
+
+    // The strongest move on this step must not read as success before anything
+    // installed — the install is the step's primary, the exit a deferral.
+    expect(buttonLabels()).toContain("Set up later");
+    expect(buttonLabels()).not.toContain("Continue");
+  });
+
+  it.each([
+    [true, "Finish setup"],
+    [false, "Open a project"],
+  ])(
+    "saves rather than celebrates a deferred install (workspace open: %s)",
+    async (hasWorkspace, action) => {
+      await openAt({}, vi.fn(), hasWorkspace);
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-testid="agent-card-claude"]')!.click();
+      });
+      await clickButton("Continue"); // agents -> cli
+      await clickButton("Set up later"); // cli -> complete
+
+      expect(document.body.textContent).toContain("Setup saved");
+      expect(document.body.textContent).not.toContain("Setup complete");
+      expect(buttonLabels().filter((l) => l !== "Close dialog")).toEqual([action]);
+    }
+  );
+
+  it("says why the agents step is blocked when a system tool is missing", async () => {
+    systemState.fatal = true;
+    await openAt({ claude: "ready" });
+    expect(document.body.textContent).toContain("Install the missing system tools to continue");
+  });
+
+  it("names the exit for what it does — closing the wizard, not skipping a step", async () => {
+    await openAt({ claude: "ready" });
+    expect(buttonLabels()).toContain("Cancel");
+    expect(buttonLabels()).not.toContain("Skip");
+  });
+
+  // The step heading is the landing point on open and on every advance: it
+  // reads the step's name and instructions before the first control, and keeps
+  // Enter off the dismiss button that discards a first run.
+  it("lands focus on the current step's heading rather than the dismiss button", async () => {
+    await openAt({ claude: "ready" });
+    const heading = document.querySelector("h3");
+    expect(heading?.textContent).toBe("Choose your AI agents");
+    expect(document.activeElement).toBe(heading);
+
+    await clickButton("Continue");
+    const next = document.querySelector("h3");
+    expect(next?.textContent).toBe("Setup complete");
+    expect(document.activeElement).toBe(next);
   });
 });

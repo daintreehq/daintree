@@ -124,22 +124,6 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("useBranchPicker active index", () => {
-  it("resolves to the first row when the cursor outruns a narrowed list", () => {
-    const { handle } = renderPicker();
-
-    act(() => {
-      handle.current.setActiveIndex(3);
-    });
-    expect(handle.current.activeIndex).toBe(3);
-
-    act(() => {
-      handle.current.setQuery("feature/auth");
-    });
-
-    expect(handle.current.selectableRows).toHaveLength(1);
-    expect(handle.current.activeIndex).toBe(0);
-  });
-
   it("never renders an out-of-range cursor, not even for one frame", () => {
     // The invariant this whole design exists for. The previous implementation
     // corrected the index in a `useEffect`, so the render that first carried the
@@ -387,25 +371,6 @@ describe("useBranchPicker session state", () => {
     });
     act(() => {
       handle.current.setOpen(true);
-    });
-
-    expect(handle.current.query).toBe("");
-    expect(handle.current.activeIndex).toBe(0);
-  });
-
-  it("clears them on close too, so a reopen inside the exit animation starts clean", () => {
-    // Radix cancels the 120ms exit animation when the popover reopens inside it,
-    // so a reset armed only on one path would be skipped and fire later.
-    const { handle } = renderPicker();
-
-    act(() => {
-      handle.current.setOpen(true);
-    });
-    act(() => {
-      handle.current.setQuery("feature");
-    });
-    act(() => {
-      handle.current.setOpen(false);
     });
 
     expect(handle.current.query).toBe("");

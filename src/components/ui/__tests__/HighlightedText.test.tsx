@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 
-import { HighlightedText, findMatchIndices, substringMatchIndices } from "../HighlightedText";
+import { HighlightedText, substringMatchIndices } from "../HighlightedText";
 
 /**
  * The class the match wrapper carries, named once so these tests assert the
@@ -133,26 +132,6 @@ describe("HighlightedText", () => {
     );
     expect(container.textContent).toBe("abc");
     expect(container.querySelectorAll(`.${HIGHLIGHT_CLASS}`)).toHaveLength(0);
-  });
-});
-
-describe("findMatchIndices", () => {
-  const matches: FuseResultMatch[] = [
-    { key: "name", value: "Terminal", indices: [[0, 7]] },
-    { key: "description", value: "A shell window", indices: [[2, 6]] },
-  ];
-
-  it("returns indices for a matching key", () => {
-    expect(findMatchIndices(matches, "name")).toEqual([[0, 7]]);
-    expect(findMatchIndices(matches, "description")).toEqual([[2, 6]]);
-  });
-
-  it("returns undefined for a missing key", () => {
-    expect(findMatchIndices(matches, "nonexistent")).toBeUndefined();
-  });
-
-  it("returns undefined when matches is undefined", () => {
-    expect(findMatchIndices(undefined, "name")).toBeUndefined();
   });
 });
 

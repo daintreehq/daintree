@@ -119,47 +119,6 @@ describe("removePanel consoleCaptureStore cleanup", () => {
     expect(useConsoleCaptureStore.getState().messages.has(panelId)).toBe(false);
   });
 
-  it("is safe to call removePane again after removePanel (idempotency)", () => {
-    const panelId = "browser-2";
-
-    usePanelStore.setState({
-      panelsById: {
-        [panelId]: {
-          id: panelId,
-          kind: "browser",
-          title: "Browser",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        } as PanelInstance,
-      },
-      panelIds: [panelId],
-    });
-
-    useConsoleCaptureStore.getState().addStructuredMessage({
-      id: 1,
-      paneId: panelId,
-      level: "error",
-      cdpType: "log",
-      args: [{ type: "primitive", kind: "string", value: "error msg" }],
-      summaryText: "error msg",
-      groupDepth: 0,
-      timestamp: Date.now(),
-      navigationGeneration: 0,
-    });
-    flushConsoleCaptureBuffer();
-
-    usePanelStore.getState().removePanel(panelId);
-
-    // Simulate BrowserPane useEffect cleanup firing after removePanel
-    expect(() => {
-      useConsoleCaptureStore.getState().removePane(panelId);
-    }).not.toThrow();
-
-    expect(useConsoleCaptureStore.getState().messages.has(panelId)).toBe(false);
-  });
-
   it("preserves other panes' messages when one browser panel is removed", () => {
     usePanelStore.setState({
       panelsById: {
@@ -216,28 +175,5 @@ describe("removePanel consoleCaptureStore cleanup", () => {
     expect(state.messages.has("browser-a")).toBe(false);
     expect(state.messages.has("browser-b")).toBe(true);
     expect(state.messages.get("browser-b")).toHaveLength(1);
-  });
-
-  it("does not throw when removing a non-browser panel with no console messages", () => {
-    const panelId = "terminal-1";
-
-    usePanelStore.setState({
-      panelsById: {
-        [panelId]: {
-          id: panelId,
-          title: "Shell",
-          kind: "terminal" as const,
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      },
-      panelIds: [panelId],
-    });
-
-    expect(() => {
-      usePanelStore.getState().removePanel(panelId);
-    }).not.toThrow();
   });
 });

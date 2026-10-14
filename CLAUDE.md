@@ -65,7 +65,7 @@ React Compiler is enabled (`babel-plugin-react-compiler`, `target: "19"`). A bai
 4. Report the commands actually run and their real results. `prettier` prints "All files formatted correctly" while exiting 1 — trust the exit code, not the summary.
 5. Never weaken a test, suppress a warning, or widen a baseline to make a change pass.
 
-CI on PRs: `check` + vitest (4 shards) + build + smoke, Ubuntu only, no E2E. `ci-ok` is the sole required check.
+CI on PRs: `check` + vitest (4 shards, plus a separate `perf-liveness` job) + build + smoke, Ubuntu only, no E2E. `ci-ok` is the sole required check.
 
 **E2E is expensive and locks up the machine — never decide to run it yourself.** Run only the spec or bucket the user names, and only when they ask. Full cross-platform validation goes through the `stabilize` workflow (`.agents/skills/stabilize/`), never a local sweep and never as part of a merge. E2E runs against the built app, so a stale or failed `npm run build:e2e` silently tests the old bundle.
 

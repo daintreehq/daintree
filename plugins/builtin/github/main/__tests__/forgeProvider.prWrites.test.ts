@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatErrorMessage } from "../../../../../shared/utils/errorMessage.js";
 
 const mockGraphQLClient = vi.fn();
+const mockGetConfigAsync = vi.fn();
 
 vi.mock("../GitHubAuth.js", () => ({
   GitHubAuth: {
     getToken: vi.fn(() => "test-token"),
     createClient: vi.fn(() => mockGraphQLClient),
+    getConfigAsync: (...args: unknown[]) => mockGetConfigAsync(...args),
   },
   GITHUB_API_TIMEOUT_MS: 5000,
 }));
@@ -540,5 +542,53 @@ describe("editPR", () => {
     await expect(githubForgeProvider.editPR(repo, 42, { title: "  " })).rejects.toThrow(
       /title cannot be empty/i
     );
+  });
+});
+
+describe("githubForgeProvider.identity.getCurrentUser", () => {
+  beforeEach(() => {
+    mockGetConfigAsync.mockReset();
+  });
+
+  it("returns null when no token is configured", async () => {
+    mockGetConfigAsync.mockResolvedValue({ hasToken: false });
+    const user = await githubForgeProvider.identity?.getCurrentUser();
+    expect(user).toBeNull();
+  });
+
+  it("returns null when the token has no cached username yet", async () => {
+    mockGetConfigAsync.mockResolvedValue({ hasToken: true });
+    const user = await githubForgeProvider.identity?.getCurrentUser();
+    expect(user).toBeNull();
+  });
+
+  it("projects cached username and avatarUrl into a ForgeUser", async () => {
+    mockGetConfigAsync.mockResolvedValue({
+      hasToken: true,
+      username: "ada",
+      avatarUrl: "https://avatars.example/ada.png",
+    });
+    const user = await githubForgeProvider.identity?.getCurrentUser();
+    expect(user).toEqual({
+      login: "ada",
+      avatarUrl: "https://avatars.example/ada.png",
+      rawData: { source: "GitHubAuth.cached" },
+    });
+  });
+
+  it("omits avatarUrl when the cache has no avatar", async () => {
+    mockGetConfigAsync.mockResolvedValue({ hasToken: true, username: "ada" });
+    const user = await githubForgeProvider.identity?.getCurrentUser();
+    expect(user?.login).toBe("ada");
+    expect(user?.avatarUrl).toBeUndefined();
+  });
+
+  it("propagates getConfigAsync rejections so the host can surface them", async () => {
+    // The host handler decides whether to wrap the throw in an error toast;
+    // the capability is transparent to it. The renderer-side action catches
+    // the rejection and routes it to `assignmentError` (mirroring the old
+    // `getConfig()` rejection case).
+    mockGetConfigAsync.mockRejectedValue(new Error("IPC unavailable"));
+    await expect(githubForgeProvider.identity?.getCurrentUser()).rejects.toThrow("IPC unavailable");
   });
 });

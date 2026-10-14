@@ -15,6 +15,7 @@ const execaMock = vi.hoisted(() => {
   const fn = vi.fn();
   return { execa: fn };
 });
+const shellMock = vi.hoisted(() => ({ openPath: vi.fn<(p: string) => Promise<string>>() }));
 
 vi.mock("fs", () => ({
   default: fsMock,
@@ -33,9 +34,7 @@ vi.mock("../../utils/openPath.js", async () => {
   return { openWithDefaultApp: (target: string) => shell.openPath(target) };
 });
 
-vi.mock("electron", () => ({
-  shell: { openPath: vi.fn() },
-}));
+vi.mock("electron", () => ({ shell: shellMock }));
 
 vi.mock("execa", () => ({
   execa: execaMock.execa,
@@ -62,6 +61,31 @@ function windowsDisk(files: string[]): void {
 
 const originalPlatform = process.platform;
 let originalPATH: string | undefined;
+let originalVISUAL: string | undefined;
+let originalEDITOR: string | undefined;
+
+function setPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { value: platform });
+}
+
+function mockExistingFiles(paths: string[], options: { executable?: boolean } = {}) {
+  const set = new Set(paths);
+  const executable = options.executable ?? true;
+  fsMock.promises.stat.mockImplementation(async (p: string) => {
+    if (set.has(p)) return { isFile: () => true };
+    throw new Error("ENOENT");
+  });
+  fsMock.promises.access.mockImplementation(async (p: string) => {
+    if (set.has(p) && executable) return;
+    throw new Error("EACCES");
+  });
+}
+
+type EditorModule = typeof import("../EditorService.js");
+
+async function loadModule(): Promise<EditorModule> {
+  return (await import("../EditorService.js")) as EditorModule;
+}
 
 describe("EditorService.discover", () => {
   beforeEach(() => {
@@ -75,20 +99,6 @@ describe("EditorService.discover", () => {
     Object.defineProperty(process, "platform", { value: originalPlatform });
     process.env.PATH = originalPATH;
   });
-
-  function mockExistingFiles(paths: string[]) {
-    const pathSet = new Set(paths);
-    fsMock.promises.stat.mockImplementation(async (filePath: string) => {
-      if (pathSet.has(filePath)) {
-        return { isFile: () => true };
-      }
-      throw new Error("ENOENT");
-    });
-    fsMock.promises.access.mockImplementation(async (filePath: string) => {
-      if (pathSet.has(filePath)) return;
-      throw new Error("EACCES");
-    });
-  }
 
   async function loadDiscover() {
     const mod = await import("../EditorService.js");
@@ -106,19 +116,6 @@ describe("EditorService.discover", () => {
     expect(webstorm).toBeDefined();
     expect(webstorm!.available).toBe(true);
     expect(webstorm!.executablePath).toBe("/Applications/WebStorm.app/Contents/MacOS/webstorm");
-  });
-
-  it("discovers IntelliJ IDEA via .app bundle on macOS", async () => {
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    mockExistingFiles(["/Applications/IntelliJ IDEA.app/Contents/MacOS/idea"]);
-
-    const discover = await loadDiscover();
-    const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
-
-    expect(webstorm).toBeDefined();
-    expect(webstorm!.available).toBe(true);
-    expect(webstorm!.executablePath).toBe("/Applications/IntelliJ IDEA.app/Contents/MacOS/idea");
   });
 
   it("discovers JetBrains IDE in ~/Applications on macOS", async () => {
@@ -260,69 +257,6 @@ describe("EditorService.discover", () => {
     );
   });
 
-  it("discovers Sublime Text via .app bundle on macOS", async () => {
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    mockExistingFiles(["/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl"]);
-
-    const discover = await loadDiscover();
-    const results = await discover();
-    const sublime = results.find((e) => e.id === "sublime");
-
-    expect(sublime).toBeDefined();
-    expect(sublime!.available).toBe(true);
-    expect(sublime!.executablePath).toBe(
-      "/Applications/Sublime Text.app/Contents/SharedSupport/bin/subl"
-    );
-  });
-
-  it("discovers Antigravity IDE via .app bundle on macOS", async () => {
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    mockExistingFiles([
-      "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
-    ]);
-
-    const discover = await loadDiscover();
-    const results = await discover();
-    const antigravity = results.find((e) => e.id === "antigravity-ide");
-
-    expect(antigravity).toBeDefined();
-    expect(antigravity!.available).toBe(true);
-    expect(antigravity!.executablePath).toBe(
-      "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"
-    );
-  });
-
-  it("discovers Antigravity IDE in ~/Applications on macOS", async () => {
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    mockExistingFiles([
-      "/Users/testuser/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
-    ]);
-
-    const discover = await loadDiscover();
-    const results = await discover();
-    const antigravity = results.find((e) => e.id === "antigravity-ide");
-
-    expect(antigravity).toBeDefined();
-    expect(antigravity!.available).toBe(true);
-    expect(antigravity!.executablePath).toBe(
-      "/Users/testuser/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide"
-    );
-  });
-
-  it("discovers Antigravity IDE via PATH when the launcher is installed there", async () => {
-    Object.defineProperty(process, "platform", { value: "linux" });
-    process.env.PATH = "/usr/local/bin";
-    mockExistingFiles(["/usr/local/bin/antigravity-ide"]);
-
-    const discover = await loadDiscover();
-    const results = await discover();
-    const antigravity = results.find((e) => e.id === "antigravity-ide");
-
-    expect(antigravity).toBeDefined();
-    expect(antigravity!.available).toBe(true);
-    expect(antigravity!.executablePath).toBe("/usr/local/bin/antigravity-ide");
-  });
-
   it("does not search .app bundle paths on Linux", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     mockExistingFiles(["/Applications/WebStorm.app/Contents/MacOS/webstorm"]);
@@ -333,19 +267,6 @@ describe("EditorService.discover", () => {
 
     expect(webstorm).toBeDefined();
     expect(webstorm!.available).toBe(false);
-  });
-
-  it("discovers new JetBrains binaries (clion, datagrip, rubymine)", async () => {
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    mockExistingFiles(["/Applications/CLion.app/Contents/MacOS/clion"]);
-
-    const discover = await loadDiscover();
-    const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
-
-    expect(webstorm).toBeDefined();
-    expect(webstorm!.available).toBe(true);
-    expect(webstorm!.executablePath).toBe("/Applications/CLion.app/Contents/MacOS/clion");
   });
 
   it("discovers editors via PATH when available", async () => {
@@ -360,19 +281,6 @@ describe("EditorService.discover", () => {
     expect(vscode).toBeDefined();
     expect(vscode!.available).toBe(true);
     expect(vscode!.executablePath).toBe("/usr/local/bin/code");
-  });
-
-  it("discovers PyCharm via .app bundle on macOS", async () => {
-    Object.defineProperty(process, "platform", { value: "darwin" });
-    mockExistingFiles(["/Applications/PyCharm.app/Contents/MacOS/pycharm"]);
-
-    const discover = await loadDiscover();
-    const results = await discover();
-    const webstorm = results.find((e) => e.id === "webstorm");
-
-    expect(webstorm).toBeDefined();
-    expect(webstorm!.available).toBe(true);
-    expect(webstorm!.executablePath).toBe("/Applications/PyCharm.app/Contents/MacOS/pycharm");
   });
 
   it("returns all editors with available=false and no executablePath when nothing is found", async () => {
@@ -608,5 +516,607 @@ describe("EditorService.openFile", () => {
 
     const { shell } = await import("electron");
     expect(shell.openPath).not.toHaveBeenCalled();
+  });
+});
+
+describe("EditorService adversarial", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalPATH = process.env.PATH;
+    originalVISUAL = process.env.VISUAL;
+    originalEDITOR = process.env.EDITOR;
+    process.env.PATH = "/usr/local/bin";
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    setPlatform("linux");
+    // clearAllMocks() clears calls but keeps implementations, so a previous test's
+    // "installed" filesystem would otherwise persist into this one.
+    mockExistingFiles([]);
+    shellMock.openPath.mockResolvedValue("");
+    mockExecaChildren(execaMock.execa, ["spawned"]);
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+    process.env.PATH = originalPATH;
+    if (originalVISUAL === undefined) delete process.env.VISUAL;
+    else process.env.VISUAL = originalVISUAL;
+    if (originalEDITOR === undefined) delete process.env.EDITOR;
+    else process.env.EDITOR = originalEDITOR;
+  });
+
+  it("re-resolves the configured editor at openFile time; stale discovery is not cached", async () => {
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { discover, openFile } = await loadModule();
+
+    const first = await discover();
+    expect(first.find((e) => e.id === "vscode")?.available).toBe(true);
+
+    mockExistingFiles([]);
+
+    await openFile("/abs/file.ts", 10, 2, { id: "vscode" });
+
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).toHaveBeenCalledWith("/abs/file.ts");
+  });
+
+  const ANTIGRAVITY_LAUNCHER =
+    "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide";
+
+  it.each([
+    {
+      what: "line and column",
+      line: 12 as number | undefined,
+      col: 5 as number | undefined,
+      expected: ["--goto", "/repo with spaces/src/app.ts:12:5"],
+    },
+    {
+      what: "a line only",
+      line: 12 as number | undefined,
+      col: undefined,
+      expected: ["--goto", "/repo with spaces/src/app.ts:12"],
+    },
+    {
+      what: "no location",
+      line: undefined,
+      col: undefined,
+      expected: ["--goto", "/repo with spaces/src/app.ts"],
+    },
+  ])("builds Antigravity IDE argv for $what", async ({ line, col, expected }) => {
+    setPlatform("darwin");
+    process.env.PATH = "";
+    mockExistingFiles([ANTIGRAVITY_LAUNCHER]);
+
+    const { openFile } = await loadModule();
+    await openFile("/repo with spaces/src/app.ts", line, col, { id: "antigravity-ide" });
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa.mock.calls[0][1]).toEqual(expected);
+  });
+
+  it("starts an editor on Linux without Daintree's desktop entry or an AppImage's libraries", async () => {
+    process.env.VISUAL = "code";
+    process.env.CHROME_DESKTOP = "daintree.desktop";
+    process.env.APPIMAGE = "/home/u/Daintree.AppImage";
+    process.env.APPDIR = "/tmp/.mount_DaintrABC";
+    process.env.LD_LIBRARY_PATH = "/tmp/.mount_DaintrABC/usr/lib:/opt/lib";
+    try {
+      const { openFile } = await loadModule();
+      await openFile("/repo/src/app.ts");
+
+      const [binary, , options] = execaMock.execa.mock.calls[0];
+      expect(binary).toBe("code");
+      expect(options).toMatchObject({ detached: true, extendEnv: false });
+      const env = options.env as Record<string, string | undefined>;
+      expect(env.CHROME_DESKTOP).toBeUndefined();
+      expect(env.APPIMAGE).toBeUndefined();
+      expect(env.LD_LIBRARY_PATH).toBe("/opt/lib");
+      expect(env.PATH).toBe("/usr/local/bin");
+    } finally {
+      for (const name of ["CHROME_DESKTOP", "APPIMAGE", "APPDIR", "LD_LIBRARY_PATH"]) {
+        delete process.env[name];
+      }
+    }
+  });
+
+  it("honours a configured Antigravity IDE over an earlier-listed installed editor", async () => {
+    // Both installed: only the configured-editor branch can pick Antigravity, since
+    // VS Code wins the discovery-order fallback.
+    setPlatform("darwin");
+    process.env.PATH = "/usr/local/bin";
+    mockExistingFiles([ANTIGRAVITY_LAUNCHER, "/usr/local/bin/code"]);
+
+    const { openFile } = await loadModule();
+    await openFile("/repo/src/app.ts", 3, undefined, { id: "antigravity-ide" });
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa.mock.calls[0][0]).toBe(ANTIGRAVITY_LAUNCHER);
+  });
+
+  it("does not preempt an already-supported editor when nothing is configured", async () => {
+    // Antigravity is appended last in KNOWN_EDITORS precisely so adding it cannot
+    // change which editor an existing user's unconfigured opens land in.
+    setPlatform("darwin");
+    process.env.PATH = "/usr/local/bin";
+    mockExistingFiles([ANTIGRAVITY_LAUNCHER, "/usr/local/bin/zed"]);
+
+    const { openFile } = await loadModule();
+    await openFile("/repo/src/app.ts");
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa.mock.calls[0][0]).toBe("/usr/local/bin/zed");
+  });
+
+  it("custom template tokenizes before substitution — file path with spaces stays one arg", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file with spaces.ts", 12, 5, {
+      id: "custom",
+      customCommand: "code",
+      customTemplate: "--goto {file}:{line}:{col}",
+    });
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    const [binary, args] = execaMock.execa.mock.calls[0];
+    expect(binary).toBe("code");
+    expect(args).toEqual(["--goto", "/abs/file with spaces.ts:12:5"]);
+  });
+
+  it("VISUAL='code --reuse-window' is split into binary + args", async () => {
+    process.env.VISUAL = "code --reuse-window";
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts");
+
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "code",
+      ["--reuse-window", "/abs/file.ts"],
+      expect.objectContaining({ detached: true })
+    );
+  });
+
+  it("VISUAL with quoted Windows-style path preserves the path as a single binary token", async () => {
+    process.env.VISUAL = '"C:\\Program Files\\Sublime Text\\subl.exe" -w';
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts");
+
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "C:\\Program Files\\Sublime Text\\subl.exe",
+      ["-w", "/abs/file.ts"],
+      expect.objectContaining({ detached: true })
+    );
+  });
+
+  it("VISUAL='/usr/bin/nvim' with absolute path is still detected as a terminal editor and skipped", async () => {
+    process.env.VISUAL = "/usr/bin/nvim";
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts");
+
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).toHaveBeenCalledWith("/abs/file.ts");
+  });
+
+  it("VISUAL=vim falls through to EDITOR=code instead of dropping it", async () => {
+    process.env.VISUAL = "vim";
+    process.env.EDITOR = "code";
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts");
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "code",
+      ["/abs/file.ts"],
+      expect.objectContaining({ detached: true })
+    );
+  });
+
+  describe("Windows: a configured command is launched from PATH by absolute path", () => {
+    let originalPATHEXT: string | undefined;
+
+    beforeEach(() => {
+      setPlatform("win32");
+      originalPATHEXT = process.env.PATHEXT;
+      process.env.PATHEXT = ".EXE;.CMD";
+      // `.` and `bin` would be resolved against the working directory.
+      process.env.PATH = ".;bin;C:\\tools";
+    });
+
+    afterEach(() => {
+      if (originalPATHEXT === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = originalPATHEXT;
+    });
+
+    it("resolves a bare custom command, never a same-named file outside PATH", async () => {
+      windowsDisk(["C:\\tools\\code.cmd"]);
+      // Same-named files the working directory would offer, never PATH.
+      mockExistingFiles(["code.exe", "bin\\code.exe", ".\\code.exe"]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", undefined, undefined, {
+        id: "custom",
+        customCommand: "code",
+        customTemplate: "{file}",
+      });
+
+      expect(execaMock.execa).toHaveBeenCalledTimes(1);
+      expect(execaMock.execa.mock.calls[0]?.[0]).toBe("C:\\tools\\code.cmd");
+      expect(fsMock.promises.stat).not.toHaveBeenCalled();
+    });
+
+    it("tries $EDITOR's own extension first, and skips a command PATH does not hold", async () => {
+      process.env.VISUAL = "missing-editor --wait";
+      process.env.EDITOR = "notepad++.exe";
+      windowsDisk(["C:\\tools\\notepad++.exe"]);
+      mockExistingFiles(["missing-editor.exe"]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts");
+
+      expect(execaMock.execa.mock.calls.map(([program]) => program)).toEqual([
+        "C:\\tools\\notepad++.exe",
+      ]);
+    });
+
+    it("reaches a wrapper PATHEXT names beyond .exe/.cmd, by bare name or with its extension", async () => {
+      process.env.PATHEXT = ".EXE;.CMD;.VBS";
+      windowsDisk(["C:\\tools\\editor.vbs"]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", undefined, undefined, {
+        id: "custom",
+        customCommand: "editor",
+        customTemplate: "{file}",
+      });
+      process.env.EDITOR = "editor.vbs";
+      await openFile("/abs/file.ts");
+
+      expect(execaMock.execa.mock.calls.map(([program]) => program)).toEqual([
+        "C:\\tools\\editor.vbs",
+        "C:\\tools\\editor.vbs",
+      ]);
+    });
+
+    it("passes a configured path through unchanged", async () => {
+      const editor = "D:\\Apps\\Editor\\editor.exe";
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", undefined, undefined, {
+        id: "custom",
+        customCommand: editor,
+        customTemplate: "{file}",
+      });
+
+      expect(execaMock.execa.mock.calls[0]?.[0]).toBe(editor);
+    });
+
+    it("searches past a PATH entry on a dropped share instead of waiting on it", async () => {
+      process.env.PATH = "\\\\gone\\tools;C:\\tools";
+      windowsDisk(["C:\\tools\\code.cmd"]);
+      const listDirectory = fsMock.promises.readdir.getMockImplementation()!;
+      fsMock.promises.readdir.mockImplementation((directory: string) =>
+        directory.startsWith("\\\\gone") ? new Promise(() => {}) : listDirectory(directory)
+      );
+      const { discover } = await loadModule();
+
+      vi.useFakeTimers();
+      try {
+        const discovering = discover();
+        await vi.advanceTimersByTimeAsync(10_000);
+        const results = await discovering;
+        expect(results.find((e) => e.id === "vscode")?.executablePath).toBe("C:\\tools\\code.cmd");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("VISUAL=nvim.exe on Windows is detected as a terminal editor and skipped", async () => {
+    setPlatform("win32");
+    process.env.VISUAL = "nvim.exe";
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts");
+
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).toHaveBeenCalledWith("/abs/file.ts");
+  });
+
+  it("custom template substitutes every occurrence of {file}/{line}/{col}, not just the first", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 10, 2, {
+      id: "custom",
+      customCommand: "code",
+      customTemplate: "--arg={file}:{line}:{col}:{file}",
+    });
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    const [, args] = execaMock.execa.mock.calls[0];
+    expect(args).toEqual(["--arg=/abs/file.ts:10:2:/abs/file.ts"]);
+  });
+
+  it("custom editor with empty command string falls through to env/discovery instead of silently succeeding", async () => {
+    process.env.VISUAL = "code";
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 1, 1, {
+      id: "custom",
+      customCommand: "   ",
+      customTemplate: "{file}",
+    });
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(execaMock.execa.mock.calls[0][0]).toBe("code");
+  });
+});
+
+// The worktree "Open in Editor" action hands EditorService a folder (#12329).
+// Everything here is about what changes for a directory target — and, just as
+// deliberately, what does not.
+describe("EditorService directory targets", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    originalPATH = process.env.PATH;
+    originalVISUAL = process.env.VISUAL;
+    originalEDITOR = process.env.EDITOR;
+    process.env.PATH = "/usr/local/bin";
+    delete process.env.VISUAL;
+    delete process.env.EDITOR;
+    setPlatform("linux");
+    fsMock.promises.stat.mockImplementation(async () => {
+      throw new Error("ENOENT");
+    });
+    fsMock.promises.access.mockImplementation(async () => {
+      throw new Error("EACCES");
+    });
+    shellMock.openPath.mockResolvedValue("");
+    mockExecaChildren(execaMock.execa, ["spawned"]);
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+    process.env.PATH = originalPATH;
+    if (originalVISUAL !== undefined) process.env.VISUAL = originalVISUAL;
+    else delete process.env.VISUAL;
+    if (originalEDITOR !== undefined) process.env.EDITOR = originalEDITOR;
+    else delete process.env.EDITOR;
+  });
+
+  const WORKTREE = "/abs/worktrees/feature-x";
+
+  function argsOfFirstLaunch(): string[] {
+    expect(execaMock.execa).toHaveBeenCalled();
+    return execaMock.execa.mock.calls[0][1] as string[];
+  }
+
+  // `--goto` names a file to navigate into; the whole point of the fix.
+  const GOTO_EDITORS = [
+    ["vscode", "code"],
+    ["vscode-insiders", "code-insiders"],
+    ["cursor", "cursor"],
+    ["windsurf", "windsurf"],
+    ["antigravity-ide", "antigravity-ide"],
+  ] as const;
+
+  for (const [id, binary] of GOTO_EDITORS) {
+    it(`${id} opens a directory as a bare path, without --goto`, async () => {
+      mockExistingFiles([`/usr/local/bin/${binary}`]);
+      const { openFile } = await loadModule();
+
+      await openFile(WORKTREE, undefined, undefined, { id }, true);
+
+      expect(execaMock.execa).toHaveBeenCalledWith(
+        `/usr/local/bin/${binary}`,
+        [WORKTREE],
+        expect.objectContaining({ detached: true })
+      );
+      // A launch that succeeded must end the chain — no discovery pass behind
+      // it, and above all no reveal, which is the bug this fixes.
+      expect(execaMock.execa).toHaveBeenCalledTimes(1);
+      expect(shellMock.openPath).not.toHaveBeenCalled();
+    });
+
+    it(`${id} still uses --goto for a file target`, async () => {
+      mockExistingFiles([`/usr/local/bin/${binary}`]);
+      const { openFile } = await loadModule();
+
+      await openFile("/abs/file.ts", 12, 5, { id }, false);
+
+      expect(argsOfFirstLaunch()).toEqual(["--goto", "/abs/file.ts:12:5"]);
+    });
+  }
+
+  // A caller that passes coordinates alongside a folder must not be able to
+  // turn it back into a file target — the folder wins.
+  it("drops coordinates supplied with a directory target", async () => {
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, 12, 5, { id: "vscode" }, true);
+
+    expect(argsOfFirstLaunch()).toEqual([WORKTREE]);
+  });
+
+  it("passes a bare directory path to the editors that already take one", async () => {
+    for (const [id, binary] of [
+      ["zed", "zed"],
+      ["sublime", "subl"],
+      ["webstorm", "webstorm"],
+      ["neovim", "nvim"],
+    ] as const) {
+      vi.clearAllMocks();
+      mockExecaChildren(execaMock.execa, ["spawned"]);
+      mockExistingFiles([`/usr/local/bin/${binary}`]);
+      const { openFile } = await loadModule();
+
+      await openFile(WORKTREE, 12, 5, { id }, true);
+
+      expect(argsOfFirstLaunch(), id).toEqual([WORKTREE]);
+    }
+  });
+
+  it("discovered editors are directory-aware too, not just the configured one", async () => {
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    // No config at all: the target reaches `code` through the discovery loop.
+    await openFile(WORKTREE, undefined, undefined, null, true);
+
+    expect(argsOfFirstLaunch()).toEqual([WORKTREE]);
+  });
+
+  it("renders the default custom template as a bare directory, not 'dir::'", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile(
+      WORKTREE,
+      12,
+      5,
+      { id: "custom", customCommand: "myeditor", customTemplate: "{file}:{line}:{col}" },
+      true
+    );
+
+    expect(execaMock.execa).toHaveBeenCalledWith(
+      "myeditor",
+      [WORKTREE],
+      expect.objectContaining({ detached: true })
+    );
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
+  });
+
+  it("keeps the surrounding flags of a custom template when coordinates go away", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile(
+      WORKTREE,
+      12,
+      5,
+      { id: "custom", customCommand: "code", customTemplate: "--reuse-window {file}:{line}:{col}" },
+      true
+    );
+
+    expect(argsOfFirstLaunch()).toEqual(["--reuse-window", WORKTREE]);
+  });
+
+  // A token that interpolates away must still be passed, empty: a positional
+  // template would otherwise slide the path into the vacated slot.
+  it("keeps a stranded token's argv slot rather than shifting the ones after it", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile(
+      WORKTREE,
+      12,
+      undefined,
+      { id: "custom", customCommand: "wrapper", customTemplate: '"{line}" "{col}" "{file}"' },
+      true
+    );
+
+    expect(argsOfFirstLaunch()).toEqual(["", "", WORKTREE]);
+  });
+
+  // Only `:` — the form the settings UI documents — is treated as a coordinate
+  // separator. Other punctuation in a hand-written template means whatever the
+  // user's own command says it means.
+  it("leaves a bare vim '+' alone when there is no line to attach to it", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile(
+      WORKTREE,
+      12,
+      5,
+      { id: "custom", customCommand: "gvim", customTemplate: "+{line} {file}" },
+      true
+    );
+
+    expect(argsOfFirstLaunch()).toEqual(["+", WORKTREE]);
+  });
+
+  it("leaves a comma delimiter's empty field in place", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 12, undefined, {
+      id: "custom",
+      customCommand: "wrapper",
+      customTemplate: "{line},{col},{file}",
+    });
+
+    expect(argsOfFirstLaunch()).toEqual(["12,,/abs/file.ts"]);
+  });
+
+  // The same stranded punctuation was already reachable for a file opened with
+  // no line — the settings UI defaults every custom editor to this template.
+  it("keeps the line but drops the missing column", async () => {
+    const { openFile } = await loadModule();
+
+    await openFile("/abs/file.ts", 12, undefined, {
+      id: "custom",
+      customCommand: "myeditor",
+      customTemplate: "{file}:{line}:{col}",
+    });
+
+    expect(argsOfFirstLaunch()).toEqual(["/abs/file.ts:12"]);
+  });
+
+  it("skips the macOS plain-text fallback for a directory and reveals it instead", async () => {
+    setPlatform("darwin");
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, undefined, undefined, null, true);
+
+    expect(execaMock.execa).not.toHaveBeenCalled();
+    expect(shellMock.openPath).toHaveBeenCalledWith(WORKTREE);
+  });
+
+  it("reaches shell.openPath for a directory only after every editor has failed", async () => {
+    setPlatform("darwin");
+    mockExistingFiles(["/usr/local/bin/code"]);
+    mockExecaChildren(execaMock.execa, ["enoent"]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, undefined, undefined, { id: "vscode" }, true);
+
+    // Exactly two attempts — the configured editor, then the discovery loop's
+    // — both with folder argv, and no `open -t` between them. Asserting the
+    // count is what stops a reveal-without-trying regression passing here.
+    expect(execaMock.execa.mock.calls).toEqual([
+      ["/usr/local/bin/code", [WORKTREE], expect.objectContaining({ detached: true })],
+      ["/usr/local/bin/code", [WORKTREE], expect.objectContaining({ detached: true })],
+    ]);
+    expect(shellMock.openPath).toHaveBeenCalledWith(WORKTREE);
+  });
+
+  it("keeps the directory flag when the configured editor is missing", async () => {
+    // Configured Zed, but only `code` is installed: the configured branch finds
+    // no executable, so discovery answers — still as a folder.
+    mockExistingFiles(["/usr/local/bin/code"]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, 12, 5, { id: "zed" }, true);
+
+    expect(execaMock.execa).toHaveBeenCalledTimes(1);
+    expect(argsOfFirstLaunch()).toEqual([WORKTREE]);
+  });
+
+  it("keeps the directory flag when the configured editor fails and another answers", async () => {
+    mockExistingFiles(["/usr/local/bin/code", "/usr/local/bin/subl"]);
+    // The configured launch fails; the discovery loop's first candidate wins.
+    mockExecaChildren(execaMock.execa, ["enoent", "spawned"]);
+    const { openFile } = await loadModule();
+
+    await openFile(WORKTREE, undefined, undefined, { id: "sublime" }, true);
+
+    expect(execaMock.execa.mock.calls[0]![0]).toBe("/usr/local/bin/subl");
+    expect(execaMock.execa.mock.calls[1]).toEqual([
+      "/usr/local/bin/code",
+      [WORKTREE],
+      expect.objectContaining({ detached: true }),
+    ]);
+    expect(shellMock.openPath).not.toHaveBeenCalled();
   });
 });

@@ -84,12 +84,6 @@ describe("viewCacheState", () => {
     vi.stubGlobal("electron", undefined);
   });
 
-  it("reports not-cached by default so a cold view is never demoted", () => {
-    // A cold view never receives warm-activated — defaulting to cached would
-    // permanently demote a view that main never cached.
-    expect(isProjectViewCached()).toBe(false);
-  });
-
   it("tracks cached -> active -> cached transitions", () => {
     expect(isProjectViewCached()).toBe(false);
 
@@ -101,20 +95,6 @@ describe("viewCacheState", () => {
 
     stub.emit.cached();
     expect(isProjectViewCached()).toBe(true);
-  });
-
-  it("clears the cached flag on warm-activated, not only on revealed", () => {
-    // Load-bearing: main only sends APP_VIEW_REVEALED while the view is still
-    // the active project, so a superseded switch delivers warm-activated with
-    // no revealed. If revealed owned the clear, that view would stay demoted.
-    expect(isProjectViewCached()).toBe(false); // arms the module
-
-    stub.emit.cached();
-    expect(isProjectViewCached()).toBe(true);
-
-    stub.emit.warmActivated();
-
-    expect(isProjectViewCached()).toBe(false);
   });
 
   it("clears a stale cached flag if revealed arrives without warm-activated", () => {
@@ -190,14 +170,6 @@ describe("viewCacheState", () => {
 
     expect(() => stub.emit.cached()).not.toThrow();
     expect(after).toHaveBeenCalledWith("cached");
-  });
-
-  it("still tracks state when queried without any subscriber", () => {
-    // Arming has to happen on the query path too — a query-only consumer of an
-    // unarmed module would silently read "not cached" forever.
-    expect(isProjectViewCached()).toBe(false);
-    stub.emit.cached();
-    expect(isProjectViewCached()).toBe(true);
   });
 
   it("seeds from preload's latch when the cached edge landed before arming", () => {

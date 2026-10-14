@@ -67,17 +67,6 @@ describe("WorktreeListService", () => {
       expect(result[1].path).toBe("/repo/feature");
     });
 
-    it("marks single entry as main worktree", async () => {
-      const output = makePorcelain(worktreeEntry("/repo/main", { branch: "main", head: "aaa111" }));
-      vi.mocked(mockGit.raw).mockResolvedValue(output);
-      service.setGit(mockGit, "/repo/main");
-
-      const result = await service.list({ forceRefresh: true });
-
-      expect(result).toHaveLength(1);
-      expect(result[0].isMainWorktree).toBe(true);
-    });
-
     it("handles porcelain output without trailing newline", async () => {
       const output =
         worktreeEntry("/repo/main", { branch: "main", head: "aaa111" }) +

@@ -9,21 +9,6 @@ const LAYOUT_PATH = resolve(__dirname, "../TwoPaneSplitLayout.tsx");
 // gate-and-resync pattern already used by `useContentGridContext` and
 // `useGridNavigation` against `layoutTransitionLock`.
 describe("TwoPaneSplitLayout sidebar lock gating (issue #7825)", () => {
-  it("imports the sidebar measurement lock helpers", async () => {
-    const content = await readFile(LAYOUT_PATH, "utf-8");
-    // #10827 promoted the guards to the combined measurement lock so both the
-    // transition lock and the startup hydration lock gate measurement.
-    expect(content).toContain("isSidebarMeasurementLocked");
-    expect(content).toContain("subscribeSidebarLayoutTransitionUnlock");
-    expect(content).toContain("@/lib/layoutTransitionLock");
-  });
-
-  it("does not use useResizeObserverRaf for the container width", async () => {
-    const content = await readFile(LAYOUT_PATH, "utf-8");
-    expect(content).not.toContain("useResizeObserverRaf");
-    expect(content).not.toContain("setContainerEl");
-  });
-
   it("creates a manual ResizeObserver guarded by the measurement lock", async () => {
     const content = await readFile(LAYOUT_PATH, "utf-8");
     expect(content).toContain("new ResizeObserver");

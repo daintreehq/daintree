@@ -120,6 +120,22 @@ describe("buildPulseCalendar — week-column geometry", () => {
   });
 });
 
+describe("buildPulseCalendar — isBeforeProject filtering (issue #4078)", () => {
+  it("never places a pre-project day in the calendar", () => {
+    const calendar = buildPulseCalendar([
+      { date: "2026-03-02", count: 0, level: 0, isBeforeProject: true },
+      { date: "2026-03-03", count: 0, level: 0, isBeforeProject: true },
+      { date: "2026-03-04", count: 2, level: 2 },
+      { date: "2026-03-05", count: 0, level: 0 },
+    ]);
+    expect(calendar.positions.has("2026-03-02")).toBe(false);
+    expect(calendar.positions.has("2026-03-03")).toBe(false);
+    expect(calendar.days.map((c) => c.date)).toEqual(["2026-03-04", "2026-03-05"]);
+    // The pre-project slots of the first week are empty space, not quiet days.
+    expect(calendar.weeks[0]!.slice(0, 2)).toEqual([null, null]);
+  });
+});
+
 describe("moveInCalendar — arrow keys follow the visual geometry", () => {
   const calendar = buildPulseCalendar(range(END, 60));
   const dateAt = (pos: { row: number; col: number } | null) =>

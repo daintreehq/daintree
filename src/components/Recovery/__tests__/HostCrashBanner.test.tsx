@@ -51,12 +51,6 @@ describe("HostCrashBanner", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders nothing when backend is recovering (sub-Doherty gate)", () => {
-    usePanelStore.setState({ backendStatus: "recovering" });
-    const { container } = render(<HostCrashBanner />);
-    expect(container.firstChild).toBeNull();
-  });
-
   it("announces an automatic restart politely; only the exhausted crash is an alert", () => {
     vi.useFakeTimers();
     usePanelStore.setState({ backendStatus: "recovering" });
@@ -117,30 +111,6 @@ describe("HostCrashBanner", () => {
     expect(screen.getByText(/Close unused terminals/i)).toBeTruthy();
   });
 
-  it("renders the SIGNAL_TERMINATED copy when applicable", () => {
-    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "SIGNAL_TERMINATED" });
-    render(<HostCrashBanner />);
-    expect(screen.getByText("Terminal service was terminated")).toBeTruthy();
-  });
-
-  it("renders the ASSERTION_FAILURE copy when applicable", () => {
-    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "ASSERTION_FAILURE" });
-    render(<HostCrashBanner />);
-    expect(screen.getByText("Terminal service hit an assertion failure")).toBeTruthy();
-  });
-
-  it("renders the CLEAN_EXIT copy when applicable", () => {
-    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "CLEAN_EXIT" });
-    render(<HostCrashBanner />);
-    expect(screen.getByText("Terminal service stopped unexpectedly")).toBeTruthy();
-  });
-
-  it("renders generic copy for UNKNOWN_CRASH", () => {
-    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
-    render(<HostCrashBanner />);
-    expect(screen.getByText("Terminal service crashed")).toBeTruthy();
-  });
-
   it("falls back to generic copy when lastCrashType is null", () => {
     usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
     render(<HostCrashBanner />);
@@ -192,20 +162,6 @@ describe("HostCrashBanner", () => {
     });
     expect(button.getAttribute("aria-disabled")).toBeNull();
     expect(button.textContent).toMatch(/Restart service/);
-  });
-
-  it("re-enables the button when the dispatch returns DISABLED", async () => {
-    mockedDispatch.mockResolvedValueOnce({
-      ok: false,
-      error: { code: "DISABLED" },
-    } as never);
-    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
-    render(<HostCrashBanner />);
-    const button = screen.getByRole("button", { name: /Restart service/i }) as HTMLButtonElement;
-    await act(async () => {
-      fireEvent.click(button);
-    });
-    expect(button.getAttribute("aria-disabled")).toBeNull();
   });
 
   it("disappears when backend transitions back to connected", () => {

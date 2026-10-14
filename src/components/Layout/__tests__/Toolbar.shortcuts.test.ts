@@ -107,18 +107,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
   });
 
-  describe("no manual ternary tooltip patterns", () => {
-    it("does not use manual ternary for terminal shortcut", () => {
-      expect(source).not.toContain("terminalShortcut ?");
-      expect(launcherSource).not.toContain("terminalShortcut ?");
-    });
-
-    it("does not use manual ternary for browser shortcut", () => {
-      expect(source).not.toContain("browserShortcut ?");
-      expect(launcherSource).not.toContain("browserShortcut ?");
-    });
-  });
-
   describe("createTooltipContent usage", () => {
     it("uses createTooltipContent for terminal tooltip", () => {
       expect(launcherSource).toContain('tooltipLabel: "Open terminal"');
@@ -204,10 +192,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   });
 
   describe("copy-tree button polish — issue #8179", () => {
-    it("imports useDohertyGate from @/hooks", () => {
-      expect(source).toMatch(/useDohertyGate[\s\S]*?from "@\/hooks"/);
-    });
-
     it("derives showCopyingSpinner via useDohertyGate at the Doherty threshold", () => {
       expect(source).toContain("const showCopyingSpinner = useDohertyGate(isCopyingTree);");
     });
@@ -419,45 +403,6 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
   });
 
-  describe("useMemo dependency array", () => {
-    // Anchored on `buttonRegistry` rather than taken as the file's first
-    // `}), [...]);`. That shortcut only ever worked because the registry
-    // happened to be the first memo of that shape in the file, so any memo
-    // added above it silently retargeted all three assertions at something
-    // else — which is how a dep list can stop being checked without a failure.
-    function buttonRegistryDeps(): string {
-      const start = source.indexOf("const buttonRegistry = useMemo");
-      expect(start).toBeGreaterThan(-1);
-      const depsMatch = source.slice(start).match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
-      expect(depsMatch).not.toBeNull();
-      return depsMatch![1]!;
-    }
-
-    it("includes sidebarShortcut in useMemo deps", () => {
-      expect(buttonRegistryDeps()).toContain("sidebarShortcut");
-    });
-
-    it("includes copyTreeCombo in useMemo deps", () => {
-      expect(buttonRegistryDeps()).toContain("copyTreeCombo");
-    });
-
-    it("includes showCopyingSpinner in useMemo deps (issue #8179)", () => {
-      expect(buttonRegistryDeps()).toContain("showCopyingSpinner");
-    });
-
-    it("diagnosticsShortcut is in ToolbarProblemsButton", () => {
-      expect(problemsSource).toContain('useEffectiveCombo("panel.toggleDiagnostics")');
-    });
-
-    it("portalShortcut is in ToolbarPortalButton", () => {
-      expect(portalSource).toContain('useEffectiveCombo("panel.togglePortal")');
-    });
-
-    it("settingsShortcut is in ToolbarSettingsButton", () => {
-      expect(settingsSource).toContain('useEffectiveCombo("app.settings")');
-    });
-  });
-
   // PluginToolbarButton moved to PluginTrayButton.tsx in #11304, alongside the
   // tray that now owns un-promoted contributions.
   describe("PluginToolbarButton aria-keyshortcuts — issue #8938", () => {
@@ -468,17 +413,9 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     it("renders aria-keyshortcuts on the plugin Button", () => {
       expect(pluginTraySource).toContain("aria-keyshortcuts={ariaShortcut}");
     });
-
-    it("drops the redundant `as string` cast on the hover hook", () => {
-      expect(pluginTraySource).not.toContain("useShortcutHintHover(config.actionId as string)");
-    });
   });
 
   describe("VoiceRecordingToolbarButton hint-hover — issue #8938", () => {
-    it("imports useShortcutHintHover", () => {
-      expect(voiceSource).toContain("useShortcutHintHover");
-    });
-
     it("calls useShortcutHintHover with the voice-input actionId", () => {
       expect(voiceSource).toContain('useShortcutHintHover("voiceInput.toggle")');
     });

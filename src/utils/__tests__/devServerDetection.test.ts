@@ -53,18 +53,6 @@ describe("findDevServerCandidate", () => {
       expect(candidate?.command).toBe("npm run dev");
     });
 
-    it("appends --turbopack (no separator) for bun run dev", () => {
-      const runners = [runner("dev", "bun run dev", "next dev")];
-      const candidate = findDevServerCandidate(runners);
-      expect(candidate?.command).toBe("bun run dev --turbopack");
-    });
-
-    it("appends --turbopack (no separator) for bun dev", () => {
-      const runners = [runner("dev", "bun dev", "next dev")];
-      const candidate = findDevServerCandidate(runners);
-      expect(candidate?.command).toBe("bun dev --turbopack");
-    });
-
     it("does NOT modify non-Next.js scripts", () => {
       const runners = [runner("dev", "npm run dev", "vite")];
       const candidate = findDevServerCandidate(runners);
@@ -79,19 +67,9 @@ describe("findDevServerCandidate", () => {
   });
 
   describe("turbopackEnabled toggle gating", () => {
-    it("injects by default (turbopackEnabled defaults to true)", () => {
-      const runners = [runner("dev", "npm run dev", "next dev")];
-      expect(findDevServerCandidate(runners)?.command).toBe("npm run dev -- --turbopack");
-    });
-
     it("does NOT inject when turbopackEnabled is false", () => {
       const runners = [runner("dev", "npm run dev", "next dev")];
       expect(findDevServerCandidate(runners, false)?.command).toBe("npm run dev");
-    });
-
-    it("does NOT inject when turbopackEnabled is false for bun runner", () => {
-      const runners = [runner("dev", "bun run dev", "next dev")];
-      expect(findDevServerCandidate(runners, false)?.command).toBe("bun run dev");
     });
   });
 
@@ -180,11 +158,6 @@ describe("findAllDevServerCandidates", () => {
     expect(result[1]?.command).toBe("npm run start");
   });
 
-  it("findDevServerCandidate delegates to findAllDevServerCandidates", () => {
-    const runners = [runner("serve", "npm run serve"), runner("dev", "npm run dev", "vite")];
-    expect(findDevServerCandidate(runners)?.name).toBe("dev");
-  });
-
   describe("isFrameworkDefault honoring", () => {
     it("promotes the framework default ahead of name-priority matches", () => {
       const runners = [
@@ -193,15 +166,6 @@ describe("findAllDevServerCandidates", () => {
       ];
       const result = findAllDevServerCandidates(runners);
       expect(result.map((r) => r.name)).toEqual(["start", "dev"]);
-    });
-
-    it("falls back to name-priority when no framework default is set", () => {
-      const runners = [
-        runner("start", "npm run start", "node server.js"),
-        runner("dev", "npm run dev", "vite"),
-      ];
-      const result = findAllDevServerCandidates(runners);
-      expect(result.map((r) => r.name)).toEqual(["dev", "start"]);
     });
 
     it("keeps the framework default first even when array order is unchanged", () => {

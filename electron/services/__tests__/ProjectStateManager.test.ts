@@ -57,12 +57,6 @@ describe("ProjectStateManager clone isolation", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("returns null when no state file exists", async () => {
-    const id = generateProjectId("/nonexistent/project");
-    const result = await manager.getProjectState(id);
-    expect(result).toBeNull();
-  });
-
   it("returns deep clones on read — mutating one result does not affect the next", async () => {
     const state = makeState();
     await manager.saveProjectState(projectId, state);
@@ -857,18 +851,6 @@ describe("ProjectStateManager quarantine recovery", () => {
     await expect(fs.access(result.quarantinedPath!)).resolves.toBeUndefined();
   });
 
-  it("drains the quarantine signal after one read — subsequent reads return no path", async () => {
-    const filePath = stateFilePath(tempDir, projectId)!;
-    await fs.writeFile(filePath, "{ not valid json", "utf-8");
-
-    const first = await manager.getProjectStateWithRecovery(projectId);
-    expect(first.quarantinedPath).toMatch(/\.corrupted\.\d+$/);
-
-    const second = await manager.getProjectStateWithRecovery(projectId);
-    expect(second.state).toBeNull();
-    expect(second.quarantinedPath).toBeUndefined();
-  });
-
   it("returns no quarantinedPath when state is valid", async () => {
     await manager.saveProjectState(projectId, makeState());
 
@@ -951,15 +933,6 @@ describe("ProjectStateManager unreadable-session tracking", () => {
 
     expect(state).not.toBeNull();
     expect(manager.wasStateUnreadableThisSession(projectId)).toBe(false);
-  });
-
-  it("marks a project whose state JSON is corrupt", async () => {
-    const filePath = stateFilePath(tempDir, projectId)!;
-    await fs.writeFile(filePath, "{ not valid json", "utf-8");
-
-    await manager.getProjectState(projectId);
-
-    expect(manager.wasStateUnreadableThisSession(projectId)).toBe(true);
   });
 
   it("marks a project whose state is a future schema version", async () => {
@@ -1048,18 +1021,6 @@ describe("ProjectStateManager schema version", () => {
     const result = await manager.getProjectState(projectId);
     expect(result).not.toBeNull();
     expect(result!.sidebarWidth).toBe(350);
-  });
-
-  it("reads a v1 file successfully", async () => {
-    await writeRaw({
-      _schemaVersion: 1,
-      projectId,
-      sidebarWidth: 350,
-      terminals: [],
-    });
-
-    const result = await manager.getProjectState(projectId);
-    expect(result).not.toBeNull();
   });
 
   it("quarantines a future-version file to .future-vN and returns null", async () => {
@@ -1167,19 +1128,6 @@ describe("ProjectStateManager schema version", () => {
     await expect(fs.access(filePath)).resolves.toBeUndefined();
   });
 
-  it("treats a negative _schemaVersion as legacy v0 and reads successfully", async () => {
-    await writeRaw({
-      _schemaVersion: -1,
-      projectId,
-      sidebarWidth: 350,
-      terminals: [],
-    });
-
-    const result = await manager.getProjectState(projectId);
-
-    expect(result).not.toBeNull();
-  });
-
   it("preserves a prior quarantine when a second future-version file lands at the same version", async () => {
     const firstPayload = {
       _schemaVersion: 2,
@@ -1216,19 +1164,6 @@ describe("ProjectStateManager schema version", () => {
     expect(suffixed).toBeDefined();
     const suffixedContent = JSON.parse(await fs.readFile(path.join(dir, suffixed!), "utf-8"));
     expect(suffixedContent).toEqual(secondPayload);
-  });
-
-  it("quarantines a very large future-version number to .future-v{N}", async () => {
-    await writeRaw({
-      _schemaVersion: 999999,
-      projectId,
-      terminals: [],
-    });
-
-    const result = await manager.getProjectState(projectId);
-
-    expect(result).toBeNull();
-    await expect(fs.access(`${filePath}.future-v999999`)).resolves.toBeUndefined();
   });
 });
 

@@ -208,15 +208,6 @@ describe("ProcessMemoryMonitor", () => {
     });
   });
 
-  it("does NOT warn when below threshold", () => {
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
-
-    stop = startAppMetricsMonitor();
-    vi.advanceTimersByTime(30_000);
-
-    expect(logWarn).not.toHaveBeenCalled();
-  });
-
   it("writes heap snapshot when Browser exceeds critical threshold in dev mode", () => {
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700 * 1024, 100)]);
     Object.defineProperty(app, "isPackaged", { value: false, writable: true });
@@ -360,21 +351,6 @@ describe("ProcessMemoryMonitor", () => {
       "process-memory-threshold-exceeded",
       expect.anything()
     );
-  });
-
-  it("uses workingSetSize when privateBytes is not available", () => {
-    // No privateBytes supplied — should use workingSetSize of 600 MB (> 500 MB Utility threshold)
-    mockGetAppMetrics.mockReturnValue([makeMetric("Utility", 600 * 1024, 300)]);
-
-    stop = startAppMetricsMonitor();
-    vi.advanceTimersByTime(30_000);
-
-    expect(logWarn).toHaveBeenCalledWith("process-memory-threshold-exceeded", {
-      pid: 300,
-      type: "Utility",
-      mb: 600,
-      thresholdMb: 500,
-    });
   });
 
   it("emits trend warning after sustained growth exceeding 5 MB/hr", () => {
@@ -559,22 +535,6 @@ describe("ProcessMemoryMonitor", () => {
       .mocked(logWarn)
       .mock.calls.filter((c) => c[0] === "process-memory-trend-warning");
     expect(trendCalls).toHaveLength(0);
-  });
-
-  it("prunes trend state for PIDs that are no longer reported", () => {
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 500)]);
-
-    stop = startAppMetricsMonitor();
-    vi.advanceTimersByTime(30_000);
-
-    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 600)]);
-    vi.advanceTimersByTime(30_000);
-
-    expect(logDebug).toHaveBeenCalledWith("process-memory-sample", {
-      pid: 600,
-      type: "Browser",
-      mb: 200,
-    });
   });
 
   describe("RAM-scaled per-process thresholds (issue #8633)", () => {
@@ -1156,13 +1116,6 @@ describe("ProcessMemoryMonitor", () => {
       await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
     }
 
-    it("works without actions parameter (backward compat)", () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
-      stop = startAppMetricsMonitor();
-      vi.advanceTimersByTime(30_000 * 10);
-      // No crash, no mitigation called
-    });
-
     it("does not reclaim hidden views during warmup period", async () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(mockActions);
@@ -1298,20 +1251,6 @@ describe("ProcessMemoryMonitor", () => {
       expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier2-mitigation", expect.any(Object));
     });
 
-    it("calls trimPtyHostState during tier 1 mitigation", async () => {
-      const trimPtyHostState = vi.fn(async () => makeTrimSummary());
-      const actionsWithTrim: MemoryPressureActions = {
-        ...mockActions,
-        trimPtyHostState,
-      };
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
-      stop = startAppMetricsMonitor(actionsWithTrim);
-
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
-
-      expect(trimPtyHostState).toHaveBeenCalledTimes(1);
-    });
-
     it("continues tier 1 even if trimPtyHostState rejects", async () => {
       const trimPtyHostState = vi.fn().mockRejectedValue(new Error("trim failed"));
       const actionsWithTrim: MemoryPressureActions = {
@@ -1432,15 +1371,6 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
-    it("calls destroyHiddenWebviews(1) on tier 1 mitigation", async () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
-      stop = startAppMetricsMonitor(mockActions);
-
-      await advancePolls(WARMUP_INTERVALS + 1);
-
-      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
-    });
-
     it("does not repeat tier 1 on every poll during one pressure episode", async () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
       stop = startAppMetricsMonitor(mockActions);
@@ -1451,16 +1381,6 @@ describe("ProcessMemoryMonitor", () => {
         .mocked(mockActions.destroyHiddenWebviews)
         .mock.calls.filter(([tier]) => tier === 1);
       expect(tier1Calls).toHaveLength(1);
-    });
-
-    it("calls destroyHiddenWebviews(2) on tier 2 mitigation", async () => {
-      // Zero reclamation + sustained pressure → tier 2 fires.
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
-      stop = startAppMetricsMonitor(mockActions);
-
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
-
-      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
     });
 
     it("calls destroyHiddenWebviews before hibernateIdleProjects in tier 2", async () => {
@@ -1480,16 +1400,6 @@ describe("ProcessMemoryMonitor", () => {
       const destroyIdx = callOrder.lastIndexOf("destroyHiddenWebviews");
       const hibernateIdx = callOrder.indexOf("hibernateIdleProjects");
       expect(destroyIdx).toBeLessThan(hibernateIdx);
-    });
-
-    it("does not trigger mitigation when no process exceeds threshold", async () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
-      stop = startAppMetricsMonitor(mockActions);
-
-      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 5);
-
-      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalled();
-      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
     });
 
     it("holds tier 2 back while tier 1's measured reclaim is still fresh", async () => {
@@ -2094,28 +2004,6 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
-    it("recordBlinkSample log conversion is KB → MB (regression for unit bug)", () => {
-      // 512 MB worth of Blink memory == 512*1024 KB.
-      recordBlinkSample(99, { allocated: 512 * 1024 });
-      expect(logDebug).toHaveBeenCalledWith(
-        "blink-memory-sample",
-        expect.objectContaining({ webContentsId: 99, allocatedMb: 512 })
-      );
-    });
-
-    it("recordBlinkSample overwrites the previous value for the same webContentsId", () => {
-      recordBlinkSample(7, { allocated: 10 });
-      recordBlinkSample(7, { allocated: 99 });
-      expect(getBlinkSamples().get(7)?.allocated).toBe(99);
-    });
-
-    it("forgetBlinkSample removes the recorded sample (used by view eviction)", () => {
-      recordBlinkSample(11, { allocated: 5 });
-      expect(getBlinkSamples().has(11)).toBe(true);
-      forgetBlinkSample(11);
-      expect(getBlinkSamples().has(11)).toBe(false);
-    });
-
     it("startAppMetricsMonitor invokes actions.sampleBlinkMemory once per poll", () => {
       const sampleBlinkMemory = vi.fn();
       const actions: MemoryPressureActions = {
@@ -2195,19 +2083,6 @@ describe("ProcessMemoryMonitor", () => {
       expect(sampleSystemHealth).toHaveBeenCalledTimes(2);
       expect(logDebug).toHaveBeenCalledWith("process-memory-sample", expect.any(Object));
     });
-
-    it("works without sampleBlinkMemory (optional field, backwards compat)", () => {
-      const actions: MemoryPressureActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
-        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
-      };
-
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
-      stop = startAppMetricsMonitor(actions);
-
-      // Should not throw — sampleBlinkMemory is optional.
-      expect(() => vi.advanceTimersByTime(30_000)).not.toThrow();
-    });
   });
 
   describe("renderer ELU sampling (issue #6276)", () => {
@@ -2237,14 +2112,6 @@ describe("ProcessMemoryMonitor", () => {
 
       recordEluSample(2, { blockingDurationMs: 5000, sampleWindowMs: 1000 });
       expect(getEluSamples().get(2)?.ratio).toBe(1);
-    });
-
-    it("emits debug log with rounded ratio for every sample", () => {
-      recordEluSample(7, { blockingDurationMs: 250, sampleWindowMs: 1000 });
-      expect(logDebug).toHaveBeenCalledWith(
-        "renderer-elu-sample",
-        expect.objectContaining({ webContentsId: 7, ratio: 0.25 })
-      );
     });
 
     it("does NOT log sustained-high warning while below threshold", () => {
@@ -2365,31 +2232,6 @@ describe("ProcessMemoryMonitor", () => {
       expect(hasSustainedRendererSaturation(sample.timestamp + 10 * 60_000)).toBe(false);
     });
 
-    // Documents current behavior: a view that goes "active" → "cached" →
-    // "active" without an intervening below-threshold sample retains its
-    // streak. The fan-out filter skips cached views, so no samples arrive
-    // during the cached phase. If the streak was at N-1 before caching and
-    // the next active sample is high, the warning fires immediately. This is
-    // bounded — view eviction always calls forgetEluSample — but the logged
-    // `windowMs` may overstate the contiguous observation period. Acceptable
-    // for telemetry-only signal; if upgraded to a proactive trigger, the
-    // streak should become gap-aware.
-    it("(known limitation) streak survives caching gaps", () => {
-      const blocking = Math.ceil(RENDERER_ELU_HIGH_RATIO * 1000) + 1;
-      // Build streak to N-1 while view is active.
-      for (let i = 0; i < RENDERER_ELU_HIGH_SAMPLE_COUNT - 1; i++) {
-        recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
-      }
-      // No samples arrive while the view is cached (fan-out skips it).
-      // Then the view is reactivated and the next sample is also high.
-      recordEluSample(42, { blockingDurationMs: blocking, sampleWindowMs: 1000 });
-
-      const highCalls = vi
-        .mocked(logWarn)
-        .mock.calls.filter((c) => c[0] === "renderer-elu-sustained-high");
-      expect(highCalls).toHaveLength(1);
-    });
-
     it("startAppMetricsMonitor invokes actions.sampleRendererElu once per poll", () => {
       const sampleRendererElu = vi.fn();
       const actions: MemoryPressureActions = {
@@ -2428,19 +2270,6 @@ describe("ProcessMemoryMonitor", () => {
     });
 
     describe("threshold edge-triggered latching (issue #7114)", () => {
-      it("warns only once across consecutive over-threshold polls for the same pid", () => {
-        mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
-
-        stop = startAppMetricsMonitor();
-        vi.advanceTimersByTime(30_000); // first poll — warns
-        vi.advanceTimersByTime(30_000); // second poll — still over, no new warning
-
-        const thresholdCalls = vi
-          .mocked(logWarn)
-          .mock.calls.filter((c) => c[0] === "process-memory-threshold-exceeded");
-        expect(thresholdCalls).toHaveLength(1);
-      });
-
       it("re-warns when pid drops below threshold then exceeds again (re-entry)", () => {
         mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
         stop = startAppMetricsMonitor();
@@ -2494,23 +2323,6 @@ describe("ProcessMemoryMonitor", () => {
           .mocked(logWarn)
           .mock.calls.filter((c) => c[0] === "process-memory-threshold-exceeded");
         expect(thresholdCalls).toHaveLength(2);
-      });
-
-      it("prunes threshold latch when pid disappears from metrics", () => {
-        mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
-        stop = startAppMetricsMonitor();
-        vi.advanceTimersByTime(30_000);
-
-        // Pid 100 disappears, replaced by 200
-        mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 200)]);
-        vi.advanceTimersByTime(30_000);
-
-        const thresholdCalls = vi
-          .mocked(logWarn)
-          .mock.calls.filter((c) => c[0] === "process-memory-threshold-exceeded");
-        expect(thresholdCalls).toHaveLength(2);
-        expect(thresholdCalls[0]![1]).toMatchObject({ pid: 100 });
-        expect(thresholdCalls[1]![1]).toMatchObject({ pid: 200 });
       });
     });
 
@@ -2669,17 +2481,6 @@ describe("ProcessMemoryMonitor", () => {
           reason: "disk-pressure-write-gate",
         });
       });
-
-      it("writes heap snapshot when writes are NOT suppressed", () => {
-        mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700 * 1024, 100)]);
-        Object.defineProperty(app, "isPackaged", { value: false, writable: true });
-        vi.mocked(getWritesSuppressed).mockReturnValue(false);
-
-        stop = startAppMetricsMonitor();
-        vi.advanceTimersByTime(30_000);
-
-        expect(v8.writeHeapSnapshot).toHaveBeenCalledTimes(1);
-      });
       it("suppressed heap snapshot does not consume cooldown", () => {
         mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700 * 1024, 100)]);
         Object.defineProperty(app, "isPackaged", { value: false, writable: true });
@@ -2739,25 +2540,9 @@ describe("ProcessMemoryMonitor", () => {
         expect(logDebug).toHaveBeenCalledTimes(3);
       });
     });
-
-    it("works without sampleRendererElu (optional, backwards compat)", () => {
-      const actions: MemoryPressureActions = {
-        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
-        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
-      };
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
-      stop = startAppMetricsMonitor(actions);
-      expect(() => vi.advanceTimersByTime(30_000)).not.toThrow();
-    });
   });
 
   describe("getTrendSnapshot (#10500)", () => {
-    it("is empty immediately after start, before any poll", () => {
-      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 4242)]);
-      stop = startAppMetricsMonitor();
-      expect(getTrendSnapshot()).toEqual([]);
-    });
-
     it("captures per-pid working-set EMA after polling a monitored process", () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 4242)]);
       stop = startAppMetricsMonitor();

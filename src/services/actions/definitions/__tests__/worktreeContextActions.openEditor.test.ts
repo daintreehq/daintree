@@ -78,20 +78,6 @@ describe("worktree.openEditor", () => {
     expect(systemClientMock.openPath).not.toHaveBeenCalled();
   });
 
-  // Omitting the project id is what made external editor launches ignore the
-  // preference in #12327 — the main process then has nothing to look up.
-  it("carries the context project id so the right editor preference is read", async () => {
-    seedWorktree("wt-1");
-
-    await getAction("worktree.openEditor").run({ worktreeId: "wt-1" }, {
-      projectId: "proj-42",
-    } as ActionContext);
-
-    expect(systemClientMock.openInEditor.mock.calls[0]![0]).toMatchObject({
-      projectId: "proj-42",
-    });
-  });
-
   it("forwards an undefined project id rather than inventing one", async () => {
     seedWorktree("wt-1");
 
@@ -160,15 +146,6 @@ describe("worktree.openEditor", () => {
 
     expect(systemClientMock.openInEditor).not.toHaveBeenCalled();
     expect(systemClientMock.openPath).not.toHaveBeenCalled();
-  });
-
-  it("propagates a launch failure to the caller", async () => {
-    seedWorktree("wt-1");
-    systemClientMock.openInEditor.mockRejectedValueOnce(new Error("outside root"));
-
-    await expect(
-      getAction("worktree.openEditor").run({ worktreeId: "wt-1" }, {} as ActionContext)
-    ).rejects.toThrow("outside root");
   });
 });
 

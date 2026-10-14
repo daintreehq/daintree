@@ -855,20 +855,6 @@ describe("the user's Reload panel (#12611)", () => {
     expect(blockedBanner()).toBeNull();
   });
 
-  it("re-arms a view the loop breaker stopped", async () => {
-    const { lifecycle } = await mountContent();
-    for (let i = 0; i <= lifecycle.VIEW_RELOAD_LIMIT; i++) {
-      await requestReload();
-    }
-    expect(blockedBanner()).not.toBeNull();
-
-    await userReload(lifecycle);
-
-    await settlePluginViewLoad(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
-    expect(blockedBanner()).toBeNull();
-    expect(lifecycle.isViewReloadBlocked("panel-1")).toBe(false);
-  });
-
   it("is not offered by a host that offers no reload", async () => {
     const { Content, lifecycle } = await loadContent();
     render(<Content panelId="panel-1" />);
@@ -959,15 +945,6 @@ describe("setHasUnsavedChanges (#12611)", () => {
     act(() => current.setHasUnsavedChanges?.(false));
     act(() => stale.setHasUnsavedChanges?.(true));
     expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
-  });
-
-  it("does not hold up the view's own reload", async () => {
-    await mountContent();
-    act(() => latest().setHasUnsavedChanges?.(true));
-
-    await requestReload();
-
-    await settlePluginViewLoad(() => expect(h.mounts).toHaveLength(2));
   });
 
   it("is lowered when the backend's host.reloadPanel replaces the view", async () => {

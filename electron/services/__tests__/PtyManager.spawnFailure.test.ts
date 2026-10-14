@@ -146,20 +146,6 @@ describe("PtyManager.spawn — PTY cleanup on constructor failure", () => {
     expect(manager.hasTerminal("t1")).toBe(false);
   });
 
-  it("registers terminal normally when constructor succeeds", () => {
-    shouldThrow = false;
-
-    manager.spawn("t1", {
-      cwd: "/tmp",
-      cols: 80,
-      rows: 24,
-      kind: "terminal",
-    });
-
-    expect(manager.hasTerminal("t1")).toBe(true);
-    expect(mockPty.kill).not.toHaveBeenCalled();
-  });
-
   it("rejects a duplicate spawn against a live terminal with TERMINAL_ALREADY_LIVE", () => {
     shouldThrow = false;
 

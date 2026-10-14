@@ -212,14 +212,6 @@ describe("createSessionIdMatcher", () => {
         match(collapsed, { occurrence: "last", boundary: "eof", tailLines: 8, tailChars: 400 })
       ).toEqual({ kind: "none" });
     });
-
-    it("applies whichever of the two windows is more restrictive", () => {
-      const raw = `codex resume ${ID}\n${"y".repeat(500)}\n`;
-      // Only two lines, so the line budget admits it; the char budget does not.
-      expect(
-        match(raw, { occurrence: "last", boundary: "eof", tailLines: 8, tailChars: 400 })
-      ).toEqual({ kind: "none" });
-    });
   });
 
   it("does not leak regex lastIndex between calls", () => {

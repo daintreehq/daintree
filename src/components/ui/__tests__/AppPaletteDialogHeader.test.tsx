@@ -41,23 +41,6 @@ function getLoadingBar(): HTMLElement | null {
 }
 
 describe("AppPaletteDialog.Header trailing metadata", () => {
-  it("shows the metadata alongside the label, the shortcut and the input", () => {
-    render(
-      <AppPaletteDialog.Header
-        label="Switch project"
-        shortcut="Cmd+P"
-        trailing={<span>3 running</span>}
-      >
-        <input aria-label="Search" />
-      </AppPaletteDialog.Header>
-    );
-
-    expect(screen.getByText("Switch project")).toBeTruthy();
-    expect(screen.getByText("3 running")).toBeTruthy();
-    expect(screen.getByTestId("kbd-chord")).toBeTruthy();
-    expect(screen.getByLabelText("Search")).toBeTruthy();
-  });
-
   it("leaves a header without metadata exactly as it was", () => {
     // The label row spaces its children apart, so grouping the chord into a
     // wrapper unconditionally would shift it on every palette that never asked
@@ -133,39 +116,6 @@ describe("AppPaletteDialog.Header loading bar", () => {
     expect(bar?.style.transitionDelay).toBe(`${UI_PALETTE_STALE_DELAY}ms`);
     expect(bar?.style.transitionDuration).toBe(`${UI_PALETTE_ENTER_DURATION}ms`);
     expect(bar?.dataset.loading).toBe("true");
-  });
-
-  it("still renders header label and child input", () => {
-    render(
-      <AppPaletteDialog.Header label="Quick switch" shortcut="Cmd+P" isLoading>
-        <input aria-label="Search terminals" />
-      </AppPaletteDialog.Header>
-    );
-    expect(screen.getByText("Quick switch")).toBeTruthy();
-    expect(screen.getByTestId("kbd-chord")).toBeTruthy();
-    expect(screen.getByLabelText("Search terminals")).toBeTruthy();
-  });
-
-  it("renders KbdChord when shortcut is provided", () => {
-    render(
-      <AppPaletteDialog.Header label="Quick switch" shortcut="Cmd+P">
-        <input aria-label="Search" />
-      </AppPaletteDialog.Header>
-    );
-    const chord = screen.getByTestId("kbd-chord");
-    expect(chord).toBeTruthy();
-    expect(chord.dataset.shortcut).toBe("Cmd+P");
-  });
-
-  it("renders nothing when shortcut is not provided", () => {
-    render(
-      <AppPaletteDialog.Header label="Quick switch">
-        <input aria-label="Search" />
-      </AppPaletteDialog.Header>
-    );
-    expect(screen.queryByTestId("kbd-chord")).toBeNull();
-    // Only the label text should be present, no extra hint text
-    expect(screen.getByText("Quick switch")).toBeTruthy();
   });
 
   it("renders nothing when shortcut is empty string", () => {

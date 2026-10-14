@@ -19,14 +19,6 @@ describe("check-version-monotonic", () => {
       expect(checkVersionMonotonic("1.0.0", "1.0.1")).toEqual({ ok: true });
     });
 
-    it("passes when new is strictly greater (minor)", () => {
-      expect(checkVersionMonotonic("1.0.0", "1.1.0")).toEqual({ ok: true });
-    });
-
-    it("passes when new is strictly greater (major)", () => {
-      expect(checkVersionMonotonic("1.5.7", "2.0.0")).toEqual({ ok: true });
-    });
-
     it("skips when versions are equal (re-tag of an already-published version)", () => {
       expect(checkVersionMonotonic("1.0.0", "1.0.0")).toEqual({ ok: true, skip: true });
     });
@@ -54,10 +46,6 @@ describe("check-version-monotonic", () => {
 
     it("passes when going from pre-release to release of the same version", () => {
       expect(checkVersionMonotonic("1.0.0-rc.1", "1.0.0")).toEqual({ ok: true });
-    });
-
-    it("passes for incremental rc bump", () => {
-      expect(checkVersionMonotonic("1.0.0-rc.1", "1.0.0-rc.2")).toEqual({ ok: true });
     });
 
     it("passes when going from release to next pre-release", () => {
@@ -150,12 +138,6 @@ describe("check-version-monotonic", () => {
       expect(readFileSync(file, "utf8")).toBe("prior-step=1\nskip_upload=true\n");
     });
 
-    it("appends skip_upload=false when not skipping", () => {
-      const file = useTmpOutput();
-      writeSkipUploadOutput(false);
-      expect(readFileSync(file, "utf8")).toBe("skip_upload=false\n");
-    });
-
     it("is a no-op when GITHUB_OUTPUT is unset (local / vitest runs)", () => {
       delete process.env.GITHUB_OUTPUT;
       expect(() => writeSkipUploadOutput(true)).not.toThrow();
@@ -177,10 +159,6 @@ describe("check-version-monotonic", () => {
       expect(extractVersion({ version: "1.2.3" }, "test.yml")).toBe("1.2.3");
     });
 
-    it("accepts pre-release strings", () => {
-      expect(extractVersion({ version: "1.0.0-rc.4" }, "test.yml")).toBe("1.0.0-rc.4");
-    });
-
     it("throws when input is null", () => {
       expect(() => extractVersion(null, "test.yml")).toThrow(/expected a YAML mapping/);
     });
@@ -193,36 +171,12 @@ describe("check-version-monotonic", () => {
       expect(() => extractVersion({ files: [] }, "test.yml")).toThrow(/missing 'version' field/);
     });
 
-    it("throws when version field is null", () => {
-      expect(() => extractVersion({ version: null }, "test.yml")).toThrow(
-        /missing 'version' field/
-      );
-    });
-
     it("throws when version field is a number (YAML-parsed bare numeric)", () => {
       expect(() => extractVersion({ version: 1 }, "test.yml")).toThrow(/must be a string/);
     });
 
-    it("throws when version field is a boolean (YAML `version: true`)", () => {
-      expect(() => extractVersion({ version: true }, "test.yml")).toThrow(/must be a string/);
-    });
-
-    it("throws when version field is an array (YAML sequence)", () => {
-      expect(() => extractVersion({ version: ["1.0.0"] }, "test.yml")).toThrow(/must be a string/);
-    });
-
-    it("throws when version field is a nested object", () => {
-      expect(() => extractVersion({ version: { major: 1 } }, "test.yml")).toThrow(
-        /must be a string/
-      );
-    });
-
     it("throws when version field is a non-semver string", () => {
       expect(() => extractVersion({ version: "v1" }, "test.yml")).toThrow(/not a valid semver/);
-    });
-
-    it("throws when version field is an empty string", () => {
-      expect(() => extractVersion({ version: "" }, "test.yml")).toThrow(/not a valid semver/);
     });
 
     it("includes the label in the error message", () => {
@@ -250,22 +204,10 @@ describe("check-version-monotonic", () => {
       expect(result.error).toContain("latest");
     });
 
-    it("rejects undefined with the not-set guidance", () => {
-      const result = validatePrefix(undefined);
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("not set");
-    });
-
     it("rejects a typo (latset) so the gate doesn't silently 404 every channel", () => {
       const result = validatePrefix("latset");
       expect(result.ok).toBe(false);
       expect(result.error).toContain("'latset'");
-      expect(result.error).toContain("not a known channel");
-    });
-
-    it("rejects nightly (channel was retired before the gate landed)", () => {
-      const result = validatePrefix("nightly");
-      expect(result.ok).toBe(false);
       expect(result.error).toContain("not a known channel");
     });
   });

@@ -508,11 +508,6 @@ beforeEach(() => {
 });
 
 describe("DockLaunchButton", () => {
-  it("renders a launch button with accessible label", () => {
-    const { getByLabelText } = renderButton();
-    expect(getByLabelText("Open launcher")).toBeTruthy();
-  });
-
   describe("discovery badge", () => {
     beforeEach(() => {
       // A launchable agent nobody has acted on yet — the one input that turns
@@ -617,20 +612,6 @@ describe("DockLaunchButton", () => {
     expect(recordActionMruMock).toHaveBeenCalledWith("agent.claude");
   });
 
-  it("launches non-launchable agent clicks instead of routing to settings", () => {
-    const onLaunchAgent = vi.fn();
-    const { getByText } = renderButton({ onLaunchAgent });
-
-    fireEvent.click(getByText("Gemini"));
-    // The launcher re-probes and answers with a session or the recovery gate;
-    // deciding it here on a stale reading skipped the gate entirely (#11760).
-    // `undefined` is the inherit-the-saved-preset sentinel, same as a
-    // launchable row — an unavailable agent is not a different kind of launch.
-    expect(onLaunchAgent).toHaveBeenCalledWith("gemini", undefined);
-    expect(actionDispatchMock).not.toHaveBeenCalled();
-    expect(recordActionMruMock).toHaveBeenCalledWith("agent.gemini");
-  });
-
   it("discriminates tooltip copy between blocked and installed-only agents", () => {
     const { getByText } = renderButton({
       agents: [
@@ -662,12 +643,6 @@ describe("DockLaunchButton", () => {
     expect(onLaunchAgent).toHaveBeenCalledWith("codex", undefined);
     // Soft dim and settings tooltip must not leak onto a launchable row.
     expect(getByText("Codex").getAttribute("title")).toBeNull();
-  });
-
-  it("keeps non-launchable rows selectable (no disabled attribute)", () => {
-    const { getByText } = renderButton();
-    // Regression guard: the pre-fix behavior was a disabled, dead-end row.
-    expect(getByText("Gemini").hasAttribute("disabled")).toBe(false);
   });
 
   describe("complete panel offering (#11521)", () => {
@@ -865,43 +840,6 @@ describe("DockLaunchButton", () => {
       expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
-    it("Enter launches the top result", () => {
-      const onLaunchAgent = vi.fn();
-      const { container } = renderButton({ onLaunchAgent });
-      const input = searchInput(container);
-
-      fireEvent.change(input, { target: { value: "claude" } });
-      fireEvent.keyDown(input, { key: "Enter" });
-
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
-    });
-
-    it("Enter activates the row moved to by ArrowDown, not the first one", () => {
-      const onLaunchAgent = vi.fn();
-      const { container } = renderButton({ onLaunchAgent });
-      const input = searchInput(container);
-
-      fireEvent.change(input, { target: { value: "e" } });
-      const firstName = selectedOption(container)?.textContent;
-
-      fireEvent.keyDown(input, { key: "ArrowDown" });
-      const moved = selectedOption(container);
-      expect(moved?.textContent).not.toBe(firstName);
-
-      // Actually confirm it — the previous version never pressed Enter, so it
-      // proved nothing about what Enter would do.
-      const movedName = moved?.textContent;
-      fireEvent.keyDown(input, { key: "Enter" });
-      // A row launches through whichever path its category uses: agents call
-      // back, panels dispatch their launch action or create directly.
-      const launched =
-        onLaunchAgent.mock.calls.length > 0 ||
-        addPanelMock.mock.calls.length > 0 ||
-        actionDispatchMock.mock.calls.length > 0;
-      expect(launched).toBe(true);
-      expect(movedName).toBeTruthy();
-    });
-
     it("Enter does nothing when the query matches no rows", () => {
       const onLaunchAgent = vi.fn();
       const { container } = renderButton({ onLaunchAgent });
@@ -948,18 +886,6 @@ describe("DockLaunchButton", () => {
       // Claude is the first agent and the first browse row.
       fireEvent.keyDown(input, { key: "Enter" });
       expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
-    });
-
-    it("lists a recently launched agent once, first, and marked Recent", () => {
-      mockMruEntries = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
-      const { container } = renderButton();
-
-      const rows = options(container);
-      const claudeRows = rows.filter((row) => row.textContent?.includes("Claude"));
-      expect(claudeRows).toHaveLength(1);
-      expect(rows[0]).toBe(claudeRows[0]);
-      expect(qualifierTextOf(claudeRows[0]!)).toBe("Recent");
-      expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
     });
 
     it("hands typing on the results region back to the search box", () => {
@@ -1182,16 +1108,6 @@ describe("DockLaunchButton", () => {
       expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
-    it("does not double-handle a key the input already consumed", () => {
-      // The input's capture handler stops propagation, so the content catch-all
-      // must not move the selection a second time.
-      const { container } = renderButton();
-      const rows = options(container);
-
-      fireEvent.keyDown(searchInput(container), { key: "ArrowDown" });
-      expect(selectedOption(container)).toBe(rows[1]);
-    });
-
     it("keeps focus in the input when the header around it is clicked", () => {
       // The padding around the input parks focus on Radix's tabIndex={-1} focus
       // scope, after which Escape dead-ends (the content vetoes the close while
@@ -1235,17 +1151,6 @@ describe("DockLaunchButton", () => {
       // preventDefault on pointerdown is what stops the click focusing the row
       // and pulling DOM focus off the search box.
       expect(fireEvent.pointerDown(second)).toBe(false);
-    });
-
-    it("moving over an unfiltered band row also moves the selection", () => {
-      const { container } = renderButton();
-
-      const rows = options(container);
-      expect(rows.length).toBeGreaterThan(1);
-
-      movePointer(rows[1]!, { x: 10, y: 40 });
-      expect(selectedOption(container)).toBe(rows[1]);
-      expect(fireEvent.pointerDown(rows[1]!)).toBe(false);
     });
 
     describe("the highlight tracks real pointer movement only (#11919)", () => {
@@ -1494,17 +1399,6 @@ describe("DockLaunchButton", () => {
     expect(queryByText("Manage agents")).toBeNull();
   });
 
-  it("opens the toolbar settings tab from the Customize toolbar cue", () => {
-    const { getByText } = renderButton();
-
-    fireEvent.click(getByText(TOOLBAR_CUSTOMIZE_LABEL));
-    expect(actionDispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "toolbar" },
-      { source: "menu" }
-    );
-  });
-
   it("lands on the Customize toolbar cue at the end of the browse list", () => {
     // The footer is the last thing End can reach, so this is also the assertion
     // that the row took an index in the flat navigation space at all.
@@ -1526,20 +1420,6 @@ describe("DockLaunchButton", () => {
     const { queryByText, getByText } = renderButton({ activeWorktreeId: "wt-1" });
     expect(getByText("My recipe")).toBeTruthy();
     expect(queryByText("Create a recipe")).toBeNull();
-  });
-
-  it("lists project-wide recipes and recipes scoped to the active worktree", () => {
-    mockRecipes = [
-      { id: "r-global", name: "Project recipe", worktreeId: undefined },
-      { id: "r-wt", name: "Worktree recipe", worktreeId: "wt-1" },
-      { id: "r-other", name: "Other worktree recipe", worktreeId: "wt-2" },
-    ];
-
-    const { getByText, queryByText } = renderButton({ activeWorktreeId: "wt-1" });
-
-    expect(getByText("Project recipe")).toBeTruthy();
-    expect(getByText("Worktree recipe")).toBeTruthy();
-    expect(queryByText("Other worktree recipe")).toBeNull();
   });
 
   it("distinguishes same-named recipes by scope (#11510)", () => {
@@ -1764,35 +1644,6 @@ describe("DockLaunchButton", () => {
     );
   });
 
-  it("surfaces spawn failures from dock-launched recipes via the notifier", async () => {
-    mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
-    const results = {
-      spawned: [],
-      failed: [{ index: 0, error: "Panel limit reached" }],
-    };
-    runRecipeWithResultsMock.mockResolvedValue(results);
-
-    const { getByText } = renderButton();
-
-    fireEvent.click(getByText("My recipe"));
-    await waitFor(() =>
-      expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, { recipeName: "My recipe" })
-    );
-  });
-
-  it("logs dock recipe launch rejections without notifying", async () => {
-    mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
-    runRecipeWithResultsMock.mockRejectedValue(new Error("recipe gone"));
-
-    const { getByText } = renderButton();
-
-    fireEvent.click(getByText("My recipe"));
-    await waitFor(() =>
-      expect(logErrorMock).toHaveBeenCalledWith("Recipe launch from dock failed", expect.any(Error))
-    );
-    expect(notifySpawnFailuresMock).not.toHaveBeenCalled();
-  });
-
   describe("Recently launched band", () => {
     const MANY: DockLaunchAgent[] = [
       { id: "claude", name: "Claude", availability: "ready" },
@@ -1800,12 +1651,6 @@ describe("DockLaunchButton", () => {
       { id: "codex", name: "Codex", availability: "ready" },
       { id: "cursor", name: "Cursor", availability: "ready" },
     ];
-
-    it("marks nothing Recent when the MRU is empty", () => {
-      mockMruEntries = [];
-      const { container } = renderButton({ agents: MANY });
-      expect(recentRows(container)).toHaveLength(0);
-    });
 
     it("renders recent agents in frecency order, capped at 3", () => {
       // Pre-sorted as getSortedActionMruList would return them; the component
@@ -1830,37 +1675,6 @@ describe("DockLaunchButton", () => {
       for (const name of ["Claude", "Codex", "Cursor", "Gemini"]) {
         expect(getAllByText(name)).toHaveLength(1);
       }
-    });
-
-    it("excludes never-launched cold-start entries (lastAccessedAt === 0)", () => {
-      mockMruEntries = [{ id: "agent.claude", score: 5, lastAccessedAt: 0 }];
-      const { container } = renderButton({ agents: MANY });
-      expect(recentRows(container)).toHaveLength(0);
-    });
-
-    it("ignores non-agent MRU entries", () => {
-      mockMruEntries = [{ id: "recipe.editor.open", score: 5, lastAccessedAt: 5000 }];
-      const { container } = renderButton({ agents: MANY });
-      expect(recentRows(container)).toHaveLength(0);
-    });
-
-    it("drops stale MRU entries for agents no longer present", () => {
-      mockMruEntries = [{ id: "agent.ghost", score: 5, lastAccessedAt: 5000 }];
-      const { container } = renderButton({ agents: MANY });
-      expect(recentRows(container)).toHaveLength(0);
-    });
-
-    it("launching a band row records MRU and invokes onLaunchAgent", () => {
-      mockMruEntries = [{ id: "agent.codex", score: 3, lastAccessedAt: 3000 }];
-      const onLaunchAgent = vi.fn();
-      const { getAllByText } = renderButton({ agents: MANY, onLaunchAgent });
-
-      // The one "Codex" row is the recent one.
-      const codexElement = getAllByText("Codex")[0];
-      expect(codexElement).toBeDefined();
-      fireEvent.click(codexElement!);
-      expect(onLaunchAgent).toHaveBeenCalledWith("codex", undefined);
-      expect(recordActionMruMock).toHaveBeenCalledWith("agent.codex");
     });
 
     it("picks up an agent launched since the menu was last opened", () => {

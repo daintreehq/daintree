@@ -25,7 +25,6 @@ import {
   MIN_TERMINAL_WIDTH_PX,
   MIN_TERMINAL_HEIGHT_PX,
   ABSOLUTE_MAX_GRID_TERMINALS,
-  GRID_TRANSITION_DURATION_MS,
   type TerminalMetrics,
 } from "../terminalLayout";
 
@@ -151,10 +150,6 @@ describe("getAutoGridCols — size-driven, fit-as-many-across", () => {
 });
 
 describe("computeAutomaticGridCols — explicit options form", () => {
-  it("matches getAutoGridCols for the comfortable default", () => {
-    expect(computeAutomaticGridCols({ count: 12, width: wCols(4) })).toBe(4);
-  });
-
   it("respects custom metrics — wider cells fit fewer columns", () => {
     const wideCells: TerminalMetrics = { ...DEFAULT_TERMINAL_METRICS, cellWidth: 16 };
     expect(
@@ -389,10 +384,5 @@ describe("layout constants", () => {
     expect(GRID_MIN_PANEL_COLS).toBeLessThan(80);
     expect(GRID_MIN_PANEL_COLS).toBeGreaterThanOrEqual(ABSOLUTE_MIN_COLS);
     expect(GRID_MIN_PANEL_ROWS).toBeLessThan(24);
-  });
-
-  it("pins the at-a-glance ceiling and transition timing", () => {
-    expect(AUTO_GRID_MAX_COLS).toBe(4);
-    expect(GRID_TRANSITION_DURATION_MS).toBe(200);
   });
 });

@@ -26,7 +26,6 @@ vi.mock("../../utils/logger.js", () => ({
 let runAssistantScratchCleanup: typeof import("../AssistantScratchService.js").runAssistantScratchCleanup;
 let startAssistantScratchCleanup: typeof import("../AssistantScratchService.js").startAssistantScratchCleanup;
 let getAssistantScratchRoot: typeof import("../AssistantScratchService.js").getAssistantScratchRoot;
-let getCurrentInstanceScratchRoot: typeof import("../AssistantScratchService.js").getCurrentInstanceScratchRoot;
 let getScratchDirForSession: typeof import("../AssistantScratchService.js").getScratchDirForSession;
 let getAssistantScratchInstanceId: typeof import("../AssistantScratchService.js").getAssistantScratchInstanceId;
 
@@ -40,7 +39,6 @@ beforeEach(async () => {
   runAssistantScratchCleanup = mod.runAssistantScratchCleanup;
   startAssistantScratchCleanup = mod.startAssistantScratchCleanup;
   getAssistantScratchRoot = mod.getAssistantScratchRoot;
-  getCurrentInstanceScratchRoot = mod.getCurrentInstanceScratchRoot;
   getScratchDirForSession = mod.getScratchDirForSession;
   getAssistantScratchInstanceId = mod.getAssistantScratchInstanceId;
 });
@@ -50,17 +48,6 @@ afterEach(async () => {
 });
 
 describe("AssistantScratchService paths", () => {
-  it("roots under userData/assistant-scratch", () => {
-    expect(getAssistantScratchRoot()).toBe(path.join(tmpDir, "assistant-scratch"));
-  });
-
-  it("places the current-instance subdir under the root", () => {
-    const instanceId = getAssistantScratchInstanceId();
-    expect(getCurrentInstanceScratchRoot()).toBe(
-      path.join(tmpDir, "assistant-scratch", instanceId)
-    );
-  });
-
   it("places each session subdir under the current instance", () => {
     const instanceId = getAssistantScratchInstanceId();
     expect(getScratchDirForSession("session-a")).toBe(
@@ -102,22 +89,6 @@ describe("runAssistantScratchCleanup", () => {
     await expect(fs.access(path.join(root, instanceId))).resolves.toBeUndefined();
     await expect(fs.access(stale1)).rejects.toBeDefined();
     await expect(fs.access(stale2)).rejects.toBeDefined();
-  });
-
-  it("leaves the root alone when only the current instance dir is present", async () => {
-    const root = getAssistantScratchRoot();
-    const instanceId = getAssistantScratchInstanceId();
-    await fs.mkdir(path.join(root, instanceId), { recursive: true });
-    await fs.writeFile(path.join(root, instanceId, "live.txt"), "live work");
-
-    const result = await runAssistantScratchCleanup();
-
-    expect(result.candidates).toBe(1);
-    expect(result.removed).toBe(0);
-    expect(result.failed).toBe(0);
-    await expect(fs.readFile(path.join(root, instanceId, "live.txt"), "utf-8")).resolves.toBe(
-      "live work"
-    );
   });
 
   it("removes loose files at the root that aren't the current instance", async () => {

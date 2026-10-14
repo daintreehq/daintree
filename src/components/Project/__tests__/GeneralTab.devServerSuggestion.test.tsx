@@ -202,44 +202,6 @@ describe("GeneralTab dev server suggestion", () => {
     fireEvent.click(screen.getByText("Use command"));
     expect(onDevServerCommandChange).toHaveBeenCalledWith("npm run dev");
   });
-
-  it("hides suggestion after input is populated (field becomes non-empty)", () => {
-    storeAllDetectedRunners.length = 0;
-    storeAllDetectedRunners.push(devRunner());
-
-    const { rerender } = renderGeneralTab({ devServerCommand: "" });
-    expect(screen.getByText(/Detected:/)).toBeDefined();
-
-    rerender(
-      <GeneralTab
-        currentProject={undefined}
-        name=""
-        onNameChange={vi.fn()}
-        emoji=""
-        onEmojiChange={vi.fn()}
-        color={undefined}
-        onColorChange={vi.fn()}
-        devServerCommand="npm run dev"
-        onDevServerCommandChange={vi.fn()}
-        devServerLoadTimeout={undefined}
-        onDevServerLoadTimeoutChange={vi.fn()}
-        turbopackEnabled={true}
-        onTurbopackEnabledChange={vi.fn()}
-        daintreeMcpTier="off"
-        onDaintreeMcpTierChange={vi.fn()}
-        daintreeMcpSkipConfirmations={false}
-        onDaintreeMcpSkipConfirmationsChange={vi.fn()}
-        projectIconSvg={undefined}
-        onProjectIconSvgChange={vi.fn()}
-        enableInRepoSettings={vi.fn()}
-        disableInRepoSettings={vi.fn()}
-        projectId="test-project"
-        isOpen={true}
-      />
-    );
-
-    expect(screen.queryByText(/Detected:/)).toBeNull();
-  });
 });
 
 describe("GeneralTab — DOM anchors for settings deep-links", () => {

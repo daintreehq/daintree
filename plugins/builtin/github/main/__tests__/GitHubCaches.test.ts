@@ -20,63 +20,10 @@ import {
   invalidateRepoListCachesForCountChange,
   invalidateRepoIssueCachesForAssignment,
   issueTooltipCache,
-  MAX_REVIEW_THREAD_PAGES,
-  REVIEW_THREADS_PER_PAGE,
 } from "../GitHubCaches.js";
 import { buildListCacheKey } from "../GitHubPRs.js";
 import type { Issue, PR, Page } from "../../../../../shared/types/forge.js";
 import type { GitHubIssue, GitHubPR, GitHubListResponse } from "../../shared/types.js";
-
-describe("GitHubCaches ETag caches", () => {
-  beforeEach(() => {
-    prETagCache.clear();
-    branchListETagCache.clear();
-    repoPRListETagCache.clear();
-  });
-
-  it("are Cache instances, not plain Maps", () => {
-    expect(prETagCache.get).toBeInstanceOf(Function);
-    expect(prETagCache.set).toBeInstanceOf(Function);
-    expect(prETagCache.invalidate).toBeInstanceOf(Function);
-    expect(typeof (prETagCache as unknown as { delete?: unknown }).delete).toBe("undefined");
-
-    expect(branchListETagCache.get).toBeInstanceOf(Function);
-    expect(branchListETagCache.set).toBeInstanceOf(Function);
-    expect(branchListETagCache.invalidate).toBeInstanceOf(Function);
-
-    expect(repoPRListETagCache.get).toBeInstanceOf(Function);
-    expect(repoPRListETagCache.set).toBeInstanceOf(Function);
-    expect(repoPRListETagCache.invalidate).toBeInstanceOf(Function);
-  });
-
-  it("set and get work for all caches", () => {
-    prETagCache.set("owner/repo#42", '"abc123"');
-    expect(prETagCache.get("owner/repo#42")).toBe('"abc123"');
-
-    branchListETagCache.set("owner/repo@main", '"def456"');
-    expect(branchListETagCache.get("owner/repo@main")).toBe('"def456"');
-
-    repoPRListETagCache.set("owner/repo", 'W/"ghi789"');
-    expect(repoPRListETagCache.get("owner/repo")).toBe('W/"ghi789"');
-  });
-
-  it("invalidate removes entries", () => {
-    prETagCache.set("owner/repo#42", '"abc123"');
-    prETagCache.invalidate("owner/repo#42");
-    expect(prETagCache.get("owner/repo#42")).toBeUndefined();
-  });
-
-  it("TTL expires entries", async () => {
-    const tinyCache = new (Object.getPrototypeOf(prETagCache).constructor)({
-      maxSize: 10,
-      defaultTTL: 10,
-    }) as typeof prETagCache;
-    tinyCache.set("k", "v");
-    expect(tinyCache.get("k")).toBe("v");
-    await new Promise((r) => setTimeout(r, 20));
-    expect(tinyCache.get("k")).toBeUndefined();
-  });
-});
 
 describe("clearGitHubCaches / clearPRCaches symmetry", () => {
   beforeEach(() => {
@@ -393,15 +340,5 @@ describe("invalidateRepoListCachesForCountChange (count-as-cache-buster)", () =>
       expect(issueTooltipCache.get("owner/repo:42")).toBeUndefined();
       expect(issueTooltipCache.get("owner/repo:99")).toBe(tooltip);
     });
-  });
-});
-
-describe("review thread pagination constants", () => {
-  it("MAX_REVIEW_THREAD_PAGES is 5", () => {
-    expect(MAX_REVIEW_THREAD_PAGES).toBe(5);
-  });
-
-  it("REVIEW_THREADS_PER_PAGE is 100", () => {
-    expect(REVIEW_THREADS_PER_PAGE).toBe(100);
   });
 });

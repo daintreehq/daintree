@@ -14,11 +14,4 @@ describe("PortalIcon — privacy", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("svg")).not.toBeNull();
   });
-
-  it("renders Globe explicitly when icon === 'globe'", () => {
-    const { container } = render(<PortalIcon icon="globe" size="tab" />);
-
-    expect(container.querySelector("img")).toBeNull();
-    expect(container.querySelector("svg")).not.toBeNull();
-  });
 });

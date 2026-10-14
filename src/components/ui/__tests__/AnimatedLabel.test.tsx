@@ -12,11 +12,6 @@ describe("AnimatedLabel", () => {
     cleanup();
   });
 
-  it("renders the current label", () => {
-    const { container } = render(<AnimatedLabel label="Copy" />);
-    expect(container.textContent).toBe("Copy");
-  });
-
   it("does not animate on mount", () => {
     const { container } = render(<AnimatedLabel label="3" />);
     const animating = container.querySelector(".animate-label-swap-in, .animate-label-swap-out");

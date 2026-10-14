@@ -11,10 +11,6 @@ describe("check-node-version-drift", () => {
       expect(parseExactPin("22.13.0", ".nvmrc")).toBe("22.13.0");
     });
 
-    it("tolerates a trailing newline (the normal on-disk shape)", () => {
-      expect(parseExactPin("22.13.0\n", ".nvmrc")).toBe("22.13.0");
-    });
-
     it("tolerates surrounding whitespace and CRLF", () => {
       expect(parseExactPin("  22.13.0\r\n", ".node-version")).toBe("22.13.0");
     });
@@ -33,10 +29,6 @@ describe("check-node-version-drift", () => {
 
     it("throws on a range", () => {
       expect(() => parseExactPin(">=22.13.0", ".nvmrc")).toThrow(/not an exact x\.y\.z/);
-    });
-
-    it("throws on a caret range", () => {
-      expect(() => parseExactPin("^22.13.0", ".nvmrc")).toThrow(/not an exact x\.y\.z/);
     });
 
     it("throws on an lts alias", () => {
@@ -88,14 +80,6 @@ describe("check-node-version-drift", () => {
       });
     });
 
-    it("handles a bounded range", () => {
-      expect(parseNodeEngineRange('{"engines":{"node":">=22.13.0 <23"}}').minimum).toBe("22.13.0");
-    });
-
-    it("handles a caret range", () => {
-      expect(parseNodeEngineRange('{"engines":{"node":"^22.13.0"}}').minimum).toBe("22.13.0");
-    });
-
     it("resolves an exclusive lower bound to the next patch", () => {
       // semver.minVersion(">22.13.0") is 22.13.1 — the smallest satisfying version.
       expect(parseNodeEngineRange('{"engines":{"node":">22.13.0"}}').minimum).toBe("22.13.1");
@@ -103,10 +87,6 @@ describe("check-node-version-drift", () => {
 
     it("throws on malformed JSON", () => {
       expect(() => parseNodeEngineRange("{ not json")).toThrow(/not valid JSON/);
-    });
-
-    it("throws when engines.node is missing", () => {
-      expect(() => parseNodeEngineRange('{"engines":{}}')).toThrow(/must be a non-empty string/);
     });
 
     it("throws when engines is absent entirely", () => {

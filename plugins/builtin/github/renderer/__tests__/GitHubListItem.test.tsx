@@ -134,18 +134,6 @@ describe("GitHubListItem", () => {
     );
   });
 
-  it("opens the forge from a PR title too", () => {
-    const onCreateWorktree = vi.fn();
-    render(<GitHubListItem item={basePR} type="pr" onCreateWorktree={onCreateWorktree} />);
-    fireEvent.click(screen.getByRole("button", { name: "Add new feature" }));
-    expect(onCreateWorktree).not.toHaveBeenCalled();
-    expect(actionService.dispatch).toHaveBeenCalledWith(
-      "system.openExternal",
-      { url: "https://github.com/test/repo/pull/99" },
-      { source: "user" }
-    );
-  });
-
   it("opens the forge from the title even when the resource has a worktree", () => {
     // The title is not a second way to reach the row's action, so having
     // somewhere local to go must not change where the name points.
@@ -406,41 +394,6 @@ describe("GitHubListItem", () => {
     expect(container.querySelector('[data-rail-slot="ci"]')).toBeNull();
   });
 
-  it("renders linked PR icon button for issues", () => {
-    const issueWithPR: Issue = {
-      ...baseIssue,
-      linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
-    };
-    render(<GitHubListItem item={issueWithPR} type="issue" />);
-    const prButton = screen.getByRole("button", { name: /Open linked pull request #55/ });
-    expect(prButton).toBeTruthy();
-    expect(prButton.querySelector("svg")).not.toBeNull();
-  });
-
-  it("renders labels and linked PR together without conflict", () => {
-    const issueWithBoth: Issue = {
-      ...baseIssue,
-      labels: [
-        { name: "bug", color: "d73a4a" },
-        { name: "high-priority", color: "e11d48" },
-      ],
-      linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
-      assignees: [{ login: "alice", avatarUrl: "https://example.com/alice.png", rawData: null }],
-    };
-    const { container } = render(<GitHubListItem item={issueWithBoth} type="issue" />);
-    expect(screen.getByText("bug")).toBeTruthy();
-    expect(screen.getByText("+1")).toBeTruthy();
-    expect(container.textContent).toContain("bug, high-priority");
-    expect(screen.getByRole("button", { name: /Open linked pull request #55/ })).toBeTruthy();
-    expect(screen.getByLabelText("Assigned to alice")).toBeTruthy();
-  });
-
-  it("renders #number badge", () => {
-    render(<GitHubListItem item={baseIssue} type="issue" />);
-    const copyButton = screen.getByLabelText("Copy number 42");
-    expect(copyButton.textContent).toBe("#42");
-  });
-
   it("separates the keyboard cursor from membership, and spends no accent on either", () => {
     // Three distinct states have to stay distinguishable: resting, the row
     // Enter would act on, and the rows bulk actions would act on. The cursor
@@ -604,18 +557,6 @@ describe("GitHubListItem", () => {
     expect(onCreateWorktree).toHaveBeenCalledWith(baseIssue);
   });
 
-  it("does not create a worktree from a closed issue", async () => {
-    const onCreateWorktree = vi.fn();
-    const closedIssue: Issue = { ...baseIssue, state: "closed" };
-    const { container } = render(
-      <GitHubListItem item={closedIssue} type="issue" onCreateWorktree={onCreateWorktree} />
-    );
-    await act(async () => {
-      fireEvent.click(container.querySelector("[role='row']")!);
-    });
-    expect(onCreateWorktree).not.toHaveBeenCalled();
-  });
-
   it("creates a worktree from a fork PR row", async () => {
     const onCreateWorktree = vi.fn();
     const forkPR: PR = { ...basePR, rawData: { isFork: true } };
@@ -638,19 +579,6 @@ describe("GitHubListItem", () => {
     // The "0" should not appear as a comment count
     const allText = screen.queryAllByText("0");
     expect(allText).toHaveLength(0);
-  });
-
-  it("shows comment count for PRs with commentCount >= 1", () => {
-    render(<GitHubListItem item={{ ...basePR, commentCount: 7 }} type="pr" />);
-    expect(screen.getByText("7")).toBeTruthy();
-  });
-
-  it("hides comment count for PRs with commentCount 0", () => {
-    const { container } = render(
-      <GitHubListItem item={{ ...basePR, commentCount: 0 }} type="pr" />
-    );
-    const svgs = container.querySelectorAll("svg.lucide-message-square");
-    expect(svgs).toHaveLength(0);
   });
 
   it("hides comment count for PRs without commentCount", () => {

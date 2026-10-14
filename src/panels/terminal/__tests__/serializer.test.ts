@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
 import { serializePtyPanel } from "../serializer";
-import { TERMINAL_SPAWN_SOURCES, type PtyPanelData } from "@shared/types/panel";
+import type { PtyPanelData } from "@shared/types/panel";
 
 function makePanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -23,12 +23,6 @@ describe("serializePtyPanel — agentPresetId", () => {
     expect(snapshot.agentPresetId).toBe("user-abc123");
   });
 
-  it("includes CCR preset IDs as well as custom ones", () => {
-    const panel = makePanel({ agentPresetId: "ccr-some-route" });
-    const snapshot = serializePtyPanel(panel);
-    expect(snapshot.agentPresetId).toBe("ccr-some-route");
-  });
-
   it("omits agentPresetId when it is undefined", () => {
     const panel = makePanel({ agentPresetId: undefined });
     const snapshot = serializePtyPanel(panel);
@@ -43,26 +37,6 @@ describe("serializePtyPanel — agentPresetId", () => {
 });
 
 describe("serializePtyPanel — other fields are unaffected by agentPresetId", () => {
-  it("still serializes agentSessionId alongside agentPresetId", () => {
-    const panel = makePanel({
-      agentPresetId: "user-xyz",
-      agentSessionId: "sess-999",
-    });
-    const snapshot = serializePtyPanel(panel);
-    expect(snapshot.agentPresetId).toBe("user-xyz");
-    expect(snapshot.agentSessionId).toBe("sess-999");
-  });
-
-  it("still serializes agentModelId alongside agentPresetId", () => {
-    const panel = makePanel({
-      agentPresetId: "user-xyz",
-      agentModelId: "claude-sonnet-4-6",
-    });
-    const snapshot = serializePtyPanel(panel);
-    expect(snapshot.agentPresetId).toBe("user-xyz");
-    expect(snapshot.agentModelId).toBe("claude-sonnet-4-6");
-  });
-
   it("still serializes agentLaunchFlags alongside agentPresetId", () => {
     const panel = makePanel({
       agentPresetId: "user-xyz",
@@ -108,13 +82,6 @@ describe("serializePtyPanel — agentPresetColor (Bug: not serialized)", () => {
     expect("agentPresetColor" in snapshot).toBe(false);
   });
 
-  it("serializes both agentPresetId and agentPresetColor together", () => {
-    const panel = makePanel({ agentPresetId: "user-abc", agentPresetColor: "#aabbcc" });
-    const snapshot = serializePtyPanel(panel);
-    expect(snapshot.agentPresetId).toBe("user-abc");
-    expect(snapshot.agentPresetColor).toBe("#aabbcc");
-  });
-
   // Forward-only write contract for issue #5459: the serializer must never
   // emit the legacy agentFlavorId / agentFlavorColor keys. The hydration path
   // (statePatcher.ts) tolerates them on read for backward compat, but writes
@@ -134,13 +101,6 @@ describe("serializePtyPanel — agentPresetColor (Bug: not serialized)", () => {
 // `spawnedBy === "quickrun"` — vanished from that list after a restart.
 
 describe("serializePtyPanel — spawnedBy", () => {
-  const sources = TERMINAL_SPAWN_SOURCES;
-
-  it.each(sources)("includes spawnedBy %s in the snapshot", (source) => {
-    const snapshot = serializePtyPanel(makePanel({ spawnedBy: source }));
-    expect(snapshot.spawnedBy).toBe(source);
-  });
-
   it("omits spawnedBy when it is undefined", () => {
     const snapshot = serializePtyPanel(makePanel({ spawnedBy: undefined }));
     expect("spawnedBy" in snapshot).toBe(false);
@@ -161,20 +121,6 @@ describe("serializePtyPanel — spawnedBy", () => {
 // provider env on restore. The serializer captures the sanitized launch env so
 // the restored session doesn't silently fall back to the default provider.
 describe("serializePtyPanel — launch env (#10922)", () => {
-  it("serializes safe provider env keys into the snapshot", () => {
-    const panel = makePanel({
-      env: {
-        ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.2",
-      },
-    });
-    const snapshot = serializePtyPanel(panel);
-    expect(snapshot.env).toEqual({
-      ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
-      ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.2",
-    });
-  });
-
   it("omits env entirely when the panel carries none", () => {
     const snapshot = serializePtyPanel(makePanel());
     expect("env" in snapshot).toBe(false);

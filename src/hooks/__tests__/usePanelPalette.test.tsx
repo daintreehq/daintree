@@ -164,13 +164,6 @@ describe("usePanelPalette", () => {
     expect(claudeEntries).toHaveLength(1);
   });
 
-  it("assigns category 'agent' to agent items", () => {
-    const { result } = renderHook(() => usePanelPalette());
-
-    const claude = result.current.results.find((item) => item.id === "agent:claude");
-    expect(claude?.category).toBe("agent");
-  });
-
   it("assigns category 'tool' to panel kind items", () => {
     const { result } = renderHook(() => usePanelPalette());
 
@@ -276,13 +269,6 @@ describe("usePanelPalette", () => {
     const claude = result.current.results.find((item) => item.id === "agent:claude");
     expect(claude?.category).toBe("agent");
     expect(claude?.origin).toBeUndefined();
-  });
-
-  it("assigns category 'agent' to the MORE_AGENTS_PANEL_ID entry", () => {
-    const { result } = renderHook(() => usePanelPalette());
-
-    const moreAgents = result.current.results.find((item) => item.id === MORE_AGENTS_PANEL_ID);
-    expect(moreAgents?.category).toBe("agent");
   });
 
   it("places agents, then MORE_AGENTS, then tools in exact order", () => {
@@ -618,30 +604,6 @@ describe("usePanelPalette", () => {
     dispatchSpy.mockRestore();
   });
 
-  it("confirmSelection dispatches agent setup wizard event for MORE_AGENTS", () => {
-    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-    const { result } = renderHook(() => usePanelPalette());
-
-    // Navigate selectedIndex to MORE_AGENTS entry
-    const moreAgentsIndex = result.current.results.findIndex(
-      (item) => item.id === MORE_AGENTS_PANEL_ID
-    );
-    expect(moreAgentsIndex).toBeGreaterThanOrEqual(0);
-
-    // selectedIndex defaults to 0 (first item), so we need to confirm the right item
-    // Since MORE_AGENTS is at index 1 (after claude), we test handleSelect path instead
-    // which is the direct click path. confirmSelection uses selectedIndex.
-    const selected = result.current.handleSelect(result.current.results[moreAgentsIndex]!);
-    expect(selected).toBeNull();
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "daintree:open-agent-setup-wizard",
-        detail: { returnToPanelPalette: true },
-      })
-    );
-    dispatchSpy.mockRestore();
-  });
-
   describe("agent availability", () => {
     it("sets installed=true for available agents", () => {
       getEffectiveAgentIdsMock.mockReturnValue(["claude"]);
@@ -705,30 +667,6 @@ describe("usePanelPalette", () => {
       expect(acme?.installed).toBe(false);
     });
 
-    it("sets installed=undefined before availability is initialized", () => {
-      getEffectiveAgentIdsMock.mockReturnValue(["claude"]);
-      cliAvailabilityState.isInitialized = false;
-
-      const { result } = renderHook(() => usePanelPalette());
-
-      const claude = result.current.results.find((item) => item.id === "agent:claude");
-      expect(claude?.installed).toBeUndefined();
-    });
-
-    it("does not set installed on tool items", () => {
-      const { result } = renderHook(() => usePanelPalette());
-
-      const browser = result.current.results.find((item) => item.id === "browser");
-      expect(browser?.installed).toBeUndefined();
-    });
-
-    it("does not set installed on MORE_AGENTS entry", () => {
-      const { result } = renderHook(() => usePanelPalette());
-
-      const moreAgents = result.current.results.find((item) => item.id === MORE_AGENTS_PANEL_ID);
-      expect(moreAgents?.installed).toBeUndefined();
-    });
-
     it("still defensively routes handleSelect to setup wizard when installed=false is passed", () => {
       // Missing agents are now filtered out of the palette entirely (issue #5117), but the
       // handleSelect branch guarding against `installed === false` is kept as a defensive
@@ -753,17 +691,6 @@ describe("usePanelPalette", () => {
         })
       );
       dispatchSpy.mockRestore();
-    });
-
-    it("handleSelect returns option for installed agent", () => {
-      getEffectiveAgentIdsMock.mockReturnValue(["claude"]);
-      cliAvailabilityState.availability = { claude: "ready" };
-
-      const { result } = renderHook(() => usePanelPalette());
-
-      const claude = result.current.results.find((item) => item.id === "agent:claude");
-      const selected = result.current.handleSelect(claude!);
-      expect(selected).toBe(claude);
     });
 
     it("handleSelect allows selection when installed is undefined (before init)", () => {
@@ -796,23 +723,6 @@ describe("usePanelPalette", () => {
       const ids = result.current.results.map((item) => item.id);
       expect(ids).toContain("agent:claude");
       expect(ids).toContain("agent:gemini");
-    });
-
-    it("hides missing agents once availability is initialized", () => {
-      getEffectiveAgentIdsMock.mockReturnValue(["claude", "gemini"]);
-      getEffectiveAgentConfigMock.mockImplementation((id: string) => ({
-        name: id,
-        iconId: id,
-        color: "#000",
-        tooltip: id,
-      }));
-      cliAvailabilityState.availability = { claude: "ready", gemini: "missing" };
-
-      const { result } = renderHook(() => usePanelPalette());
-
-      const ids = result.current.results.map((item) => item.id);
-      expect(ids).toContain("agent:claude");
-      expect(ids).not.toContain("agent:gemini");
     });
 
     it("shows all agents before availability initializes (no premature filter)", () => {

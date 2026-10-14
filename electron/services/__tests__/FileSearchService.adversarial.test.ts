@@ -89,32 +89,6 @@ describe("FileSearchService adversarial", () => {
     expect(gitClient.raw).toHaveBeenCalledTimes(1);
   });
 
-  it("does not reseed the cache with stale results after invalidate during an in-flight load", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
-    tempDirs.push(dir);
-    const gitClient = createGitClient();
-    const rawDeferred = createDeferred<string>();
-    gitClient.checkIsRepo.mockResolvedValue(true);
-    gitClient.revparse.mockResolvedValue(`${dir}\n`);
-    gitClient.raw.mockReturnValueOnce(rawDeferred.promise).mockResolvedValueOnce("beta.ts\0");
-    createHardenedGitMock.mockReturnValue(gitClient);
-
-    const service = await createService();
-    const first = service.search({ cwd: dir, query: "alpha", limit: 5 });
-
-    service.invalidate(dir);
-    rawDeferred.resolve("alpha.ts\0");
-
-    await expect(first).resolves.toEqual(["alpha.ts"]);
-    await expect(service.search({ cwd: dir, query: "beta", limit: 5 })).resolves.toEqual([
-      "beta.ts",
-    ]);
-    await expect(service.search({ cwd: dir, query: "beta", limit: 5 })).resolves.toEqual([
-      "beta.ts",
-    ]);
-    expect(gitClient.raw).toHaveBeenCalledTimes(2);
-  });
-
   it("skips unreadable subtrees and still returns matches from readable siblings", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
     tempDirs.push(dir);

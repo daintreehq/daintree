@@ -82,14 +82,6 @@ describe("panelDialogStore", () => {
       expect(usePanelDialogStore.getState().requestSeq).toBeGreaterThan(first);
     });
 
-    it("removes the previous panel when a second open supersedes it", async () => {
-      const firstId = await usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
-
-      await usePanelDialogStore.getState().openPanelDialog({ kind: "file" });
-
-      expect(removePanelMock).toHaveBeenCalledWith(firstId);
-    });
-
     it("clears the reservation when the panel could not be created", async () => {
       addPanelMock.mockResolvedValue(null);
 

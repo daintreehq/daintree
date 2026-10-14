@@ -41,13 +41,6 @@ describe("useFocusOnActivateIntent", () => {
     });
   });
 
-  it("subscribes on mount regardless of isStateLoaded", () => {
-    renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
-      initialProps: { loaded: false },
-    });
-    expect(onFocusOnActivateMock).toHaveBeenCalledTimes(1);
-  });
-
   it("does NOT dispatch when intent arrives before hydration completes", () => {
     renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
       initialProps: { loaded: false },

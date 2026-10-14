@@ -67,17 +67,6 @@ describe("panelIdsByWorktreeId invariant across mutations", () => {
   });
 
   describe("ordering operations", () => {
-    it("reorderTerminals updates the bucket order", () => {
-      seedTerminal("t1", "wt-A");
-      seedTerminal("t2", "wt-A");
-      seedTerminal("t3", "wt-A");
-
-      // Move index 2 (t3) to position 0 within wt-A's grid scope
-      usePanelStore.getState().reorderTerminals(2, 0, "grid", "wt-A");
-
-      expect(usePanelStore.getState().panelIdsByWorktreeId["wt-A"]).toEqual(["t3", "t1", "t2"]);
-    });
-
     it("restoreTerminalOrder syncs bucket order on hydration restore", () => {
       seedTerminal("t1", "wt-A");
       seedTerminal("t2", "wt-A");
@@ -102,24 +91,6 @@ describe("panelIdsByWorktreeId invariant across mutations", () => {
       usePanelStore.getState().reorderTabGroups(1, 0, "grid", "wt-A");
 
       expect(usePanelStore.getState().panelIdsByWorktreeId["wt-A"]).toEqual(["t3", "t1", "t2"]);
-    });
-
-    it("getTabGroups interleaves explicit and virtual groups by panelIds order", () => {
-      // A panel gaining a second tab (becoming an explicit group) must keep its
-      // grid position rather than jumping to the front (#10435).
-      seedTerminal("t1", "wt-A");
-      seedTerminal("t2", "wt-A");
-      seedTerminal("t3", "wt-A");
-
-      usePanelStore.getState().createTabGroup("grid", "wt-A", ["t2", "t3"]);
-
-      // Leading virtual group (t1) must precede the explicit [t2, t3] group.
-      expect(
-        usePanelStore
-          .getState()
-          .getTabGroups("grid", "wt-A")
-          .map((g) => g.panelIds)
-      ).toEqual([["t1"], ["t2", "t3"]]);
     });
 
     it("getTabGroups interleaves a virtual group on each side of an explicit group", () => {

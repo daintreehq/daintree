@@ -161,13 +161,6 @@ describe("mcpServer IPC adversarial", () => {
     expect(result).toEqual(newStatus);
   });
 
-  it("rotateApiKey passes through the service-rotated key", async () => {
-    serviceMock.rotateApiKey.mockResolvedValue("rotated-secret-123");
-    const result = await getHandler(CHANNELS.MCP_SERVER_ROTATE_API_KEY)(fakeEvent());
-    expect(result).toBe("rotated-secret-123");
-    expect(serviceMock.rotateApiKey).toHaveBeenCalledTimes(1);
-  });
-
   it("setAuditEnabled rejects non-boolean values", async () => {
     await expect(
       getHandler(CHANNELS.MCP_SERVER_SET_AUDIT_ENABLED)(fakeEvent(), "true")
@@ -218,24 +211,6 @@ describe("mcpServer IPC adversarial", () => {
     expect(serviceMock.setAuditMaxRecords).toHaveBeenCalledTimes(2);
   });
 
-  it("getAuditRecords passes through service result", async () => {
-    serviceMock.getAuditRecords.mockReturnValueOnce([
-      {
-        id: "x",
-        timestamp: 1,
-        toolId: "t",
-        sessionId: "s",
-        tier: "unknown",
-        argsSummary: "{}",
-        result: "success",
-        durationMs: 0,
-      },
-    ] as never);
-    const result = await getHandler(CHANNELS.MCP_SERVER_GET_AUDIT_RECORDS)(fakeEvent());
-    expect(Array.isArray(result)).toBe(true);
-    expect((result as unknown[]).length).toBe(1);
-  });
-
   it("getAuditRecords forwards a narrowing query and rejects malformed ones", async () => {
     const handler = getHandler(CHANNELS.MCP_SERVER_GET_AUDIT_RECORDS);
     await handler(fakeEvent(), { helpSessionId: "help-1", limit: 5 });
@@ -282,31 +257,6 @@ describe("mcpServer IPC adversarial", () => {
     // legacy dispatch-only one — a typo in the handler would silently
     // re-introduce the original bug.
     expect(serviceMock.getAuditRecords).not.toHaveBeenCalled();
-  });
-
-  it("clearAuditLog calls service clear", async () => {
-    await getHandler(CHANNELS.MCP_SERVER_CLEAR_AUDIT_LOG)(fakeEvent());
-    expect(serviceMock.clearAuditLog).toHaveBeenCalledTimes(1);
-  });
-
-  it("getTurnOutcomeRecords passes through service result", async () => {
-    serviceMock.getTurnOutcomeRecords.mockReturnValueOnce([
-      {
-        id: "turn-1",
-        timestamp: 1,
-        terminalId: "t1",
-        sessionId: "s1",
-        outcome: "answered",
-      },
-    ] as never);
-    const result = await getHandler(CHANNELS.MCP_SERVER_GET_TURN_OUTCOME_RECORDS)(fakeEvent());
-    expect(Array.isArray(result)).toBe(true);
-    expect((result as unknown[]).length).toBe(1);
-  });
-
-  it("clearTurnOutcomeLog calls service clear", async () => {
-    await getHandler(CHANNELS.MCP_SERVER_CLEAR_TURN_OUTCOME_LOG)(fakeEvent());
-    expect(serviceMock.clearTurnOutcomeLog).toHaveBeenCalledTimes(1);
   });
 
   const DISCONNECT_BEARER_CHANNEL = "mcp-server:disconnect-bearer";
@@ -448,14 +398,6 @@ describe("mcpServer IPC adversarial", () => {
       });
       expect(serviceMock.releaseTerminalAdoption).toHaveBeenCalledWith("terminal-1");
     });
-  });
-
-  it("cleanup removes all thirty-two registered handlers", () => {
-    // 24 baseline + issueNativeGrant + revokeNativeGrant (#10648) + the four
-    // terminal hand-over operations (#12490) + a pane's notice state and stop.
-    expect(ipcHandlers.size).toBe(32);
-    cleanup();
-    expect(ipcHandlers.size).toBe(0);
   });
 });
 

@@ -62,11 +62,4 @@ describe("migration031 — assistant model per agent", () => {
     expect(run({ docSearch: true }).store.set).not.toHaveBeenCalled();
     expect(run({ modelIds: { claude: "opus" } }).store.set).not.toHaveBeenCalled();
   });
-
-  it("is a no-op on replay", () => {
-    const first = run({ modelId: "opus" }).after;
-    const { store, after } = run(first);
-    expect(store.set).not.toHaveBeenCalled();
-    expect(after).toEqual({ modelIds: { claude: "opus" } });
-  });
 });

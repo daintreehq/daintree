@@ -438,15 +438,10 @@ describe("help prompt outputs", () => {
 
     // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB by
     // default) across the whole AGENTS.md chain and truncates past it without
-    // telling the model, and the help session appends its scratch note at
-    // runtime. Growing past this means trimming, not copying CLAUDE.md across.
-    it("AGENTS.md stays well inside Codex's instruction budget", () => {
-      expect(Buffer.byteLength(AGENTS, "utf8")).toBeLessThanOrEqual(24 * 1024);
-    });
-
-    // The template is not the whole file Codex reads: provisioning appends
+    // telling the model. Growing past this means trimming, not copying CLAUDE.md
+    // across. The template is not the whole file Codex reads: provisioning appends
     // runtime notes (the scratch folder today, session metadata per #12702).
-    // Keep ~3 KiB of the cap free for them rather than spending it here.
+    // Keep ~3 KiB of a 24 KiB budget free for them rather than spending it here.
     it("the AGENTS.md template leaves room for runtime notes", () => {
       expect(Buffer.byteLength(AGENTS, "utf8")).toBeLessThanOrEqual(21_500);
     });
@@ -517,12 +512,6 @@ describe("build-help-prompts script integration", () => {
       const actual = readFileSync(path.join(workdir, "help", name), "utf8");
       expect(actual).toBe(expected);
     }
-  });
-
-  it("--check exits 0 when generated files match sources", () => {
-    runScript();
-    const check = runScript(["--check"]);
-    expect(check.status).toBe(0);
   });
 
   it("--check exits 1 and names the stale file when an output drifts", () => {

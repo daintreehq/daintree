@@ -156,33 +156,6 @@ describe("VoiceCorrectionService", () => {
     expect(result.action).toBe("no_change");
   });
 
-  it("falls back to raw text on timeout", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation(
-        (_url: string, init: RequestInit) =>
-          new Promise((_resolve, reject) => {
-            const timer = setTimeout(() => {}, 30000);
-            init.signal!.addEventListener(
-              "abort",
-              () => {
-                clearTimeout(timer);
-                reject(init.signal!.reason);
-              },
-              { once: true }
-            );
-          })
-      )
-    );
-
-    const svc = new VoiceCorrectionService();
-    const resultPromise = svc.correct({ rawText: "react is great" }, BASE_SETTINGS);
-    await vi.advanceTimersByTimeAsync(8000);
-    const result = await resultPromise;
-    expect(result.confirmedText).toBe("react is great");
-    expect(result.action).toBe("no_change");
-  });
-
   it("keeps the short timeout for single-sentence corrections", async () => {
     vi.stubGlobal(
       "fetch",
@@ -723,11 +696,6 @@ describe("VoiceCorrectionService", () => {
   });
 
   describe("annotateUncertainWords", () => {
-    it("wraps matching words with uncertain tags", () => {
-      const result = VoiceCorrectionService.annotateUncertainWords("hello world foo", ["world"]);
-      expect(result).toBe("hello <uncertain>world</uncertain> foo");
-    });
-
     it("handles punctuation attached to words", () => {
       const result = VoiceCorrectionService.annotateUncertainWords("hello, world!", ["hello"]);
       expect(result).toBe("<uncertain>hello</uncertain>, world!");

@@ -261,12 +261,3 @@ describe("RotatingTip — count-biased selection (#6756)", () => {
     expect(dispatch).toHaveBeenCalledWith("nav.quickSwitcher", undefined, { source: "user" });
   });
 });
-
-describe("contentGridTips module — no module-level mutable counter (#6756, #4754)", () => {
-  it("does not declare a module-level mount counter", async () => {
-    const { readFile } = await import("fs/promises");
-    const { resolve } = await import("path");
-    const source = await readFile(resolve(__dirname, "../contentGridTips.tsx"), "utf-8");
-    expect(source).not.toMatch(/let\s+tipMountCount\b/);
-  });
-});

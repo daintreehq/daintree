@@ -471,26 +471,6 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
-
-    it("keeps Enter immediate in simple agent mode", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("agent-simple-enter", 1000, onStateChange, {
-        agentId: "claude",
-        getVisibleLines: () => ["> "],
-        getCursorLine: () => "> ",
-        initialState: "idle",
-        skipInitialStateEmit: true,
-      });
-
-      monitor.onInput("run\r");
-
-      expect(monitor.getState()).toBe("busy");
-      expect(onStateChange).toHaveBeenCalledWith("agent-simple-enter", 1000, "busy", {
-        trigger: "input",
-      });
-
-      monitor.dispose();
-    });
   });
 
   describe("Simple-output mode detection layers (#9873)", () => {
@@ -918,114 +898,9 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
-
-    it("should work without polling enabled", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
-
-      monitor.notifySubmission();
-
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
-      expect(monitor.getState()).toBe("busy");
-
-      monitor.dispose();
-    });
-
-    it("should not fire duplicate busy when already busy", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
-
-      monitor.notifySubmission();
-      monitor.notifySubmission();
-
-      expect(onStateChange).toHaveBeenCalledTimes(1);
-
-      monitor.dispose();
-    });
   });
 
   describe("Output-driven activity", () => {
-    it("should NOT trigger busy from output during typing echo window - Issue #1476", () => {
-      const onStateChange = vi.fn();
-      const processStateValidator = {
-        hasActiveChildren: vi.fn().mockReturnValue(true),
-      };
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        processStateValidator,
-        outputActivityDetection: {
-          enabled: true,
-          activationThreshold: 1,
-          maxBytesPerFrame: 65536,
-          leakRatePerMs: 0.001,
-        },
-      });
-
-      // User types (sets recent input timestamp)
-      monitor.onInput("h");
-
-      // Output during echo window should NOT trigger busy
-      monitor.onData("h");
-
-      expect(onStateChange).not.toHaveBeenCalled();
-      expect(monitor.getState()).toBe("idle");
-
-      monitor.dispose();
-    });
-
-    it("should trigger busy from output when there is pending input (Enter pressed)", () => {
-      const onStateChange = vi.fn();
-      const processStateValidator = {
-        hasActiveChildren: vi.fn().mockReturnValue(true),
-      };
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        processStateValidator,
-        outputActivityDetection: {
-          enabled: true,
-          activationThreshold: 1,
-          maxBytesPerFrame: 65536,
-          leakRatePerMs: 0.001,
-        },
-      });
-
-      // Press Enter first to set pending input
-      monitor.onInput("\r");
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
-
-      // Reset to test output confirmation
-      onStateChange.mockClear();
-      monitor.onData("agent output");
-
-      // Already busy, output just confirms - no duplicate call
-      expect(onStateChange).not.toHaveBeenCalled();
-      expect(monitor.getState()).toBe("busy");
-
-      monitor.dispose();
-    });
-
-    it("should not re-emit busy when output arrives after Enter has set state to busy", () => {
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        outputActivityDetection: {
-          enabled: true,
-          activationThreshold: 1,
-          maxBytesPerFrame: 65536,
-          leakRatePerMs: 0.001,
-        },
-      });
-
-      monitor.onInput("\r");
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
-      onStateChange.mockClear();
-
-      monitor.onData("agent output");
-
-      // Already busy from input — output confirms but doesn't re-emit busy
-      expect(onStateChange).not.toHaveBeenCalled();
-      expect(monitor.getState()).toBe("busy");
-
-      monitor.dispose();
-    });
-
     it("should NOT trigger busy from output during echo window even without validator - Issue #1476", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {

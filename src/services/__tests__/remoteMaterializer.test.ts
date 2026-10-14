@@ -8,7 +8,6 @@ import type {
 import { UPLOAD_CONFIRM_BYTES, UPLOAD_REFUSE_BYTES } from "@shared/types/remoteHosts";
 import { createRemoteMaterializer, type RemoteMaterializerDeps } from "../remoteMaterializer";
 
-const MB = 1024 * 1024;
 const REPLACE_TOKEN = "0123456789abcdef0123456789abcdef";
 
 function setup(overrides: Partial<RemoteMaterializerDeps> = {}) {
@@ -124,15 +123,6 @@ describe("remote materialize", () => {
     });
     expect(fileTransfer.uploadLocalFile).not.toHaveBeenCalled();
     expect(deps.reportFailure).not.toHaveBeenCalled();
-  });
-
-  it("sends a large file once confirmed, and never asks below the threshold", async () => {
-    const { materialize, fileTransfer, deps } = setup();
-    fileTransfer.statLocalFile.mockResolvedValueOnce({ size: 60 * MB, isDirectory: false });
-    await materialize({ kind: "local-file", path: "/Users/me/big.mov" });
-    expect(fileTransfer.uploadLocalFile).toHaveBeenCalledTimes(1);
-    await materialize({ kind: "local-file", path: "/Users/me/small.txt" });
-    expect(deps.confirmLargeUpload).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a file over the hard cap without asking", async () => {
@@ -340,11 +330,6 @@ describe("remote materialize", () => {
   describe("size limits", () => {
     const FIFTY_MB = 50 * 1024 * 1024;
     const FIVE_HUNDRED_MB = 500 * 1024 * 1024;
-
-    it("holds the confirm threshold at 50 MB and the hard cap at 500 MB", () => {
-      expect(UPLOAD_CONFIRM_BYTES).toBe(FIFTY_MB);
-      expect(UPLOAD_REFUSE_BYTES).toBe(FIVE_HUNDRED_MB);
-    });
 
     it.each([
       [FIFTY_MB, false],

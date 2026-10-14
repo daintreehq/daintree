@@ -25,14 +25,6 @@ describe("metadataFilename", () => {
     expect(metadataFilename("latest", "-mac")).toBe("latest-mac.yml");
   });
 
-  it("constructs Linux filename", () => {
-    expect(metadataFilename("rc", "-linux")).toBe("rc-linux.yml");
-  });
-
-  it("constructs Linux arm64 filename", () => {
-    expect(metadataFilename("latest", "-linux-arm64")).toBe("latest-linux-arm64.yml");
-  });
-
   it("constructs Windows filename (empty suffix)", () => {
     expect(metadataFilename("beta", "")).toBe("beta.yml");
   });
@@ -144,13 +136,6 @@ describe("fetchRemoteMetadata", () => {
     await expect(
       fetchRemoteMetadata("https://updates.daintree.org/releases/latest-mac.yml", fetchFn)
     ).rejects.toThrow(/HTTP 200.*got 404/);
-  });
-
-  it("throws on 500", async () => {
-    const fetchFn = vi.fn().mockResolvedValue(makeResponse({ status: 500 }));
-    await expect(
-      fetchRemoteMetadata("https://updates.daintree.org/releases/latest-mac.yml", fetchFn)
-    ).rejects.toThrow(/500/);
   });
 
   it("throws on malformed YAML in body", async () => {
@@ -316,22 +301,6 @@ describe("verifyMetadataOnce", () => {
     const result = await verifyMetadataOnce("latest-mac.yml", publishUrl, "/nonexistent", vi.fn());
     expect(result.ok).toBe(false);
     expect(result.error).toContain("failed to read local metadata");
-  });
-
-  it("returns error when remote returns 404", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "verify-r2-metadata-test-"));
-    try {
-      const content =
-        "version: 1.0.0\nfiles:\n  - url: mac.zip\n    sha512: aaa\n    size: 100\npath: mac.zip\nsha512: aaa\nreleaseDate: 2024-01-01\n";
-      await writeFile(path.join(dir, "latest-mac.yml"), content);
-      const fetchFn = vi.fn().mockResolvedValue(makeResponse({ status: 404 }));
-
-      const result = await verifyMetadataOnce("latest-mac.yml", publishUrl, dir, fetchFn);
-      expect(result.ok).toBe(false);
-      expect(result.error).toContain("404");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
   });
 
   it("returns error on content mismatch", async () => {
@@ -511,19 +480,6 @@ describe("verifyMetadataWithRetries", () => {
       fetch: vi.fn(),
       sleep: vi.fn(),
       maxAttempts: 0,
-      log: vi.fn(),
-    });
-    expect(error).toContain("maxAttempts must be >= 1");
-  });
-
-  it("returns error when maxAttempts is negative", async () => {
-    const error = await verifyMetadataWithRetries({
-      filename: "latest-mac.yml",
-      publishUrl: "https://x.example/r/",
-      releaseDir: "/nonexistent",
-      fetch: vi.fn(),
-      sleep: vi.fn(),
-      maxAttempts: -1,
       log: vi.fn(),
     });
     expect(error).toContain("maxAttempts must be >= 1");

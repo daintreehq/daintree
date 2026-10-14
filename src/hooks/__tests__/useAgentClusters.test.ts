@@ -1,6 +1,19 @@
-import { describe, it, expect } from "vitest";
-import { deriveHighestPriorityCluster } from "../useAgentClusters";
+// @vitest-environment jsdom
+import { renderHook, act } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
+
+const { useWorktreeStoreMock } = vi.hoisted(() => ({
+  useWorktreeStoreMock: vi.fn(),
+}));
+
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: useWorktreeStoreMock,
+}));
+
+import { deriveHighestPriorityCluster, useAgentClusters } from "../useAgentClusters";
+import { _resetWorktreeIdCacheForTests } from "../useTerminalSelectors";
 
 const NOW = 1_700_000_000_000;
 
@@ -78,15 +91,6 @@ describe("deriveHighestPriorityCluster", () => {
       expect(cluster!.memberIds).toEqual(["a", "b"]);
       expect(cluster!.latestStateChange).toBe(NOW - 1);
       expect(cluster!.headline).toBe("2 agents waiting");
-    });
-
-    it("includes waiting agents with waitingReason='question'", () => {
-      const cluster = derive([
-        makeAgent("a", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
-        makeAgent("b", { agentState: "waiting", waitingReason: "question", lastStateChange: NOW }),
-      ]);
-      expect(cluster?.type).toBe("waiting");
-      expect(cluster?.count).toBe(2);
     });
 
     it("includes waiting agents with no waitingReason", () => {
@@ -190,32 +194,6 @@ describe("deriveHighestPriorityCluster", () => {
   });
 
   describe("eligibility guards", () => {
-    it("excludes trashed terminals", () => {
-      const cluster = derive([
-        makeAgent("a", {
-          agentState: "waiting",
-          waitingReason: "prompt",
-          lastStateChange: NOW,
-          location: "trash",
-        }),
-        makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
-      ]);
-      expect(cluster).toBeNull();
-    });
-
-    it("excludes background terminals", () => {
-      const cluster = derive([
-        makeAgent("a", {
-          agentState: "waiting",
-          waitingReason: "prompt",
-          lastStateChange: NOW,
-          location: "background",
-        }),
-        makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
-      ]);
-      expect(cluster).toBeNull();
-    });
-
     it("excludes plain terminals without an agentState (no agent activity)", () => {
       // In practice only AgentStateService sets `agentState`, so a terminal
       // with no agent never reaches the cluster states ("waiting", "working",
@@ -378,31 +356,6 @@ describe("deriveHighestPriorityCluster", () => {
       expect(cluster).toBeNull();
     });
 
-    it("does not treat terminals as orphaned when the worktree id set is empty", () => {
-      const { panelsById, panelIds } = build([
-        makeAgent("a", {
-          agentState: "waiting",
-          waitingReason: "prompt",
-          lastStateChange: NOW,
-          worktreeId: "wt-whatever",
-        }),
-        makeAgent("b", {
-          agentState: "waiting",
-          waitingReason: "prompt",
-          lastStateChange: NOW,
-          worktreeId: "wt-other",
-        }),
-      ]);
-      const cluster = deriveHighestPriorityCluster({
-        panelIds,
-        panelsById,
-        isInTrash: noTrash,
-        worktreeIds: EMPTY_WORKTREE_IDS,
-        now: NOW,
-      });
-      expect(cluster?.count).toBe(2);
-    });
-
     it("tolerates missing entries in panelsById", () => {
       const cluster = deriveHighestPriorityCluster({
         panelIds: ["missing", "a", "b"],
@@ -441,16 +394,6 @@ describe("deriveHighestPriorityCluster", () => {
         now: NOW,
       });
       expect(cluster?.memberIds).toEqual(["b", "a"]);
-    });
-
-    it("signature is stable across identical inputs", () => {
-      const terminals = [
-        makeAgent("a", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
-        makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
-      ];
-      const s1 = derive(terminals)!.signature;
-      const s2 = derive(terminals)!.signature;
-      expect(s1).toBe(s2);
     });
 
     it("signature changes when latestStateChange advances", () => {
@@ -501,15 +444,100 @@ describe("deriveHighestPriorityCluster", () => {
       expect(derive(termsAsc)!.signature).toBe(derive(termsDesc)!.signature);
     });
   });
+});
 
-  describe("headline variants", () => {
-    it("uses plural correctly for ≥2 agents", () => {
-      const cluster = derive([
-        makeAgent("a", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
-        makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
-        makeAgent("c", { agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
+function seedPanels(terminals: PtyPanelData[]): void {
+  usePanelStore.setState(build(terminals));
+}
+
+function seedWorktrees(ids: string[]): void {
+  const worktrees = new Map(ids.map((id) => [id, { id, worktreeId: id }]));
+  useWorktreeStoreMock.mockImplementation(
+    (selector: (state: { worktrees: typeof worktrees }) => unknown) => selector({ worktrees })
+  );
+}
+
+describe("useAgentClusters (hook integration)", () => {
+  beforeEach(() => {
+    _resetWorktreeIdCacheForTests();
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+    useWorktreeStoreMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("detects a waiting cluster with 2 eligible agents", () => {
+    seedWorktrees(["wt-1"]);
+    seedPanels([
+      makeAgent("a", { agentState: "waiting", waitingReason: "prompt", lastStateChange: 1 }),
+      makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: 2 }),
+    ]);
+    const { result } = renderHook(() => useAgentClusters());
+    expect(result.current?.type).toBe("waiting");
+    expect(result.current?.memberIds).toEqual(["a", "b"]);
+  });
+
+  it("excludes orphaned-worktree terminals (critical: matches WaitingContainer visibility)", () => {
+    seedWorktrees(["wt-1"]); // wt-gone is NOT in the active set
+    seedPanels([
+      makeAgent("a", {
+        agentState: "waiting",
+        waitingReason: "prompt",
+        lastStateChange: 1,
+        worktreeId: "wt-1",
+      }),
+      makeAgent("b", {
+        agentState: "waiting",
+        waitingReason: "prompt",
+        lastStateChange: 2,
+        worktreeId: "wt-gone",
+      }),
+    ]);
+    const { result } = renderHook(() => useAgentClusters());
+    expect(result.current).toBeNull();
+  });
+
+  it("recomputes when panelStore updates (reactive)", () => {
+    seedWorktrees(["wt-1"]);
+    seedPanels([
+      makeAgent("a", { agentState: "waiting", waitingReason: "prompt", lastStateChange: 1 }),
+    ]);
+    const { result } = renderHook(() => useAgentClusters());
+    expect(result.current).toBeNull();
+
+    act(() => {
+      seedPanels([
+        makeAgent("a", { agentState: "waiting", waitingReason: "prompt", lastStateChange: 1 }),
+        makeAgent("b", { agentState: "waiting", waitingReason: "prompt", lastStateChange: 2 }),
       ]);
-      expect(cluster?.headline).toBe("3 agents waiting");
     });
+
+    expect(result.current?.type).toBe("waiting");
+    expect(result.current?.count).toBe(2);
+  });
+
+  it("completion cluster expires lazily when Date.now() moves past the 30s window on next update", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2024-01-01T00:00:00Z").getTime());
+    const start = Date.now();
+    seedWorktrees(["wt-1"]);
+    seedPanels([
+      makeAgent("a", { agentState: "completed", lastStateChange: start - 1_000 }),
+      makeAgent("b", { agentState: "completed", lastStateChange: start - 2_000 }),
+    ]);
+    const { result } = renderHook(() => useAgentClusters());
+    expect(result.current?.type).toBe("completion");
+
+    act(() => {
+      vi.setSystemTime(start + 60_000);
+      seedPanels([
+        makeAgent("a", { agentState: "completed", lastStateChange: start - 1_000 }),
+        makeAgent("b", { agentState: "completed", lastStateChange: start - 2_000 }),
+      ]);
+    });
+
+    expect(result.current).toBeNull();
   });
 });

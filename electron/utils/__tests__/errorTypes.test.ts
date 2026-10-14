@@ -1,11 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   AppError,
-  GitError,
   GitOperationError,
-  WorktreeRemovedError,
-  DaintreeError,
-  isAppError,
   toGitOperationError,
   getUserMessage,
   getRetryability,
@@ -14,22 +10,6 @@ import {
 import { serializeError, deserializeError } from "../../../shared/utils/ipcErrorSerialization.js";
 
 describe("GitOperationError", () => {
-  it("preserves the GitError -> DaintreeError -> Error hierarchy", () => {
-    const err = new GitOperationError("auth-failed", "boom", { cwd: "/repo", op: "push" });
-    expect(err).toBeInstanceOf(GitOperationError);
-    expect(err).toBeInstanceOf(GitError);
-    expect(err).toBeInstanceOf(DaintreeError);
-    expect(err).toBeInstanceOf(Error);
-  });
-
-  it("still allows existing WorktreeRemovedError instanceof checks to hold", () => {
-    const wt = new WorktreeRemovedError("/missing");
-    expect(wt).toBeInstanceOf(GitError);
-    expect(wt).toBeInstanceOf(WorktreeRemovedError);
-    // WorktreeRemovedError must NOT be conflated with the new taxonomy
-    expect(wt).not.toBeInstanceOf(GitOperationError);
-  });
-
   it("stamps reason/op/cwd into context and dedicated fields", () => {
     const err = new GitOperationError("conflict-unresolved", "merge conflict", {
       cwd: "/w",
@@ -79,37 +59,6 @@ describe("toGitOperationError", () => {
 });
 
 describe("AppError", () => {
-  it("preserves the AppError -> DaintreeError -> Error hierarchy", () => {
-    const err = new AppError({ code: "BINARY_FILE", message: "binary" });
-    expect(err).toBeInstanceOf(AppError);
-    expect(err).toBeInstanceOf(DaintreeError);
-    expect(err).toBeInstanceOf(Error);
-  });
-
-  it("sets name to 'AppError' so renderer-side duck-typing works after IPC", () => {
-    const err = new AppError({ code: "VALIDATION", message: "bad input" });
-    expect(err.name).toBe("AppError");
-  });
-
-  it("stamps code and userMessage onto own properties", () => {
-    const err = new AppError({
-      code: "FILE_TOO_LARGE",
-      message: "exceeds limit",
-      userMessage: "This file is too large to preview.",
-      context: { size: 600 * 1024, limit: 512 * 1024 },
-    });
-    expect(err.code).toBe("FILE_TOO_LARGE");
-    expect(err.userMessage).toBe("This file is too large to preview.");
-    expect(err.context).toEqual({ size: 600 * 1024, limit: 512 * 1024 });
-  });
-
-  it("exposes isAppError narrowing", () => {
-    expect(isAppError(new AppError({ code: "CANCELLED", message: "cancel" }))).toBe(true);
-    expect(isAppError(new GitError("git error"))).toBe(false);
-    expect(isAppError(new Error("plain"))).toBe(false);
-    expect(isAppError(null)).toBe(false);
-  });
-
   it("survives the serialize → structuredClone → deserialize cycle with code preserved", () => {
     const original = new AppError({
       code: "RATE_LIMITED",

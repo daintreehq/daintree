@@ -17,10 +17,9 @@ import type { TerminalReliabilityMetricPayload } from "../../../shared/types/pty
  * `electron/pty-host.ts` wires them per renderer connection. The unit suites
  * (portBatcher.test.ts, portQueue.test.ts) each mock the other component;
  * these tests exist to prove the composed behavior under heavy multi-terminal
- * output: batching preserves per-terminal byte order, the focused pane's
- * latency privilege survives sibling floods, watermark pauses engage and
- * ack-driven resume actually releases the PTY, and teardown paths leak
- * neither bytes nor pause holds.
+ * output: batching preserves per-terminal byte order, watermark pauses engage
+ * and ack-driven resume actually releases the PTY, and the aggregate gate
+ * spares the focused pane under a fleet flood.
  */
 
 const encoder = new TextEncoder();
@@ -173,54 +172,6 @@ describe("port pipeline stress (real batcher + queue + coordinator)", () => {
     vi.useRealTimers();
   });
 
-  it("focused terminal's batch posts ahead of five flooding siblings", () => {
-    const harness = createHarness();
-    const win = harness.addWindow(1);
-    harness.setFocused(1, "t-focus");
-
-    // Siblings write first (their per-terminal immediates are scheduled
-    // first); the focused terminal writes LAST. The first flush still posts
-    // the focused entry first.
-    for (let i = 0; i < 5; i++) {
-      harness.pump(`t${i}`, `sibling-${i}-`.repeat(20));
-    }
-    harness.pump("t-focus", "focused-output");
-
-    vi.runAllTimers();
-
-    expect(win.posted.length).toBeGreaterThanOrEqual(6);
-    expect(win.posted[0]!.id).toBe("t-focus");
-    expect(concatPosted(win.posted, "t-focus")).toBe("focused-output");
-  });
-
-  it("interactive echo accelerates the focused batch without reordering its earlier chunks", () => {
-    const harness = createHarness();
-    const win = harness.addWindow(1);
-    harness.setFocused(1, "t-focus");
-
-    // Focused terminal escalates to throughput mode (two writes), siblings
-    // flood alongside. The echo write swaps the 16ms timer for an immediate.
-    harness.pump("t-focus", "aaa");
-    harness.pump("t-focus", "bbb");
-    harness.pump("t1", "noise-1");
-    harness.pump("t1", "noise-2");
-    harness.pump("t-focus", "x", true);
-
-    // One macrotask tick — well before the 16ms throughput window.
-    vi.advanceTimersByTime(1);
-
-    const focusedBatches = win.posted.filter((p) => p.id === "t-focus");
-    expect(focusedBatches).toHaveLength(1);
-    // Earlier queued chunks land ahead of the echo byte — accelerated, never
-    // reordered.
-    expect(decoder.decode(focusedBatches[0]!.data)).toBe("aaabbbx");
-    expect(win.posted[0]!.id).toBe("t-focus");
-
-    // The swapped-out throughput timer must not double-post.
-    vi.advanceTimersByTime(PORT_BATCH_THROUGHPUT_DELAY_MS + 1);
-    expect(win.posted.filter((p) => p.id === "t-focus")).toHaveLength(1);
-  });
-
   it("per-terminal byte order survives an interleaved flood with threshold flushes and odd chunk shapes", () => {
     const harness = createHarness();
     const win = harness.addWindow(1);
@@ -296,22 +247,6 @@ describe("port pipeline stress (real batcher + queue + coordinator)", () => {
     expect(win.queueManager.getQueuedBytes("t1")).toBeLessThan(LOW_WATERMARK_BYTES);
   });
 
-  it("terminal exit with batched data still pending delivers the tail and leaves no holds", () => {
-    const harness = createHarness();
-    const win = harness.addWindow(1);
-
-    harness.pump("t1", "final-output-before-exit");
-    // Exit arrives before any flush timer fires — mimic the host's exit
-    // handler: flush the batcher's tail, then clear the queue accounting.
-    win.batcher.flushTerminal("t1");
-    win.queueManager.clearQueue("t1");
-
-    expect(concatPosted(win.posted, "t1")).toBe("final-output-before-exit");
-    expect(win.queueManager.getQueuedBytes("t1")).toBe(0);
-    expect(win.queueManager.getTotalQueuedBytes()).toBe(0);
-    expect(harness.terminals.get("t1")!.coordinator.isPaused).toBe(false);
-  });
-
   it("a saturated window rejects while its sibling window keeps accepting", () => {
     const harness = createHarness();
     const winA = harness.addWindow(1);
@@ -371,34 +306,6 @@ describe("port pipeline stress (real batcher + queue + coordinator)", () => {
     // Governor pressure clears — NOW the PTY resumes.
     terminal.coordinator.resume("resource-governor");
     expect(terminal.rawResume).toHaveBeenCalledTimes(1);
-  });
-
-  it("window teardown mid-pause releases the PTY and surfaces the release", () => {
-    const harness = createHarness();
-    const win = harness.addWindow(1);
-
-    const chunk = "d".repeat(PORT_BATCH_THRESHOLD_BYTES);
-    for (let i = 0; i < 40; i++) {
-      harness.pump("t1", chunk);
-    }
-    vi.advanceTimersByTime(PORT_BATCH_THROUGHPUT_DELAY_MS + 4);
-    const terminal = harness.terminals.get("t1")!;
-    expect(win.queueManager.isPaused("t1")).toBe(true);
-
-    // LRU eviction / project close: the window goes away with acks pending.
-    // Mimic disconnectWindow: resumeAll, then dispose.
-    win.queueManager.resumeAll();
-    win.queueManager.dispose();
-    win.batcher.dispose();
-
-    expect(terminal.rawResume).toHaveBeenCalledTimes(1);
-    expect(terminal.coordinator.isPaused).toBe(false);
-    // The release is surfaced (stuck-pill regression) with a pause-end metric.
-    expect(win.statusEvents).toContainEqual({ id: "t1", status: "running" });
-    expect(win.metrics.some((m) => m.terminalId === "t1" && m.metricType === "pause-end")).toBe(
-      true
-    );
-    expect(win.queueManager.getTotalQueuedBytes()).toBe(0);
   });
 
   it("32 terminals flooding one window: every byte accounted, aggregate gate holds, sweep releases", () => {

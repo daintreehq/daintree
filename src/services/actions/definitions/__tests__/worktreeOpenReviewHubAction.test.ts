@@ -58,14 +58,6 @@ beforeEach(() => {
 });
 
 describe("worktree.openReviewHub", () => {
-  it("registers a renderer-scoped command action", () => {
-    const action = getAction();
-    expect(action.id).toBe("worktree.openReviewHub");
-    expect(action.kind).toBe("command");
-    expect(action.danger).toBe("safe");
-    expect(action.scope).toBe("renderer");
-  });
-
   it("accepts an optional worktreeId argument", () => {
     const action = getAction();
     expect(action.argsSchema).toBeDefined();

@@ -223,233 +223,219 @@ describe("TerminalCrashReapService (#7526, #8769, #13176)", () => {
           expect(child.on).toHaveBeenCalledWith("error", expect.any(Function));
           expect(child.stdin.on).toHaveBeenCalledWith("error", expect.any(Function));
         });
-
-        it("spawns the supervisor only once across many terminals", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("a", 10);
-          svc.attachTerminal("b", 20);
-          svc.attachTerminal("c", 30);
-
-          expect(spawn).toHaveBeenCalledTimes(1);
-          expect(writes).toEqual(["ADD 10\n", "ADD 20\n", "ADD 30\n"]);
-        });
-
-        it("skips a repeated terminal-pid without re-writing", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 777);
-          svc.attachTerminal("t1", 777);
-
-          expect(writes).toEqual(["ADD 777\n"]);
-        });
-
-        it("unregisters the PID when the terminal exits", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 4242, 1);
-          svc.detachTerminal("t1", 1);
-          svc.detachTerminal("t1", 1);
-
-          expect(writes).toEqual(["ADD 4242\n", "REMOVE 4242\n"]);
-          expect(svc.getTrackedPidsForTest().size).toBe(0);
-        });
-
-        it("replaces the predecessor's PID on a same-id respawn", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 100, 1);
-          svc.attachTerminal("t1", 200, 2);
-
-          expect(writes).toEqual(["ADD 100\n", "REMOVE 100\n", "ADD 200\n"]);
-          expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 200]]));
-        });
-
-        it("ignores a stale exit from the predecessor after a same-id respawn", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 100, 1);
-          svc.attachTerminal("t1", 200, 2);
-          svc.detachTerminal("t1", 1);
-
-          expect(writes).toEqual(["ADD 100\n", "REMOVE 100\n", "ADD 200\n"]);
-          expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 200]]));
-        });
-
-        it("ignores a predecessor's PID that arrives after its successor registered", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 200, 2);
-          svc.attachTerminal("t1", 100, 1);
-
-          expect(writes).toEqual(["ADD 200\n"]);
-          expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 200]]));
-        });
-
-        it("a stale same-PID event cannot rewind the generation and detach the live one", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 100, 2);
-          svc.attachTerminal("t1", 100, 1);
-          svc.detachTerminal("t1", 1);
-
-          expect(writes).toEqual(["ADD 100\n"]);
-          expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 100]]));
-        });
-
-        it("re-registers a successor that landed on its predecessor's recycled PID", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 100, 1);
-          svc.attachTerminal("t1", 100, 2);
-          svc.detachTerminal("t1", 1);
-
-          expect(writes).toEqual(["ADD 100\n", "REMOVE 100\n", "ADD 100\n"]);
-          expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 100]]));
-        });
-
-        it("detaches regardless of generation when either side has none", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("a", 10);
-          svc.attachTerminal("b", 20, 3);
-          svc.detachTerminal("a", 9);
-          svc.detachTerminal("b");
-
-          expect(writes).toEqual(["ADD 10\n", "ADD 20\n", "REMOVE 10\n", "REMOVE 20\n"]);
-        });
-
-        it("detaching an unknown terminal is a no-op", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.detachTerminal("nope");
-          svc.attachTerminal("t1", 4242);
-          svc.detachTerminal("nope");
-
-          expect(writes).toEqual(["ADD 4242\n"]);
-        });
-
-        it("rejects invalid PIDs without spawning", () => {
-          const { spawn, reaper } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t", 0);
-          svc.attachTerminal("t", -1);
-          svc.attachTerminal("t", 1.5);
-          svc.attachTerminal("t", Number.NaN);
-
-          expect(spawn).not.toHaveBeenCalled();
-        });
-
-        it("warns once and stays a no-op when the supervisor is unavailable", () => {
-          const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-          const { spawn, reaper } = makePosix({ available: false });
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("a", 1);
-          svc.attachTerminal("b", 2);
-          svc.detachTerminal("a");
-
-          expect(spawn).not.toHaveBeenCalled();
-          expect(warnSpy).toHaveBeenCalledTimes(1);
-        });
-
-        it("warns once when no reaper module is loaded", () => {
-          const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-          const { spawn } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper: null, spawn });
-
-          svc.attachTerminal("a", 1);
-          svc.attachTerminal("b", 2);
-
-          expect(spawn).not.toHaveBeenCalled();
-          expect(warnSpy).toHaveBeenCalledTimes(1);
-        });
-
-        it("survives a supervisor spawn failure without crashing or retrying", () => {
-          const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-          const { spawn, reaper } = makePosix({ spawnThrows: true });
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          expect(() => svc.attachTerminal("a", 1)).not.toThrow();
-          svc.attachTerminal("b", 2);
-
-          expect(spawn).toHaveBeenCalledTimes(1); // not retried
-          expect(warnSpy).toHaveBeenCalled();
-        });
-
-        it("survives stdin write failures and warns once", () => {
-          const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-          const { spawn, reaper } = makePosix({ stdinWriteThrows: true });
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          expect(() => svc.attachTerminal("a", 1)).not.toThrow();
-          svc.attachTerminal("b", 2);
-          expect(() => svc.detachTerminal("a")).not.toThrow();
-
-          expect(warnSpy).toHaveBeenCalledTimes(1);
-        });
-
-        it("dispose() disarms the supervisor and closes the pipe", () => {
-          const { spawn, reaper, writes, stdin } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 4242);
-          svc.dispose();
-
-          expect(writes).toEqual(["ADD 4242\n", "DISARM\n"]);
-          expect(stdin.end).toHaveBeenCalledTimes(1);
-        });
-
-        it("dispose() is idempotent", () => {
-          const { spawn, reaper, stdin } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 4242);
-          svc.dispose();
-          svc.dispose();
-
-          expect(stdin.end).toHaveBeenCalledTimes(1);
-        });
-
-        it("dispose() swallows a stdin write failure", () => {
-          const { spawn, reaper } = makePosix({ stdinWriteThrows: true });
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 4242); // ADD write throws, caught
-          expect(() => svc.dispose()).not.toThrow(); // DISARM write throws, caught
-        });
-
-        it("dispose() before any attach does not throw", () => {
-          const { spawn, reaper } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          expect(() => svc.dispose()).not.toThrow();
-          expect(spawn).not.toHaveBeenCalled();
-        });
-
-        it("attaching or detaching after dispose writes nothing", () => {
-          const { spawn, reaper, writes } = makePosix();
-          const svc = new TerminalCrashReapService(null, { reaper, spawn });
-
-          svc.attachTerminal("t1", 4242);
-          svc.dispose();
-          svc.attachTerminal("t2", 9999);
-          svc.detachTerminal("t1");
-
-          expect(writes).toEqual(["ADD 4242\n", "DISARM\n"]);
-        });
       });
     }
+
+    // Past the platform gate darwin and linux share every code path, so the
+    // supervisor protocol runs on one of them.
+    describe("supervisor protocol", () => {
+      beforeEach(() => {
+        setPlatform("linux");
+      });
+
+      it("spawns the supervisor only once across many terminals", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("a", 10);
+        svc.attachTerminal("b", 20);
+        svc.attachTerminal("c", 30);
+
+        expect(spawn).toHaveBeenCalledTimes(1);
+        expect(writes).toEqual(["ADD 10\n", "ADD 20\n", "ADD 30\n"]);
+      });
+
+      it("unregisters the PID when the terminal exits", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 4242, 1);
+        svc.detachTerminal("t1", 1);
+        svc.detachTerminal("t1", 1);
+
+        expect(writes).toEqual(["ADD 4242\n", "REMOVE 4242\n"]);
+        expect(svc.getTrackedPidsForTest().size).toBe(0);
+      });
+
+      it("replaces the predecessor's PID on a same-id respawn", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 100, 1);
+        svc.attachTerminal("t1", 200, 2);
+
+        expect(writes).toEqual(["ADD 100\n", "REMOVE 100\n", "ADD 200\n"]);
+        expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 200]]));
+      });
+
+      it("ignores a stale exit from the predecessor after a same-id respawn", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 100, 1);
+        svc.attachTerminal("t1", 200, 2);
+        svc.detachTerminal("t1", 1);
+
+        expect(writes).toEqual(["ADD 100\n", "REMOVE 100\n", "ADD 200\n"]);
+        expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 200]]));
+      });
+
+      it("ignores a predecessor's PID that arrives after its successor registered", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 200, 2);
+        svc.attachTerminal("t1", 100, 1);
+
+        expect(writes).toEqual(["ADD 200\n"]);
+        expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 200]]));
+      });
+
+      it("a stale same-PID event cannot rewind the generation and detach the live one", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 100, 2);
+        svc.attachTerminal("t1", 100, 1);
+        svc.detachTerminal("t1", 1);
+
+        expect(writes).toEqual(["ADD 100\n"]);
+        expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 100]]));
+      });
+
+      it("re-registers a successor that landed on its predecessor's recycled PID", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 100, 1);
+        svc.attachTerminal("t1", 100, 2);
+        svc.detachTerminal("t1", 1);
+
+        expect(writes).toEqual(["ADD 100\n", "REMOVE 100\n", "ADD 100\n"]);
+        expect(svc.getTrackedPidsForTest()).toEqual(new Map([["t1", 100]]));
+      });
+
+      it("detaches regardless of generation when either side has none", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("a", 10);
+        svc.attachTerminal("b", 20, 3);
+        svc.detachTerminal("a", 9);
+        svc.detachTerminal("b");
+
+        expect(writes).toEqual(["ADD 10\n", "ADD 20\n", "REMOVE 10\n", "REMOVE 20\n"]);
+      });
+
+      it("detaching an unknown terminal is a no-op", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.detachTerminal("nope");
+        svc.attachTerminal("t1", 4242);
+        svc.detachTerminal("nope");
+
+        expect(writes).toEqual(["ADD 4242\n"]);
+      });
+
+      it("warns once and stays a no-op when the supervisor is unavailable", () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const { spawn, reaper } = makePosix({ available: false });
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("a", 1);
+        svc.attachTerminal("b", 2);
+        svc.detachTerminal("a");
+
+        expect(spawn).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+      });
+
+      it("warns once when no reaper module is loaded", () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const { spawn } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper: null, spawn });
+
+        svc.attachTerminal("a", 1);
+        svc.attachTerminal("b", 2);
+
+        expect(spawn).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+      });
+
+      it("survives a supervisor spawn failure without crashing or retrying", () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const { spawn, reaper } = makePosix({ spawnThrows: true });
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        expect(() => svc.attachTerminal("a", 1)).not.toThrow();
+        svc.attachTerminal("b", 2);
+
+        expect(spawn).toHaveBeenCalledTimes(1); // not retried
+        expect(warnSpy).toHaveBeenCalled();
+      });
+
+      it("survives stdin write failures and warns once", () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const { spawn, reaper } = makePosix({ stdinWriteThrows: true });
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        expect(() => svc.attachTerminal("a", 1)).not.toThrow();
+        svc.attachTerminal("b", 2);
+        expect(() => svc.detachTerminal("a")).not.toThrow();
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+      });
+
+      it("dispose() disarms the supervisor and closes the pipe", () => {
+        const { spawn, reaper, writes, stdin } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 4242);
+        svc.dispose();
+
+        expect(writes).toEqual(["ADD 4242\n", "DISARM\n"]);
+        expect(stdin.end).toHaveBeenCalledTimes(1);
+      });
+
+      it("dispose() is idempotent", () => {
+        const { spawn, reaper, stdin } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 4242);
+        svc.dispose();
+        svc.dispose();
+
+        expect(stdin.end).toHaveBeenCalledTimes(1);
+      });
+
+      it("dispose() swallows a stdin write failure", () => {
+        const { spawn, reaper } = makePosix({ stdinWriteThrows: true });
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 4242); // ADD write throws, caught
+        expect(() => svc.dispose()).not.toThrow(); // DISARM write throws, caught
+      });
+
+      it("dispose() before any attach does not throw", () => {
+        const { spawn, reaper } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        expect(() => svc.dispose()).not.toThrow();
+        expect(spawn).not.toHaveBeenCalled();
+      });
+
+      it("attaching or detaching after dispose writes nothing", () => {
+        const { spawn, reaper, writes } = makePosix();
+        const svc = new TerminalCrashReapService(null, { reaper, spawn });
+
+        svc.attachTerminal("t1", 4242);
+        svc.dispose();
+        svc.attachTerminal("t2", 9999);
+        svc.detachTerminal("t1");
+
+        expect(writes).toEqual(["ADD 4242\n", "DISARM\n"]);
+      });
+    });
   });
 });

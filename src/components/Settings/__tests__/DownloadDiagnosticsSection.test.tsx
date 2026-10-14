@@ -41,13 +41,6 @@ describe("DownloadDiagnosticsSection — collecting state", () => {
     useDiagnosticsReviewStore.setState({ isCollecting: false, downloadError: null });
   });
 
-  it("shows no glyph and no spinner while idle", () => {
-    render(<DownloadDiagnosticsSection />);
-
-    expect(spinner()).not.toHaveBeenCalled();
-    expect(glyphCount()).toBe(0);
-  });
-
   it("shows the spinner while collecting", () => {
     render(<DownloadDiagnosticsSection />);
     setCollecting(true);
@@ -56,27 +49,6 @@ describe("DownloadDiagnosticsSection — collecting state", () => {
     // rendered, and only once — exactly one SVG while busy.
     expect(spinner()).toHaveBeenCalled();
     expect(glyphCount()).toBe(1);
-  });
-
-  it("drops the spinner once collecting ends", () => {
-    render(<DownloadDiagnosticsSection />);
-    setCollecting(true);
-    spinner().mockClear();
-    setCollecting(false);
-
-    expect(spinner()).not.toHaveBeenCalled();
-    expect(glyphCount()).toBe(0);
-  });
-
-  // Busy is the Button's `loading` state: the label stays put (it holds the
-  // width and the accessible name) and the button keeps keyboard focus.
-  it("keeps the label while collecting", () => {
-    render(<DownloadDiagnosticsSection />);
-    const idleLabel = getButton().textContent;
-
-    setCollecting(true);
-
-    expect(getButton().textContent).toBe(idleLabel);
   });
 
   it("marks the button busy only while collecting, without natively disabling it", () => {

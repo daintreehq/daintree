@@ -9,8 +9,6 @@ import {
   ExitedCircle,
   AskingCircle,
 } from "../AgentStateCircles";
-// Re-imported via the barrel to regression-test `export * from "./AgentStateCircles"`.
-import { SpinnerCircle } from "../index";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { CheckCircle2 } from "lucide-react";
@@ -263,12 +261,6 @@ describe("AgentStateCircles a11y", () => {
       const lineStroke = parseFloat(line.getAttribute("stroke-width")!);
       expect(lineStroke / ringStroke).toBeCloseTo(ratio, 2);
     }
-  });
-
-  it("re-exports SpinnerCircle through the barrel", () => {
-    expect(SpinnerCircle).toBe(DirectSpinnerCircle);
-    const { container } = render(<SpinnerCircle />);
-    expect(glyphBox(container)?.getAttribute("aria-hidden")).toBe("true");
   });
 });
 

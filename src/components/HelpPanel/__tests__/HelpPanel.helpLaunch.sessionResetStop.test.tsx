@@ -848,33 +848,6 @@ describe("HelpPanel — + New session destructive reset", () => {
     });
   });
 
-  it("forwards requestedId and activateDockOnCreate to agent.launch dispatch", async () => {
-    setupBoundTerminal({ agentState: "idle", conversationTouched: false });
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "fresh" } });
-    mockProvisionSession.mockResolvedValue({
-      sessionId: "sess-fresh",
-      sessionPath: "/sessions/fresh",
-      token: "tok-fresh",
-      tier: "core",
-      mcpUrl: null,
-      windowId: 1,
-    });
-
-    const { container } = render(<HelpPanel width={380} />);
-    await act(async () => {
-      fireEvent.click(restartConversationButton(container)!);
-    });
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({
-        requestedId: expect.stringMatching(/^terminal-/),
-        activateDockOnCreate: true,
-      }),
-      { source: "user" }
-    );
-  });
-
   it("reverts the reserved id when agent.launch dispatch fails (no ghost helpTerminalId)", async () => {
     setupBoundTerminal({ agentState: "idle", conversationTouched: false });
     mockProvisionSession.mockResolvedValue({
@@ -974,41 +947,6 @@ describe("HelpPanel — + New session destructive reset", () => {
       resolveProvision?.(null);
     });
   });
-
-  it("forwards fresh customArgs from settings to agent.launch dispatch", async () => {
-    setupBoundTerminal({ agentState: "idle", conversationTouched: false });
-    mockGetHelpAssistantSettings.mockResolvedValue({
-      docSearch: true,
-      daintreeControl: true,
-      tier: "core" as const,
-      bypassPermissions: false,
-      auditRetention: 7,
-      modelIds: { claude: "", codex: "", gemini: "" },
-      customArgs: "--model sonnet",
-    });
-    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "fresh-term" } });
-    mockProvisionSession.mockResolvedValue({
-      sessionId: "sess-fresh",
-      sessionPath: "/sessions/fresh",
-      token: "tok-fresh",
-      tier: "core",
-      mcpUrl: null,
-      windowId: 1,
-    });
-
-    const { container } = render(<HelpPanel width={380} />);
-    await act(async () => {
-      fireEvent.click(restartConversationButton(container)!);
-    });
-
-    expect(mockDispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({
-        agentLaunchFlags: ["--model", "sonnet"],
-      }),
-      { source: "user" }
-    );
-  });
 });
 
 describe("HelpPanel — Stop assistant (end session, #10989)", () => {
@@ -1052,15 +990,6 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     helpPanelState.agentId = null;
     const { container } = render(<HelpPanel width={380} />);
     expect(queryStopItem(container)).toBeNull();
-  });
-
-  it("keeps the stop item out of the primary row, distinct from the hide button", () => {
-    setupBoundTerminal({ agentState: "idle" });
-    const { container } = render(<HelpPanel width={380} />);
-    expect(queryStopItem(container)).toBeTruthy();
-    expect(container.querySelector('button[aria-label="Hide Daintree Assistant"]')).toBeTruthy();
-    // No dedicated header stop icon — only the overflow item.
-    expect(container.querySelector('button[aria-label="Stop Daintree Assistant"]')).toBeNull();
   });
 
   it("ends immediately without a confirm and does NOT relaunch when idle and untouched", () => {

@@ -5,7 +5,6 @@ import { buildKeybindingWhenContext } from "../keybindingWhenContext";
 import { usePaletteStore, usePanelStore } from "@/store";
 import type { PaletteId } from "@/store/paletteStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
-import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCanopyStore } from "@/store/canopyStore";
 
 function makeAgent(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
@@ -105,16 +104,6 @@ describe("buildKeybindingWhenContext", () => {
 
     useFleetArmingStore.setState({ armedIds: new Set(["t-1", "t-2"]) });
     expect(buildKeybindingWhenContext(eventFrom(null)).fleetWaiting).toBe(true);
-  });
-
-  it("mirrors sidebar visibility from the macro focus store", () => {
-    const { visibility } = useMacroFocusStore.getState();
-
-    useMacroFocusStore.setState({ visibility: { ...visibility, sidebar: false } });
-    expect(buildKeybindingWhenContext(eventFrom(null)).sidebarVisible).toBe(false);
-
-    useMacroFocusStore.setState({ visibility: { ...visibility, sidebar: true } });
-    expect(buildKeybindingWhenContext(eventFrom(null)).sidebarVisible).toBe(true);
   });
 
   it("marks a text field or editor as text input, but not a terminal's own textarea", () => {

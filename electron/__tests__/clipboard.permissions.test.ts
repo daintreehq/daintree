@@ -58,12 +58,31 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
+const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_FILE_COUNT = 20;
+// Round to a second boundary to avoid mtime truncation on filesystems with 1s
+// granularity (ext4).
+const NOW = Math.floor(Date.now() / 1000) * 1000;
+
 function clipboardDir(): string {
   return path.join(osMockState.base, "daintree-clipboard");
 }
 
 async function modeOf(p: string): Promise<number> {
   return (await fs.stat(p)).mode & 0o777;
+}
+
+async function createClipboardFile(name: string, ageMs: number): Promise<string> {
+  const filePath = path.join(clipboardDir(), name);
+  await fs.writeFile(filePath, "png-bytes");
+  const mtime = new Date(NOW - ageMs);
+  await fs.utimes(filePath, mtime, mtime);
+  return filePath;
+}
+
+async function listClipboardFiles(): Promise<string[]> {
+  const entries = await fs.readdir(clipboardDir());
+  return entries.sort();
 }
 
 type SaveImage = () => Promise<{ filePath: string; thumbnailDataUrl: string }>;
@@ -193,5 +212,96 @@ describe("clipboard cleanup through a planted symlink", () => {
     await cleanupOldClipboardImages();
 
     expect(await fs.readFile(stale, "utf8")).toBe("not mine");
+  });
+});
+
+describe("cleanupOldClipboardImages — age eviction", () => {
+  beforeEach(async () => {
+    await fs.mkdir(clipboardDir(), { recursive: true });
+  });
+
+  it("preserves a file exactly at the 24h boundary but evicts one past it", async () => {
+    const atBoundary = await createClipboardFile("clipboard-at-boundary.png", MAX_AGE_MS);
+    const pastBoundary = await createClipboardFile(
+      "clipboard-past-boundary.png",
+      MAX_AGE_MS + 1000
+    );
+    await cleanupOldClipboardImages(NOW);
+    await expect(fs.access(atBoundary)).resolves.toBeUndefined();
+    await expect(fs.access(pastBoundary)).rejects.toThrow();
+  });
+
+  it("ignores files that don't match the clipboard naming pattern", async () => {
+    const other = path.join(clipboardDir(), "unrelated.txt");
+    await fs.writeFile(other, "keep me");
+    const mtime = new Date(NOW - (MAX_AGE_MS + 60_000));
+    await fs.utimes(other, mtime, mtime);
+
+    await cleanupOldClipboardImages(NOW);
+    await expect(fs.access(other)).resolves.toBeUndefined();
+  });
+
+  it("returns without error when the clipboard dir doesn't exist", async () => {
+    await fs.rm(clipboardDir(), { recursive: true, force: true });
+    await expect(cleanupOldClipboardImages(NOW)).resolves.toBeUndefined();
+  });
+});
+
+describe("cleanupOldClipboardImages — count cap", () => {
+  beforeEach(async () => {
+    await fs.mkdir(clipboardDir(), { recursive: true });
+  });
+
+  it("keeps only the newest MAX_FILE_COUNT files when more survive the age check", async () => {
+    const total = MAX_FILE_COUNT + 5;
+    // Older index => older mtime. All within the 24h window so age eviction
+    // doesn't apply; only the count cap should.
+    for (let i = 0; i < total; i++) {
+      const ageMs = (total - i) * 60_000; // i=0 oldest, i=total-1 newest
+      await createClipboardFile(`clipboard-${i}-x.png`, ageMs);
+    }
+
+    await cleanupOldClipboardImages(NOW);
+
+    const remaining = await listClipboardFiles();
+    expect(remaining).toHaveLength(MAX_FILE_COUNT);
+    // The 5 oldest (indices 0-4) should be gone; the newest 20 (5-24) kept.
+    expect(remaining).not.toContain("clipboard-0-x.png");
+    expect(remaining).not.toContain("clipboard-4-x.png");
+    expect(remaining).toContain("clipboard-5-x.png");
+    expect(remaining).toContain(`clipboard-${total - 1}-x.png`);
+  });
+
+  it("does not evict when exactly MAX_FILE_COUNT files survive", async () => {
+    for (let i = 0; i < MAX_FILE_COUNT; i++) {
+      await createClipboardFile(`clipboard-${i}-x.png`, (i + 1) * 60_000);
+    }
+
+    await cleanupOldClipboardImages(NOW);
+
+    const remaining = await listClipboardFiles();
+    expect(remaining).toHaveLength(MAX_FILE_COUNT);
+  });
+
+  it("applies age eviction before the count cap", async () => {
+    // 3 old (evicted by age) + 22 fresh. After age eviction 22 survive; count
+    // cap trims to 20.
+    for (let i = 0; i < 3; i++) {
+      await createClipboardFile(`clipboard-old-${i}.png`, MAX_AGE_MS + (i + 1) * 60_000);
+    }
+    for (let i = 0; i < 22; i++) {
+      await createClipboardFile(`clipboard-fresh-${i}.png`, (i + 1) * 1_000);
+    }
+
+    await cleanupOldClipboardImages(NOW);
+
+    const remaining = await listClipboardFiles();
+    expect(remaining).toHaveLength(MAX_FILE_COUNT);
+    expect(remaining.every((name) => name.startsWith("clipboard-fresh-"))).toBe(true);
+    // fresh-21 and fresh-20 carry the largest age offsets (oldest mtimes), so
+    // the count cap evicts exactly those two.
+    expect(remaining).not.toContain("clipboard-fresh-21.png");
+    expect(remaining).not.toContain("clipboard-fresh-20.png");
+    expect(remaining).toContain("clipboard-fresh-0.png");
   });
 });

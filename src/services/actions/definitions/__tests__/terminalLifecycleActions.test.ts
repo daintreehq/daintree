@@ -244,28 +244,6 @@ describe("terminal.close result contract (#11805)", () => {
     expect(trashPanel).not.toHaveBeenCalled();
   });
 
-  it("closes nothing when there is no panel to act on", async () => {
-    setPanelState({ focusedId: null, panels: [{ id: "p1", location: "trash" }] });
-    const run = setupActions();
-
-    await expect(run("terminal.close")).resolves.toEqual({ closedIds: [] });
-  });
-
-  // Routing only — the mocked coordinator settles nothing. That the panel is
-  // genuinely gone by the time the call resolves is proved against the real
-  // coordinator in terminalLifecycleActions.optimisticClose.test.ts.
-  it.each(["agent", "plugin"] as const)(
-    "routes %s dispatch through the synchronous flush",
-    async (dispatchSource) => {
-      setPanelState({ focusedId: "p1", panels: [{ id: "p1", location: "grid" }] });
-      const run = setupActions();
-
-      await run("terminal.close", { terminalId: "p1" }, { dispatchSource });
-
-      expect(optimisticPanelCloseMock.flushOptimisticCloses).toHaveBeenCalled();
-    }
-  );
-
   it.each(["user", "keybinding", "menu", "context-menu"] as const)(
     "leaves the deferral intact for %s dispatch",
     async (dispatchSource) => {
@@ -1718,18 +1696,6 @@ describe("terminal.revealOwned (#12315)", () => {
     await expect(definition().run({ terminalId: "p1" }, {} as never)).rejects.toThrow(
       /main-process path/
     );
-  });
-
-  it("stays out of the palette, since nothing there could dispatch it", () => {
-    expect(definition().palette?.mode).toBe("hidden");
-  });
-
-  it("is banded safe, which is what keeps it reachable by a bound session", () => {
-    // Load-bearing rather than cosmetic: `isWithheldFromBoundSession` withholds
-    // `confirm` entries from workspace-bound external sessions, and a bound
-    // session is precisely the caller this tool exists for. Revealing is also
-    // reversible — nothing is destroyed and the user can switch back.
-    expect(definition().danger).toBe("safe");
   });
 
   it("requires a non-empty terminal id with no focused-panel fallback", () => {

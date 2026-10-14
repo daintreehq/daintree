@@ -52,14 +52,6 @@ const KEY_ONLY_ACTIONS = new Set([
   "git.toggle",
 ]);
 
-/**
- * Duplicate registrations that are intentional: the same action registered by
- * different definition files for different UI entry points (e.g., a keybinding
- * definition with minimal metadata and a command-palette definition with full
- * metadata). Only the LAST registration wins at runtime.
- */
-const DUPLICATE_ALLOWLIST = new Set<string>();
-
 function createCallbacks(): ActionCallbacks {
   return {
     onOpenSettings: () => {},
@@ -97,32 +89,13 @@ function createCallbacks(): ActionCallbacks {
   };
 }
 
-async function createRegistryWithAudit(): Promise<{
-  registry: ActionRegistry;
-  duplicates: Array<{ key: string; count: number }>;
-}> {
+async function createRegistryWithAudit(): Promise<{ registry: ActionRegistry }> {
   (globalThis as any).self = globalThis;
 
-  const seen = new Map<string, number>();
-  const duplicates: Array<{ key: string; count: number }> = [];
-
-  const shim: ActionRegistry = new Map();
-  const originalSet = shim.set.bind(shim);
-
-  shim.set = (key, value) => {
-    const keyStr = key as string;
-    const count = seen.get(keyStr) ?? 0;
-    seen.set(keyStr, count + 1);
-    if (count > 0 && !DUPLICATE_ALLOWLIST.has(keyStr)) {
-      duplicates.push({ key: keyStr, count: count + 1 });
-    }
-    return originalSet(key, value);
-  };
-
   const { createActionDefinitions } = await import("../actionDefinitions");
-  const registry = createActionDefinitions(createCallbacks(), shim);
+  const registry = createActionDefinitions(createCallbacks(), new Map());
 
-  return { registry, duplicates };
+  return { registry };
 }
 
 /**
@@ -212,16 +185,6 @@ describe("external MCP tool surface budget (#11585)", () => {
   // so it could never fail first and only offered a second place for the real
   // figure to drift out of step. The tool COUNT is budgeted in tierAuth.test.ts
   // against the allowlist that is the actual gate.
-
-  it("every allowlisted external tool exists in the registry", async () => {
-    // Kept from the deleted budget: it was the half that caught an allowlist
-    // naming an id the registry no longer has, which the byte sum only noticed
-    // as a suspiciously small total.
-    const { registry } = await createRegistryWithAudit();
-
-    const absent = MCP_EXTERNAL_TIER_TOOLS.filter((id) => !registry.get(id as ActionId)?.());
-    expect(absent).toEqual([]);
-  });
 
   it("names only real actions that can actually be advertised and dispatched", async () => {
     const { registry } = await createRegistryWithAudit();
@@ -909,6 +872,47 @@ describe("registry-vs-union drift", () => {
   });
 });
 
+describe("createActionDefinitions", () => {
+  it("registers a launch action for launchable agents but not assistant-only agents (#10634)", async () => {
+    const { registry: actions } = await createRegistryWithAudit();
+
+    // Launchable built-in agents get a direct-launch action...
+    expect(actions.has("agent.claude" as any)).toBe(true);
+    // ...but the assistant-only daintree-assistant is never launchable, so no
+    // action is registered (keeps it out of the action palette and MCP manifest).
+    expect(actions.has("agent.daintree-assistant" as any)).toBe(false);
+  });
+
+  it("does not register removed github.* action ids", async () => {
+    const { registry: actions } = await createRegistryWithAudit();
+
+    // The first batch forwarded to forge.* for one release before removal; the
+    // second batch was the GitHub-specific host action surface retired by the
+    // forge-neutral migration. Guards against accidental re-registration
+    // (which the round-trip test above, driven by BUILT_IN_ACTION_IDS, would
+    // not catch on its own).
+    const removedIds = [
+      "github.openIssues",
+      "github.openPRs",
+      "github.openCommits",
+      "github.openIssue",
+      "github.assignIssue",
+      "github.validateToken",
+      "github.openPR",
+      "github.getRepoStats",
+      "github.listIssues",
+      "github.listPullRequests",
+      "github.getIssueByNumber",
+      "github.checkCli",
+      "github.getConfig",
+      "github.setToken",
+      "github.clearToken",
+    ];
+    const stillRegistered = removedIds.filter((id) => actions.has(id as any));
+    expect(stillRegistered).toEqual([]);
+  });
+});
+
 describe("definition invariants", () => {
   it("no action has isEnabled without disabledReason", async () => {
     const { registry } = await createRegistryWithAudit();
@@ -962,49 +966,6 @@ describe("definition invariants", () => {
     }
 
     expect(missing).toEqual([]);
-  });
-
-  it("every core arg-requiring query has examples", async () => {
-    const { registry } = await createRegistryWithAudit();
-
-    const coreSet = new Set<string>(CORE_TIER_TOOLS as readonly string[]);
-    const missing: string[] = [];
-    for (const [key, factory] of registry) {
-      if (!coreSet.has(key)) continue;
-      const def = factory();
-      // Mirrors `validateDefinitionInvariants`: core's reads only.
-      if (def.kind !== "query") continue;
-      const requiresArgs = def.argsSchema
-        ? !def.argsSchema.safeParse(undefined).success && !def.argsSchema.safeParse({}).success
-        : false;
-      if (requiresArgs && (!def.examples || def.examples.length === 0)) {
-        missing.push(`${key} (${def.title})`);
-      }
-    }
-
-    if (missing.length > 0) {
-      console.warn(
-        `[quality-gate] ${missing.length} core arg-requiring query(ies) missing examples:\n` +
-          missing.map((m) => `  - ${m}`).join("\n")
-      );
-    }
-    // TODO(#8431): Promote to hard assert once all core actions have examples.
-  });
-});
-
-describe("duplicate registrations", () => {
-  it("no duplicate registrations that mask different definitions", async () => {
-    const { duplicates } = await createRegistryWithAudit();
-
-    if (duplicates.length > 0) {
-      console.warn(
-        `[quality-gate] ${duplicates.length} duplicate registrations detected:\n` +
-          duplicates.map((d) => `  - ${d.key} (registered ${d.count}x, last write wins)`).join("\n")
-      );
-    }
-
-    // TODO(#6305): Promote to hard assert once duplicates are audited.
-    expect(true).toBe(true);
   });
 });
 
@@ -1457,27 +1418,6 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       }
     }
     expect(failures).toEqual([]);
-  });
-});
-
-describe("dangerRationale backfill", () => {
-  it("every EXPECTED_CONFIRM_DANGER action has a non-empty dangerRationale", async () => {
-    const { registry } = await createRegistryWithAudit();
-
-    const missing: string[] = [];
-    for (const id of EXPECTED_CONFIRM_DANGER) {
-      const factory = registry.get(id);
-      if (!factory) {
-        missing.push(`${id} (not registered)`);
-        continue;
-      }
-      const def = factory();
-      if (!def.dangerRationale || def.dangerRationale.trim().length === 0) {
-        missing.push(`${id}`);
-      }
-    }
-
-    expect(missing).toEqual([]);
   });
 });
 

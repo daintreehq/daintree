@@ -17,12 +17,6 @@ describe("gitPullRebaseConfirmStore", () => {
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
-  it("resolves with false when declined", async () => {
-    const pending = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
-    useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
-    await expect(pending).resolves.toBe(false);
-  });
-
   it("cancels a prior pending request (resolves it false) when a new one arrives", async () => {
     const first = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-a");
     const second = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-b");

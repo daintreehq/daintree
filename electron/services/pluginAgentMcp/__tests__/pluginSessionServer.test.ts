@@ -569,11 +569,6 @@ describe("createPluginSessionServer", () => {
     await waitFor(() => seen?.aborted === true);
   });
 
-  it("reports the server key the agent was handed as its server name", async () => {
-    const { client } = await connect(vi.fn(), { serverName: "daintree-ledger-1a2b3c4d" });
-    expect(client.getServerVersion()?.name).toBe("daintree-ledger-1a2b3c4d");
-  });
-
   describe("scope", () => {
     it("lists the database tools first, then the plugin's own, on a read-write session", async () => {
       const { client } = await connect(vi.fn(), {

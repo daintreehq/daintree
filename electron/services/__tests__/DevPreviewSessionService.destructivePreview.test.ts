@@ -2,7 +2,8 @@ import http from "node:http";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, existsSync } from "node:fs";
+import fsPromises from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DevPreviewSessionService } from "../DevPreviewSessionService.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -67,7 +68,34 @@ function createPtyClientMock() {
         spawnedAt: Date.now(),
       };
     }),
+    emitExit(id: string, exitCode: number) {
+      const terminal = terminals.get(id);
+      if (terminal) terminal.hasPty = false;
+      for (const callback of exitListeners) callback(id, exitCode);
+    },
+    emitData(id: string, data: string | Uint8Array) {
+      for (const callback of dataListeners) callback(id, data);
+    },
   };
+}
+
+/**
+ * The install command now rides in the spawned shell's own arguments so the PTY
+ * ends when the install does (#12295) — it is no longer typed into the shell.
+ */
+function spawnedCommandFor(
+  spawn: { mock: { calls: Array<[string, { args?: string[] }]> } },
+  terminalId: string
+): string {
+  const call = spawn.mock.calls.find(([id]) => id === terminalId);
+  const args = call?.[1].args ?? [];
+  // PowerShell launches carry the script as a UTF-16LE base64 -EncodedCommand,
+  // so a plain join would never reveal the command text.
+  const encodedIndex = args.indexOf("-EncodedCommand");
+  if (encodedIndex >= 0 && args[encodedIndex + 1]) {
+    return Buffer.from(args[encodedIndex + 1], "base64").toString("utf16le");
+  }
+  return args.join("\n");
 }
 
 describe("DevPreviewSessionService — destructive preview", () => {
@@ -244,6 +272,174 @@ describe("DevPreviewSessionService — destructive preview", () => {
 
       expect(sizes.nodeModulesSizeBytes).toBeNull();
       expect(typeof sizes.cacheDirSizes[".next"]).toBe("number");
+    });
+  });
+});
+
+describe("DevPreviewSessionService — tiered restart", () => {
+  let onStateChanged: (state: DevPreviewSessionState) => void;
+  let ptyClient: ReturnType<typeof createPtyClientMock>;
+  let service: DevPreviewSessionService;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    onStateChanged = vi.fn();
+    ptyClient = createPtyClientMock();
+    service = new DevPreviewSessionService(ptyClient as unknown as PtyClient, onStateChanged);
+    mockHttpResponse(200);
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "devpreview-tiers-"));
+  });
+
+  afterEach(() => {
+    service.dispose();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function request() {
+    return { panelId: "panel-1", projectId: "project-1" };
+  }
+
+  function ensureRequest() {
+    return { ...request(), cwd: tmpDir, devCommand: "npm run dev" };
+  }
+
+  describe("restartAndClearCache", () => {
+    it("kills the terminal, wipes the cache dirs, then respawns", async () => {
+      for (const dir of [".next", ".vite", ".turbo", path.join("node_modules", ".vite")]) {
+        const full = path.join(tmpDir, dir);
+        mkdirSync(full, { recursive: true });
+        writeFileSync(path.join(full, "stale"), "x");
+      }
+      // A non-cache marker directly under node_modules — must survive so an
+      // accidental widening of CACHE_DIRS to all of node_modules is caught.
+      writeFileSync(path.join(tmpDir, "node_modules", "package.json"), "{}");
+
+      const started = await service.ensure(ensureRequest());
+      expect(started.terminalId).toBeTruthy();
+
+      const result = await service.restartAndClearCache(request());
+
+      expect(ptyClient.kill).toHaveBeenCalledWith(
+        started.terminalId,
+        "dev-preview:restart-clear-cache"
+      );
+      expect(existsSync(path.join(tmpDir, ".next"))).toBe(false);
+      expect(existsSync(path.join(tmpDir, ".vite"))).toBe(false);
+      expect(existsSync(path.join(tmpDir, ".turbo"))).toBe(false);
+      expect(existsSync(path.join(tmpDir, "node_modules", ".vite"))).toBe(false);
+      expect(existsSync(path.join(tmpDir, "node_modules", "package.json"))).toBe(true);
+      expect(result.status).toBe("starting");
+      expect(result.terminalId).not.toBe(started.terminalId);
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("is forgiving when cache dirs do not exist", async () => {
+      const started = await service.ensure(ensureRequest());
+      const result = await service.restartAndClearCache(request());
+
+      expect(result.status).toBe("starting");
+      expect(result.terminalId).not.toBe(started.terminalId);
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    });
+
+    it("surfaces a deletion failure as an error state and does not respawn", async () => {
+      await service.ensure(ensureRequest());
+      vi.spyOn(fsPromises, "rm").mockRejectedValue(new Error("EPERM: operation not permitted"));
+
+      const result = await service.restartAndClearCache(request());
+
+      expect(result.status).toBe("error");
+      expect(result.error?.message).toContain("Failed to clear cache");
+      // Only the initial ensure() spawn — no respawn after the failure.
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("deletes caches only after the terminal is confirmed gone", async () => {
+      mkdirSync(path.join(tmpDir, ".next"), { recursive: true });
+      const started = await service.ensure(ensureRequest());
+      ptyClient.getTerminalAsync.mockClear();
+      const rmSpy = vi.spyOn(fsPromises, "rm");
+
+      await service.restartAndClearCache(request());
+
+      // kill must precede deletion, and the liveness poll
+      // (getTerminalAsync via waitForTerminalGone) must run between them —
+      // proving rm waits for the PTY to be confirmed dead, not just signalled.
+      const killOrder = ptyClient.kill.mock.invocationCallOrder.at(-1)!;
+      const pollOrder = ptyClient.getTerminalAsync.mock.invocationCallOrder[0];
+      const rmOrder = rmSpy.mock.invocationCallOrder[0];
+      expect(pollOrder).toBeGreaterThan(killOrder);
+      expect(rmOrder).toBeGreaterThan(pollOrder);
+      expect(started.terminalId).toBeTruthy();
+    });
+  });
+
+  describe("reinstallAndRestart", () => {
+    it("removes node_modules with retries, runs install, and does not double-spawn", async () => {
+      mkdirSync(path.join(tmpDir, "node_modules"), { recursive: true });
+      writeFileSync(path.join(tmpDir, "node_modules", "marker"), "x");
+      writeFileSync(path.join(tmpDir, "bun.lock"), "");
+
+      const rmSpy = vi.spyOn(fsPromises, "rm");
+      const started = await service.ensure(ensureRequest());
+      expect(started.terminalId).toBeTruthy();
+
+      const result = await service.reinstallAndRestart(request());
+
+      expect(ptyClient.kill).toHaveBeenCalledWith(
+        started.terminalId,
+        "dev-preview:reinstall-restart"
+      );
+      expect(rmSpy).toHaveBeenCalledWith(
+        path.join(tmpDir, "node_modules"),
+        expect.objectContaining({ recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+      );
+      expect(existsSync(path.join(tmpDir, "node_modules"))).toBe(false);
+      expect(result.status).toBe("installing");
+
+      // runInstall spawns exactly one install PTY (initial dev spawn + install
+      // spawn = 2). The dev server is NOT respawned until the install exits 0.
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+
+      const installTerminalId = result.terminalId!;
+      expect(spawnedCommandFor(ptyClient.spawn, installTerminalId)).toContain("bun install");
+
+      ptyClient.emitExit(installTerminalId, 0);
+      // spawnSessionTerminal awaits port allocation before calling spawn.
+      await vi.waitFor(() => {
+        expect(ptyClient.spawn).toHaveBeenCalledTimes(3);
+      });
+    });
+
+    it("surfaces a node_modules removal failure as an error state", async () => {
+      await service.ensure(ensureRequest());
+      vi.spyOn(fsPromises, "rm").mockRejectedValue(new Error("EBUSY: resource busy"));
+
+      const result = await service.reinstallAndRestart(request());
+
+      expect(result.status).toBe("error");
+      expect(result.error?.message).toContain("Failed to remove node_modules");
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not respawn the dev server when the install exits nonzero", async () => {
+      mkdirSync(path.join(tmpDir, "node_modules"), { recursive: true });
+      writeFileSync(path.join(tmpDir, "bun.lock"), "");
+
+      await service.ensure(ensureRequest());
+      const result = await service.reinstallAndRestart(request());
+      expect(result.status).toBe("installing");
+
+      const installTerminalId = result.terminalId!;
+      ptyClient.emitExit(installTerminalId, 1);
+
+      const state = service.getState(request());
+      expect(state.status).toBe("error");
+      expect(state.error?.type).toBe("missing-dependencies");
+      // initial dev spawn + install spawn only — no dev-server respawn.
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
     });
   });
 });

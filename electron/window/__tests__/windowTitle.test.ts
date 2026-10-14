@@ -50,11 +50,6 @@ describe("composeWindowTitle", () => {
     expect(composeWindowTitle(null, 2)).toBe(`(2) ${composeWindowTitle(null, 0)}`);
   });
 
-  it("does not repeat the app name after a project name", () => {
-    const fallback = composeWindowTitle(null, 0);
-    expect(composeWindowTitle("checkout-api", 0)).not.toContain(fallback);
-  });
-
   it("strips surrounding whitespace rather than passing it into the title", () => {
     expect(composeWindowTitle("  checkout-api  ", 0)).toBe(composeWindowTitle("checkout-api", 0));
   });

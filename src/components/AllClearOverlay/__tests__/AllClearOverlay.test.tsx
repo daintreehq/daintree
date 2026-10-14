@@ -48,16 +48,6 @@ afterEach(() => {
 });
 
 describe("AllClearOverlay", () => {
-  it("renders the overlay when the event carries shouldFlash: true", () => {
-    render(<AllClearOverlay />);
-
-    act(() => {
-      fireAllClear(true);
-    });
-
-    expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeTruthy();
-  });
-
   it("does not render before the callback fires", () => {
     render(<AllClearOverlay />);
     expect(document.body.querySelector(OVERLAY_SELECTOR)).toBeNull();
@@ -159,22 +149,6 @@ describe("AllClearOverlay", () => {
     expect(overlay.style.getPropertyValue("--all-clear-flash-duration")).toBe(
       `${ALL_CLEAR_FLASH_DURATION}ms`
     );
-  });
-
-  it("clears the safety timer on unmount", () => {
-    const { unmount } = render(<AllClearOverlay />);
-
-    act(() => {
-      fireAllClear(true);
-    });
-
-    unmount();
-
-    expect(() => {
-      act(() => {
-        vi.advanceTimersByTime(500);
-      });
-    }).not.toThrow();
   });
 
   it("cleans up onAllAgentsClear listener on unmount", () => {

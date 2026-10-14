@@ -184,23 +184,4 @@ describe("FileImagePreview cache busting", () => {
     expect(rawSrc(container)).not.toBe(before);
     expect(container.querySelector("img")).toBe(img);
   });
-
-  it("ignores the token for SVG markup", () => {
-    // SVG markup has no protocol URL to bust — it is re-read and re-sanitized upstream.
-    const { container } = render(
-      <FileImagePreview
-        filePath="/repo/assets/icon.svg"
-        rootPath="/repo"
-        alt="icon.svg"
-        sanitizedSvg={`<svg xmlns="${SVG_NS}"><rect /></svg>`}
-        cacheBust="9"
-      />
-    );
-
-    const src = container.querySelector("img")?.getAttribute("src") ?? "";
-    expect(src.startsWith(SVG_DATA_PREFIX)).toBe(true);
-    expect(decodeURIComponent(src.slice(SVG_DATA_PREFIX.length))).toBe(
-      `<svg xmlns="${SVG_NS}"><rect /></svg>`
-    );
-  });
 });

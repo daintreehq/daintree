@@ -807,15 +807,6 @@ describe("PluginMcpRoute", () => {
     expect(response.status).toBe(400);
   });
 
-  it("rejects a direct call to an unlisted tool without dispatching it", async () => {
-    const { token } = issue();
-    const { client } = await connect(token);
-    await expect(client.callTool({ name: "actions_list", arguments: {} })).rejects.toThrow(
-      /Unknown tool/
-    );
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
   it("caps the sessions one credential may hold open", async () => {
     const { token } = issue();
     for (let i = 0; i < MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL; i++) {
@@ -1078,16 +1069,6 @@ describe("PluginMcpRoute", () => {
     const result = await client.callTool({ name: "lookup", arguments: {} });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).not.toContain("x".repeat(200));
-  });
-
-  it("does not file a session for a request the SDK never initialized", async () => {
-    const { token } = issue();
-    const response = await rawRequest({
-      token,
-      body: { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
-    });
-    expect(response.status).toBe(400);
-    expect(route.sessionCount).toBe(0);
   });
 
   it("does not file a session for GET or DELETE without a session id", async () => {

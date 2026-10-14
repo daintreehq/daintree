@@ -2,7 +2,9 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
+import type { WorktreeState } from "@shared/types";
 import { CrossWorktreeDiff } from "../CrossWorktreeDiff";
+import { sortWorktreesForComparison } from "../crossWorktreeDiffUtils";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 // Driven as a value and a change event, not as a Radix popup.
@@ -79,6 +81,25 @@ const COLLIDING: FileFixture[] = [
   { path: "src/checkout/index.ts", status: "M", insertions: 2, deletions: 1 },
 ];
 
+function createWorktree(
+  id: string,
+  name: string,
+  overrides: Partial<WorktreeState> = {}
+): WorktreeState {
+  return {
+    id,
+    worktreeId: id,
+    name,
+    path: `/tmp/${name}`,
+    branch: name,
+    isCurrent: false,
+    isMainWorktree: false,
+    worktreeChanges: null,
+    lastActivityTimestamp: null,
+    ...overrides,
+  };
+}
+
 describe("CrossWorktreeDiff pickers", () => {
   it("names each picker by the side it sets", () => {
     renderComparison([]);
@@ -95,6 +116,20 @@ describe("CrossWorktreeDiff pickers", () => {
       const wt = worktrees.get(option.value)!;
       if (!("branch" in wt) || !wt.branch) expect(option.disabled).toBe(true);
     }
+  });
+
+  it("keeps the main worktree first and sorts the rest by name", () => {
+    const unsorted = [
+      createWorktree("b", "beta"),
+      createWorktree("main", "main", { isMainWorktree: true }),
+      createWorktree("a", "alpha"),
+    ];
+
+    expect(sortWorktreesForComparison(unsorted).map((worktree) => worktree.id)).toEqual([
+      "main",
+      "a",
+      "b",
+    ]);
   });
 });
 

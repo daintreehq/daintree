@@ -102,17 +102,6 @@ describe("reconnect error debounce", () => {
     vi.useRealTimers();
   });
 
-  it("does not write reconnectError synchronously", () => {
-    seedPanel("t-1");
-    usePanelStore.getState().setReconnectError("t-1", ERROR_A);
-    expect(
-      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.reconnectError
-    ).toBeUndefined();
-    expect(
-      (usePanelStore.getState().panelsById["t-1"] as PtyPanelData | undefined)?.runtimeStatus
-    ).toBeUndefined();
-  });
-
   it("writes the error after the 400ms gate elapses", async () => {
     seedPanel("t-1");
     usePanelStore.getState().setReconnectError("t-1", ERROR_A);

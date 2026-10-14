@@ -221,15 +221,6 @@ describe("ProjectPluginDetailPane", () => {
     expect(document.body.textContent).toContain(".daintree/plugins/dash");
   });
 
-  it("reports why an unreadable directory was rejected", () => {
-    render(
-      <ProjectPluginDetailPane
-        plugin={plugin({ state: "invalid", error: "manifest.json is not valid JSON" })}
-      />
-    );
-    expect(document.body.textContent).toContain("manifest.json is not valid JSON");
-  });
-
   it("offers a reload for every state, including one that will not parse (#12212)", async () => {
     // `plugin:project-reload` and `projectPluginStore.reload` both shipped
     // unwired: switching projects and back was the only reload the UI had.

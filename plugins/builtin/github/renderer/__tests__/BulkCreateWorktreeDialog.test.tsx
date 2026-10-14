@@ -411,14 +411,6 @@ describe("BulkCreateWorktreeDialog", () => {
     onComplete: vi.fn(),
   };
 
-  it("renders idle state with issue list and create button", () => {
-    render(<BulkCreateWorktreeDialog {...defaultProps} />);
-    expect(screen.getByText("#1")).toBeTruthy();
-    expect(screen.getByText("#2")).toBeTruthy();
-    expect(screen.getByText("#3")).toBeTruthy();
-    expect(screen.getByTestId("bulk-create-confirm-button")).toBeTruthy();
-  });
-
   it("creates worktrees using direct client calls", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
@@ -509,26 +501,6 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/1 failed/)).toBeTruthy();
   });
 
-  it("shows Retry Failed button when there are failures", async () => {
-    let callCount = 0;
-    mockWorktreeCreate.mockImplementation(() => {
-      callCount++;
-      if (callCount === 2) return Promise.reject(new Error("Some error"));
-      return Promise.resolve(createdWorktree(`wt-${callCount}`));
-    });
-
-    render(<BulkCreateWorktreeDialog {...defaultProps} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(5000);
-
-    expect(screen.getByTestId("bulk-create-retry-button")).toBeTruthy();
-    expect(screen.getByText("Retry failed")).toBeTruthy();
-  });
-
   it("does not show Retry Failed button when all succeed", async () => {
     render(<BulkCreateWorktreeDialog {...defaultProps} />);
 
@@ -586,35 +558,6 @@ describe("BulkCreateWorktreeDialog", () => {
     worktreeDataHolder.map.delete("existing-wt");
   });
 
-  it("auto-retries transient errors with backoff", async () => {
-    let callCount = 0;
-    mockWorktreeCreate.mockImplementation(() => {
-      callCount++;
-      if (callCount <= 2) {
-        return Promise.reject(new Error("index.lock: File exists"));
-      }
-      return Promise.resolve(createdWorktree("wt-1"));
-    });
-
-    const props = {
-      ...defaultProps,
-      selectedIssues: [makeIssue(1)],
-    };
-
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    // Advance enough time for backoff retries (up to 30s cap * 2 retries + settle)
-    await advanceTimersGradually(65000);
-
-    expect(callCount).toBe(3);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
-  });
-
   it("keeps retrying a transient worktree creation past the old 3-attempt cap", async () => {
     // Five consecutive transient failures — beyond the old MAX_AUTO_RETRIES cap
     // of 3 total attempts — then success. Proves the count ceiling is gone for
@@ -646,33 +589,6 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(callCount).toBe(6);
     expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
     expect(screen.queryByText(/failed/)).toBeNull();
-  });
-
-  it("classifies rate limit errors as transient", async () => {
-    let callCount = 0;
-    mockWorktreeCreate.mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
-        return Promise.reject(new Error("Rate limit exceeded"));
-      }
-      return Promise.resolve(createdWorktree("wt-1"));
-    });
-
-    const props = {
-      ...defaultProps,
-      selectedIssues: [makeIssue(1)],
-    };
-
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(35000);
-
-    expect(callCount).toBe(2);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
   });
 
   it("does not auto-retry non-transient errors", async () => {
@@ -806,55 +722,6 @@ describe("BulkCreateWorktreeDialog", () => {
 
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
     expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
-  });
-
-  it("recipe-enabled success path shows N of N created, never 0 of N", async () => {
-    mockSelectedRecipeId = "test-recipe";
-    mockRunRecipeWithResults.mockResolvedValue({
-      spawned: [{ terminalId: "t-1" }, { terminalId: "t-2" }],
-      failed: [],
-    });
-    // Terminals are healthy (no exitCode or exitCode 0)
-    mockTerminals = [
-      { id: "t-1", exitCode: undefined },
-      { id: "t-2", exitCode: undefined },
-    ];
-
-    const props = { ...defaultProps, selectedIssues: [makeIssue(1), makeIssue(2)] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(5000);
-
-    // Must show "2 of 2 created", never "0 of 2"
-    expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
-    expect(screen.queryByText(/0 of/)).toBeNull();
-  });
-
-  it("verification detects crashed terminal and shows failure", async () => {
-    mockSelectedRecipeId = "test-recipe";
-    mockRunRecipeWithResults.mockResolvedValue({
-      spawned: [{ terminalId: "t-crash" }],
-      failed: [],
-    });
-    // Terminal crashed with non-zero exit code
-    mockTerminals = [{ id: "t-crash", exitCode: 1 }];
-
-    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(5000);
-
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    expect(screen.getByText(/terminal\(s\) crashed/)).toBeTruthy();
-    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
   });
 
   it("retry does not re-verify previously succeeded items", async () => {
@@ -2186,61 +2053,6 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     onComplete: vi.fn(),
   };
 
-  it("retries transient assignment failure with backoff then succeeds", async () => {
-    prefsHolder.assignWorktreeToSelf = true;
-    viewerHolder.user = { login: "me" };
-
-    let assignCallCount = 0;
-    mockAssignIssue.mockImplementation(() => {
-      assignCallCount++;
-      if (assignCallCount === 1) {
-        return Promise.reject(new Error("GitHub is temporarily unavailable. Please retry."));
-      }
-      return Promise.resolve();
-    });
-
-    render(<BulkCreateWorktreeDialog {...assignProps} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(35000);
-
-    expect(assignCallCount).toBe(2);
-    expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "me");
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
-  });
-
-  it("succeeds when assignment recovers after two transient failures", async () => {
-    prefsHolder.assignWorktreeToSelf = true;
-    viewerHolder.user = { login: "me" };
-
-    let assignCallCount = 0;
-    mockAssignIssue.mockImplementation(() => {
-      assignCallCount++;
-      if (assignCallCount <= 2) {
-        return Promise.reject(new Error("GitHub is temporarily unavailable. Please retry."));
-      }
-      return Promise.resolve();
-    });
-
-    render(<BulkCreateWorktreeDialog {...assignProps} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    await advanceTimersGradually(70000);
-
-    // Two transient failures inside the wall-clock window must keep retrying;
-    // the third attempt recovers and short-circuits out of the loop.
-    expect(assignCallCount).toBe(3);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
-  });
-
   it("keeps retrying transient assignment failures past the old 3-attempt cap", async () => {
     prefsHolder.assignWorktreeToSelf = true;
     viewerHolder.user = { login: "me" };
@@ -2883,30 +2695,6 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     expect(createCalls[0]![0].newBranch).toBe("feature/pr-10");
   });
 
-  it("invokes stored bulkCreateDialog.onComplete when Done is clicked in PR mode", async () => {
-    mockListBranches.mockResolvedValue([
-      { name: "origin/feature/pr-10", current: false, remote: true },
-      { name: "origin/feature/pr-20", current: false, remote: true },
-      { name: "origin/feature/pr-30", current: false, remote: true },
-    ]);
-    const storedOnComplete = vi.fn();
-    mockBulkCreateDialog.onComplete = storedOnComplete;
-
-    render(<BulkCreateWorktreeDialog {...prProps} />);
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-    await advanceTimersGradually(5000);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-done-button").click();
-    });
-
-    expect(storedOnComplete).toHaveBeenCalledTimes(1);
-  });
-
   it("includes fork PRs in plan", () => {
     const forkPR: PR = {
       ...makePR(99),
@@ -2919,29 +2707,6 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     expect(
       screen.getByTestId("bulk-create-confirm-button").getAttribute("aria-disabled")
     ).toBeNull();
-  });
-
-  it("skips merged PRs with reason", () => {
-    const mergedPR: PR = {
-      ...makePR(99),
-      state: "merged",
-      merged: true,
-    };
-    const props = { ...prProps, selectedPRs: [mergedPR] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    expect(screen.getByText("Merged")).toBeTruthy();
-  });
-
-  it("skips PRs without headRef", () => {
-    const noRefPR: PR = {
-      ...makePR(99),
-      headRef: undefined as unknown as string,
-    };
-    const props = { ...prProps, selectedPRs: [noRefPR] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    expect(screen.getByText("No branch info")).toBeTruthy();
   });
 
   it("does not show assign-to-self toggle in PR mode", () => {

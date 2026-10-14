@@ -90,21 +90,6 @@ describe("PostHydrationListeners", () => {
     mark.mockClear();
   });
 
-  it("runs every deferred listener hook once on mount", () => {
-    render(<PostHydrationListeners />);
-
-    for (const hook of allHooks) {
-      expect(hook).toHaveBeenCalledTimes(1);
-    }
-  });
-
-  it("emits the staged-mount perf mark exactly once on mount", () => {
-    render(<PostHydrationListeners />);
-
-    expect(mark).toHaveBeenCalledTimes(1);
-    expect(mark).toHaveBeenCalledWith(PERF_MARKS.POST_HYDRATION_LISTENERS_MOUNT);
-  });
-
   it("runs no deferred hook until the gate flips true, then runs each once", () => {
     // Mirrors AppInner's `{isStateLoaded && <PostHydrationListeners />}` across a
     // real React re-render: nothing runs while the gate is closed, everything
@@ -125,10 +110,5 @@ describe("PostHydrationListeners", () => {
     }
     expect(mark).toHaveBeenCalledTimes(1);
     expect(mark).toHaveBeenCalledWith(PERF_MARKS.POST_HYDRATION_LISTENERS_MOUNT);
-  });
-
-  it("renders nothing visible", () => {
-    const { container } = render(<PostHydrationListeners />);
-    expect(container.firstChild).toBeNull();
   });
 });

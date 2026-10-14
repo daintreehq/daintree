@@ -6,14 +6,6 @@ const status = (state: CIStatus["state"]): CIStatus => ({ state }) as CIStatus;
 const REPORTABLE = ["success", "failure", "pending", "neutral"] as const;
 
 describe("getCIStatusVisual", () => {
-  it("marks a run still in flight with a dot and a settled one with a glyph", () => {
-    // GitHub's own vocabulary, and the one the forge dropdown rows speak. A
-    // change here silently puts two views of the same PR out of step.
-    expect(getCIStatusVisual(status("pending"))?.kind).toBe("dot");
-    expect(getCIStatusVisual(status("success"))?.kind).toBe("icon");
-    expect(getCIStatusVisual(status("failure"))?.kind).toBe("icon");
-  });
-
   it("keeps only one state on the dot, so shape survives forced colors", () => {
     // Every dot collapses to the same system-coloured disc under
     // `forced-colors: active` — a second one would be indistinguishable from

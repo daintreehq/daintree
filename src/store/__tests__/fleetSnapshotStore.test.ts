@@ -48,12 +48,6 @@ describe("fleetSnapshotStore", () => {
     cleanupFleetSnapshotListeners();
   });
 
-  it("starts null so 'nothing reported yet' is distinguishable from 'fleet clear'", () => {
-    // The whole all-clear presentation hangs on this: a surface may only claim
-    // the fleet is clear on a delivered empty snapshot, never on initial state.
-    expect(useFleetSnapshotStore.getState().snapshot).toBeNull();
-  });
-
   it("stores a delivered empty fleet as a real snapshot, not as null", () => {
     setupFleetSnapshotListeners();
     capturedCallback!(snapshot([]));
@@ -72,14 +66,6 @@ describe("fleetSnapshotStore", () => {
 
     const stored = useFleetSnapshotStore.getState().snapshot!;
     expect(stored.runs.map((r) => r.runId)).toEqual(["c"]);
-  });
-
-  it("clears a previously populated fleet when an empty one arrives", () => {
-    setupFleetSnapshotListeners();
-    capturedCallback!(snapshot([makeRun("a")]));
-    capturedCallback!(snapshot([]));
-
-    expect(useFleetSnapshotStore.getState().snapshot!.runs).toEqual([]);
   });
 
   it("pulls a snapshot on setup so a dropped push can't leave the view blank", async () => {

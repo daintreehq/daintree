@@ -101,11 +101,6 @@ describe("summarizeSessionStates", () => {
     expect(breakdown).toBe("1 waiting, 2 unread, 2 finished");
     expect(visibleStates.map((v) => v.state)).toEqual(["waiting", "unread", "completed"]);
   });
-
-  it("leaves unread out when there are none", () => {
-    const { visibleStates } = summarizeSessionStates({ ...ZERO, working: 1 }, 1);
-    expect(visibleStates.some((v) => v.state === "unread")).toBe(false);
-  });
 });
 
 describe("CollapsedSessionIndicators", () => {

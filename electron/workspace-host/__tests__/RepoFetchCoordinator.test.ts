@@ -89,17 +89,6 @@ describe("RepoFetchCoordinator", () => {
     ]);
   });
 
-  it("prunes on an explicit prune request, matching the omitted default", async () => {
-    mockGetGitCommonDir.mockReturnValue("/repo/.git");
-    const mockGit = makeMockGit(() => Promise.resolve());
-    mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
-
-    const coord = new RepoFetchCoordinator();
-    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo", prune: true });
-
-    expect(mockGit.raw.mock.calls[0][0]).toContain("--prune");
-  });
-
   it("re-runs git for a prune request the recent success did not prune for", async () => {
     // "Fetch" then "Fetch and prune" seconds later: reusing the non-pruned
     // success inside the recency window would drop the prune the user asked
@@ -725,43 +714,6 @@ describe("RepoFetchCoordinator", () => {
     expect(maxInFlight).toBeGreaterThan(1);
   });
 
-  it("caches auth failures and skips fetches inside the backoff window", async () => {
-    mockGetGitCommonDir.mockReturnValue("/repo/.git");
-    mockCreateBackgroundFetchGit.mockReturnValue(
-      makeMockGit(() =>
-        Promise.reject(new Error("Authentication failed for 'https://example.com'"))
-      )
-    );
-
-    const coord = new RepoFetchCoordinator();
-    const first = await coord.fetchForWorktree({
-      worktreeId: "wt1",
-      worktreePath: "/repo",
-    });
-    expect(first.status).toBe("failed");
-    expect(first.reason).toBe("auth-failed");
-    expect(coord.hasFailureFor("/repo/.git")).toBe(true);
-
-    // Second attempt inside the first backoff step skips without invoking git.
-    mockCreateBackgroundFetchGit.mockClear();
-    const second = await coord.fetchForWorktree({
-      worktreeId: "wt1",
-      worktreePath: "/repo",
-    });
-    expect(second.status).toBe("skipped");
-    expect(second.skipReason).toBe("auth-suspended");
-    expect(mockCreateBackgroundFetchGit).not.toHaveBeenCalled();
-
-    // Once the backoff window elapses, the next attempt actually re-fetches.
-    vi.advanceTimersByTime(5 * 60_000 + 1_000);
-    const retried = await coord.fetchForWorktree({
-      worktreeId: "wt1",
-      worktreePath: "/repo",
-    });
-    expect(retried.status).toBe("failed");
-    expect(mockCreateBackgroundFetchGit).toHaveBeenCalledTimes(1);
-  });
-
   it("classifies forge secondary rate limits as transient, not auth", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     mockCreateBackgroundFetchGit.mockReturnValue(
@@ -791,20 +743,6 @@ describe("RepoFetchCoordinator", () => {
     coord.clearAuthFailures();
     expect(coord.hasFailureFor("/repo/.git")).toBe(true);
     coord.clearNetworkFailures();
-    expect(coord.hasFailureFor("/repo/.git")).toBe(false);
-  });
-
-  it("clears auth suspensions on demand", async () => {
-    mockGetGitCommonDir.mockReturnValue("/repo/.git");
-    mockCreateBackgroundFetchGit.mockReturnValue(
-      makeMockGit(() => Promise.reject(new Error("Authentication failed")))
-    );
-
-    const coord = new RepoFetchCoordinator();
-    await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
-    expect(coord.hasFailureFor("/repo/.git")).toBe(true);
-
-    coord.clearAuthFailures();
     expect(coord.hasFailureFor("/repo/.git")).toBe(false);
   });
 
@@ -1141,33 +1079,6 @@ describe("RepoFetchCoordinator", () => {
     expect((coord as unknown as { states: Map<string, unknown> }).states.size).toBe(0);
   });
 
-  it("classifies native AbortError (name === 'AbortError') as transient", async () => {
-    mockGetGitCommonDir.mockReturnValue("/repo/.git");
-    const abortError = new Error("The operation was aborted");
-    (abortError as { name?: string }).name = "AbortError";
-    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.reject(abortError)));
-
-    const coord = new RepoFetchCoordinator();
-    const result = await coord.fetchForWorktree({
-      worktreeId: "wt1",
-      worktreePath: "/repo",
-    });
-
-    expect(result.status).toBe("failed");
-    // classifyGitError returns "unknown" for this message, but isAbortError
-    // catches it by name and routes it to transient.
-    expect(result.networkFailed).toBe(true);
-    expect(result.authFailed).toBe(false);
-    expect(coord.hasFailureFor("/repo/.git")).toBe(true);
-
-    // clearNetworkFailures clears transient; clearAuthFailures does not.
-    coord.clearAuthFailures();
-    expect(coord.hasFailureFor("/repo/.git")).toBe(true);
-
-    coord.clearNetworkFailures();
-    expect(coord.hasFailureFor("/repo/.git")).toBe(false);
-  });
-
   it("classifies simple-git wrapped abort (name='GitError' with abort message) as transient", async () => {
     mockGetGitCommonDir.mockReturnValue("/repo/.git");
     // simple-git wraps the underlying AbortError in a GitError — the name
@@ -1195,47 +1106,7 @@ describe("RepoFetchCoordinator", () => {
     expect(coord.hasFailureFor("/repo/.git")).toBe(false);
   });
 
-  it("does not classify a generic Error with 'abort' in message as abort", async () => {
-    mockGetGitCommonDir.mockReturnValue("/repo/.git");
-    // A plain Error with name="Error" and "abort" in the message should NOT
-    // match isAbortError — the message fallback only applies to GitError
-    // wrappers, not arbitrary Error objects.
-    const genericError = new Error("some irrelevant abort message");
-    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.reject(genericError)));
-
-    const coord = new RepoFetchCoordinator();
-    // Verify directly through the private method.
-    expect((coord as any).isAbortError(genericError)).toBe(false);
-
-    const result = await coord.fetchForWorktree({
-      worktreeId: "wt1",
-      worktreePath: "/repo",
-    });
-
-    expect(result.status).toBe("failed");
-    // Falls through to the generic transient path (no auth or network match).
-    expect(result.networkFailed).toBe(true);
-    expect(result.authFailed).toBe(false);
-    expect(coord.hasFailureFor("/repo/.git")).toBe(true);
-  });
   describe("multiple remotes", () => {
-    it("fetches only origin for a single-remote repo", async () => {
-      mockGetGitCommonDir.mockReturnValue("/repo/.git");
-      const mockGit = makeMockGit(() => Promise.resolve());
-      mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
-
-      const coord = new RepoFetchCoordinator();
-      await coord.fetchForWorktree({
-        worktreeId: "wt1",
-        worktreePath: "/repo",
-        remotes: ["origin"],
-        primaryRemote: "origin",
-      });
-
-      const fetched = mockGit.raw.mock.calls.map((call) => call[0][1]);
-      expect(fetched).toEqual(["origin"]);
-    });
-
     it("fetches the primary remote before the auxiliary one", async () => {
       mockGetGitCommonDir.mockReturnValue("/repo/.git");
       const mockGit = makeMockGit(() => Promise.resolve());

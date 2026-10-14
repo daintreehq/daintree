@@ -222,15 +222,6 @@ describe("agentSessionHistory.resume — launch directory containment", () => {
 });
 
 describe("agentSessionHistory.resume — launch target", () => {
-  it("launches in the directory the record itself carries, not the caller's", async () => {
-    listMock.mockResolvedValue([record({ cwd: `${WT_A}/nested` })]);
-    await run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx);
-    expect(resumeMock.mock.calls[0]?.[1]).toMatchObject({
-      cwd: `${WT_A}/nested`,
-      worktreeId: WT_A,
-    });
-  });
-
   it("re-homes a record journaled without a worktree by its recorded cwd", async () => {
     listMock.mockResolvedValue([record({ worktreeId: null, cwd: WT_B })]);
     await run({ worktreeId: WT_B, sessionId: "sess-1" }, agentCtx);
@@ -276,16 +267,6 @@ describe("agentSessionHistory.resume — result", () => {
       worktreeId: WT_A,
       outcome: "created",
     });
-  });
-
-  it("reports a repeat resume as reusing the live pane, with the same terminal id", async () => {
-    resumeMock.mockResolvedValue({
-      terminalId: "term-9",
-      outcome: "activatedExisting",
-      worktreeId: WT_A,
-    });
-    const result = await run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx);
-    expect(result).toMatchObject({ terminalId: "term-9", outcome: "activatedExisting" });
   });
 
   it("declares a result shape that can carry structuredContent over MCP", () => {

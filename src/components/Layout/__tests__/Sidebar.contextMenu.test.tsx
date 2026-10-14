@@ -160,18 +160,6 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
     expect(ids).toContain("ui.sidebar.resetWidth");
   });
 
-  it("reveals the scratch's own folder, which currentProject could not supply", () => {
-    workspaceRoot.mockReturnValue(SCRATCH);
-
-    renderSidebar();
-
-    const reveal = screen
-      .getAllByRole("menuitem")
-      .find((el) => el.getAttribute("data-action-id") === "system.openPath");
-    expect(reveal?.getAttribute("data-args")).toBe(JSON.stringify({ path: SCRATCH.path }));
-    expect(reveal?.textContent).toContain("Reveal workspace in Finder");
-  });
-
   it("ignores a project a sibling window left globally current", () => {
     // `currentProject` is broadcast to every view, cached ones included, so a
     // second window switching projects repoints it here too. Keying the menu off

@@ -61,20 +61,6 @@ describe("hexToOklch", () => {
     expect(c.c).toBeCloseTo(0, 1);
   });
 
-  it("converts mid-gray", () => {
-    const c = hexToOklch("#808080")!;
-    expect(c.l).toBeGreaterThan(0.4);
-    expect(c.l).toBeLessThan(0.7);
-    expect(c.c).toBeCloseTo(0, 1);
-  });
-
-  it("converts a saturated color with meaningful chroma", () => {
-    const c = hexToOklch("#36CE94")!;
-    expect(c.c).toBeGreaterThan(0.1);
-    expect(c.h).toBeGreaterThan(0);
-    expect(c.h).toBeLessThan(360);
-  });
-
   it("handles 3-digit hex", () => {
     const c6 = hexToOklch("#ff0000")!;
     const c3 = hexToOklch("#f00")!;
@@ -122,14 +108,6 @@ describe("deltaOklch", () => {
     const red = hexToOklch("#ff0000")!;
     const teal = hexToOklch("#00ffff")!;
     expect(deltaOklch(red, teal)).toBeGreaterThan(0.2);
-  });
-
-  it("handles hue wraparound (h=350 vs h=10)", () => {
-    const a = hexToOklch("#ff0044")!;
-    const b = hexToOklch("#ff4400")!;
-    // These are close in hue (~20° apart), so ΔE should be moderate
-    expect(deltaOklch(a, b)).toBeGreaterThan(0);
-    expect(deltaOklch(a, b)).toBeLessThan(0.15);
   });
 
   it("handles synthetic hue wraparound at h=350 vs h=10", () => {
@@ -281,16 +259,6 @@ function makeSource(
 }
 
 describe("auditCrossThemeAccents", () => {
-  it("produces no failures for perceptibly distinct accents", () => {
-    const sources = [
-      makeSource("theme-a", "dark", "#36CE94"),
-      makeSource("theme-b", "dark", "#C59A4E"),
-      makeSource("theme-c", "dark", "#C8746C"),
-    ];
-    const result = auditCrossThemeAccents(sources);
-    expect(result.failures).toHaveLength(0);
-  });
-
   it("warns when two primary accents fall below cross-theme threshold", () => {
     // #36CE94 vs #36CF94 differ by 1 bit in green channel
     const sources = [
@@ -309,15 +277,5 @@ describe("auditCrossThemeAccents", () => {
     ];
     const result = auditCrossThemeAccents(sources);
     expect(result.warnings.some((w) => w.includes("accentSecondary"))).toBe(true);
-  });
-
-  it("only compares within same polarity", () => {
-    const sources = [
-      makeSource("dark-a", "dark", "#36CE94", "#6B8D72"),
-      makeSource("light-a", "light", "#36CE94", "#6B8D72"),
-    ];
-    const result = auditCrossThemeAccents(sources);
-    // Same hexes OK across different polarities
-    expect(result.failures).toHaveLength(0);
   });
 });

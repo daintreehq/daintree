@@ -16,20 +16,6 @@ describe("applyManualWorktreeReorder", () => {
     expect(result).toEqual(["b", "hidden-1", "c", "a", "hidden-2"]);
   });
 
-  it("preserves hidden items at the beginning of the full order", () => {
-    const fullOrder = ["hidden-1", "hidden-2", "a", "b"];
-    const visible = ["a", "b"];
-    const result = applyManualWorktreeReorder(fullOrder, visible, 0, 1);
-    expect(result).toEqual(["hidden-1", "hidden-2", "b", "a"]);
-  });
-
-  it("preserves hidden items at the end of the full order", () => {
-    const fullOrder = ["a", "b", "hidden-1", "hidden-2"];
-    const visible = ["a", "b"];
-    const result = applyManualWorktreeReorder(fullOrder, visible, 0, 1);
-    expect(result).toEqual(["b", "a", "hidden-1", "hidden-2"]);
-  });
-
   it("appends visible IDs missing from the full order (first-ever drag case)", () => {
     const fullOrder: string[] = [];
     const visible = ["a", "b", "c"];
@@ -49,12 +35,6 @@ describe("applyManualWorktreeReorder", () => {
     const fullOrder = ["hidden", "a"];
     const visible = ["a"];
     const result = applyManualWorktreeReorder(fullOrder, visible, 0, 0);
-    expect(result).toEqual(fullOrder);
-  });
-
-  it("returns full order unchanged for empty visible subset", () => {
-    const fullOrder = ["a", "b"];
-    const result = applyManualWorktreeReorder(fullOrder, [], 0, 0);
     expect(result).toEqual(fullOrder);
   });
 

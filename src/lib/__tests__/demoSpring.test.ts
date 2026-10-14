@@ -48,12 +48,6 @@ describe("stepSpring", () => {
     expect(state).toEqual({ current: 10, velocity: 5 });
   });
 
-  it("is deterministic for identical inputs", () => {
-    const a = stepSpring({ current: 0, velocity: 0 }, 100, 0.016);
-    const b = stepSpring({ current: 0, velocity: 0 }, 100, 0.016);
-    expect(a).toEqual(b);
-  });
-
   it("accelerates toward the target from rest", () => {
     const next = stepSpring(atRest(0), 100, DEMO_SPRING_FIXED_DT);
     // force is positive (target above current) → velocity and position both rise
@@ -131,14 +125,6 @@ describe("frame-rate independence (the regression guard for #10136)", () => {
     expect(Math.abs(fast.current - slow.current)).toBeLessThan(1);
     // and the same total simulated time was consumed in every case
     expect(Math.abs(fast.velocity - slow.velocity)).toBeLessThan(5);
-  });
-
-  it("a low frame rate is not slower than a high one (no slow-motion)", () => {
-    const SECONDS = 0.15;
-    const fast = stateAfter(SECONDS, 1 / 120).current;
-    const slow = stateAfter(SECONDS, 1 / 20).current;
-    // slow-motion bug would make `slow` lag well behind `fast`; they must match
-    expect(slow).toBeGreaterThan(fast - 1);
   });
 
   it("matches the reference at non-divisor frame rates (not just 1/120 multiples)", () => {

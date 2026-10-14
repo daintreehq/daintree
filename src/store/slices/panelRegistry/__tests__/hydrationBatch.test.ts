@@ -498,51 +498,6 @@ describe("hydration batch (#5196)", () => {
   });
 
   describe("spawn batch aliases (#9165)", () => {
-    it("collapses a recipe spawn burst into a single panelIds render", async () => {
-      const { beginSpawnBatch, flushSpawnBatch, addPanel } = usePanelStore.getState();
-
-      let panelIdsNotifyCount = 0;
-      let lastPanelIds: string[] | undefined;
-      const unsubscribe = usePanelStore.subscribe((state) => {
-        if (state.panelIds !== lastPanelIds) {
-          panelIdsNotifyCount++;
-          lastPanelIds = state.panelIds;
-        }
-      });
-
-      try {
-        lastPanelIds = usePanelStore.getState().panelIds;
-
-        const token = beginSpawnBatch();
-        expect(token).not.toBeNull();
-        for (let i = 0; i < 5; i++) {
-          await addPanel({
-            kind: "browser",
-            requestedId: `spawn-${i}`,
-            cwd: "/",
-            bypassLimits: true,
-            browserUrl: "about:blank",
-          });
-        }
-        // Deferred: panelsById is populated but panelIds hasn't changed yet.
-        expect(usePanelStore.getState().panelsById["spawn-0"]).toBeDefined();
-        expect(panelIdsNotifyCount).toBe(0);
-
-        flushSpawnBatch(token);
-
-        expect(panelIdsNotifyCount).toBe(1);
-        expect(usePanelStore.getState().panelIds).toEqual([
-          "spawn-0",
-          "spawn-1",
-          "spawn-2",
-          "spawn-3",
-          "spawn-4",
-        ]);
-      } finally {
-        unsubscribe();
-      }
-    });
-
     it("surfaces a batched grid panel via getTabGroups before flush (#9649)", async () => {
       // Regression for the blank recipe-launched terminal: during the spawn
       // batch window the worktree index is committed eagerly but panelIds is

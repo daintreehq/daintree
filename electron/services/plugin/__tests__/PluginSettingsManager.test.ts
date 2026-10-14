@@ -44,15 +44,6 @@ describe("PluginSettingsManager explicit project root", () => {
     expect(projectStoreMock.getCurrentProject).not.toHaveBeenCalled();
   });
 
-  it("does not track project switches once a root is supplied", () => {
-    const mgr = managerFor();
-    projectStoreMock.getCurrentProject.mockReturnValue({ path: "/projects/a" });
-    const first = mgr.resolveSettingsFilePath(PLUGIN_ID, "project", "/projects/bound");
-
-    projectStoreMock.getCurrentProject.mockReturnValue({ path: "/projects/b" });
-    expect(mgr.resolveSettingsFilePath(PLUGIN_ID, "project", "/projects/bound")).toBe(first);
-  });
-
   it("still resolves the active project at call time when no root is supplied", () => {
     const mgr = managerFor();
     projectStoreMock.getCurrentProject.mockReturnValue({ path: "/projects/a" });

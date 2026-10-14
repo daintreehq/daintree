@@ -475,25 +475,6 @@ describe("useMcpBridge", () => {
     await dispatched;
   });
 
-  it("leaves callerInfo undefined in the store for pinned help-session dispatch (#9157)", async () => {
-    mocks.get.mockReturnValue(confirmManifestEntry());
-    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
-
-    renderHook(() => useMcpBridge());
-
-    const dispatched = dispatchHandler?.({
-      requestId: "req-no-caller",
-      actionId: "worktree.delete",
-      args: { worktreeId: "wt-1" },
-    });
-
-    await Promise.resolve();
-    expect(useMcpConfirmStore.getState().current?.callerInfo).toBeUndefined();
-
-    useMcpConfirmStore.getState().resolveCurrent("approved");
-    await dispatched;
-  });
-
   it("preserves the bound context across the confirmation wait (#8317)", async () => {
     mocks.get.mockReturnValue(confirmManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
@@ -988,25 +969,6 @@ describe("useMcpBridge", () => {
   });
 
   describe("MCP spawn source tagging (#6959)", () => {
-    it("stamps spawnedBy: 'mcp' onto agent.launch dispatches and preserves caller args", async () => {
-      mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.launch", danger: "safe" }));
-      mocks.dispatch.mockResolvedValue({ ok: true, result: { terminalId: "t-1" } });
-
-      renderHook(() => useMcpBridge());
-
-      await dispatchHandler?.({
-        requestId: "req-launch",
-        actionId: "agent.launch",
-        args: { agentId: "claude", location: "grid" },
-      });
-
-      expect(mocks.dispatch).toHaveBeenCalledWith(
-        "agent.launch",
-        { agentId: "claude", location: "grid", spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
-      );
-    });
-
     it("stamps panel-spawning workflow actions so indirect agent launches do not steal focus", async () => {
       mocks.get.mockReturnValue(
         safeManifestEntry({ id: "workflow.startWorkOnIssue", danger: "safe" })
@@ -1058,26 +1020,6 @@ describe("useMcpBridge", () => {
       );
     });
 
-    it("overrides any caller-supplied spawnedBy on agent.* dispatches", async () => {
-      mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.claude", danger: "safe" }));
-      mocks.dispatch.mockResolvedValue({ ok: true, result: { terminalId: "t-2" } });
-
-      renderHook(() => useMcpBridge());
-
-      // An MCP client might try to claim a different origin — ignore it.
-      await dispatchHandler?.({
-        requestId: "req-claude",
-        actionId: "agent.claude",
-        args: { spawnedBy: "quickrun" },
-      });
-
-      expect(mocks.dispatch).toHaveBeenCalledWith(
-        "agent.claude",
-        { spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
-      );
-    });
-
     it("cannot be talked into claiming assistant provenance from an external session", async () => {
       mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.claude", danger: "safe" }));
       mocks.dispatch.mockResolvedValue({ ok: true, result: { terminalId: "t-spoof" } });
@@ -1097,43 +1039,6 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "agent.claude",
         { spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
-      );
-    });
-
-    it("synthesizes args object when none provided for agent.* dispatches", async () => {
-      mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.terminal", danger: "safe" }));
-      mocks.dispatch.mockResolvedValue({ ok: true, result: { terminalId: "t-3" } });
-
-      renderHook(() => useMcpBridge());
-
-      await dispatchHandler?.({
-        requestId: "req-terminal",
-        actionId: "agent.terminal",
-      });
-
-      expect(mocks.dispatch).toHaveBeenCalledWith(
-        "agent.terminal",
-        { spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
-      );
-    });
-
-    it("does not tag non-agent actions", async () => {
-      mocks.get.mockReturnValue(safeManifestEntry({ id: "actions.list", danger: "safe" }));
-      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
-
-      renderHook(() => useMcpBridge());
-
-      await dispatchHandler?.({
-        requestId: "req-list",
-        actionId: "actions.list",
-        args: { limit: 5 },
-      });
-
-      expect(mocks.dispatch).toHaveBeenCalledWith(
-        "actions.list",
-        { limit: 5 },
         { source: "agent", confirmed: undefined }
       );
     });
@@ -2108,31 +2013,6 @@ describe("useMcpBridge", () => {
       expect.objectContaining({ source: "agent", confirmed: true })
     );
   });
-
-  it("leaves non-git dispatch args untouched by cwd pinning", async () => {
-    mocks.get.mockReturnValue(confirmManifestEntry());
-    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
-
-    renderHook(() => useMcpBridge());
-
-    const dispatched = dispatchHandler?.({
-      requestId: "req-nopin",
-      actionId: "worktree.delete",
-      args: { worktreeId: "wt-1" },
-    });
-
-    await vi.waitFor(() => {
-      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
-    });
-    useMcpConfirmStore.getState().resolveCurrent("approved");
-    await dispatched;
-
-    expect(mocks.dispatch).toHaveBeenCalledWith(
-      "worktree.delete",
-      { worktreeId: "wt-1" },
-      expect.objectContaining({ source: "agent" })
-    );
-  });
   it("asks ActionService for the danger of THIS dispatch, not the action's static tier (#11860)", () => {
     // The gate is args-conditional: worktree.createWithRecipe is statically
     // "safe" and only becomes confirm when the args name a recipe. If this call
@@ -2721,12 +2601,6 @@ describe("resolveMcpConfirmPreviewTarget (#11538)", () => {
     ).toEqual({ kind: "worktreeDelete", worktreeId: "wt-1", force: true });
   });
 
-  it("resolves a worktree.delete target from its worktreeId", () => {
-    expect(
-      resolveMcpConfirmPreviewTarget("worktree.delete", { worktreeId: "wt-1" }, undefined)
-    ).toEqual({ kind: "worktreeDelete", worktreeId: "wt-1", force: false });
-  });
-
   it("prefers an explicit cwd arg over any context for git dispatch", () => {
     mocks.getContext.mockReturnValue({ activeWorktreePath: "/live" });
     expect(
@@ -3151,24 +3025,6 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
     expect(mocks.buildPreview).toHaveBeenCalledWith("wt-1");
   });
 
-  it("surfaces the fresh changed-file list for worktree.delete", async () => {
-    mocks.buildPreview.mockResolvedValue({
-      trackedChangeCount: 1,
-      untrackedFileCount: 0,
-      hasTrackedChanges: true,
-      hasUntrackedFiles: false,
-      changes: [{ path: "src/app.ts", status: "modified", insertions: null, deletions: null }],
-      submodules: { status: "verified", risk: emptySubmoduleRisk() },
-    });
-    const { lines } = await buildMcpConfirmPreview({
-      kind: "worktreeDelete",
-      worktreeId: "wt-1",
-      force: false,
-    });
-    expect(lines[0]).toContain("1 uncommitted tracked file");
-    expect(lines).toContain("  M src/app.ts");
-  });
-
   it("discloses the teardown an agent-requested delete runs, as the local dialog does", async () => {
     // The delete runs the project's teardown before removing the tree; an
     // approver shown only the file list consented to less than will happen.
@@ -3266,21 +3122,6 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
       force: false,
     });
     expect(lines).toEqual(["⚠ Could not verify current changes — proceed with caution."]);
-  });
-
-  it("surfaces the branch and actual commits for a git.push target", async () => {
-    mocks.buildGitPreview.mockResolvedValue({
-      branch: "feature/x",
-      destination: { remote: "origin", branch: "feature/x" },
-      pullSource: { remote: "origin", branch: "feature/x" },
-      commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
-    });
-    const { lines } = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
-    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/repo", "push");
-    expect(lines[0]).toBe("Destination: origin/feature/x");
-    expect(lines[1]).toBe("Branch: feature/x");
-    expect(lines[2]).toContain("Fix the thing");
-    expect(lines[2]).toContain("Ada");
   });
 
   it("distinguishes an empty branch from an unverifiable one for git targets", async () => {

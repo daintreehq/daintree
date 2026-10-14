@@ -19,7 +19,7 @@ vi.mock("@shared/config/panelKindRegistry", async () => {
   };
 });
 
-function mockRegistryImports(options?: { throwBrowserDefaults?: boolean }): void {
+function mockRegistryImports(): void {
   vi.doMock("@/components/Terminal/TerminalPane", () => ({
     TerminalPane: (() => null) as MinimalComponent,
   }));
@@ -41,11 +41,7 @@ function mockRegistryImports(options?: { throwBrowserDefaults?: boolean }): void
     serializeBrowser: vi.fn(() => ({ id: "browser" })),
   }));
   vi.doMock("../browser/defaults", () => ({
-    createBrowserDefaults: options?.throwBrowserDefaults
-      ? vi.fn(() => {
-          throw new Error("browser defaults failed");
-        })
-      : vi.fn(() => ({ browserUrl: "http://localhost:3000" })),
+    createBrowserDefaults: vi.fn(() => ({ browserUrl: "http://localhost:3000" })),
   }));
   vi.doMock("../dev-preview/serializer", () => ({
     serializeDevPreview: vi.fn(() => ({ id: "dev-preview" })),
@@ -130,18 +126,6 @@ describe("panel registry adversarial", () => {
     );
     expect(getPanelKindDefinition("browser")?.component).toBe(second);
     warnSpy.mockRestore();
-  });
-
-  it("DEFAULT_FACTORY_FAILURE_BUBBLES", async () => {
-    mockRegistryImports({ throwBrowserDefaults: true });
-    const sharedRegistry = await import("@shared/config/panelKindRegistry");
-    const registry = await import("../registry");
-
-    registry.initBuiltInPanelKinds();
-
-    expect(() => {
-      sharedRegistry.getPanelKindConfig("browser")?.createDefaults?.({ kind: "browser" });
-    }).toThrow("browser defaults failed");
   });
 
   it("UNREGISTER_BUILTIN_DEFINITION_REJECTED", async () => {

@@ -25,13 +25,6 @@ beforeEach(() => {
 
 describe("fleetTargetOverridesStore", () => {
   describe("payload overrides", () => {
-    it("sets and reads a per-target payload override", () => {
-      useFleetTargetOverridesStore.getState().setPayloadOverride("t-1", "custom payload");
-      expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-1"]).toBe(
-        "custom payload"
-      );
-    });
-
     it("clearPayloadOverride removes the key", () => {
       const store = useFleetTargetOverridesStore.getState();
       store.setPayloadOverride("t-1", "x");

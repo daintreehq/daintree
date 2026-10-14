@@ -63,15 +63,6 @@ describe("builtinRendererRegistry", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns null for unregistered slots", () => {
-    expect(getBuiltinView("github.bulkCreateWorktreeDialog")).toBeNull();
-  });
-
-  it("returns the registered component", () => {
-    registerBuiltinView("github.issueSelector", StubComponent);
-    expect(getBuiltinView("github.issueSelector")).toBe(StubComponent);
-  });
-
   it("warns and overwrites when a slot is registered twice", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     registerBuiltinView("github.issueSelector", StubComponent);

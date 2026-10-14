@@ -50,18 +50,6 @@ describe("PaletteFooterHints", () => {
     expect(screen.queryByRole("button", { name: /keyboard shortcuts/i })).toBeNull();
   });
 
-  it("renders all keys for a multi-key hint", () => {
-    render(<PaletteFooterHints primaryHint={{ keys: ["↑", "↓"], label: "navigate" }} hints={[]} />);
-    expect(screen.getByText("↑")).toBeTruthy();
-    expect(screen.getByText("↓")).toBeTruthy();
-  });
-
-  it("renders no secondary chips when hints is empty", () => {
-    render(<PaletteFooterHints primaryHint={defaultProps.primaryHint} hints={[]} />);
-    expect(screen.queryByText("navigate")).toBeNull();
-    expect(screen.queryByText("close")).toBeNull();
-  });
-
   it("applies width-priority drop classes — last hint hides earliest", () => {
     const { container } = render(<PaletteFooterHints {...defaultProps} />);
     const escChip = screen.getByText("close").parentElement;

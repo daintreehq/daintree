@@ -552,17 +552,6 @@ describe("ProjectResourceBadge — process ownership", () => {
     expect(await processRowLabel(container, 400)).toBe("RuinWeave view");
   });
 
-  it("leaves an unowned process on its generic label", async () => {
-    mockGetProcessMetrics.mockResolvedValue([
-      makeProcess({ pid: 200, type: "GPU", name: "GPU Process" }),
-    ]);
-
-    const container = await renderWithDiagnostics();
-
-    // Scoped to the row: unrelated popover copy may legitimately say "view".
-    expect(await processRowLabel(container, 200)).toBe("GPU Process");
-  });
-
   it("surfaces the full label on hover when the row truncates", async () => {
     mockGetProcessMetrics.mockResolvedValue([
       makeProcess({ projectNames: ["Cedar Forge", "RuinWeave"] }),

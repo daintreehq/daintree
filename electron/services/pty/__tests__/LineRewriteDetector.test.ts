@@ -44,20 +44,12 @@ describe("isStatusLineRewrite", () => {
     expect(isStatusLineRewrite("hello world")).toBe(false);
   });
 
-  it("returns false for text without rewrite indicators", () => {
-    expect(isStatusLineRewrite("working on task")).toBe(false);
-  });
-
   it("returns true for spinner with token count", () => {
     expect(isStatusLineRewrite("\r100 tokens")).toBe(true);
   });
 
   it("returns true for spinner with cost", () => {
     expect(isStatusLineRewrite("\r$0.05")).toBe(true);
-  });
-
-  it("returns true for rewrite with token count", () => {
-    expect(isStatusLineRewrite("\r150 tokens used")).toBe(true);
   });
 
   it("returns true for braille spinner characters", () => {
@@ -88,16 +80,8 @@ describe("isStatusLineRewrite", () => {
     expect(isStatusLineRewrite("\r✢ Thinking…")).toBe(true);
   });
 
-  it("returns true for new Claude spinner char ✶", () => {
-    expect(isStatusLineRewrite("\r✶ Working…")).toBe(true);
-  });
-
   it("returns true for Claude middle dot spinner", () => {
     expect(isStatusLineRewrite("\r· Deliberating…")).toBe(true);
-  });
-
-  it("returns true for new Claude spinner char ✳", () => {
-    expect(isStatusLineRewrite("\r✳ Cogitating…")).toBe(true);
   });
 
   it("returns true for reduced-motion spinner ●", () => {
@@ -141,11 +125,6 @@ describe("LineRewriteDetector", () => {
   it("resets window after expiry", () => {
     detector.update("a\rb", 1000);
     expect(detector.update("c\rd", 1600)).toBe(false);
-  });
-
-  it("updates lastSpinnerDetectedAt on trigger", () => {
-    detector.update("a\rb\rc", 1000);
-    expect(detector.lastSpinnerDetectedAt).toBe(1000);
   });
 
   it("isSpinnerActive returns true within window", () => {

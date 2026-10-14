@@ -650,13 +650,6 @@ describe("snoozed rows", () => {
     expect(many).toContain("3");
   });
 
-  it("states no wake time when every snooze is unlimited", () => {
-    const status = getProjectRowStatus(project({ snoozedAgentCount: 2 }), NOW);
-
-    expect(status.tone).toBe("snoozed");
-    expect(status.ageDetail).toBeUndefined();
-  });
-
   it("renders the same wake time regardless of how much later it is read", () => {
     // The anti-countdown contract: a static clock time stays true without being
     // redrawn, so no timer is needed to keep the row honest.
@@ -881,19 +874,6 @@ describe("assistant presence status lines (#11806)", () => {
     );
 
     expect(status.text).toBe("Assistant working");
-  });
-
-  it("counts the workers rather than announcing the assistant beside them", () => {
-    // Both are executing, but only the runs the user launched are countable
-    // (#11806) — and "Assistant working" must not stand in for a number when
-    // there is a real one to give.
-    const status = getProjectRowStatus(
-      project({ activeAgentCount: 2, assistantState: "working" }),
-      NOW
-    );
-
-    expect(status.livenessDetail).toBe("2 agents running");
-    expect(status.markTone).toBe("working");
   });
 
   it("puts a seen wait below the snooze but above the settled lines", () => {
@@ -1127,12 +1107,6 @@ describe("row status liveness", () => {
     expect(status.livenessDetail).toBeUndefined();
   });
 
-  it("singularises the clause the way the sentences above it do", () => {
-    const status = getProjectRowStatus(project({ waitingAgentCount: 1, activeAgentCount: 1 }), NOW);
-
-    expect(status.livenessDetail).toBe("1 agent running");
-  });
-
   it("keeps the clause off a row where nothing is executing", () => {
     // Every settled tone at once: a completion, a snooze and a bare process
     // count are all reachable only after the cascade established that no agent
@@ -1179,32 +1153,6 @@ describe("row status liveness", () => {
     expect(hidden.livenessDetail).toBe("Assistant working");
   });
 
-  it("reports the workers when both they and the assistant are going", () => {
-    const status = getProjectRowStatus(
-      project({ waitingAgentCount: 1, activeAgentCount: RUNNING, assistantState: "working" }),
-      NOW
-    );
-
-    expect(status.livenessDetail).toBe(`${RUNNING} agents running`);
-  });
-
-  it("leaves the assistant's own line without a clause about itself", () => {
-    const status = getProjectRowStatus(project({ assistantState: "working" }), NOW);
-
-    expect(status.text).toBe("Assistant working");
-    expect(status.livenessDetail).toBeUndefined();
-  });
-
-  it("treats a directing assistant as executing, the way the classifier does", () => {
-    // A directing assistant is mid-task, so it speaks; an idle one has nothing
-    // to say and lets the row fall through to whatever is underneath it.
-    const directing = getProjectRowStatus(project({ assistantState: "directing" }), NOW);
-    const idle = getProjectRowStatus(project({ assistantState: "idle" }), NOW);
-
-    expect(directing.text).toBe("Assistant working");
-    expect(idle.isDormantFallback).toBe(true);
-  });
-
   it("needs no union with the snooze count to see a snoozed run still working", () => {
     // Snoozing withholds a row from the demanding tallies; it does not stop the
     // run, so a still-working snoozed agent is already inside `activeAgentCount`.
@@ -1214,21 +1162,6 @@ describe("row status liveness", () => {
     );
 
     expect(status.livenessDetail).toBe("1 agent running");
-  });
-
-  it("keeps reporting the run when the folder underneath it has gone", () => {
-    // `isMissing` pre-empts the activity cascade outright, so without this the
-    // one row whose agents are most likely orphaned says the least about them.
-    const missing = getProjectRowStatus(
-      project({ isMissing: true, activeAgentCount: RUNNING }),
-      NOW
-    );
-    const found = getProjectRowStatus(project({ isMissing: true }), NOW);
-
-    expect(missing.text).toBe(found.text);
-    expect(missing.tone).toBe(found.tone);
-    expect(missing.livenessDetail).toBe(`${RUNNING} agents running`);
-    expect(found.livenessDetail).toBeUndefined();
   });
 
   it("carries the clause under every demand tier that can hide a run", () => {

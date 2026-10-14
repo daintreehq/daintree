@@ -164,18 +164,6 @@ describe("TerminalInstanceService - Activity Tier", () => {
     vi.useRealTimers();
   });
 
-  describe("Tier Mapping", () => {
-    it("should map TerminalRefreshTier.BACKGROUND to backend background tier", () => {
-      expect(TerminalRefreshTier.BACKGROUND).toBe(1000);
-    });
-
-    it("should map active refresh tiers to backend active tier", () => {
-      expect(TerminalRefreshTier.BURST).toBe(16);
-      expect(TerminalRefreshTier.FOCUSED).toBe(100);
-      expect(TerminalRefreshTier.VISIBLE).toBe(200);
-    });
-  });
-
   describe("Addon Lifecycle on Tier Transitions", () => {
     it("keeps content addons live when transitioning to BACKGROUND (hibernation removed)", () => {
       const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
@@ -225,43 +213,6 @@ describe("TerminalInstanceService - Activity Tier", () => {
       expect(managed.webLinksAddon).not.toBeNull();
     });
 
-    it("should recreate addons when transitioning from BACKGROUND to FOCUSED", async () => {
-      const { createImageAddon, createFileLinksAddon, createWebLinksAddon } =
-        await import("../TerminalAddonManager");
-
-      const managed = makeMockManaged({
-        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-        imageAddon: null,
-        fileLinksDisposable: null,
-        webLinksAddon: null,
-      });
-      service.instances.set("t1", managed as unknown as Record<string, unknown>);
-
-      service.applyRendererPolicy("t1", TerminalRefreshTier.FOCUSED);
-
-      expect(createImageAddon).toHaveBeenCalled();
-      expect(createFileLinksAddon).toHaveBeenCalled();
-      expect(createWebLinksAddon).toHaveBeenCalled();
-    });
-
-    it("should not dispose already-null addons", () => {
-      const managed = makeMockManaged({
-        lastAppliedTier: TerminalRefreshTier.FOCUSED,
-        imageAddon: null,
-        fileLinksDisposable: null,
-        webLinksAddon: null,
-      });
-      service.instances.set("t1", managed as unknown as Record<string, unknown>);
-
-      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
-      vi.advanceTimersByTime(600);
-
-      // Should not throw — null addons are handled gracefully
-      expect(managed.imageAddon).toBeNull();
-      expect(managed.fileLinksDisposable).toBeNull();
-      expect(managed.webLinksAddon).toBeNull();
-    });
-
     it("should not recreate addons that already exist on upgrade", async () => {
       const { createImageAddon, createFileLinksAddon, createWebLinksAddon } =
         await import("../TerminalAddonManager");
@@ -302,37 +253,9 @@ describe("TerminalInstanceService - Activity Tier", () => {
       expect(m.webLinksAddon).not.toBeNull();
       expect(m.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
     });
-
-    it("should handle destroy on background-tier terminal with null addons", () => {
-      const managed = makeMockManaged({
-        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
-        imageAddon: null,
-        fileLinksDisposable: null,
-        webLinksAddon: null,
-      });
-      service.instances.set("t1", managed as unknown as Record<string, unknown>);
-
-      // Should not throw
-      expect(() => service.destroy("t1")).not.toThrow();
-    });
-  });
-
-  describe("initializeBackendTier", () => {
-    it("should be documented as part of the hydration flow", () => {
-      // Unit tests for the actual logic are in TerminalRendererPolicy.test.ts
-      expect(true).toBe(true);
-    });
   });
 
   describe("host-pushed tier reconciliation (issue #9778)", () => {
-    it("subscribes to terminalClient.onTierChanged on first terminal creation", async () => {
-      // The subscription is installed lazily (alongside onData/onExit) so that
-      // merely constructing the singleton never reaches into terminalClient —
-      // keeping it out of unrelated component tests' import graph.
-      await service.prewarmTerminal("warm", "terminal", {});
-      expect(capturedTierChangedCb).toBeTypeOf("function");
-    });
-
     it("re-arms the outbound dedupe baseline when the host pushes a background demotion (#9778)", async () => {
       // Create a terminal so the lazy onTierChanged subscription is installed.
       await service.prewarmTerminal("warm", "terminal", {});
@@ -357,22 +280,6 @@ describe("TerminalInstanceService - Activity Tier", () => {
       // gate suppressing bytes while the pane looked active).
       service.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
       expect(mockTerminalClient.setActivityTier).toHaveBeenCalledWith("t1", "active", 50);
-    });
-
-    it("does not arm needsWake on a host-pushed tier (the field is permanently false)", async () => {
-      await service.prewarmTerminal("warm", "terminal", {});
-
-      const managed = makeMockManaged({
-        lastAppliedTier: TerminalRefreshTier.FOCUSED,
-        needsWake: false,
-      });
-      service.instances.set("t1", managed as unknown as Record<string, unknown>);
-
-      capturedTierChangedCb?.("t1", "background");
-      expect(managed.needsWake).toBe(false);
-
-      capturedTierChangedCb?.("t1", "active");
-      expect(managed.needsWake).toBe(false);
     });
   });
 

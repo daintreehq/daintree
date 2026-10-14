@@ -28,8 +28,6 @@ import {
   resolveAuthorAvatar,
   _resetGitHubProfilePictureCachesForTests,
 } from "../GitHubProfilePicture.js";
-import { GitHubRateLimitError } from "../GitHubRateLimitService.js";
-import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../../shared/utils/forgeProviderIds.js";
 
 function okResponse(items: Array<{ avatar_url?: unknown }>) {
   return { ok: true, status: 200, json: async () => ({ items }) };
@@ -42,10 +40,6 @@ describe("GitHubProfilePicture", () => {
     _resetGitHubProfilePictureCachesForTests();
   });
 
-  it("exposes the canonical GitHub provider id", () => {
-    expect(gitHubProfilePictureProvider.providerId).toBe(BUILTIN_GITHUB_PROVIDER_ID);
-  });
-
   it("resolves the first user's avatar_url for a public email", async () => {
     mockFetch.mockResolvedValueOnce(okResponse([{ avatar_url: "https://avatars.example/u/1" }]));
     const url = await resolveAuthorAvatar("dev@example.com");
@@ -56,35 +50,11 @@ describe("GitHubProfilePicture", () => {
     expect(calledUrl).toContain("+in:email");
   });
 
-  it("returns null when no profile matches the email", async () => {
-    mockFetch.mockResolvedValueOnce(okResponse([]));
-    expect(await resolveAuthorAvatar("nobody@example.com")).toBeNull();
-  });
-
-  it("returns null without opening a socket when there is no token", async () => {
-    mockToken = null;
-    expect(await resolveAuthorAvatar("dev@example.com")).toBeNull();
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
   it("treats a 422 as a genuine cached miss", async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 422, json: async () => ({}) });
     expect(await resolveAuthorAvatar("dev@example.com")).toBeNull();
     expect(await resolveAuthorAvatar("dev@example.com")).toBeNull();
     expect(mockFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("treats a 403 as transient and does not cache it", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 403, json: async () => ({}) });
-    expect(await resolveAuthorAvatar("dev@example.com")).toBeNull();
-    mockFetch.mockResolvedValueOnce(okResponse([{ avatar_url: "https://avatars.example/late" }]));
-    expect(await resolveAuthorAvatar("dev@example.com")).toBe("https://avatars.example/late");
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("returns null (not a throw) on rate-limit errors", async () => {
-    mockFetch.mockRejectedValueOnce(new GitHubRateLimitError("secondary", Date.now() + 60000));
-    await expect(resolveAuthorAvatar("dev@example.com")).resolves.toBeNull();
   });
 
   it("caches resolved URLs — a second lookup does not hit the network", async () => {

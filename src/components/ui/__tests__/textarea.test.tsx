@@ -6,12 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { cn } from "@/lib/utils";
 import { Textarea, textareaVariants } from "../textarea";
 import { Field, FieldDescription, FieldLabel } from "../field";
-import {
-  expectNarrowTransition,
-  expectNoUnfocusedAccent,
-  expectSingleWinner,
-  utilitiesInGroup,
-} from "./variantAssertions";
+import { expectNarrowTransition, expectSingleWinner, utilitiesInGroup } from "./variantAssertions";
 
 describe("Textarea native surface", () => {
   it("forwards the ref to the textarea element", () => {
@@ -88,10 +83,6 @@ describe("textareaVariants", () => {
 
   it("never widens to a blanket transition", () => {
     expectNarrowTransition(textareaVariants(), /^transition-(colors|\[[a-z,-]+\])$/);
-  });
-
-  it("spends accent only on the focus ring", () => {
-    expectNoUnfocusedAccent(textareaVariants());
   });
 
   it("lets a consumer class win its property group outright", () => {

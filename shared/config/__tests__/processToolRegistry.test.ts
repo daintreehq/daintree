@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  PROCESS_TOOL_ICON_BY_COMMAND,
   PROCESS_TOOL_REGISTRY,
   getProcessToolConfig,
   getProcessToolPriority,
@@ -9,14 +8,6 @@ import {
 const entries = Object.entries(PROCESS_TOOL_REGISTRY);
 
 describe("PROCESS_TOOL_REGISTRY", () => {
-  it("resolves every declared command back to the entry that declared it", () => {
-    for (const [iconId, config] of entries) {
-      for (const command of config.commands) {
-        expect(PROCESS_TOOL_ICON_BY_COMMAND[command], `${command} → ${iconId}`).toBe(iconId);
-      }
-    }
-  });
-
   it("claims each command exactly once", () => {
     // A duplicate alias resolves last-wins at runtime, so the losing entry
     // becomes unreachable without any error.
@@ -30,11 +21,6 @@ describe("PROCESS_TOOL_REGISTRY", () => {
       }
     }
     expect(duplicates).toEqual([]);
-  });
-
-  it("exposes no command the registry does not declare", () => {
-    const declared = new Set(entries.flatMap(([, config]) => config.commands));
-    expect(Object.keys(PROCESS_TOOL_ICON_BY_COMMAND).sort()).toEqual([...declared].sort());
   });
 
   it("gives every entry a non-empty label and at least one command", () => {

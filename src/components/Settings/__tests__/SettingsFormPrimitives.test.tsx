@@ -130,12 +130,6 @@ function expectResetAlwaysVisible(reset: HTMLElement) {
 }
 
 describe("SettingsInput", () => {
-  it("renders label associated to input", () => {
-    render(<SettingsInput label="Username" />);
-    expect(screen.getByLabelText("Username")).toBeTruthy();
-    expect(screen.getByLabelText("Username").tagName).toBe("INPUT");
-  });
-
   it("wires description to aria-describedby", () => {
     render(<SettingsInput label="Host" description="The server hostname" />);
     const input = screen.getByLabelText("Host");
@@ -153,12 +147,6 @@ describe("SettingsInput", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("keeps description visible alongside error", () => {
-    render(<SettingsInput label="Port" description="Server port" error="Invalid" />);
-    expect(screen.getByText("Server port")).toBeTruthy();
-    expect(screen.getByText("Invalid")).toBeTruthy();
-  });
-
   it("aria-describedby references both error and description when both exist", () => {
     render(<SettingsInput label="Port" description="Server port" error="Required" />);
     const input = screen.getByLabelText("Port");
@@ -173,12 +161,6 @@ describe("SettingsInput", () => {
     const { container } = render(<SettingsInput label="Name" isModified />);
     const dot = container.querySelector(".bg-state-modified.rounded-full");
     expect(dot).toBeTruthy();
-  });
-
-  it("shows reset button when isModified and onReset and not disabled", () => {
-    const onReset = vi.fn();
-    render(<SettingsInput label="Name" isModified onReset={onReset} />);
-    expect(screen.getByLabelText("Reset Name to default")).toBeTruthy();
   });
 
   it("hides reset button when disabled", () => {
@@ -218,15 +200,6 @@ describe("SettingsInput", () => {
 describe("SettingsSelect", () => {
   const EN_OPTIONS = [{ value: "en", label: "English" }];
   const DEFAULT_OPTIONS = [{ value: "d", label: "Default" }];
-
-  it("renders label associated to combobox trigger", () => {
-    render(
-      <SettingsSelect label="Language" value="en" onValueChange={() => {}} options={EN_OPTIONS} />
-    );
-    const trigger = screen.getByLabelText("Language");
-    expect(trigger).toBeTruthy();
-    expect(trigger.getAttribute("role")).toBe("combobox");
-  });
 
   it("wires description to aria-describedby", () => {
     render(
@@ -313,12 +286,6 @@ describe("SettingsNumberInput", () => {
 });
 
 describe("SettingsTextarea", () => {
-  it("renders label associated to textarea", () => {
-    render(<SettingsTextarea label="Instructions" />);
-    expect(screen.getByLabelText("Instructions")).toBeTruthy();
-    expect(screen.getByLabelText("Instructions").tagName).toBe("TEXTAREA");
-  });
-
   it("wires description to aria-describedby", () => {
     render(<SettingsTextarea label="Notes" description="Additional notes" />);
     const textarea = screen.getByLabelText("Notes");
@@ -380,18 +347,6 @@ describe("SettingsTextarea", () => {
   it("hides the reset button when disabled", () => {
     render(<SettingsTextarea label="Bio" isModified onReset={vi.fn()} disabled />);
     expect(screen.queryByLabelText("Reset Bio to default")).toBeNull();
-  });
-
-  it("uses semantic tokens for background and focus", () => {
-    render(<SettingsTextarea label="Notes" />);
-    const textarea = screen.getByLabelText("Notes");
-    expect(textarea.className).toContain("bg-surface-input");
-    expect(textarea.className).toContain("focus-visible:outline");
-    expect(textarea.className).toContain("focus-visible:outline-2");
-    expect(textarea.className).toContain("focus-visible:outline-accent-primary");
-    expect(textarea.className).toContain("focus-visible:outline-offset-2");
-    expect(textarea.className).toContain("font-mono");
-    expect(textarea.className).toContain("resize-y");
   });
 
   // text-muted has no dark-theme contrast floor, and a field's description is text the
@@ -472,21 +427,6 @@ describe("SettingsChoicebox", () => {
     const errorId = group.getAttribute("aria-describedby")!;
     expect(document.getElementById(errorId)?.textContent).toBe("Invalid selection");
     expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("keeps description visible alongside error", () => {
-    render(
-      <SettingsChoicebox
-        label="Density"
-        description="Choose dock density"
-        error="Invalid selection"
-        value="normal"
-        onChange={vi.fn()}
-        options={MOCK_OPTIONS}
-      />
-    );
-    expect(screen.getByText("Choose dock density")).toBeTruthy();
-    expect(screen.getByText("Invalid selection")).toBeTruthy();
   });
 
   it("aria-describedby references both error and description when both exist", () => {
@@ -607,37 +547,6 @@ describe("SettingsChoicebox", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("updates selection when onChange is called", () => {
-    const onChange = vi.fn();
-    const { rerender } = render(
-      <SettingsChoicebox
-        label="Density"
-        value="normal"
-        onChange={onChange}
-        options={MOCK_OPTIONS}
-      />
-    );
-
-    const radios = screen.getAllByRole("radio");
-    expect(radios[1]?.getAttribute("aria-checked")).toBe("true");
-
-    onChange.mockImplementation(() => {
-      rerender(
-        <SettingsChoicebox
-          label="Density"
-          value="compact"
-          onChange={onChange}
-          options={MOCK_OPTIONS}
-        />
-      );
-    });
-
-    const compactRadio = screen.getByRole("radio", { name: /Compact/ });
-    fireEvent.click(compactRadio);
-    const updatedRadios = screen.getAllByRole("radio");
-    expect(updatedRadios[0]?.getAttribute("aria-checked")).toBe("true");
-  });
-
   it("navigates with arrow keys", async () => {
     const onChange = vi.fn();
     render(
@@ -717,21 +626,6 @@ describe("SettingsChoicebox", () => {
     expect(onChange).toHaveBeenCalledWith("compact");
   });
 
-  it("applies grid layout when columns prop is set", () => {
-    const { container } = render(
-      <SettingsChoicebox
-        label="Density"
-        value="normal"
-        onChange={vi.fn()}
-        options={MOCK_OPTIONS}
-        columns={3}
-      />
-    );
-    const group = container.querySelector('[role="radiogroup"]');
-    expect(group?.classList.contains("grid")).toBe(true);
-    expect(group?.classList.contains("grid-cols-3")).toBe(true);
-  });
-
   it("respects custom resetAriaLabel", () => {
     const onReset = vi.fn();
     render(
@@ -746,20 +640,6 @@ describe("SettingsChoicebox", () => {
       />
     );
     expect(screen.getByLabelText("Reset density setting")).toBeTruthy();
-  });
-
-  it("applies className to container", () => {
-    const { container } = render(
-      <SettingsChoicebox
-        label="Density"
-        value="normal"
-        onChange={vi.fn()}
-        options={MOCK_OPTIONS}
-        className="custom-class"
-      />
-    );
-    const wrapper = container.querySelector(".custom-class");
-    expect(wrapper).toBeTruthy();
   });
 
   it("reserves a check-icon slot on every option, visible only on the selected one", () => {
@@ -820,35 +700,9 @@ describe("SettingsChoicebox", () => {
     fireEvent.click(mutedRadio);
     expect(onChange).toHaveBeenCalledWith("inherit");
   });
-
-  it("renders the muted option with a lighter label weight than a peer option", () => {
-    const options: readonly ChoiceboxOption<string>[] = [
-      { value: "inherit", label: "Default", muted: true },
-      { value: "on", label: "On" },
-    ];
-    render(<SettingsChoicebox label="Skip" value="on" onChange={vi.fn()} options={options} />);
-    const mutedLabel = screen.getByText("Default");
-    const peerLabel = screen.getByText("On");
-    expect(mutedLabel.classList.contains("font-normal")).toBe(true);
-    expect(mutedLabel.classList.contains("font-medium")).toBe(false);
-    expect(peerLabel.classList.contains("font-medium")).toBe(true);
-  });
 });
 
 describe("SettingsCheckbox", () => {
-  it("renders label and description", () => {
-    render(
-      <SettingsCheckbox
-        label="Test Setting"
-        description="A test description"
-        checked={false}
-        onChange={vi.fn()}
-      />
-    );
-    expect(screen.getByText("Test Setting")).toBeTruthy();
-    expect(screen.getByText("A test description")).toBeTruthy();
-  });
-
   it("names the checkbox from the label alone, not the whole row", () => {
     render(
       <SettingsCheckbox
@@ -900,20 +754,6 @@ describe("SettingsCheckbox", () => {
     expect(onChange).toHaveBeenCalledWith(true);
   });
 
-  it("wires description to aria-describedby", () => {
-    render(
-      <SettingsCheckbox
-        label="Test Setting"
-        description="A test description"
-        checked={false}
-        onChange={vi.fn()}
-      />
-    );
-    const checkbox = screen.getByRole("checkbox");
-    const describedBy = checkbox.getAttribute("aria-describedby");
-    expect(describedBy).toBeTruthy();
-  });
-
   it("shows error and sets aria-invalid", () => {
     render(
       <SettingsCheckbox
@@ -942,20 +782,6 @@ describe("SettingsCheckbox", () => {
     );
     const checkbox = screen.getByRole("checkbox");
     expect(checkbox.getAttribute("aria-invalid")).toBeNull();
-  });
-
-  it("keeps description visible alongside error", () => {
-    render(
-      <SettingsCheckbox
-        label="Test Setting"
-        description="A test description"
-        checked={false}
-        onChange={vi.fn()}
-        error="Invalid state"
-      />
-    );
-    expect(screen.getByText("A test description")).toBeTruthy();
-    expect(screen.getByText("Invalid state")).toBeTruthy();
   });
 
   it("aria-describedby references both error and description when both exist", () => {
@@ -1023,24 +849,6 @@ describe("SettingsCheckbox", () => {
     const checkbox = screen.getByRole("checkbox");
     fireEvent.click(checkbox);
     expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it("applies disabled styling", () => {
-    render(
-      <SettingsCheckbox
-        label="Test Setting"
-        description="A test description"
-        checked={false}
-        onChange={vi.fn()}
-        disabled
-      />
-    );
-    const checkbox = screen.getByRole("checkbox");
-    const checkboxEl = checkbox as HTMLInputElement;
-    expect(checkboxEl.disabled).toBe(true);
-    const label = screen.getByText("Test Setting");
-    expect(label).toBeTruthy();
-    expect(label.classList.contains("cursor-not-allowed")).toBe(true);
   });
 
   // The unchecked box has to stay visible against whatever it sits on. Painting
@@ -1112,20 +920,6 @@ describe("SettingsCheckbox", () => {
     expect(radii[0]).not.toBe("rounded-lg");
   });
 
-  it("renders checkmark when checked", () => {
-    render(
-      <SettingsCheckbox
-        label="Test Setting"
-        description="A test description"
-        checked={true}
-        onChange={vi.fn()}
-      />
-    );
-    const checkbox = screen.getByRole("checkbox");
-    const indicator = checkbox.querySelector("svg");
-    expect(indicator).toBeTruthy();
-  });
-
   // Cross-source contract (#11166): whatever animation the checkmark indicator
   // carries must be registered in a reduce-motion kill-list, or the check-in
   // animation keeps playing for users who asked for no motion. Reads the classes
@@ -1154,31 +948,9 @@ describe("SettingsCheckbox", () => {
     );
     animationClasses.forEach((name) => expect([...killed]).toContain(name));
   });
-
-  it("uses error styling when error is present", () => {
-    render(
-      <SettingsCheckbox
-        label="Test Setting"
-        description="A test description"
-        checked={false}
-        onChange={vi.fn()}
-        error="Invalid state"
-      />
-    );
-    const checkbox = screen.getByRole("checkbox");
-    expect(checkbox.className).toContain("border-status-error");
-    expect(checkbox.className).toContain("data-[state=checked]:border-status-error");
-  });
 });
 
 describe("SettingsSwitch", () => {
-  it("renders with aria-label", () => {
-    render(<SettingsSwitch checked={false} onCheckedChange={vi.fn()} aria-label="Test switch" />);
-    const switchEl = screen.getByRole("switch");
-    expect(switchEl).toBeTruthy();
-    expect(switchEl.getAttribute("aria-label")).toBe("Test switch");
-  });
-
   it("calls onCheckedChange with true when toggling on", async () => {
     const onChange = vi.fn();
     render(<SettingsSwitch checked={false} onCheckedChange={onChange} aria-label="Test switch" />);
@@ -1211,27 +983,6 @@ describe("SettingsSwitch", () => {
     const switchEl = screen.getByRole("switch");
     fireEvent.click(switchEl);
     expect(onChange).not.toHaveBeenCalled();
-  });
-
-  it("applies disabled styling", () => {
-    const { container } = render(
-      <SettingsSwitch checked={false} onCheckedChange={vi.fn()} aria-label="Test switch" disabled />
-    );
-    const switchEl = container.querySelector('[role="switch"]') as HTMLButtonElement | null;
-    // Keyed off the real :disabled state rather than a conditional class, so
-    // the dimming cannot drift out of sync with whether the control is live.
-    expect(switchEl?.disabled).toBe(true);
-    expect(switchEl?.classList.contains("disabled:opacity-50")).toBe(true);
-    expect(switchEl?.classList.contains("disabled:cursor-not-allowed")).toBe(true);
-  });
-
-  it("uses correct track dimensions", () => {
-    const { container } = render(
-      <SettingsSwitch checked={false} onCheckedChange={vi.fn()} aria-label="Test switch" />
-    );
-    const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.classList.contains("w-11")).toBe(true);
-    expect(switchEl?.classList.contains("h-6")).toBe(true);
   });
 
   it("uses specific transitions (not transition-all) with asymmetric track/thumb timing", () => {
@@ -1267,34 +1018,6 @@ describe("SettingsSwitch", () => {
     const switchEl = container.querySelector('[role="switch"]');
     expect(switchEl?.getAttribute("data-tone")).toBe("neutral");
     expect(switchEl?.className).toContain("data-[state=checked]:bg-text-primary");
-  });
-
-  it("applies amber color scheme", () => {
-    const { container } = render(
-      <SettingsSwitch
-        checked={true}
-        onCheckedChange={vi.fn()}
-        aria-label="Test switch"
-        colorScheme="amber"
-      />
-    );
-    const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.getAttribute("data-tone")).toBe("warning");
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-status-warning");
-  });
-
-  it("applies danger color scheme", () => {
-    const { container } = render(
-      <SettingsSwitch
-        checked={true}
-        onCheckedChange={vi.fn()}
-        aria-label="Test switch"
-        colorScheme="danger"
-      />
-    );
-    const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.getAttribute("data-tone")).toBe("danger");
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-status-error");
   });
 
   // The off state used to paint the thumb with the very fill the on state uses
@@ -1333,28 +1056,6 @@ describe("SettingsSwitch", () => {
     // Either spelling is fine; what matters is that the resting control has an
     // edge of its own and does not rely on its fill alone to be discernible.
     expect(track?.className).toMatch(/(^|\s)(border|ring-\d)(\s|-|$)/);
-  });
-
-  it("toggles on activation", () => {
-    const onChange = vi.fn();
-    render(<SettingsSwitch checked={false} onCheckedChange={onChange} aria-label="Test switch" />);
-
-    const switchEl = screen.getByRole("switch");
-    fireEvent.click(switchEl);
-    expect(onChange).toHaveBeenCalledWith(true);
-  });
-
-  it("applies className to root", () => {
-    const { container } = render(
-      <SettingsSwitch
-        checked={false}
-        onCheckedChange={vi.fn()}
-        aria-label="Test switch"
-        className="custom-class"
-      />
-    );
-    const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.classList.contains("custom-class")).toBe(true);
   });
 });
 

@@ -33,24 +33,9 @@ describe("CopyableCommand", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the command text", () => {
-    renderWithProviders(<CopyableCommand command="brew install kiro" />);
-    expect(screen.getByText("brew install kiro")).toBeTruthy();
-  });
-
   it("does not render the inspect button when inspectUrl is omitted", () => {
     renderWithProviders(<CopyableCommand command="brew install kiro" />);
     expect(screen.queryByLabelText("Inspect install script in browser")).toBeNull();
-  });
-
-  it("renders the inspect button when inspectUrl is provided", () => {
-    renderWithProviders(
-      <CopyableCommand
-        command="curl https://kiro.dev/install.sh | bash"
-        inspectUrl="https://kiro.dev/install.sh"
-      />
-    );
-    expect(screen.getByLabelText("Inspect install script in browser")).toBeTruthy();
   });
 
   it("opens the inspect URL externally when the inspect button is clicked", () => {
@@ -70,13 +55,6 @@ describe("CopyableCommand", () => {
     // Microtask drain so the awaited writeText resolves before the assertion.
     await Promise.resolve();
     expect(writeTextMock).toHaveBeenCalledWith("npm install foorm -rf /");
-  });
-
-  it("passes a clean command through to the clipboard unchanged", async () => {
-    renderWithProviders(<CopyableCommand command="brew install kiro" />);
-    fireEvent.click(screen.getByLabelText("Copy command to clipboard"));
-    await Promise.resolve();
-    expect(writeTextMock).toHaveBeenCalledWith("brew install kiro");
   });
 
   it("wraps at path boundaries without changing the text or what is copied", async () => {

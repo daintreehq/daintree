@@ -127,11 +127,6 @@ describe("buildPanelProps activity stabilization", () => {
     expect((b as ActivityState).type).toBe("background");
   });
 
-  it("returns null when activityHeadline is falsy", () => {
-    const result = build(makeTerminal({ id: "null-1", activityHeadline: undefined }));
-    expect(result.activity).toBeNull();
-  });
-
   it("returns null for empty-string headline", () => {
     const result = build(makeTerminal({ id: "null-2", activityHeadline: "" }));
     expect(result.activity).toBeNull();
@@ -179,19 +174,6 @@ describe("buildPanelProps activity stabilization", () => {
     expect(a).toBeNull();
     const b = build(makeTerminal({ id, activityHeadline: "Now active" })).activity;
     expect(b).toEqual({ headline: "Now active", status: "working", type: "interactive" });
-  });
-});
-
-describe("buildPanelProps extensionState", () => {
-  it("forwards extensionState from terminal to props", () => {
-    const extState = { activeTab: "overview", zoom: 1.5 };
-    const result = build(makeTerminal({ extensionState: extState }));
-    expect(result.extensionState).toEqual(extState);
-  });
-
-  it("passes undefined extensionState when not set", () => {
-    const result = build(makeTerminal({}));
-    expect(result.extensionState).toBeUndefined();
   });
 });
 

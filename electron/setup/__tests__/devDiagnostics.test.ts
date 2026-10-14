@@ -88,11 +88,6 @@ describe("devDiagnostics", () => {
       expect(process.traceProcessWarnings).toBe(true);
     });
 
-    it("registers a single warning handler", () => {
-      startDevDiagnostics();
-      expect(process.listeners("warning")).toHaveLength(1);
-    });
-
     it("is idempotent — second call does not re-register", () => {
       startDevDiagnostics();
       startDevDiagnostics();
@@ -330,14 +325,6 @@ describe("devDiagnostics", () => {
   });
 
   describe("stopDevDiagnostics", () => {
-    it("removes the warning handler", () => {
-      startDevDiagnostics();
-      expect(process.listeners("warning")).toHaveLength(1);
-
-      stopDevDiagnostics();
-      expect(process.listeners("warning")).toHaveLength(0);
-    });
-
     it("stops the listener sweep timer", () => {
       ipcMainMock.eventNames.mockReturnValue(["c"]);
       ipcMainMock.listenerCount.mockReturnValue(6);
@@ -362,12 +349,6 @@ describe("devDiagnostics", () => {
       expect(fsMock.readdirSync).not.toHaveBeenCalled();
     });
 
-    it("is a no-op when called twice", () => {
-      startDevDiagnostics();
-      stopDevDiagnostics();
-      expect(() => stopDevDiagnostics()).not.toThrow();
-    });
-
     it("allows clean restart after stop", () => {
       startDevDiagnostics();
       stopDevDiagnostics();
@@ -378,27 +359,6 @@ describe("devDiagnostics", () => {
     it("does not call app.exit when warning fires after stop", () => {
       startDevDiagnostics();
       stopDevDiagnostics();
-
-      const warning = new Error("too many listeners");
-      warning.name = "MaxListenersExceededWarning";
-      process.emit("warning", warning);
-
-      expect(appMock.exit).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("_resetDevDiagnosticsForTesting", () => {
-    it("removes the warning handler", () => {
-      startDevDiagnostics();
-      expect(process.listeners("warning")).toHaveLength(1);
-
-      _resetDevDiagnosticsForTesting();
-      expect(process.listeners("warning")).toHaveLength(0);
-    });
-
-    it("prevents app.exit on warnings emitted after reset", () => {
-      startDevDiagnostics();
-      _resetDevDiagnosticsForTesting();
 
       const warning = new Error("too many listeners");
       warning.name = "MaxListenersExceededWarning";

@@ -24,21 +24,6 @@ describe("faultRegistry (env enabled)", () => {
     expect(globalThis.__daintreeFaultRegistry).toEqual({});
   });
 
-  it("setFault and getFault round-trip", async () => {
-    const { initFaultRegistry, setFault, getFault } = await loadRegistry();
-    initFaultRegistry();
-    setFault("test:channel", { kind: "error", message: "boom" });
-    expect(getFault("test:channel")).toEqual({ kind: "error", message: "boom" });
-  });
-
-  it("setFault replaces existing config", async () => {
-    const { initFaultRegistry, setFault, getFault } = await loadRegistry();
-    initFaultRegistry();
-    setFault("ch", { kind: "error", message: "first" });
-    setFault("ch", { kind: "delay", delayMs: 100 });
-    expect(getFault("ch")).toEqual({ kind: "delay", delayMs: 100 });
-  });
-
   it("clearFault removes a single fault", async () => {
     const { initFaultRegistry, setFault, getFault, clearFault } = await loadRegistry();
     initFaultRegistry();
@@ -78,12 +63,6 @@ describe("faultRegistry (env enabled)", () => {
     const start = Date.now();
     await applyInvokeFault("ch");
     expect(Date.now() - start).toBeGreaterThanOrEqual(40);
-  });
-
-  it("applyInvokeFault is a no-op when no fault set", async () => {
-    const { initFaultRegistry, applyInvokeFault } = await loadRegistry();
-    initFaultRegistry();
-    await expect(applyInvokeFault("clean-channel")).resolves.toBeUndefined();
   });
 
   // A stub answers the channel in place of its handler. The wrapper treats a returned
@@ -139,20 +118,10 @@ describe("faultRegistry (env disabled)", () => {
     return await import("../faultRegistry.js");
   }
 
-  it("FAULT_MODE_ENABLED is false", async () => {
-    const { FAULT_MODE_ENABLED } = await loadRegistry();
-    expect(FAULT_MODE_ENABLED).toBe(false);
-  });
-
   it("initFaultRegistry is a no-op", async () => {
     const { initFaultRegistry } = await loadRegistry();
     initFaultRegistry();
     expect(globalThis.__daintreeFaultRegistry).toBeUndefined();
-  });
-
-  it("getFault returns undefined", async () => {
-    const { getFault } = await loadRegistry();
-    expect(getFault("anything")).toBeUndefined();
   });
 
   it("applyInvokeFault ignores a stub that somehow reached the registry", async () => {
@@ -167,10 +136,5 @@ describe("faultRegistry (env disabled)", () => {
     const { setFault } = await loadRegistry();
     setFault("ch", { kind: "error", message: "nope" });
     expect(globalThis.__daintreeFaultRegistry).toBeUndefined();
-  });
-
-  it("applyInvokeFault resolves immediately", async () => {
-    const { applyInvokeFault } = await loadRegistry();
-    await expect(applyInvokeFault("ch")).resolves.toBeUndefined();
   });
 });

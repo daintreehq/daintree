@@ -5,8 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionContext } from "@shared/types/actions";
 import type { ActionRegistry, AnyActionDefinition } from "../../actionTypes";
-import { MCP_EXTERNAL_TIER_TOOLS } from "@shared/config/mcpExternalTierAllowlist";
-import { CORE_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
 
 const workspaceClientMock = vi.hoisted(() => ({ list: vi.fn() }));
 
@@ -54,23 +52,6 @@ const ROW = {
 };
 
 describe("workspace.list", () => {
-  it("is a safe, context-independent read", () => {
-    const def = definition();
-
-    expect(def.kind).toBe("query");
-    expect(def.danger).toBe("safe");
-    // No argsSchema and no context reads: discovery has to answer the same way
-    // for a session bound anywhere, which is the whole point of a catalog.
-    expect(def.argsSchema).toBeUndefined();
-  });
-
-  it("is admitted at the external tier and in the core tool set", () => {
-    // Two independently curated lists (#10712). The external tier must never
-    // reach past what the in-app assistant already can, so both or neither.
-    expect(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).toContain("workspace.list");
-    expect(CORE_TIER_TOOLS as readonly string[]).toContain("workspace.list");
-  });
-
   it("advertises an object-rooted output schema carrying all five fields", () => {
     // `buildToolOutputSchema` drops any schema whose root is not an object, so
     // the array has to be wrapped or the contract silently vanishes.

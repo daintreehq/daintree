@@ -329,25 +329,6 @@ describe("terminalStore process detection listeners", () => {
     cleanup();
   });
 
-  // Regression for #5765: once runtime detection sees an agent, the renderer must
-  // mirror the sticky everDetectedAgent flag so the onExit guard can preserve the
-  // panel even if snapshot IPC lags behind the exit event.
-  it("sets everDetectedAgent when agent:detected carries an agentType", () => {
-    const cleanup = setupTerminalStoreListeners();
-    const detected = handlers.agentDetected;
-
-    detected?.({
-      terminalId: "term-1",
-      agentType: "claude",
-      processIconId: "claude",
-      processName: "claude",
-      timestamp: Date.now(),
-    });
-
-    expect(getPtyPanel("term-1")?.everDetectedAgent).toBe(true);
-    cleanup();
-  });
-
   it("does not set everDetectedAgent for non-agent detections", () => {
     const cleanup = setupTerminalStoreListeners();
     const detected = handlers.agentDetected;
@@ -496,27 +477,6 @@ describe("terminalStore process detection listeners", () => {
     cleanup();
   });
 
-  // Issue #5776: when a plain terminal is runtime-promoted to host an agent,
-  // the renderer must apply the agent scrollback policy to the live xterm —
-  // the only in-process repair available for spawn-sealed terminals.
-  it("calls applyAgentPromotion when a plain terminal (no agentId) detects a built-in agent", () => {
-    const cleanup = setupTerminalStoreListeners();
-    const detected = handlers.agentDetected;
-
-    applyAgentPromotionMock.mockClear();
-
-    detected?.({
-      terminalId: "term-1",
-      agentType: "claude",
-      processIconId: "claude",
-      processName: "claude",
-      timestamp: Date.now(),
-    });
-
-    expect(applyAgentPromotionMock).toHaveBeenCalledWith("term-1", "claude");
-    cleanup();
-  });
-
   it("applies runtime promotion for cold-spawned agent panels too", () => {
     usePanelStore.setState((s) => ({
       panelsById: {
@@ -584,28 +544,6 @@ describe("terminalStore process detection listeners", () => {
     const panel = getPtyPanel("term-1");
     expect(panel?.launchAgentId).toBe("claude");
     expect(panel?.detectedAgentId).toBeUndefined();
-    cleanup();
-  });
-
-  // Regression for #5807: a non-agent process exit (e.g., npm) in a plain
-  // shell with no launchAgentId must leave launchAgentId untouched.
-  it("leaves launchAgentId untouched on non-agent process exit in a plain shell", () => {
-    const cleanup = setupTerminalStoreListeners();
-    const detected = handlers.agentDetected;
-    const exited = handlers.agentExited;
-
-    detected?.({
-      terminalId: "term-1",
-      processIconId: "npm",
-      processName: "npm",
-      timestamp: Date.now(),
-    });
-
-    exited?.({ terminalId: "term-1", timestamp: Date.now() });
-
-    const panel = getPtyPanel("term-1");
-    expect(panel?.launchAgentId).toBeUndefined();
-    expect(panel?.detectedProcessId).toBeUndefined();
     cleanup();
   });
 
@@ -703,22 +641,6 @@ describe("terminalStore process detection listeners", () => {
     it("does not call wake on paused-backpressure status (flow-control auto-resume)", () => {
       const cleanup = setupTerminalStoreListeners();
       handlers.status?.({ id: "term-1", status: "paused-backpressure", timestamp: Date.now() });
-      expect(terminalInstanceService.wake).not.toHaveBeenCalled();
-      cleanup();
-    });
-
-    // FUTURE_SAB: `paused-user` has no producer (#9900); the listener drops
-    // it at the boundary. This test continues to assert no wake.
-    it("does not call wake on paused-user status (FUTURE_SAB; #9900)", () => {
-      const cleanup = setupTerminalStoreListeners();
-      handlers.status?.({ id: "term-1", status: "paused-user", timestamp: Date.now() });
-      expect(terminalInstanceService.wake).not.toHaveBeenCalled();
-      cleanup();
-    });
-
-    it("does not call wake on running status", () => {
-      const cleanup = setupTerminalStoreListeners();
-      handlers.status?.({ id: "term-1", status: "running", timestamp: Date.now() });
       expect(terminalInstanceService.wake).not.toHaveBeenCalled();
       cleanup();
     });

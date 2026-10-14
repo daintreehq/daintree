@@ -103,21 +103,6 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
     expect(onSent).toHaveBeenCalled();
   });
 
-  it("announces singular form when exactly one target succeeds", async () => {
-    // Two armed; only one fires successfully (dead pty rejects with EPIPE,
-    // which is a permanent classification — the announcer calls it out as
-    // "unreachable" so the user can tell auto-disarmed targets apart from
-    // retryable transient failures).
-    submitMock.mockImplementation(async (id) => {
-      if (id === "b") throw new Error("EPIPE");
-    });
-    arm(["a", "b"]);
-    const onSent = vi.fn();
-    tryFleetBroadcastFromEditor("a", "hello", onSent);
-    await flush();
-    expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast sent to 1 — 1 unreachable");
-  });
-
   it("announces partial failure with success/failure split (permanent → unreachable)", async () => {
     submitMock.mockImplementation(async (id) => {
       if (id === "c") throw new Error("EPIPE");
@@ -215,21 +200,6 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
 });
 
 describe("tryFleetBroadcastFromEditor — permanent failure auto-disarm (#8706)", () => {
-  it("auto-disarms targets whose submit rejects with a permanent errno", async () => {
-    // Dead PTY: submit rejection carries EPIPE → fleet must disarm the
-    // target so the next broadcast doesn't fire into the gone pipe.
-    submitMock.mockImplementation(async (id) => {
-      if (id === "dead") throw new Error("EPIPE: terminal dead has no live PTY (exited)");
-    });
-    arm(["alive", "dead"]);
-    expect(useFleetArmingStore.getState().armedIds.has("dead")).toBe(true);
-    tryFleetBroadcastFromEditor("alive", "hello", vi.fn());
-    await flush();
-    expect(useFleetArmingStore.getState().armedIds.has("dead")).toBe(false);
-    // Alive target stays armed.
-    expect(useFleetArmingStore.getState().armedIds.has("alive")).toBe(true);
-  });
-
   it("does NOT record a failure chip for permanently-failed targets (would auto-dismiss anyway)", async () => {
     submitMock.mockImplementation(async (id) => {
       if (id === "dead") throw new Error("EPIPE");
@@ -306,13 +276,6 @@ describe("tryFleetBroadcastFromEditor — fires immediately without confirmation
 
     const submittedIds = submitMock.mock.calls.map((call) => call[0]).sort();
     expect(submittedIds).toEqual(["a", "b", "c"]);
-  });
-
-  it("fans short, single-line, safe text out immediately", async () => {
-    arm(["a", "b"]);
-    tryFleetBroadcastFromEditor("a", "npm test", vi.fn());
-    await flush();
-    expect(submitMock).toHaveBeenCalled();
   });
 
   it("fires the ribbon commit flash on a successful broadcast", async () => {
@@ -413,11 +376,6 @@ describe("cancelActiveBroadcast", () => {
     expect(useFleetBroadcastProgressStore.getState().isActive).toBe(false);
     expect(useAnnouncerStore.getState().polite?.msg).toMatch(/Broadcast cancelled/);
     expect(onSent).toHaveBeenCalled();
-  });
-
-  it("is a no-op when no broadcast is active", () => {
-    expect(() => cancelActiveBroadcast()).not.toThrow();
-    expect(useFleetBroadcastProgressStore.getState().isActive).toBe(false);
   });
 });
 

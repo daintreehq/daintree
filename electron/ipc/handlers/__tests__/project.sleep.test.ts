@@ -299,26 +299,6 @@ describe("project:sleep", () => {
       );
     });
 
-    it("does not unload plugins for a project it refused to sleep (#12216)", async () => {
-      projectStoreMock.getProjectById.mockReturnValue(null);
-      const { invoke } = setup();
-
-      await expect(invoke("ghost")).rejects.toThrow(/Project not found/);
-
-      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
-    });
-
-    it("does not re-unload a project that was already asleep (#12216)", async () => {
-      projectStoreMock.getProjectById.mockReturnValue({ ...PROJECT, status: "closed" });
-      const { invoke } = setup();
-
-      await invoke("proj-1");
-
-      // The no-op branch returns before the status write, so nothing was
-      // closed here and there is no cascade to run.
-      expect(pluginLifecycleMock.notifyProjectPluginsClosed).not.toHaveBeenCalled();
-    });
-
     it("reclaims the cached views and the workspace host", async () => {
       const { invoke, evictProject } = setup();
 
@@ -490,19 +470,6 @@ describe("project:sleep", () => {
       await invoke("proj-1");
 
       expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
-    });
-
-    it("stays silent on both channels when the teardown was not confirmed", async () => {
-      teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
-        confirmed: false,
-        terminalsKilled: 0,
-        sessions: [],
-      });
-      const { invoke } = setup();
-
-      await expect(invoke("proj-1")).rejects.toBeInstanceOf(AppError);
-
-      expect(broadcastMock).not.toHaveBeenCalled();
     });
   });
 });

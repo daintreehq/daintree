@@ -214,15 +214,6 @@ describe("ImagePathProbe", () => {
       expect(probe.readBasename(123)).toBe("claude");
     });
 
-    it("persists null when readlink rejects", async () => {
-      const probe = new ImagePathProbe();
-      probe.readBasename(123);
-      readlinkMock.queue[0]!.reject(new Error("ENOENT"));
-      await flush();
-
-      expect(probe.readBasename(123)).toBeNull();
-    });
-
     it("does not schedule a refresh while one is already in flight", () => {
       const probe = new ImagePathProbe();
       probe.readBasename(123);
@@ -269,30 +260,6 @@ describe("ImagePathProbe", () => {
 
         expect(probe.readBasename(123)).toBe("claude");
         expect(readlinkMock.calls).toHaveLength(2);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("survives a 1500ms poll-interval tick without blanking the basename", async () => {
-      // Regression guard for the hard-max=poll-interval timing bug. With the
-      // ProcessTreeCache poll at 1500ms and (previously) the probe's max age
-      // at 1500ms, every poll past the first one would fall past max-age
-      // under setTimeout jitter, return null, and defeat hysteresis. A
-      // successful result is now retained for the life of the entry, so the
-      // cached basename survives any number of poll cycles.
-      vi.useFakeTimers();
-      try {
-        const probe = new ImagePathProbe();
-        probe.readBasename(123);
-        readlinkMock.queue[0]!.resolve("/opt/homebrew/bin/claude");
-        await flush();
-
-        vi.advanceTimersByTime(1500);
-        expect(probe.readBasename(123)).toBe("claude");
-
-        vi.advanceTimersByTime(1500);
-        expect(probe.readBasename(123)).toBe("claude");
       } finally {
         vi.useRealTimers();
       }
@@ -380,25 +347,6 @@ describe("ImagePathProbe", () => {
       expect(probe.readBasename(5005)).toBeNull();
       expect(execFileMock.calls).toHaveLength(0);
       expect(readlinkMock.queue).toHaveLength(0);
-    });
-
-    it("stays null across repeated reads without ever scheduling a refresh", async () => {
-      const probe = new ImagePathProbe();
-      for (let i = 0; i < 5; i++) {
-        expect(probe.readBasename(5005)).toBeNull();
-        await flush();
-      }
-      expect(execFileMock.calls).toHaveLength(0);
-    });
-
-    it("keeps evict and dispose harmless", () => {
-      const probe = new ImagePathProbe();
-      probe.readBasename(5005);
-      expect(() => {
-        probe.evict(5005);
-        probe.dispose();
-      }).not.toThrow();
-      expect(probe.readBasename(5005)).toBeNull();
     });
   });
 

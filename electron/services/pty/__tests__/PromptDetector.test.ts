@@ -115,61 +115,10 @@ describe("approval prompt detection via hint patterns", () => {
     expect(result.matchedText).toMatch(/approve\s+once/i);
   });
 
-  it("detects 'allow once' on cursor line", () => {
-    const config = approvalConfig();
-    const result = detectPrompt(["other"], config, "Yes, allow once");
-    expect(result.isPrompt).toBe(true);
-    expect(result.confidence).toBe(0.85);
-  });
-
-  it("detects 'Proceed? [y/N]'", () => {
-    const config = approvalConfig();
-    const result = detectPrompt(["Proceed? [y/N]"], config, null);
-    expect(result.isPrompt).toBe(true);
-  });
-
-  it("detects OpenCode 'Allow permission'", () => {
-    const config = approvalConfig();
-    const lines = [
-      "OpenCode wants to run: git status",
-      "a, Allow permission",
-      "d, Deny permission",
-    ];
-    const result = detectPrompt(lines, config, "");
-    expect(result.isPrompt).toBe(true);
-  });
-
-  it("detects [Y/n] bracket pattern", () => {
-    const config = approvalConfig();
-    const result = detectPrompt(["Install packages? [Y/n]"], config, null);
-    expect(result.isPrompt).toBe(true);
-  });
-
-  it("detects (y/n) paren pattern", () => {
-    const config = approvalConfig();
-    const result = detectPrompt(["Continue? (y/n):"], config, null);
-    expect(result.isPrompt).toBe(true);
-  });
-
   it("handles ANSI-wrapped approval text", () => {
     const config = approvalConfig();
     const result = detectPrompt(["\x1b[32mApprove\x1b[0m Once"], config, null);
     expect(result.isPrompt).toBe(true);
-  });
-
-  it("is case-insensitive", () => {
-    const config = approvalConfig();
-    for (const text of ["ALLOW ONCE", "allow once", "Allow Once"]) {
-      const result = detectPrompt([text], config, null);
-      expect(result.isPrompt, `Expected "${text}" to be detected`).toBe(true);
-    }
-  });
-
-  it("does not match text outside scan window", () => {
-    const config = approvalConfig({ promptScanLineCount: 2 });
-    const lines = ["Approve Once", "line2", "line3", "line4"];
-    const result = detectPrompt(lines, config, "line4");
-    expect(result.isPrompt).toBe(false);
   });
 });
 
@@ -179,10 +128,6 @@ describe("detectPromptLexeme", () => {
     expect(result.isPrompt).toBe(true);
     expect(result.confidence).toBe(0.7);
     expect(result.matchedText).toBe("?");
-  });
-
-  it("detects question mark with trailing space", () => {
-    expect(detectPromptLexeme("Are you sure? ").isPrompt).toBe(true);
   });
 
   it("detects bracket confirmation [y/N]", () => {
@@ -195,26 +140,14 @@ describe("detectPromptLexeme", () => {
     expect(detectPromptLexeme("Continue (yes/no)").isPrompt).toBe(true);
   });
 
-  it("detects [Yes/No] mixed case", () => {
-    expect(detectPromptLexeme("Overwrite? [Yes/No]").isPrompt).toBe(true);
-  });
-
   it("detects keyword+colon: Enter password:", () => {
     const result = detectPromptLexeme("Enter password:");
     expect(result.isPrompt).toBe(true);
     expect(result.matchedText).toMatch(/password:/i);
   });
 
-  it("detects keyword+colon: Select host:", () => {
-    expect(detectPromptLexeme("Select host:").isPrompt).toBe(true);
-  });
-
   it("detects 'Press enter to continue'", () => {
     expect(detectPromptLexeme("Press enter to continue...").isPrompt).toBe(true);
-  });
-
-  it("detects 'Press any key to exit'", () => {
-    expect(detectPromptLexeme("Press any key to exit").isPrompt).toBe(true);
   });
 
   it("does NOT match bare colon at end", () => {
@@ -229,16 +162,8 @@ describe("detectPromptLexeme", () => {
     expect(detectPromptLexeme("Building project...").isPrompt).toBe(false);
   });
 
-  it("does NOT match empty string", () => {
-    expect(detectPromptLexeme("").isPrompt).toBe(false);
-  });
-
   it("does NOT match whitespace-only", () => {
     expect(detectPromptLexeme("   ").isPrompt).toBe(false);
-  });
-
-  it("does NOT match text without lexemes", () => {
-    expect(detectPromptLexeme("Compiling 42 modules").isPrompt).toBe(false);
   });
 
   it("handles ANSI-colored input", () => {

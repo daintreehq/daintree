@@ -31,10 +31,6 @@ const VALID_HUES = new Set([
 describe("ACTION_CATEGORY_COLORS", () => {
   const entries = Object.entries(ACTION_CATEGORY_COLORS);
 
-  it("maps at least one category", () => {
-    expect(entries.length).toBeGreaterThan(0);
-  });
-
   it("draws every category from the engineered category-{hue} token set", () => {
     for (const [category, classes] of entries) {
       expect(

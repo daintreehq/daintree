@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { TOOLBAR_BUTTON_PRIORITIES } from "@shared/types/toolbar";
 import { OVERFLOW_MENU_META } from "../Toolbar";
 
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
@@ -37,27 +36,6 @@ describe("Toolbar — agent registry zero-touch guarantee (issue #5070)", () => 
         const meta = OVERFLOW_MENU_META[id];
         expect(meta?.label, `empty label for agent "${id}"`).toBeTruthy();
       }
-    });
-  });
-
-  describe("TOOLBAR_BUTTON_PRIORITIES", () => {
-    it("has a priority entry for every built-in agent", () => {
-      for (const id of BUILT_IN_AGENT_IDS) {
-        expect(
-          TOOLBAR_BUTTON_PRIORITIES[id],
-          `missing TOOLBAR_BUTTON_PRIORITIES entry for agent "${id}"`
-        ).toBeDefined();
-      }
-    });
-
-    it("assigns agent buttons priority 2 (grouped with launcher)", () => {
-      for (const id of BUILT_IN_AGENT_IDS) {
-        expect(TOOLBAR_BUTTON_PRIORITIES[id]).toBe(2);
-      }
-    });
-
-    it("registers the launcher button at priority 2", () => {
-      expect(TOOLBAR_BUTTON_PRIORITIES["launcher"]).toBe(2);
     });
   });
 

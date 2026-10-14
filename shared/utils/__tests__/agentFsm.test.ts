@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { fc, test } from "@fast-check/vitest";
 import {
   VALID_TRANSITIONS,
   isValidTransition,
@@ -9,52 +10,12 @@ import type { AgentState } from "../../types/agent.js";
 
 describe("agentFsm", () => {
   describe("VALID_TRANSITIONS", () => {
-    it("covers all six canonical agent states", () => {
-      const keys = Object.keys(VALID_TRANSITIONS).sort();
-      expect(keys).toEqual(
-        ["completed", "directing", "exited", "idle", "waiting", "working"].sort()
-      );
-    });
-
     it("leaves directing empty (renderer-only state, never produced by main process)", () => {
       expect(VALID_TRANSITIONS.directing).toEqual([]);
     });
 
     it("permits exited → idle for respawn", () => {
       expect(VALID_TRANSITIONS.exited).toEqual(["idle"]);
-    });
-  });
-
-  describe("FSM invariant", () => {
-    // VALID_TRANSITIONS describes the natural lifecycle. `kill` is a hard-reset
-    // override that bypasses the table by design, so it is excluded from this
-    // invariant. `directing` is renderer-only and never receives main-process
-    // events; we don't assert table coverage for transitions out of it.
-    it("every natural-lifecycle nextAgentState result is permitted by VALID_TRANSITIONS", () => {
-      const states: AgentState[] = ["idle", "working", "waiting", "completed", "exited"];
-      const events: AgentEvent[] = [
-        { type: "start" },
-        { type: "busy" },
-        { type: "prompt" },
-        { type: "completion" },
-        { type: "input" },
-        { type: "exit", code: 0 },
-        { type: "respawn" },
-        { type: "watchdog-timeout" },
-        { type: "error", error: "x" },
-        { type: "output", data: "x" },
-      ];
-      for (const from of states) {
-        for (const event of events) {
-          const to = nextAgentState(from, event);
-          if (to !== from) {
-            expect(
-              isValidTransition(from, to),
-              `${from} -[${event.type}]-> ${to} must be in VALID_TRANSITIONS`
-            ).toBe(true);
-          }
-        }
-      }
     });
   });
 
@@ -66,14 +27,6 @@ describe("agentFsm", () => {
       expect(isValidTransition("waiting", "working")).toBe(true);
       expect(isValidTransition("completed", "working")).toBe(true);
       expect(isValidTransition("exited", "idle")).toBe(true);
-    });
-
-    it("rejects all transitions out of directing (renderer-managed state)", () => {
-      expect(isValidTransition("directing", "idle")).toBe(false);
-      expect(isValidTransition("directing", "working")).toBe(false);
-      expect(isValidTransition("directing", "waiting")).toBe(false);
-      expect(isValidTransition("directing", "completed")).toBe(false);
-      expect(isValidTransition("directing", "exited")).toBe(false);
     });
 
     it("rejects unknown transitions", () => {
@@ -109,21 +62,11 @@ describe("agentFsm", () => {
       expect(nextAgentState("completed", { type: "prompt" })).toBe("waiting");
     });
 
-    it("transitions waiting/idle/completed → working on input", () => {
-      expect(nextAgentState("waiting", { type: "input" })).toBe("working");
-      expect(nextAgentState("idle", { type: "input" })).toBe("working");
-      expect(nextAgentState("completed", { type: "input" })).toBe("working");
-    });
-
     it("transitions any non-exited state → exited on exit", () => {
       const states: AgentState[] = ["idle", "working", "waiting", "completed"];
       for (const state of states) {
         expect(nextAgentState(state, { type: "exit", code: 0 })).toBe("exited");
       }
-    });
-
-    it("does not retransition exited on exit (terminal state)", () => {
-      expect(nextAgentState("exited", { type: "exit", code: 0 })).toBe("exited");
     });
 
     it("treats kill as a hard reset to idle from any state", () => {
@@ -184,4 +127,71 @@ describe("agentFsm", () => {
       expect(nextAgentState("working", malformed)).toBe("working");
     });
   });
+});
+
+const MAIN_PROCESS_STATES = ["idle", "working", "waiting", "completed", "exited"] as const;
+
+// `satisfies Record<AgentEvent["type"], ...>` is a compile-time coverage ratchet:
+// adding a new variant to AgentEvent forces a corresponding entry here before
+// these tests will compile. The exit constructor MUST emit a numeric `code` —
+// the FSM treats exit events without one as no-ops (agentFsm.ts:47-49), so
+// omitting the code would silently hide → exited transitions in sequence tests.
+const eventConstructors = {
+  start: fc.constant({ type: "start" } as const),
+  busy: fc.constant({ type: "busy" } as const),
+  output: fc.record({ type: fc.constant("output" as const), data: fc.string() }),
+  prompt: fc.constant({ type: "prompt" } as const),
+  completion: fc.constant({ type: "completion" } as const),
+  input: fc.constant({ type: "input" } as const),
+  exit: fc.record({ type: fc.constant("exit" as const), code: fc.integer() }),
+  error: fc.record({ type: fc.constant("error" as const), error: fc.string() }),
+  kill: fc.constant({ type: "kill" } as const),
+  respawn: fc.constant({ type: "respawn" } as const),
+  "watchdog-timeout": fc.constant({ type: "watchdog-timeout" } as const),
+} satisfies Record<AgentEvent["type"], fc.Arbitrary<AgentEvent>>;
+
+const mainProcessStateArb = fc.constantFrom(...MAIN_PROCESS_STATES);
+const inputRecoveryStateArb = fc.constantFrom(
+  "idle" as const,
+  "waiting" as const,
+  "completed" as const
+);
+
+// Natural-lifecycle events: everything except `kill`, which is a hard-reset
+// override that bypasses VALID_TRANSITIONS by design.
+const naturalEventArb: fc.Arbitrary<AgentEvent> = fc.oneof(
+  ...(Object.entries(eventConstructors)
+    .filter(([type]) => type !== "kill")
+    .map(([, arb]) => arb) as fc.Arbitrary<AgentEvent>[])
+);
+
+describe("agentFsm property tests", () => {
+  // `directing` is renderer-only and never receives main-process events, so it
+  // is excluded from the from-states; since no row of VALID_TRANSITIONS lists
+  // `directing`, this also proves no natural event produces it.
+  test.prop([mainProcessStateArb, naturalEventArb])(
+    "every state-changing natural-lifecycle transition is permitted by VALID_TRANSITIONS",
+    (from, event) => {
+      const to = nextAgentState(from, event);
+      if (to !== from) {
+        expect(VALID_TRANSITIONS[from]).toContain(to);
+        expect(isValidTransition(from, to)).toBe(true);
+      }
+    }
+  );
+
+  test.prop([naturalEventArb])(
+    "exited is quasi-terminal under any natural event other than respawn",
+    (event) => {
+      fc.pre(event.type !== "respawn");
+      expect(nextAgentState("exited", event)).toBe("exited");
+    }
+  );
+
+  test.prop([inputRecoveryStateArb])(
+    "input event recovers idle/waiting/completed to working (#3195 regression guard)",
+    (from) => {
+      expect(nextAgentState(from, { type: "input" })).toBe("working");
+    }
+  );
 });

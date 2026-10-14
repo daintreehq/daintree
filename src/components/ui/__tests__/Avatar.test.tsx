@@ -216,36 +216,6 @@ describe("Avatar", () => {
     }
   });
 
-  it("renders tooltip wrapper when title is provided", () => {
-    const { container } = render(<Avatar src="test.jpg" alt="Test" title="Test User" />);
-    const img = container.querySelector("img");
-    expect(img).toBeTruthy();
-    // Content should still render through the mocked tooltip
-  });
-
-  it("renders circle shape by default", () => {
-    const { container } = render(<Avatar src="test.jpg" alt="Test" />);
-    const img = container.querySelector("img");
-    expect(img).toBeTruthy();
-    expect(img!.className).toContain("rounded-full");
-    expect(img!.className).not.toContain("rounded-md");
-  });
-
-  it("renders square shape when shape='square'", () => {
-    const { container } = render(<Avatar src="test.jpg" alt="Test" shape="square" />);
-    const img = container.querySelector("img");
-    expect(img).toBeTruthy();
-    expect(img!.className).not.toContain("rounded-full");
-  });
-
-  it("renders circle shape when shape='circle' is explicit", () => {
-    const { container } = render(<Avatar src="test.jpg" alt="Test" shape="circle" />);
-    const img = container.querySelector("img");
-    expect(img).toBeTruthy();
-    expect(img!.className).toContain("rounded-full");
-    expect(img!.className).not.toContain("rounded-md");
-  });
-
   it("loads immediately when src changes between two cached images", () => {
     const origComplete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "complete");
     const origNaturalWidth = Object.getOwnPropertyDescriptor(

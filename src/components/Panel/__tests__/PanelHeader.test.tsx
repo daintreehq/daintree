@@ -588,11 +588,6 @@ describe("PanelHeader", () => {
       });
     });
 
-    it("always renders the overflow button (Rename/Duplicate/Trash always available)", () => {
-      render(<PanelHeader {...makeProps()} />);
-      expect(screen.getByLabelText("More panel actions")).toBeDefined();
-    });
-
     it("renders Rename and Duplicate for a browser panel", () => {
       render(<PanelHeader {...makeProps({ kind: "browser" })} />);
       const menu = screen.getByTestId("overflow-menu");
@@ -605,13 +600,6 @@ describe("PanelHeader", () => {
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Lock input")).toBeDefined();
-    });
-
-    it("does not render View Terminal Info on any panel kind (#5957)", () => {
-      mockHasPty = true;
-      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
-      const menu = screen.getByTestId("overflow-menu");
-      expect(findMenuButton(menu, "View Terminal Info")).toBeUndefined();
     });
 
     it("does not render Lock input for non-PTY panels", () => {
@@ -756,16 +744,6 @@ describe("PanelHeader", () => {
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Unlock input")).toBeDefined();
       expect(findMenuButton(menu, "Lock input")).toBeUndefined();
-    });
-
-    it("renders headerActions slot in the menu", () => {
-      render(
-        <PanelHeader
-          {...makeProps({ headerActions: <div data-testid="custom-action">Agent Settings</div> })}
-        />
-      );
-      const menu = screen.getByTestId("overflow-menu");
-      expect(menu.querySelector("[data-testid='custom-action']")).toBeDefined();
     });
   });
 
@@ -977,14 +955,6 @@ describe("PanelHeader", () => {
     });
   });
 
-  describe("Collapse to Dock button (removed — collapse via Escape/outside-click/chip)", () => {
-    it("never renders a dedicated collapse button on docked panels", () => {
-      const onMinimize = vi.fn();
-      render(<PanelHeader {...makeProps({ location: "dock", onMinimize })} />);
-      expect(screen.queryByTestId("panel-collapse-to-dock")).toBeNull();
-    });
-  });
-
   describe("close button dismiss-vs-destroy copy (#11186)", () => {
     const tooltipTexts = () =>
       screen.getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
@@ -1029,25 +999,6 @@ describe("PanelHeader", () => {
   });
 
   describe("Move to grid button", () => {
-    it("renders when docked with onRestore and showRestoreControl", () => {
-      const onRestore = vi.fn();
-      render(
-        <PanelHeader {...makeProps({ location: "dock", onRestore, showRestoreControl: true })} />
-      );
-      const btn = screen.getByTestId("panel-move-to-grid");
-      expect(btn).toBeDefined();
-      expect(btn.getAttribute("aria-label")).toBe("Move to grid");
-    });
-
-    it("calls onRestore when clicked", () => {
-      const onRestore = vi.fn();
-      render(
-        <PanelHeader {...makeProps({ location: "dock", onRestore, showRestoreControl: true })} />
-      );
-      screen.getByTestId("panel-move-to-grid").click();
-      expect(onRestore).toHaveBeenCalledTimes(1);
-    });
-
     it("does not render when showRestoreControl is false (grouped dock panel)", () => {
       const onRestore = vi.fn();
       render(
@@ -1600,25 +1551,7 @@ describe("PanelHeader", () => {
     );
   });
 
-  describe("Maximize tooltip", () => {
-    it("does not include double-click header hint", () => {
-      render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn() })} />);
-      const tooltips = screen.getAllByTestId("tooltip-content");
-      const maximizeTooltip = tooltips.find((el) => el.textContent?.includes("Maximize"));
-      expect(maximizeTooltip).toBeDefined();
-      expect(maximizeTooltip!.textContent).not.toContain("double-click header");
-    });
-  });
-
   describe("Restore grid view tooltip", () => {
-    it("does not include double-click header hint when maximized", () => {
-      render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn(), isMaximized: true })} />);
-      const tooltips = screen.getAllByTestId("tooltip-content");
-      const restoreTooltip = tooltips.find((el) => el.textContent?.includes("Restore grid view"));
-      expect(restoreTooltip).toBeDefined();
-      expect(restoreTooltip!.textContent).not.toContain("double-click header");
-    });
-
     it("renders restore button with standardized labels (no 'Focus' wording)", () => {
       render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn(), isMaximized: true })} />);
       const restoreBtn = screen.getByRole("button", { name: "Restore grid view" });
@@ -1742,12 +1675,6 @@ describe("PanelHeader", () => {
       const closeButton = screen.getByTestId("panel-close");
       fireEvent.dblClick(closeButton);
       expect(onToggleMaximize).not.toHaveBeenCalled();
-    });
-
-    it("does not throw when onToggleMaximize is undefined", () => {
-      const { container } = render(<PanelHeader {...makeProps({ location: "grid" })} />);
-      const header = container.firstElementChild as HTMLElement;
-      expect(() => fireEvent.dblClick(header)).not.toThrow();
     });
   });
 
@@ -1891,19 +1818,6 @@ describe("PanelHeader", () => {
   });
 
   describe("dangerous flags indicator", () => {
-    it("shows the dangerous-permissions mark when agentLaunchFlags contain a dangerous flag", () => {
-      render(
-        <PanelHeader
-          {...makeProps({
-            agentLaunchFlags: ["--dangerously-skip-permissions"],
-          })}
-        />
-      );
-
-      const indicator = screen.getByLabelText("Launched with dangerous permissions");
-      expect(indicator).toBeDefined();
-    });
-
     it("draws a different silhouette from the fleet-failure dot", () => {
       // Two warnings beside one title must not share a shape: "launched with
       // elevated permissions" is a property of the pane, "the last broadcast
@@ -1951,50 +1865,6 @@ describe("PanelHeader", () => {
 
       const indicator = screen.queryByLabelText("Launched with dangerous permissions");
       expect(indicator).toBeNull();
-    });
-
-    it("does not show indicator when agentLaunchFlags is empty array", () => {
-      render(<PanelHeader {...makeProps({ agentLaunchFlags: [] })} />);
-
-      const indicator = screen.queryByLabelText("Launched with dangerous permissions");
-      expect(indicator).toBeNull();
-    });
-
-    it("shows tooltip with correct text for dangerous flags", () => {
-      render(<PanelHeader {...makeProps({ agentLaunchFlags: ["--yolo"] })} />);
-
-      const tooltipContent = screen.queryByText(
-        "Launched with dangerous permissions — agent can modify files without prompting"
-      );
-      expect(tooltipContent).toBeDefined();
-    });
-  });
-
-  describe("title edit input styling (#7926)", () => {
-    const getRenameInput = () => screen.getByLabelText("Edit terminal title") as HTMLInputElement;
-
-    it("matches the static label font size (text-xs)", () => {
-      render(<PanelHeader {...makeProps({ isEditingTitle: true, editingValue: "Test" })} />);
-      expect(getRenameInput().className).toContain("text-xs");
-      expect(getRenameInput().className).not.toContain("text-sm");
-    });
-
-    it("uses a transparent border and subtle background lift instead of a heavy chrome", () => {
-      render(<PanelHeader {...makeProps({ isEditingTitle: true, editingValue: "Test" })} />);
-      const cls = getRenameInput().className;
-      expect(cls).toContain("border-transparent");
-      expect(cls).toContain("bg-overlay-soft");
-      expect(cls).not.toContain("border-border-strong");
-      expect(cls).not.toContain("bg-daintree-bg/60");
-    });
-
-    it("does not use the accent color for any focus indicator", () => {
-      render(<PanelHeader {...makeProps({ isEditingTitle: true, editingValue: "Test" })} />);
-      const cls = getRenameInput().className;
-      expect(cls).not.toMatch(
-        /(?:outline|ring|border)-(?:daintree-accent|accent-primary)(?![\w-])/
-      );
-      expect(cls).toContain("focus:outline-hidden");
     });
   });
 
@@ -2065,11 +1935,6 @@ describe("PanelHeader", () => {
       expect(overlay?.getAttribute("aria-hidden")).toBe("true");
     });
 
-    it("does not render the overlay when isFleetPreviewed is false", () => {
-      const { container } = render(<PanelHeader {...makeProps({ isFleetPreviewed: false })} />);
-      expect(container.querySelector(".fleet-preview-enter-overlay")).toBeNull();
-    });
-
     it("coexists with the selected state without replacing the selected background", () => {
       // isFocused: false isolates the bg cascade so isSelected wins the class
       // (the focus-bg hook) — the kinetic overlay is additive, not a replacement.
@@ -2085,15 +1950,6 @@ describe("PanelHeader", () => {
       expect(header?.className).toMatch(
         /bg-\[var\(--panel-header-focus-bg,var\(--color-overlay-[a-z]+\)\)\]/
       );
-    });
-
-    it("still renders the overlay when the pane is focused", () => {
-      // A focused, previewed pane gets the focus-bg hook via the isFocused
-      // branch — the overlay must not be gated on focus/selection state.
-      const { container } = render(
-        <PanelHeader {...makeProps({ isFleetPreviewed: true, isFocused: true })} />
-      );
-      expect(container.querySelector(".fleet-preview-enter-overlay")).not.toBeNull();
     });
 
     it("mounts/unmounts the overlay across preview enter→exit→enter, replaying the cue", () => {

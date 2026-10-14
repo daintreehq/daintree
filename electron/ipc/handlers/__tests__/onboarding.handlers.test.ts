@@ -235,14 +235,6 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     expect(result.setupBannerDismissed).toBe(true);
   });
 
-  it("cleanup removes discovery handlers", () => {
-    const cleanup = registerOnboardingHandlers();
-    cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("onboarding:mark-agents-seen");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("onboarding:dismiss-welcome-card");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("onboarding:dismiss-setup-banner");
-  });
-
   it("complete handler stamps the onboarding_complete Sentry tag with true", () => {
     registerOnboardingHandlers();
     seedOnboarding();

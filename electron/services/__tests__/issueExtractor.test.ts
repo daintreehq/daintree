@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveIssueTitleFromBranch,
-  extractIssueNumber,
   extractIssueNumberSync,
   getIssueCacheSizeForTest,
 } from "../issueExtractor.js";
@@ -81,15 +80,6 @@ describe("issueExtractor", () => {
   it("trims branch and folder names before parsing", () => {
     expect(extractIssueNumberSync(`  ${unique("feature/issue-700")}  `)).toBe(700);
     expect(extractIssueNumberSync(unique("feature/no-id"), `  ${unique("jira-321")}  `)).toBe(321);
-  });
-
-  it("async extractIssueNumber returns same result as sync extractor", async () => {
-    const branch = unique("feature/issue-314");
-    const folder = unique("worktree-issue-159");
-
-    await expect(extractIssueNumber(branch, folder)).resolves.toBe(
-      extractIssueNumberSync(branch, folder)
-    );
   });
 });
 

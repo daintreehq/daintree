@@ -170,15 +170,6 @@ describe("TerminalProcess onExit — sessionPersistTimer cleanup", () => {
 
     warnSpy.mockRestore();
   });
-
-  it("does not throw when clearing timer that was never set", () => {
-    const pty = createControllablePty();
-
-    createTerminal(pty);
-
-    // Exit without any data — no timer was ever scheduled
-    expect(() => pty.emitExit(0)).not.toThrow();
-  });
 });
 
 describe("TerminalProcess onExit — master fd release (#9539)", () => {

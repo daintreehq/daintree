@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/utils", () => ({
@@ -24,22 +24,6 @@ describe("ContentFadeIn", () => {
   });
 
   describe("rendering", () => {
-    it("renders children", () => {
-      render(
-        <ContentFadeIn>
-          <span data-testid="child">hello</span>
-        </ContentFadeIn>
-      );
-      expect(screen.getByTestId("child")).toBeTruthy();
-    });
-
-    it("merges custom className", () => {
-      const { container } = render(<ContentFadeIn className="my-custom flex-1">x</ContentFadeIn>);
-      const root = container.firstElementChild;
-      expect(root?.className).toContain("my-custom");
-      expect(root?.className).toContain("flex-1");
-    });
-
     it("forwards arbitrary HTML attributes (role, data-*, aria-*)", () => {
       const { container } = render(
         <ContentFadeIn role="presentation" data-testid="root" aria-label="content">

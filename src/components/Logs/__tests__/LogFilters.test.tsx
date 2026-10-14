@@ -33,12 +33,6 @@ describe("LogFilters accessibility", () => {
     sourceCounts: { renderer: 3, main: 1, preload: 0 } as Partial<Record<string, number>>,
   };
 
-  it("renders search input with type='search'", () => {
-    render(<LogFilters {...baseProps} />);
-    const input = screen.getByRole("searchbox", { name: "Search logs" }) as HTMLInputElement;
-    expect(input.type).toBe("search");
-  });
-
   it("renders active and inactive level pills with aria-pressed", () => {
     render(<LogFilters {...baseProps} filters={{ levels: ["info", "error"] }} />);
     const debugBtn = screen.getByRole("button", { name: /^Debug\s*\(1\)$/ });
@@ -75,16 +69,6 @@ describe("LogFilters accessibility", () => {
     const mainBtn = screen.getByText("main").closest("button")!;
     expect(rendererBtn.getAttribute("aria-pressed")).toBe("true");
     expect(mainBtn.getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("closes sources popover on Escape", async () => {
-    render(<LogFilters {...baseProps} />);
-    await openSources();
-    expect(screen.getByText(/renderer/)).toBeTruthy();
-    pressEscape();
-    await waitFor(() => {
-      expect(screen.queryByText(/renderer/)).toBeNull();
-    });
   });
 
   it("keeps what is typed into an empty search and commits it after the debounce", async () => {

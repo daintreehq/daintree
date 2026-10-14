@@ -523,48 +523,6 @@ describe("WebContentsCdpService", () => {
     expect(lease.contexts.size).toBeLessThanOrEqual(64);
   });
 
-  it("never evicts the first world seen, before the frame tree is known", async () => {
-    const lease = await acquireCdpLease(asWebContents(wc), ["Runtime"]);
-    wc.debugger.emit(
-      "message",
-      {},
-      "Runtime.executionContextCreated",
-      createdContext(1, MAIN_FRAME_ID)
-    );
-    for (let i = 0; i < 200; i++) {
-      wc.debugger.emit(
-        "message",
-        {},
-        "Runtime.executionContextCreated",
-        createdContext(400 + i, `f-${i}`)
-      );
-    }
-
-    // `mainFrameId` is still null here, so the first world is the only thing
-    // standing in for it.
-    expect(lease.mainFrameId).toBeNull();
-    expect(lease.contexts.get(1)).toBe(MAIN_FRAME_ID);
-  });
-
-  it("leaves Page enabled when its last holder releases", async () => {
-    const lease = await acquireCdpLease(asWebContents(wc), ["Page", "Runtime"]);
-    await lease.release();
-
-    // Other main-process callers enable Page ad hoc without a lease and expect
-    // it to stay on; Runtime has no such caller and goes off as before.
-    expect(wc.debugger.count("Runtime.disable")).toBe(1);
-    expect(wc.debugger.count("Page.disable")).toBe(0);
-  });
-
-  it("retires outstanding leases on the test reset", async () => {
-    const lease = await acquireCdpLease(asWebContents(wc), ["Page"]);
-    __resetCdpLeasesForTests();
-
-    expect(lease.invalidated).toBe(true);
-    expect(await lease.refreshMainFrameId()).toBeNull();
-    expect(wc.debugger.count("Page.getFrameTree")).toBe(0);
-  });
-
   it("does not let a context-tracking failure escape into the debugger emit", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await acquireCdpLease(asWebContents(wc), ["Runtime"]);

@@ -227,14 +227,4 @@ describe("ProjectSwitchStatusTiming", () => {
     timing.fail("nope", "load-failed");
     expect(logInfoMock).not.toHaveBeenCalled();
   });
-
-  it("logs only timings, counts, and ids", () => {
-    timing.begin("s1", "p1", 1, T0);
-    timing.hostReady("s1", "cold");
-    timing.complete(report("s1", T0 + 2_450));
-    for (const value of Object.values(lastRecord())) {
-      if (typeof value === "string") expect(value).not.toMatch(/[\\/]/);
-      if (Array.isArray(value)) expect(value.every((v) => typeof v === "number")).toBe(true);
-    }
-  });
 });

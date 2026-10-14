@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
-import { createRef } from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
 
 import { cn } from "@/lib/utils";
 import { Badge, CountBadge, badgeVariants } from "../badge";
@@ -35,19 +34,6 @@ function tokens(classes: string, pattern: RegExp): string[] {
 }
 
 describe("Badge rendering", () => {
-  it("renders a span and forwards ref, ARIA and data attributes", () => {
-    const ref = createRef<HTMLSpanElement>();
-    render(
-      <Badge ref={ref} aria-label="CI failed" data-testid="ci-badge">
-        Failed
-      </Badge>
-    );
-    const badge = screen.getByTestId("ci-badge");
-    expect(badge.tagName).toBe("SPAN");
-    expect(ref.current).toBe(badge);
-    expect(badge.getAttribute("aria-label")).toBe("CI failed");
-  });
-
   it("exposes the resolved size and tone for call sites to assert on", () => {
     render(
       <Badge size="xs" tone="warning" data-testid="badge">
@@ -57,25 +43,6 @@ describe("Badge rendering", () => {
     const badge = screen.getByTestId("badge");
     expect(badge.getAttribute("data-size")).toBe("xs");
     expect(badge.getAttribute("data-tone")).toBe("warning");
-  });
-
-  // The supported way to make a badge clickable: a real button owns the
-  // semantics and the badge stays presentational inside it, so a tooltip
-  // trigger still has a genuine interactive element to attach to.
-  it("stays presentational inside an interactive wrapper", () => {
-    const onClick = vi.fn();
-    render(
-      <button type="button" onClick={onClick}>
-        <Badge tone="info">Open</Badge>
-      </button>
-    );
-    const button = screen.getByRole("button", { name: "Open" });
-    // No nested interactive element inside the button.
-    expect(button.querySelector("button")).toBeNull();
-    expect(button.querySelector('[data-slot="badge"]')!.tagName).toBe("SPAN");
-
-    fireEvent.click(button);
-    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
 

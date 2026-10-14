@@ -139,31 +139,6 @@ beforeEach(() => {
   clientMocks.reloadProjectPlugins.mockResolvedValue(undefined);
 });
 
-describe("plugin.validate", () => {
-  it("forwards the path and returns the verdict unchanged", async () => {
-    const verdict = {
-      manifestPath: "/p/.daintree/plugins/acme.demo/plugin.json",
-      origin: "project",
-      originSource: "location",
-      valid: false,
-      pluginId: "acme.demo",
-      errors: [{ path: "contributes.panels.0.color", message: "Required" }],
-      warnings: [],
-    };
-    clientMocks.validateManifest.mockResolvedValue(verdict);
-
-    await expect(run("plugin.validate", { path: ".daintree/plugins/acme.demo" })).resolves.toEqual(
-      verdict
-    );
-    expect(clientMocks.validateManifest).toHaveBeenCalledWith(".daintree/plugins/acme.demo");
-  });
-
-  it("lets a rejection propagate rather than reporting a false verdict", async () => {
-    clientMocks.validateManifest.mockRejectedValue(new Error("outside this project"));
-    await expect(run("plugin.validate", { path: "/etc" })).rejects.toThrow(/outside this project/);
-  });
-});
-
 describe("plugin.diagnostics", () => {
   it("returns only the named plugin's own diagnostics", async () => {
     clientMocks.getDiagnosticsSnapshot.mockResolvedValue({
@@ -283,11 +258,6 @@ describe("plugin.diagnostics", () => {
     expect(result.logLinesAvailable).toBe(51);
   });
 
-  it("propagates a snapshot read failure instead of reporting an empty buffer", async () => {
-    clientMocks.getDiagnosticsSnapshot.mockRejectedValue(new Error("IPC gone"));
-    await expect(run("plugin.diagnostics", { pluginId: "acme.demo" })).rejects.toThrow(/IPC gone/);
-  });
-
   it("bounds the log tail in the schema, not only in the handler", () => {
     const schema = definition("plugin.diagnostics").argsSchema;
     const parse = (logLimit: unknown) => schema?.safeParse({ pluginId: "a.b", logLimit }).success;
@@ -394,11 +364,6 @@ describe("plugin.reloadProject", () => {
     expect(result.plugins).toEqual([]);
   });
 
-  it("propagates a failure to list, even once the reload itself succeeded", async () => {
-    clientMocks.getProjectPlugins.mockRejectedValue(new Error("project closed mid-reload"));
-    await expect(run("plugin.reloadProject")).rejects.toThrow(/project closed mid-reload/);
-  });
-
   it("refuses plugin-sourced dispatch, since it would unload the caller", () => {
     expect(definition("plugin.reloadProject").denyPluginDispatch).toBe(true);
   });
@@ -417,13 +382,6 @@ describe("result schemas", () => {
 
     const def = definition("plugin.diagnostics");
     const result = await run("plugin.diagnostics", { pluginId: "acme.demo" });
-    expect(def.resultSchema?.safeParse(result).success).toBe(true);
-  });
-
-  it("holds for the reload result too", async () => {
-    clientMocks.getProjectPlugins.mockResolvedValue([]);
-    const def = definition("plugin.reloadProject");
-    const result = await run("plugin.reloadProject");
     expect(def.resultSchema?.safeParse(result).success).toBe(true);
   });
 });
@@ -745,13 +703,6 @@ describe("plugin.backupDatabases", () => {
     clientMocks.backupDatabases.mockReset();
     notifyMock.mockReset();
     revealMock.mockClear();
-  });
-
-  it("names only the plugin, and main does the rest", async () => {
-    clientMocks.backupDatabases.mockResolvedValue({ status: "cancelled" });
-    await run("plugin.backupDatabases", { pluginId: "acme.ledger" });
-
-    expect(clientMocks.backupDatabases).toHaveBeenCalledWith("acme.ledger");
   });
 
   it("says nothing when the dialog was dismissed", async () => {

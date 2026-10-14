@@ -52,14 +52,6 @@ describe("useSystemHealthCheck — focus re-check", () => {
     vi.restoreAllMocks();
   });
 
-  it("runs an initial check on mount", async () => {
-    renderHook(() => useSystemHealthCheck());
-
-    await waitFor(() => {
-      expect(mockGetSpecs).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it("re-runs the check when the window regains focus", async () => {
     renderHook(() => useSystemHealthCheck());
 

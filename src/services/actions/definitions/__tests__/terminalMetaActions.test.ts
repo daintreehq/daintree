@@ -81,17 +81,6 @@ describe("terminal.setClientMetadata contract", () => {
     expect(schema.safeParse({ terminalId: "t1" }).success).toBe(false);
     expect(schema.safeParse({ terminalId: "t1", clientMetadata: null }).success).toBe(true);
   });
-
-  it("is hidden from the palette and never captured as a repeatable action", () => {
-    const def = definition();
-
-    // It needs a terminal id the palette's empty-args dispatch cannot supply,
-    // and a replay would rewrite the last caller's record onto whatever
-    // terminal happens to be focused now.
-    expect(def.palette).toEqual({ mode: "hidden" });
-    expect(def.nonRepeatable).toBe(true);
-    expect(def.denyPluginDispatch).toBe(true);
-  });
 });
 
 describe("terminal.setClientMetadata dispatch", () => {

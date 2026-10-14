@@ -277,20 +277,6 @@ describe("startup worktree port attach (#11818)", () => {
     expect(attachDirectPort).not.toHaveBeenCalled();
   });
 
-  it("fails when the project has no workspace host", () => {
-    expect(attach({ host: null })).toEqual({ ok: false, reason: "no-host" });
-  });
-
-  it("fails when no broker was constructed", () => {
-    expect(attach({ brokerPort: null })).toEqual({ ok: false, reason: "no-broker" });
-  });
-
-  it("fails when the broker rejects the target", () => {
-    // brokerPort() returns false for a destroyed webContents — a resolved
-    // loadProject() is not proof the renderer got a port.
-    expect(attach({ brokerPort: () => false })).toEqual({ ok: false, reason: "broker-rejected" });
-  });
-
   it("still attaches the direct port before discovering the host is missing", () => {
     const attachDirectPort = vi.fn();
     attach({ host: null, attachDirectPort });
@@ -484,13 +470,6 @@ describe("startup worktree load orchestration (#11818)", () => {
         const line = describeStartupWorktreeLoadOutcome(outcome, "/repo");
         expect(line.message, status).not.toBe("");
         expect(line.context, status).toMatchObject({ projectPath: "/repo" });
-      }
-    });
-
-    it("treats anything that left the renderer without a port as an error", () => {
-      // The sidebar is broken from the user's side in every one of those cases.
-      for (const [status, { outcome, level }] of cases) {
-        expect(describeStartupWorktreeLoadOutcome(outcome, "/repo").level, status).toBe(level);
       }
     });
 

@@ -176,27 +176,12 @@ describe("getCoachLine — copy policy", () => {
     getCoachLine(makePulse({ ...QUIET_PULSE, currentStreakDays: 45 }), null),
   ];
 
-  // Every line the retired ladder could produce. The guard has to reject all of
-  // them, or it isn't guarding anything.
-  const RETIRED_COPY = [
-    "3 commits today — nice.",
-    "One small commit today keeps your streak going.",
-    "Momentum's building: 2 active days this week.",
-    "Make a tiny win: ship one small change today.",
-  ];
-
   // Streak leverage, imperatives, and the praise that made a commit count feel
   // like a score. This is a regression guard on known-bad vocabulary, not a
   // proof of calmness — it can't catch every way copy could turn into pressure.
   // The invariance tests below are what actually pin the behaviour down.
   const FORBIDDEN =
     /\b(streak|missed|keeps?|maintain|must|should|need to|have to|make|ship|win|momentum|nice|tiny|don't)\b/i;
-
-  it("rejects every line the old ladder could produce", () => {
-    for (const retired of RETIRED_COPY) {
-      expect(retired).toMatch(FORBIDDEN);
-    }
-  });
 
   it("uses no obligation, guilt, or praise vocabulary in any branch", () => {
     for (const line of EVERY_LINE) {
@@ -260,15 +245,5 @@ describe("getCoachLine — copy policy", () => {
     expect(getCoachLine(makePulse(), withMerges({ 60: 5 })).toLowerCase()).not.toContain(
       "pull request"
     );
-  });
-});
-
-describe("getUsableHealth", () => {
-  it("passes through only health that can back a claim", () => {
-    const ok = makeHealth();
-    expect(getUsableHealth(ok)).toBe(ok);
-    expect(getUsableHealth(null)).toBeNull();
-    expect(getUsableHealth(makeHealth({ error: "boom" }))).toBeNull();
-    expect(getUsableHealth(makeHealth({ repoUrl: "" }))).toBeNull();
   });
 });

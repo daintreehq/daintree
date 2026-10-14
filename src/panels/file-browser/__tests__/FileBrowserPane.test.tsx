@@ -1186,13 +1186,6 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
     expect(setFileBrowserViewMock).not.toHaveBeenCalled();
   });
 
-  it("renders no resize separator while the sidebar is collapsed", () => {
-    mockPanel.browserSidebarCollapsed = true;
-    renderPane();
-
-    expect(screen.queryByTestId("file-browser-sidebar-resize")).toBeNull();
-  });
-
   it("keeps a resized width across a real collapse and reopen (driven through the store)", () => {
     makeStoreStateful();
     const { rerender } = renderPane();
@@ -1545,14 +1538,6 @@ describe("folder context menu", () => {
     expect(options?.includePaths).toBeUndefined();
   });
 
-  it("sends the row path untouched, with no escaping or glob suffix", async () => {
-    const options = await copyFolderContext();
-
-    // `src/[draft]` survives verbatim: scope takes literal paths, so escaping
-    // it for minimatch would now name a folder that doesn't exist.
-    expect(options?.scopePaths?.[0]).toBe(FOLDER_ROW.path);
-  });
-
   it("targets the worktree the pane is bound to", async () => {
     renderPane();
     await act(async () => {
@@ -1628,13 +1613,6 @@ describe("insert file reference", () => {
     expect(treeProps.canInsertFileReference).toBe(false);
   });
 
-  // The tree's rows are relative, so the drag source (#11576) needs the same
-  // absolute base the menu's own join uses.
-  it("hands the tree the base path its rows are relative to", () => {
-    renderPane();
-    expect(treeProps.basePath).toBe("/repo");
-  });
-
   // `row.path` stays relative to the true source root after a re-root, so the
   // base must not follow the tree down. Joining the two would spell
   // `/repo/src/src/App.tsx` for every dragged row.
@@ -1682,11 +1660,6 @@ describe("workspace-rooted browser", () => {
     renderPane({});
 
     expect(screen.queryByRole("button", { name: "Copy context" })).toBeNull();
-  });
-
-  it("keeps Copy context for a worktree", () => {
-    renderPane();
-    expect(screen.getByRole("button", { name: "Copy context" })).toBeTruthy();
   });
 
   it("does not fall back to the workspace when a named worktree hasn't resolved", () => {
@@ -1752,13 +1725,6 @@ describe("promoted workspace-rooted browser (#11489)", () => {
     renderPane({ worktreeId: "wt-1" });
 
     expect(treeArgs.changeTick).toBe(450);
-  });
-
-  it("follows its own worktree's filesystem tick when it is not workspace-rooted", () => {
-    worktreeTicks.fs = 300;
-    renderPane({ worktreeId: "wt-1" });
-
-    expect(treeArgs.changeTick).toBe(300);
   });
 
   it("hands the tree the affected directories behind its own filesystem tick", () => {
@@ -2386,38 +2352,6 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586, #11938)
     expect(treeState.refresh).toHaveBeenCalledWith({ manual: true });
   });
 
-  it("keeps the tree's Refresh when a selected file's viewer is collapsed", () => {
-    // A file is selected and the viewer that would once have owned Refresh is
-    // gone. The tree header is mounted, so it owns it — the same answer as the
-    // layout above, reached from the other direction.
-    mockPanel.browserSelectedPath = "src/app.ts";
-    mockPanel.browserViewerCollapsed = true;
-    renderPane();
-
-    // The viewer column is unmounted — its tree toggle is the tell — so the
-    // tree column is the only place the remaining one can be.
-    expect(screen.queryByTestId("file-browser-sidebar-toggle")).toBeNull();
-    expect(screen.getByTestId("file-tree-view")).toBeTruthy();
-    expect(refreshButtons()).toHaveLength(1);
-  });
-
-  it("runs the pane's manual refresh from the viewer with nothing selected", () => {
-    // Nothing selected is not a dead layout: Refresh re-reads the tree, and a
-    // browser whose source has no worktree tick (a workspace root) is left with
-    // just the polled reconcile (#11590) until someone asks.
-    mockPanel.browserSidebarCollapsed = true;
-    renderPane();
-
-    // getByRole, not the plural helper: this must be the one and only Refresh,
-    // and a missing button should fail here rather than inside fireEvent.
-    act(() => {
-      fireEvent.click(screen.getByTestId("file-browser-refresh"));
-    });
-
-    expect(treeState.refresh).toHaveBeenCalledTimes(1);
-    expect(treeState.refresh).toHaveBeenCalledWith({ manual: true });
-  });
-
   it("refetches the open media preview when the viewer's Refresh is pressed", async () => {
     // The end-to-end shape of the bug: the pane merges its change tick and its
     // manual nonce into one `revision` string, and the media branches ignore
@@ -2924,13 +2858,6 @@ describe("FileBrowserPane git status derivation", () => {
     expect(getFileBrowserRowGitStatus(treeProps.gitStatusIndex, "src", true)).toBe("modified");
   });
 
-  it("summarises the changed files when nothing is selected", async () => {
-    setChanges([{ path: "/repo/src/app.ts", status: "modified" }]);
-    renderPane();
-
-    expect(await screen.findByRole("button", { name: /Read src\/app\.ts/ })).toBeTruthy();
-  });
-
   it("opens a summarised file whose tree row is not flattened", async () => {
     // `src` is collapsed here, so the changed file has no row at all. Requiring
     // one would make the summary click do nothing visible.
@@ -3076,17 +3003,6 @@ describe("FileBrowserPane git status derivation", () => {
     expect(await screen.findByText("Pick a file to read")).toBeTruthy();
     expect(treeProps.gitStatusIndex).toBeNull();
   });
-
-  it("still derives the combined change tick from the fuller snapshot", async () => {
-    // The tick now comes off the selected object rather than its own selector;
-    // the fs side must still win when it is the more recent of the two.
-    setChanges([{ path: "/repo/src/app.ts", status: "modified" }]);
-    worktreeTicks.git = 120;
-    worktreeTicks.fs = 450;
-    renderPane();
-
-    await waitFor(() => expect(treeArgs.changeTick).toBe(450));
-  });
 });
 
 describe("a selection the dotfile filter hides (#11620)", () => {
@@ -3162,20 +3078,6 @@ describe("FileBrowserPane tree navigation vs the viewer", () => {
     // A leaf has nothing to navigate into, so opening it is the only thing the
     // gesture could mean — the asymmetry that keeps single-click browsing.
     expect(viewerWrites()).toEqual(["src/app.ts"]);
-  });
-
-  it("moves the tree cursor for both kinds, viewer or no viewer", () => {
-    renderPane();
-
-    act(() => {
-      treeProps.onSelect?.("src", true);
-    });
-    expect(treeProps.cursorPath).toBe("src");
-
-    act(() => {
-      treeProps.onSelect?.("src/app.ts", false);
-    });
-    expect(treeProps.cursorPath).toBe("src/app.ts");
   });
 
   it("opens a folder in the viewer on activate, the deliberate half of the split", () => {

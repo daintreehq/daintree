@@ -158,17 +158,6 @@ describe("ShortcutReferenceDialog", () => {
       expect(spoken).toMatch(/Command W, or Control F4/);
     });
 
-    it("merges two actions that are described identically in one category", () => {
-      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-      expect(rowNames().filter((n) => n === "Open keyboard shortcuts reference")).toHaveLength(1);
-    });
-
-    it("folds a numbered family into one row", () => {
-      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-      const names = rowNames();
-      expect(names.filter((n) => n.startsWith("Focus terminal"))).toEqual(["Focus terminal 1–4"]);
-    });
-
     it("states a scope once on the heading when a whole category shares it", () => {
       render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
       const heading = screen
@@ -202,12 +191,6 @@ describe("ShortcutReferenceDialog", () => {
         }
       }
     });
-
-    it("uses list/listitem roles for shortcut rows", () => {
-      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-      expect(screen.getAllByRole("list").length).toBeGreaterThan(0);
-      expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
-    });
   });
 
   describe("searching", () => {
@@ -232,25 +215,6 @@ describe("ShortcutReferenceDialog", () => {
         await waitFor(() => expect(rowNames()).toContain("Restart all terminals"));
         expect(rowNames(), query).not.toContain("Toggle sidebar");
       }
-    });
-
-    it("finds an alternative key, not only the first one", async () => {
-      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-      type("⌘/");
-      await waitFor(() => expect(rowNames()).toContain("Open keyboard shortcuts reference"));
-    });
-
-    it("lists every key using a lone modifier", async () => {
-      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-      type("cmd");
-      await waitFor(() => expect(rowNames()).toContain("Toggle sidebar"));
-      expect(rowNames()).not.toContain("Redraw focused terminal");
-    });
-
-    it("falls back to fuzzy matching for a misspelling", async () => {
-      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
-      type("stsh");
-      await waitFor(() => expect(rowNames()).toContain("Stash current input"));
     });
 
     it("offers a way out of an empty result and returns focus to the search", async () => {

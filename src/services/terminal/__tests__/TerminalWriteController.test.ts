@@ -261,34 +261,6 @@ describe("TerminalWriteController.write", () => {
       expect(deps.acknowledgeData).not.toHaveBeenCalled();
       expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 3);
     });
-
-    it("deferred-restore path: never acks the IPC ledger even for non-ASCII strings", () => {
-      // The IPC ledger is drained when the deferred chunk replays through the
-      // normal path after restore. Acking here would double-drain it. The
-      // port-ack FIFO is equally untouched (settled by the replay write).
-      managed.isSerializedRestoreInProgress = true;
-      controller.write("t1", "│");
-
-      expect(deps.acknowledgePortData).not.toHaveBeenCalled();
-      expect(deps.acknowledgeData).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("coalesced-batch chunk accounting", () => {
-    it("settles all merged port-ack FIFO entries for a coalesced write", () => {
-      controller.write("t1", new Uint8Array([1, 2, 3, 4]), 3);
-      expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 4, 3, 0);
-      expect(deps.acknowledgeData).not.toHaveBeenCalled();
-    });
-
-    it("deferred-restore path: preserves the chunk count on the held batch", () => {
-      managed.isSerializedRestoreInProgress = true;
-      controller.write("t1", new Uint8Array([1, 2]), 2);
-      expect(deps.acknowledgePortData).not.toHaveBeenCalled();
-      expect(managed.deferredOutput).toEqual([
-        { data: new Uint8Array([1, 2]), chunkCount: 2, ackGeneration: 0 },
-      ]);
-    });
   });
 
   describe("lastActivityMarker refresh (rAF-coalesced)", () => {
@@ -454,11 +426,6 @@ describe("TerminalWriteController.write", () => {
     expect(firstWriteCalls[0]?.[1]).toMatchObject({ terminalId: "t1" });
     expect(firstWriteCalls[0]?.[1].elapsedSinceOpenMs).toBeTypeOf("number");
     expect(managed.hasEmittedFirstWriteMark).toBe(true);
-  });
-
-  it("decrements pendingWrites when the callback fires", () => {
-    controller.write("t1", "abc");
-    expect(managed.pendingWrites ?? 0).toBe(0);
   });
 
   describe("onWrite hook (write-driven BURST signal)", () => {

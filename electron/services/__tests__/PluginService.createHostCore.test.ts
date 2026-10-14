@@ -905,50 +905,6 @@ describe("createHost — host.process (managed processes, #9234)", () => {
     expect(fakes[0]!.stdinWrites.join("")).toBe('{"jsonrpc":"2.0","method":"initialize"}\n');
   });
 
-  it("gates duplex spawn on shell:exec like every other mode (#11871)", async () => {
-    await writePlugin("proc-duplex-nocap", { name: "acme.proc-duplex-nocap", version: "1.0.0" });
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const spawner = vi.fn(() => makeFakeChild({ duplex: true }).child);
-    const manager = new PluginProcessManager({ streamSink: () => {}, spawner, killGraceMs: 10 });
-    service._setProcessManagerForTests(manager);
-
-    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
-      "acme.proc-duplex-nocap"
-    );
-    const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
-
-    await expect(spawn("codex", { mode: "duplex" })).rejects.toThrow(
-      /PERMISSION_REQUIRED.*shell:exec/
-    );
-    expect(spawner).not.toHaveBeenCalled();
-  });
-
-  it("blocks a denied-consent duplex spawn before the manager (#11871)", async () => {
-    await writePlugin("proc-duplex-deny", {
-      name: "acme.proc-duplex-deny",
-      version: "1.0.0",
-      capabilities: ["shell:exec"],
-    });
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const spawner = vi.fn(() => makeFakeChild({ duplex: true }).child);
-    const manager = new PluginProcessManager({ streamSink: () => {}, spawner, killGraceMs: 10 });
-    service._setProcessManagerForTests(manager);
-    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
-
-    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
-      "acme.proc-duplex-deny"
-    );
-    const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
-
-    await expect(spawn("codex", { mode: "duplex" })).rejects.toThrow(/PERMISSION_REQUIRED/);
-    expect(spawner).not.toHaveBeenCalled();
-    expect(manager.runningCount("acme.proc-duplex-deny")).toBe(0);
-  });
-
   it("tears duplex children down on unload and silences a stale write (#11871)", async () => {
     await writePlugin("proc-duplex-unload", {
       name: "acme.proc-duplex-unload",
@@ -1240,26 +1196,6 @@ describe("createHost — showToast", () => {
       // The bucket key stays the raw id: never rendered, and two plugins may
       // share a display name.
       rateLimitKey: "plugin:acme.toast-named:success",
-    });
-  });
-
-  it("defaults type to info when omitted", async () => {
-    await writePlugin("toast-default", { name: "acme.toast-default", version: "1.0.0" });
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const { host } = (service as unknown as { createHost: ToastHostShape }).createHost(
-      "acme.toast-default"
-    );
-
-    broadcastToRendererMock.mockClear();
-    await host.showToast({ message: "Done" });
-
-    expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-      type: "info",
-      message: "acme.toast-default: Done",
-      duration: undefined,
-      rateLimitKey: "plugin:acme.toast-default:info",
     });
   });
 

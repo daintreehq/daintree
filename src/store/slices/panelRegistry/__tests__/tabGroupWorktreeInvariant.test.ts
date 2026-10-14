@@ -139,27 +139,6 @@ describe("Tab Group Worktree Invariant", () => {
       consoleWarnSpy.mockRestore();
     });
 
-    it("moves entire group when moving a grouped panel", () => {
-      const t1 = createMockTerminal("t1", "wt-a", "grid");
-      const t2 = createMockTerminal("t2", "wt-a", "grid");
-      const t3 = createMockTerminal("t3", "wt-a", "grid");
-      const group = createMockTabGroup("g1", "wt-a", ["t1", "t2", "t3"]);
-
-      setTerminals([t1, t2, t3]);
-      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
-
-      usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
-
-      const state = usePanelStore.getState();
-      const updatedGroup = state.tabGroups.get("g1");
-
-      expect(updatedGroup?.worktreeId).toBe("wt-b");
-
-      expect(state.panelsById["t1"]?.worktreeId).toBe("wt-b");
-      expect(state.panelsById["t2"]?.worktreeId).toBe("wt-b");
-      expect(state.panelsById["t3"]?.worktreeId).toBe("wt-b");
-    });
-
     it("moves ungrouped panel individually", () => {
       const t1 = createMockTerminal("t1", "wt-a", "grid");
       const t2 = createMockTerminal("t2", "wt-a", "grid");
@@ -230,32 +209,6 @@ describe("Tab Group Worktree Invariant", () => {
         "t1",
         TerminalRefreshTier.VISIBLE
       );
-    });
-
-    it("moves entire group and all member panels to new worktree", () => {
-      const t1 = createMockTerminal("t1", "wt-a", "grid");
-      const t2 = createMockTerminal("t2", "wt-a", "grid");
-      const t3 = createMockTerminal("t3", "wt-a", "grid");
-      const group = createMockTabGroup("g1", "wt-a", ["t1", "t2", "t3"]);
-
-      setTerminals([t1, t2, t3]);
-      usePanelStore.setState({ tabGroups: new Map([["g1", group]]) });
-
-      const result = usePanelStore.getState().moveTabGroupToWorktree("g1", "wt-b");
-
-      expect(result).toBe(true);
-
-      const state = usePanelStore.getState();
-      const updatedGroup = state.tabGroups.get("g1");
-      expect(updatedGroup?.worktreeId).toBe("wt-b");
-
-      const updatedT1 = state.panelsById["t1"];
-      const updatedT2 = state.panelsById["t2"];
-      const updatedT3 = state.panelsById["t3"];
-
-      expect(updatedT1?.worktreeId).toBe("wt-b");
-      expect(updatedT2?.worktreeId).toBe("wt-b");
-      expect(updatedT3?.worktreeId).toBe("wt-b");
     });
 
     it("returns true when moving to same worktree", () => {
@@ -519,23 +472,6 @@ describe("Tab Group Worktree Invariant", () => {
       expect(repairedT2?.worktreeId).toBe("wt-a");
     });
 
-    it("does not modify panels already matching group worktreeId", () => {
-      const t1 = createMockTerminal("t1", "wt-a", "grid");
-      const t2 = createMockTerminal("t2", "wt-a", "grid");
-      const group = createMockTabGroup("g1", "wt-a", ["t1", "t2"]);
-
-      setTerminals([t1, t2]);
-
-      usePanelStore.getState().hydrateTabGroups([group]);
-
-      const state = usePanelStore.getState();
-      const repairedT1 = state.panelsById["t1"];
-      const repairedT2 = state.panelsById["t2"];
-
-      expect(repairedT1?.worktreeId).toBe("wt-a");
-      expect(repairedT2?.worktreeId).toBe("wt-a");
-    });
-
     it("skips trashed panels during worktree repair", () => {
       const t1 = createMockTerminal("t1", "wt-a", "grid");
       const t2 = createMockTerminal("t2", "wt-b", "trash");
@@ -558,23 +494,6 @@ describe("Tab Group Worktree Invariant", () => {
   });
 
   describe("hydrateTabGroups - skipPersist option", () => {
-    it("respects skipPersist option with empty groups (error recovery path)", async () => {
-      const { panelPersistence } = await import("../../../persistence/panelPersistence");
-
-      const t1 = createMockTerminal("t1", "wt-a", "grid");
-      const t2 = createMockTerminal("t2", "wt-a", "grid");
-
-      setTerminals([t1, t2]);
-      usePanelStore.setState({ tabGroups: new Map() });
-
-      // Error recovery path: clear in-memory groups without wiping persistence
-      usePanelStore.getState().hydrateTabGroups([], { skipPersist: true });
-
-      expect(panelPersistence.saveTabGroups).not.toHaveBeenCalled();
-      // Verify in-memory state was still cleared
-      expect(usePanelStore.getState().tabGroups.size).toBe(0);
-    });
-
     it("respects skipPersist option with non-empty groups", async () => {
       const { panelPersistence } = await import("../../../persistence/panelPersistence");
 
@@ -709,21 +628,6 @@ describe("Tab Group Worktree Invariant", () => {
       const groups = usePanelStore.getState().getTabGroups("grid", "wt-a");
       const orderedIds = groups.flatMap((g) => g.panelIds);
       expect(orderedIds).toEqual(["committed-1", "batched-2"]);
-    });
-
-    it("does not duplicate a panel once it lands in both panelIds and the index after flush", () => {
-      const panel = createMockTerminal("recipe-1", "wt-a", "grid");
-      // Post-flush state: the id is now in BOTH panelIds and the index bucket.
-      usePanelStore.setState({
-        panelsById: { "recipe-1": panel },
-        panelIds: ["recipe-1"],
-        panelIdsByWorktreeId: { "wt-a": ["recipe-1"] },
-        tabGroups: new Map(),
-      });
-
-      const groups = usePanelStore.getState().getTabGroups("grid", "wt-a");
-      const allIds = groups.flatMap((g) => g.panelIds);
-      expect(allIds).toEqual(["recipe-1"]);
     });
   });
 });

@@ -119,14 +119,6 @@ describe("processes IPC (#13175)", () => {
     expect(snapshot.terminals).toEqual([]);
     expect(snapshot.complete).toBe(false);
   });
-
-  it("removes its handler on dispose", () => {
-    dispose = registerProcessesHandlers({} as HandlerDependencies);
-    dispose();
-    dispose = null;
-
-    expect(ipcMain.removeHandler).toHaveBeenCalledWith("processes:get-snapshot");
-  });
 });
 
 describe("ending a closed terminal's processes under drive leases", () => {

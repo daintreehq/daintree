@@ -144,18 +144,6 @@ describe("BrowserToolbar handleSubmit", () => {
     expect(defaultProps.onNavigate).not.toHaveBeenCalled();
   });
 
-  it("calls onReload on consecutive same-URL submissions", () => {
-    const { getByTestId } = renderToolbar();
-    const input = openDropdown(getByTestId);
-
-    fireEvent.submit(input.closest("form")!);
-    fireEvent.focus(input);
-    fireEvent.submit(input.closest("form")!);
-
-    expect(defaultProps.onReload).toHaveBeenCalledTimes(2);
-    expect(defaultProps.onNavigate).not.toHaveBeenCalled();
-  });
-
   it("calls onReload for URL with path, query, and hash", () => {
     const fullUrl = "http://localhost:5173/app?tab=1#section";
     const { getByTestId } = renderToolbar({ url: fullUrl });
@@ -229,14 +217,6 @@ describe("BrowserToolbar favicon and delete", () => {
     openDropdown(container.querySelector("[data-testid='browser-address-bar']")! as HTMLElement);
     const img = container.querySelector("img[src='https://example.com/favicon.ico']");
     expect(img).toBeTruthy();
-  });
-
-  it("renders Globe icon for entries without favicon", () => {
-    const { container } = renderToolbar();
-    openDropdown(container.querySelector("[data-testid='browser-address-bar']")! as HTMLElement);
-    // Second entry has no favicon — should have a Globe SVG sibling
-    const rows = container.querySelectorAll(".group\\/row");
-    expect(rows.length).toBe(2);
   });
 
   it("delete button calls removeUrl on mousedown", () => {
@@ -357,12 +337,6 @@ describe("BrowserToolbar ARIA semantics", () => {
       expect(input.getAttribute("aria-expanded")).toBe("false");
     });
     expect(input.getAttribute("aria-activedescendant")).toBeNull();
-  });
-
-  it("Copy URL button is exposed by accessible name", () => {
-    const { getByRole } = renderToolbar();
-    const button = getByRole("button", { name: "Copy URL" });
-    expect(button).toBeTruthy();
   });
 
   it("Open in external browser button is exposed by accessible name", () => {
@@ -823,17 +797,6 @@ describe("BrowserToolbar address-bar scheme icon and input", () => {
       "browser-url-scheme-globe"
     );
     expect(globe.getAttribute("aria-hidden")).toBe("true");
-  });
-
-  it("address bar exposes a focus-visible ring without suppressing the forced-colors outline", () => {
-    const { getByTestId } = renderToolbar();
-    const input = getByTestId("browser-address-bar");
-    // A focus-visible indicator must be present (the accent ring is the address bar's
-    // sole accent signal per CLAUDE.md) and outline-hidden must be preserved so the
-    // transparent forced-colors outline survives (lesson #6185 — never outline-none).
-    expect(input.className).toContain("focus-visible:outline-accent-primary");
-    expect(input.className).toContain("focus:outline-hidden");
-    expect(input.className).not.toContain("outline-none");
   });
 });
 

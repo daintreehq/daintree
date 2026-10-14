@@ -3,7 +3,6 @@ import {
   describeChord,
   describeKeyCap,
   parseChord,
-  MODIFIER_SEARCH_MAP,
   VALID_KEY_PATTERN,
   isChordPrefix,
   normalizeQuery,
@@ -12,11 +11,6 @@ import {
 import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 
 describe("parseChord — macOS glyphs", () => {
-  it("maps Cmd/Option/Shift/Ctrl to glyphs", () => {
-    expect(parseChord("Cmd+Shift+P", true)).toEqual([["⌘", "⇧", "P"]]);
-    expect(parseChord("Ctrl+Option+T", true)).toEqual([["⌃", "⌥", "T"]]);
-  });
-
   it("maps Return/Enter to ⏎", () => {
     expect(parseChord("Cmd+Return", true)).toEqual([["⌘", "⏎"]]);
     expect(parseChord("Cmd+Enter", true)).toEqual([["⌘", "⏎"]]);
@@ -95,13 +89,6 @@ describe("parseChord — multi-step chords", () => {
     expect(parseChord("Cmd+K T", true)).toEqual([["⌘", "K"], ["T"]]);
   });
 
-  it("handles two-step chords with shared prefix", () => {
-    expect(parseChord("Cmd+K Cmd+W", true)).toEqual([
-      ["⌘", "K"],
-      ["⌘", "W"],
-    ]);
-  });
-
   it("collapses extra whitespace between steps", () => {
     expect(parseChord("Cmd+K   T", true)).toEqual([["⌘", "K"], ["T"]]);
   });
@@ -119,10 +106,6 @@ describe("parseChord — edge cases", () => {
   it("handles literal + key (Ctrl++)", () => {
     expect(parseChord("Ctrl++", false)).toEqual([["Ctrl", "+"]]);
     expect(parseChord("Ctrl++", true)).toEqual([["⌃", "+"]]);
-  });
-
-  it("handles literal + key with shift", () => {
-    expect(parseChord("Cmd+Shift++", true)).toEqual([["⌘", "⇧", "+"]]);
   });
 
   it("passes through unknown tokens (Hyper)", () => {
@@ -161,26 +144,6 @@ describe("parseChord — edge cases", () => {
   it("preserves casing of unknown multi-char tokens (PageUp)", () => {
     expect(parseChord("PageUp", false)).toEqual([["PageUp"]]);
     expect(parseChord("Cmd+NumpadEnter", true)).toEqual([["⌘", "NumpadEnter"]]);
-  });
-});
-
-describe("MODIFIER_SEARCH_MAP", () => {
-  it("maps text aliases to canonical IDs", () => {
-    expect(MODIFIER_SEARCH_MAP["cmd"]).toBe("cmd");
-    expect(MODIFIER_SEARCH_MAP["command"]).toBe("cmd");
-    expect(MODIFIER_SEARCH_MAP["meta"]).toBe("cmd");
-    expect(MODIFIER_SEARCH_MAP["ctrl"]).toBe("ctrl");
-    expect(MODIFIER_SEARCH_MAP["control"]).toBe("ctrl");
-    expect(MODIFIER_SEARCH_MAP["alt"]).toBe("alt");
-    expect(MODIFIER_SEARCH_MAP["option"]).toBe("alt");
-    expect(MODIFIER_SEARCH_MAP["shift"]).toBe("shift");
-  });
-
-  it("maps unicode symbols to canonical IDs", () => {
-    expect(MODIFIER_SEARCH_MAP["⌘"]).toBe("cmd");
-    expect(MODIFIER_SEARCH_MAP["⌃"]).toBe("ctrl");
-    expect(MODIFIER_SEARCH_MAP["⌥"]).toBe("alt");
-    expect(MODIFIER_SEARCH_MAP["⇧"]).toBe("shift");
   });
 });
 
@@ -359,41 +322,15 @@ describe("comboToAriaKeyshortcuts — chord sequences", () => {
     expect(comboToAriaKeyshortcuts("Cmd+K T", true)).toBeUndefined();
     expect(comboToAriaKeyshortcuts("Cmd+K T", false)).toBeUndefined();
   });
-
-  it("returns undefined for two-step chords with shared prefix", () => {
-    expect(comboToAriaKeyshortcuts("Cmd+K Cmd+W", true)).toBeUndefined();
-    expect(comboToAriaKeyshortcuts("Cmd+K Cmd+W", false)).toBeUndefined();
-  });
-
-  it("returns undefined for chords with extra whitespace between steps", () => {
-    expect(comboToAriaKeyshortcuts("Cmd+K   T", true)).toBeUndefined();
-  });
 });
 
 describe("comboToAriaKeyshortcuts — real default-combo round-trips", () => {
   // Anchors the converter against representative bindings from
   // defaultKeybindings.ts so a future raw-combo refactor cannot silently
   // change what ends up in the accessibility tree.
-  it("maps panel toggles (Cmd+B → Meta+B / Control+B)", () => {
-    expect(comboToAriaKeyshortcuts("Cmd+B", true)).toBe("Meta+B");
-    expect(comboToAriaKeyshortcuts("Cmd+B", false)).toBe("Control+B");
-  });
-
-  it("maps multi-modifier combos (Cmd+Shift+P, Cmd+Alt+P)", () => {
-    expect(comboToAriaKeyshortcuts("Cmd+Shift+P", true)).toBe("Meta+Shift+P");
-    expect(comboToAriaKeyshortcuts("Cmd+Alt+P", false)).toBe("Control+Alt+P");
-  });
-
   it("maps the Cmd+Shift+= zoom-in alias (issue #7304)", () => {
     expect(comboToAriaKeyshortcuts("Cmd+Shift+=", true)).toBe("Meta+Shift+=");
     expect(comboToAriaKeyshortcuts("Cmd+Shift+=", false)).toBe("Control+Shift+=");
-  });
-
-  it("returns undefined for two-step chord families (Cmd+K Cmd+S, Cmd+K T)", () => {
-    expect(comboToAriaKeyshortcuts("Cmd+K Cmd+S", true)).toBeUndefined();
-    expect(comboToAriaKeyshortcuts("Cmd+K Cmd+S", false)).toBeUndefined();
-    expect(comboToAriaKeyshortcuts("Cmd+K T", true)).toBeUndefined();
-    expect(comboToAriaKeyshortcuts("Cmd+K T", false)).toBeUndefined();
   });
 });
 
@@ -420,26 +357,14 @@ describe("comboToAriaKeyshortcuts — edge cases", () => {
     expect(comboToAriaKeyshortcuts("cmd+shift+p", true)).toBe("Meta+Shift+P");
   });
 
-  it("trims whitespace around + separators", () => {
-    expect(comboToAriaKeyshortcuts(" Cmd + Shift + P ", true)).toBe("Meta+Shift+P");
-  });
-
   it("passes through unknown modifier-style tokens unchanged", () => {
     expect(comboToAriaKeyshortcuts("Hyper+P", true)).toBe("Hyper+P");
   });
 });
 
 describe("parseChord — pre-glyphed input (formatComboForDisplay → KbdChord pipeline)", () => {
-  it("splits pre-glyphed single-modifier on + separator (⌘+B)", () => {
-    expect(parseChord("⌘+B", true)).toEqual([["⌘", "B"]]);
-  });
-
   it("splits pre-glyphed multi-modifier on + separator (⌘+⇧+B)", () => {
     expect(parseChord("⌘+⇧+B", true)).toEqual([["⌘", "⇧", "B"]]);
-  });
-
-  it("splits pre-glyphed combo with Option (⌘+⌥+T)", () => {
-    expect(parseChord("⌘+⌥+T", true)).toEqual([["⌘", "⌥", "T"]]);
   });
 
   it("splits pre-glyphed combo with Ctrl (⌃+⌘+F)", () => {

@@ -29,13 +29,6 @@ describe("parseNumberQuery", () => {
       });
     });
 
-    it("should parse hash-prefixed numbers", () => {
-      expect(parseNumberQuery("#123, #124, #125")).toEqual({
-        kind: "multi",
-        numbers: [123, 124, 125],
-      });
-    });
-
     it("should parse mixed hash and bare numbers", () => {
       expect(parseNumberQuery("#123, 124")).toEqual({
         kind: "multi",

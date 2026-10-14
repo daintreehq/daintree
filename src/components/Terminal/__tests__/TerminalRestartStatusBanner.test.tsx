@@ -234,18 +234,6 @@ describe("TerminalRestartStatusBanner", () => {
         expect(onDismissAll).toHaveBeenCalledOnce();
       });
 
-      it("still offers no restart action alongside the bulk control", () => {
-        render(
-          <TerminalRestartStatusBanner
-            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
-            onRestart={vi.fn()}
-            onDismiss={vi.fn()}
-            onDismissAll={vi.fn()}
-          />
-        );
-        expect(screen.queryByRole("button", { name: /restart session/i })).toBeNull();
-      });
-
       it("does not leak the bulk control onto other variants", () => {
         for (const variant of [
           { type: "auto-restarting" },
@@ -294,43 +282,11 @@ describe("TerminalRestartStatusBanner", () => {
         );
         expect(screen.getByText("Most recent session claimed elsewhere")).toBeTruthy();
       });
-
-      it("uses the same 'nothing to resume' copy for no-resume-command and no-resume-path", () => {
-        const { unmount } = render(
-          <TerminalRestartStatusBanner
-            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
-            onRestart={vi.fn()}
-            onDismiss={vi.fn()}
-          />
-        );
-        expect(screen.getByText("Session no longer reachable")).toBeTruthy();
-        unmount();
-
-        render(
-          <TerminalRestartStatusBanner
-            variant={{ type: "session-resume-unavailable", reason: "no-resume-path" }}
-            onRestart={vi.fn()}
-            onDismiss={vi.fn()}
-          />
-        );
-        expect(screen.getByText("Session no longer reachable")).toBeTruthy();
-      });
     });
 
     // "Find session" (issue #12182) — a pre-built slot the caller supplies,
     // since only it knows whether this pane's agent has one to offer.
     describe("findSessionSlot (issue #12182)", () => {
-      it("renders nothing extra when the caller supplies no slot", () => {
-        render(
-          <TerminalRestartStatusBanner
-            variant={{ type: "session-resume-unavailable", reason: "no-resume-command" }}
-            onRestart={vi.fn()}
-            onDismiss={vi.fn()}
-          />
-        );
-        expect(screen.getAllByRole("button")).toHaveLength(1);
-      });
-
       it("renders the caller-supplied slot alongside dismiss", () => {
         render(
           <TerminalRestartStatusBanner

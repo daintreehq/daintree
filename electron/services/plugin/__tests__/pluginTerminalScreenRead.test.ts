@@ -7,7 +7,6 @@ vi.mock("../../AgentAvailabilityStore.js", () => ({
 import { serializeTerminalTail } from "../../pty/terminalSerialization.js";
 import type { TerminalInfo } from "../../pty/types.js";
 import {
-  activeScreenData,
   admitPluginTerminalScreenRead,
   clipToUtf8Bytes,
   readPluginTerminalScreen,
@@ -288,11 +287,5 @@ describe("screen text from a real headless terminal", () => {
     expect(result).toMatchObject({ status: "ok", lineCount: 5 });
     if (result.status !== "ok") return;
     expect(result.text.split("\n")[0]).toBe("line 45");
-  });
-});
-
-describe("activeScreenData", () => {
-  it("passes a normal-screen snapshot through", () => {
-    expect(activeScreenData("plain")).toBe("plain");
   });
 });

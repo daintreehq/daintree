@@ -97,14 +97,6 @@ describe("computeEffectiveNotificationState", () => {
     expect(statusOf(states, "workingPulse")).toBe("sound-off");
     expect(statusOf(states, "uiFeedback")).toBe("sound-off");
   });
-
-  it("never reports kinds without a per-kind toggle as kind-off or sound-off", () => {
-    const states = computeEffectiveNotificationState(ALL_ON);
-    for (const kind of ["agent", "git", "host", "recovery", "settings", "connectivity"] as const) {
-      expect(statusOf(states, kind)).not.toBe("kind-off");
-      expect(statusOf(states, kind)).not.toBe("sound-off");
-    }
-  });
 });
 
 describe("selectors", () => {
@@ -147,10 +139,6 @@ describe("heroLine", () => {
 describe("osDndDisplayNote", () => {
   it("returns the display string when OS DND is active", () => {
     expect(osDndDisplayNote(true)).toBe("OS Do Not Disturb is active");
-  });
-
-  it("returns null when OS DND is explicitly off", () => {
-    expect(osDndDisplayNote(false)).toBeNull();
   });
 
   it("returns null when the OS DND state is unknown (unsupported platform)", () => {

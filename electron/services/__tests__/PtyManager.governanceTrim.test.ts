@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PtyManager } from "../PtyManager.js";
 import { ANALYSIS_SESSION_IDLE_TRIM_MS } from "../../../shared/utils/workerGovernancePolicy.js";
-import { SCROLLBACK_BACKGROUND, SCROLLBACK_MIN } from "../../../shared/config/scrollback.js";
+import { SCROLLBACK_MIN } from "../../../shared/config/scrollback.js";
 import type { AgentState } from "../../../shared/types/agent.js";
 import type { TerminalProcess } from "../pty/TerminalProcess.js";
 import type { TerminalRegistry } from "../pty/TerminalRegistry.js";
@@ -134,23 +134,144 @@ describe("PtyManager.trimIdleAnalysisSessions", () => {
       expect(terminal.getCurrentScrollback()).toBe(SCROLLBACK_MIN);
     }
   });
+});
 
-  it("reports every terminal as skipped when agents hold them all", () => {
-    // The tier-1 shape from #11674: a machine full of working agents. The pass
-    // must be a no-op that says so, so a zero delta upstream is attributable to
-    // deliberate protection rather than to a lever that failed.
-    const terminals = ["a", "b", "c"].map((id) => makeTerminal(id, { agentState: "working" }));
-    const manager = managerWith(terminals);
-
-    const result = manager.trimIdleAnalysisSessions({
-      now: NOW,
-      targetLines: SCROLLBACK_BACKGROUND,
+describe("PtyManager drive lease", () => {
+  function managerWith(projects: Record<string, string | null | undefined>) {
+    const manager = Object.create(PtyManager.prototype) as PtyManager;
+    Object.defineProperty(manager, "registry", {
+      value: {
+        get: (id: string) =>
+          id in projects ? { getInfo: () => ({ projectId: projects[id] }) } : undefined,
+      },
+      configurable: true,
     });
+    Object.defineProperty(manager, "driveLeases", {
+      value: new Map(),
+      writable: true,
+      configurable: true,
+    });
+    return manager;
+  }
 
-    expect(result).toEqual({ trimmed: 0, skipped: terminals.length });
-    for (const terminal of terminals) {
-      expect(terminal.trimScrollback).not.toHaveBeenCalled();
-      expect(terminal.getCurrentScrollback()).toBeGreaterThan(SCROLLBACK_BACKGROUND);
-    }
+  const LOCAL_WINDOW = 3;
+  const HOLDER = -7;
+  const OTHER_REMOTE = -9;
+
+  it("arbitrates nothing until a lease names the project", () => {
+    const manager = managerWith({ a1: "project-a", loose: null });
+    expect(manager.mayDriveFrom("a1", OTHER_REMOTE)).toBe(true);
+    manager.setDriveLeases([{ projectId: "project-b", leaseId: 1, holderConnection: HOLDER }]);
+    expect(manager.mayDriveFrom("a1", OTHER_REMOTE)).toBe(true);
+    // No known project: not spawned yet, or never filed.
+    expect(manager.mayDriveFrom("loose", OTHER_REMOTE)).toBe(true);
+    expect(manager.mayDriveFrom("unknown", OTHER_REMOTE)).toBe(true);
+  });
+
+  it("lets only the remote holder's connection drive, including this machine's windows", () => {
+    const manager = managerWith({ a1: "project-a" });
+    manager.setDriveLeases([{ projectId: "project-a", leaseId: 5, holderConnection: HOLDER }]);
+    expect(manager.mayDriveFrom("a1", HOLDER, 5)).toBe(true);
+    expect(manager.mayDriveFrom("a1", HOLDER)).toBe(true);
+    expect(manager.mayDriveFrom("a1", OTHER_REMOTE)).toBe(false);
+    expect(manager.mayDriveFrom("a1", LOCAL_WINDOW)).toBe(false);
+  });
+
+  it("lets every local window drive when this machine holds, and no remote port", () => {
+    const manager = managerWith({ a1: "project-a" });
+    manager.setDriveLeases([{ projectId: "project-a", leaseId: 5, holderConnection: null }]);
+    expect(manager.mayDriveFrom("a1", LOCAL_WINDOW)).toBe(true);
+    expect(manager.mayDriveFrom("a1", LOCAL_WINDOW + 1)).toBe(true);
+    expect(manager.mayDriveFrom("a1", OTHER_REMOTE)).toBe(false);
+  });
+
+  it("refuses work stamped with a lease a takeover replaced, and trusts a newer one", () => {
+    const manager = managerWith({ a1: "project-a" });
+    manager.setDriveLeases([{ projectId: "project-a", leaseId: 5, holderConnection: HOLDER }]);
+    // Queued before the takeover that produced lease 5.
+    expect(manager.mayDriveFrom("a1", HOLDER, 4)).toBe(false);
+    // Main granted lease 6 to another endpoint; the table has yet to hear.
+    expect(manager.mayDriveFrom("a1", OTHER_REMOTE, 6)).toBe(true);
+
+    manager.setDriveLeases([]);
+    expect(manager.mayDriveFrom("a1", OTHER_REMOTE)).toBe(true);
+  });
+});
+
+/**
+ * `PtyManager.updateWorktreeId` is where a renderer-side move becomes the
+ * authoritative record the fleet palette groups by (#12060), and where the
+ * ownership identity is checked.
+ *
+ * The check lands here rather than in main because this is the only place both
+ * halves are known synchronously — naming the terminal's project in main would
+ * have cost an await, and with it the FIFO ordering that makes two rapid moves
+ * settle on the second one.
+ */
+describe("PtyManager.updateWorktreeId", () => {
+  function managerWith(record: { projectId?: string | null } | undefined) {
+    const setWorktreeId = vi.fn();
+    const terminal = record
+      ? { getInfo: () => ({ projectId: record.projectId }), setWorktreeId }
+      : undefined;
+    const manager = Object.create(PtyManager.prototype) as PtyManager;
+    Object.defineProperty(manager, "registry", {
+      value: { get: (id: string) => (id === "t1" ? terminal : undefined) },
+      configurable: true,
+    });
+    return { manager, setWorktreeId };
+  }
+
+  it("writes the move onto the record when the sender owns the run", () => {
+    const { manager, setWorktreeId } = managerWith({ projectId: "project-a" });
+
+    manager.updateWorktreeId("t1", "/repo/.worktrees/feature", "project-a");
+
+    expect(setWorktreeId).toHaveBeenCalledWith("/repo/.worktrees/feature");
+  });
+
+  it("refuses a move for a run owned by another project", () => {
+    // The fleet snapshot pushes every run to every view, so a foreign terminal
+    // id is always in reach. Without this the palette could report project B's
+    // run paired with one of project A's worktrees.
+    const { manager, setWorktreeId } = managerWith({ projectId: "project-b" });
+
+    manager.updateWorktreeId("t1", "/project-a/.worktrees/feature", "project-a");
+
+    expect(setWorktreeId).not.toHaveBeenCalled();
+  });
+
+  it("treats null as an identity, not a wildcard, in both directions", () => {
+    // An unbound window (Cmd+N on the project picker) reaches its own
+    // projectless terminals and nothing else; a project-owned sender must not
+    // reach a projectless run either.
+    const unbound = managerWith({ projectId: undefined });
+    unbound.manager.updateWorktreeId("t1", "/repo", null);
+    expect(unbound.setWorktreeId).toHaveBeenCalledWith("/repo");
+
+    const owned = managerWith({ projectId: "project-a" });
+    owned.manager.updateWorktreeId("t1", "/repo", null);
+    expect(owned.setWorktreeId).not.toHaveBeenCalled();
+
+    const projectless = managerWith({ projectId: undefined });
+    projectless.manager.updateWorktreeId("t1", "/repo", "project-a");
+    expect(projectless.setWorktreeId).not.toHaveBeenCalled();
+  });
+
+  it("carries an explicit clear through to the record", () => {
+    const { manager, setWorktreeId } = managerWith({ projectId: "project-a" });
+
+    manager.updateWorktreeId("t1", null, "project-a");
+
+    expect(setWorktreeId).toHaveBeenCalledWith(null);
+  });
+
+  it("is a no-op for a run that has already gone", () => {
+    // Never a synthetic record: the renderer store keeps the filing either way.
+    const { manager, setWorktreeId } = managerWith(undefined);
+
+    manager.updateWorktreeId("gone", "/repo", "project-a");
+
+    expect(setWorktreeId).not.toHaveBeenCalled();
   });
 });

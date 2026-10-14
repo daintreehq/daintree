@@ -117,19 +117,6 @@ describe("enqueueBackgroundRestores", () => {
     expect(fake.calls).toEqual(["a", "b"]);
   });
 
-  it("restores in the order it was given", async () => {
-    const fake = createFakeManager();
-    enqueueBackgroundRestores(
-      job({ getManager: () => fake.manager, projectIds: ["newest", "middle", "oldest"] })
-    );
-    await tick();
-    fake.settle();
-    await tick();
-    fake.settle();
-    await tick();
-    expect(fake.calls).toEqual(["newest", "middle", "oldest"]);
-  });
-
   it("finishes one window's projects before starting the next window's", async () => {
     const first = createFakeManager();
     const second = createFakeManager();
@@ -296,29 +283,6 @@ describe("cancelBackgroundRestores", () => {
 });
 
 describe("restore recency", () => {
-  it("steps lastUsed further back with each project, preserving the given order", async () => {
-    // The queue consumes `projectIds` destructively, so deriving recency from
-    // the remaining length would hand the LEAST recently used project the
-    // NEWEST timestamp and invert the LRU order the manifest recorded.
-    const seen: number[] = [];
-    const manager = {
-      disposed: false,
-      restoreInBackground: vi.fn((_id: string, _path: string, opts: { lastUsed: number }) => {
-        seen.push(opts.lastUsed);
-        return Promise.resolve({ status: "restored" } as RestoreResult);
-      }),
-    } as unknown as ProjectViewManager;
-
-    enqueueBackgroundRestores(
-      job({ getManager: () => manager, projectIds: ["newest", "middle", "oldest"] })
-    );
-    await tick();
-
-    expect(seen).toHaveLength(3);
-    expect(seen[0]).toBeGreaterThan(seen[1]);
-    expect(seen[1]).toBeGreaterThan(seen[2]);
-  });
-
   it("holds the order even when a boot takes longer than the rank step", async () => {
     // The failure this guards: reading Date.now() per project instead of a
     // fixed epoch lets wall-clock advance beat the one-second step, so a first

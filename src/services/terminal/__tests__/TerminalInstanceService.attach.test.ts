@@ -581,3 +581,257 @@ describe("TerminalInstanceService attach reveal", () => {
     expect(c.isAttaching).toBe(false);
   });
 });
+
+describe("TerminalInstanceService detach blur", () => {
+  type DetachTestService = {
+    instances: Map<string, unknown>;
+    offscreenManager: {
+      ensureHiddenContainer: () => HTMLDivElement | null;
+      getOffscreenSlot: (id: string) => HTMLDivElement | undefined;
+    };
+    detach: (id: string, container: HTMLElement | null) => void;
+    detachForProjectSwitch: (id: string) => void;
+    resizeController: {
+      clearResizeJob: (managed: unknown) => void;
+      clearSettledTimer: (id: string) => void;
+    };
+  };
+
+  let service: DetachTestService;
+
+  const makeMockManaged = (id: string) => {
+    const hostElement = document.createElement("div");
+    return {
+      id,
+      terminal: {
+        blur: vi.fn(),
+        buffer: { active: { length: 100 } },
+      },
+      hostElement,
+      isDetached: false,
+      isVisible: true,
+      lastDetachAt: 0,
+      hoveredLink: null as unknown,
+      latestCols: 0,
+      latestRows: 0,
+      targetCols: undefined as number | undefined,
+      targetRows: undefined as number | undefined,
+    };
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: DetachTestService;
+      });
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    service.instances.clear();
+  });
+
+  it("detach() calls terminal.blur()", () => {
+    const managed = makeMockManaged("t1");
+    const container = document.createElement("div");
+    container.appendChild(managed.hostElement);
+    service.instances.set("t1", managed);
+
+    vi.spyOn(service.offscreenManager, "getOffscreenSlot").mockReturnValue(undefined);
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+
+    service.detach("t1", container);
+
+    expect(managed.terminal.blur).toHaveBeenCalledTimes(1);
+    expect(managed.isDetached).toBe(true);
+  });
+
+  it("detachForProjectSwitch() calls terminal.blur()", () => {
+    const managed = makeMockManaged("t2");
+    const parent = document.createElement("div");
+    parent.appendChild(managed.hostElement);
+    service.instances.set("t2", managed);
+
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+    vi.spyOn(service.resizeController, "clearResizeJob").mockImplementation(() => {});
+    vi.spyOn(service.resizeController, "clearSettledTimer").mockImplementation(() => {});
+
+    service.detachForProjectSwitch("t2");
+
+    expect(managed.terminal.blur).toHaveBeenCalledTimes(1);
+    expect(managed.isDetached).toBe(true);
+  });
+
+  it("detach() clears hoveredLink", () => {
+    const managed = makeMockManaged("t3");
+    managed.hoveredLink = { text: "https://example.com", range: {}, activate: vi.fn() };
+    const container = document.createElement("div");
+    container.appendChild(managed.hostElement);
+    service.instances.set("t3", managed);
+
+    vi.spyOn(service.offscreenManager, "getOffscreenSlot").mockReturnValue(undefined);
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+
+    service.detach("t3", container);
+
+    expect(managed.hoveredLink).toBeNull();
+  });
+
+  it("detachForProjectSwitch() clears hoveredLink", () => {
+    const managed = makeMockManaged("t4");
+    managed.hoveredLink = { text: "/file.tsx:1:1", range: {}, activate: vi.fn() };
+    const parent = document.createElement("div");
+    parent.appendChild(managed.hostElement);
+    service.instances.set("t4", managed);
+
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+    vi.spyOn(service.resizeController, "clearResizeJob").mockImplementation(() => {});
+    vi.spyOn(service.resizeController, "clearSettledTimer").mockImplementation(() => {});
+
+    service.detachForProjectSwitch("t4");
+
+    expect(managed.hoveredLink).toBeNull();
+  });
+
+  it("detachForProjectSwitch() backfills target dims from latest geometry when unset (#10070)", () => {
+    const managed = makeMockManaged("t5");
+    managed.latestCols = 120;
+    managed.latestRows = 40;
+    const parent = document.createElement("div");
+    parent.appendChild(managed.hostElement);
+    service.instances.set("t5", managed);
+
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+    vi.spyOn(service.resizeController, "clearResizeJob").mockImplementation(() => {});
+    vi.spyOn(service.resizeController, "clearSettledTimer").mockImplementation(() => {});
+
+    service.detachForProjectSwitch("t5");
+
+    // Background-tier resizes only update latest dims; the warm-attach path
+    // needs target dims, so detach must seed them so reattach paints at size.
+    expect(managed.targetCols).toBe(120);
+    expect(managed.targetRows).toBe(40);
+  });
+
+  it("detachForProjectSwitch() preserves existing target dims (#10070)", () => {
+    const managed = makeMockManaged("t6");
+    managed.latestCols = 120;
+    managed.latestRows = 40;
+    managed.targetCols = 100;
+    managed.targetRows = 30;
+    const parent = document.createElement("div");
+    parent.appendChild(managed.hostElement);
+    service.instances.set("t6", managed);
+
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+    vi.spyOn(service.resizeController, "clearResizeJob").mockImplementation(() => {});
+    vi.spyOn(service.resizeController, "clearSettledTimer").mockImplementation(() => {});
+
+    service.detachForProjectSwitch("t6");
+
+    // An explicit saved target (e.g. from setTargetSize) must not be clobbered.
+    expect(managed.targetCols).toBe(100);
+    expect(managed.targetRows).toBe(30);
+  });
+
+  it("detachForProjectSwitch() leaves target dims unset when no geometry was measured (#10070)", () => {
+    const managed = makeMockManaged("t7");
+    // latestCols/latestRows stay 0 — terminal was never measured.
+    const parent = document.createElement("div");
+    parent.appendChild(managed.hostElement);
+    service.instances.set("t7", managed);
+
+    vi.spyOn(service.offscreenManager, "ensureHiddenContainer").mockReturnValue(
+      document.createElement("div")
+    );
+    vi.spyOn(service.resizeController, "clearResizeJob").mockImplementation(() => {});
+    vi.spyOn(service.resizeController, "clearSettledTimer").mockImplementation(() => {});
+
+    service.detachForProjectSwitch("t7");
+
+    // A 0-width backfill would poison the cold-seed resize before open().
+    expect(managed.targetCols).toBeUndefined();
+    expect(managed.targetRows).toBeUndefined();
+  });
+});
+
+// attach() runs inside useLayoutEffect: any layout read here forces a
+// synchronous style/layout pass on the mount path, debug logging on or off.
+describe("TerminalInstanceService attach layout reads", () => {
+  let service: AttachTestService;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: AttachTestService;
+      });
+    vi.useFakeTimers();
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    service.instances.clear();
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("does not measure the container synchronously while attaching", () => {
+    const hostElement = document.createElement("div");
+    const offscreen = document.createElement("div");
+    offscreen.appendChild(hostElement);
+    service.instances.set("t1", {
+      id: "t1",
+      terminal: {
+        blur: vi.fn(),
+        refresh: vi.fn(),
+        dispose: vi.fn(),
+        resize: vi.fn(),
+        open: vi.fn(),
+        element: document.createElement("div"),
+        rows: 24,
+        buffer: { active: { length: 100 } },
+        onRender: vi.fn(() => ({ dispose: vi.fn() })),
+      },
+      hostElement,
+      isOpened: true,
+      isDetached: false,
+      isVisible: true,
+      lastAttachAt: 0,
+      lastDetachAt: 0,
+      lastWidth: 0,
+      lastHeight: 0,
+      isAttaching: true,
+      attachGeneration: 0,
+      attachRevealToken: 0,
+      listeners: [],
+      exitSubscribers: new Set(),
+      agentStateSubscribers: new Set(),
+      altBufferListeners: new Set(),
+    });
+    vi.spyOn(service.resizeController, "fit").mockImplementation(() => {});
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+
+    service.attach("t1", document.createElement("div"));
+
+    process.stderr.write(
+      `[bench:attach-layout-read] ${JSON.stringify({ getBoundingClientRect: rectSpy.mock.calls.length })}` +
+        "\n"
+    );
+    expect(rectSpy).not.toHaveBeenCalled();
+  });
+});

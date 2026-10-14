@@ -80,15 +80,6 @@ describe("FleetFailureBanner", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
-  it("uses singular noun when exactly one target failed", () => {
-    useFleetFailureStore.setState({
-      failedIds: new Set(["t1"]),
-      payload: "ls\r",
-    });
-    render(<FleetFailureBanner />);
-    expect(screen.getByText("1 terminal rejected the write.")).toBeTruthy();
-  });
-
   it("omits the retry action and shows no-replay copy when payload is null", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),

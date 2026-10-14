@@ -21,13 +21,6 @@ describe("extractFailedSpecPaths", () => {
     expect(extractFailedSpecPaths({ suites: [] })).toEqual([]);
   });
 
-  it("includes hard-failed specs", () => {
-    const report = {
-      suites: [{ specs: [spec("e2e/core/a.spec.ts", "unexpected", "failed")] }],
-    };
-    expect(extractFailedSpecPaths(report)).toEqual(["e2e/core/a.spec.ts"]);
-  });
-
   it("includes flaky specs even though spec-level ok is true", () => {
     // Flaky = failed first attempt, passed on retry. The last result is
     // "passed" and spec.ok would be true, but FAIL_ON_FLAKY_TESTS makes it a

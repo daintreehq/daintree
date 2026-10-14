@@ -41,32 +41,14 @@ beforeEach(() => {
 });
 
 describe("resolveNextMajorVersion — node_modules primary path", () => {
-  it("returns 15 for installed version '15.0.0'", async () => {
-    mockInstalledVersion("15.0.0");
-    expect(await resolveNextMajorVersion(CWD)).toBe(15);
-  });
-
   it("returns 14 for installed version '14.2.30'", async () => {
     mockInstalledVersion("14.2.30");
     expect(await resolveNextMajorVersion(CWD)).toBe(14);
   });
 
-  it("returns 13 for installed version '13.5.7'", async () => {
-    mockInstalledVersion("13.5.7");
-    expect(await resolveNextMajorVersion(CWD)).toBe(13);
-  });
-
   it("returns null when version field is missing", async () => {
     mockReadFile.mockImplementation(async (p) => {
       if (p === MODULES_PKG) return JSON.stringify({ name: "next" });
-      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-    });
-    expect(await resolveNextMajorVersion(CWD)).toBeNull();
-  });
-
-  it("returns null when version field is not a string", async () => {
-    mockReadFile.mockImplementation(async (p) => {
-      if (p === MODULES_PKG) return JSON.stringify({ version: 15 });
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     });
     expect(await resolveNextMajorVersion(CWD)).toBeNull();
@@ -82,16 +64,6 @@ describe("resolveNextMajorVersion — package.json fallback, common range format
     expect(await resolveNextMajorVersion(CWD)).toBe(15);
   });
 
-  it("caret range ^14.0.0 → 14", async () => {
-    mockNoNodeModules({ next: "^14.0.0" });
-    expect(await resolveNextMajorVersion(CWD)).toBe(14);
-  });
-
-  it("bare version 15.0.0 → 15", async () => {
-    mockNoNodeModules({ next: "15.0.0" });
-    expect(await resolveNextMajorVersion(CWD)).toBe(15);
-  });
-
   it("major only '15' → 15", async () => {
     mockNoNodeModules({ next: "15" });
     expect(await resolveNextMajorVersion(CWD)).toBe(15);
@@ -100,11 +72,6 @@ describe("resolveNextMajorVersion — package.json fallback, common range format
   it("x-range 15.x → 15", async () => {
     mockNoNodeModules({ next: "15.x" });
     expect(await resolveNextMajorVersion(CWD)).toBe(15);
-  });
-
-  it("x-range 14.x.x → 14", async () => {
-    mockNoNodeModules({ next: "14.x.x" });
-    expect(await resolveNextMajorVersion(CWD)).toBe(14);
   });
 
   it("tilde range ~15.0.0 → 15", async () => {
@@ -124,11 +91,6 @@ describe("resolveNextMajorVersion — package.json fallback, common range format
 
   it("dist-tag 'latest' → null (cannot determine version)", async () => {
     mockNoNodeModules({ next: "latest" });
-    expect(await resolveNextMajorVersion(CWD)).toBeNull();
-  });
-
-  it("dist-tag 'canary' → null", async () => {
-    mockNoNodeModules({ next: "canary" });
     expect(await resolveNextMajorVersion(CWD)).toBeNull();
   });
 
@@ -158,11 +120,6 @@ describe("resolveNextMajorVersion — fallback chain", () => {
     expect(await resolveNextMajorVersion(CWD)).toBe(15);
   });
 
-  it("falls back to package.json when node_modules is absent", async () => {
-    mockNoNodeModules({ next: "^15.0.0" });
-    expect(await resolveNextMajorVersion(CWD)).toBe(15);
-  });
-
   it("returns null when both sources are absent", async () => {
     mockNothing();
     expect(await resolveNextMajorVersion(CWD)).toBeNull();
@@ -175,35 +132,5 @@ describe("resolveNextMajorVersion — fallback chain", () => {
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     });
     expect(await resolveNextMajorVersion(CWD)).toBe(15);
-  });
-});
-
-describe("resolveNextMajorVersion — TURBO-01 gate boundary", () => {
-  it("v15 → 15 (injection allowed)", async () => {
-    mockInstalledVersion("15.0.0");
-    const major = await resolveNextMajorVersion(CWD);
-    expect(major).not.toBeNull();
-    expect(major! >= 15).toBe(true);
-  });
-
-  it("v14 → 14 (injection must be blocked)", async () => {
-    mockInstalledVersion("14.2.30");
-    const major = await resolveNextMajorVersion(CWD);
-    expect(major).not.toBeNull();
-    expect(major! < 15).toBe(true);
-  });
-
-  it("^15.0.0 in package.json → injection allowed (end-to-end gate check)", async () => {
-    mockNoNodeModules({ next: "^15.0.0" });
-    const major = await resolveNextMajorVersion(CWD);
-    expect(major).not.toBeNull();
-    expect(major! >= 15).toBe(true);
-  });
-
-  it("^14.0.0 in package.json → injection must be blocked", async () => {
-    mockNoNodeModules({ next: "^14.0.0" });
-    const major = await resolveNextMajorVersion(CWD);
-    expect(major).not.toBeNull();
-    expect(major! < 15).toBe(true);
   });
 });

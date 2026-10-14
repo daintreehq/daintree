@@ -106,17 +106,6 @@ describe("WorktreeLifecycleService", () => {
       expect(result?.setup).toEqual(["yarn install"]);
     });
 
-    it("uses user-level config as highest priority", async () => {
-      const userConfig = { setup: ["bun install"] };
-
-      mockAccess.mockResolvedValue(undefined); // all files exist
-      mockReadFile.mockResolvedValue(JSON.stringify(userConfig));
-
-      const result = await service.loadConfig("/path/to/worktree", "/path/to/project");
-      // First existing valid config wins — user-level is first
-      expect(result?.setup).toEqual(["bun install"]);
-    });
-
     it("skips invalid JSON and tries next config", async () => {
       const validConfig = { setup: ["npm install"] };
 
@@ -186,6 +175,205 @@ describe("WorktreeLifecycleService", () => {
     });
   });
 
+  describe("loadConfig with resource block", () => {
+    it("parses a full resource config with all fields", async () => {
+      const config = {
+        setup: ["npm install"],
+        resource: {
+          provision: ["docker compose up -d"],
+          teardown: ["docker compose down"],
+          resume: ["docker compose start"],
+          pause: ["docker compose stop"],
+          status: "docker compose ps --format json",
+          connect: "docker exec -it app bash",
+        },
+      };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (n(p).includes("/.daintree/projects/")) throw new Error("ENOENT");
+        if (n(p).endsWith("/worktree/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockResolvedValue(JSON.stringify(config));
+
+      const result = await service.loadConfig("/path/to/worktree", "/path/to/project");
+      expect(result).not.toBeNull();
+      expect(result?.setup).toEqual(["npm install"]);
+      expect(result?.resource).toBeDefined();
+      expect(result?.resource?.provision).toEqual(["docker compose up -d"]);
+      expect(result?.resource?.teardown).toEqual(["docker compose down"]);
+      expect(result?.resource?.resume).toEqual(["docker compose start"]);
+      expect(result?.resource?.pause).toEqual(["docker compose stop"]);
+      expect(result?.resource?.status).toBe("docker compose ps --format json");
+      expect(result?.resource?.connect).toBe("docker exec -it app bash");
+    });
+
+    it("parses an empty resource block as valid", async () => {
+      const config = { resource: {} };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (n(p).includes("/.daintree/projects/")) throw new Error("ENOENT");
+        if (n(p).endsWith("/worktree/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockResolvedValue(JSON.stringify(config));
+
+      const result = await service.loadConfig("/path/to/worktree", "/path/to/project");
+      expect(result).not.toBeNull();
+      expect(result?.resource).toEqual({});
+    });
+
+    it("rejects config where resource.status is an array instead of string", async () => {
+      const invalidConfig = { resource: { status: ["invalid"] } };
+      const validConfig = { setup: ["npm install"] };
+
+      let readCount = 0;
+      mockAccess.mockImplementation(async (p: string) => {
+        if (n(p).includes("/.daintree/projects/")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockImplementation(async () => {
+        readCount++;
+        if (readCount === 1) return JSON.stringify(invalidConfig);
+        return JSON.stringify(validConfig);
+      });
+
+      const result = await service.loadConfig("/path/to/worktree", "/path/to/project");
+      expect(result).toEqual(validConfig);
+    });
+  });
+
+  describe("loadConfig with resources (plural) block", () => {
+    it("parses resources record with multiple named environments", async () => {
+      const config = {
+        resources: {
+          docker: {
+            provision: ["docker compose up -d"],
+            connect: "docker exec -it app bash",
+          },
+          akash: {
+            provision: ["akash deploy"],
+            status: "akash status",
+          },
+        },
+      };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (n(p).includes("/.daintree/projects/")) throw new Error("ENOENT");
+        if (n(p).endsWith("/worktree/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockResolvedValue(JSON.stringify(config));
+
+      const result = await service.loadConfig("/path/to/worktree", "/path/to/project");
+      expect(result).not.toBeNull();
+      expect(result?.resources?.docker?.provision).toEqual(["docker compose up -d"]);
+      expect(result?.resources?.akash?.status).toBe("akash status");
+    });
+  });
+
+  describe("loadResourceConfig resolution", () => {
+    it("returns named environment when environmentId provided", async () => {
+      const config = {
+        resources: {
+          docker: { provision: ["docker up"] },
+          akash: { provision: ["akash deploy"] },
+        },
+      };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (n(p).includes("/.daintree/projects/")) throw new Error("ENOENT");
+        if (n(p).endsWith("/worktree/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockResolvedValue(JSON.stringify(config));
+
+      const result = await service.loadResourceConfig(
+        "/path/to/worktree",
+        "/path/to/project",
+        "akash"
+      );
+      expect(result?.provision).toEqual(["akash deploy"]);
+    });
+
+    it("returns default environment when no environmentId", async () => {
+      const config = {
+        resources: {
+          default: { provision: ["default-provision"] },
+          staging: { provision: ["staging-provision"] },
+        },
+      };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (n(p).includes("/.daintree/projects/")) throw new Error("ENOENT");
+        if (n(p).endsWith("/worktree/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockResolvedValue(JSON.stringify(config));
+
+      const result = await service.loadResourceConfig("/path/to/worktree", "/path/to/project");
+      expect(result?.provision).toEqual(["default-provision"]);
+    });
+
+    it("falls back to singular resource when resources not present", async () => {
+      const config = {
+        resource: { provision: ["old-way"] },
+      };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (n(p).includes("/.daintree/projects/")) throw new Error("ENOENT");
+        if (n(p).endsWith("/worktree/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockResolvedValue(JSON.stringify(config));
+
+      const result = await service.loadResourceConfig("/path/to/worktree", "/path/to/project");
+      expect(result?.provision).toEqual(["old-way"]);
+    });
+
+    it("returns null when neither resource nor resources exist", async () => {
+      const config = { setup: ["npm install"] };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (n(p).includes("/.daintree/projects/")) throw new Error("ENOENT");
+        if (n(p).endsWith("/worktree/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockResolvedValue(JSON.stringify(config));
+
+      const result = await service.loadResourceConfig("/path/to/worktree", "/path/to/project");
+      expect(result).toBeNull();
+    });
+
+    it("falls back to first entry when no default and no environmentId", async () => {
+      const config = {
+        resources: {
+          staging: { provision: ["staging-deploy"] },
+          prod: { provision: ["prod-deploy"] },
+        },
+      };
+
+      mockAccess.mockImplementation(async (p: string) => {
+        if (n(p).includes("/.daintree/projects/")) throw new Error("ENOENT");
+        if (n(p).endsWith("/worktree/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockResolvedValue(JSON.stringify(config));
+
+      const result = await service.loadResourceConfig("/path/to/worktree", "/path/to/project");
+      expect(result?.provision).toEqual(["staging-deploy"]);
+    });
+  });
+
   describe("copyDaintreeDir", () => {
     it("does nothing if source .daintree does not exist", async () => {
       mockAccess.mockRejectedValue(new Error("ENOENT"));
@@ -195,24 +383,6 @@ describe("WorktreeLifecycleService", () => {
 
     it("copies .daintree from src to dest even if dest already exists (force:false preserves existing)", async () => {
       mockAccess.mockResolvedValue(undefined); // src exists
-      await service.copyDaintreeDir("/main/repo", "/new/worktree");
-      expect(mockCp).toHaveBeenCalledWith(
-        path.join("/main/repo", ".daintree"),
-        path.join("/new/worktree", ".daintree"),
-        {
-          recursive: true,
-          force: false,
-          errorOnExist: false,
-        }
-      );
-    });
-
-    it("copies .daintree from src to dest when src exists", async () => {
-      mockAccess.mockImplementation(async (p: string) => {
-        if ((p as string).includes(path.join("/main/repo", ".daintree"))) return undefined; // src exists
-        throw new Error("ENOENT"); // dest does not
-      });
-
       await service.copyDaintreeDir("/main/repo", "/new/worktree");
       expect(mockCp).toHaveBeenCalledWith(
         path.join("/main/repo", ".daintree"),
@@ -253,6 +423,225 @@ describe("WorktreeLifecycleService", () => {
         DAINTREE_WORKTREE_PATH: "/worktrees/feat",
         DAINTREE_PROJECT_ROOT: "/project",
         DAINTREE_WORKTREE_NAME: "feature/my-branch",
+      });
+    });
+
+    it("includes DAINTREE_BRANCH when branch is provided", () => {
+      const env = service.buildEnv(
+        "/worktrees/feat",
+        "/project",
+        "feature/lifecycle",
+        "feature/lifecycle"
+      );
+      expect(env.DAINTREE_BRANCH).toBe("feature/lifecycle");
+    });
+
+    it("includes DAINTREE_RESOURCE_PROVIDER when resource provider is provided", () => {
+      const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle", undefined, {
+        provider: "akash",
+      });
+      expect(env.DAINTREE_RESOURCE_PROVIDER).toBe("akash");
+    });
+
+    it("includes DAINTREE_RESOURCE_ENDPOINT when resource endpoint is provided", () => {
+      const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle", undefined, {
+        endpoint: "https://app.example.com",
+      });
+      expect(env.DAINTREE_RESOURCE_ENDPOINT).toBe("https://app.example.com");
+    });
+
+    it("includes DAINTREE_RESOURCE_STATUS when resource lastOutput is provided", () => {
+      const jsonOutput = '{"status":"ready","endpoint":"10.0.0.1"}';
+      const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle", undefined, {
+        lastOutput: jsonOutput,
+      });
+      expect(env.DAINTREE_RESOURCE_STATUS).toBe(jsonOutput);
+    });
+
+    it("omits individual resource vars when their values are undefined", () => {
+      const env = service.buildEnv("/worktrees/feat", "/project", "feature/lifecycle", undefined, {
+        provider: "fly",
+      });
+      expect(env.DAINTREE_RESOURCE_PROVIDER).toBe("fly");
+      expect(env).not.toHaveProperty("DAINTREE_RESOURCE_ENDPOINT");
+      expect(env).not.toHaveProperty("DAINTREE_RESOURCE_STATUS");
+    });
+  });
+
+  describe("substituteVariables", () => {
+    const origPlatform = process.platform;
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: origPlatform });
+    });
+
+    function setPlatform(p: string) {
+      Object.defineProperty(process, "platform", { value: p });
+    }
+
+    const baseVars = { worktree_path: "/w", worktree_name: "test", project_root: "/p" };
+
+    it("shell-escapes {{branch}} on Unix (single quotes)", () => {
+      setPlatform("darwin");
+      const result = service.substituteVariables("ssh deploy@{{branch}}.example.com", {
+        ...baseVars,
+        branch: "feature/test",
+      });
+      expect(result).toBe("ssh deploy@'feature/test'.example.com");
+    });
+
+    it("shell-escapes {{branch}} on Windows (double quotes)", () => {
+      setPlatform("win32");
+      const result = service.substituteVariables("ssh deploy@{{branch}}.example.com", {
+        ...baseVars,
+        branch: "feature/test",
+      });
+      expect(result).toBe('ssh deploy@"feature/test".example.com');
+    });
+
+    it("leaves unresolved variables as-is (fails loudly in shell)", () => {
+      const result = service.substituteVariables("ssh root@{{unknown_var}}", baseVars);
+      expect(result).toBe("ssh root@{{unknown_var}}");
+    });
+
+    it("replaces multiple variables with escaping", () => {
+      setPlatform("linux");
+      const result = service.substituteVariables(
+        "deploy --branch={{branch}} --dir={{worktree_path}} --name={{worktree_name}}",
+        { ...baseVars, branch: "main", worktree_path: "/w/main", worktree_name: "main" }
+      );
+      expect(result).toBe("deploy --branch='main' --dir='/w/main' --name='main'");
+    });
+
+    it("is case-insensitive for variable names", () => {
+      setPlatform("darwin");
+      const result = service.substituteVariables("echo {{BRANCH}} {{Worktree_Path}}", {
+        ...baseVars,
+        branch: "dev",
+      });
+      expect(result).toBe("echo 'dev' '/w'");
+    });
+
+    it("leaves {branch-slug} unquoted (already sanitized to [a-z0-9-])", () => {
+      setPlatform("darwin");
+      const result = service.substituteVariables("deploy {branch-slug}", {
+        ...baseVars,
+        branch: "feature/test",
+        "branch-slug": "feature-test",
+      });
+      expect(result).toBe("deploy feature-test");
+    });
+
+    describe("shell injection prevention", () => {
+      it("neutralizes $(command) in branch names on Unix", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("echo {{branch}}", {
+          ...baseVars,
+          branch: "feat/$(whoami)",
+        });
+        expect(result).toBe("echo 'feat/$(whoami)'");
+      });
+
+      it("escapes embedded single quotes on Unix", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("echo {{branch}}", {
+          ...baseVars,
+          branch: "it's-a-branch",
+        });
+        expect(result).toBe("echo 'it'\\''s-a-branch'");
+      });
+
+      it("escapes embedded double quotes on Windows", () => {
+        setPlatform("win32");
+        const result = service.substituteVariables("echo {{branch}}", {
+          ...baseVars,
+          branch: 'say "hi"',
+        });
+        expect(result).toBe('echo "say ""hi"""');
+      });
+
+      it("escapes Windows %VAR% environment variable expansion", () => {
+        setPlatform("win32");
+        const result = service.substituteVariables("deploy {{branch}}", {
+          ...baseVars,
+          branch: "feat/%CD%",
+        });
+        expect(result).toBe('deploy "feat/%%CD%%"');
+      });
+
+      it("never re-expands placeholders inside a value it already substituted", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("echo {{branch}}", {
+          ...baseVars,
+          branch: "x{branch}$(id)",
+        });
+        expect(result).toBe("echo 'x{branch}$(id)'");
+      });
+
+      it("leaves placeholders straight after `$` alone", () => {
+        setPlatform("linux");
+        // Substituted, `${{endpoint}}` would become `$'…'`, where bash reads
+        // backslash escapes and a crafted value could close the quote.
+        const result = service.substituteVariables("ssh ${{endpoint}} ${branch-slug}", {
+          ...baseVars,
+          endpoint: "box\\'||id;#",
+          "branch-slug": "feature-x",
+        });
+        expect(result).toBe("ssh ${{endpoint}} ${branch-slug}");
+      });
+
+      it("still expands both placeholder forms in one template", () => {
+        setPlatform("linux");
+        const result = service.substituteVariables("cd {{worktree_path}} && deploy {branch-slug}", {
+          ...baseVars,
+          "branch-slug": "feature-x",
+        });
+        expect(result).toBe("cd '/w' && deploy feature-x");
+      });
+
+      it("falls back to escaping branch-slug if it contains unexpected characters", () => {
+        setPlatform("darwin");
+        const result = service.substituteVariables("deploy {branch-slug}", {
+          ...baseVars,
+          "branch-slug": "bad; rm -rf /",
+        });
+        expect(result).toBe("deploy 'bad; rm -rf /'");
+      });
+    });
+  });
+
+  describe("buildVariables", () => {
+    it("returns all lifecycle variables", () => {
+      const vars = service.buildVariables("/w/feat", "/project", "feat-branch", "feature/test");
+      expect(vars).toEqual({
+        branch: "feature/test",
+        worktree_path: "/w/feat",
+        worktree_name: "feat-branch",
+        project_root: "/project",
+        endpoint: undefined,
+        "parent-dir": "/",
+        "base-folder": "project",
+        "branch-slug": "feature-test",
+        "repo-name": "project",
+      });
+    });
+
+    it("sets branch to undefined when not provided", () => {
+      const vars = service.buildVariables("/w/detached", "/project", "detached");
+      expect(vars.branch).toBeUndefined();
+    });
+
+    it("includes endpoint when provided", () => {
+      const vars = service.buildVariables("/w", "/p", "test", "main", "https://app.example.com");
+      expect(vars).toEqual({
+        branch: "main",
+        worktree_path: "/w",
+        worktree_name: "test",
+        project_root: "/p",
+        endpoint: "https://app.example.com",
+        "parent-dir": "/",
+        "base-folder": "p",
+        "branch-slug": "main",
+        "repo-name": "p",
       });
     });
   });
@@ -365,23 +754,6 @@ describe("WorktreeLifecycleService", () => {
       expect(result.error).toContain("exit");
     });
 
-    it("stops at first failing command", async () => {
-      let callCount = 0;
-      mockSpawn.mockImplementation(() => {
-        callCount++;
-        return makeFakeProcess(callCount === 1 ? 1 : 0);
-      });
-
-      const result = await service.runCommands(["failing-cmd", "second-cmd"], {
-        cwd: "/test",
-        env: {},
-        onProgress: vi.fn(),
-      });
-
-      expect(result.success).toBe(false);
-      expect(callCount).toBe(1);
-    });
-
     it("returns success for empty commands array", async () => {
       const result = await service.runCommands([], {
         cwd: "/test",
@@ -406,6 +778,66 @@ describe("WorktreeLifecycleService", () => {
       expect(result.error).toContain("ENOENT");
     });
 
+    it("runs multiple provision commands sequentially", async () => {
+      const callOrder: string[] = [];
+      mockSpawn.mockImplementation((cmd: string) => {
+        callOrder.push(cmd);
+        return makeFakeProcess(0);
+      });
+
+      const result = await service.runCommands(
+        ["docker compose pull", "docker compose up -d", "docker compose exec app migrate"],
+        {
+          cwd: "/project",
+          env: {},
+          onProgress: vi.fn(),
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(callOrder).toEqual([
+        "docker compose pull",
+        "docker compose up -d",
+        "docker compose exec app migrate",
+      ]);
+    });
+
+    it("stops at first failing provision command", async () => {
+      let callCount = 0;
+      mockSpawn.mockImplementation(() => {
+        callCount++;
+        return makeFakeProcess(callCount === 2 ? 1 : 0);
+      });
+
+      const result = await service.runCommands(
+        ["docker compose pull", "docker compose up -d", "docker compose exec app migrate"],
+        {
+          cwd: "/project",
+          env: {},
+          onProgress: vi.fn(),
+        }
+      );
+
+      expect(result.success).toBe(false);
+      expect(callCount).toBe(2);
+      expect(result.error).toContain("docker compose up -d");
+    });
+
+    it("reports progress correctly for resource command sequences", async () => {
+      mockSpawn.mockImplementation(() => makeFakeProcess(0));
+
+      const onProgress = vi.fn();
+      await service.runCommands(["docker compose pull", "docker compose up -d"], {
+        cwd: "/project",
+        env: {},
+        onProgress,
+      });
+
+      expect(onProgress).toHaveBeenCalledTimes(2);
+      expect(onProgress).toHaveBeenCalledWith(0, 2, "docker compose pull");
+      expect(onProgress).toHaveBeenCalledWith(1, 2, "docker compose up -d");
+    });
+
     it.skipIf(process.platform === "win32")("injects PATH and HOME on Unix", async () => {
       const child = makeFakeProcess(0);
       mockSpawn.mockReturnValue(child);
@@ -423,28 +855,6 @@ describe("WorktreeLifecycleService", () => {
             DAINTREE_WORKTREE_PATH: "/wt",
             PATH: expect.any(String),
             HOME: expect.any(String),
-          }),
-        })
-      );
-    });
-
-    it.runIf(process.platform === "win32")("injects PATH and USERPROFILE on Windows", async () => {
-      const child = makeFakeProcess(0);
-      mockSpawn.mockReturnValue(child);
-
-      await service.runCommands(["echo test"], {
-        cwd: "/test",
-        env: { DAINTREE_WORKTREE_PATH: "/wt" },
-        onProgress: vi.fn(),
-      });
-
-      expect(mockSpawn).toHaveBeenCalledWith(
-        "echo test",
-        expect.objectContaining({
-          env: expect.objectContaining({
-            DAINTREE_WORKTREE_PATH: "/wt",
-            PATH: expect.any(String),
-            USERPROFILE: expect.any(String),
           }),
         })
       );

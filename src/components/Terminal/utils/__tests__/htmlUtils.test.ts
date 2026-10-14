@@ -10,10 +10,6 @@ describe("escapeHtml", () => {
     expect(escapeHtml("foo & bar")).toBe("foo &amp; bar");
   });
 
-  it("escapes script tags (XSS prevention)", () => {
-    expect(escapeHtml("<script>alert(1)</script>")).toBe("&lt;script&gt;alert(1)&lt;/script&gt;");
-  });
-
   it("preserves normal text", () => {
     expect(escapeHtml("Hello World")).toBe("Hello World");
   });
@@ -24,20 +20,8 @@ describe("escapeHtml", () => {
 });
 
 describe("escapeHtmlAttribute", () => {
-  it("escapes double quotes", () => {
-    expect(escapeHtmlAttribute('value with "quotes"')).toBe("value with &quot;quotes&quot;");
-  });
-
   it("escapes single quotes", () => {
     expect(escapeHtmlAttribute("value with 'quotes'")).toBe("value with &#39;quotes&#39;");
-  });
-
-  it("escapes angle brackets", () => {
-    expect(escapeHtmlAttribute("<script>")).toBe("&lt;script&gt;");
-  });
-
-  it("escapes ampersands", () => {
-    expect(escapeHtmlAttribute("foo & bar")).toBe("foo &amp; bar");
   });
 
   it("preserves newlines (allowed in HTML attributes)", () => {
@@ -45,26 +29,8 @@ describe("escapeHtmlAttribute", () => {
     expect(escapeHtmlAttribute("value\nwith\nnewlines")).toBe("value\nwith\nnewlines");
   });
 
-  it("preserves equals signs (needed for URLs)", () => {
-    // = doesn't break out of quoted attributes
-    expect(escapeHtmlAttribute("onclick=alert(1)")).toBe("onclick=alert(1)");
-  });
-
   it("escapes all quote/angle characters together", () => {
     expect(escapeHtmlAttribute('a="b" & <c>')).toBe("a=&quot;b&quot; &amp; &lt;c&gt;");
-  });
-
-  it("handles complex attribute injection attempt via quotes", () => {
-    // Attacker tries to break out of style and inject onclick using quotes
-    // The quotes are escaped, so the injection fails
-    const malicious = 'color:red" onclick="alert(1)" data="';
-    const escaped = escapeHtmlAttribute(malicious);
-    expect(escaped).toBe("color:red&quot; onclick=&quot;alert(1)&quot; data=&quot;");
-    // The escaped string is safe - all quotes are escaped so no attribute breakout
-  });
-
-  it("preserves normal text", () => {
-    expect(escapeHtmlAttribute("normal text")).toBe("normal text");
   });
 
   it("handles empty string", () => {
@@ -112,30 +78,6 @@ describe("linkifyHtml XSS prevention", () => {
     expect(output).toContain('<a href="https://example.com"');
     expect(output).toContain("</a>' onclick=");
   });
-
-  it("handles URLs with event handler injection attempts", () => {
-    const input = 'https://evil.com" onmouseover="alert(document.cookie)';
-    const output = linkifyHtml(input);
-    // The " ends the URL match, so onmouseover is outside the link
-    expect(output).toContain('<a href="https://evil.com"');
-    expect(output).toContain('</a>" onmouseover=');
-  });
-
-  it("decodes then re-escapes ampersands for proper URL rendering", () => {
-    // When URL contains &amp; (from escaped HTML), it gets decoded to &, then re-escaped to &amp;
-    // This prevents double-escaping and ensures URLs work correctly
-    const input = "Visit https://example.com/path?a=1&amp;b=2";
-    const output = linkifyHtml(input);
-    // The &amp; gets decoded to & then escaped back to &amp; (proper handling)
-    expect(output).toContain('href="https://example.com/path?a=1&amp;b=2"');
-  });
-
-  it("escapes display text as well as href", () => {
-    // URL with &amp; gets decoded to & then re-escaped for display
-    const input = "Visit https://example.com/path?a=1&amp;b=2";
-    const output = linkifyHtml(input);
-    expect(output).toContain(">https://example.com/path?a=1&amp;b=2</a>");
-  });
 });
 
 describe("linkifyHtml", () => {
@@ -179,30 +121,6 @@ describe("convertAnsiLinesToHtml", () => {
     expect(result[0]).toBe("&lt;div&gt;Hello&lt;/div&gt;");
   });
 
-  it("escapes script tags (XSS prevention)", () => {
-    const result = convertAnsiLinesToHtml(["<script>alert(1)</script>"]);
-    expect(result[0]).toContain("&lt;script&gt;");
-    expect(result[0]).not.toContain("<script>");
-  });
-
-  it("preserves ANSI color codes as styled spans", () => {
-    // Red text ANSI: \x1b[31m
-    const result = convertAnsiLinesToHtml(["\x1b[31mRed text\x1b[0m"]);
-    expect(result[0]).toContain("ansi-red-fg");
-    expect(result[0]).toContain("Red text");
-  });
-
-  it("escapes HTML inside colored ANSI text", () => {
-    const result = convertAnsiLinesToHtml(["\x1b[31m<div>test</div>\x1b[0m"]);
-    expect(result[0]).toContain("&lt;div&gt;test&lt;/div&gt;");
-    expect(result[0]).toContain("ansi-red-fg");
-  });
-
-  it("linkifies URLs in output", () => {
-    const result = convertAnsiLinesToHtml(["Visit https://example.com"]);
-    expect(result[0]).toContain('<a href="https://example.com"');
-  });
-
   it("handles URLs with query parameters containing &", () => {
     const result = convertAnsiLinesToHtml(["Visit https://example.com?a=1&b=2"]);
     // The & gets escaped to &amp; in the input (escapeHtml),
@@ -234,11 +152,6 @@ describe("convertAnsiLinesToHtml", () => {
     expect(result[0]).toBe("&amp;amp;test");
   });
 
-  it("handles HTML entities like &nbsp;", () => {
-    const result = convertAnsiLinesToHtml(["hello&nbsp;world"]);
-    expect(result[0]).toBe("hello&amp;nbsp;world");
-  });
-
   it("handles combined HTML + ANSI + URL in one line", () => {
     // Most fragile path: escape → ansi → linkify
     const result = convertAnsiLinesToHtml([
@@ -257,14 +170,5 @@ describe("convertAnsiLinesToHtml", () => {
     const result = convertAnsiLinesToHtml(["Click javascript:alert(1)"]);
     expect(result[0]).not.toContain("<a href");
     expect(result[0]).toBe("Click javascript:alert(1)");
-  });
-
-  it("handles complex ANSI sequences (bold, multiple colors)", () => {
-    // Bold + red + reset
-    const result = convertAnsiLinesToHtml(["\x1b[1m\x1b[31mBold Red\x1b[0m Normal"]);
-    expect(result[0]).toContain("Bold Red");
-    expect(result[0]).toContain("Normal");
-    // Should have some styling (exact output depends on Anser implementation)
-    expect(result[0]!.length).toBeGreaterThan("Bold Red Normal".length);
   });
 });

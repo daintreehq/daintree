@@ -326,3 +326,42 @@ describe("PluginService file logging — lifecycle (#12804)", () => {
     );
   });
 });
+
+/**
+ * `getDiagnosticsSnapshot` used to key its entries off `manifest.name` while the
+ * registry keys a project plugin off its instance key, so every project plugin
+ * fell out of the snapshot — silently, and precisely for the plugins whose
+ * authors read these diagnostics (#12214).
+ */
+describe("PluginService.getDiagnosticsSnapshot", () => {
+  it("reports a project plugin under the instance key the registry holds", () => {
+    const instanceKey = makeProjectPluginInstanceKey("a".repeat(64), "acme.demo");
+    service._registerFakePluginForTests(fakePlugin("acme.demo"), instanceKey);
+
+    const ids = service.getDiagnosticsSnapshot().plugins.map((p) => p.pluginId);
+
+    expect(ids).toContain(instanceKey);
+    // The bare manifest id is not what the registry holds it under, so it must
+    // not appear as a second, phantom entry.
+    expect(ids).not.toContain("acme.demo");
+  });
+
+  it("still reports an installed plugin under its plain manifest id", () => {
+    service._registerFakePluginForTests(fakePlugin("acme.installed"));
+
+    expect(service.getDiagnosticsSnapshot().plugins.map((p) => p.pluginId)).toContain(
+      "acme.installed"
+    );
+  });
+
+  it("keeps two projects' copies of one id apart", () => {
+    const keyA = makeProjectPluginInstanceKey("a".repeat(64), "acme.demo");
+    const keyB = makeProjectPluginInstanceKey("b".repeat(64), "acme.demo");
+    service._registerFakePluginForTests(fakePlugin("acme.demo"), keyA);
+    service._registerFakePluginForTests(fakePlugin("acme.demo"), keyB);
+
+    const ids = service.getDiagnosticsSnapshot().plugins.map((p) => p.pluginId);
+    expect(ids).toContain(keyA);
+    expect(ids).toContain(keyB);
+  });
+});

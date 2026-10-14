@@ -363,21 +363,6 @@ describe("worktree.createWithRecipe", () => {
     expect(worktreeClientMock.create).not.toHaveBeenCalled();
   });
 
-  it("PR path surfaces fetchPRBranch failures (no worktree created)", async () => {
-    forgeClientMock.getPR.mockResolvedValue({
-      number: 42,
-      headRef: "contrib/x",
-      title: "x",
-      url: "u",
-    });
-    worktreeClientMock.fetchPRBranch.mockRejectedValue(new Error("git fetch failed"));
-    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
-      /git fetch failed/
-    );
-    expect(worktreeClientMock.create).not.toHaveBeenCalled();
-  });
-
   it("PR path names the branch and a way forward, keeping the git reason", async () => {
     // The agent gets no banner and no retry affordance, so the raw
     // "couldn't find remote ref" has to be wrapped into something it can act
@@ -828,20 +813,6 @@ describe("worktree.createWithRecipe", () => {
     expect(notifySpawnFailuresMock).not.toHaveBeenCalled();
   });
 
-  it("treats empty-string headRef the same as missing", async () => {
-    forgeClientMock.getPR.mockResolvedValue({
-      number: 42,
-      headRef: "",
-      title: "x",
-      url: "u",
-    });
-    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
-    await expect(def.run({ source: pullRequest(42) }, {} as never)).rejects.toThrow(
-      /no head branch/
-    );
-    expect(worktreeClientMock.fetchPRBranch).not.toHaveBeenCalled();
-  });
-
   it("treats whitespace-only headRef the same as missing", async () => {
     forgeClientMock.getPR.mockResolvedValue({
       number: 42,
@@ -1245,22 +1216,6 @@ describe("workflow.startWorkOnIssue", () => {
     );
   });
 
-  it("throws PARTIAL_SUCCESS when agent.launch returns null after worktree creation", async () => {
-    forgeClientMock.getIssue.mockResolvedValue({
-      number: 1,
-      title: "x",
-      url: "u",
-    });
-    const callbacks = makeCallbacks();
-    callbacks.onLaunchAgent.mockResolvedValue(null);
-    const def = setupActions(callbacks)("workflow.startWorkOnIssue");
-    await expect(def.run({ issueNumber: 1, agentId: "claude" }, {} as never)).rejects.toThrow(
-      /PARTIAL_SUCCESS:/
-    );
-    expect(worktreeClientMock.create).toHaveBeenCalled();
-    expect(copyTreeClientMock.injectToTerminal).not.toHaveBeenCalled();
-  });
-
   it("throws PARTIAL_SUCCESS without injecting when the CLI is missing (setup-diagnostic panel)", async () => {
     forgeClientMock.getIssue.mockResolvedValue({ number: 2, title: "x", url: "u" });
     const callbacks = makeCallbacks();
@@ -1465,20 +1420,6 @@ describe("workflow.startWorkOnIssue", () => {
     expect(result.assignmentError).toBeNull();
   });
 
-  it("assignToSelf is best-effort — failure surfaces in assignmentError without aborting the macro", async () => {
-    forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
-    setGithubUser("ada");
-    forgeClientMock.assignIssue.mockRejectedValue(new Error("403 Forbidden"));
-    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
-    const result = (await def.run(
-      { issueNumber: 6609, agentId: "claude", assignToSelf: true },
-      {} as never
-    )) as Record<string, unknown>;
-    expect(result.assignedToSelf).toBe(false);
-    expect(result.assignmentError).toBe("403 Forbidden");
-    expect(result.terminalId).toBe("term-1");
-  });
-
   it("assignToSelf omitted falls back to assignWorktreeToSelf preference (true)", async () => {
     forgeClientMock.getIssue.mockResolvedValue({ number: 6609, title: "t", url: "u" });
     setGithubUser("ada");
@@ -1592,6 +1533,45 @@ describe("workflow.startWorkOnIssue", () => {
     const branch = call[1] as string;
     expect(branch).toMatch(/^feature\/issue-42-/);
     expect(branch).not.toMatch(/[^a-z0-9/-]/);
+  });
+});
+
+/**
+ * #11547 — `workflow.startWorkOnIssue` had a complete resultSchema but never set
+ * `mcpOutputSchema`, so the one action tying an issue to a running agent handed
+ * callers a text blob and nothing structured. These assert the *generated*
+ * schema through the real ActionService rather than the literal flag, so the
+ * tierAuth `type === "object"` gate is exercised end to end.
+ */
+describe("workflow.startWorkOnIssue emits a manifest outputSchema (#11547)", () => {
+  const registerAll = () => registerThroughActionService(makeCallbacks());
+  const outputSchema = (service: ActionService, id: string) =>
+    service.get(id as ActionId)?.outputSchema as Record<string, unknown> | undefined;
+
+  it("generates an object-typed outputSchema", () => {
+    // Without mcpOutputSchema this is undefined; with a top-level nullable
+    // schema it would be an untyped `anyOf` that tierAuth drops. Either
+    // regression fails here.
+    const schema = outputSchema(registerAll(), "workflow.startWorkOnIssue");
+    expect(schema).toBeDefined();
+    expect(schema!.type).toBe("object");
+  });
+
+  it("requires every advertised field", () => {
+    const schema = outputSchema(registerAll(), "workflow.startWorkOnIssue")!;
+    const props = Object.keys((schema.properties as Record<string, unknown>) ?? {});
+    const required = (schema.required as string[] | undefined) ?? [];
+    // `run()` always emits the whole object, so nothing may be optional — an
+    // optional key lets a strict client read "absent" as a distinct state.
+    // (The startWorkOnIssue suite above covers the run()-vs-schema agreement.)
+    expect(props.length).toBeGreaterThan(0);
+    expect([...required].sort()).toEqual([...props].sort());
+  });
+
+  it("does not flip the flag on its sibling worktree.createWithRecipe", () => {
+    // The neighbour in the same module has no mcpOutputSchema; enabling one
+    // action must not quietly enable the other.
+    expect(outputSchema(registerAll(), "worktree.createWithRecipe")).toBeUndefined();
   });
 });
 

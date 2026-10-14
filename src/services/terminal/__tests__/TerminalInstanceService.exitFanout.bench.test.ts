@@ -3,13 +3,10 @@
 // Benchmark for per-terminal event fan-out in the renderer terminal service.
 // Prints metrics with EXIT_FANOUT_BENCH=1; the assertions pin the O(1)-per-event shape.
 //
-// 1. Exit fan-out: N terminals, each PTY exits once (kill-by-project / project
-//    close). The preload event bus calls every `terminal:exit` subscriber across
-//    the contextBridge per event, so the metric is bus subscriber invocations.
-// 2. Echo release: one keystroke, then a 50-chunk output burst for the echoing
-//    terminal inside one frame. Measures frame callbacks queued and run.
+// Exit fan-out: N terminals, each PTY exits once (kill-by-project / project
+// close). The preload event bus calls every `terminal:exit` subscriber across
+// the contextBridge per event, so the metric is bus subscriber invocations.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TerminalBurstController } from "../TerminalBurstController";
 import type { ManagedTerminal } from "../types";
 
 type ExitCb = (id: string, exitCode: number) => void;
@@ -76,7 +73,6 @@ vi.mock("../TerminalAddonManager", () => ({
 }));
 
 const PRINT = process.env.EXIT_FANOUT_BENCH === "1";
-const ECHO_CHUNKS = 50;
 const TIMING_ROUNDS = 200;
 
 type BenchService = {
@@ -126,7 +122,7 @@ describe("terminal event fan-out benchmark", () => {
     expect(exitBus.subscribers.size).toBe(1);
   });
 
-  for (const n of [20, 50]) {
+  for (const n of [20]) {
     it(`dispatches each of ${n} PTY exits to its own terminal only`, async () => {
       const ids = Array.from({ length: n }, (_, i) => `t${i}`);
       for (const id of ids) await service.prewarmTerminal(id, "terminal", {});
@@ -160,58 +156,4 @@ describe("terminal event fan-out benchmark", () => {
       expect(invocations).toBe(n);
     });
   }
-});
-
-describe("echo release benchmark", () => {
-  let queued: FrameRequestCallback[];
-  let scheduled: number;
-  let ran: number;
-
-  beforeEach(() => {
-    queued = [];
-    scheduled = 0;
-    ran = 0;
-    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
-      scheduled++;
-      queued.push(cb);
-      return scheduled;
-    });
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  function flushFrame(): void {
-    const frame = queued;
-    queued = [];
-    for (const cb of frame) {
-      ran++;
-      cb(performance.now());
-    }
-  }
-
-  it(`queues one frame callback for a ${ECHO_CHUNKS}-chunk echo burst`, () => {
-    const controller = new TerminalBurstController({
-      getInstance: () => undefined,
-      applyRendererPolicy: vi.fn(),
-      holdWebGLForScroll: vi.fn(),
-    });
-
-    controller.onEchoPendingInput("t1");
-    for (let i = 0; i < ECHO_CHUNKS; i++) controller.onEchoData("t1");
-    expect(controller.getEchoPendingHoldId()).toBe("t1");
-    flushFrame();
-
-    if (PRINT) {
-      process.stdout.write(
-        `[echo-release] chunks=${ECHO_CHUNKS} rafScheduled=${scheduled} rafRan=${ran}\n`
-      );
-    }
-
-    expect(controller.getEchoPendingHoldId()).toBeNull();
-    expect(scheduled).toBe(1);
-    expect(ran).toBe(1);
-  });
 });

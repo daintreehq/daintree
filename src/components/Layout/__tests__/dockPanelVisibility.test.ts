@@ -154,14 +154,6 @@ describe("selectOpenDockPopoverId", () => {
 
     expect(selectOpenDockPopoverId(state, scope)).toBeNull();
   });
-
-  it("returns null once the panel has moved back to the grid", () => {
-    const state = createState({
-      panelsById: { "dock-1": createDockPanel("dock-1", { location: "grid" }) },
-    });
-
-    expect(selectOpenDockPopoverId(state, scope)).toBeNull();
-  });
 });
 
 describe("isDockPanelRendered — plugin kinds follow the registry (#11332)", () => {

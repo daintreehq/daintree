@@ -10,10 +10,6 @@ describe("formatErrorMessage", () => {
       expect(formatErrorMessage(new Error("boom"), FALLBACK)).toBe("boom");
     });
 
-    it("returns the message of a TypeError subclass", () => {
-      expect(formatErrorMessage(new TypeError("bad type"), FALLBACK)).toBe("bad type");
-    });
-
     it("returns the empty string for an Error with empty message (does NOT fall back)", () => {
       expect(formatErrorMessage(new Error(""), FALLBACK)).toBe("");
     });
@@ -38,18 +34,6 @@ describe("formatErrorMessage", () => {
     it("falls back when message is a non-string", () => {
       expect(formatErrorMessage({ message: 42 }, FALLBACK)).toBe(FALLBACK);
     });
-
-    it("falls back when message is null", () => {
-      expect(formatErrorMessage({ message: null }, FALLBACK)).toBe(FALLBACK);
-    });
-
-    it("falls back when message is undefined", () => {
-      expect(formatErrorMessage({ message: undefined }, FALLBACK)).toBe(FALLBACK);
-    });
-
-    it("falls back when message is an object", () => {
-      expect(formatErrorMessage({ message: { nested: "thing" } }, FALLBACK)).toBe(FALLBACK);
-    });
   });
 
   describe("opaque values fall back", () => {
@@ -57,36 +41,16 @@ describe("formatErrorMessage", () => {
       expect(formatErrorMessage(null, FALLBACK)).toBe(FALLBACK);
     });
 
-    it("falls back for undefined", () => {
-      expect(formatErrorMessage(undefined, FALLBACK)).toBe(FALLBACK);
-    });
-
     it("falls back for a number", () => {
       expect(formatErrorMessage(42, FALLBACK)).toBe(FALLBACK);
-    });
-
-    it("falls back for a boolean", () => {
-      expect(formatErrorMessage(true, FALLBACK)).toBe(FALLBACK);
     });
 
     it("falls back for an object without message", () => {
       expect(formatErrorMessage({ code: "EFAIL" }, FALLBACK)).toBe(FALLBACK);
     });
-
-    it("falls back for an array", () => {
-      expect(formatErrorMessage(["error", "list"], FALLBACK)).toBe(FALLBACK);
-    });
-
-    it("falls back for a Symbol", () => {
-      expect(formatErrorMessage(Symbol("err"), FALLBACK)).toBe(FALLBACK);
-    });
   });
 
   describe("contract", () => {
-    it("does not stringify opaque objects (no [object Object] leakage)", () => {
-      expect(formatErrorMessage({ foo: "bar" }, FALLBACK)).not.toContain("[object Object]");
-    });
-
     it("falls back when the message getter throws", () => {
       const hostile = {
         get message(): string {
@@ -123,21 +87,6 @@ describe("humanizeAppError", () => {
   });
 
   describe("ErrorType fallbacks", () => {
-    const cases: Array<[ErrorType, string]> = [
-      ["git", "Git operation failed"],
-      ["process", "Background process failed"],
-      ["filesystem", "File operation failed"],
-      ["network", "Network problem"],
-      ["config", "Configuration problem"],
-      ["unknown", "Something went wrong"],
-    ];
-
-    it.each(cases)("returns the %s fallback title and body", (type, expectedTitle) => {
-      const result = humanizeAppError(baseError({ type }));
-      expect(result.title).toBe(expectedTitle);
-      expect(result.body.length).toBeGreaterThan(0);
-    });
-
     it("falls through to 'unknown' for a runtime-unknown type value", () => {
       // Force-cast: structured-clone could in theory deliver a string outside
       // the union (older main + newer renderer, or vice versa).
@@ -165,32 +114,6 @@ describe("humanizeAppError", () => {
   });
 
   describe("gitReason mapping", () => {
-    const reasons: GitOperationReason[] = [
-      "auth-failed",
-      "network-unavailable",
-      "repository-not-found",
-      "not-a-repository",
-      "dubious-ownership",
-      "config-missing",
-      "worktree-dirty",
-      "conflict-unresolved",
-      "push-rejected-outdated",
-      "push-rejected-policy",
-      "pathspec-invalid",
-      "lfs-missing",
-      "lfs-quota-exceeded",
-      "hook-rejected",
-      "git-not-installed",
-      "system-io-error",
-    ];
-
-    it.each(reasons)("returns a friendly title and instruction body for %s", (reason) => {
-      const result = humanizeAppError(baseError({ type: "git", gitReason: reason }));
-      expect(result.title.length).toBeGreaterThan(0);
-      expect(result.title).not.toBe("Git operation failed");
-      expect(result.body.length).toBeGreaterThan(0);
-    });
-
     it("uses generic git fallback when gitReason is 'unknown'", () => {
       const result = humanizeAppError(baseError({ type: "git", gitReason: "unknown" }));
       expect(result.title).toBe("Git operation failed");

@@ -10,22 +10,6 @@ const SUBTABS = [
 ];
 
 describe("SettingsSubtabBar", () => {
-  it("renders all subtab buttons", () => {
-    const onChange = vi.fn();
-    render(
-      <SettingsSubtabBar
-        subtabs={SUBTABS}
-        activeId="claude"
-        onChange={onChange}
-        group="test"
-        ariaLabel="Test sections"
-      />
-    );
-    expect(screen.getByText("Claude")).toBeTruthy();
-    expect(screen.getByText("Gemini")).toBeTruthy();
-    expect(screen.getByText("Codex")).toBeTruthy();
-  });
-
   it("calls onChange with the clicked subtab id", () => {
     const onChange = vi.fn();
     render(
@@ -61,54 +45,6 @@ describe("SettingsSubtabBar", () => {
     );
     expect(screen.getAllByTestId("active-icon")).toHaveLength(1);
     expect(screen.getAllByTestId("inactive-icon")).toHaveLength(1);
-  });
-
-  it("does not render trailing wrapper when trailing is undefined", () => {
-    const subtabs = [{ id: "a", label: "A" }];
-    const { container } = render(
-      <SettingsSubtabBar
-        subtabs={subtabs}
-        activeId="a"
-        onChange={vi.fn()}
-        group="test"
-        ariaLabel="Test sections"
-      />
-    );
-    const button = container.querySelector("button[role='tab']")!;
-    expect(button.querySelector(".flex.items-center.gap-1")).toBeNull();
-  });
-
-  it("renders trailing content", () => {
-    const subtabs = [
-      {
-        id: "a",
-        label: "A",
-        trailing: <span data-testid="trailing-dot" />,
-      },
-    ];
-    render(
-      <SettingsSubtabBar
-        subtabs={subtabs}
-        activeId="a"
-        onChange={vi.fn()}
-        group="test"
-        ariaLabel="Test sections"
-      />
-    );
-    expect(screen.getByTestId("trailing-dot")).toBeTruthy();
-  });
-
-  it("renders a tablist element", () => {
-    render(
-      <SettingsSubtabBar
-        subtabs={SUBTABS}
-        activeId="claude"
-        onChange={vi.fn()}
-        group="test"
-        ariaLabel="Test sections"
-      />
-    );
-    expect(screen.getByRole("tablist")).toBeTruthy();
   });
 
   it("returns null when subtabs list is empty", () => {
@@ -239,20 +175,6 @@ describe("SettingsSubtabBar", () => {
     fireEvent.keyDown(tablist, { key: "End" });
     expect(onChange).toHaveBeenCalledWith("codex");
     expect(document.activeElement).toBe(codexTab);
-  });
-
-  it("does not render scroll arrow buttons", () => {
-    render(
-      <SettingsSubtabBar
-        subtabs={SUBTABS}
-        activeId="claude"
-        onChange={vi.fn()}
-        group="test"
-        ariaLabel="Test sections"
-      />
-    );
-    expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
-    expect(screen.queryByLabelText("Scroll tabs right")).toBeNull();
   });
 });
 

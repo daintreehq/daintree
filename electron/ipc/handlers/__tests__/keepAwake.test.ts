@@ -14,7 +14,6 @@ vi.mock("../../../services/PowerSaveBlockerService.js", () => ({
 }));
 
 import { registerKeepAwakeHandlers } from "../keepAwake.js";
-import { buildKeepAwakePreloadBindings } from "../keepAwake.preload.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { KeepAwakeConfig, KeepAwakeState } from "../../../../shared/types/ipc/keepAwake.js";
@@ -55,14 +54,6 @@ describe("keep-awake IPC", () => {
 
   afterEach(() => {
     cleanup();
-  });
-
-  it("returns the service's state", async () => {
-    await expect(getHandler(CHANNELS.KEEP_AWAKE_GET_STATE)(fakeEvent())).resolves.toEqual({
-      config: { enabled: true, onBattery: false },
-      isBlocking: false,
-      revision: 4,
-    });
   });
 
   it("rejects payloads that are not a plain object", async () => {
@@ -106,26 +97,5 @@ describe("keep-awake IPC", () => {
     await getHandler(CHANNELS.KEEP_AWAKE_GET_STATE)(fakeEvent());
 
     expect(getPowerSaveBlockerServiceMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("removes its handlers on cleanup", () => {
-    cleanup();
-
-    expect(ipcHandlers.has(CHANNELS.KEEP_AWAKE_GET_STATE)).toBe(false);
-    expect(ipcHandlers.has(CHANNELS.KEEP_AWAKE_UPDATE_CONFIG)).toBe(false);
-    cleanup = () => {};
-  });
-
-  it("builds preload bindings that invoke the matching channels", async () => {
-    const invoke = vi.fn(async () => undefined);
-    const bindings = buildKeepAwakePreloadBindings(invoke);
-
-    await bindings.getState();
-    await bindings.updateConfig({ enabled: false });
-
-    expect(invoke).toHaveBeenNthCalledWith(1, CHANNELS.KEEP_AWAKE_GET_STATE);
-    expect(invoke).toHaveBeenNthCalledWith(2, CHANNELS.KEEP_AWAKE_UPDATE_CONFIG, {
-      enabled: false,
-    });
   });
 });

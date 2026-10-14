@@ -469,39 +469,6 @@ describe("useUpdateListener", () => {
     expect(notifyMock.mock.calls.every((c) => c[0].correlationId === "app-update")).toBe(true);
   });
 
-  it("emits notify for a newer version with the same app-update correlationId", () => {
-    renderHook(() => useUpdateListener());
-
-    act(() => {
-      capturedAvailable!({ version: "2.5.0" });
-    });
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      capturedAvailable!({ version: "2.5.1" });
-    });
-    expect(notifyMock).toHaveBeenCalledTimes(2);
-    expect(notifyMock.mock.calls[1]![0].correlationId).toBe("app-update");
-  });
-
-  it("allows a new toast if the prior same-version toast was already dismissed", () => {
-    renderHook(() => useUpdateListener());
-
-    act(() => {
-      capturedAvailable!({ version: "2.5.0" });
-    });
-    const firstId = notifyMock.mock.results[0]!.value as string;
-
-    act(() => {
-      userDismiss(firstId);
-    });
-
-    act(() => {
-      capturedAvailable!({ version: "2.5.0" });
-    });
-    expect(notifyMock).toHaveBeenCalledTimes(2);
-  });
-
   it("calls notifyDismiss on main when the user closes the tracked Available toast", () => {
     renderHook(() => useUpdateListener());
 

@@ -750,11 +750,14 @@ describe("XtermAdapter lifecycle", () => {
       });
     }
 
-    it("writes the backward-word sequence for Option+Left", async () => {
+    it.each([
+      ["ArrowLeft", "\x1bb"],
+      ["ArrowRight", "\x1bf"],
+    ] as const)("writes the word-navigation sequence for Option+%s", async (key, sequence) => {
       const onInput = vi.fn();
       const keyHandler = await mountAndGetKeyHandler({ onInput });
 
-      const event = optionArrow("ArrowLeft");
+      const event = optionArrow(key);
       const preventDefaultSpy = vi.spyOn(event, "preventDefault");
       const stopPropagationSpy = vi.spyOn(event, "stopPropagation");
 
@@ -762,19 +765,21 @@ describe("XtermAdapter lifecycle", () => {
       expect(keyHandler(event)).toBe(false);
       expect(preventDefaultSpy).toHaveBeenCalled();
       expect(stopPropagationSpy).toHaveBeenCalled();
-      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bb");
+      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", sequence);
       // `return false` bypasses xterm's onData, so input tracking is replicated here.
       expect(mocks.terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
-      expect(onInput).toHaveBeenCalledWith("\x1bb");
+      expect(onInput).toHaveBeenCalledWith(sequence);
     });
 
-    it("writes the forward-word sequence for Option+Right", async () => {
-      const onInput = vi.fn();
-      const keyHandler = await mountAndGetKeyHandler({ onInput });
+    it("does not turn modified arrows into word-navigation input", async () => {
+      const keyHandler = await mountAndGetKeyHandler();
 
-      expect(keyHandler(optionArrow("ArrowRight"))).toBe(false);
-      expect(mocks.writeTerminalInputOrFleet).toHaveBeenCalledWith("term-1", "\x1bf");
-      expect(onInput).toHaveBeenCalledWith("\x1bf");
+      keyHandler(optionArrow("ArrowLeft", { shiftKey: true }));
+      keyHandler(optionArrow("ArrowRight", { ctrlKey: true }));
+      keyHandler(optionArrow("ArrowLeft", { metaKey: true }));
+
+      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
+      expect(mocks.terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
     });
 
     it("keeps writing while the key is held", async () => {
@@ -839,31 +844,6 @@ describe("XtermAdapter lifecycle", () => {
       expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
       expect(mocks.terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
       expect(onInput).not.toHaveBeenCalled();
-    });
-
-    it("does not claim Option+Arrow combined with another modifier", async () => {
-      const keyHandler = await mountAndGetKeyHandler();
-
-      // Shift+Option extends a selection; Cmd+Option is bound to terminal.focus*.
-      keyHandler(optionArrow("ArrowLeft", { shiftKey: true }));
-      keyHandler(optionArrow("ArrowRight", { ctrlKey: true }));
-      keyHandler(optionArrow("ArrowLeft", { metaKey: true }));
-
-      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
-      expect(mocks.terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
-    });
-
-    it("leaves unmodified arrows to xterm", async () => {
-      const keyHandler = await mountAndGetKeyHandler();
-
-      const plainArrow = new KeyboardEvent("keydown", {
-        key: "ArrowLeft",
-        code: "ArrowLeft",
-        bubbles: true,
-        cancelable: true,
-      });
-      expect(keyHandler(plainArrow)).toBe(true);
-      expect(mocks.writeTerminalInputOrFleet).not.toHaveBeenCalled();
     });
 
     it("swallows Option+Arrow without writing while input is locked", async () => {

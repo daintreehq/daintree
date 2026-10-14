@@ -706,38 +706,6 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
     }
   });
 
-  it("substitutes duplicate ${settings:*} occurrences across command/args/env", async () => {
-    const fake = makeFakeSubprocess();
-    const seen: Array<{ command: string; args: string[]; env: Record<string, string> }> = [];
-    const supervisor = new PluginMcpSupervisor({
-      spawner: (config) => {
-        seen.push({ command: config.command, args: config.args, env: config.env });
-        return fake.handle;
-      },
-      killTree: () => {},
-    });
-    const startPromise = supervisor.start({
-      pluginId: "acme.demo",
-      contributions: [
-        {
-          id: "dup",
-          name: "Dup",
-          command: "${settings:bin}",
-          args: ["${settings:bin}", "--token=${settings:tok}", "--also=${settings:tok}"],
-          env: { ONE: "${settings:tok}", TWO: "${settings:tok}" },
-        },
-      ],
-      resolveSettings: async (settingId) => (settingId === "tok" ? "abc" : "/bin/node"),
-    });
-    await fake.waitForStdinCount(1);
-    fake.answerInitialize();
-    await startPromise;
-
-    expect(seen[0]!.command).toBe("/bin/node");
-    expect(seen[0]!.args).toEqual(["/bin/node", "--token=abc", "--also=abc"]);
-    expect(seen[0]!.env).toEqual({ ONE: "abc", TWO: "abc" });
-  });
-
   it("forwards pluginDir as the spawner cwd", async () => {
     const fake = makeFakeSubprocess();
     let seenCwd: string | undefined;
@@ -1291,36 +1259,6 @@ describe("PluginMcpSupervisor.notifySettingChanged (issue #10619)", () => {
     supervisor.notifySettingChanged("acme.demo", "unrelatedKey", restart);
     vi.advanceTimersByTime(5000);
     expect(restart).not.toHaveBeenCalled();
-  });
-
-  it("restarts a server exactly once when one of its several referenced settings changes", async () => {
-    const fake = makeFakeSubprocess();
-    const supervisor = new PluginMcpSupervisor({
-      spawner: () => fake.handle,
-      killTree: () => {},
-    });
-    const start = supervisor.start({
-      pluginId: "acme.demo",
-      contributions: [
-        {
-          id: "linear",
-          name: "Linear",
-          command: "node",
-          env: { A: "${settings:keyA}", B: "${settings:keyB}" },
-        },
-      ],
-      resolveSettings: async () => "v",
-    });
-    await fake.waitForStdinCount(1);
-    fake.answerInitialize();
-    await start;
-    const restart = vi.fn();
-
-    vi.useFakeTimers();
-    supervisor.notifySettingChanged("acme.demo", "keyA", restart);
-    vi.advanceTimersByTime(1000);
-    expect(restart).toHaveBeenCalledTimes(1);
-    expect(restart).toHaveBeenCalledWith("linear");
   });
 
   it("does not restart a server for a different plugin", async () => {

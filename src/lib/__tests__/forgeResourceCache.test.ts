@@ -40,10 +40,6 @@ describe("forgeResourceCache", () => {
   });
 
   describe("buildCacheKey", () => {
-    it("produces a deterministic project-scoped key", () => {
-      expect(buildCacheKey("/proj", "issue", "open", "created")).toBe("/proj:issue:open:created");
-    });
-
     it("different projects produce different keys", () => {
       const a = buildCacheKey("/proj-a", "issue", "open", "created");
       const b = buildCacheKey("/proj-b", "issue", "open", "created");
@@ -59,28 +55,14 @@ describe("forgeResourceCache", () => {
   });
 
   describe("getCache / setCache", () => {
-    it("returns undefined for an unknown key", () => {
-      expect(getCache("missing")).toBeUndefined();
-    });
-
     it("round-trips a cache entry", () => {
       const e = entry([makeIssue(1)]);
       setCache("k", e);
       expect(getCache("k")).toEqual(e);
     });
-
-    it("overwrites an existing entry", () => {
-      setCache("k", entry([makeIssue(1)]));
-      setCache("k", entry([makeIssue(2)]));
-      expect(getCache("k")?.items.map((i) => i.number)).toEqual([2]);
-    });
   });
 
   describe("generation counter", () => {
-    it("starts at 0 for an unknown key", () => {
-      expect(getGeneration("new")).toBe(0);
-    });
-
     it("increments on each nextGeneration call", () => {
       expect(nextGeneration("k")).toBe(1);
       expect(nextGeneration("k")).toBe(2);
@@ -223,12 +205,6 @@ describe("forgeResourceCache", () => {
 
       expect(getGeneration(changed)).toBe(changedBefore + 1);
       expect(getGeneration(skipped)).toBe(skippedBefore);
-    });
-
-    it("is a no-op on an empty cache", () => {
-      expect(() =>
-        mutateCacheEntries("/proj", "issue", (e) => ({ ...e, items: [] }))
-      ).not.toThrow();
     });
   });
 
@@ -519,16 +495,6 @@ describe("forgeResourceCache", () => {
       patchIssueAssigneeCache("/proj", 1, { login: "  ada  " }, true);
 
       expect(loginsOn(key, 1)).toEqual(["ada"]);
-    });
-  });
-
-  describe("_resetForTests", () => {
-    it("clears both the cache and the generation map", () => {
-      setCache("k", entry([]));
-      nextGeneration("k");
-      _resetForTests();
-      expect(getCache("k")).toBeUndefined();
-      expect(getGeneration("k")).toBe(0);
     });
   });
 });

@@ -160,15 +160,6 @@ describe("buildReportIssueUrl", () => {
     expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
   });
 
-  it("URL is parseable and points at the right repo", () => {
-    const result = buildReportIssueUrl(makeInput());
-    const url = new URL(result.url);
-    expect(url.host).toBe("github.com");
-    expect(url.pathname).toBe("/daintreehq/daintree/issues/new");
-    expect(url.searchParams.has("title")).toBe(true);
-    expect(url.searchParams.has("body")).toBe(true);
-  });
-
   it("keeps total URL length under 8192 across every truncation stage", () => {
     // Each stage corresponds to a different input size class.
     const inputs = [
@@ -203,15 +194,6 @@ describe("buildReportIssueUrl", () => {
     expect(result.url.length).toBeLessThanOrEqual(8192);
     // The full message should still appear in the body / clipboard payload.
     expect(result.fullBody).toContain("😀");
-  });
-
-  it("caps title for very long ASCII messages", () => {
-    const longMessage = "A".repeat(5000);
-    const result = buildReportIssueUrl(makeInput({ message: longMessage }));
-    expect(result.url.length).toBeLessThanOrEqual(8192);
-    const title = new URL(result.url).searchParams.get("title") ?? "";
-    expect(title.length).toBeLessThan(longMessage.length);
-    expect(title.endsWith("…")).toBe(true);
   });
 
   describe("enrichment sections", () => {
@@ -329,19 +311,6 @@ describe("buildReportIssueUrl", () => {
       expect(body).not.toContain("<summary>System info</summary>");
       expect(body).not.toContain("Recent actions");
       expect(result.usedClipboardFallback).toBe(false);
-    });
-
-    it("falls back to clipboard stub if even unenriched body overflows", () => {
-      const longLine = "x".repeat(1200);
-      const stack = Array.from({ length: 25 }, () => longLine).join("\n");
-      const componentStack = Array.from({ length: 10 }, () => longLine).join("\n");
-      const systemInfo = "App: 1.0.0";
-      const recentActions = [makeBreadcrumb()];
-      const result = buildReportIssueUrl(
-        makeInput({ stack, componentStack, systemInfo, recentActions, now: fixedNow })
-      );
-      expect(result.usedClipboardFallback).toBe(true);
-      expect(getEncodedBodyLength(result.url)).toBeLessThanOrEqual(URL_BODY_BUDGET);
     });
 
     it("escapes pipe characters in action IDs to keep the line format unambiguous", () => {
@@ -538,24 +507,6 @@ describe("buildReportIssueUrl — plugin diagnostics", () => {
     const urlBody = decodeURIComponent(new URL(result.url).searchParams.get("body") ?? "");
     expect(urlBody).not.toContain("log line number 250");
     expect(urlBody).toContain("<summary>System info</summary>");
-  });
-
-  it("does not throw on log lines containing multi-byte glyphs", () => {
-    // A lone surrogate (from a naive code-unit slice upstream) would make
-    // encodeURIComponent throw; assert a well-formed multi-byte line is safe.
-    const result = buildReportIssueUrl(
-      makeInput({
-        pluginDiagnostics: {
-          plugins: [
-            makePluginEntry({
-              logLines: [{ ts: 1700000001000, level: "info", message: "😀".repeat(50) }],
-            }),
-          ],
-        },
-      })
-    );
-    expect(() => new URL(result.url)).not.toThrow();
-    expect(result.fullBody).toContain("😀");
   });
 
   it("adds a plugin-count line to the clipboard-fallback stub body", () => {

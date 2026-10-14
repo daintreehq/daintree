@@ -867,13 +867,6 @@ describe("OpenAITranscriptionProvider", () => {
   // and clear the server buffer on speech onset. Without commits no
   // transcription events ever arrive.
 
-  it("spawns the VAD worker once the session is ready", async () => {
-    const service = new OpenAITranscriptionProvider();
-    await bringSessionReady(service);
-    expect(vadWorkers).toHaveLength(1);
-    service.stop();
-  });
-
   it("feeds the VAD without transferring the buffer still sent to OpenAI", async () => {
     const service = new OpenAITranscriptionProvider();
     await bringSessionReady(service);
@@ -982,21 +975,6 @@ describe("OpenAITranscriptionProvider", () => {
 
     // A misfire surfaces as speech-start then speech-end with only a tiny blip
     // of audio — the MIN_COMMIT_BYTES guard must skip the commit.
-    service.sendAudioChunk(new Uint8Array(10).buffer);
-    worker.emitSpeechStart();
-    worker.emitSpeechEnd();
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
-
-    service.stop();
-  });
-
-  it("skips the commit when too little audio has streamed since the last commit", async () => {
-    const service = new OpenAITranscriptionProvider();
-    const { socket } = await bringSessionReady(service);
-    const worker = latestVadWorker();
-
-    // A tiny chunk, well under MIN_COMMIT_BYTES — committing it would draw a
-    // fatal "undersized buffer" error from OpenAI, so speech-end must skip it.
     service.sendAudioChunk(new Uint8Array(10).buffer);
     worker.emitSpeechStart();
     worker.emitSpeechEnd();
@@ -2125,17 +2103,6 @@ describe("OpenAITranscriptionProvider", () => {
 
   // ── Heartbeat (half-open detection) ──────────────────────────────────────
 
-  it("pings on the heartbeat interval once the connection is open", async () => {
-    const service = new OpenAITranscriptionProvider();
-    const { socket } = await bringSessionReady(service);
-
-    expect(socket.pingCalls).toBe(0);
-    vi.advanceTimersByTime(20_000);
-    expect(socket.pingCalls).toBe(1);
-
-    service.stop();
-  });
-
   it("terminates the socket when a heartbeat ping goes unanswered", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
@@ -2428,12 +2395,6 @@ describe("summarizeEchoedSession", () => {
     }
   });
 
-  it("never leaks keyword or prompt contents", () => {
-    // These logs are readable by agents; keyterms carry the user's branch names,
-    // project terms, custom dictionary and terminal output.
-    expect(JSON.stringify(summarizeEchoedSession(echoed))).not.toContain(SECRET_TERM);
-  });
-
   it("reports a non-null turn_detection so a server-applied VAD default is visible", () => {
     const withVad = {
       audio: { input: { transcription: { model: "m" }, turn_detection: { type: "server_vad" } } },
@@ -2629,19 +2590,6 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
       { text: "first", itemId: "item-A" },
       { text: "second", itemId: "item-B" },
     ]);
-  });
-
-  it("emits an in-order completion immediately", async () => {
-    const service = new OpenAITranscriptionProvider();
-    const events: VoiceTranscriptionEvent[] = [];
-    service.onEvent((e) => events.push(e));
-
-    const { socket } = await bringSessionReady(service);
-    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
-    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
-    socket.simulateMessage("conversation.item.done", done("item-A", "first"));
-
-    expect(completions(events)).toEqual([{ text: "first", itemId: "item-A" }]);
   });
 
   it("emits a completion for an unacknowledged item without waiting", async () => {

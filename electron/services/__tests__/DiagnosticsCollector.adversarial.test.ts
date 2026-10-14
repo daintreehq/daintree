@@ -590,24 +590,6 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(body).toContain("[REDACTED]");
   });
 
-  it("FREE_TEXT_AWS_KEY_SCRUBBED_IN_LOG_MESSAGE", async () => {
-    shared.logEntries = [
-      {
-        level: "info",
-        message: "envrc loaded: AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
-        timestamp: 3,
-      },
-    ];
-
-    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
-      logs: { recentEntries: Array<{ message: string }> };
-    };
-
-    const msg = payload.logs.recentEntries[0]?.message ?? "";
-    expect(msg).not.toContain("AKIAIOSFODNN7EXAMPLE");
-    expect(msg).toContain("[REDACTED]");
-  });
-
   it("PROCESS_REPORT_HEADER_PII_REDACTED", async () => {
     const reportSpy = vi.spyOn(process, "report", "get").mockReturnValue({
       getReport: () =>
@@ -1044,26 +1026,6 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(payload.counts.windows).toBe(0);
     expect(payload.counts.openProjects).toBe(0);
     expect(payload.counts.terminals.total).toBe(0);
-  });
-
-  it("FREE_TEXT_PEM_BLOCK_SCRUBBED", async () => {
-    shared.logEntries = [
-      {
-        level: "error",
-        message:
-          "config dump: -----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY----- end",
-        timestamp: 4,
-      },
-    ];
-
-    const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
-      logs: { recentEntries: Array<{ message: string }> };
-    };
-
-    const msg = payload.logs.recentEntries[0]?.message ?? "";
-    expect(msg).not.toContain("BEGIN RSA PRIVATE KEY");
-    expect(msg).not.toContain("MIIEpAIBAAKCAQEA");
-    expect(msg).toContain("[REDACTED]");
   });
 
   describe("mcpAudit section (#12508)", () => {

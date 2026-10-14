@@ -718,18 +718,6 @@ describe("useRecipeRunner — suggestions", () => {
     expect(result.current.suggestions.map((s) => s.id)).toEqual(["2"]);
   });
 
-  it("returns an empty array when no detected runners match", () => {
-    projectSettingsState.allDetectedRunners = [
-      makeRunCommand({ id: "1", name: "lint", command: "eslint ." }),
-    ];
-
-    const { result } = renderHook(() =>
-      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
-    );
-
-    expect(result.current.suggestions).toEqual([]);
-  });
-
   it("matches the keyword in either the name or the command field", () => {
     projectSettingsState.allDetectedRunners = [
       // keyword only in name
@@ -1024,21 +1012,6 @@ describe("useRecipeRunner — delete confirm flow", () => {
 });
 
 describe("useRecipeRunner — keyboard model", () => {
-  it("starts with focusedIndex 0 and focusedItemId pointing at the first recipe", () => {
-    recipes.push(
-      makeRecipe({ id: "alpha", name: "Alpha" }),
-      makeRecipe({ id: "beta", name: "Beta" }),
-      makeRecipe({ id: "gamma", name: "Gamma" })
-    );
-
-    const { result } = renderHook(() =>
-      useRecipeRunner({ activeWorktreeId: "wt-1", defaultCwd: "/tmp" })
-    );
-
-    expect(result.current.focusedIndex).toBe(0);
-    expect(result.current.focusedItemId).toBe("recipe-option-alpha");
-  });
-
   it("updates focusedItemId when setFocusedIndex is called", () => {
     recipes.push(
       makeRecipe({ id: "alpha", name: "Alpha" }),

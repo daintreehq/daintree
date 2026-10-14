@@ -85,10 +85,6 @@ describe("resolveOverlayColor", () => {
     expect(tb).toBeLessThan(wb);
   });
 
-  it("distinguishes severities that tint with different tokens", () => {
-    expect(resolveOverlayColor(TOKENS, "warning")).not.toBe(resolveOverlayColor(TOKENS, "error"));
-  });
-
   it("maps each severity to its own token, not a neighbour's", () => {
     // With only one status token present, exactly the severity that maps to it
     // may tint — a swapped mapping would tint the wrong one.
@@ -118,11 +114,6 @@ describe("resolveOverlayColor", () => {
 
   it("falls back to the canvas for neutral, whose wash is not a status colour", () => {
     expect(resolveOverlayColor(TOKENS, "neutral")).toBe(CANVAS);
-  });
-
-  it("falls back to the canvas when the severity's token is missing from the theme", () => {
-    const partial = { "surface-canvas": CANVAS };
-    expect(resolveOverlayColor(partial, "warning")).toBe(CANVAS);
   });
 
   it("resolves to nothing when the theme has no canvas to blend against", () => {

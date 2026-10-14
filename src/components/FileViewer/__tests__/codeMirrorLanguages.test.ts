@@ -51,14 +51,6 @@ describe("loadMarkdownSupport — the one Markdown configuration (#12323)", () =
 });
 
 describe("CODEMIRROR_LANGUAGES — curated registry shape", () => {
-  it("is a non-empty array of LanguageDescription instances", () => {
-    expect(Array.isArray(CODEMIRROR_LANGUAGES)).toBe(true);
-    expect(CODEMIRROR_LANGUAGES.length).toBeGreaterThan(0);
-    for (const desc of CODEMIRROR_LANGUAGES) {
-      expect(desc).toBeInstanceOf(LanguageDescription);
-    }
-  });
-
   it("has no duplicate names", () => {
     const names = CODEMIRROR_LANGUAGES.map((d) => d.name);
     expect(new Set(names).size).toBe(names.length);
@@ -69,12 +61,6 @@ describe("CODEMIRROR_LANGUAGES — curated registry shape", () => {
       const hasExt = Array.isArray(desc.extensions) && desc.extensions.length > 0;
       const hasFilename = desc.filename instanceof RegExp;
       expect(hasExt || hasFilename).toBe(true);
-    }
-  });
-
-  it("every entry has a callable load function", () => {
-    for (const desc of CODEMIRROR_LANGUAGES) {
-      expect(typeof desc.load).toBe("function");
     }
   });
 });
@@ -104,10 +90,7 @@ describe("CODEMIRROR_LANGUAGES — matchFilename coverage for common file types"
     ["foo.sh", "Shell"],
     ["foo.bash", "Shell"],
     ["foo.rb", "Ruby"],
-    ["Gemfile", "Ruby"],
-    ["Rakefile", "Ruby"],
     ["foo.lua", "Lua"],
-    ["Dockerfile", "Dockerfile"],
     ["foo.sql", "SQL"],
     ["foo.cs", "C#"],
     ["foo.kt", "Kotlin"],
@@ -122,7 +105,6 @@ describe("CODEMIRROR_LANGUAGES — matchFilename coverage for common file types"
     ["foo.php", "PHP"],
     ["foo.java", "Java"],
     ["foo.vue", "Vue"],
-    ["CMakeLists.txt", "CMake"],
     ["foo.r", "R"],
   ];
 

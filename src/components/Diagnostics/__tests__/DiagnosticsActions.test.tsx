@@ -220,21 +220,4 @@ describe("EventsActions — ConfirmDialog", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText("Clear events?")).toBeNull();
   });
-
-  it("does not show dialog before clicking Clear", () => {
-    render(<EventsActions />);
-
-    expect(screen.queryByText("Clear events?")).toBeNull();
-  });
-
-  it("does not use window.confirm", () => {
-    const confirmSpy = vi.spyOn(window, "confirm");
-
-    render(<EventsActions />);
-
-    fireEvent.click(screen.getByText("Clear events"));
-
-    expect(confirmSpy).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
-  });
 });

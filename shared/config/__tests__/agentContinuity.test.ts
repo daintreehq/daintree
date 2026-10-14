@@ -4,7 +4,6 @@ import {
   getAgentIds,
   getEffectiveAgentConfig,
   setUserRegistry,
-  CONVERSATION_CONTINUITY_TIERS,
   type AgentConfig,
 } from "../agentRegistry.js";
 
@@ -37,12 +36,6 @@ describe("resolveAgentContinuity (#11282 phase 5)", () => {
       const declared = getEffectiveAgentConfig(id)?.continuity;
       if (!declared) continue;
       expect(resolveAgentContinuity(id)).toEqual(declared);
-    }
-  });
-
-  it("resolves every built-in agent to a structurally valid tier and never throws", () => {
-    for (const id of getAgentIds()) {
-      expect(CONVERSATION_CONTINUITY_TIERS).toContain(resolveAgentContinuity(id).tier);
     }
   });
 

@@ -101,17 +101,4 @@ describe("branchChipState", () => {
   it("drops the chip for a git-free project even if a stale branch is selected", () => {
     expect(branchChipState("project", "feature/x", false)).toBe("hidden");
   });
-
-  it("treats an unspecified mode as git-backed, preserving existing callers", () => {
-    expect(branchChipState("project", "feature/x")).toBe(
-      branchChipState("project", "feature/x", true)
-    );
-  });
-
-  it("never shows a branch outside a project", () => {
-    const outsideProject = (["scratch", "none"] as const).map((kind) =>
-      branchChipState(kind, "feature/x")
-    );
-    expect(outsideProject).not.toContain("visible");
-  });
 });

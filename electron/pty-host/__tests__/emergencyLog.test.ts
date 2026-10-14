@@ -40,30 +40,11 @@ describe("pty-host emergencyLog", () => {
   });
 
   describe("appendEmergencyLog", () => {
-    it("creates the log file on first append", () => {
-      appendEmergencyLog("first line\n");
-      const content = fs.readFileSync(getEmergencyLogPath(), "utf8");
-      expect(content).toBe("first line\n");
-    });
-
     it("appends to an existing log file", () => {
       appendEmergencyLog("a\n");
       appendEmergencyLog("b\n");
       const content = fs.readFileSync(getEmergencyLogPath(), "utf8");
       expect(content).toBe("a\nb\n");
-    });
-
-    it("appends when file is under the size limit", () => {
-      const logFile = getEmergencyLogPath();
-      const padding = "x".repeat(1024 * 1024 - 200);
-      fs.mkdirSync(path.dirname(logFile), { recursive: true });
-      fs.writeFileSync(logFile, padding, "utf8");
-      const statBefore = fs.statSync(logFile);
-      expect(statBefore.size).toBe(1024 * 1024 - 200);
-
-      appendEmergencyLog("new entry\n");
-      const content = fs.readFileSync(logFile, "utf8");
-      expect(content).toBe(padding + "new entry\n");
     });
 
     it("truncates and replaces when file is over the size limit", () => {

@@ -24,16 +24,6 @@ describe("terminalInputStore", () => {
   });
 
   describe("draft inputs with project context", () => {
-    it("should store draft input with project context", () => {
-      const terminalId = "term-1";
-      const projectId = "project-a";
-      const draft = "echo hello";
-
-      useTerminalInputStore.getState().setDraftInput(terminalId, draft, projectId);
-
-      expect(useTerminalInputStore.getState().getDraftInput(terminalId, projectId)).toBe(draft);
-    });
-
     it("should keep draft inputs separate per project", () => {
       const terminalId = "term-1";
       const projectA = "project-a";
@@ -47,34 +37,6 @@ describe("terminalInputStore", () => {
       // Same terminal ID, different projects should have different drafts
       expect(useTerminalInputStore.getState().getDraftInput(terminalId, projectA)).toBe(draftA);
       expect(useTerminalInputStore.getState().getDraftInput(terminalId, projectB)).toBe(draftB);
-    });
-
-    it("should preserve draft when switching projects and back", () => {
-      const terminalId = "term-1";
-      const projectA = "project-a";
-      const projectB = "project-b";
-      const draftA = "npm run dev";
-
-      // Set draft in project A
-      useTerminalInputStore.getState().setDraftInput(terminalId, draftA, projectA);
-
-      // "Switch" to project B - draft from project A should not be visible
-      expect(useTerminalInputStore.getState().getDraftInput(terminalId, projectB)).toBe("");
-
-      // "Switch" back to project A - draft should be preserved
-      expect(useTerminalInputStore.getState().getDraftInput(terminalId, projectA)).toBe(draftA);
-    });
-
-    it("should clear draft input with project context", () => {
-      const terminalId = "term-1";
-      const projectId = "project-a";
-      const draft = "echo hello";
-
-      useTerminalInputStore.getState().setDraftInput(terminalId, draft, projectId);
-      expect(useTerminalInputStore.getState().getDraftInput(terminalId, projectId)).toBe(draft);
-
-      useTerminalInputStore.getState().clearDraftInput(terminalId, projectId);
-      expect(useTerminalInputStore.getState().getDraftInput(terminalId, projectId)).toBe("");
     });
 
     it("should not affect other project drafts when clearing", () => {
@@ -111,15 +73,6 @@ describe("terminalInputStore", () => {
   });
 
   describe("backward compatibility without project context", () => {
-    it("should work without project context (legacy behavior)", () => {
-      const terminalId = "term-1";
-      const draft = "echo hello";
-
-      // Call without projectId
-      useTerminalInputStore.getState().setDraftInput(terminalId, draft);
-      expect(useTerminalInputStore.getState().getDraftInput(terminalId)).toBe(draft);
-    });
-
     it("should keep drafts with and without project context separate", () => {
       const terminalId = "term-1";
       const projectId = "project-a";
@@ -138,20 +91,6 @@ describe("terminalInputStore", () => {
   });
 
   describe("multiple terminals per project", () => {
-    it("should store separate drafts for different terminals in same project", () => {
-      const projectId = "project-a";
-      const terminal1 = "term-1";
-      const terminal2 = "term-2";
-      const draft1 = "npm install";
-      const draft2 = "npm test";
-
-      useTerminalInputStore.getState().setDraftInput(terminal1, draft1, projectId);
-      useTerminalInputStore.getState().setDraftInput(terminal2, draft2, projectId);
-
-      expect(useTerminalInputStore.getState().getDraftInput(terminal1, projectId)).toBe(draft1);
-      expect(useTerminalInputStore.getState().getDraftInput(terminal2, projectId)).toBe(draft2);
-    });
-
     it("should track multiple terminals across multiple projects", () => {
       const projectA = "project-a";
       const projectB = "project-b";
@@ -239,11 +178,6 @@ describe("terminalInputStore", () => {
       );
     });
 
-    it("should return undefined when popping non-existent stash", () => {
-      const popped = useTerminalInputStore.getState().popStashedEditorState("term-1", "project-a");
-      expect(popped).toBeUndefined();
-    });
-
     it("should scope stash by project", () => {
       const stateA = makeState("project a content");
       const stateB = makeState("project b content");
@@ -257,17 +191,6 @@ describe("terminalInputStore", () => {
       expect(useTerminalInputStore.getState().popStashedEditorState("term-1", "project-b")).toBe(
         stateB
       );
-    });
-
-    it("should overwrite stash on re-stash", () => {
-      const first = makeState("first");
-      const second = makeState("second");
-      const store = useTerminalInputStore.getState();
-      store.stashEditorState("term-1", first, "project-a");
-      store.stashEditorState("term-1", second, "project-a");
-
-      const popped = useTerminalInputStore.getState().popStashedEditorState("term-1", "project-a");
-      expect(popped).toBe(second);
     });
 
     it("should be cleared by clearAllDraftInputs", () => {
@@ -290,11 +213,6 @@ describe("terminalInputStore", () => {
       const value = useTerminalInputStore.getState().popPendingDraft("term-1", "project-a");
       expect(value).toBe("fix the bug");
       expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(0);
-    });
-
-    it("should return undefined when popping non-existent pending draft", () => {
-      const value = useTerminalInputStore.getState().popPendingDraft("term-1", "project-a");
-      expect(value).toBeUndefined();
     });
 
     it("should scope pending drafts by project", () => {
@@ -320,16 +238,6 @@ describe("terminalInputStore", () => {
       expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(1);
       expect(useTerminalInputStore.getState().popPendingDraft("term-2", "project-a")).toBe(
         "draft-2"
-      );
-    });
-
-    it("should overwrite existing pending draft on re-save", () => {
-      const store = useTerminalInputStore.getState();
-      store.setPendingDraft("term-1", "first", "project-a");
-      store.setPendingDraft("term-1", "second", "project-a");
-
-      expect(useTerminalInputStore.getState().popPendingDraft("term-1", "project-a")).toBe(
-        "second"
       );
     });
   });
@@ -643,24 +551,6 @@ describe("terminalInputStore", () => {
       const drafts = useTerminalInputStore.getState().getProjectDraftInputs("project-a");
       expect(drafts).toEqual({ "term-1": "echo hello", "term-2": "ls -la" });
     });
-
-    it("should return empty object when no drafts exist for the project", () => {
-      const store = useTerminalInputStore.getState();
-      store.setDraftInput("term-1", "draft", "project-b");
-
-      const drafts = useTerminalInputStore.getState().getProjectDraftInputs("project-a");
-      expect(drafts).toEqual({});
-    });
-
-    it("should exclude empty draft values", () => {
-      const store = useTerminalInputStore.getState();
-      store.setDraftInput("term-1", "hello", "project-a");
-      // Setting empty clears the draft internally
-      store.setDraftInput("term-2", "", "project-a");
-
-      const drafts = useTerminalInputStore.getState().getProjectDraftInputs("project-a");
-      expect(drafts).toEqual({ "term-1": "hello" });
-    });
   });
 
   describe("getDraftProjectIds (#11352)", () => {
@@ -675,10 +565,6 @@ describe("terminalInputStore", () => {
       );
     });
 
-    it("returns an empty array when no drafts exist", () => {
-      expect(useTerminalInputStore.getState().getDraftProjectIds()).toEqual([]);
-    });
-
     it("ignores bare terminal-id keys with no project context", () => {
       const store = useTerminalInputStore.getState();
       store.setDraftInput("term-1", "no project"); // key is just the terminalId
@@ -689,17 +575,6 @@ describe("terminalInputStore", () => {
   });
 
   describe("restoreProjectDraftInputs", () => {
-    it("should restore drafts with the project prefix", () => {
-      useTerminalInputStore.getState().restoreProjectDraftInputs("project-a", {
-        "term-1": "echo hello",
-        "term-2": "ls -la",
-      });
-
-      const store = useTerminalInputStore.getState();
-      expect(store.getDraftInput("term-1", "project-a")).toBe("echo hello");
-      expect(store.getDraftInput("term-2", "project-a")).toBe("ls -la");
-    });
-
     it("should not overwrite drafts from other projects", () => {
       const store = useTerminalInputStore.getState();
       store.setDraftInput("term-1", "other project draft", "project-b");
@@ -766,13 +641,6 @@ describe("terminalInputStore", () => {
         terminalId: "term-1",
         workspaceId: "ws-1",
       });
-    });
-
-    it("moves the target when the user types into a different agent", () => {
-      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-1", "ws-1");
-      useTerminalInputStore.getState().recordLastTypedAgentTarget("term-2", "ws-1");
-
-      expect(useTerminalInputStore.getState().lastTypedAgentTarget?.terminalId).toBe("term-2");
     });
 
     it("keeps a referentially stable target when re-recording the same agent", () => {

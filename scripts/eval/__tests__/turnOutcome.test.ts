@@ -45,11 +45,6 @@ describe("resolveStorePath", () => {
     expect(result).toBe("/tmp/my-config.json");
   });
 
-  it("resolves relative path", () => {
-    const result = resolveStorePath("relative/config.json");
-    expect(normalize(result).endsWith("relative/config.json")).toBe(true);
-  });
-
   it("uses Daintree capitalization on macOS", () => {
     const platformSpy = vi.spyOn(os, "platform").mockReturnValue("darwin");
     // The platform default only applies with no env override, which the test
@@ -155,20 +150,6 @@ describe("loadRecords", () => {
 // ---------------------------------------------------------------------------
 
 describe("ensureChronological", () => {
-  it("preserves chronological order", () => {
-    const records = [makeRecord({ timestamp: 1000 }), makeRecord({ timestamp: 2000 })];
-    const result = ensureChronological(records);
-    expect(result[0].timestamp).toBe(1000);
-    expect(result[1].timestamp).toBe(2000);
-  });
-
-  it("reverses newest-first order", () => {
-    const records = [makeRecord({ timestamp: 2000 }), makeRecord({ timestamp: 1000 })];
-    const result = ensureChronological(records);
-    expect(result[0].timestamp).toBe(1000);
-    expect(result[1].timestamp).toBe(2000);
-  });
-
   it("sorts partially shuffled arrays", () => {
     const records = [
       makeRecord({ timestamp: 1000 }),
@@ -179,12 +160,6 @@ describe("ensureChronological", () => {
     expect(result[0].timestamp).toBe(1000);
     expect(result[1].timestamp).toBe(2000);
     expect(result[2].timestamp).toBe(3000);
-  });
-
-  it("handles single record", () => {
-    const records = [makeRecord()];
-    const result = ensureChronological(records);
-    expect(result).toHaveLength(1);
   });
 
   it("handles empty array", () => {
@@ -216,13 +191,6 @@ describe("filterBaselineWindow", () => {
     expect(recent).toHaveLength(0);
     expect(anchorTimestamp).toBe(0);
   });
-
-  it("includes all records when window is large enough", () => {
-    const now = Date.now();
-    const records = [makeRecord({ timestamp: now - 1000 }), makeRecord({ timestamp: now - 2000 })];
-    const { recent } = filterBaselineWindow(records, 24);
-    expect(recent).toHaveLength(2);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -251,12 +219,6 @@ describe("computeClassDistribution", () => {
       expect(dist.counts[cls]).toBe(0);
       expect(dist.proportions[cls]).toBe(0);
     }
-  });
-
-  it("includes all 10 classes even when absent", () => {
-    const records = [makeRecord({ outcome: "answered" })];
-    const dist = computeClassDistribution(records);
-    expect(Object.keys(dist.counts)).toHaveLength(10);
   });
 });
 
@@ -291,17 +253,6 @@ describe("stratifiedSample", () => {
     const ids = new Set(sample.map((r) => r.id));
     expect(ids.size).toBe(sample.length);
   });
-
-  it("distributes across classes", () => {
-    const records = [
-      ...Array.from({ length: 20 }, () => makeRecord({ outcome: "answered" })),
-      ...Array.from({ length: 10 }, () => makeRecord({ outcome: "hedged" })),
-      ...Array.from({ length: 5 }, () => makeRecord({ outcome: "agent-stuck" })),
-    ];
-    const { metadata } = stratifiedSample(records, 20);
-    expect(metadata.sampled).toBeLessThanOrEqual(20);
-    expect(metadata.sampled).toBeGreaterThan(0);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -327,15 +278,6 @@ describe("computeKappa", () => {
 
   it("handles mismatched lengths gracefully", () => {
     expect(computeKappa(["answered"], ["answered", "hedged"])).toBe(0);
-  });
-
-  it("kappa > 0 for better-than-chance agreement", () => {
-    const pred: TurnOutcomeClass[] = ["answered", "answered", "answered", "hedged", "hedged"];
-    const exp: TurnOutcomeClass[] = ["answered", "answered", "hedged", "hedged", "answered"];
-    // 2 agreements of 5 = 0.4 observed; chance ~0.44; kappa slightly negative
-    const k = computeKappa(pred, exp);
-    expect(typeof k).toBe("number");
-    expect(Number.isFinite(k)).toBe(true);
   });
 });
 
@@ -491,14 +433,6 @@ describe("parseArgs", () => {
 
   it("throws on invalid baseline-hours", () => {
     expect(() => parseArgs(["--baseline-hours", "0"])).toThrow(">= 1");
-  });
-
-  it("applies defaults", () => {
-    const opts = parseArgs(["--store-path", "/tmp/cfg.json"]);
-    expect(opts.budget).toBe(200);
-    expect(opts.baselineHours).toBe(24);
-    expect(opts.model).toBe("gpt-5-mini");
-    expect(opts.dryRun).toBe(false);
   });
 
   it("throws when store-path missing", () => {

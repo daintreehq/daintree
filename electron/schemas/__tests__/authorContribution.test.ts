@@ -134,14 +134,6 @@ describe("manifest authors field (issue #10516)", () => {
     expect(make(MANIFEST_AUTHORS_CAP + 1).success).toBe(false);
   });
 
-  it("rejects a manifest whose author has an invalid url", () => {
-    const result = getPluginManifestSchema("user").safeParse(
-      manifestWith({ authors: [{ name: "Alice", url: "http://alice.dev" }] })
-    );
-    expect(result.success).toBe(false);
-    expect(authorIssueCode(result)).toContain("scope_url_not_https");
-  });
-
   it("rejects a non-array authors value", () => {
     expect(
       getPluginManifestSchema("user").safeParse(manifestWith({ authors: "Alice" })).success

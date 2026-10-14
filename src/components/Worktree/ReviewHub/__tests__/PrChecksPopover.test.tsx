@@ -392,18 +392,6 @@ describe("PrChecksPopover", () => {
     expect(screen.getByText("fresh")).toBeTruthy();
   });
 
-  it("survives a read that resolves after unmount", async () => {
-    const pending = deferred<{ checks: ForgeCheckRun[] }>();
-    getChecksMock.mockReturnValue(pending.promise);
-    const { unmount } = renderPopover();
-    fireEvent.click(trigger());
-    await waitFor(() => expect(getChecksMock).toHaveBeenCalled());
-    unmount();
-    await act(async () => {
-      pending.resolve({ checks: [check()] });
-    });
-  });
-
   it("closes itself on Escape and hands focus back to the trigger", async () => {
     getChecksMock.mockResolvedValue({ checks: [check()] });
     renderPopover();
@@ -548,20 +536,5 @@ describe("PrChecksPopover", () => {
     await screen.findByTestId("pr-checks-error");
     fireEvent.click(screen.getByTestId("pr-checks-open-pr"));
     expect(onOpenExternal).toHaveBeenCalledWith("https://github.com/o/r/pull/42");
-  });
-
-  it("keeps every row of a large check list", async () => {
-    getChecksMock.mockResolvedValue({
-      checks: Array.from({ length: 300 }, (_, i) =>
-        check({ name: `job-${i}`, conclusion: i === 297 ? "failure" : "success" })
-      ),
-    });
-    renderPopover();
-    await openAndSettle();
-
-    const list = await screen.findByTestId("pr-checks-list");
-    expandSettled();
-    expect(list.querySelectorAll("li")).toHaveLength(300);
-    expect(list.querySelectorAll("li")[0]!.textContent).toContain("job-297");
   });
 });

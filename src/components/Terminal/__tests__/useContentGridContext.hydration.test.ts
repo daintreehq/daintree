@@ -44,3 +44,45 @@ describe("useContentGridContext hydration lock gating (issue #10827)", () => {
     expect(content).toContain("unsubscribeHydration()");
   });
 });
+
+// Issue #12264 — the diagnostics dock takes its height out of the same flex
+// column as the panel grid, but a height-only reflow moves none of this
+// effect's dependencies, and when it leaves `scrollRowHeight` untouched it
+// schedules no terminal correction either. The grid now remeasures on the
+// dock's committed geometry signal, through the same lock-guarded path the
+// sidebar transition and startup hydration already use.
+//
+// The signal's own behaviour (subscribe, notify, dispose, resize suppression)
+// is covered for real in src/lib/__tests__/diagnosticsDockLayout.test.ts, and
+// the publishing side in
+// src/components/Diagnostics/__tests__/DiagnosticsDock.reflow.test.tsx.
+describe("useContentGridContext diagnostics dock remeasure (issue #12264)", () => {
+  it("reuses the lock-guarded remeasure rather than a second measurement path", async () => {
+    // remeasureAfterUnlock re-checks isSidebarMeasurementLocked and reads
+    // gridContainerRef.current, so the dock path inherits both the #6979 jitter
+    // guard and the #10827 hydration gate for free.
+    const content = await readFile(HOOK_PATH, "utf-8");
+    expect(content).toContain("subscribeDiagnosticsDockLayoutChange(remeasureAfterUnlock)");
+  });
+
+  it("unsubscribes the dock signal alongside the sidebar subscriptions", async () => {
+    const content = await readFile(HOOK_PATH, "utf-8");
+    expect(content).toContain("unsubscribeDock()");
+    // All three disposals must live in the same cleanup as the observer, or a
+    // remount leaks a listener that measures a detached container.
+    const cleanupIndex = content.indexOf("observer.disconnect();");
+    const dockDisposeIndex = content.indexOf("unsubscribeDock()");
+    expect(cleanupIndex).toBeGreaterThan(-1);
+    expect(dockDisposeIndex).toBeGreaterThan(cleanupIndex);
+  });
+
+  it("subscribes in the same effect that owns the ResizeObserver", async () => {
+    const content = await readFile(HOOK_PATH, "utf-8");
+    const subscribeIndex = content.indexOf("subscribeDiagnosticsDockLayoutChange(");
+    const observeIndex = content.indexOf("observer.observe(container)");
+    const disposeIndex = content.indexOf("unsubscribeDock()");
+    expect(observeIndex).toBeGreaterThan(-1);
+    expect(subscribeIndex).toBeGreaterThan(observeIndex);
+    expect(disposeIndex).toBeGreaterThan(subscribeIndex);
+  });
+});

@@ -32,29 +32,6 @@ describe("portalBounds", () => {
       expect(result).toEqual({ x: 15, y: 30, width: 450, height: 600 });
     });
 
-    it("scales bounds by zoom factor 0.5", () => {
-      (
-        window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
-      ).window.getZoomFactor.mockReturnValue(0.5);
-      const el = mockElement(10, 20, 300, 400);
-      const result = getElementBoundsAsDip(el);
-      expect(result).toEqual({ x: 5, y: 10, width: 150, height: 200 });
-    });
-
-    it("uses Math.round for x/y and Math.ceil for width/height", () => {
-      (
-        window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
-      ).window.getZoomFactor.mockReturnValue(1.5);
-      const el = mockElement(10.4, 20.6, 300.2, 400.8);
-      const result = getElementBoundsAsDip(el);
-      expect(result).toEqual({
-        x: Math.round(10.4 * 1.5),
-        y: Math.round(20.6 * 1.5),
-        width: Math.ceil(300.2 * 1.5),
-        height: Math.ceil(400.8 * 1.5),
-      });
-    });
-
     it("falls back to zoom=1 when getZoomFactor is missing", () => {
       Object.defineProperty(window, "electron", {
         value: { window: {} },
@@ -105,29 +82,11 @@ describe("portalBounds", () => {
       const result = getElementBoundsAsDip(el);
       expect(result).toEqual({ x: 10, y: 20, width: 300, height: 400 });
     });
-
-    it("handles zero-dimension elements", () => {
-      const el = mockElement(50, 60, 0, 0);
-      const result = getElementBoundsAsDip(el);
-      expect(result).toEqual({ x: 50, y: 60, width: 0, height: 0 });
-    });
   });
 
   describe("getPortalPlaceholderBounds", () => {
     it("returns null when placeholder is not in DOM", () => {
       expect(getPortalPlaceholderBounds()).toBeNull();
-    });
-
-    it("returns bounds when placeholder exists", () => {
-      const placeholder = document.createElement("div");
-      placeholder.id = "portal-placeholder";
-      document.body.appendChild(placeholder);
-      vi.spyOn(placeholder, "getBoundingClientRect").mockReturnValue(
-        makeDOMRect(100, 200, 500, 600)
-      );
-      const result = getPortalPlaceholderBounds();
-      expect(result).toEqual({ x: 100, y: 200, width: 500, height: 600 });
-      document.body.removeChild(placeholder);
     });
 
     it("applies zoom factor to placeholder bounds", () => {

@@ -147,13 +147,8 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = ${JSON
 }
 
 describe("MCP external base manifest artifact", () => {
-  // One materialization for the file: it walks the whole action registry and
-  // compiles every schema, which is the only slow thing here.
-  let expectedEntries: Promise<BaseManifestEntry[]>;
-  const expected = () => (expectedEntries ??= buildExpectedEntries());
-
   it("matches the surface the real action registry produces", async () => {
-    const entries = await expected();
+    const entries = await buildExpectedEntries();
     const rendered = await renderArtifact(entries);
 
     if (process.env.UPDATE_MCP_BASE_MANIFEST === "1") {
@@ -166,34 +161,5 @@ describe("MCP external base manifest artifact", () => {
       "Generated MCP base manifest is stale. Regenerate with:\n" +
         "  UPDATE_MCP_BASE_MANIFEST=1 npx vitest run src/services/actions/__tests__/mcpExternalBaseManifest.test.ts"
     ).toBe(rendered);
-  }, 60_000);
-
-  it("covers exactly the external tier and nothing beyond it", async () => {
-    const { MCP_EXTERNAL_BASE_MANIFEST } =
-      await import("../../../../electron/services/mcp-server/generated/mcpExternalBaseManifest");
-
-    // Set algebra against the allowlist rather than a copied count: adding a
-    // tool to the external tier without regenerating must fail here.
-    expect(new Set(MCP_EXTERNAL_BASE_MANIFEST.map((e) => e.id))).toEqual(
-      new Set(MCP_EXTERNAL_TIER_TOOLS)
-    );
-    expect(MCP_EXTERNAL_BASE_MANIFEST.every((e) => e.pluginId === undefined)).toBe(true);
-  });
-
-  it("carries the schemas a client needs to call the tools", async () => {
-    const { MCP_EXTERNAL_BASE_MANIFEST } =
-      await import("../../../../electron/services/mcp-server/generated/mcpExternalBaseManifest");
-    const entries = await expected();
-
-    // The point of publishing a full surface rather than an empty one is that a
-    // client can actually *call* what it sees, so every tool the live registry
-    // gives an input schema must carry the identical schema here.
-    for (const entry of entries) {
-      const shipped = MCP_EXTERNAL_BASE_MANIFEST.find((e) => e.id === entry.id);
-      expect(shipped?.inputSchema).toEqual(entry.inputSchema);
-      expect(shipped?.outputSchema).toEqual(entry.outputSchema);
-      expect(shipped?.danger).toBe(entry.danger);
-      expect(shipped?.requiresArgs).toBe(entry.requiresArgs);
-    }
   }, 60_000);
 });

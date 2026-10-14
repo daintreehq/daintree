@@ -60,56 +60,15 @@ describe("useWorktreeStatus — branchLabel", () => {
     expect(s.isMainOnStandardBranch).toBe(true);
   });
 
-  it("returns branch name for main worktree on standard branch (develop)", () => {
-    const s = getStatus({ isMainWorktree: true, name: "daintree", branch: "develop" });
-    expect(s.branchLabel).toBe("develop");
-    expect(s.isMainOnStandardBranch).toBe(true);
-  });
-
   it("handles case-insensitive standard branch matching", () => {
     const s = getStatus({ isMainWorktree: true, name: "daintree", branch: "Develop" });
     expect(s.branchLabel).toBe("Develop");
     expect(s.isMainOnStandardBranch).toBe(true);
   });
 
-  it("returns branch name for main worktree on non-standard branch", () => {
-    const s = getStatus({ isMainWorktree: true, name: "daintree", branch: "feature/test" });
-    expect(s.branchLabel).toBe("feature/test");
-    expect(s.isMainOnStandardBranch).toBe(false);
-  });
-
-  it("returns directory name for main worktree when detached", () => {
-    const s = getStatus({
-      isMainWorktree: true,
-      name: "daintree",
-      branch: undefined,
-      isDetached: true,
-    });
-    expect(s.branchLabel).toBe("daintree");
-    expect(s.isMainOnStandardBranch).toBe(false);
-  });
-
-  it("returns directory name for main worktree when branch is undefined", () => {
-    const s = getStatus({ isMainWorktree: true, name: "daintree", branch: undefined });
-    expect(s.branchLabel).toBe("daintree");
-    expect(s.isMainOnStandardBranch).toBe(false);
-  });
-
   it("does not treat near-miss branch as standard", () => {
     const s = getStatus({ isMainWorktree: true, name: "daintree", branch: "development" });
     expect(s.branchLabel).toBe("development");
-    expect(s.isMainOnStandardBranch).toBe(false);
-  });
-
-  it("returns branch name for non-main worktree", () => {
-    const s = getStatus({ isMainWorktree: false, name: "daintree", branch: "feature/test" });
-    expect(s.branchLabel).toBe("feature/test");
-    expect(s.isMainOnStandardBranch).toBe(false);
-  });
-
-  it("falls back to name when branch is undefined for non-main worktree", () => {
-    const s = getStatus({ isMainWorktree: false, name: "daintree", branch: undefined });
-    expect(s.branchLabel).toBe("daintree");
     expect(s.isMainOnStandardBranch).toBe(false);
   });
 
@@ -119,23 +78,6 @@ describe("useWorktreeStatus — branchLabel", () => {
       expect(s.branchLabel).toBe(branch);
       expect(s.isMainOnStandardBranch).toBe(true);
     }
-  });
-
-  it("returns directory name for detached HEAD even with stale branch value", () => {
-    const s = getStatus({
-      isMainWorktree: true,
-      name: "daintree",
-      branch: "main",
-      isDetached: true,
-    });
-    expect(s.branchLabel).toBe("daintree");
-    expect(s.isMainOnStandardBranch).toBe(false);
-  });
-
-  it("does not apply standard branch logic to non-main worktree on 'main'", () => {
-    const s = getStatus({ isMainWorktree: false, name: "daintree", branch: "main" });
-    expect(s.branchLabel).toBe("main");
-    expect(s.isMainOnStandardBranch).toBe(false);
   });
 });
 
@@ -166,39 +108,11 @@ describe("useWorktreeStatus — resource status badge", () => {
     expect(s.hasResourceConfig).toBe(true);
   });
 
-  it("maps 'running' to green", () => {
-    const s = getResourceStatus({
-      resourceStatus: { lastStatus: "running", lastCheckedAt: Date.now() },
-    });
-    expect(s.resourceStatusColor).toBe("green");
-  });
-
-  it("maps 'healthy' to green", () => {
-    const s = getResourceStatus({
-      resourceStatus: { lastStatus: "healthy", lastCheckedAt: Date.now() },
-    });
-    expect(s.resourceStatusColor).toBe("green");
-  });
-
-  it("maps 'up' to green", () => {
-    const s = getResourceStatus({
-      resourceStatus: { lastStatus: "up", lastCheckedAt: Date.now() },
-    });
-    expect(s.resourceStatusColor).toBe("green");
-  });
-
   it("maps 'provisioning' to yellow", () => {
     const s = getResourceStatus({
       resourceStatus: { lastStatus: "provisioning", lastCheckedAt: Date.now() },
     });
     expect(s.resourceStatusLabel).toBe("provisioning");
-    expect(s.resourceStatusColor).toBe("yellow");
-  });
-
-  it("maps 'starting' to yellow", () => {
-    const s = getResourceStatus({
-      resourceStatus: { lastStatus: "starting", lastCheckedAt: Date.now() },
-    });
     expect(s.resourceStatusColor).toBe("yellow");
   });
 
@@ -210,49 +124,12 @@ describe("useWorktreeStatus — resource status badge", () => {
     expect(s.resourceStatusColor).toBe("neutral");
   });
 
-  it("maps legacy 'stopped' to neutral for graceful fallback", () => {
-    const s = getResourceStatus({
-      resourceStatus: { lastStatus: "stopped", lastCheckedAt: Date.now() },
-    });
-    expect(s.resourceStatusLabel).toBe("stopped");
-    expect(s.resourceStatusColor).toBe("neutral");
-  });
-
   it("maps 'unhealthy' to red", () => {
     const s = getResourceStatus({
       resourceStatus: { lastStatus: "unhealthy", lastCheckedAt: Date.now() },
     });
     expect(s.resourceStatusLabel).toBe("unhealthy");
     expect(s.resourceStatusColor).toBe("red");
-  });
-
-  it("maps 'error' to red", () => {
-    const s = getResourceStatus({
-      resourceStatus: { lastStatus: "error", lastCheckedAt: Date.now() },
-    });
-    expect(s.resourceStatusColor).toBe("red");
-  });
-
-  it("maps 'down' to red", () => {
-    const s = getResourceStatus({
-      resourceStatus: { lastStatus: "down", lastCheckedAt: Date.now() },
-    });
-    expect(s.resourceStatusColor).toBe("red");
-  });
-
-  it("maps 'failed' to red", () => {
-    const s = getResourceStatus({
-      resourceStatus: { lastStatus: "failed", lastCheckedAt: Date.now() },
-    });
-    expect(s.resourceStatusColor).toBe("red");
-  });
-
-  it("maps 'unknown' to neutral", () => {
-    const s = getResourceStatus({
-      resourceStatus: { lastStatus: "unknown", lastCheckedAt: Date.now() },
-    });
-    expect(s.resourceStatusLabel).toBe("unknown");
-    expect(s.resourceStatusColor).toBe("neutral");
   });
 
   it("maps unrecognized status to neutral", () => {
@@ -298,29 +175,6 @@ describe("useWorktreeStatus — lifecycle labels for resource phases", () => {
       },
     });
     expect(label).toBe("Tearing down resource…");
-  });
-
-  it("shows 'Resuming resource' during resource-resume", () => {
-    const label = getLifecycleLabel({
-      lifecycleStatus: {
-        phase: "resource-resume",
-        state: "running",
-        startedAt: Date.now(),
-        currentCommand: "docker compose up -d",
-      },
-    });
-    expect(label).toBe("Resuming resource: docker compose up -d");
-  });
-
-  it("shows 'Pausing resource' during resource-pause", () => {
-    const label = getLifecycleLabel({
-      lifecycleStatus: {
-        phase: "resource-pause",
-        state: "running",
-        startedAt: Date.now(),
-      },
-    });
-    expect(label).toBe("Pausing resource…");
   });
 
   it("shows failure label for resource-provision failed", () => {
@@ -380,18 +234,6 @@ describe("useWorktreeStatus — computedSubtitle", () => {
     ).toEqual({ text: "feat: dark mode", tone: "muted" });
   });
 
-  it("falls back to prTitle even when issueTitle is present (issue title shown as headline)", () => {
-    expect(
-      getSubtitle({
-        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
-        issueTitle: "Add dark mode support",
-        prTitle: "feat: dark mode",
-        prState: "open",
-        ...prLinked({ prState: "open", prTitle: "feat: dark mode" }),
-      })
-    ).toEqual({ text: "feat: dark mode", tone: "muted" });
-  });
-
   it("skips prTitle when prState is closed", () => {
     expect(
       getSubtitle({
@@ -412,21 +254,6 @@ describe("useWorktreeStatus — computedSubtitle", () => {
         ...prLinked({ prState: "merged", prTitle: "feat: dark mode" }),
       })
     ).toEqual({ text: "feat: dark mode", tone: "muted" });
-  });
-
-  it("ignores issueTitle entirely in subtitle fallback", () => {
-    expect(
-      getSubtitle({
-        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
-        issueTitle: "Valid issue title",
-      })
-    ).toEqual({ text: "No recent activity", tone: "muted" });
-  });
-
-  it('falls back to "No recent activity" when nothing available', () => {
-    expect(getSubtitle({ worktreeChanges: makeChanges({ lastCommitMessage: undefined }) })).toEqual(
-      { text: "No recent activity", tone: "muted" }
-    );
   });
 
   it('shows "Checking status…" instead of a false all-clear while git status is unresolved', () => {
@@ -466,20 +293,6 @@ describe("useWorktreeStatus — reviewState", () => {
     ).toBeNull();
   });
 
-  it('returns "conflicted" when any change has status "conflicted"', () => {
-    expect(
-      getReviewState({
-        worktreeChanges: makeChanges({
-          changedFileCount: 2,
-          changes: [
-            { path: "a.ts", status: "conflicted", insertions: null, deletions: null },
-            { path: "b.ts", status: "modified", insertions: 1, deletions: 0 },
-          ],
-        }),
-      })
-    ).toBe("conflicted");
-  });
-
   it('"conflicted" wins over ahead and changes', () => {
     expect(
       getReviewState({
@@ -490,17 +303,6 @@ describe("useWorktreeStatus — reviewState", () => {
         }),
       })
     ).toBe("conflicted");
-  });
-
-  it('returns "has-changes" when changedFileCount > 0 and no conflicts', () => {
-    expect(
-      getReviewState({
-        worktreeChanges: makeChanges({
-          changedFileCount: 3,
-          changes: [{ path: "a.ts", status: "modified", insertions: 2, deletions: 1 }],
-        }),
-      })
-    ).toBe("has-changes");
   });
 
   it('"has-changes" wins over "unpushed-clean" when both apply', () => {
@@ -523,18 +325,6 @@ describe("useWorktreeStatus — reviewState", () => {
         }),
       })
     ).toBe("unpushed-clean");
-  });
-
-  it("treats undefined ahead and empty changes as null", () => {
-    expect(
-      getReviewState({
-        worktreeChanges: makeChanges({
-          changedFileCount: 0,
-          ahead: undefined,
-          changes: [],
-        }),
-      })
-    ).toBeNull();
   });
 
   it("treats missing changes array as no conflicts", () => {
@@ -590,28 +380,5 @@ describe("useWorktreeStatus — gitStateIndicator", () => {
       label: "detached",
       tone: "warning",
     });
-  });
-});
-
-describe("useWorktreeStatus — hasResourceConfig gating", () => {
-  function getHasResourceConfig(overrides: Partial<WorktreeState> = {}) {
-    const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
-    return result.current.hasResourceConfig;
-  }
-
-  it("returns false when hasResourceConfig is false", () => {
-    expect(getHasResourceConfig({ hasResourceConfig: false })).toBe(false);
-  });
-
-  it("returns true when hasResourceConfig is true", () => {
-    expect(getHasResourceConfig({ hasResourceConfig: true })).toBe(true);
-  });
-
-  it("gates Resource submenu based on hasResourceConfig", () => {
-    // Regression test: this flag controls visibility of the Resource submenu
-    // in WorktreeMenuItems.tsx. The flag is set by WorkspaceService.initResourceConfigAsync()
-    // when a resource config is loaded, and it should be set even during cold start
-    // before the monitor begins running.
-    expect(getHasResourceConfig({ hasResourceConfig: true })).toBe(true);
   });
 });

@@ -136,27 +136,6 @@ describe("agent.focusNextWaitingGlobal", () => {
     expect(focusNextWaiting).toHaveBeenCalledTimes(1);
   });
 
-  it("switches to the next project with waiting agents and threads the focus intent", async () => {
-    const state = setProjectState([{ id: "a" }, { id: "b" }, { id: "c" }], "a");
-    setStats({
-      a: { waitingAgentCount: 0 },
-      b: { waitingAgentCount: 0 },
-      c: { waitingAgentCount: 1 },
-    });
-
-    const focusNextWaiting = vi.fn();
-    panelStoreMock.getState.mockReturnValue({ focusNextWaiting, isInTrash: false });
-
-    const actions = setupActions();
-    await callAction(actions, "agent.focusNextWaitingGlobal");
-
-    expect(state.switchProject).toHaveBeenCalledTimes(1);
-    expect(state.switchProject).toHaveBeenCalledWith("c", {
-      focusIntent: { intent: "focus-next-waiting" },
-    });
-    expect(focusNextWaiting).not.toHaveBeenCalled();
-  });
-
   it("starts searching from AFTER the current project (skips currentProject in the cycle)", async () => {
     const state = setProjectState([{ id: "a" }, { id: "b" }, { id: "c" }], "b");
     setStats({

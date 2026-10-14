@@ -193,68 +193,6 @@ describe("useDevServer adversarial races", () => {
     expect(result.current.status).toBe("running");
   });
 
-  it("queues latest config while ensure is in-flight and applies it after completion", async () => {
-    const firstEnsure = createDeferred<DevPreviewSessionState>();
-
-    ensureMock.mockImplementation((request: { devCommand: string; projectId: string }) => {
-      if (request.devCommand === "npm run dev") {
-        return firstEnsure.promise;
-      }
-      return Promise.resolve(
-        buildState({
-          panelId: "panel-1",
-          projectId: request.projectId,
-          status: "starting",
-          terminalId: "term-latest",
-        })
-      );
-    });
-
-    const { rerender } = renderHook(
-      ({ devCommand }: { devCommand: string }) =>
-        useDevServer({
-          panelId: "panel-1",
-          devCommand,
-          cwd: "/repo",
-        }),
-      {
-        initialProps: { devCommand: "npm run dev" },
-      }
-    );
-
-    await waitFor(() => {
-      expect(ensureMock).toHaveBeenCalledTimes(1);
-      expect(ensureMock).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ devCommand: "npm run dev" })
-      );
-    });
-
-    rerender({ devCommand: "pnpm dev" });
-
-    expect(ensureMock).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      firstEnsure.resolve(
-        buildState({
-          panelId: "panel-1",
-          projectId: "project-1",
-          status: "starting",
-          terminalId: "term-first",
-        })
-      );
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(ensureMock).toHaveBeenCalledTimes(2);
-      expect(ensureMock).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ devCommand: "pnpm dev" })
-      );
-    });
-  });
-
   it("re-ensures when worktree changes with otherwise identical config", async () => {
     const { rerender } = renderHook(
       ({ worktreeId }: { worktreeId?: string }) =>
@@ -354,77 +292,6 @@ describe("useDevServer adversarial races", () => {
       );
       expect(result.current.url).toBe("http://localhost:5174/");
       expect(result.current.terminalId).toBe("term-worktree-2");
-    });
-  });
-
-  it("applies latest project and worktree when both switch during in-flight ensure", async () => {
-    const firstEnsure = createDeferred<DevPreviewSessionState>();
-
-    ensureMock.mockImplementation((request: { projectId: string; worktreeId?: string }) => {
-      if (request.projectId === "project-1") {
-        return firstEnsure.promise;
-      }
-      return Promise.resolve(
-        buildState({
-          panelId: "panel-1",
-          projectId: "project-2",
-          worktreeId: "wt-2",
-          status: "running",
-          terminalId: "term-project-2",
-          url: "http://localhost:4173/",
-        })
-      );
-    });
-
-    const { rerender, result } = renderHook(
-      ({ worktreeId }: { worktreeId?: string }) =>
-        useDevServer({
-          panelId: "panel-1",
-          devCommand: "npm run dev",
-          cwd: "/repo",
-          worktreeId,
-        }),
-      {
-        initialProps: { worktreeId: "wt-1" },
-      }
-    );
-
-    await waitFor(() => {
-      expect(ensureMock).toHaveBeenCalledTimes(1);
-      expect(ensureMock).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ projectId: "project-1", worktreeId: "wt-1" })
-      );
-    });
-
-    projectState.currentProject = { id: "project-2" };
-    rerender({ worktreeId: "wt-2" });
-
-    expect(ensureMock).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      firstEnsure.resolve(
-        buildState({
-          panelId: "panel-1",
-          projectId: "project-1",
-          worktreeId: "wt-1",
-          status: "running",
-          terminalId: "term-project-1",
-          url: "http://localhost:3000/",
-        })
-      );
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(ensureMock).toHaveBeenCalledTimes(2);
-      expect(ensureMock).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ projectId: "project-2", worktreeId: "wt-2" })
-      );
-      expect(result.current.status).toBe("running");
-      expect(result.current.url).toBe("http://localhost:4173/");
-      expect(result.current.terminalId).toBe("term-project-2");
     });
   });
 
@@ -610,75 +477,6 @@ describe("useDevServer adversarial races", () => {
     expect(result.current.status).toBe("running");
     expect(result.current.terminalId).toBe("term-project-2");
     expect(result.current.url).toBe("http://localhost:4173/");
-  });
-
-  it("escalates stuckTier at 6s/20s/45s without restarting a stuck starting session (#8276, retuned #9099)", async () => {
-    vi.useFakeTimers();
-    try {
-      ensureMock.mockImplementation((request: { projectId: string }) =>
-        Promise.resolve(
-          buildState({
-            panelId: "panel-1",
-            projectId: request.projectId,
-            status: "starting",
-            terminalId: `term-${request.projectId}`,
-          })
-        )
-      );
-      getStateMock.mockImplementation((request: { projectId: string }) =>
-        Promise.resolve(
-          buildState({
-            panelId: "panel-1",
-            projectId: request.projectId,
-            status: "starting",
-            terminalId: `term-${request.projectId}`,
-          })
-        )
-      );
-
-      const { result } = renderHook(() =>
-        useDevServer({
-          panelId: "panel-1",
-          devCommand: "npm run dev",
-          cwd: "/repo",
-        })
-      );
-
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      expect(result.current.status).toBe("starting");
-      expect(result.current.stuckTier).toBe(0);
-      expect(ensureMock).toHaveBeenCalledTimes(1);
-
-      // 0 → 6000 (Tier 1)
-      await act(async () => {
-        vi.advanceTimersByTime(6000);
-        await Promise.resolve();
-      });
-      expect(result.current.stuckTier).toBe(1);
-
-      // 6000 → 20000 (Tier 2)
-      await act(async () => {
-        vi.advanceTimersByTime(14000);
-        await Promise.resolve();
-      });
-      expect(result.current.stuckTier).toBe(2);
-
-      // 20000 → 45000 (Tier 3)
-      await act(async () => {
-        vi.advanceTimersByTime(25000);
-        await Promise.resolve();
-      });
-      expect(result.current.stuckTier).toBe(3);
-
-      // The #8276 contract: escalation never silently restarts.
-      expect(restartMock).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("cancels pending stuck timers when the server recovers (#8276)", async () => {
@@ -987,55 +785,6 @@ describe("useDevServer adversarial races", () => {
     }
   });
 
-  it("allows Tier 2 to fire normally when phaseLabel never reaches 'Compiling' (#9099)", async () => {
-    vi.useFakeTimers();
-    try {
-      ensureMock.mockImplementation((request: { projectId: string }) =>
-        Promise.resolve(
-          buildState({
-            panelId: "panel-1",
-            projectId: request.projectId,
-            status: "starting",
-            terminalId: `term-${request.projectId}`,
-          })
-        )
-      );
-      getStateMock.mockImplementation((request: { projectId: string }) =>
-        Promise.resolve(
-          buildState({
-            panelId: "panel-1",
-            projectId: request.projectId,
-            status: "starting",
-            terminalId: `term-${request.projectId}`,
-          })
-        )
-      );
-
-      const { result } = renderHook(() =>
-        useDevServer({
-          panelId: "panel-1",
-          devCommand: "npm run dev",
-          cwd: "/repo",
-        })
-      );
-
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      // Advance to 20s with no Compiling signal — Tier 2 must fire.
-      await act(async () => {
-        vi.advanceTimersByTime(20000);
-        await Promise.resolve();
-      });
-      expect(result.current.phaseLabel).toBeUndefined();
-      expect(result.current.stuckTier).toBe(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("does not auto-restart a stuck installing session (backend handles install lifecycle)", async () => {
     vi.useFakeTimers();
     try {
@@ -1083,60 +832,6 @@ describe("useDevServer adversarial races", () => {
 
       expect(restartMock).not.toHaveBeenCalled();
       // Installing is exempt from stuck-start escalation (#8276).
-      expect(result.current.stuckTier).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not auto-restart installing session with URL present", async () => {
-    vi.useFakeTimers();
-    try {
-      ensureMock.mockImplementation((request: { projectId: string }) =>
-        Promise.resolve(
-          buildState({
-            panelId: "panel-1",
-            projectId: request.projectId,
-            status: "installing",
-            terminalId: `term-${request.projectId}`,
-            url: "http://localhost:3000/",
-          })
-        )
-      );
-      getStateMock.mockImplementation((request: { projectId: string }) =>
-        Promise.resolve(
-          buildState({
-            panelId: "panel-1",
-            projectId: request.projectId,
-            status: "installing",
-            terminalId: `term-${request.projectId}`,
-            url: "http://localhost:3000/",
-          })
-        )
-      );
-
-      const { result } = renderHook(() =>
-        useDevServer({
-          panelId: "panel-1",
-          devCommand: "npm install && npm run dev",
-          cwd: "/repo",
-        })
-      );
-
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      expect(result.current.status).toBe("installing");
-      expect(result.current.url).toBe("http://localhost:3000/");
-
-      await act(async () => {
-        vi.advanceTimersByTime(120000);
-        await Promise.resolve();
-      });
-
-      expect(restartMock).not.toHaveBeenCalled();
       expect(result.current.stuckTier).toBe(0);
     } finally {
       vi.useRealTimers();

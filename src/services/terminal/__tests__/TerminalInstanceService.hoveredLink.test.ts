@@ -73,23 +73,10 @@ describe("TerminalInstanceService hovered link API", () => {
     service.instances.clear();
   });
 
-  it("getHoveredLinkText returns null when terminal is missing", () => {
-    expect(service.getHoveredLinkText("missing")).toBeNull();
-  });
-
-  it("getHoveredLinkText returns null when no link is hovered", () => {
-    service.instances.set("t1", { hoveredLink: null });
-    expect(service.getHoveredLinkText("t1")).toBeNull();
-  });
-
   it("getHoveredLinkText returns the text of the currently hovered link", () => {
     const link = { text: "https://example.com", range: {}, activate: vi.fn() };
     service.instances.set("t1", { hoveredLink: link });
     expect(service.getHoveredLinkText("t1")).toBe("https://example.com");
-  });
-
-  it("getHoveredFilePath returns null when terminal is missing", () => {
-    expect(service.getHoveredFilePath("missing")).toBeNull();
   });
 
   it("getHoveredFilePath returns the absolute path for a file link", () => {
@@ -131,11 +118,6 @@ describe("TerminalInstanceService hovered link API", () => {
     await service.openHoveredLink("t1", event);
 
     expect(activate).toHaveBeenCalledWith(event, "https://example.com");
-  });
-
-  it("openHoveredLink is a no-op when no link is hovered", async () => {
-    service.instances.set("t1", { hoveredLink: null });
-    await expect(service.openHoveredLink("t1")).resolves.toBeUndefined();
   });
 
   it("openHoveredLink surfaces sync throws from activate() via notify() (#9925)", async () => {

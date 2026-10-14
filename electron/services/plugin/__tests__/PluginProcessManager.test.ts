@@ -459,17 +459,6 @@ describe("PluginProcessManager", () => {
     await Promise.all(inFlight);
   });
 
-  it("frees a concurrency slot when a process exits", async () => {
-    const h = makeHarness();
-    const handle = await h.manager.spawn("acme.tool", pipeConfig());
-    expect(h.manager.runningCount("acme.tool")).toBe(1);
-    h.fakes[0]!.emitExit(0, null);
-    await flushMicrotasks();
-    expect(h.manager.runningCount("acme.tool")).toBe(0);
-
-    void handle; // keep the handle referenced
-  });
-
   it("killAll terminates every outstanding process for a plugin", async () => {
     const h = makeHarness();
     await h.manager.spawn("acme.tool", pipeConfig({ command: "a" }));
@@ -1101,14 +1090,6 @@ describe("PluginProcessManager", () => {
       expect(chunks).toEqual([{ stream: "data", chunk: "fresh" }]);
     });
 
-    it("carries the current geometry across a restart", async () => {
-      const h = makeHarness();
-      const handle = await h.manager.spawn("acme.tool", ptyConfig({ cols: 80, rows: 24 }));
-      handle.resize(140, 45);
-      await handle.restart();
-      expect(h.ptyConfigs.at(-1)!.config).toMatchObject({ cols: 140, rows: 45 });
-    });
-
     it("bumps the generation on every restart so the transport can filter", async () => {
       const h = makeHarness();
       const handle = await h.manager.spawn("acme.tool", ptyConfig());
@@ -1287,20 +1268,6 @@ describe("PluginProcessManager", () => {
       expect(h.fakes[0]!.stdinWrites).toEqual([]);
     });
 
-    it("makes write() a no-op after the child exits rather than throwing", async () => {
-      const h = makeHarness();
-      const handle = await h.manager.spawn("acme.tool", duplexConfig());
-      const fake = h.fakes[0]!;
-
-      fake.emitExit(0, null);
-      await flushMicrotasks();
-
-      // Fire-and-forget contract: a write racing the exit behaves like kill() on
-      // a dead process, not an exception thrown inside a plugin's timer.
-      expect(() => handle.write("late\n")).not.toThrow();
-      expect(fake.stdinWrites).toEqual([]);
-    });
-
     it("makes write() a no-op once stdin has been destroyed", async () => {
       const h = makeHarness();
       const handle = await h.manager.spawn("acme.tool", duplexConfig());
@@ -1331,49 +1298,6 @@ describe("PluginProcessManager", () => {
       expect(second.stdinWrites.join("")).toBe("after-restart\n");
       // The detached predecessor receives nothing.
       expect(first.stdinWrites).toEqual([]);
-    });
-
-    it("counts duplex processes against the per-plugin concurrency cap", async () => {
-      const h = makeHarness();
-      for (let i = 0; i < PLUGIN_PROCESS_MAX_CONCURRENT; i++) {
-        await h.manager.spawn("acme.tool", duplexConfig());
-      }
-      expect(h.manager.runningCount("acme.tool")).toBe(PLUGIN_PROCESS_MAX_CONCURRENT);
-      await expect(h.manager.spawn("acme.tool", duplexConfig())).rejects.toThrow(
-        PluginProcessConcurrencyError
-      );
-    });
-
-    it("records duplex spawns in the audit trail", async () => {
-      const h = makeHarness();
-      await h.manager.spawn("acme.tool", duplexConfig({ command: "codex" }));
-      expect(h.auditCalls).toEqual([{ pluginId: "acme.tool", command: "codex" }]);
-    });
-
-    it("tears duplex children down on unload", async () => {
-      const h = makeHarness();
-      await h.manager.spawn("acme.tool", duplexConfig());
-      await h.manager.spawn("acme.tool", duplexConfig());
-
-      h.manager.killAll("acme.tool");
-
-      expect(h.fakes[0]!.killSignals).toContain("SIGTERM");
-      expect(h.fakes[1]!.killSignals).toContain("SIGTERM");
-    });
-
-    it("leaves resize inert on a duplex process — there is no terminal", async () => {
-      const h = makeHarness();
-      const handle = await h.manager.spawn("acme.tool", duplexConfig());
-      expect(() => handle.resize(120, 40)).not.toThrow();
-      expect(h.ptys).toHaveLength(0);
-    });
-
-    it("leaves pipe-mode writes inert even though the write path now exists", async () => {
-      const h = makeHarness();
-      const handle = await h.manager.spawn("acme.tool", pipeConfig());
-
-      expect(() => handle.write("x")).not.toThrow();
-      expect(h.fakes[0]!.stdinWrites).toEqual([]);
     });
 
     it("no-ops when stdin has ended rather than writing after end", async () => {

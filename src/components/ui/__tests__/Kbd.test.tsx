@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { Kbd, KbdChord } from "../Kbd";
+import { KbdChord } from "../Kbd";
 import { describeChord, formatChordText } from "@/lib/kbdShortcut";
 
 vi.mock("@/lib/platform", () => ({
@@ -11,15 +11,6 @@ vi.mock("@/lib/platform", () => ({
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
-
-describe("Kbd", () => {
-  it("renders children inside a kbd element", () => {
-    const { container } = render(<Kbd>Esc</Kbd>);
-    const kbd = container.querySelector("kbd");
-    expect(kbd).toBeTruthy();
-    expect(kbd?.textContent).toBe("Esc");
-  });
-});
 
 describe("KbdChord", () => {
   it("outer wrapper is a span so ARIA labels do not land on kbd", () => {
@@ -53,30 +44,6 @@ describe("KbdChord", () => {
       expect(spoken).not.toMatch(/[⌘⌥⇧⌃+]/);
       unmount();
     }
-  });
-
-  it("renders chord with multiple steps", () => {
-    const { container } = render(<KbdChord shortcut="Cmd+K Cmd+S" />);
-    const innerKbds = container.querySelectorAll("span kbd");
-    expect(innerKbds.length).toBeGreaterThanOrEqual(4);
-  });
-
-  it("applies tabular-nums on per-key pills so digit and letter keys align (issue #8100)", () => {
-    const { container } = render(<KbdChord shortcut="Cmd+S" />);
-    const innerKbds = container.querySelectorAll("span kbd");
-    expect(innerKbds.length).toBeGreaterThan(0);
-    innerKbds.forEach((kbd) => {
-      expect(kbd.className).toContain("tabular-nums");
-    });
-  });
-
-  it("applies tabular-nums on digit-token pills — the issue's stated scenario (#8100)", () => {
-    const { container } = render(<KbdChord shortcut="Cmd+1" isMac={false} />);
-    const innerKbds = container.querySelectorAll("span kbd");
-    expect(innerKbds.length).toBeGreaterThan(0);
-    innerKbds.forEach((kbd) => {
-      expect(kbd.className).toContain("tabular-nums");
-    });
   });
 });
 

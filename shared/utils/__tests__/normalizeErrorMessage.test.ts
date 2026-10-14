@@ -53,12 +53,6 @@ describe("normalizeForDedup", () => {
     expect(normalizeForDedup("Process process 67890 crashed")).toBe("Process crashed");
   });
 
-  it("strips EADDRINUSE port after address already in use phrase", () => {
-    const a = "listen EADDRINUSE: address already in use :::3000";
-    const b = "listen EADDRINUSE: address already in use :::4000";
-    expect(normalizeForDedup(a)).toBe(normalizeForDedup(b));
-  });
-
   it("strips EADDRINUSE port after localhost", () => {
     const a = "connect ECONNREFUSED localhost:3000";
     const b = "connect ECONNREFUSED localhost:4000";

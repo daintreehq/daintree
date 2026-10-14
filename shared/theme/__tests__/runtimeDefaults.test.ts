@@ -65,20 +65,6 @@ describe("ANSI terminal fallbacks for plugin themes without a terminal sub-palet
     expect(tokens["terminal-bright-cyan"]).toBe(ANSI_CYAN_FALLBACK);
   });
 
-  it("does not leak the (purple-adjacent) accent into the magenta slot", () => {
-    const palette = makePaletteWithoutTerminal();
-    const tokens = createSemanticTokens(palette);
-    expect(tokens["terminal-magenta"]).not.toBe(palette.accent);
-    expect(tokens["terminal-bright-magenta"]).not.toBe(palette.accent);
-  });
-
-  it("does not leak the activity-active hue into the cyan slot", () => {
-    const palette = makePaletteWithoutTerminal();
-    const tokens = createSemanticTokens(palette);
-    expect(tokens["terminal-cyan"]).not.toBe(palette.activity.active);
-    expect(tokens["terminal-bright-cyan"]).not.toBe(palette.activity.active);
-  });
-
   it("applies the ANSI fallback through compilePaletteToTokens (normalizeAppColorScheme path)", () => {
     // Mirror coverage: themes.ts and semantic.ts implement the same fix in
     // parallel. This guards against future divergence by exercising the
@@ -255,10 +241,6 @@ describe("grainCharacter — curated texture resolution and conditional emission
 });
 
 describe("PANEL_KIND_BRAND_COLORS — agent vs dev-preview distinctness", () => {
-  it("agent and dev-preview resolve to different theme tokens", () => {
-    expect(PANEL_KIND_BRAND_COLORS.agent).not.toBe(PANEL_KIND_BRAND_COLORS["dev-preview"]);
-  });
-
   it("dev-preview no longer collides with the accent on purple-accent themes", () => {
     expect(PANEL_KIND_BRAND_COLORS["dev-preview"]).not.toBe("var(--theme-accent-primary)");
     expect(PANEL_KIND_BRAND_COLORS["dev-preview"]).not.toBe("var(--theme-category-violet)");

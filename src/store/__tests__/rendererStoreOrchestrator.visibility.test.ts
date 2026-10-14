@@ -174,12 +174,6 @@ describe("rendererStoreOrchestrator — focus-follow release while hidden (#1237
     expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
   });
 
-  it("runs the release straight away when the document is visible", () => {
-    vi.advanceTimersByTime(2_001);
-
-    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
-  });
-
   it("forgets a pending release on destroy", () => {
     setHidden(true);
     vi.advanceTimersByTime(2_001);

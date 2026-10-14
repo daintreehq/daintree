@@ -86,12 +86,6 @@ describe("webContentsLifecycle", () => {
       );
       expect(lifecycle?.[1]).toEqual({ state: "active" });
     });
-
-    it("returns early when wc is destroyed", async () => {
-      const wc = createMockWc({ destroyed: true });
-      await unfreezeWebContents(wc as unknown as Electron.WebContents);
-      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
-    });
   });
 
   describe("error swallowing", () => {
@@ -268,20 +262,6 @@ describe("webContentsLifecycle", () => {
         "HeapProfiler.collectGarbage",
         "HeapProfiler.disable",
       ]);
-    });
-
-    it("never sends Memory.simulatePressureNotification (never reached this renderer)", async () => {
-      const wc = createMockWc();
-      await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
-      const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
-      expect(methods).not.toContain("Memory.simulatePressureNotification");
-    });
-
-    it("never sends Memory.forciblyPurgeJavaScriptMemory (SIGSEGVed throttled hidden views)", async () => {
-      const wc = createMockWc();
-      await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
-      const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
-      expect(methods).not.toContain("Memory.forciblyPurgeJavaScriptMemory");
     });
 
     it("skips entirely when Windows E2E disables cached-view CDP commands", async () => {

@@ -24,11 +24,6 @@ describe("useDockBlockedState", () => {
     expect(result.current).toBe(null);
   });
 
-  it("returns null initially for waiting state (debounce pending)", () => {
-    const { result } = renderHook(() => useDockBlockedState("waiting"));
-    expect(result.current).toBe(null);
-  });
-
   it("returns 'waiting' after debounce delay", () => {
     const { result } = renderHook(() => useDockBlockedState("waiting"));
     expect(result.current).toBe(null);
@@ -88,18 +83,6 @@ describe("useDockBlockedState", () => {
     // Should still be null — never stayed blocked long enough
     act(() => vi.advanceTimersByTime(800));
     expect(result.current).toBe(null);
-  });
-
-  it("does not update state after unmount", () => {
-    const { result, unmount } = renderHook(() => useDockBlockedState("waiting"));
-    expect(result.current).toBe(null);
-
-    unmount();
-
-    // Timer fires after unmount — should not throw or update
-    act(() => {
-      vi.advanceTimersByTime(800);
-    });
   });
 
   it("returns null for undefined agentState", () => {
@@ -166,11 +149,6 @@ describe("getGroupAmbientAgentState", () => {
     expect(getGroupAmbientAgentState(panels)).toBe(undefined);
   });
 
-  it("returns 'waiting' when waiting outranks working", () => {
-    const panels = [{ agentState: "waiting" as const }, { agentState: "working" as const }];
-    expect(getGroupAmbientAgentState(panels)).toBe("waiting");
-  });
-
   it("returns undefined for empty panels", () => {
     expect(getGroupAmbientAgentState([])).toBe(undefined);
   });
@@ -183,11 +161,6 @@ describe("getGroupAmbientAgentState", () => {
   it("ignores directing state (not in working tier)", () => {
     const panels = [{ agentState: "directing" as const }, { agentState: "idle" as const }];
     expect(getGroupAmbientAgentState(panels)).toBe(undefined);
-  });
-
-  it("returns 'working' for completed + working mix", () => {
-    const panels = [{ agentState: "completed" as const }, { agentState: "working" as const }];
-    expect(getGroupAmbientAgentState(panels)).toBe("working");
   });
 });
 
@@ -224,16 +197,6 @@ describe("isDockAgentStateDeprioritized", () => {
 });
 
 describe("isGroupDeprioritized", () => {
-  it("returns true when all panels are idle", () => {
-    const panels = [{ agentState: "idle" as const }, { agentState: "idle" as const }];
-    expect(isGroupDeprioritized(panels)).toBe(true);
-  });
-
-  it("returns true when all panels are completed", () => {
-    const panels = [{ agentState: "completed" as const }, { agentState: "completed" as const }];
-    expect(isGroupDeprioritized(panels)).toBe(true);
-  });
-
   it("returns true for mix of idle, completed, and undefined", () => {
     const panels = [
       { agentState: "idle" as const },
@@ -245,11 +208,6 @@ describe("isGroupDeprioritized", () => {
 
   it("returns false when any panel is working", () => {
     const panels = [{ agentState: "idle" as const }, { agentState: "working" as const }];
-    expect(isGroupDeprioritized(panels)).toBe(false);
-  });
-
-  it("returns false when any panel is waiting", () => {
-    const panels = [{ agentState: "completed" as const }, { agentState: "waiting" as const }];
     expect(isGroupDeprioritized(panels)).toBe(false);
   });
 

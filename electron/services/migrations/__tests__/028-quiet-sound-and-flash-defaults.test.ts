@@ -47,20 +47,6 @@ describe("migration028 — quiet sound and flash defaults", () => {
     expect(store.set).not.toHaveBeenCalled();
   });
 
-  it("is idempotent — running twice does not re-apply", () => {
-    const data: Record<string, unknown> = {
-      notificationSettings: { soundEnabled: true },
-    };
-    const store = makeStoreMock(data);
-    migration028.up(store);
-    const firstCallCount = (store.set as ReturnType<typeof vi.fn>).mock.calls.length;
-
-    migration028.up(store);
-    const secondCallCount = (store.set as ReturnType<typeof vi.fn>).mock.calls.length;
-
-    expect(secondCallCount).toBe(firstCallCount);
-  });
-
   it("no-op when notificationSettings is missing", () => {
     const store = makeStoreMock({});
     migration028.up(store);

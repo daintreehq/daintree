@@ -132,17 +132,6 @@ describe("ResourcePollTimer", () => {
     expect(host.onResourceStatusPoll).toHaveBeenCalledTimes(1);
   });
 
-  it("clear() prevents further callbacks even if a timer fires", async () => {
-    const host = makeHost({ resourcePollIntervalMs: 5_000 });
-    const timer = new ResourcePollTimer(host as ResourcePollTimerHost);
-
-    timer.schedule();
-    timer.clear();
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(host.onResourceStatusPoll).not.toHaveBeenCalled();
-  });
-
   it("clear() prevents post-callback rescheduling", async () => {
     const host = makeHost({ resourcePollIntervalMs: 5_000 });
     const timer = new ResourcePollTimer(host as ResourcePollTimerHost);

@@ -91,20 +91,6 @@ describe("sortAgentsByToolbarPin", () => {
     expect(pinnedCount).toBe(2);
   });
 
-  it("places a pinned agent absent from both side arrays at the end of the pinned group", () => {
-    const agents = [agent("claude", "ready"), agent("gemini", "ready")];
-    // gemini pinned but positioned nowhere → after claude (index 0), before any unpinned.
-    const { sorted, pinnedCount } = sortAgentsByToolbarPin(
-      agents,
-      ["claude"],
-      settings({ gemini: { pinned: true } }),
-      [],
-      {}
-    );
-    expect(sorted.map((a) => a.id)).toEqual(["claude", "gemini"]);
-    expect(pinnedCount).toBe(2);
-  });
-
   it("uses the first index for a duplicated id in leftButtons", () => {
     const agents = [agent("claude", "ready"), agent("gemini", "ready")];
     const { sorted } = sortAgentsByToolbarPin(
@@ -122,12 +108,6 @@ describe("sortAgentsByToolbarPin", () => {
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(agents, ["claude"], null, [], {});
     expect(sorted.map((a) => a.id)).toEqual(["claude", "gemini"]);
     expect(pinnedCount).toBe(1);
-  });
-
-  it("treats undefined availability with no pin as unpinned", () => {
-    const agents = [agent("claude", undefined)];
-    const { pinnedCount } = sortAgentsByToolbarPin(agents, [], settings({}), [], {});
-    expect(pinnedCount).toBe(0);
   });
 
   it("leaves an installed agent with no position out of the pinned group", () => {

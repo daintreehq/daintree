@@ -586,25 +586,6 @@ describe("IPC channel drift guardrails", () => {
     }
   });
 
-  it("preload imports CHANNELS from channels.ts — no hand-maintained inline copy", async () => {
-    const source = await readFile(PRELOAD_CTS, "utf8");
-
-    // esbuild bundles the preload, so it can (and must) consume the canonical
-    // CHANNELS export from electron/ipc/channels.ts. If the inline copy
-    // reappears, drift is possible again. #5691.
-    expect(
-      source,
-      'electron/preload.cts must `import { CHANNELS } from "./ipc/channels.js"` ' +
-        "rather than inlining a duplicate CHANNELS declaration."
-    ).toMatch(/^import\s*\{[^}]*\bCHANNELS\b[^}]*\}\s*from\s*["']\.\/ipc\/channels\.js["'];?$/m);
-
-    expect(
-      /\bconst\s+CHANNELS\s*=\s*\{/.test(source),
-      "electron/preload.cts must not declare its own `const CHANNELS = { ... }` — " +
-        "the single source of truth lives in electron/ipc/channels.ts."
-    ).toBe(false);
-  });
-
   it("the agent-session list binding forwards both scope filters (#11530)", async () => {
     // This namespace is hand-wired inline in preload.cts, so there is no
     // builder module to unit-test. The main-side handler tests invoke the

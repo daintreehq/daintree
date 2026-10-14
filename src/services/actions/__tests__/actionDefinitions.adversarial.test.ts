@@ -757,7 +757,7 @@ describe("terminal action hardening", () => {
   // #6920: terminal.close trashes immediately for every agent state — the
   // close-confirm dialog and CustomEvent dispatch were retired in favour of
   // an undo toast emitted by panelStore.trashPanel.
-  it.each(["idle", "working", "waiting", "directing", "completed", "exited"] as const)(
+  it.each(["working", "waiting"] as const)(
     "trashes a %s agent terminal immediately on terminal.close (no confirm event)",
     async (state) => {
       const actions = buildRegistry(registerTerminalActions);

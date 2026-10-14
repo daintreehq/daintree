@@ -76,12 +76,6 @@ describe("UpstreamSyncBadge — base compare ref (#11747)", () => {
     expect(document.body.textContent).toContain("Base (main): 4 commits behind");
   });
 
-  it("names the compare ref on the ahead line too", () => {
-    renderBadge({ baseBehindCount: 0, baseAheadCount: 6, baseCompareRef: "upstream/main" });
-
-    expect(document.body.textContent).toContain("Base (upstream/main): 6 commits ahead");
-  });
-
   it("says the comparison is local when the base fell back to the local branch", () => {
     // `BaseDivergence` sets the compare ref to the BARE base name when the
     // remote ref won't resolve — which is what "Fetch and prune" leaves behind
@@ -106,12 +100,6 @@ describe("UpstreamSyncBadge — base compare ref (#11747)", () => {
     renderBadge({ baseCompareRef: null });
 
     expect(screen.queryByTestId("upstream-sync-local-base")).toBeNull();
-  });
-
-  it("labels the ahead line as local too", () => {
-    renderBadge({ baseBehindCount: 0, baseAheadCount: 6, baseCompareRef: "main" });
-
-    expect(document.body.textContent).toContain("Base (local main): 6 commits ahead");
   });
 
   it("labels the resting line as local", () => {

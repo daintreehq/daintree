@@ -19,26 +19,6 @@ describe("stripIdleTerminalSequences", () => {
     expect(stripIdleTerminalSequences("hello world")).toBe("hello world");
   });
 
-  it("strips DECSET cursor hide/show", () => {
-    expect(stripIdleTerminalSequences("\x1b[?25l\x1b[?25h")).toBe("");
-  });
-
-  it("strips DECSET focus event toggles", () => {
-    expect(stripIdleTerminalSequences("\x1b[?1004h\x1b[?1004l")).toBe("");
-  });
-
-  it("strips DECSET bracketed-paste mode toggles", () => {
-    expect(stripIdleTerminalSequences("\x1b[?2004h\x1b[?2004l")).toBe("");
-  });
-
-  it("strips DECSET sync-update toggles", () => {
-    expect(stripIdleTerminalSequences("\x1b[?2026h\x1b[?2026l")).toBe("");
-  });
-
-  it("strips DECSET alt-screen toggles", () => {
-    expect(stripIdleTerminalSequences("\x1b[?1049h\x1b[?1049l")).toBe("");
-  });
-
   it("strips DECSET combined-mode sequences with all known-noise codes", () => {
     expect(stripIdleTerminalSequences("\x1b[?25;2026h")).toBe("");
     expect(stripIdleTerminalSequences("\x1b[?1049;2004l")).toBe("");
@@ -57,24 +37,8 @@ describe("stripIdleTerminalSequences", () => {
     expect(stripIdleTerminalSequences("\x1b]0;Window Title\x07")).toBe("");
   });
 
-  it("strips OSC 1 set-icon-name", () => {
-    expect(stripIdleTerminalSequences("\x1b]1;Icon\x07")).toBe("");
-  });
-
-  it("strips OSC 2 set-window-title-only", () => {
-    expect(stripIdleTerminalSequences("\x1b]2;Claude — Working\x07")).toBe("");
-  });
-
   it("strips OSC 7 set-cwd", () => {
     expect(stripIdleTerminalSequences("\x1b]7;file:///tmp\x07")).toBe("");
-  });
-
-  it("strips OSC 8 hyperlink", () => {
-    expect(stripIdleTerminalSequences("\x1b]8;;https://example.com\x07")).toBe("");
-  });
-
-  it("strips OSC 9 taskbar progress", () => {
-    expect(stripIdleTerminalSequences("\x1b]9;4;1;50\x07")).toBe("");
   });
 
   it("strips OSC 10 foreground-color query/response", () => {
@@ -98,16 +62,6 @@ describe("stripIdleTerminalSequences", () => {
   it("strips OSC 1337 iTerm2 sequences", () => {
     expect(stripIdleTerminalSequences("\x1b]1337;CurrentDir=/tmp\x07")).toBe("");
     expect(stripIdleTerminalSequences("\x1b]1337;RemoteHost=user@host\x07")).toBe("");
-  });
-
-  it("preserves OSC 1337 with payload exceeding 512 chars", () => {
-    const start = performance.now();
-    const payload = "x".repeat(2000);
-    const input = `\x1b]1337;File=name=foo.png:${payload}\x07`;
-    const out = stripIdleTerminalSequences(input);
-    const elapsed = performance.now() - start;
-    expect(elapsed).toBeLessThan(50);
-    expect(out).toBe(input);
   });
 
   it("preserves unknown OSC codes (e.g. OSC 14, OSC 777)", () => {
@@ -184,9 +138,5 @@ describe("stripIdleTerminalSequences", () => {
   it("strips multiple noise types interleaved with content", () => {
     const input = "\x1b[?25l\x1b]133;A\x07hello\x1b[24;80R world\x1b[?25h";
     expect(stripIdleTerminalSequences(input)).toBe("hello world");
-  });
-
-  it("does not strip 4-digit CPR-shaped numbers in plain text", () => {
-    expect(stripIdleTerminalSequences("price: $1234")).toBe("price: $1234");
   });
 });

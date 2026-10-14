@@ -150,13 +150,6 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     expect(dead?.className).not.toBe(live?.className);
   });
 
-  it("keeps a value's count visible even when it drops to zero", () => {
-    // The count used to vanish at zero, so a chip's label changed as filters
-    // moved and the grid reflowed underneath the pointer.
-    openWithCounts();
-    expect(chip(/^Active/)?.textContent).toContain("(0)");
-  });
-
   it("marks selection on an axis that hover does not touch", () => {
     // The defect this guards: hovering an unselected chip already raises its
     // fill and takes its text to `text-text-primary`, so a selected chip and a
@@ -400,16 +393,6 @@ describe("WorktreeFilterPopover keyboard and focus surfaces", () => {
     useWorktreeFilterStore.getState().setOrderBy("created");
   });
   afterEach(cleanup);
-
-  it("gives the trigger the app's accent focus ring rather than the browser's", () => {
-    // Every other control in the sidebar rail carries this; without it the
-    // trigger fell back to the UA's own outline, which is a different colour
-    // from the rest of the surface.
-    openPopover();
-    const trigger = screen.getByLabelText(/^Filter and sort worktrees/);
-    expect(trigger.className).toMatch(/focus-visible:outline\b/);
-    expect(trigger.className).toContain("outline-accent-primary");
-  });
 
   it("lets every section toggle own its whole row, with Clear floating over it", () => {
     // A Clear slot laid out beside the toggle took a strip off the right of

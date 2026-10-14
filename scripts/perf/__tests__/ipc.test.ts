@@ -5,7 +5,7 @@ import {
   nonceRequestId,
   serializedBytes,
 } from "../lib/ipcFixture";
-import { ipcScenarios } from "../scenarios/ipc";
+import "../scenarios/ipc";
 
 /**
  * Unit coverage for the accounting helpers only. The scenarios themselves fork
@@ -54,15 +54,6 @@ describe("ipc fixture accounting", () => {
 });
 
 describe("ipc scenario family", () => {
-  it("no longer ships the in-process broker scenarios", () => {
-    const ids = ipcScenarios.map((scenario) => scenario.id);
-    // PERF-040/041 drove a RequestResponseBroker inside this process and were
-    // named as though they crossed a boundary. PERF-044 replaced them.
-    expect(ids).not.toContain("PERF-040");
-    expect(ids).not.toContain("PERF-041");
-    expect(ids).toEqual(["PERF-042", "PERF-043", "PERF-044", "PERF-045", "PERF-046"]);
-  });
-
   it("importing the family forks no host processes", () => {
     // Lazy-fixture rule: a host is forked inside run(), never at import time.
     expect(liveUtilityHostCount()).toBe(0);

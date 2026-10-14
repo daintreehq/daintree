@@ -40,16 +40,18 @@ function renderHandle(
 const tokens = (el: Element) => el.className.split(/\s+/).filter(Boolean);
 const vertical = (growKey: SplitterGrowKey) => growKey === "ArrowLeft" || growKey === "ArrowRight";
 const cases = PLACEMENTS.map((p) => [`${p.edge}/${p.growKey}`, p] as const);
+// The label, reset gesture, focus outline and grip ink are the same at every placement.
+const oneCase = cases.slice(0, 1);
 
 describe("ResizeHandle", () => {
   afterEach(cleanup);
 
-  it.each(cases)("names the reset gesture in its label (%s)", (_, placement) => {
+  it.each(oneCase)("names the reset gesture in its label (%s)", (_, placement) => {
     const { handle } = renderHandle(placement);
     expect(handle.getAttribute("aria-label")).toMatch(/^Resize .+ \(double-click to reset\)$/);
   });
 
-  it.each(cases)("resets on double-click (%s)", (_, placement) => {
+  it.each(oneCase)("resets on double-click (%s)", (_, placement) => {
     const { handle, onReset } = renderHandle(placement);
     fireEvent.doubleClick(handle);
     expect(onReset).toHaveBeenCalledTimes(1);
@@ -81,7 +83,7 @@ describe("ResizeHandle", () => {
     expect(direct || extended).toBe(true);
   });
 
-  it.each(cases)("paints a visible accent outline on keyboard focus (%s)", (_, placement) => {
+  it.each(oneCase)("paints a visible accent outline on keyboard focus (%s)", (_, placement) => {
     const { handle } = renderHandle(placement);
     const t = tokens(handle);
     expect(t).toContain("focus-visible:outline-solid");
@@ -142,7 +144,7 @@ describe("ResizeHandle", () => {
     return contrastRatio(alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : value, bg);
   };
 
-  it.each(cases)("draws the grip in theme tokens, never slash-alpha ink (%s)", (_, placement) => {
+  it.each(oneCase)("draws the grip in theme tokens, never slash-alpha ink (%s)", (_, placement) => {
     for (const isResizing of [false, true]) {
       const { grip } = renderHandle(placement, { isResizing });
       const inks = tokens(grip).filter((x) => /(^|:)bg-/.test(x));
@@ -158,7 +160,7 @@ describe("ResizeHandle", () => {
     for (const theme of Object.keys(REST_GAPS_UNDER_3)) expect(GRIP_THEMES).toContain(theme);
   });
 
-  it.each(cases)("rests at 3:1 and steps up to hover then focus (%s)", (_, placement) => {
+  it.each(oneCase)("rests at 3:1 and steps up to hover then focus (%s)", (_, placement) => {
     const { grip } = renderHandle(placement);
     const rest = gripInk(grip, "");
     const hover = gripInk(grip, "group-hover/resize:");

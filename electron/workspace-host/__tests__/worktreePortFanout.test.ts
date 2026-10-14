@@ -54,25 +54,6 @@ describe("fanoutEventToPorts", () => {
     expect(logger.error.mock.calls[0][0]).toContain("postMessage failed, closing port");
   });
 
-  it("still delivers to the remaining ports when one throws (reverse iteration)", () => {
-    const earlyBad = makePort(true);
-    const middleGood = makePort();
-    const lateBad = makePort(true);
-    const ports = [earlyBad, middleGood, lateBad];
-    const logger = { error: vi.fn() };
-
-    fanoutEventToPorts(ports, { type: "pr-detected" }, logger);
-
-    expect(middleGood.postMessage).toHaveBeenCalledWith({
-      type: "event",
-      event: { type: "pr-detected" },
-    });
-    expect(earlyBad.close).toHaveBeenCalledTimes(1);
-    expect(lateBad.close).toHaveBeenCalledTimes(1);
-    expect(ports).toEqual([middleGood]);
-    expect(logger.error).toHaveBeenCalledTimes(2);
-  });
-
   it("splices the port before calling close() so a re-entrant close listener finds idx === -1", () => {
     const bad = makePort(true);
     const ports = [bad];

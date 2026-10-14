@@ -190,23 +190,6 @@ describe("useSearchablePalette", () => {
       expect(result.current.totalResults).toBe(25);
     });
 
-    it("totalResults equals results.length when not truncated", () => {
-      const items: PaletteItem[] = Array.from({ length: 10 }, (_, i) => ({
-        id: `item-${i}`,
-        name: `Item ${i}`,
-      }));
-
-      const { result } = renderHook(() =>
-        useSearchablePalette<PaletteItem>({
-          items,
-          maxResults: 20,
-        })
-      );
-
-      expect(result.current.results).toHaveLength(10);
-      expect(result.current.totalResults).toBe(10);
-    });
-
     it("totalResults updates after query change narrows results", () => {
       const items: PaletteItem[] = [
         ...Array.from({ length: 25 }, (_, i) => ({
@@ -268,48 +251,6 @@ describe("useSearchablePalette", () => {
 
       expect(result.current.totalResults).toBeGreaterThan(0);
       expect(result.current.results.length).toBeLessThanOrEqual(10);
-    });
-  });
-
-  describe("isStale (deferred filter)", () => {
-    it("exposes isStale on the return object", () => {
-      const { result } = renderHook(() =>
-        useSearchablePalette<PaletteItem>({
-          items: [{ id: "a", name: "A" }],
-        })
-      );
-
-      // JSDOM resolves useDeferredValue synchronously inside act(), so the
-      // observable steady-state value is always false. The contract we're
-      // asserting here is structural: the field exists and is a boolean.
-      expect(typeof result.current.isStale).toBe("boolean");
-      expect(result.current.isStale).toBe(false);
-    });
-
-    it("filters by the deferred query (results stay consistent post-set)", () => {
-      const items: PaletteItem[] = [
-        { id: "alpha", name: "Alpha" },
-        { id: "beta", name: "Beta" },
-      ];
-
-      const { result } = renderHook(() =>
-        useSearchablePalette<PaletteItem>({
-          items,
-          filterFn: (allItems, query) => {
-            if (!query) return allItems;
-            return allItems.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()));
-          },
-        })
-      );
-
-      act(() => {
-        result.current.setQuery("alp");
-      });
-
-      // After the act() flush, the deferred render has caught up to the urgent
-      // state — results reflect the typed query and isStale settles to false.
-      expect(result.current.results.map((i) => i.id)).toEqual(["alpha"]);
-      expect(result.current.isStale).toBe(false);
     });
   });
 

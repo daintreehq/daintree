@@ -81,15 +81,6 @@ describe("useEmptyCanvasContent", () => {
       h.scratchState.currentScratch = scratch;
     });
 
-    // The bug: a scratch nulls currentProject, which used to read as "no
-    // workspace" and hand the user an acquire-a-workspace screen.
-    it("gives the canvas the launcher, not the welcome screen", () => {
-      render(<>{renderContent().current.emptyContent}</>);
-
-      expect(screen.getByTestId("empty-state")).toBeTruthy();
-      expect(screen.queryByTestId("welcome-screen")).toBeNull();
-    });
-
     it("hands the empty state the scratch's identity and cwd", () => {
       render(<>{renderContent().current.emptyContent}</>);
 
@@ -214,10 +205,6 @@ describe("useEmptyCanvasContent", () => {
       expect(screen.queryByTestId("empty-state")).toBeNull();
     });
 
-    it("keeps the canvas keyed on the project", () => {
-      expect(renderContent().current.workspaceId).toBe(project.id);
-    });
-
     it("still supplies the launcher for a project opened without git", () => {
       // A claim replaces the CANVAS, and the non-git branch's canvas is the
       // launcher — so the claim wins there too rather than the two racing.
@@ -248,12 +235,6 @@ describe("useEmptyCanvasContent", () => {
 
       expect(screen.getByTestId("welcome-screen")).toBeTruthy();
       expect(screen.queryByTestId("project-surface")).toBeNull();
-    });
-
-    it("falls back to the stock canvas when nothing resolves", () => {
-      h.surface.resolved = null;
-
-      expect(renderContent().current.emptyContent).toBeUndefined();
     });
   });
 

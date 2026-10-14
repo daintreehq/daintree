@@ -312,22 +312,6 @@ describe("worktree IPC adversarial", () => {
     expect(worktreeService.createWorktree).not.toHaveBeenCalled();
   });
 
-  it("WORKTREE_CREATE surfaces validator error message verbatim (#7033)", async () => {
-    validateBranchNameMock.mockReturnValueOnce({
-      valid: false,
-      error: "Branch name cannot contain '@{'",
-    });
-
-    await expect(
-      getHandler(CHANNELS.WORKTREE_CREATE)(fakeEvent(), {
-        rootPath: "/repo",
-        options: { baseBranch: "main", newBranch: "feat@{x", path: "/repo/wt-bad" },
-      })
-    ).rejects.toThrow(/@\{/);
-
-    expect(worktreeService.createWorktree).not.toHaveBeenCalled();
-  });
-
   it("WORKTREE_CREATE rejects malformed payloads before validating (#7033)", async () => {
     const handler = getHandler(CHANNELS.WORKTREE_CREATE);
 

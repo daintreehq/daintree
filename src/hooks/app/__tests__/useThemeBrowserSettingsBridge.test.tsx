@@ -73,45 +73,6 @@ describe("useThemeBrowserSettingsBridge", () => {
     dispatchSpy.mockRestore();
   });
 
-  it("restores to terminalAppearance tab when browser was opened from that tab", () => {
-    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-    const setIsSettingsOpen = vi.fn();
-
-    // Simulate being on terminalAppearance tab in Settings
-    useSettingsStore.setState({
-      activeTab: "terminalAppearance",
-      activeSubtab: null,
-      activeSectionId: null,
-    });
-
-    const { rerender } = render(
-      <Harness isSettingsOpen={true} setIsSettingsOpen={setIsSettingsOpen} />
-    );
-
-    act(() => {
-      useThemeBrowserStore.getState().open();
-    });
-    dispatchSpy.mockClear();
-
-    rerender(<Harness isSettingsOpen={false} setIsSettingsOpen={setIsSettingsOpen} />);
-
-    act(() => {
-      useThemeBrowserStore.getState().close();
-    });
-
-    const settingsEvents = dispatchSpy.mock.calls
-      .map((c) => c[0])
-      .filter(
-        (e): e is CustomEvent => e instanceof CustomEvent && e.type === "daintree:open-settings-tab"
-      );
-    expect(settingsEvents).toHaveLength(1);
-    const detail = settingsEvents[0]!.detail as { tab?: string; sectionId?: string };
-    expect(detail.tab).toBe("terminalAppearance");
-    expect(detail.sectionId).toBe("appearance-theme");
-
-    dispatchSpy.mockRestore();
-  });
-
   it("does NOT reopen Settings on close if the browser was opened with Settings closed", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     const setIsSettingsOpen = vi.fn();

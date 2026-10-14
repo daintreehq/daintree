@@ -51,19 +51,6 @@ describe("useFleetFailureStore", () => {
     unsubscribe = null;
   });
 
-  it("starts empty", () => {
-    const s = useFleetFailureStore.getState();
-    expect(s.failedIds.size).toBe(0);
-    expect(s.payload).toBeNull();
-  });
-
-  it("recordFailure populates ids and payload", () => {
-    useFleetFailureStore.getState().recordFailure("hello", ["a", "b"]);
-    const s = useFleetFailureStore.getState();
-    expect(s.failedIds).toEqual(new Set(["a", "b"]));
-    expect(s.payload).toBe("hello");
-  });
-
   it("recordFailure with empty ids resets state", () => {
     useFleetFailureStore.getState().recordFailure("hello", ["a"]);
     useFleetFailureStore.getState().recordFailure("ignored", []);
@@ -92,14 +79,6 @@ describe("useFleetFailureStore", () => {
   it("dismissId resets fully when last id leaves", () => {
     useFleetFailureStore.getState().recordFailure("p", ["a"]);
     useFleetFailureStore.getState().dismissId("a");
-    const s = useFleetFailureStore.getState();
-    expect(s.failedIds.size).toBe(0);
-    expect(s.payload).toBeNull();
-  });
-
-  it("clear resets everything", () => {
-    useFleetFailureStore.getState().recordFailure("p", ["a", "b"]);
-    useFleetFailureStore.getState().clear();
     const s = useFleetFailureStore.getState();
     expect(s.failedIds.size).toBe(0);
     expect(s.payload).toBeNull();

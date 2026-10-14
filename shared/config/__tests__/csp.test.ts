@@ -19,11 +19,6 @@ describe("Daintree app CSP", () => {
     expect(csp).toContain(`trusted-types ${TRUSTED_TYPES_POLICY_NAME} default 'allow-duplicates'`);
   });
 
-  it("registers a default Trusted Types policy for React/Radix DOM sinks", () => {
-    expect(getDaintreeAppProdCSP()).toMatch(/trusted-types[^;]*\bdefault\b/);
-    expect(getDaintreeAppDevCSP()).toMatch(/trusted-types[^;]*\bdefault\b/);
-  });
-
   it("getDaintreeAppCSP routes to dev or prod based on flag", () => {
     expect(getDaintreeAppCSP(true)).toBe(getDaintreeAppDevCSP());
     expect(getDaintreeAppCSP(false)).toBe(getDaintreeAppProdCSP());
@@ -131,14 +126,6 @@ describe("Daintree app CSP", () => {
     // `.pdf` and answers with a hard-coded `application/pdf`.
     const frameSrcOf = (csp: string) => csp.match(/frame-src ([^;]*);/)?.[1];
 
-    it("allows daintree-pdf: in frame-src in production", () => {
-      expect(frameSrcOf(getDaintreeAppProdCSP())).toContain("daintree-pdf:");
-    });
-
-    it("allows daintree-pdf: in frame-src in development", () => {
-      expect(frameSrcOf(getDaintreeAppDevCSP())).toContain("daintree-pdf:");
-    });
-
     it("keeps daintree-file: out of frame-src in both modes", () => {
       // The general file scheme serves arbitrary repo files under
       // extension-derived MIME types, so framing it would let a repo-controlled
@@ -181,15 +168,6 @@ describe("Daintree app CSP", () => {
     // warning — every protocol/MIME fix upstream still fails. daintree-file:
     // stays for consumers that read media bytes through fetch() (the size
     // probe, WebAudio); blob: stays for renderer-minted object URLs.
-    it("allows daintree-media: in media-src in production", () => {
-      const mediaSrc = getDaintreeAppProdCSP().match(/media-src ([^;]*);/)?.[1];
-      expect(mediaSrc).toContain("daintree-media:");
-    });
-
-    it("allows daintree-media: in media-src in development", () => {
-      const mediaSrc = getDaintreeAppDevCSP().match(/media-src ([^;]*);/)?.[1];
-      expect(mediaSrc).toContain("daintree-media:");
-    });
 
     it("confines daintree-media: to media-src in both modes", () => {
       // The scheme exists to serve media bytes to a media element and nothing

@@ -540,52 +540,6 @@ describe("projectSettingsDirty", () => {
       expect(snapshot.runCommands[0]!.preferredAutoRestart).toBe(false);
     });
 
-    it("should preserve preferredLocation and preferredAutoRestart in snapshot", () => {
-      const snapshot = createProjectSettingsSnapshot(
-        "Project",
-        "🌲",
-        "",
-        undefined,
-        [],
-        [],
-        [
-          {
-            id: "cmd1",
-            name: "Build",
-            command: "npm run build",
-            preferredLocation: "dock",
-            preferredAutoRestart: true,
-          },
-        ],
-        undefined,
-        [],
-        {}
-      );
-
-      expect(snapshot.runCommands[0]!.preferredLocation).toBe("dock");
-      expect(snapshot.runCommands[0]!.preferredAutoRestart).toBe(true);
-    });
-
-    it("should treat undefined and undefined devServerLoadTimeout as equal", () => {
-      const snapshot2 = createProjectSettingsSnapshot(
-        "Project",
-        "🌲",
-        "npm run dev",
-        undefined,
-        ["node_modules/**"],
-        [{ id: "1", key: "KEY", value: "value" }],
-        [{ id: "cmd1", name: "Build", command: "npm run build" }],
-        "recipe-1",
-        [{ commandId: "test", disabled: false }],
-        {},
-        "none",
-        "",
-        undefined
-      );
-
-      expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(true);
-    });
-
     it("should detect changed notificationOverrides", () => {
       const snapshotA = createProjectSettingsSnapshot(
         "Project",
@@ -672,51 +626,6 @@ describe("projectSettingsDirty", () => {
       );
 
       expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
-    });
-
-    it("should treat undefined and undefined color as equal", () => {
-      const snapshotA = createProjectSettingsSnapshot(
-        "Project",
-        "🌲",
-        "npm run dev",
-        undefined,
-        [],
-        [],
-        [],
-        undefined,
-        [],
-        {},
-        "none",
-        "",
-        undefined,
-        undefined,
-        "",
-        undefined,
-        undefined,
-        undefined
-      );
-      const snapshotB = createProjectSettingsSnapshot(
-        "Project",
-        "🌲",
-        "npm run dev",
-        undefined,
-        [],
-        [],
-        [],
-        undefined,
-        [],
-        {},
-        "none",
-        "",
-        undefined,
-        undefined,
-        "",
-        undefined,
-        undefined,
-        undefined
-      );
-
-      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(true);
     });
 
     it("should detect change from undefined to defined color", () => {

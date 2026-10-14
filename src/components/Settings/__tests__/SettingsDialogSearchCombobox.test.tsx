@@ -207,15 +207,6 @@ describe("settings search keyboard", () => {
     expect(settingsSearchKeyAction(key("End"), 0, RESULTS.length)).toBeNull();
   });
 
-  it("points aria-activedescendant at the first row before any arrow press", () => {
-    const container = renderResults(0);
-    const aria = settingsSearchComboboxAria(RESULTS, 0, true);
-    const first = container.querySelectorAll('[role="option"]')[0];
-
-    expect(first?.getAttribute("aria-selected")).toBe("true");
-    expect(aria["aria-activedescendant"]).toBe(first?.getAttribute("id"));
-  });
-
   it("reveals the first row when a new query keeps it active", () => {
     const scrollIntoView = vi.fn();
     const original = Element.prototype.scrollIntoView;

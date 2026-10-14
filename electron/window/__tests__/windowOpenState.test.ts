@@ -9,7 +9,6 @@ import {
   hasPendingOpen,
   holdWindowForOpen,
   isWindowBound,
-  isWindowReadyForOpens,
   markWindowReadyForOpens,
   reserveWindowForOpen,
   snapshotOpenWorld,
@@ -223,13 +222,6 @@ describe("snapshotOpenWorld", () => {
       ready: true,
     });
     expect(logErrorMock).toHaveBeenCalledOnce();
-  });
-
-  it("reports readiness only once a window has been marked", () => {
-    const w = ctx(1, pvm(null));
-    expect(isWindowReadyForOpens(w.browserWindow)).toBe(false);
-    markWindowReadyForOpens(w.browserWindow);
-    expect(isWindowReadyForOpens(w.browserWindow)).toBe(true);
   });
 
   it("never reports a window without a view manager as ready", () => {

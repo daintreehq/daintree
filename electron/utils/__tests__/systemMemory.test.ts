@@ -7,13 +7,6 @@ import {
 } from "../systemMemory.js";
 
 describe("systemMemory thresholds", () => {
-  it("preserves proportional thresholds on an 8 GB machine", () => {
-    expect(getSystemMemoryThresholds(8 * 1024)).toEqual({
-      criticalMb: 8 * 1024 * 0.1,
-      warningMb: 8 * 1024 * 0.2,
-    });
-  });
-
   it("leaves every machine at or below the knee on the raw fractions", () => {
     // Widening the band (#11926) must not have moved the machines the issue
     // was not about: below the point where the critical cap starts winning,

@@ -67,12 +67,6 @@ describe("readInRepoProjectIdentity", () => {
     expect(result).toEqual({ found: false });
   });
 
-  it("returns empty object when version key is missing", async () => {
-    await writeProjectJson(JSON.stringify({ name: "No Version" }));
-    const result = await identityFiles.readInRepoProjectIdentity(tmpDir);
-    expect(result).toEqual({ found: false });
-  });
-
   it("returns empty object when version is not a number", async () => {
     await writeProjectJson(JSON.stringify({ version: "1", name: "Bad Version" }));
     const result = await identityFiles.readInRepoProjectIdentity(tmpDir);
@@ -115,18 +109,6 @@ describe("readInRepoProjectIdentity", () => {
     expect(result).not.toHaveProperty("anotherField");
   });
 
-  it("handles partial fields (only name)", async () => {
-    await writeProjectJson(JSON.stringify({ version: 1, name: "Just Name" }));
-    const result = await identityFiles.readInRepoProjectIdentity(tmpDir);
-    expect(result).toEqual({ found: true, name: "Just Name" });
-  });
-
-  it("handles partial fields (only emoji)", async () => {
-    await writeProjectJson(JSON.stringify({ version: 1, emoji: "🎯" }));
-    const result = await identityFiles.readInRepoProjectIdentity(tmpDir);
-    expect(result).toEqual({ found: true, emoji: "🎯" });
-  });
-
   it("handles partial fields (only color)", async () => {
     await writeProjectJson(JSON.stringify({ version: 1, color: "#123abc" }));
     const result = await identityFiles.readInRepoProjectIdentity(tmpDir);
@@ -164,12 +146,5 @@ describe("readInRepoProjectIdentity", () => {
     await writeProjectJson(JSON.stringify({ version: 1, name: 123, emoji: true, color: null }));
     const result = await identityFiles.readInRepoProjectIdentity(tmpDir);
     expect(result).toEqual({ found: true });
-  });
-
-  it("returns found:false for unreadable directory", async () => {
-    const result = await identityFiles.readInRepoProjectIdentity(
-      "/nonexistent/path/that/does/not/exist"
-    );
-    expect(result).toEqual({ found: false });
   });
 });

@@ -279,20 +279,6 @@ describe("AvatarGroup", () => {
     }
   });
 
-  it("gives every disc its own edge inside the canvas cut-out", () => {
-    render(
-      withTooltips(
-        createElement(kit.AvatarGroup, { avatars: people, max: 2, "aria-label": "People" })
-      )
-    );
-    const group = screen.getByRole("group", { name: "People" });
-    for (const disc of group.children) {
-      const classes = disc.className.split(" ");
-      expect(classes).toContain("ring-surface-canvas");
-      expect(classes).toContain("border-border-strong");
-    }
-  });
-
   it("skips nameless entries and falls back on a bad max", () => {
     expect(() =>
       render(

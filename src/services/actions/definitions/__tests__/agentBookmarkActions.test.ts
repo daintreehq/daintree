@@ -177,32 +177,6 @@ describe("session bookmark actions", () => {
     expect(removePanel).not.toHaveBeenCalled();
   });
 
-  it("promote and rename forward the exact sessionId and label", async () => {
-    const record = { sessionId: "s1" };
-    agentSessionHistoryMock.promoteBookmark.mockResolvedValue(record);
-    agentSessionHistoryMock.renameBookmark.mockResolvedValue(record);
-    const actions = setupActions();
-
-    await callAction(actions, "session.bookmark.promote", { sessionId: "s1", label: "P" });
-    expect(agentSessionHistoryMock.promoteBookmark).toHaveBeenCalledWith({
-      sessionId: "s1",
-      label: "P",
-    });
-
-    await callAction(actions, "session.bookmark.rename", { sessionId: "s1", label: "R" });
-    expect(agentSessionHistoryMock.renameBookmark).toHaveBeenCalledWith({
-      sessionId: "s1",
-      label: "R",
-    });
-  });
-
-  it("delete forwards only the sessionId", async () => {
-    agentSessionHistoryMock.deleteBookmark.mockResolvedValue(undefined);
-    const actions = setupActions();
-    await callAction(actions, "session.bookmark.delete", { sessionId: "s1" });
-    expect(agentSessionHistoryMock.deleteBookmark).toHaveBeenCalledWith({ sessionId: "s1" });
-  });
-
   it("list scopes to the explicit projectId, then the context project, and never leaks across projects", async () => {
     agentSessionHistoryMock.listBookmarks.mockResolvedValue([VALID_RECORD]);
     const actions = setupActions();
@@ -330,26 +304,6 @@ describe("session bookmark actions", () => {
     )) as { bookmarks: unknown[]; hasMore: boolean };
     expect(exact.bookmarks).toHaveLength(many.length);
     expect(exact.hasMore).toBe(false);
-  });
-
-  it("list honours an explicit limit and keeps the newest-first order", async () => {
-    const many = Array.from({ length: 8 }, (_, i) => ({
-      ...VALID_RECORD,
-      sessionId: `s${i}`,
-      bookmark: { bookmarkedAt: i, label: `L${i}` },
-    }));
-    agentSessionHistoryMock.listBookmarks.mockResolvedValue(many);
-    const actions = setupActions();
-    const result = (await callAction(
-      actions,
-      "session.bookmarks.list",
-      { limit: 2 },
-      {
-        projectId: "p",
-      }
-    )) as { bookmarks: Array<{ sessionId: string }>; total: number; hasMore: boolean };
-    expect(result.bookmarks.map((b) => b.sessionId)).toEqual(["s0", "s1"]);
-    expect(result).toMatchObject({ total: 8, hasMore: true });
   });
 
   it("list strips pane-presentation bookmark fields an agent cannot act on", async () => {

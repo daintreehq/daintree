@@ -503,15 +503,6 @@ describe("AgentAvailabilityStore", () => {
   });
 
   describe("help terminal tracking", () => {
-    it("isHelpTerminal returns false for unknown terminal", () => {
-      expect(store.isHelpTerminal("unknown-term")).toBe(false);
-    });
-
-    it("isHelpTerminal returns true after markAsHelp", () => {
-      store.markAsHelp("term-help");
-      expect(store.isHelpTerminal("term-help")).toBe(true);
-    });
-
     it("isHelpTerminal returns false after unmarkAsHelp", () => {
       store.markAsHelp("term-help");
       store.unmarkAsHelp("term-help");

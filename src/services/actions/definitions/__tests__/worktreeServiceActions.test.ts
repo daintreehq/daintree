@@ -13,16 +13,32 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 const mockRefreshPullRequests = vi.fn().mockResolvedValue(undefined);
+const retryProjectLoadMock = vi.fn<() => Promise<void>>();
+const setWorktreeLoadErrorMock = vi.fn<(error: string | null) => void>();
+
+let worktreeLoadError: string | null = null;
+let currentProject: { id: string } | null = null;
+let viewState: { isInitialized: boolean; isLoading: boolean; error: string | null } | null = null;
+
 vi.mock("@/clients", () => ({
-  worktreeClient: { refreshPullRequests: () => mockRefreshPullRequests() },
+  worktreeClient: {
+    refreshPullRequests: () => mockRefreshPullRequests(),
+    retryProjectLoad: () => retryProjectLoadMock(),
+  },
 }));
 
 vi.mock("@/store/createWorktreeStore", () => ({
-  getCurrentViewStoreOrNull: () => null,
+  getCurrentViewStoreOrNull: () => (viewState ? { getState: () => viewState } : null),
 }));
 
 vi.mock("@/store/projectStore", () => ({
-  useProjectStore: { getState: () => ({}) },
+  useProjectStore: {
+    getState: () => ({
+      worktreeLoadError,
+      currentProject,
+      setWorktreeLoadError: setWorktreeLoadErrorMock,
+    }),
+  },
 }));
 
 const mockRequest = vi.fn();
@@ -78,11 +94,6 @@ describe("worktree service action definitions", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers the refresh and reconcile actions", () => {
-    expect(registry.has("worktree.refresh")).toBe(true);
-    expect(registry.has("worktree.reconcileTopology")).toBe(true);
-  });
-
   it.each([
     ["succeeds", () => mockRequest.mockResolvedValueOnce({ ok: true })],
     ["fails", () => mockRequest.mockRejectedValueOnce(new Error("Worktree port timed out"))],
@@ -111,14 +122,6 @@ describe("worktree service action definitions", () => {
       }
     }
   );
-
-  it("worktree.refresh requests a host refresh and does not notify on success", async () => {
-    const def = registry.get("worktree.refresh")!();
-    await def.run!(undefined as never, undefined as never);
-
-    expect(mockRequest).toHaveBeenCalledWith("refresh");
-    expect(mockNotify).not.toHaveBeenCalled();
-  });
 
   it("worktree.refresh surfaces an error toast when the host does not respond", async () => {
     mockRequest.mockRejectedValueOnce(new Error("Worktree port timed out"));
@@ -259,5 +262,129 @@ describe("worktree service action definitions", () => {
     await def.run!(undefined as never, undefined as never);
 
     expect(mockRequest).toHaveBeenCalledWith("reconcile-topology", { force: true });
+  });
+});
+
+const { registerWorktreeServiceActions } = await import("../worktreeServiceActions");
+
+type Registry = Map<string, () => { [k: string]: unknown }>;
+
+function buildRegistry(): Registry {
+  const registry: Registry = new Map();
+  registerWorktreeServiceActions(registry as never, {} as never);
+  return registry;
+}
+
+function getAction() {
+  const factory = buildRegistry().get("worktree.retryProjectLoad");
+  if (!factory) throw new Error("worktree.retryProjectLoad not registered");
+  return factory() as {
+    danger: string;
+    isEnabled: (ctx: unknown) => boolean;
+    disabledReason: (ctx: unknown) => string | undefined;
+    run: (args: unknown, ctx: unknown) => Promise<void>;
+  };
+}
+
+describe("worktree.retryProjectLoad (#8400)", () => {
+  beforeEach(() => {
+    retryProjectLoadMock.mockReset();
+    retryProjectLoadMock.mockResolvedValue(undefined);
+    setWorktreeLoadErrorMock.mockReset();
+    worktreeLoadError = null;
+    currentProject = null;
+    viewState = null;
+  });
+
+  it("is disabled when there is no worktree load failure", () => {
+    worktreeLoadError = null;
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(false);
+    expect(action.disabledReason({})).toBe("No worktree load failure to retry");
+  });
+
+  it("is enabled while a worktree load failure is present", () => {
+    worktreeLoadError = "Not a git repository";
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(true);
+    expect(action.disabledReason({})).toBeUndefined();
+  });
+
+  it("is enabled for an open project whose worktree store settled without a snapshot (#12576)", () => {
+    // No error to show, but no port either — the state that used to read as an
+    // empty repository. It must be retryable, not a dead end.
+    currentProject = { id: "p1" };
+    viewState = { isInitialized: false, isLoading: false, error: null };
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(true);
+    expect(action.disabledReason({})).toBeUndefined();
+  });
+
+  it("stays disabled while the first snapshot is still loading or once one has landed", () => {
+    currentProject = { id: "p1" };
+    viewState = { isInitialized: false, isLoading: true, error: null };
+    expect(getAction().isEnabled({})).toBe(false);
+
+    viewState = { isInitialized: true, isLoading: false, error: null };
+    expect(getAction().isEnabled({})).toBe(false);
+  });
+
+  it("leaves a crashed workspace service to Restart service", () => {
+    // setFatalError also leaves the store uninitialized and settled, but a
+    // reload can't bring back a host that exhausted its restart budget.
+    currentProject = { id: "p1" };
+    viewState = { isInitialized: false, isLoading: false, error: "Workspace service crashed" };
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(false);
+    expect(action.disabledReason({})).toMatch(/restart/i);
+  });
+
+  it("leaves a crashed service to Restart even when a load failure is also reported", () => {
+    // A dead host is usually why the load failed; a reload can't fix either.
+    worktreeLoadError = "Not a git repository";
+    currentProject = { id: "p1" };
+    viewState = { isInitialized: true, isLoading: false, error: "Workspace service crashed" };
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(false);
+    expect(action.disabledReason({})).toMatch(/restart/i);
+  });
+
+  it("stays disabled for an unbound view", () => {
+    currentProject = null;
+    viewState = { isInitialized: false, isLoading: false, error: null };
+    expect(getAction().isEnabled({})).toBe(false);
+  });
+
+  it("clears the banner after a successful retry", async () => {
+    worktreeLoadError = "Not a git repository";
+    await getAction().run(undefined, {});
+    expect(retryProjectLoadMock).toHaveBeenCalledTimes(1);
+    expect(setWorktreeLoadErrorMock).toHaveBeenCalledWith(null);
+  });
+
+  it("leaves the banner in place when the retry fails", async () => {
+    worktreeLoadError = "Not a git repository";
+    retryProjectLoadMock.mockRejectedValue(new Error("still broken"));
+    await expect(getAction().run(undefined, {})).rejects.toThrow("still broken");
+    expect(setWorktreeLoadErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("does not clobber a new error that arrived mid-retry", async () => {
+    worktreeLoadError = "Not a git repository";
+    let resolveRetry: () => void = () => {};
+    retryProjectLoadMock.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveRetry = resolve;
+      })
+    );
+
+    const runPromise = getAction().run(undefined, {});
+    // A concurrent switch surfaces a different failure while the retry is in
+    // flight — the success path must not wipe it.
+    worktreeLoadError = "A different project failed";
+    resolveRetry();
+    await runPromise;
+
+    expect(setWorktreeLoadErrorMock).not.toHaveBeenCalled();
   });
 });

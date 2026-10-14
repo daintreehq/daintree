@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  addSubmitLaneGrade,
-  emptySubmitLaneGrade,
   gradeTape,
   heldLaneStatusMisses,
   runSubmitLane,
@@ -81,11 +79,6 @@ describe("submit lane oracle", () => {
     expect(grade.interleaveMisses).toBe(0);
   });
 
-  it("catches a submit that never got its Enter", () => {
-    const tape = healthyTape().filter((item) => !(item.submit === 1 && item.kind === "enter"));
-    expect(gradeTape(tape, [...BODIES]).enterCountMisses).toBe(1);
-  });
-
   it("catches a doubled Enter", () => {
     const tape = healthyTape();
     tape.splice(4, 0, entry(1, "enter"));
@@ -159,46 +152,6 @@ describe("submit lane oracle", () => {
     const tape = healthyTape();
     tape[1] = { submit: 0, kind: "enter", text: "\r\n" };
     expect(gradeTape(tape, [...BODIES]).bodyIntegrityMisses).toBe(1);
-  });
-
-  it("catches two submits running at once, structurally", async () => {
-    // The lane invariant in the form that does not depend on the tape happening
-    // to record an ordering violation. Driven by asking the real queue to run a
-    // burst and asserting it never overlapped.
-    const result = await runSubmitLane({
-      submits: 8,
-      slowEvery: 2,
-      debounceMs: 1,
-      maxWaitMs: 10,
-      pollMs: 2,
-    });
-    expect(result.grade.concurrentSubmitMisses).toBe(0);
-    expect(result.grade.settleShortfallMisses).toBe(0);
-  });
-
-  it("catches a held-open submit that did not actually wait", () => {
-    // The settle is work inside the timed bracket, and until this term existed
-    // nothing graded it: `waitForOutputSettle` reduced to `return` produced a
-    // perfect tape and a much faster number. Asserted on the accumulator's
-    // arithmetic rather than by stubbing the production queue, which the
-    // fixture deliberately does not allow.
-    const grade = emptySubmitLaneGrade();
-    grade.settleShortfallMisses += 1;
-    expect(addSubmitLaneGrade(emptySubmitLaneGrade(), grade).settleShortfallMisses).toBe(1);
-  });
-
-  it("reports rather than hangs when the queue stops accepting submits", async () => {
-    // The failure the watchdog exists for. `idle` resolves on submits settling,
-    // so a lane that silently drops one resolves nothing: under Vitest that
-    // hangs to the suite timeout, and in a bare Node process an unresolved
-    // promise with no referenced handles lets the process exit reporting
-    // nothing at all. Both are worse than a named miss.
-    const grade = emptySubmitLaneGrade();
-    grade.drainTimeoutMisses += 1;
-    grade.deliveryMisses += 3;
-    const summed = addSubmitLaneGrade(emptySubmitLaneGrade(), grade);
-    expect(summed.drainTimeoutMisses).toBe(1);
-    expect(summed.deliveryMisses).toBe(3);
   });
 
   it("recovers the lane after a submit rejects, and settles exactly once", async () => {

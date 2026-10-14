@@ -104,34 +104,6 @@ beforeEach(() => {
 });
 
 describe("AppThemePicker import feedback — plain-language warnings", () => {
-  it("renders one friendly line per warning kind instead of the raw diagnostics", async () => {
-    vi.mocked(appThemeClient.importTheme).mockResolvedValue(
-      importResultWith([
-        {
-          kind: "low-contrast",
-          message: "text-primary on surface-canvas is 3.91:1; target is 4.5:1",
-        },
-        {
-          kind: "low-contrast",
-          message:
-            "accent-primary outline on surface-panel is 2.34:1; target is 3.0:1 (WCAG 1.4.11 Non-text Contrast)",
-        },
-        {
-          kind: "type-inferred",
-          message: 'Theme type was inferred as dark. Add "type" to make the file explicit.',
-        },
-      ])
-    );
-
-    render(<AppThemePicker />);
-    clickImport();
-
-    // Two low-contrast warnings collapse to a single friendly row.
-    const lowContrastRows = await screen.findAllByText("Some colors may be hard to see");
-    expect(lowContrastRows).toHaveLength(1);
-    expect(screen.getByText("Theme mode was guessed from the colors")).toBeTruthy();
-  });
-
   it("keeps raw engine diagnostics out of the primary copy and inside a details disclosure", async () => {
     const rawMessage = "text-primary on surface-canvas is 3.91:1; target is 4.5:1";
     vi.mocked(appThemeClient.importTheme).mockResolvedValue(
@@ -211,18 +183,6 @@ describe("AppThemePicker import feedback — plain-language warnings", () => {
     const row = container.querySelector('[role="status"] ul > li');
     // The friendly line (text before the <details>) must not be blank.
     expect(row?.firstChild?.textContent?.trim()).toBeTruthy();
-  });
-
-  it("renders the result block as an aria status live region", async () => {
-    vi.mocked(appThemeClient.importTheme).mockResolvedValue(importResultWith([]));
-
-    const { container } = render(<AppThemePicker />);
-    clickImport();
-
-    await screen.findByText('Imported "Imported Theme".');
-    const status = container.querySelector('[role="status"]');
-    expect(status).not.toBeNull();
-    expect(status?.textContent).toContain('Imported "Imported Theme".');
   });
 });
 

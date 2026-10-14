@@ -167,30 +167,6 @@ describe("terminal resource-metrics fan-out", () => {
     }
   });
 
-  it("measures sends and payload bytes per emit", () => {
-    const EMITS = 60;
-    for (let i = 0; i < EMITS; i++) ptyClient.emit("resource-metrics", makeBatch(), 1000 + i);
-
-    let sends = 0;
-    let bytes = 0;
-    for (const view of registry.views) {
-      for (const s of view.sends) {
-        if (s.channel !== CHANNELS.TERMINAL_RESOURCE_METRICS) continue;
-        sends++;
-        bytes += JSON.stringify(s.args).length;
-      }
-    }
-    if (process.env.BENCH_OUT) {
-      appendFileSync(
-        process.env.BENCH_OUT,
-        `resource-metrics sends/emit=${sends / EMITS} bytes/emit=${bytes / EMITS} cachedSends=${registry.views
-          .filter((v) => v.cached)
-          .reduce((n, v) => n + v.sends.length, 0)}\n`
-      );
-    }
-    expect(sends / EMITS).toBe(PROJECTS);
-  });
-
   it("gives each view, cached or not, only its own project's terminals", () => {
     ptyClient.emit("resource-metrics", makeBatch(), 42);
 

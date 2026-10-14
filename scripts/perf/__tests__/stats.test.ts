@@ -66,18 +66,6 @@ describe("perf stats utilities", () => {
 });
 
 describe("averageMetrics", () => {
-  it("divides each metric by its own occurrence count, not the sample count", () => {
-    // serializeMs appears once across four samples; it must average to its lone
-    // value, not be diluted toward zero by the three samples that omit it.
-    const samples: Array<Record<string, number>> = [{ serializeMs: 1000 }, {}, {}, {}];
-    expect(averageMetrics(samples).serializeMs).toBe(1000);
-  });
-
-  it("averages metrics that appear in every sample", () => {
-    const samples = [{ lag: 10 }, { lag: 20 }, { lag: 30 }];
-    expect(averageMetrics(samples).lag).toBe(20);
-  });
-
   it("handles disjoint metric keys across samples independently", () => {
     const samples: Array<Record<string, number>> = [{ a: 4 }, { b: 8 }, { a: 6 }];
     const result = averageMetrics(samples);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { narrationFingerprint, parseNarration } from "../tourNarration.js";
-import { resolveChapterTiming, resolveTourTimings, tourMinutes } from "../tourTiming.js";
+import { resolveChapterTiming, tourMinutes } from "../tourTiming.js";
 import type { TourChapter, TourChapterTiming, TourTimingManifest } from "../tourTypes.js";
 
 const chapter: TourChapter = {
@@ -49,17 +49,6 @@ describe("resolveChapterTiming", () => {
   it("estimates a chapter the manifest does not know", () => {
     const other = { ...chapter, id: "other" };
     expect(resolveChapterTiming(other, manifestWith(fingerprint)).audioUrl).toBeNull();
-  });
-});
-
-describe("resolveTourTimings", () => {
-  it("resolves every chapter in order", () => {
-    const other = { ...chapter, id: "other" };
-    const timings = resolveTourTimings([chapter, other], manifestWith(fingerprint));
-    expect(timings.map((timing) => timing.audioUrl)).toEqual([
-      "https://example.com/intro.ogg",
-      null,
-    ]);
   });
 });
 

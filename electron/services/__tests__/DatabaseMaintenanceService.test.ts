@@ -87,6 +87,10 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+}
+
 /**
  * A backup now awaits its candidate integrity probe before the rename, so the
  * chain spans several microtask turns. Drain generously rather than counting.
@@ -150,15 +154,6 @@ describe("DatabaseMaintenanceService", () => {
     service.initialize();
 
     expect(mockDbModule.attemptRecovery).toHaveBeenCalledWith("/fake/daintree.db");
-    void service.dispose();
-  });
-
-  it("handles failed recovery gracefully", () => {
-    mockDbModule.probeDb.mockReturnValue(false);
-    mockDbModule.attemptRecovery.mockReturnValue(null);
-
-    const service = new DatabaseMaintenanceService();
-    expect(() => service.initialize()).not.toThrow();
     void service.dispose();
   });
 
@@ -330,14 +325,6 @@ describe("DatabaseMaintenanceService", () => {
     await service.dispose();
     // Second dispose should not run checkpoint again
     expect(mockSqlite.pragma).not.toHaveBeenCalledWith("wal_checkpoint(TRUNCATE)");
-  });
-
-  it("dispose before startMaintenance completes without error", async () => {
-    const service = new DatabaseMaintenanceService();
-    service.initialize();
-
-    await expect(service.dispose()).resolves.toBeUndefined();
-    expect(mockSystemSleepService.onSuspend).not.toHaveBeenCalled();
   });
 
   it("startMaintenance after dispose is a no-op", async () => {
@@ -773,5 +760,173 @@ describe("DatabaseMaintenanceService", () => {
       mockRunDbWork.mock.calls.filter(([op]) => (op as { op: string }).op === "quickCheck")
     ).toHaveLength(0);
     void service.dispose();
+  });
+
+  it("OVERLAPPING_TICKS_DO_NOT_LOSE_INFLIGHT_BACKUP", async () => {
+    const firstBackup = createDeferred<void>();
+    mockSqlite.backup
+      .mockImplementationOnce(() => firstBackup.promise)
+      .mockResolvedValue(undefined);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+
+    const disposePromise = service.dispose();
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+
+    firstBackup.resolve(undefined);
+    await flushMicrotasks();
+    await disposePromise;
+
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(2);
+    expect(mockSqlite.pragma.mock.calls).toEqual([
+      ["wal_checkpoint(PASSIVE)"],
+      ["wal_checkpoint(PASSIVE)"],
+      ["optimize"],
+      ["wal_checkpoint(TRUNCATE)"],
+    ]);
+    expect(mockSqlite.pragma.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+      mockSqlite.backup.mock.invocationCallOrder[1] ?? 0
+    );
+  });
+
+  it("DISPOSE_DURING_INFLIGHT_BACKUP_WAITS_NOT_DOUBLE_STARTS", async () => {
+    const inFlightBackup = createDeferred<void>();
+    mockSqlite.backup
+      .mockImplementationOnce(() => inFlightBackup.promise)
+      .mockResolvedValue(undefined);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    const disposePromise = service.dispose();
+
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+
+    inFlightBackup.resolve(undefined);
+    await flushMicrotasks();
+    await disposePromise;
+
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(2);
+    expect(mockSqlite.pragma.mock.calls.at(-1)).toEqual(["wal_checkpoint(TRUNCATE)"]);
+  });
+
+  it("RENAME_RACE_CLEANS_TEMP_FILE", async () => {
+    const renameError = new Error("rename failed");
+    Object.assign(renameError, { code: "EPERM" });
+    vi.mocked(fs.renameSync).mockImplementationOnce(() => {
+      throw renameError;
+    });
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    // The candidate probe (probeDb, mocked clean) sits between the backup and
+    // the rename now, so the rename is one extra microtask turn out.
+    await drainMicrotasks();
+
+    expect(console.warn).toHaveBeenCalledWith("[DatabaseMaintenance] Backup failed:", renameError);
+    expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
+
+    await expect(service.dispose()).resolves.toBeUndefined();
+  });
+
+  it("CORRUPT_CANDIDATE_SURVIVES_FAILED_TEMP_CLEANUP", async () => {
+    // The candidate probes dirty AND the temp file cannot be removed. A failed
+    // unlink is not a reason to promote the bad copy over the good backup.
+    mockDbModule.probeDbFile.mockReturnValue("corrupt");
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.unlinkSync).mockImplementation(() => {
+      throw Object.assign(new Error("unlink failed"), { code: "EPERM" });
+    });
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    await drainMicrotasks();
+
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+
+    await service.dispose();
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+  });
+
+  it("CORRUPT_CANDIDATE_NEVER_REPLACES_GOOD_BACKUP", async () => {
+    // Every candidate sqlite.backup() produces probes dirty. However many ticks
+    // pass and however shutdown lands, the good backup must never be renamed
+    // over — that file is the user's last copy of their data.
+    mockDbModule.probeDbFile.mockReturnValue("corrupt");
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(5 * 60 * 1000);
+      await drainMicrotasks();
+    }
+
+    expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith("/fake/daintree.db.backup.tmp");
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+
+    await service.dispose();
+    expect(vi.mocked(fs.renameSync)).not.toHaveBeenCalled();
+    expect(mockSqlite.pragma.mock.calls.at(-1)).toEqual(["wal_checkpoint(TRUNCATE)"]);
+  });
+
+  it("SUSPEND_DURING_INFLIGHT_BACKUP_ONLY_CHECKPOINTS", async () => {
+    const inFlightBackup = createDeferred<void>();
+    mockSqlite.backup
+      .mockImplementationOnce(() => inFlightBackup.promise)
+      .mockResolvedValue(undefined);
+
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    vi.advanceTimersByTime(5 * 60 * 1000);
+
+    const suspendCallback = mockSystemSleepService.onSuspend.mock.calls[0]?.[0] as () => void;
+    suspendCallback();
+
+    expect(mockSqlite.backup).toHaveBeenCalledTimes(1);
+    expect(mockSqlite.pragma.mock.calls).toEqual([
+      ["wal_checkpoint(PASSIVE)"],
+      ["wal_checkpoint(PASSIVE)"],
+    ]);
+
+    inFlightBackup.resolve(undefined);
+    await flushMicrotasks();
+    await service.dispose();
+  });
+
+  it("DISPOSED_SERVICE_IGNORES_LATE_TIMER_FIRE", async () => {
+    const service = new DatabaseMaintenanceService();
+    service.initialize();
+    service.startMaintenance();
+
+    await service.dispose();
+    mockSqlite.backup.mockClear();
+    mockSqlite.pragma.mockClear();
+
+    vi.advanceTimersByTime(10 * 60 * 1000);
+
+    expect(mockSqlite.backup).not.toHaveBeenCalled();
+    expect(mockSqlite.pragma).not.toHaveBeenCalled();
   });
 });

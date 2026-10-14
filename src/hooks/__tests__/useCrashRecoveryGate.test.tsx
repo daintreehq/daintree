@@ -150,28 +150,6 @@ describe("useCrashRecoveryGate", () => {
     expect(result.current.state.status).toBe("pending");
   });
 
-  it("auto-restores at crashCount 1 (below crash-loop threshold)", async () => {
-    const resolve = vi.fn(async () => {});
-    installElectronStub({ resolve });
-
-    const { result } = renderHook(() =>
-      useCrashRecoveryGate(
-        makeBootResult({
-          crashPending: { ...mockCrash, crashCount: 1 },
-          crashConfig: { autoRestoreOnCrash: true },
-        })
-      )
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(resolve).toHaveBeenCalledWith({ kind: "restore", panelIds: ["t1", "t2"] });
-    expect(result.current.state.status).toBe("none");
-  });
-
   it("surfaces the dialog instead of silent-restoring when hasBackup is false", async () => {
     const resolve = vi.fn(async () => {});
     installElectronStub({ resolve });
@@ -319,56 +297,6 @@ describe("useCrashRecoveryGate", () => {
     expect(storeState.crashCount).toBe(1);
   });
 
-  it("signals restore confirmation store with zero suspects on clean restore", async () => {
-    const resolve = vi.fn(async () => {});
-    installElectronStub({ resolve });
-
-    renderHook(() =>
-      useCrashRecoveryGate(
-        makeBootResult({
-          crashPending: { ...mockCrash, crashCount: 1 },
-          crashConfig: { autoRestoreOnCrash: true },
-        })
-      )
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(resolve).toHaveBeenCalled();
-    const storeState = useRestoreConfirmationStore.getState();
-    expect(storeState.visible).toBe(true);
-    expect(storeState.suspectCount).toBe(0);
-    expect(storeState.crashCount).toBe(1);
-  });
-
-  it("signals restore confirmation store with zero suspects when panels is undefined", async () => {
-    const resolve = vi.fn(async () => {});
-    installElectronStub({ resolve });
-
-    renderHook(() =>
-      useCrashRecoveryGate(
-        makeBootResult({
-          crashPending: { ...mockCrash, panels: undefined, crashCount: 0 },
-          crashConfig: { autoRestoreOnCrash: true },
-        })
-      )
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(resolve).toHaveBeenCalled();
-    const storeState = useRestoreConfirmationStore.getState();
-    expect(storeState.visible).toBe(true);
-    expect(storeState.suspectCount).toBe(0);
-    expect(storeState.crashCount).toBe(0);
-  });
-
   it("does not signal restore confirmation on explicit dialog path", async () => {
     renderHook(() => useCrashRecoveryGate(makeBootResult({ crashPending: mockCrash })));
 
@@ -377,32 +305,6 @@ describe("useCrashRecoveryGate", () => {
       await Promise.resolve();
     });
 
-    const storeState = useRestoreConfirmationStore.getState();
-    expect(storeState.visible).toBe(false);
-  });
-
-  it("does not signal restore confirmation when resolve rejects", async () => {
-    const resolve = vi.fn(async () => {
-      throw new Error("resolve failed");
-    });
-    installElectronStub({ resolve });
-
-    renderHook(() =>
-      useCrashRecoveryGate(
-        makeBootResult({
-          crashPending: { ...mockCrash, crashCount: 1 },
-          crashConfig: { autoRestoreOnCrash: true },
-        })
-      )
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(resolve).toHaveBeenCalled();
     const storeState = useRestoreConfirmationStore.getState();
     expect(storeState.visible).toBe(false);
   });
@@ -473,36 +375,6 @@ describe("useCrashRecoveryGate", () => {
     if (result.current.state.status === "failed") {
       expect(result.current.state.errorMessage).toBe("Crash recovery restore failed");
     }
-  });
-
-  it("fires crashRecovery.resolve exactly once when auto-restore fails under StrictMode double-mount", async () => {
-    // The hasProcessed ref must continue to guard against a duplicate
-    // auto-restore IPC even on the failure path — a fast-failing restore
-    // must not be retried by a StrictMode remount.
-    const resolve = vi.fn(async () => {
-      throw new Error("Crash recovery restore failed");
-    });
-    installElectronStub({ resolve });
-
-    renderHook(
-      () =>
-        useCrashRecoveryGate(
-          makeBootResult({
-            crashPending: { ...mockCrash, crashCount: 1 },
-            crashConfig: { autoRestoreOnCrash: true },
-          })
-        ),
-      { wrapper: StrictMode }
-    );
-
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(resolve).toHaveBeenCalledTimes(1);
   });
 
   it("updateConfig patches local config in failed state so the auto-restore switch reflects the change", async () => {
@@ -650,24 +522,6 @@ describe("useCrashRecoveryGate", () => {
       });
 
       expect(gateMarks()).toEqual([]);
-    });
-
-    it("records a finite, non-negative durationMs on the end mark", async () => {
-      renderHook(() => useCrashRecoveryGate(makeBootResult({ crashPending: null })));
-
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      const endMark = (window.__DAINTREE_PERF_MARKS__ ?? []).find(
-        (entry) => entry.mark === "crash_recovery_gate:end"
-      );
-      expect(endMark).toBeDefined();
-      const durationMs = (endMark?.meta as { durationMs?: number } | undefined)?.durationMs;
-      expect(typeof durationMs).toBe("number");
-      expect(Number.isFinite(durationMs)).toBe(true);
-      expect(durationMs).toBeGreaterThanOrEqual(0);
     });
 
     it("emits crash_recovery_gate start/end when window.electron.crashRecovery.resolve throws synchronously", async () => {

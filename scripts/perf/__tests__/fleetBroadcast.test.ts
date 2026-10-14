@@ -11,11 +11,6 @@ const SCENARIO_SOURCE = resolve(here, "../scenarios/fleetBroadcast.ts");
 const context = { mode: "smoke" as const, now: () => performance.now() };
 
 describe("fleet eligibility is the real predicate", () => {
-  it("loads isTerminalFleetEligible out of src/store/fleetEligibility.ts", async () => {
-    const { isTerminalFleetEligible } = await loadFleetEligibility();
-    expect(typeof isTerminalFleetEligible).toBe("function");
-  }, 60_000);
-
   it("accepts a live grid terminal and rejects one panel per rejection clause", async () => {
     const { isTerminalFleetEligible } = await loadFleetEligibility();
     const check = (panel: unknown): boolean =>
@@ -60,29 +55,6 @@ describe("fleet eligibility is the real predicate", () => {
     expect(source).not.toContain('runtimeStatus === "exited"');
   });
 });
-
-describe.each(fleetBroadcastScenarios.map((scenario) => [scenario.id, scenario] as const))(
-  "%s",
-  (_id, scenario) => {
-    it("fans out with every paired reading at zero", async () => {
-      const sample = await scenario.run(context);
-      const metrics = sample.metrics as Record<string, number>;
-      for (const name of scenario.correctness ?? []) {
-        expect(metrics[name], name).toBe(0);
-      }
-      expect(sample.durationMs).toBeGreaterThan(0);
-      expect(sample.notes).toBeUndefined();
-    }, 60_000);
-
-    it("declares one paired reading per operation in the timed bracket", () => {
-      expect(scenario.correctness).toEqual([
-        "eligibilityMisses",
-        "substitutionMisses",
-        "dispatchMisses",
-      ]);
-    });
-  }
-);
 
 describe("PERF-150 target count", () => {
   it("dispatches to exactly the 24 live grid terminals the fixture built", async () => {

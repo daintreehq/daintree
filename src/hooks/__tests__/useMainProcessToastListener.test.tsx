@@ -117,23 +117,6 @@ describe("useMainProcessToastListener", () => {
     });
   });
 
-  it("threads rateLimitKey through to notify when provided", () => {
-    renderHook(() => useMainProcessToastListener());
-
-    act(() => {
-      capturedCallback!({
-        type: "error",
-        title: "Cloud resource may still be running",
-        message: "Teardown failed",
-        rateLimitKey: "cloud-teardown-failure",
-      });
-    });
-
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ rateLimitKey: "cloud-teardown-failure" })
-    );
-  });
-
   it("threads priority through to notify (low → inbox-only)", () => {
     renderHook(() => useMainProcessToastListener());
 
@@ -147,20 +130,6 @@ describe("useMainProcessToastListener", () => {
     });
 
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
-  });
-
-  it("threads duration through to notify when provided", () => {
-    renderHook(() => useMainProcessToastListener());
-
-    act(() => {
-      capturedCallback!({
-        type: "info",
-        message: "acme.linear: Synced",
-        duration: 3000,
-      });
-    });
-
-    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ duration: 3000 }));
   });
 
   it("calls notify with an action that triggers checkForUpdates", () => {

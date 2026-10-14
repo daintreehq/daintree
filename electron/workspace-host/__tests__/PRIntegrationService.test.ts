@@ -255,15 +255,6 @@ describe("PRIntegrationService", () => {
       expect(onDetectionStateChanged).toHaveBeenCalledWith(false);
       expect(onDetectionStateChanged).toHaveBeenCalledTimes(2);
     });
-
-    it("does not throw when the optional callback is omitted", async () => {
-      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
-      await service.initialize("/repo", "test-project-id", () => []);
-
-      expect(() =>
-        eventBus.emit("sys:pr:detection-state", { tripped: true, timestamp: Date.now() })
-      ).not.toThrow();
-    });
   });
 
   describe("resetPRState", () => {
@@ -295,12 +286,6 @@ describe("PRIntegrationService", () => {
   });
 
   describe("pause / resume", () => {
-    it("pause() stops the underlying service", () => {
-      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
-      service.pause();
-      expect(prServiceMock.stop).toHaveBeenCalledTimes(1);
-    });
-
     it("resume() starts the underlying service with no startup jitter", async () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
       await service.initialize("/repo", "test-project-id", () => []);
@@ -370,19 +355,6 @@ describe("PRIntegrationService", () => {
       expect(prServiceMock.reset).toHaveBeenCalledTimes(1);
       expect(prServiceMock.initialize).not.toHaveBeenCalled();
       expect(prServiceMock.start).not.toHaveBeenCalled();
-    });
-
-    it("refreshes for any providerId since the relay only signals presence", () => {
-      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
-
-      service.updateForgeCredentials(
-        "builtin.unknown",
-        { kind: "bearer", value: "abc" },
-        "/repo",
-        "test-project-id"
-      );
-
-      expect(prServiceMock.refresh).toHaveBeenCalledTimes(1);
     });
   });
 

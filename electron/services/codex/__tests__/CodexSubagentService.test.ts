@@ -121,12 +121,6 @@ describe("toSubagent", () => {
     expect(subagent?.role).toBe("reviewer");
   });
 
-  it("reports no model or depth rather than inventing values the protocol never sent", () => {
-    const subagent = toSubagent({ id: "t", agentNickname: "Meitner" });
-    expect(subagent?.model).toBeNull();
-    expect(subagent?.depth).toBeNull();
-  });
-
   it("drops a thread with no id rather than emitting an unaddressable row", () => {
     expect(toSubagent({ preview: "orphan" })).toBeNull();
   });

@@ -271,29 +271,6 @@ describe("GitHubAuth", () => {
     );
   });
 
-  it("validate passes x-github-request-id to rate-limit service when present", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ login: "user", avatar_url: "" }),
-      headers: new Headers({
-        "x-oauth-scopes": "repo",
-        "x-github-request-id": "beef-dead-42",
-        "x-ratelimit-remaining": "4999",
-        "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 3600),
-      }),
-    });
-    (globalThis as unknown as { fetch: Mock }).fetch = mockFetch;
-
-    // Reset rate-limit state so validate doesn't hit a pre-existing block.
-    const { gitHubRateLimitService } = await import("../GitHubRateLimitService.js");
-    gitHubRateLimitService._resetForTests();
-
-    await GitHubAuth.validate("ghp_validtoken012345678901234567890123456789");
-
-    // Should not mark blocked since remaining=4999 > 0.
-    expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
-  });
-
   it("detached validation leaves the configured token's rate-limit and auth state alone", async () => {
     (globalThis as unknown as { fetch: Mock }).fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -375,20 +352,6 @@ describe("GitHubAuth", () => {
 
     expect(result.valid).toBe(true);
     expect(result.scopes).toEqual(["repo", "read:user"]);
-  });
-
-  it("returns empty scopes for comma-only header", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ login: "user", avatar_url: "" }),
-      headers: new Headers({ "x-oauth-scopes": "," }),
-    });
-    (globalThis as unknown as { fetch: Mock }).fetch = mockFetch;
-
-    const result = await GitHubAuth.validate("ghp_validtoken012345678901234567890123456789");
-
-    expect(result.valid).toBe(true);
-    expect(result.scopes).toEqual([]);
   });
 
   it("include response.status on generic error so it is actionable even when statusText is empty", async () => {

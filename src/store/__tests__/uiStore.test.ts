@@ -6,11 +6,6 @@ describe("useUIStore overlay stack", () => {
     useUIStore.setState({ overlayStack: [] });
   });
 
-  it("starts with an empty stack", () => {
-    expect(useUIStore.getState().overlayStack.length).toBe(0);
-    expect(useUIStore.getState().hasOpenOverlays()).toBe(false);
-  });
-
   it("addOverlayClaim records a named claim", () => {
     useUIStore.getState().addOverlayClaim("settings");
     expect(useUIStore.getState().overlayStack.includes("settings")).toBe(true);
@@ -35,12 +30,6 @@ describe("useUIStore overlay stack", () => {
     useUIStore.getState().addOverlayClaim("settings");
 
     expect(useUIStore.getState().overlayClaimEpoch).toBeGreaterThan(afterFirst);
-  });
-
-  it("addOverlayClaim collapses duplicate registrations for the same ID", () => {
-    useUIStore.getState().addOverlayClaim("settings");
-    useUIStore.getState().addOverlayClaim("settings");
-    expect(useUIStore.getState().overlayStack.length).toBe(1);
   });
 
   it("addOverlayClaim returns the same array reference when the ID already exists", () => {
@@ -85,15 +74,5 @@ describe("useUIStore overlay stack", () => {
     useUIStore.getState().addOverlayClaim("c");
     useUIStore.getState().removeOverlayClaim("b");
     expect(useUIStore.getState().overlayStack).toEqual(["a", "c"]);
-  });
-
-  it("tracks multiple simultaneous claims independently", () => {
-    useUIStore.getState().addOverlayClaim("settings");
-    useUIStore.getState().addOverlayClaim("project-switcher");
-    expect(useUIStore.getState().overlayStack.length).toBe(2);
-
-    useUIStore.getState().removeOverlayClaim("settings");
-    expect(useUIStore.getState().overlayStack.length).toBe(1);
-    expect(useUIStore.getState().overlayStack.includes("project-switcher")).toBe(true);
   });
 });

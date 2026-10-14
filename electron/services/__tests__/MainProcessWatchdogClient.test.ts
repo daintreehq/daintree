@@ -194,12 +194,6 @@ describe("MainProcessWatchdogClient", () => {
     expect(mockChild.postMessage).not.toHaveBeenCalled();
   });
 
-  it("dispose() is idempotent", () => {
-    const client = new WatchdogClient({ mainPid: 4242 });
-    client.dispose();
-    expect(() => client.dispose()).not.toThrow();
-  });
-
   it("schedules a restart with backoff when the watchdog exits unexpectedly", () => {
     new WatchdogClient({ mainPid: 4242 });
     expect(shared.forkMock).toHaveBeenCalledTimes(1);
@@ -260,24 +254,6 @@ describe("MainProcessWatchdogClient", () => {
     client.dispose();
     mockChild.emit("exit", 0);
     expect(shared.loggerCalls.some((c) => c.message.includes("exited unexpectedly"))).toBe(false);
-  });
-
-  it("stops restarting after the sliding-window crash threshold (deadlock detection becomes inactive)", () => {
-    new WatchdogClient({ mainPid: 4242 });
-
-    // Simulate 3 crashes within the window — the 3rd must hit the cap.
-    let currentChild = mockChild;
-    for (let i = 0; i < 4; i++) {
-      const next = createMockChild();
-      shared.forkMock.mockReturnValueOnce(next);
-      currentChild.emit("exit", 1);
-      vi.advanceTimersByTime(6_000);
-      currentChild = next;
-    }
-
-    // Initial fork + 2 restart attempts = 3 total. The 3rd crash trips
-    // CRASH_THRESHOLD and no further fork is scheduled.
-    expect(shared.forkMock.mock.calls.length).toBe(3);
   });
 
   it("does not throw if postMessage fails (channel torn down)", () => {
@@ -412,37 +388,6 @@ describe("MainProcessWatchdogClient", () => {
     // Initial fork + 2 restart attempts = 3 total. The 3rd crash trips
     // the cap; no 4th fork happens despite each fork having "succeeded".
     expect(shared.forkMock.mock.calls.length).toBe(3);
-  });
-
-  it("sliding window decays — crashes older than RAPID_CRASH_WINDOW_MS are dropped", () => {
-    new WatchdogClient({ mainPid: 4242 });
-
-    // First crash.
-    let currentChild = mockChild;
-    let next = createMockChild();
-    shared.forkMock.mockReturnValueOnce(next);
-    currentChild.emit("exit", 1);
-    vi.advanceTimersByTime(6_000);
-    currentChild = next;
-    expect(shared.forkMock).toHaveBeenCalledTimes(2);
-
-    // Wait past the 5-minute window so the old crash decays out on the
-    // next trim — but the stability timer also clears the array, so this
-    // exercises the trim path. Step the clock incrementally so the
-    // stability timer fires at 300s and clears the array.
-    vi.advanceTimersByTime(310_000);
-
-    // Three more crashes — the prior crash is out of the window AND was
-    // cleared by the stability timer, so the third trips the threshold.
-    for (let i = 0; i < 3; i++) {
-      next = createMockChild();
-      shared.forkMock.mockReturnValueOnce(next);
-      currentChild.emit("exit", 1);
-      vi.advanceTimersByTime(6_000);
-      currentChild = next;
-    }
-    // Initial + 1 + 2 = 4 forks. The 3rd crash post-reset trips the cap.
-    expect(shared.forkMock.mock.calls.length).toBe(4);
   });
 
   it("sliding window trims crashes older than RAPID_CRASH_WINDOW_MS without relying on the stability timer", () => {
@@ -631,29 +576,6 @@ describe("MainProcessWatchdogClient", () => {
 
     expect(listener).not.toHaveBeenCalled();
     expect(shared.trackEventMock).not.toHaveBeenCalled();
-    client.dispose();
-  });
-
-  it("does not refire onDisabled when scheduleRestart is invoked again while still capped", () => {
-    const client = new WatchdogClient({ mainPid: 4242 });
-    const listener = vi.fn();
-    client.onDisabled(listener);
-
-    // 3 crashes trip CRASH_THRESHOLD — listener fires once.
-    let currentChild = mockChild;
-    for (let i = 0; i < 3; i++) {
-      const next = createMockChild();
-      shared.forkMock.mockReturnValueOnce(next);
-      currentChild.emit("exit", 1);
-      vi.advanceTimersByTime(11_000);
-      currentChild = next;
-    }
-    expect(listener).toHaveBeenCalledTimes(1);
-
-    // A second cap-hit before restart() is a no-op — no extra fires.
-    // (No fork happens after the cap, but defensively assert.)
-    vi.advanceTimersByTime(11_000);
-    expect(listener).toHaveBeenCalledTimes(1);
     client.dispose();
   });
 

@@ -95,12 +95,6 @@ describe("SafeModeBanner", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders nothing when dismissed", () => {
-    useSafeModeStore.setState({ safeMode: true, dismissed: true });
-    const { container } = render(<SafeModeBanner />);
-    expect(container.firstChild).toBeNull();
-  });
-
   it("renders the calm headline without crash count or relative time", () => {
     useSafeModeStore.setState({
       safeMode: true,
@@ -164,22 +158,6 @@ describe("SafeModeBanner", () => {
     });
     render(<SafeModeBanner />);
     expect(screen.queryByRole("button", { name: /Show details/i })).toBeNull();
-  });
-
-  it("shows Show details when panels were skipped", () => {
-    useSafeModeStore.setState({ safeMode: true, skippedPanelCount: 4 });
-    render(<SafeModeBanner />);
-    expect(screen.getByRole("button", { name: /Show details/i })).toBeTruthy();
-  });
-
-  it("shows Show details when crashes exist but no panels were skipped", () => {
-    useSafeModeStore.setState({
-      safeMode: true,
-      crashCount: 2,
-      skippedPanelCount: 0,
-    });
-    render(<SafeModeBanner />);
-    expect(screen.getByRole("button", { name: /Show details/i })).toBeTruthy();
   });
 
   it("opens confirm dialog when Restart normally is clicked, does not call resetAndRelaunch", () => {

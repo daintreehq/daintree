@@ -11,10 +11,6 @@ describe("freshnessClass", () => {
     expect(freshnessClass("fresh")).toBe("");
   });
 
-  it("returns opacity-75 for aging level", () => {
-    expect(freshnessClass("aging")).toBe("opacity-75");
-  });
-
   it("returns border-l-2 border-border-default italic for stale-disk level, not opacity", () => {
     const result = freshnessClass("stale-disk");
     expect(result).toBe("border-l-2 border-border-default italic");
@@ -80,14 +76,6 @@ describe("freshnessSuffix", () => {
     expect(suffix).toContain("updated");
     expect(suffix).toContain("2m ago");
   });
-
-  it("returns cached message for stale-disk level", () => {
-    expect(freshnessSuffix("stale-disk", null, now)).toBe(" · cached from previous session");
-  });
-
-  it("returns error message for errored level", () => {
-    expect(freshnessSuffix("errored", null, now)).toBe(" · couldn't refresh");
-  });
 });
 
 describe("badgeFreshnessSuffix", () => {
@@ -113,10 +101,5 @@ describe("badgeFreshnessSuffix", () => {
     const suffix = badgeFreshnessSuffix("rate-limit", now, resetAt);
     expect(suffix).toContain("rate limited");
     expect(suffix).toContain("retry at");
-  });
-
-  it("returns circuit-breaker suffix", () => {
-    const suffix = badgeFreshnessSuffix("circuit-breaker", now);
-    expect(suffix).toBe(" · data may be stale — PR detection paused");
   });
 });

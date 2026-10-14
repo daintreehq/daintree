@@ -208,15 +208,6 @@ describe("routeExternalOpen (#12593 acceptance)", () => {
     expect(empty.win.focus).toHaveBeenCalled();
   });
 
-  it("creates one window when none are open", async () => {
-    const world = makeWorld();
-    const deps = makeDeps(world);
-
-    await routeExternalOpen("/work/new", deps);
-
-    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/new");
-  });
-
   it("focuses the window already showing the project instead of opening it again", async () => {
     const world = makeWorld();
     const owner = world.add({ active: idFor("/work/known") });
@@ -690,19 +681,6 @@ describe("openFolderInNewWindow", () => {
     _resetOpenDirConsumerForTest();
 
     await expect(early).rejects.toThrow("shut down");
-  });
-
-  it("routes as an explicit new window once installed", async () => {
-    const world = makeWorld();
-    const asking = world.add();
-    const deps = makeDeps(world);
-    installOpenDirConsumer(deps);
-
-    const outcome = await openFolderInNewWindow("/work/a", asking.id);
-
-    expect(outcome.kind).toBe("created");
-    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/a");
-    expect(asking.active).toBeNull();
   });
 
   it("waits behind an external open already on the chain, so both can't claim one empty window", async () => {

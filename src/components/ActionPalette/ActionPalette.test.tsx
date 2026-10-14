@@ -180,33 +180,6 @@ describe("ActionPalette", () => {
     expect(screen.getByText("No actions yet")).toBeTruthy();
   });
 
-  it("forwards isStale to SearchablePalette as isFiltering", () => {
-    render(
-      <ActionPalette
-        {...baseProps}
-        query="al"
-        results={[makeItem("a.action", "Alpha")]}
-        totalResults={1}
-        isStale
-      />
-    );
-    expect(lastSearchablePaletteProps.current?.isFiltering).toBe(true);
-  });
-
-  it("passes a renderBody callback when the hook supplies sections", () => {
-    render(
-      <ActionPalette
-        {...baseProps}
-        query=""
-        results={[makeItem("a.action", "Alpha")]}
-        totalResults={1}
-        sections={[{ id: "category:general", label: "General", start: 0, count: 1 }]}
-      />
-    );
-
-    expect(typeof lastSearchablePaletteProps.current?.renderBody).toBe("function");
-  });
-
   it("keeps the sectioned body while a typed query's results are still catching up", () => {
     // Filtering lags the input, so the browse rows and their sections are both
     // still on screen for a frame after the first keystroke. Gating on `query`
@@ -275,11 +248,6 @@ describe("ActionPalette", () => {
     render(<ActionPalette {...baseProps} />);
     fireKey("/");
     expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
-  });
-
-  it("surfaces the projects hint when an empty-result query looks like a path", () => {
-    render(<ActionPalette {...baseProps} query="src/foo" results={[]} totalResults={0} />);
-    expect(screen.getByText("to search projects")).toBeTruthy();
   });
 
   it("keeps the projects hint's promise: Enter hands a path-shaped query to the project switcher", () => {

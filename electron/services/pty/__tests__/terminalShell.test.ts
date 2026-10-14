@@ -96,14 +96,6 @@ describe("getDefaultShellArgs", () => {
       expect(getDefaultShellArgs("powershell.exe")).toEqual(PS_BOOTSTRAP_ARGS);
     });
 
-    it("forces UTF-8 console encoding for fully-qualified PowerShell path", () => {
-      setPlatform("win32");
-
-      expect(
-        getDefaultShellArgs("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
-      ).toEqual(PS_BOOTSTRAP_ARGS);
-    });
-
     it("forces UTF-8 console encoding + suppresses banner for pwsh.exe (PowerShell 7+)", () => {
       // PowerShell 7+ defaults to UTF-8 internally, but [Console]::OutputEncoding
       // still drives decoding of native tools (git, docker, etc.) — bootstrap

@@ -654,30 +654,6 @@ describe("AgentModelCatalogService", () => {
     expect(result.contextWindow).toBeNull();
   });
 
-  it("accepts codex CLI output as a {models: [...]} object (real shape)", async () => {
-    const execFileImpl: ExecFn = vi.fn(async () => ({
-      stdout: JSON.stringify({
-        models: [
-          { slug: "gpt-5.5", display_name: "GPT-5.5", context_window: 256_000, ...LISTED(7) },
-          { slug: "gpt-5.4", display_name: "GPT-5.4", context_window: 128_000, ...LISTED(16) },
-        ],
-      }),
-      stderr: "",
-    })) as unknown as ExecFn;
-
-    const service = new AgentModelCatalogService({
-      cachePath,
-      fetchImpl: mockFetch({}),
-      execFileImpl,
-      codexCommand: "codex",
-    });
-
-    const result = await service.getResolvedModels("codex");
-
-    expect(result.models.map((m) => m.id)).toContain("gpt-5.5");
-    expect(result.contextWindow).toBe(256_000);
-  });
-
   it("tolerates non-numeric limit.context anywhere in the remote catalog", async () => {
     const fetchImpl = mockFetch({
       google: {

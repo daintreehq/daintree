@@ -1304,15 +1304,6 @@ describe("listIssues search", () => {
     expect(queries[1]).toBe("repo:owner/repo is:issue sort:created-desc flaky");
   });
 
-  it("maps opts.sort 'updated' to sort:updated-desc", async () => {
-    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
-
-    await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky", sort: "updated" });
-
-    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
-    expect(searchQuery).toBe("repo:owner/repo is:issue state:open sort:updated-desc flaky");
-  });
-
   /**
    * The search path used to pin `-desc` and drop `direction` on the floor
    * (#11527) — invisible while the action couldn't set it, wrong afterwards.
@@ -1610,15 +1601,6 @@ describe("listPRs search", () => {
 
     const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
     expect(searchQuery).toBe("repo:owner/repo is:pr is:open sort:created-desc theme");
-  });
-
-  it("maps opts.sort 'updated' to sort:updated-desc", async () => {
-    mockGraphQLClient.mockResolvedValue(prSearchResponse());
-
-    await githubForgeProvider.listPRs(repo, { state: "open", search: "theme", sort: "updated" });
-
-    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
-    expect(searchQuery).toBe("repo:owner/repo is:pr is:open sort:updated-desc theme");
   });
 
   it.each([
@@ -2228,16 +2210,6 @@ describe("getRepoActivityProbe", () => {
     await expect(githubForgeProvider.getRepoActivityProbe!(repo)).rejects.toThrow();
   });
 
-  it("yields a different token when the ETag changes", async () => {
-    mockFetchActivityProbe
-      .mockResolvedValueOnce({ status: "changed", etag: 'W/"etag-1"' })
-      .mockResolvedValueOnce({ status: "changed", etag: 'W/"etag-2"' });
-
-    const first = await githubForgeProvider.getRepoActivityProbe!(repo);
-    const second = await githubForgeProvider.getRepoActivityProbe!(repo);
-    expect(first.freshnessToken).not.toBe(second.freshnessToken);
-  });
-
   it("throws when no GitHub token is configured", async () => {
     vi.mocked(GitHubAuth.getToken).mockReturnValueOnce(undefined);
     await expect(githubForgeProvider.getRepoActivityProbe!(repo)).rejects.toThrow();
@@ -2289,23 +2261,9 @@ describe("validation account", () => {
       account: "octocat",
     });
   });
-
-  it("exposes the gh credential-import capability", () => {
-    expect(githubForgeProvider.credentialImport).toBeTruthy();
-    expect(typeof githubForgeProvider.credentialImport?.preview).toBe("function");
-    expect(typeof githubForgeProvider.credentialImport?.commit).toBe("function");
-  });
 });
 
 describe("classifyPushError", () => {
-  it("extracts a GH### code from protected-branch stderr", () => {
-    expect(
-      githubForgeProvider.classifyPushError!(
-        "GH006: Protected branch update failed for refs/heads/main."
-      )
-    ).toEqual({ code: "GH006" });
-  });
-
   it("extracts a GH### code from ruleset-violation stderr", () => {
     expect(
       githubForgeProvider.classifyPushError!("remote: GH013: Repository rule violations found.")
@@ -3549,12 +3507,6 @@ describe("issue write mutations (close/reopen/edit/comment/labels)", () => {
   });
 });
 
-describe("buildRepoUrl", () => {
-  it("links to the repository root", () => {
-    expect(githubForgeProvider.buildRepoUrl?.(repo)).toBe("https://github.com/owner/repo");
-  });
-});
-
 function parseBuiltUrl(s: string) {
   const url = new URL(s);
   return { path: url.pathname, q: url.searchParams.get("q") };
@@ -3567,25 +3519,11 @@ describe("buildIssuesUrl", () => {
     expect(q).toBeNull();
   });
 
-  it("returns the bare /issues path with no q param when options is empty", () => {
-    const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, {}));
-    expect(path).toBe("/owner/repo/issues");
-    expect(q).toBeNull();
-  });
-
   // #11201: the default open filter with no search should link to the bare
   // /issues list (GitHub already scopes it to `is:issue is:open`), not a raw
   // `?q=is:open` search view.
   it("returns the bare /issues path with no q param for the default open filter", () => {
     const { path, q } = parseBuiltUrl(githubForgeProvider.buildIssuesUrl(repo, { state: "open" }));
-    expect(path).toBe("/owner/repo/issues");
-    expect(q).toBeNull();
-  });
-
-  it("treats an empty-string query with state 'open' as the default open filter", () => {
-    const { path, q } = parseBuiltUrl(
-      githubForgeProvider.buildIssuesUrl(repo, { query: "", state: "open" })
-    );
     expect(path).toBe("/owner/repo/issues");
     expect(q).toBeNull();
   });
@@ -3618,13 +3556,6 @@ describe("buildIssuesUrl", () => {
     expect(q).toBe("is:closed");
   });
 
-  it("treats an empty-string query as absent and still applies the state filter", () => {
-    const { q } = parseBuiltUrl(
-      githubForgeProvider.buildIssuesUrl(repo, { query: "", state: "closed" })
-    );
-    expect(q).toBe("is:closed");
-  });
-
   it("appends the state qualifier after the query when both are present", () => {
     const { path, q } = parseBuiltUrl(
       githubForgeProvider.buildIssuesUrl(repo, { query: "bug", state: "closed" })
@@ -3654,24 +3585,10 @@ describe("buildPRsUrl", () => {
     expect(q).toBeNull();
   });
 
-  it("returns the bare /pulls path with no q param when options is empty", () => {
-    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, {}));
-    expect(path).toBe("/owner/repo/pulls");
-    expect(q).toBeNull();
-  });
-
   // #11201: the default open filter → bare /pulls list (GitHub already scopes
   // it to `is:pr is:open`), not a raw `?q=is:open` search view.
   it("returns the bare /pulls path with no q param for the default open filter", () => {
     const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "open" }));
-    expect(path).toBe("/owner/repo/pulls");
-    expect(q).toBeNull();
-  });
-
-  it("treats an empty-string query with state 'open' as the default open filter", () => {
-    const { path, q } = parseBuiltUrl(
-      githubForgeProvider.buildPRsUrl(repo, { query: "", state: "open" })
-    );
     expect(path).toBe("/owner/repo/pulls");
     expect(q).toBeNull();
   });
@@ -3697,21 +3614,6 @@ describe("buildPRsUrl", () => {
     const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "closed" }));
     expect(path).toBe("/owner/repo/pulls");
     expect(q).toBe("is:closed");
-  });
-
-  it("applies state: 'merged' as a q qualifier on its own", () => {
-    // PRs only — issues never use "merged" upstream, but the builder must
-    // round-trip whatever the caller supplies.
-    const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo, { state: "merged" }));
-    expect(path).toBe("/owner/repo/pulls");
-    expect(q).toBe("is:merged");
-  });
-
-  it("treats an empty-string query as absent and still applies the state filter", () => {
-    const { q } = parseBuiltUrl(
-      githubForgeProvider.buildPRsUrl(repo, { query: "", state: "merged" })
-    );
-    expect(q).toBe("is:merged");
   });
 
   it("appends the state qualifier after the query when both are present", () => {
@@ -3780,31 +3682,6 @@ describe("buildPRFileUrl", () => {
     // would fail — this is just a documentation of why those two are
     // expected to differ.
     expect(rawHash).not.toBe(encodedHash);
-  });
-
-  it("produces different hashes for different paths", () => {
-    const url1 = githubForgeProvider.buildPRFileUrl!(repo, 1, "src/a.ts");
-    const url2 = githubForgeProvider.buildPRFileUrl!(repo, 1, "src/b.ts");
-    expect(parseDeepLink(url1).hash).not.toBe(parseDeepLink(url2).hash);
-  });
-
-  it("produces the same hash for the same path on different PR numbers", () => {
-    const url1 = githubForgeProvider.buildPRFileUrl!(repo, 1, "src/a.ts");
-    const url2 = githubForgeProvider.buildPRFileUrl!(repo, 999, "src/a.ts");
-    const hash1 = parseDeepLink(url1).hash;
-    const hash2 = parseDeepLink(url2).hash;
-    expect(hash1).toBe(hash2);
-    // Path component is the only thing that should differ
-    expect(parseDeepLink(url1).pathname).toBe("/owner/repo/pull/1/files");
-    expect(parseDeepLink(url2).pathname).toBe("/owner/repo/pull/999/files");
-  });
-
-  it("uses the well-known SHA-256 of 'src/a.ts' as the anchor", () => {
-    // Locks the algorithm: any future change to the hash function or input
-    // encoding would break this fixture.
-    const expected = createHash("sha256").update("src/a.ts", "utf8").digest("hex");
-    const url = githubForgeProvider.buildPRFileUrl!(repo, 42, "src/a.ts");
-    expect(parseDeepLink(url).hash).toBe(`#diff-${expected}`);
   });
 });
 

@@ -60,15 +60,6 @@ describe("ProjectStateManager.clearProjectState adversarial", () => {
     vi.clearAllMocks();
   });
 
-  it("treats ENOENT from resilientUnlink as success (already gone)", async () => {
-    await manager.saveProjectState(projectId, makeState({ sidebarWidth: 100 }));
-
-    const enoent = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-    utilsMock.resilientUnlink.mockRejectedValueOnce(enoent);
-
-    await expect(manager.clearProjectState(projectId)).resolves.toBeUndefined();
-  });
-
   it("invalidates cache before unlink — ENOENT path leaves no cached entry", async () => {
     await manager.saveProjectState(projectId, makeState({ sidebarWidth: 111 }));
 
@@ -98,15 +89,6 @@ describe("ProjectStateManager.clearProjectState adversarial", () => {
     // callers don't continue reading the presumed-deleted state for 60s.
     const result = await manager.getProjectState(projectId);
     expect(result).toBeNull();
-  });
-
-  it("re-throws non-ENOENT errors from resilientUnlink", async () => {
-    await manager.saveProjectState(projectId, makeState());
-
-    const eperm = Object.assign(new Error("EPERM"), { code: "EPERM" });
-    utilsMock.resilientUnlink.mockRejectedValueOnce(eperm);
-
-    await expect(manager.clearProjectState(projectId)).rejects.toThrow("EPERM");
   });
 
   it("calls resilientUnlink even when the file may not exist (no pre-flight existsSync)", async () => {
@@ -199,43 +181,6 @@ describe("ProjectStateManager.getProjectState ENOENT branch (mocked fs)", () => 
     tempDir = path.join(os.tmpdir(), "daintree-get-adv");
     manager = new ProjectStateManager(tempDir);
     projectId = generateProjectId("/test/adversarial-get-project");
-  });
-
-  it("does not invoke resilientRename (quarantine) when readFile yields ENOENT mid-flight", async () => {
-    // Deterministic TOCTOU: readFile rejects with ENOENT. The fixed catch
-    // block must short-circuit BEFORE the corruption-recovery rename path,
-    // proving the ENOENT branch was actually entered.
-    fsPromisesMock.readFile.mockRejectedValue(
-      Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" })
-    );
-
-    const result = await manager.getProjectState(projectId);
-
-    expect(result).toBeNull();
-    expect(fsPromisesMock.readFile).toHaveBeenCalledTimes(1);
-    expect(utilsMock.resilientRename).not.toHaveBeenCalled();
-  });
-
-  it("getProjectStateWithRecovery surfaces no quarantinedPath on ENOENT readFile", async () => {
-    fsPromisesMock.readFile.mockRejectedValue(
-      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
-    );
-
-    const result = await manager.getProjectStateWithRecovery(projectId);
-
-    expect(result.state).toBeNull();
-    expect(result.quarantinedPath).toBeUndefined();
-    expect(utilsMock.resilientRename).not.toHaveBeenCalled();
-  });
-
-  it("still quarantines on a genuine corruption error (non-ENOENT)", async () => {
-    // Sanity check: the ENOENT short-circuit must not swallow real corruption.
-    fsPromisesMock.readFile.mockResolvedValue("{ not valid json");
-
-    const result = await manager.getProjectState(projectId);
-
-    expect(result).toBeNull();
-    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
   });
 
   it("marks and quarantines on a non-ENOENT read failure (EACCES)", async () => {

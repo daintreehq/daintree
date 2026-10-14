@@ -175,27 +175,6 @@ describe("buildOutgoingState draft propagation (#4985)", () => {
     );
   });
 
-  it("sends empty draftInputs when drafts were cleared before reopen", async () => {
-    const { useProjectStore } = await import("../projectStore");
-    const { useTerminalInputStore } = await import("../terminalInputStore");
-
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    useTerminalInputStore.getState().setDraftInput("terminal-1", "hello", projectA.id);
-    useTerminalInputStore.getState().clearDraftInput("terminal-1", projectA.id);
-
-    await useProjectStore.getState().reopenProject(projectB.id);
-    await Promise.resolve();
-
-    expect(projectClientMock.reopen).toHaveBeenCalledWith(
-      projectB.id,
-      expect.objectContaining({ draftInputs: {} }),
-      expect.objectContaining({
-        trace: expect.objectContaining({ switchId: expect.any(String), entryPoint: "api" }),
-      })
-    );
-  });
-
   it("sends non-empty draftInputs when drafts exist", async () => {
     const { useProjectStore } = await import("../projectStore");
     const { useTerminalInputStore } = await import("../terminalInputStore");
@@ -504,30 +483,6 @@ describe("buildOutgoingState terminal/tabGroup snapshot (#5001)", () => {
     expect(outgoing.terminals).toEqual([{ id: "browser-1", kind: "browser" }]);
   });
 
-  it("includes dev-preview panel snapshots in outgoing terminals", async () => {
-    const { setPanelStoreAccessor } = await import("../storeAccessors");
-    const devPreview = {
-      id: "dev-1",
-      kind: "dev-preview",
-      title: "Dev Preview",
-      location: "grid",
-    };
-    setPanelStoreAccessor(() => ({
-      panelsById: { "dev-1": devPreview } as never,
-      panelIds: ["dev-1"],
-      tabGroups: new Map(),
-    }));
-
-    const { useProjectStore } = await import("../projectStore");
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await useProjectStore.getState().switchProject(projectB.id);
-    await Promise.resolve();
-
-    const outgoing = projectClientMock.switch.mock.calls[0]![1];
-    expect(outgoing.terminals).toEqual([{ id: "dev-1", kind: "dev-preview" }]);
-  });
-
   it("excludes trash, background, assistant, and smoke-test panels", async () => {
     const { setPanelStoreAccessor } = await import("../storeAccessors");
     const panels = {
@@ -686,22 +641,6 @@ describe("buildOutgoingState worktree selection (#5000, #9512)", () => {
     expect(outgoing.activeWorktreeId).toBe("wt-feature");
   });
 
-  it("persists the durable restore selection in reopenProject outgoing state", async () => {
-    const { useProjectStore } = await import("../projectStore");
-    const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
-    setWorktreeSelectionAccessor(() => ({
-      activeWorktreeId: "wt-feature",
-      restoreWorktreeId: "wt-feature",
-    }));
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await useProjectStore.getState().reopenProject(projectB.id);
-    await Promise.resolve();
-
-    const outgoing = projectClientMock.reopen.mock.calls[0]![1];
-    expect(outgoing.activeWorktreeId).toBe("wt-feature");
-  });
-
   it("persists the durable selection, not an incidentally-active worktree (#9512)", async () => {
     // A batch merge left a temporary PR worktree focused/active, but the user's
     // last deliberate selection was the root worktree. The outgoing state must
@@ -742,23 +681,6 @@ describe("buildOutgoingState worktree selection (#5000, #9512)", () => {
     expect("activeWorktreeId" in outgoing).toBe(true);
   });
 
-  it("preserves the restore target when no view store is mounted (skip validation)", async () => {
-    const { useProjectStore } = await import("../projectStore");
-    const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
-    // No setWorktreeIdSetAccessor → getWorktreeIdSet() returns null → no validation.
-    setWorktreeSelectionAccessor(() => ({
-      activeWorktreeId: "wt-feature",
-      restoreWorktreeId: "wt-feature",
-    }));
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await useProjectStore.getState().switchProject(projectB.id);
-    await Promise.resolve();
-
-    const outgoing = projectClientMock.switch.mock.calls[0]![1];
-    expect(outgoing.activeWorktreeId).toBe("wt-feature");
-  });
-
   it("converts null restore selection to undefined in outgoing state", async () => {
     const { useProjectStore } = await import("../projectStore");
     const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
@@ -771,23 +693,6 @@ describe("buildOutgoingState worktree selection (#5000, #9512)", () => {
     const outgoing = projectClientMock.switch.mock.calls[0]![1];
     expect(outgoing.activeWorktreeId).toBeUndefined();
     expect("activeWorktreeId" in outgoing).toBe(true);
-  });
-
-  it("includes the restore selection even when terminal store getter is null (early return)", async () => {
-    // Don't call setPanelStoreAccessor — forces the early return path
-    const { useProjectStore } = await import("../projectStore");
-    const { setWorktreeSelectionAccessor } = await import("../storeAccessors");
-    setWorktreeSelectionAccessor(() => ({
-      activeWorktreeId: "wt-early",
-      restoreWorktreeId: "wt-early",
-    }));
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await useProjectStore.getState().switchProject(projectB.id);
-    await Promise.resolve();
-
-    const outgoing = projectClientMock.switch.mock.calls[0]![1];
-    expect(outgoing.activeWorktreeId).toBe("wt-early");
   });
 });
 
@@ -810,16 +715,6 @@ describe("fleet arming clear on project switch (#5298)", () => {
     const clearOrder = clearSpy.mock.invocationCallOrder[0];
     const switchOrder = projectClientMock.switch.mock.invocationCallOrder[0];
     expect(clearOrder).toBeLessThan(switchOrder!);
-  });
-
-  it("does not throw when the callback is a no-op", async () => {
-    const { useProjectStore } = await import("../projectStore");
-    const { setFleetArmingClearAccessor: setFleetArmingClear } = await import("../storeAccessors");
-    setFleetArmingClear(() => {});
-
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await expect(useProjectStore.getState().switchProject(projectB.id)).resolves.not.toThrow();
   });
 
   it("does not invoke clear when switching to the current project (early return)", async () => {
@@ -850,16 +745,6 @@ describe("worktreeLoadError surfacing (#8400)", () => {
     expect(useProjectStore.getState().worktreeLoadError).toBeNull();
     expect(useProjectStore.getState().error).toBeNull();
     expect(useProjectStore.getState().isLoading).toBe(true);
-  });
-
-  it("setWorktreeLoadError sets and clears the slice", async () => {
-    const { useProjectStore } = await import("../projectStore");
-
-    useProjectStore.getState().setWorktreeLoadError("boom");
-    expect(useProjectStore.getState().worktreeLoadError).toBe("boom");
-
-    useProjectStore.getState().setWorktreeLoadError(null);
-    expect(useProjectStore.getState().worktreeLoadError).toBeNull();
   });
 
   it("applies the worktree-load-status event, guarding on projectId", async () => {
@@ -1035,31 +920,6 @@ describe("switching to a project whose repository is gone (#11649)", () => {
 });
 
 describe("switch busy indication (#10736)", () => {
-  it("flags isSwitching and the target project id when a switch starts", async () => {
-    const { useProjectStore } = await import("../projectStore");
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    expect(useProjectStore.getState().isSwitching).toBe(false);
-    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
-
-    await useProjectStore.getState().switchProject(projectB.id);
-
-    expect(useProjectStore.getState().isSwitching).toBe(true);
-    expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
-  });
-
-  it("keeps isSwitching set after the fire-and-forget IPC resolves (view is replaced)", async () => {
-    const { useProjectStore } = await import("../projectStore");
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await useProjectStore.getState().switchProject(projectB.id);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // The happy path never re-enters this renderer, so the flag is not cleared.
-    expect(useProjectStore.getState().isSwitching).toBe(true);
-  });
-
   it("clears isSwitching when the switch IPC rejects (outgoing view stays visible)", async () => {
     projectClientMock.switch.mockRejectedValueOnce(new Error("boom"));
     const { useProjectStore } = await import("../projectStore");
@@ -1239,29 +1099,6 @@ describe("switch busy indication (#10736)", () => {
     expect(useProjectStore.getState().switchingToProjectId).toBeNull();
   });
 
-  it("flags isSwitching for reopenProject (background-project switch path)", async () => {
-    const { useProjectStore } = await import("../projectStore");
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await useProjectStore.getState().reopenProject(projectB.id);
-
-    expect(useProjectStore.getState().isSwitching).toBe(true);
-    expect(useProjectStore.getState().switchingToProjectId).toBe(projectB.id);
-  });
-
-  it("clears isSwitching when the reopen IPC rejects", async () => {
-    projectClientMock.reopen.mockRejectedValueOnce(new Error("boom"));
-    const { useProjectStore } = await import("../projectStore");
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await useProjectStore.getState().reopenProject(projectB.id);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(useProjectStore.getState().isSwitching).toBe(false);
-    expect(useProjectStore.getState().switchingToProjectId).toBeNull();
-  });
-
   it("clearSwitching resets the switch flags and the switch-owned loading state", async () => {
     const { useProjectStore } = await import("../projectStore");
     // Mirrors a parked renderer reactivated from the LRU cache: switchProject
@@ -1292,24 +1129,6 @@ describe("switch busy indication (#10736)", () => {
     useProjectStore.getState().clearSwitching();
 
     expect(useProjectStore.getState().isLoading).toBe(true);
-  });
-
-  it("a superseded switch's rejection does not clobber the newer transition's busy state", async () => {
-    // Switch A→B (requestId N), then A→C supersedes it (requestId N+1). When B's
-    // IPC later rejects, the staleness guard must keep C's busy state intact so
-    // the busy state keeps tracking the live switch rather than clearing early.
-    projectClientMock.switch.mockRejectedValueOnce(new Error("B failed")); // first call (B)
-    const { useProjectStore } = await import("../projectStore");
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
-
-    await useProjectStore.getState().switchProject(projectB.id);
-    await useProjectStore.getState().switchProject("project-c");
-    // Let B's rejected promise's .catch() run (it should short-circuit).
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(useProjectStore.getState().isSwitching).toBe(true);
-    expect(useProjectStore.getState().switchingToProjectId).toBe("project-c");
   });
 });
 

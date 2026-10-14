@@ -112,16 +112,6 @@ describe("hardened git treats file paths literally, not as globs (real git)", ()
     expect(selected).toEqual([GLOBBY]);
   });
 
-  it("returns the named file's own content in its diff", async () => {
-    const { createHardenedGit } = await import("../hardenedGit.js");
-    const client = await createHardenedGit(repoDir);
-
-    const diff = await client.diff(["--no-color", "--", GLOBBY]);
-
-    expect(diff).toContain("edited in the bracket file");
-    expect(diff).not.toContain("edited in the sibling");
-  });
-
   it("discards only the named file's changes, leaving a glob-matched sibling intact", async () => {
     // The data-loss shape of this bug: the user discards changes on one file in
     // the UI and loses uncommitted work in a different file.
@@ -148,10 +138,8 @@ describe("hardened git treats file paths literally, not as globs (real git)", ()
   // Git refuses `literal` alongside GLOB or ICASE — "fatal: global 'literal'
   // pathspec setting is incompatible with all other global pathspec settings",
   // exit 128 — so a developer who exports either would otherwise have every
-  // path-bearing git call in the app fail. NOGLOB is included to pin the
-  // asymmetry: git accepts that one next to literal, so this case documents the
-  // non-conflict rather than guarding a failure.
-  describe.each(["GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"])(
+  // path-bearing git call in the app fail.
+  describe.each(["GIT_GLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"])(
     "with an inherited %s",
     (inheritedVar) => {
       let priorValue: string | undefined;

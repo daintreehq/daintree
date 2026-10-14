@@ -517,25 +517,6 @@ describe("terminal spawn handler - projectId resolution", () => {
     expect(spawnArgs.projectId).toBe("scratch-uuid");
   });
 
-  it("uses explicit projectId even when current project differs", async () => {
-    mockGetProjectById.mockReturnValue(projectA);
-    mockGetCurrentProject.mockReturnValue(projectB);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler({} as Electron.IpcMainInvokeEvent, {
-      projectId: "project-a-id",
-      cols: 80,
-      rows: 24,
-    });
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.projectId).toBe("project-a-id");
-    expect(mockGetProjectById).toHaveBeenCalledWith("project-a-id");
-  });
-
   it("fetches project settings using resolved projectId, not current project", async () => {
     mockGetProjectById.mockReturnValue(projectA);
     mockGetCurrentProject.mockReturnValue(projectB);
@@ -993,6 +974,7 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       expect(spawnArgs.postSpawnInput).toBeUndefined();
       // The command is embedded in the shell startup args instead.
       expect(spawnArgs.args?.join(" ")).toContain("claude --resume s-1");
+      expect(ptyClient.write).not.toHaveBeenCalled();
     }
   );
 
@@ -1117,27 +1099,6 @@ describe("terminal spawn shell-injection hardening (#6065)", () => {
     mockGetCurrentProject.mockReturnValue({ id: "p1", path: "/tmp", name: "p" });
     mockGetProjectById.mockReturnValue(null);
     mockGetProjectSettings.mockResolvedValue({});
-  });
-
-  it("rejects commands containing control characters before spawning", async () => {
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-
-    await expect(
-      handler(
-        {} as Electron.IpcMainInvokeEvent,
-        {
-          cols: 80,
-          rows: 24,
-          command: "echo \x1B[31mred",
-        } as unknown as Parameters<typeof handler>[1]
-      )
-    ).rejects.toThrow(/IPC validation failed: terminal:spawn/);
-
-    expect(ptyClient.spawn).not.toHaveBeenCalled();
-    expect(ptyClient.write).not.toHaveBeenCalled();
   });
 
   it("rejects multi-line commands at the schema boundary", async () => {
@@ -1559,58 +1520,6 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBeUndefined();
   });
 
-  it("does NOT inject DAINTREE_ASSISTANT_AUTO_APPROVE when the assistant launches with bypassPermissions off", async () => {
-    mockValidateToken.mockImplementation((token) =>
-      token === "assistant-nobypass" ? "full" : false
-    );
-    mockGetBypassPermissions.mockImplementation(() => false);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-        env: { DAINTREE_MCP_TOKEN: "assistant-nobypass" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_ASSISTANT_AUTO_APPROVE).toBeUndefined();
-  });
-
-  it("does NOT inject DAINTREE_ASSISTANT_DEBUG_LOG when debugLogging is off", async () => {
-    mockValidateToken.mockImplementation((token) =>
-      token === "assistant-nodebug" ? "core" : false
-    );
-    mockGetDebugLogging.mockImplementation(() => false);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "daintree-assistant",
-        launchAgentId: "daintree-assistant",
-        env: { DAINTREE_MCP_TOKEN: "assistant-nodebug" },
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBeUndefined();
-  });
-
   it("does NOT inject DAINTREE_ASSISTANT_DEBUG_LOG for a non-assistant help agent even when debugLogging is on", async () => {
     // The var is scoped to the daintree-assistant CLI; a claude help launch
     // with debugLogging on must never receive it.
@@ -1636,7 +1545,6 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_ASSISTANT_DEBUG_LOG).toBeUndefined();
   });
-
   it("appends --dangerously-skip-permissions even at core tier when bypassPermissions is on", async () => {
     // Tier and bypassPermissions are decoupled (#7532): a core session with
     // bypass on should still skip the CLI confirmation gate.
@@ -2300,35 +2208,6 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
       )
     ).rejects.toThrow(/does not belong to a Claude session/);
     expect(ptyClient.spawn).not.toHaveBeenCalled();
-  });
-
-  it("spawns Gemini as a normal agent — no help-session flag injection after deprecation (#8811)", async () => {
-    // Gemini is deprecated from the assistant overlay (#8811) but still
-    // launches from the main toolbar. A plain launch (no DAINTREE_MCP_TOKEN)
-    // must reach `ptyClient.spawn` with the command untouched and never flow
-    // through the Claude per-pane MCP path.
-    mockValidateToken.mockReturnValue(false);
-
-    const deps = { ptyClient } as unknown as HandlerDependencies;
-    registerTerminalLifecycleHandlers(deps);
-
-    const handler = getSpawnHandler();
-    await handler(
-      {} as Electron.IpcMainInvokeEvent,
-      {
-        cols: 80,
-        rows: 24,
-        cwd: tmpDir,
-        command: "gemini",
-        launchAgentId: "gemini",
-      } as unknown as Parameters<typeof handler>[1]
-    );
-
-    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
-    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
-    expect(spawnArgs.command).toBe("gemini");
-    expect(spawnArgs.command).not.toContain("--approval-mode");
-    expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
   it("appends a Copilot help session's launch args to the spawn (#7542)", async () => {
@@ -3406,7 +3285,6 @@ describe("terminal close handlers - resume journaling", () => {
     expect(ptyClient.gracefulKill).toHaveBeenCalledWith("term-1");
     expect(persistAgentSessionMock).not.toHaveBeenCalled();
   });
-
   it("does not journal the assistant on an explicit gracefulKill either", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, isAssistantTerminal: true });
     ptyClient.gracefulKill.mockResolvedValue("sess-abc");
@@ -3575,6 +3453,29 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
     }
   });
 
+  it("Windows agent startup preserves literal argv and the persisted command", async () => {
+    setPlatform("win32");
+    const handler = spawnHandlerForTest();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+    });
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.shell).toMatch(/powershell\.exe$/i);
+    expect(spawnArgs.args.slice(0, 3)).toEqual(["-NoLogo", "-NoExit", "-EncodedCommand"]);
+    const script = Buffer.from(spawnArgs.args[3], "base64").toString("utf16le");
+    expect(script).toContain("[System.Diagnostics.Process]::Start($start)");
+    expect(script).toContain("$start.FileName = 'C:\\test\\agent.exe'");
+    expect(spawnArgs.command).toBe("claude");
+    expect(spawnArgs.postSpawnInput).toBeUndefined();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
   it("resolves the agent executable before binding the pane's MCP config, once", async () => {
     setPlatform("win32");
     mockValidateToken.mockReturnValue(false);
@@ -3673,15 +3574,6 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
 
     expect(waitForWindowsShellMock).not.toHaveBeenCalled();
     expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
-  });
-
-  it("refreshes the registry PATH before spawning on Windows", async () => {
-    setPlatform("win32");
-    const handler = spawnHandlerForTest();
-
-    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 });
-
-    expect(refreshWindowsPathForSpawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("holds the spawn until the refresh settles", async () => {

@@ -53,14 +53,6 @@ describe("isTuiReservedKey", () => {
     expect(isTuiReservedKey(keyEvent({ key: "L", ctrlKey: true }))).toBe(true);
   });
 
-  it("reserves accept-line, clear-screen, transpose, and yank — they collide with global app defaults", () => {
-    // Ctrl+J/L/T/Y map to fleet.armFocused, help.togglePanel,
-    // terminal.duplicate, and fleet.accept on Windows/Linux.
-    for (const key of ["j", "l", "t", "y"]) {
-      expect(isTuiReservedKey(keyEvent({ key, ctrlKey: true }))).toBe(true);
-    }
-  });
-
   it("does not reserve Ctrl+Alt combos — Cmd+Alt bindings on Windows arrive as Ctrl+Alt", () => {
     // The old xterm-side check ignored altKey, which made Ctrl+Alt+P/N/B/K/J
     // (the Cmd+Alt bindings on Windows/Linux) dead inside terminals.

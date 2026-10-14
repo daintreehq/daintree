@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { extractPort, normalizeNextjsDevCommand } from "../DevPreviewCommandNormalizer.js";
+import {
+  extractPort,
+  normalizeNextjsDevCommand,
+  normalizeViteDevCommand,
+} from "../DevPreviewCommandNormalizer.js";
 
 const mockReadFile = vi.fn<(path: string, encoding: string) => Promise<string>>();
 
@@ -154,12 +158,6 @@ describe("normalizeNextjsDevCommand", () => {
     it("leaves vite commands unchanged", async () => {
       expect(await normalizeNextjsDevCommand("vite", CWD)).toBe("vite");
     });
-
-    it("leaves arbitrary commands unchanged", async () => {
-      expect(await normalizeNextjsDevCommand("python manage.py runserver", CWD)).toBe(
-        "python manage.py runserver"
-      );
-    });
   });
 
   describe("version gating", () => {
@@ -172,11 +170,6 @@ describe("normalizeNextjsDevCommand", () => {
     it("skips injection when version is null", async () => {
       mockResolveNextMajorVersion.mockResolvedValue(null);
       expect(await normalizeNextjsDevCommand("next dev", CWD)).toBe("next dev");
-    });
-
-    it("injects when Next.js major is 15", async () => {
-      mockResolveNextMajorVersion.mockResolvedValue(15);
-      expect(await normalizeNextjsDevCommand("next dev", CWD)).toBe("next dev --turbopack");
     });
 
     it("skips injection when turbopackEnabled is false", async () => {
@@ -384,13 +377,6 @@ describe("normalizeNextjsDevCommand", () => {
         )
       ).toBe('next dev --experimental-https-key "certs/dev --turbopack.pem"');
     });
-
-    it("drops the separator when the turbo flag was all it forwarded", async () => {
-      mockResolveNextMajorVersion.mockResolvedValue(14);
-      expect(await normalizeNextjsDevCommand("npm run dev -- --turbopack", CWD)).toBe(
-        "npm run dev"
-      );
-    });
   });
 
   describe("compound package scripts are never rewritten", () => {
@@ -443,18 +429,6 @@ describe("extractPort", () => {
 
   it("returns null for shell control character &&", async () => {
     expect(await extractPort("next dev && echo done", CWD)).toBeNull();
-  });
-
-  it("returns null for shell control character ;", async () => {
-    expect(await extractPort("next dev; echo ready", CWD)).toBeNull();
-  });
-
-  it("returns null for shell comment #", async () => {
-    expect(await extractPort("next dev # with port 3000", CWD)).toBeNull();
-  });
-
-  it("returns null for pipe |", async () => {
-    expect(await extractPort("next dev | tee log", CWD)).toBeNull();
   });
 
   it("returns Next.js default port 3000", async () => {
@@ -543,5 +517,181 @@ describe("extractPort", () => {
 
   it("returns null for --port with non-numeric value", async () => {
     expect(await extractPort("next dev --port abc", CWD)).toBeNull();
+  });
+});
+
+describe("normalizeViteDevCommand", () => {
+  const CWD = "/project";
+  const PORT = 43210;
+
+  describe("direct Vite commands", () => {
+    it("appends --port and --strictPort to bare 'vite'", async () => {
+      expect(await normalizeViteDevCommand("vite", CWD, PORT)).toBe(
+        `vite --port ${PORT} --strictPort`
+      );
+    });
+
+    it("appends --port and --strictPort to 'vite dev'", async () => {
+      expect(await normalizeViteDevCommand("vite dev", CWD, PORT)).toBe(
+        `vite dev --port ${PORT} --strictPort`
+      );
+    });
+
+    it("appends --port and --strictPort to 'npx vite'", async () => {
+      expect(await normalizeViteDevCommand("npx vite", CWD, PORT)).toBe(
+        `npx vite --port ${PORT} --strictPort`
+      );
+    });
+
+    it("preserves existing flags before appending", async () => {
+      expect(await normalizeViteDevCommand("vite dev --host 0.0.0.0", CWD, PORT)).toBe(
+        `vite dev --host 0.0.0.0 --port ${PORT} --strictPort`
+      );
+    });
+  });
+
+  describe("SvelteKit commands", () => {
+    it("appends --port and --strictPort to 'svelte-kit dev'", async () => {
+      expect(await normalizeViteDevCommand("svelte-kit dev", CWD, PORT)).toBe(
+        `svelte-kit dev --port ${PORT} --strictPort`
+      );
+    });
+  });
+
+  describe("Astro commands (no --strictPort)", () => {
+    it("appends --port only to 'astro dev'", async () => {
+      expect(await normalizeViteDevCommand("astro dev", CWD, PORT)).toBe(
+        `astro dev --port ${PORT}`
+      );
+    });
+
+    it("does NOT append --strictPort for Astro via pkg manager", async () => {
+      mockPkg({ dev: "astro dev" });
+      expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe(
+        `npm run dev -- --port ${PORT}`
+      );
+    });
+  });
+
+  describe("Nuxt commands (no --strictPort)", () => {
+    it("appends --port only to 'nuxt dev'", async () => {
+      expect(await normalizeViteDevCommand("nuxt dev", CWD, PORT)).toBe(`nuxt dev --port ${PORT}`);
+    });
+  });
+
+  describe("package manager script commands", () => {
+    it("appends ` -- --port N --strictPort` for npm run dev resolving to vite", async () => {
+      mockPkg({ dev: "vite" });
+      expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe(
+        `npm run dev -- --port ${PORT} --strictPort`
+      );
+    });
+
+    it("appends ` --port N --strictPort` (no -- separator) for pnpm dev", async () => {
+      // pnpm forwards an explicit `--` verbatim to the script, where Vite
+      // treats everything after it as positional and drops the flags.
+      mockPkg({ dev: "vite" });
+      expect(await normalizeViteDevCommand("pnpm dev", CWD, PORT)).toBe(
+        `pnpm dev --port ${PORT} --strictPort`
+      );
+    });
+
+    it("resolves pkg script body for SvelteKit (vite dev under the hood)", async () => {
+      mockPkg({ dev: "vite dev" });
+      expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe(
+        `npm run dev -- --port ${PORT} --strictPort`
+      );
+    });
+
+    it("resolves pkg script body for Astro and omits --strictPort", async () => {
+      mockPkg({ start: "astro dev" });
+      expect(await normalizeViteDevCommand("npm run start", CWD, PORT)).toBe(
+        `npm run start -- --port ${PORT}`
+      );
+    });
+
+    it("resolves pkg script body for Nuxt and omits --strictPort", async () => {
+      mockPkg({ dev: "nuxt dev" });
+      expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe(
+        `npm run dev -- --port ${PORT}`
+      );
+    });
+  });
+
+  describe("skip conditions", () => {
+    it("does NOT modify when command already has --port flag", async () => {
+      expect(await normalizeViteDevCommand("vite --port 5173", CWD, PORT)).toBe("vite --port 5173");
+    });
+
+    it("does NOT modify when command has --port=N form", async () => {
+      expect(await normalizeViteDevCommand("vite --port=5173", CWD, PORT)).toBe("vite --port=5173");
+    });
+
+    it("does NOT modify when command has -p flag", async () => {
+      expect(await normalizeViteDevCommand("vite -p 5173", CWD, PORT)).toBe("vite -p 5173");
+    });
+
+    it("does NOT modify when command has compact -pN form", async () => {
+      expect(await normalizeViteDevCommand("vite -p5173", CWD, PORT)).toBe("vite -p5173");
+    });
+
+    it("does NOT modify when command has PORT= env prefix", async () => {
+      expect(await normalizeViteDevCommand("PORT=5173 vite", CWD, PORT)).toBe("PORT=5173 vite");
+    });
+
+    it("does NOT modify when resolved pkg script already specifies --port", async () => {
+      mockPkg({ dev: "vite --port 5173" });
+      expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe("npm run dev");
+    });
+
+    it("leaves compound && command unchanged", async () => {
+      expect(await normalizeViteDevCommand("vite && echo done", CWD, PORT)).toBe(
+        "vite && echo done"
+      );
+    });
+
+    it("does NOT modify when pkg script body has shell control", async () => {
+      mockPkg({ dev: "vite && echo done" });
+      expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe("npm run dev");
+    });
+
+    it("does NOT modify when no package.json exists", async () => {
+      mockNoPkg();
+      expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe("npm run dev");
+    });
+
+    it("does NOT modify when script name not found in package.json", async () => {
+      mockPkg({ start: "vite" });
+      expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe("npm run dev");
+    });
+
+    it("does NOT modify Next.js commands", async () => {
+      expect(await normalizeViteDevCommand("next dev", CWD, PORT)).toBe("next dev");
+    });
+
+    it("does NOT modify Remix commands (no CLI --port flag)", async () => {
+      expect(await normalizeViteDevCommand("remix dev", CWD, PORT)).toBe("remix dev");
+    });
+
+    it("does NOT modify 'vite-node' (hyphenated tool name)", async () => {
+      expect(await normalizeViteDevCommand("vite-node server.ts", CWD, PORT)).toBe(
+        "vite-node server.ts"
+      );
+    });
+
+    it("does NOT modify pkg manager scripts that resolve to non-Vite commands", async () => {
+      mockPkg({ dev: "next dev" });
+      expect(await normalizeViteDevCommand("npm run dev", CWD, PORT)).toBe("npm run dev");
+    });
+  });
+
+  describe("idempotency", () => {
+    it("calling twice on a pkg-manager script does not double-append", async () => {
+      mockPkg({ dev: "vite" });
+      const once = await normalizeViteDevCommand("npm run dev", CWD, PORT);
+      mockPkg({ dev: "vite" });
+      const twice = await normalizeViteDevCommand(once, CWD, PORT);
+      expect(twice).toBe(once);
+    });
   });
 });

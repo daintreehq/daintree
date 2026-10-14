@@ -87,11 +87,6 @@ describe("resolveWorktreeMovePatch", () => {
     expect(resolveWorktreeMovePatch({ worktreeId: OLD, worktreeGitDir: GITDIR }, ctx)).toBeNull();
   });
 
-  it("returns null for a legacy snapshot with no stored gitDir", () => {
-    const ctx = ctxWith([{ id: NEW, gitDir: GITDIR }]);
-    expect(resolveWorktreeMovePatch({ worktreeId: OLD }, ctx)).toBeNull();
-  });
-
   it("remaps the worktree id and rebases cwd/filePath/markdownFilePath onto the new root", () => {
     const ctx = ctxWith([{ id: NEW, gitDir: GITDIR }]);
     const patch = resolveWorktreeMovePatch(

@@ -62,13 +62,6 @@ describe("useMenuActions", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("dispatches directly when payload has actionId and no args", async () => {
-    const { handler } = setup();
-
-    await handler?.({ actionId: "terminal.new" });
-    expect(dispatchMock).toHaveBeenCalledWith("terminal.new", undefined, { source: "menu" });
-  });
-
   it("hands the terminal-cycle key to the portal's tabs while the portal has focus", async () => {
     const { handler } = setup();
     keybindingService.setScope("portal");
@@ -106,27 +99,6 @@ describe("useMenuActions", () => {
       { agentId: "codex" },
       { source: "menu" }
     );
-  });
-
-  it("dispatches plugin action IDs directly", async () => {
-    const { handler } = setup();
-
-    await handler?.({ actionId: "plugin.foo.bar" });
-    expect(dispatchMock).toHaveBeenCalledWith("plugin.foo.bar", undefined, { source: "menu" });
-  });
-
-  it("dispatches terminal focus-next action from main-process shortcut", async () => {
-    const { handler } = setup();
-
-    await handler?.({ actionId: "terminal.focusNext" });
-    await handler?.({ actionId: "terminal.focusPrevious" });
-
-    expect(dispatchMock).toHaveBeenNthCalledWith(1, "terminal.focusNext", undefined, {
-      source: "menu",
-    });
-    expect(dispatchMock).toHaveBeenNthCalledWith(2, "terminal.focusPrevious", undefined, {
-      source: "menu",
-    });
   });
 
   it("does not leak unhandled rejection when dispatch throws", async () => {

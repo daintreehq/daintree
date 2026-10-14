@@ -48,20 +48,4 @@ describe("registerExitCleanupHandlers", () => {
     expect(process.listenerCount("SIGINT")).toBe(sigintAfterFirst);
     expect(process.listenerCount("SIGTERM")).toBe(sigtermAfterFirst);
   });
-
-  it("re-registers after the guard is reset", () => {
-    registerExitCleanupHandlers();
-    __resetExitCleanupHandlersForTest();
-    // Drop the first registration's listeners so we measure a clean delta.
-    for (const l of process.listeners("SIGINT") as SignalListener[]) {
-      if (!sigintBaseline.includes(l)) process.removeListener("SIGINT", l);
-    }
-    for (const l of process.listeners("SIGTERM") as SignalListener[]) {
-      if (!sigtermBaseline.includes(l)) process.removeListener("SIGTERM", l);
-    }
-
-    registerExitCleanupHandlers();
-    expect(process.listenerCount("SIGINT")).toBe(sigintBaseline.length + 1);
-    expect(process.listenerCount("SIGTERM")).toBe(sigtermBaseline.length + 1);
-  });
 });

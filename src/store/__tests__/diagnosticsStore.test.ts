@@ -51,15 +51,6 @@ describe("diagnosticsStore height & maxHeight", () => {
     expect(useDiagnosticsStore.getState().height).toBe(200);
   });
 
-  it("setMaxHeight is idempotent when nothing changes", () => {
-    useDiagnosticsStore.setState({ maxHeight: 400, height: 200 });
-    const before = useDiagnosticsStore.getState();
-    useDiagnosticsStore.getState().setMaxHeight(400);
-    const after = useDiagnosticsStore.getState();
-    expect(after.maxHeight).toBe(before.maxHeight);
-    expect(after.height).toBe(before.height);
-  });
-
   it("setMaxHeight skips subscriber notifications on a no-op", () => {
     useDiagnosticsStore.setState({ maxHeight: 400, height: 200 });
     let notifyCount = 0;

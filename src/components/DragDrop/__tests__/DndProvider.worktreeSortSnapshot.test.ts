@@ -17,12 +17,6 @@ describe("DndProvider worktree-sort drag snapshot — issue #8393", () => {
     source = await fs.readFile(DND_PROVIDER_PATH, "utf-8");
   });
 
-  it("declares a ref for the active worktree-sort data snapshot", () => {
-    expect(source).toMatch(
-      /const\s+activeWorktreeSortDataRef\s*=\s*useRef<Record<string,\s*unknown>\s*\|\s*null>\(null\)/
-    );
-  });
-
   it("snapshots active.data.current at the top of the worktree-sort branch in handleDragStart", () => {
     expect(source).toMatch(
       /activeWorktreeSortDataRef\.current\s*=\s*active\.data\.current\s+as\s+Record<string,\s*unknown>/
@@ -33,10 +27,6 @@ describe("DndProvider worktree-sort drag snapshot — issue #8393", () => {
     // The ref is the canonical source — without this, an unmounted source
     // row leaves active.data.current undefined and the reorder is dropped.
     expect(source).toMatch(/activeWorktreeSortDataRef\.current\s*\?\?/);
-  });
-
-  it("clears the snapshot ref once the worktree-sort drop is processed", () => {
-    expect(source).toMatch(/activeWorktreeSortDataRef\.current\s*=\s*null/);
   });
 
   it("clears the snapshot ref on handleDragCancel for worktree-sort drags", () => {
@@ -54,5 +44,19 @@ describe("DndProvider worktree-sort drag snapshot — issue #8393", () => {
     const cancelDropBlock = source.match(/const cancelDrop = useCallback\(([\s\S]*?)\}, \[/);
     expect(cancelDropBlock).toBeTruthy();
     expect(cancelDropBlock?.[1]).toMatch(/activeWorktreeSortDataRef\.current\s*!==\s*null/);
+  });
+});
+
+// dnd-kit runs the drop animation through WAAPI, which CSS reduced-motion rules
+// never reach — so the OS preference has to collapse it at the DragOverlay, for
+// the snap-back as well as the settle. Zero duration rather than `null`: a null
+// config makes dnd-kit skip scrolling the source back into view on cancel.
+describe("DragOverlay dropAnimation reduced-motion gate", () => {
+  it("wires the reduced-motion gate onto the real DragOverlay", async () => {
+    const source = await fs.readFile(DND_PROVIDER_PATH, "utf-8");
+    expect(source).toMatch(
+      /dropAnimation=\{(?:\s|\/\/[^\n]*)*prefersReducedMotion\s*\?\s*\{\s*duration:\s*0\b/
+    );
+    expect(source).not.toMatch(/prefersReducedMotion\s*\?\s*null/);
   });
 });

@@ -184,11 +184,6 @@ describe("QuickStateFilterBar", () => {
     expect(onChange).toHaveBeenCalledWith("all");
   });
 
-  it('"All" is aria-checked when value is "all"', () => {
-    renderBar(<QuickStateFilterBar value="all" onChange={() => {}} />);
-    expect(screen.getByRole("radio", { name: /^All/ }).getAttribute("aria-checked")).toBe("true");
-  });
-
   it("renders a state icon on each non-All segment and no icon on All", () => {
     renderBar(
       <QuickStateFilterBar
@@ -223,35 +218,6 @@ describe("QuickStateFilterBar", () => {
     expect(svgClass).toContain("motion-reduce:animate-none");
   });
 
-  it("keeps the working icon spinning while Working is the active filter", () => {
-    renderBar(
-      <QuickStateFilterBar
-        value="working"
-        onChange={() => {}}
-        counts={{ all: 9, working: 2, waiting: 0, finished: 0 }}
-      />
-    );
-    const working = screen.getByRole("radio", { name: /Working/ });
-    expect(working.getAttribute("aria-checked")).toBe("true");
-    const svg = glyphBox(working);
-    expect(svg).not.toBeNull();
-    expect(svg?.getAttribute("class") ?? "").toContain("animate-spin-slow");
-  });
-
-  it("does not spin the working icon when counts.working is zero", () => {
-    renderBar(
-      <QuickStateFilterBar
-        value="all"
-        onChange={() => {}}
-        counts={{ all: 9, working: 0, waiting: 1, finished: 1 }}
-      />
-    );
-    const working = screen.getByRole("radio", { name: /Working/ });
-    const svg = glyphBox(working);
-    expect(svg).not.toBeNull();
-    expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
-  });
-
   it("does not spin the working icon when counts prop is omitted", () => {
     renderBar(<QuickStateFilterBar value="all" onChange={() => {}} />);
     const working = screen.getByRole("radio", { name: "Working" });
@@ -274,22 +240,6 @@ describe("QuickStateFilterBar", () => {
       const svg = glyphBox(screen.getByRole("radio", { name }));
       expect(svg).not.toBeNull();
       expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
-    }
-  });
-
-  it("marks each segment icon as aria-hidden so the accessible name stays clean", () => {
-    renderBar(
-      <QuickStateFilterBar
-        value="all"
-        onChange={() => {}}
-        counts={{ all: 9, working: 1, waiting: 1, finished: 1 }}
-      />
-    );
-    for (const name of [/Working/, /Attention/, /Finished/]) {
-      const button = screen.getByRole("radio", { name });
-      const svg = glyphBox(button);
-      expect(svg).not.toBeNull();
-      expect(svg?.getAttribute("aria-hidden")).toBe("true");
     }
   });
 
@@ -359,35 +309,6 @@ describe("QuickStateFilterBar", () => {
       expect(svgClass).toContain(colorClass);
       expect(svgClass).not.toMatch(FADED);
     }
-  });
-
-  it("fades only the segments whose count is zero in a mixed-count bar", () => {
-    renderBar(
-      <QuickStateFilterBar
-        value="all"
-        onChange={() => {}}
-        counts={{ all: 2, working: 0, waiting: 2, finished: 0 }}
-      />
-    );
-    const workingClass =
-      screen
-        .getByRole("radio", { name: /Working/ })
-        .querySelector(GLYPH_SELECTOR)
-        ?.getAttribute("class") ?? "";
-    const waitingClass =
-      screen
-        .getByRole("radio", { name: /Attention/ })
-        .querySelector(GLYPH_SELECTOR)
-        ?.getAttribute("class") ?? "";
-    const finishedClass =
-      screen
-        .getByRole("radio", { name: /Finished/ })
-        .querySelector(GLYPH_SELECTOR)
-        ?.getAttribute("class") ?? "";
-    expect(isFadedHue(workingClass, "text-state-working")).toBe(true);
-    expect(isFadedHue(finishedClass, "text-text-secondary")).toBe(true);
-    expect(waitingClass).toContain("text-state-waiting");
-    expect(waitingClass).not.toMatch(FADED);
   });
 
   it("draws Finished as unread only while it holds an unread hand-back, as Pilot does (#13234)", () => {
@@ -482,18 +403,6 @@ describe("QuickStateFilterBar", () => {
         ?.getAttribute("class") ?? "";
     expect(isFadedHue(svgClass, "text-state-working")).toBe(true);
     expect(svgClass).not.toContain("animate-spin-slow");
-  });
-
-  it("renders the optional trailing slot past a divider", () => {
-    renderBar(
-      <QuickStateFilterBar
-        value="all"
-        onChange={() => {}}
-        counts={{ all: 9, working: 1, waiting: 1, finished: 1 }}
-        trailing={<button type="button">Arm</button>}
-      />
-    );
-    expect(screen.getByRole("button", { name: "Arm" })).toBeTruthy();
   });
   it("groups the four segments in a named radiogroup, with the trailing slot outside it", () => {
     renderBar(

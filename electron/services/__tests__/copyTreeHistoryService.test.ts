@@ -85,11 +85,6 @@ describe("recordCopyTreeRun", () => {
     expect(viewA.send).toHaveBeenCalledTimes(1);
   });
 
-  it("sends nothing when no view is bound to the project", async () => {
-    registryMock.getWebContentsForProject.mockReturnValue([]);
-    await expect(recordCopyTreeRun(PROJECT_A, INPUT)).resolves.toBeUndefined();
-  });
-
   it("does not let one dead view stop the others from receiving the snapshot", async () => {
     const dead = {
       send: vi.fn(() => {

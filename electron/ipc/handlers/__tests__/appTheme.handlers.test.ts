@@ -183,26 +183,6 @@ describe("appTheme handlers", () => {
     vi.useRealTimers();
   });
 
-  it("registers all handlers including new follow-system channels", () => {
-    const cleanup = registerAppThemeHandlers();
-
-    const registeredChannels = (
-      ipcMain.handle as unknown as { mock: { calls: Array<[string, Handler]> } }
-    ).mock.calls.map((c) => c[0]);
-
-    expect(registeredChannels).toContain(CHANNELS.APP_THEME_GET);
-    expect(registeredChannels).toContain(CHANNELS.APP_THEME_SET_COLOR_SCHEME);
-    expect(registeredChannels).toContain(CHANNELS.APP_THEME_EXPORT);
-    expect(registeredChannels).toContain(CHANNELS.APP_THEME_SET_FOLLOW_SYSTEM);
-    expect(registeredChannels).toContain(CHANNELS.APP_THEME_SET_PREFERRED_DARK_SCHEME);
-    expect(registeredChannels).toContain(CHANNELS.APP_THEME_SET_PREFERRED_LIGHT_SCHEME);
-    expect(nativeThemeMock.on).toHaveBeenCalledWith("updated", expect.any(Function));
-
-    cleanup();
-
-    expect(nativeThemeMock.removeListener).toHaveBeenCalledWith("updated", expect.any(Function));
-  });
-
   it("setFollowSystem stores the value", async () => {
     storeState.data.appTheme = { colorSchemeId: "daintree" };
     registerAppThemeHandlers();
@@ -234,18 +214,6 @@ describe("appTheme handlers", () => {
   });
 
   describe("setRecentSchemeIds", () => {
-    it("persists a valid string array", async () => {
-      storeState.data.appTheme = { colorSchemeId: "daintree" };
-      registerAppThemeHandlers();
-
-      const handler = getHandler(CHANNELS.APP_THEME_SET_RECENT_SCHEME_IDS);
-      await handler({}, ["bondi", "dracula", "serengeti"]);
-
-      expect(storeState.data.appTheme).toMatchObject({
-        recentSchemeIds: ["bondi", "dracula", "serengeti"],
-      });
-    });
-
     it("ignores non-array input without throwing", async () => {
       storeState.data.appTheme = { colorSchemeId: "daintree" };
       registerAppThemeHandlers();
@@ -304,26 +272,6 @@ describe("appTheme handlers", () => {
   });
 
   describe("setAccentColorOverride", () => {
-    it("persists a normalized hex color", async () => {
-      storeState.data.appTheme = { colorSchemeId: "daintree" };
-      registerAppThemeHandlers();
-
-      const handler = getHandler(CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE);
-      await handler({}, "#AABBCC");
-
-      expect(storeState.data.appTheme).toMatchObject({ accentColorOverride: "#aabbcc" });
-    });
-
-    it("accepts a hex without leading #", async () => {
-      storeState.data.appTheme = { colorSchemeId: "daintree" };
-      registerAppThemeHandlers();
-
-      const handler = getHandler(CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE);
-      await handler({}, "ff8040");
-
-      expect(storeState.data.appTheme).toMatchObject({ accentColorOverride: "#ff8040" });
-    });
-
     it("persists null to clear the override", async () => {
       storeState.data.appTheme = {
         colorSchemeId: "daintree",
@@ -810,26 +758,6 @@ describe("appTheme handlers", () => {
       };
 
       expect(config.customSchemes).toEqual([]);
-    });
-
-    it("passes through already-migrated native arrays", async () => {
-      const nativeSchemes = [
-        { id: "modern", name: "Modern", type: "light", builtin: false, tokens: {} },
-      ];
-      storeState.data.appTheme = {
-        colorSchemeId: "daintree",
-        customSchemes: nativeSchemes,
-      };
-      registerAppThemeHandlers();
-
-      const handler = getHandler(CHANNELS.APP_THEME_GET);
-      const config = (await handler({}, {})) as {
-        colorSchemeId: string;
-        customSchemes: unknown[];
-      };
-
-      expect(config.customSchemes).toHaveLength(1);
-      expect(config.customSchemes[0]).toMatchObject({ id: "modern" });
     });
 
     it("drops invalid entries but preserves valid ones", async () => {

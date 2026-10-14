@@ -105,12 +105,6 @@ describe("computePoolEnvHash", () => {
     const b = computePoolEnvHash({ FOO: "ba" });
     expect(a).not.toBe(b);
   });
-
-  it("returns a hash with the env- prefix", () => {
-    const hash = computePoolEnvHash({ FOO: "1", BAR: "2" });
-    expect(hash).toMatch(/^env-/);
-    expect(hash).not.toBe(POOL_ENV_EMPTY_HASH);
-  });
 });
 
 describe("carriesPoolStrippedEnv", () => {

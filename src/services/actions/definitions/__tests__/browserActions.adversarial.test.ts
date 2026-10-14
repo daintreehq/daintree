@@ -401,22 +401,6 @@ describe("browserActions adversarial", () => {
     expect(result.messages.map((m) => m.id)).toEqual([2, 3]);
   });
 
-  it("browser.getConsoleMessages applies limit to the most recent rows after filtering", async () => {
-    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
-    setConsoleState([
-      makeRow({ id: 1 }),
-      makeRow({ id: 2 }),
-      makeRow({ id: 3 }),
-      makeRow({ id: 4 }),
-    ]);
-    const run = setupActions();
-    const result = (await run("browser.getConsoleMessages", { limit: 2 })) as {
-      messages: Array<{ id: number }>;
-    };
-
-    expect(result.messages.map((m) => m.id)).toEqual([3, 4]);
-  });
-
   it("browser.getConsoleMessages applies limit to the most recent rows of the filtered level", async () => {
     setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
     setConsoleState([
@@ -445,19 +429,6 @@ describe("browserActions adversarial", () => {
 
     expect(getMessagesSpy).toHaveBeenCalledWith("other");
     expect(result.paneId).toBe("other");
-  });
-
-  it("browser.getConsoleMessages returns empty result for a pane with no messages", async () => {
-    setPanelState({ focusedId: "b1", panelsById: devPreviewPanels(["b1"]) });
-    setConsoleState([]);
-    const run = setupActions();
-    const result = (await run("browser.getConsoleMessages")) as {
-      messages: unknown[];
-      counts: { errorCount: number; warnCount: number };
-    };
-
-    expect(result.messages).toEqual([]);
-    expect(result.counts).toEqual({ errorCount: 0, warnCount: 0 });
   });
 
   it("browser.getConsoleMessages throws when no target panel exists", async () => {

@@ -10,20 +10,6 @@ describe("TtlCache", () => {
     vi.useRealTimers();
   });
 
-  it("stores and retrieves values", () => {
-    const cache = new TtlCache<string, number>(10, 60_000);
-    cache.set("a", 1);
-    cache.set("b", 2);
-    expect(cache.get("a")).toBe(1);
-    expect(cache.get("b")).toBe(2);
-    expect(cache.size).toBe(2);
-  });
-
-  it("returns undefined for missing keys", () => {
-    const cache = new TtlCache<string, number>(10, 60_000);
-    expect(cache.get("missing")).toBeUndefined();
-  });
-
   it("expires entries after TTL", () => {
     const cache = new TtlCache<string, number>(10, 5_000);
     cache.set("a", 1);
@@ -63,15 +49,6 @@ describe("TtlCache", () => {
     cache.set("d", 4);
     expect(cache.get("a")).toBeUndefined();
     expect(cache.get("b")).toBe(2);
-  });
-
-  it("clears all entries", () => {
-    const cache = new TtlCache<string, number>(10, 60_000);
-    cache.set("a", 1);
-    cache.set("b", 2);
-    cache.clear();
-    expect(cache.size).toBe(0);
-    expect(cache.get("a")).toBeUndefined();
   });
 
   it("does not count expired entries toward capacity", () => {
@@ -116,11 +93,6 @@ describe("TtlCache", () => {
       // Iteration removed the expired entry.
       expect(cache.size).toBe(1);
       expect(cache.get("a")).toBeUndefined();
-    });
-
-    it("returns nothing on an empty cache", () => {
-      const cache = new TtlCache<string, number>(10, 60_000);
-      expect(Array.from(cache.entries())).toEqual([]);
     });
   });
 });

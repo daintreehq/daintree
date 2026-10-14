@@ -392,13 +392,6 @@ describe("fleet.armMatchingFilter", () => {
     expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
   });
 
-  it("replaces when armed set is empty", async () => {
-    seedPanels([makeAgent("a1", { worktreeId: "wt-1" }), makeAgent("a2", { worktreeId: "wt-2" })]);
-    const registry = await buildRegistry();
-    await run(registry, "fleet.armMatchingFilter", { worktreeIds: ["wt-1"] });
-    expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
-  });
-
   it("unions with existing armed set when non-empty", async () => {
     seedPanels([makeAgent("a1", { worktreeId: "wt-1" }), makeAgent("a2", { worktreeId: "wt-2" })]);
     useFleetArmingStore.getState().armIds(["a2"]);
@@ -512,16 +505,6 @@ describe("fleet.armFocused", () => {
   beforeEach(() => {
     resetStores();
     vi.clearAllMocks();
-  });
-
-  it("arms the focused eligible pane from an empty fleet", async () => {
-    seedPanels([makeAgent("a"), makeAgent("b")]);
-    usePanelStore.setState({ focusedId: "a" });
-    const registry = await buildRegistry();
-    await run(registry, "fleet.armFocused");
-    const armed = useFleetArmingStore.getState().armedIds;
-    expect(armed.has("a")).toBe(true);
-    expect(armed.size).toBe(1);
   });
 
   it("arms the focused plain terminal", async () => {

@@ -81,11 +81,6 @@ describe("BUILTIN_SLASH_COMMANDS registry", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("has no duplicate labels", () => {
-    const labels = BUILTIN_SLASH_COMMANDS.map((e) => e.label);
-    expect(new Set(labels).size).toBe(labels.length);
-  });
-
   it("derives every label from its id as a single slash token", () => {
     for (const entry of BUILTIN_SLASH_COMMANDS) {
       expect(entry.label).toBe(`/${entry.id}`);
@@ -189,14 +184,6 @@ describe("getBuiltinSlashCommands", () => {
           agentId,
         });
       }
-    }
-  });
-
-  it("returns unique ids and labels per agent", () => {
-    for (const agentId of BUILT_IN_AGENT_IDS) {
-      const commands = getBuiltinSlashCommands(agentId);
-      expect(new Set(commands.map((c) => c.id)).size).toBe(commands.length);
-      expect(new Set(commands.map((c) => c.label)).size).toBe(commands.length);
     }
   });
 });

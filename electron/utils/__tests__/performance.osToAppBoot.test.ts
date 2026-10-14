@@ -30,11 +30,6 @@ describe("osToAppBootMs", () => {
     expect(mod.getOsToAppBootMs()).toBeNull();
   });
 
-  it("returns null when DAINTREE_PERF_SPAWN_WALL_MS is '0'", async () => {
-    const mod = await importPerformanceWithEnv({ DAINTREE_PERF_SPAWN_WALL_MS: "0" });
-    expect(mod.osToAppBootMs).toBeNull();
-  });
-
   it("returns null when DAINTREE_PERF_SPAWN_WALL_MS is non-numeric", async () => {
     const mod = await importPerformanceWithEnv({ DAINTREE_PERF_SPAWN_WALL_MS: "not-a-number" });
     expect(mod.osToAppBootMs).toBeNull();

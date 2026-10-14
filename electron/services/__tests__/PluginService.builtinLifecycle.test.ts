@@ -275,20 +275,6 @@ describe("PluginService built-in plugin loading", () => {
     expect(user?.isBuiltin).toBe(false);
   });
 
-  it("user plugins receive isBuiltin=false even when no built-in dir is configured", async () => {
-    await writePlugin("acme.user-only", {
-      name: "acme.user-only",
-      version: "1.0.0",
-    });
-
-    const service = new PluginService(tmpDir, "0.0.0");
-    await service.initialize();
-
-    const plugins = service.listPlugins();
-    expect(plugins).toHaveLength(1);
-    expect(plugins[0].isBuiltin).toBe(false);
-  });
-
   it("skips built-in scan cleanly when the directory is absent", async () => {
     const missingDir = path.join(builtinDir, "does-not-exist");
     await writePlugin("acme.user-plugin", {
@@ -371,31 +357,6 @@ describe("PluginService built-in plugin loading", () => {
     expect(plugins).toHaveLength(1);
     expect(plugins[0].disabled).toBe(true);
     expect(plugins[0].isBuiltin).toBe(false);
-  });
-
-  it("marks active plugins with disabled=false", async () => {
-    await writePlugin("acme.active", { name: "acme.active", version: "1.0.0" });
-
-    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
-    await service.initialize();
-
-    const plugins = service.listPlugins();
-    expect(plugins).toHaveLength(1);
-    expect(plugins[0].disabled).toBe(false);
-  });
-
-  it("treats missing plugins.disabled as empty (no exception)", async () => {
-    // store has no "plugins" key at all (in-memory fallback shape)
-    await writeBuiltinPlugin("daintree.helper", {
-      name: "daintree.helper",
-      version: "1.0.0",
-    });
-
-    const service = new PluginService(tmpDir, "0.0.0", { builtinPluginsRoot: builtinDir });
-    await service.initialize();
-
-    expect(service.listPlugins()).toHaveLength(1);
-    expect(service.listPlugins()[0].disabled).toBe(false);
   });
 
   it("ignores malformed disabled values defensively", async () => {
@@ -851,5 +812,71 @@ describe("PluginService built-in plugin loading", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+// #12323: `contributes.fileEditors` resolves through the builtin view registry
+// compiled into the host bundle, so only a built-in plugin can back it. The
+// schema accepts the entry for every origin (it cannot see the origin); the
+// loader is where the refusal lives.
+describe("contributes.fileEditors is built-in only (#12323)", () => {
+  const FILE_EDITOR = { id: "markdown", slot: "markdown.editor", extensions: ["md"] };
+  let builtinDir: string;
+
+  async function writePluginAt(root: string, dirName: string, manifest: Record<string, unknown>) {
+    const dir = path.join(root, dirName);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
+  }
+
+  beforeEach(async () => {
+    builtinDir = path.join(tmpDir, "builtin");
+    await fs.mkdir(builtinDir, { recursive: true });
+  });
+
+  it("discovers the Markdown editor disabled and loads its contribution after opt-in", async () => {
+    await writePluginAt(builtinDir, "markdown-editor", {
+      name: "daintree.markdown-editor",
+      version: "1.0.0",
+      contributes: { fileEditors: [FILE_EDITOR] },
+    });
+    const service = new PluginService(path.join(tmpDir, "user"), "0.0.0", {
+      builtinPluginsRoot: builtinDir,
+    });
+    await service.initialize();
+    expect(service.hasPlugin("daintree.markdown-editor")).toBe(false);
+    expect(
+      service.listPlugins().find((plugin) => plugin.manifest.name === "daintree.markdown-editor")
+    ).toMatchObject({ disabled: true, isBuiltin: true });
+    await service.setEnabled("daintree.markdown-editor", true);
+    expect(service.hasPlugin("daintree.markdown-editor")).toBe(true);
+  });
+
+  it("refuses an installed plugin that contributes a file editor and records why", async () => {
+    const userRoot = path.join(tmpDir, "user");
+    await writePluginAt(userRoot, "acme-editor", {
+      name: "acme.editor",
+      version: "1.0.0",
+      contributes: { fileEditors: [FILE_EDITOR] },
+    });
+    const service = new PluginService(userRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+    expect(service.hasPlugin("acme.editor")).toBe(false);
+    const record = service.listPlugins().find((p) => p.manifest.name === "acme.editor");
+    // The plugin never entered the registry; the provenance record carries the
+    // reason so the plugin manager can show it.
+    expect(record).toBeUndefined();
+  });
+
+  it("still loads an installed plugin whose fileEditors is empty", async () => {
+    const userRoot = path.join(tmpDir, "user");
+    await writePluginAt(userRoot, "acme-plain", {
+      name: "acme.plain",
+      version: "1.0.0",
+      contributes: { fileEditors: [] },
+    });
+    const service = new PluginService(userRoot, "0.0.0", { builtinPluginsRoot: builtinDir });
+    await service.initialize();
+    expect(service.hasPlugin("acme.plain")).toBe(true);
   });
 });

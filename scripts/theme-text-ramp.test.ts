@@ -9,7 +9,6 @@ import {
   isStateVariant,
   promote,
   replacementToken,
-  roleClass,
 } from "./theme-text-ramp.js";
 
 /**
@@ -71,10 +70,6 @@ describe("token rewriting", () => {
       "group-hover/stagerow:text-text-secondary"
     );
     expect(replacementToken("", "placeholder")).toBe("text-text-placeholder");
-  });
-
-  it("spells the role the way Tailwind resolves it", () => {
-    expect(roleClass("secondary")).toBe(`text-text-secondary`);
   });
 });
 

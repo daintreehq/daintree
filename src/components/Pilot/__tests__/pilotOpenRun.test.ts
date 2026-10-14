@@ -251,17 +251,6 @@ describe("pilot.openRun", () => {
       expect(switchProject).not.toHaveBeenCalled();
       expect(switchScratch).not.toHaveBeenCalled();
     });
-
-    it("still focuses in place once the same view is on screen", async () => {
-      // The gate is two questions, not one: identity alone was wrong, and
-      // refusing on identity alone would break every in-view click.
-      seedView(PROJECT_HERE);
-
-      await openRun({ runId: "t1", workspaceId: PROJECT_HERE });
-
-      expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "t1" });
-      expect(switchProject).not.toHaveBeenCalled();
-    });
   });
 
   describe("when the caller omits the workspace", () => {

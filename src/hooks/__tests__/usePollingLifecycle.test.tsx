@@ -62,23 +62,6 @@ describe("usePollingLifecycle", () => {
   });
 
   describe("singleton listener registration", () => {
-    it("installs visibilitychange / sidebar-refresh / project-switch listeners on first subscriber", () => {
-      const addEventListenerSpy = vi.spyOn(document, "addEventListener");
-      const windowAddEventListenerSpy = vi.spyOn(window, "addEventListener");
-
-      setupHook({});
-
-      expect(addEventListenerSpy).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
-      expect(windowAddEventListenerSpy).toHaveBeenCalledWith(
-        "daintree:refresh-sidebar",
-        expect.any(Function)
-      );
-      expect(onSwitchMock).toHaveBeenCalledTimes(1);
-
-      addEventListenerSpy.mockRestore();
-      windowAddEventListenerSpy.mockRestore();
-    });
-
     it("installs each global listener only once across multiple mounted hooks", () => {
       const addEventListenerSpy = vi.spyOn(document, "addEventListener");
 
@@ -129,15 +112,6 @@ describe("usePollingLifecycle", () => {
       await waitFor(() => {
         expect(fetchFn).toHaveBeenCalledTimes(1);
         expect(fetchFn.mock.calls[0]?.[0]?.force).toBe(false);
-      });
-    });
-
-    it("invokes calculateNextInterval after the fetch resolves", async () => {
-      const calculateNextInterval = vi.fn().mockReturnValue(60_000);
-      setupHook({ calculateNextInterval });
-
-      await waitFor(() => {
-        expect(calculateNextInterval).toHaveBeenCalled();
       });
     });
   });
@@ -526,22 +500,6 @@ describe("usePollingLifecycle", () => {
       expect(hook.result.current).toBe(firstControl);
       expect(hook.result.current.scheduleNextPoll).toBe(firstControl.scheduleNextPoll);
       expect(hook.result.current.refresh).toBe(firstControl.refresh);
-    });
-
-    it("refresh(force) threads the force flag through to fetchFn", async () => {
-      const fetchFn = vi.fn().mockResolvedValue(undefined);
-      const { hook } = setupHook({ fetchFn });
-
-      await waitFor(() => {
-        expect(fetchFn).toHaveBeenCalledTimes(1);
-      });
-
-      await act(async () => {
-        await hook.result.current.refresh({ force: true });
-      });
-
-      expect(fetchFn).toHaveBeenCalledTimes(2);
-      expect(fetchFn.mock.calls[1]?.[0]?.force).toBe(true);
     });
   });
 

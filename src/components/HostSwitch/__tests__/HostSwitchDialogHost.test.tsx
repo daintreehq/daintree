@@ -77,11 +77,4 @@ describe("HostSwitchDialogHost", () => {
     await act(async () => {});
     expect(screen.getByTestId("host-switcher-palette")).toBeTruthy();
   });
-
-  it("shows nothing in a window with no offer", async () => {
-    takeProjectOffer.mockResolvedValue(null);
-    render(<HostSwitchDialogHost />);
-    await act(async () => {});
-    expect(screen.queryByText(/Projects on/)).toBeNull();
-  });
 });

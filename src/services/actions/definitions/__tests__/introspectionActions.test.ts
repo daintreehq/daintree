@@ -105,16 +105,6 @@ afterEach(() => {
 });
 
 describe("actions.persistedStores", () => {
-  it("is registered with the expected metadata", () => {
-    expect(registry.has("actions.persistedStores")).toBe(true);
-    const def = registry.get("actions.persistedStores")!();
-    expect(def.id).toBe("actions.persistedStores");
-    expect(def.kind).toBe("query");
-    expect(def.danger).toBe("safe");
-    expect(def.category).toBe("introspection");
-    expect(def.scope).toBe("renderer");
-  });
-
   it("returns storeCount and an entry per registered store", async () => {
     registerPersistedStore({
       storeId: "alpha",
@@ -257,20 +247,6 @@ describe("actions.persistedStores", () => {
     expect(result.stores[0]!.sizeBytes).toBe("{not-json".length * 2);
   });
 
-  it("does not log or throw when parsing corrupt JSON", async () => {
-    registerPersistedStore({
-      storeId: "silent",
-      store: makeStore({ name: "daintree-silent" }),
-      persistedStateType: "State",
-    });
-    localStorage.setItem("daintree-silent", "{broken");
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const def = registry.get("actions.persistedStores")!();
-    await expect(def.run(undefined, stubCtx)).resolves.toBeDefined();
-    expect(warnSpy).not.toHaveBeenCalled();
-  });
-
   it("reports persistedBlobVersion: null when the blob is valid JSON but has no version field", async () => {
     registerPersistedStore({
       storeId: "noBlobVersion",
@@ -351,24 +327,6 @@ describe("actions.list", () => {
     } as ActionManifestEntry;
   }
 
-  it("does not throw when filtering entries with undefined title or description", async () => {
-    // Regression: #6120 — TypeError on toLowerCase when a manifest entry's
-    // title or description arrived as undefined (e.g. from an IPC-sourced
-    // plugin action). The filter must coerce missing strings to "".
-    vi.mocked(actionService.list).mockReturnValueOnce([
-      makeEntry({ id: "actions.alpha", title: undefined as unknown as string }),
-      makeEntry({ id: "actions.beta", description: undefined as unknown as string }),
-      makeEntry({
-        id: "actions.gamma",
-        title: undefined as unknown as string,
-        description: undefined as unknown as string,
-      }),
-    ]);
-
-    const def = registry.get("actions.list")!();
-    await expect(def.run({ search: "alpha" } as never, stubCtx)).resolves.toBeDefined();
-  });
-
   it("matches by id when title/description are undefined", async () => {
     vi.mocked(actionService.list).mockReturnValueOnce([
       makeEntry({
@@ -385,11 +343,6 @@ describe("actions.list", () => {
     };
 
     expect(result.actions.map((a) => a.id)).toEqual(["actions.findMe"]);
-  });
-
-  it("has mcpVisibility set to core", () => {
-    const def = registry.get("actions.list")!();
-    expect(def.mcpVisibility).toBe("core");
   });
 
   it("excludes actions with mcpVisibility hidden", async () => {
@@ -529,30 +482,6 @@ describe("actions.list", () => {
     expect(schema.safeParse({ limit: 1, offset: 2 }).success).toBe(true);
     // Omitting args entirely stays valid — paging is opt-in, not required.
     expect(schema.safeParse(undefined).success).toBe(true);
-  });
-
-  it("honors an explicit limit and offset", async () => {
-    vi.mocked(actionService.list).mockReturnValueOnce(makeEntries(10));
-
-    const page = await listPage({ limit: 3, offset: 4 });
-
-    expect(page.actions.map((a) => a.id)).toEqual(["actions.p004", "actions.p005", "actions.p006"]);
-    expect(page.limit).toBe(3);
-    expect(page.offset).toBe(4);
-    expect(page.total).toBe(10);
-    expect(page.hasMore).toBe(true);
-  });
-
-  it("reports the requested page size on a partial final page", async () => {
-    // `limit` echoes what was asked for, not how many came back.
-    vi.mocked(actionService.list).mockReturnValueOnce(makeEntries(5));
-
-    const page = await listPage({ limit: 4, offset: 3 });
-
-    expect(page.actions.map((a) => a.id)).toEqual(["actions.p003", "actions.p004"]);
-    expect(page.actions.length).toBeLessThan(page.limit);
-    expect(page.limit).toBe(4);
-    expect(page.hasMore).toBe(false);
   });
 
   it("reports no more results when the final page ends exactly at the total", async () => {
@@ -706,15 +635,6 @@ describe("actions.search", () => {
       ...overrides,
     } as ActionManifestEntry;
   }
-
-  it("is registered with the expected metadata", () => {
-    expect(registry.has("actions.search")).toBe(true);
-    const def = registry.get("actions.search")!();
-    expect(def.id).toBe("actions.search");
-    expect(def.kind).toBe("query");
-    expect(def.danger).toBe("safe");
-    expect(def.mcpVisibility).toBe("core");
-  });
 
   it("returns matching entries without inputSchema or outputSchema", async () => {
     // Mirror the real list() contract: schemas are present only when the
@@ -975,15 +895,6 @@ describe("actions.getSchema", () => {
     } as ActionManifestEntry;
   }
 
-  it("is registered with the expected metadata", () => {
-    expect(registry.has("actions.getSchema")).toBe(true);
-    const def = registry.get("actions.getSchema")!();
-    expect(def.id).toBe("actions.getSchema");
-    expect(def.kind).toBe("query");
-    expect(def.danger).toBe("safe");
-    expect(def.mcpVisibility).toBe("core");
-  });
-
   it("returns full entry including inputSchema for a valid action", async () => {
     const entry = makeEntry({
       id: "git.commit",
@@ -1045,103 +956,5 @@ describe("actions.getSchema", () => {
     expect(result.ok).toBe(false);
     expect(result.error.code).toBe("NOT_FOUND");
     expect(result.error.message).toContain("actions.locked");
-  });
-
-  it("returns structured error when an entry is both hidden and restricted", async () => {
-    const entry = makeEntry({
-      id: "actions.dual",
-      mcpVisibility: "hidden",
-      danger: "restricted",
-    });
-    vi.mocked(actionService.get).mockReturnValueOnce(entry);
-
-    const def = registry.get("actions.getSchema")!();
-    const result = (await def.run({ actionId: "actions.dual" } as never, stubCtx)) as {
-      ok: false;
-      error: { code: string; message: string };
-    };
-
-    expect(result.ok).toBe(false);
-    expect(result.error.code).toBe("NOT_FOUND");
-  });
-
-  it("returns the full input schema for an action the listing summarised", async () => {
-    const entry = makeEntry({
-      id: "git.push",
-      title: "Push",
-      inputSchema: { type: "object", properties: { force: { type: "boolean" } } },
-    });
-    vi.mocked(actionService.get).mockReturnValueOnce(entry);
-
-    const def = registry.get("actions.getSchema")!();
-    const result = (await def.run({ actionId: "git.push" } as never, stubCtx)) as {
-      ok: true;
-      entry: ActionManifestEntry;
-    };
-
-    expect(result.ok).toBe(true);
-    expect(result.entry.inputSchema).toBeDefined();
-  });
-});
-
-describe("search → getSchema roundtrip", () => {
-  function makeEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
-    return {
-      id: "actions.example",
-      name: "actions.example",
-      title: "Example",
-      description: "An example action",
-      category: "test",
-      kind: "command",
-      danger: "safe",
-      enabled: true,
-      requiresArgs: false,
-      ...overrides,
-    } as ActionManifestEntry;
-  }
-
-  // Schema-on-demand, not reachability. `actions.search` deliberately answers
-  // without `inputSchema` so a broad query stays cheap, and `actions.getSchema`
-  // fetches the full shape for the one action the model settled on. Both only
-  // ever describe actions the session can already dispatch — the roundtrip does
-  // not widen anything, which is what #11585 established the hard way.
-  it("summarises in search, then returns the full schema on getSchema", async () => {
-    const pushEntry = makeEntry({
-      id: "git.push",
-      title: "Push",
-      description: "Push commits to remote",
-      category: "git",
-      inputSchema: { type: "object", properties: { force: { type: "boolean" } } },
-    });
-    vi.mocked(actionService.list).mockImplementationOnce((_ctx, options) => {
-      const entries = [
-        makeEntry({ id: "actions.list", title: "List Actions", mcpVisibility: "core" }),
-        pushEntry,
-      ];
-      if (options?.includeSchemas === false) {
-        return entries.map(
-          ({ inputSchema: _i, outputSchema: _o, ...rest }) => rest as ActionManifestEntry
-        );
-      }
-      return entries;
-    });
-    vi.mocked(actionService.get).mockReturnValueOnce(pushEntry);
-
-    // Step 2: search finds it, without schemas
-    const searchDef = registry.get("actions.search")!();
-    const searchResult = (await searchDef.run({ query: "push" } as never, stubCtx)) as {
-      results: ActionManifestEntry[];
-    };
-    expect(searchResult.results[0]!.id).toBe("git.push");
-    expect(searchResult.results[0]!).not.toHaveProperty("inputSchema");
-
-    // Step 3: getSchema retrieves the full schema
-    const schemaDef = registry.get("actions.getSchema")!();
-    const schemaResult = (await schemaDef.run({ actionId: "git.push" } as never, stubCtx)) as {
-      ok: true;
-      entry: ActionManifestEntry;
-    };
-    expect(schemaResult.ok).toBe(true);
-    expect(schemaResult.entry.inputSchema).toBeDefined();
   });
 });

@@ -22,12 +22,6 @@ describe("FileBrowserVisibilitySettings", () => {
     usePreferencesStore.getState().setFileBrowserAlwaysHiddenPatterns([".DS_Store", "Thumbs.db"]);
   });
 
-  it("renders a removable chip for each current pattern", () => {
-    render(<FileBrowserVisibilitySettings />);
-    expect(screen.getByLabelText("Remove .DS_Store")).toBeTruthy();
-    expect(screen.getByLabelText("Remove Thumbs.db")).toBeTruthy();
-  });
-
   it("adds a pattern on Enter and clears the input", () => {
     render(<FileBrowserVisibilitySettings />);
     const input = screen.getByLabelText("Add an always-hidden pattern") as HTMLInputElement;

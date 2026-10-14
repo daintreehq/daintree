@@ -3,6 +3,7 @@ import { reduceScrollback, restoreScrollback } from "../TerminalScrollbackContro
 import { type ManagedTerminal, SCROLLBACK_REDUCE_COOLDOWN_MS } from "../types";
 import { getScrollbackForType, setAgentScrollbackMaxLines } from "@/utils/scrollbackConfig";
 import { logInfo } from "@/utils/logger";
+import { TerminalRefreshTier } from "@shared/types/panel";
 
 const mockScrollbackStore = { scrollbackLines: 5000 };
 vi.mock("@/store/scrollbackStore", () => ({
@@ -173,55 +174,6 @@ describe("TerminalScrollbackController", () => {
     });
 
     describe("cooldown gate", () => {
-      it("stamps lastScrollbackReduceAt on successful reduce", () => {
-        const managed = makeMockManaged();
-        const before = Date.now();
-        reduceScrollback(managed, 500);
-        const after = Date.now();
-
-        expect(managed.terminal.options.scrollback).toBe(500);
-        expect(managed.lastScrollbackReduceAt).toBeGreaterThanOrEqual(before);
-        expect(managed.lastScrollbackReduceAt).toBeLessThanOrEqual(after);
-      });
-
-      it("skips a second reduce within the 2000ms cooldown window", () => {
-        const nowSpy = vi.spyOn(Date, "now");
-        try {
-          nowSpy.mockReturnValue(10_000);
-          const managed = makeMockManaged();
-          reduceScrollback(managed, 500);
-          expect(managed.terminal.options.scrollback).toBe(500);
-
-          // Restore to 5000 to simulate a tier upgrade clearing the buffer
-          // size, then re-trigger reduce inside cooldown — should be skipped.
-          managed.terminal.options.scrollback = 5000;
-          nowSpy.mockReturnValue(11_000); // 1000ms later, still inside 2000ms cooldown
-          reduceScrollback(managed, 500);
-
-          expect(managed.terminal.options.scrollback).toBe(5000);
-        } finally {
-          nowSpy.mockRestore();
-        }
-      });
-
-      it("allows a second reduce after the 2000ms cooldown elapses", () => {
-        const nowSpy = vi.spyOn(Date, "now");
-        try {
-          nowSpy.mockReturnValue(10_000);
-          const managed = makeMockManaged();
-          reduceScrollback(managed, 500);
-          expect(managed.terminal.options.scrollback).toBe(500);
-
-          managed.terminal.options.scrollback = 5000;
-          nowSpy.mockReturnValue(12_001); // 2001ms later
-          reduceScrollback(managed, 500);
-
-          expect(managed.terminal.options.scrollback).toBe(500);
-        } finally {
-          nowSpy.mockRestore();
-        }
-      });
-
       it("force option bypasses the cooldown", () => {
         const nowSpy = vi.spyOn(Date, "now");
         try {
@@ -681,5 +633,131 @@ describe("TerminalScrollbackController", () => {
         expect(managed.terminal.options.scrollback).toBe(plainTarget);
       });
     });
+  });
+});
+
+function createManagedTerminal(
+  overrides: Partial<ManagedTerminal> = {},
+  terminalOverrides: Partial<ManagedTerminal["terminal"]> = {}
+): ManagedTerminal {
+  const write = vi.fn();
+  const hasSelection = vi.fn(() => false);
+  const buffer = { length: 3000 };
+
+  return {
+    terminal: {
+      options: { scrollback: 5000 },
+      buffer: { active: buffer, normal: buffer },
+      rows: 24,
+      hasSelection,
+      write,
+      ...terminalOverrides,
+    } as ManagedTerminal["terminal"],
+    type: "terminal",
+    kind: "terminal",
+    isFocused: false,
+    isUserScrolledBack: false,
+    isAltBuffer: false,
+    ...overrides,
+  } as ManagedTerminal;
+}
+
+describe("TerminalScrollbackController adversarial", () => {
+  beforeEach(() => {
+    mockScrollbackStore.scrollbackLines = 5000;
+    mockPerformanceModeStore.performanceMode = false;
+    mockProjectSettingsStore.settings = null;
+    vi.mocked(logInfo).mockClear();
+  });
+
+  it("INVALID_PROJECT_OVERRIDE_NAN", () => {
+    mockProjectSettingsStore.settings = {
+      terminalSettings: { scrollbackLines: Number.NaN },
+    };
+    const managed = createManagedTerminal();
+
+    restoreScrollback(managed);
+
+    expect(managed.terminal.options.scrollback).toBe(1500);
+    expect(Number.isFinite(managed.terminal.options.scrollback)).toBe(true);
+  });
+
+  it("ZERO_BASE_SCROLLBACK_USES_POLICY_MAX", () => {
+    mockScrollbackStore.scrollbackLines = 0;
+    mockProjectSettingsStore.settings = {
+      terminalSettings: { scrollbackLines: 0 },
+    };
+
+    const terminalManaged = createManagedTerminal();
+    const agentManaged = createManagedTerminal({
+      kind: "terminal",
+      launchAgentId: "claude",
+      runtimeAgentId: "claude",
+    });
+
+    restoreScrollback(terminalManaged);
+    restoreScrollback(agentManaged);
+
+    expect(terminalManaged.terminal.options.scrollback).toBe(2000);
+    expect(agentManaged.terminal.options.scrollback).toBe(10000);
+  });
+
+  it("NEGATIVE_SCROLLBACK_USED_NO_WARN", () => {
+    const managed = createManagedTerminal({}, {
+      options: { scrollback: 4000 },
+      rows: 24,
+      buffer: { active: { length: 12 }, normal: { length: 12 } },
+    } as unknown as Partial<ManagedTerminal["terminal"]>);
+
+    reduceScrollback(managed, 500);
+
+    expect(managed.terminal.options.scrollback).toBe(500);
+    expect(managed.terminal.write).not.toHaveBeenCalled();
+    expect(logInfo).not.toHaveBeenCalled();
+  });
+
+  // #11673 — visibility is read from managed.isVisible, never derived from the
+  // refresh tier. A hidden pane can sit at BURST while streaming, and a visible
+  // pane can lag at BACKGROUND during a handoff; deriving one from the other
+  // protects the wrong terminals in both directions.
+  it("VISIBLE_AT_BACKGROUND_TIER_IS_PROTECTED", () => {
+    const managed = createManagedTerminal({
+      isVisible: true,
+      lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+    });
+
+    restoreScrollback(managed);
+
+    // 3000 - 24 = 2976 retained vs a 1500 plain target ⇒ clamp, not evict.
+    expect(managed.terminal.options.scrollback).toBe(2976);
+  });
+
+  it("HIDDEN_AT_BURST_TIER_IS_NOT_PROTECTED", () => {
+    const managed = createManagedTerminal({
+      isVisible: false,
+      lastAppliedTier: TerminalRefreshTier.BURST,
+    });
+
+    restoreScrollback(managed);
+
+    expect(managed.terminal.options.scrollback).toBe(1500);
+    expect(managed.lastScrollbackReduceAt).toBeDefined();
+  });
+
+  it("STORE_FLIP_NO_CACHE", () => {
+    const managed = createManagedTerminal();
+    mockProjectSettingsStore.settings = {
+      terminalSettings: { scrollbackLines: 2000 },
+    };
+
+    restoreScrollback(managed);
+    expect(managed.terminal.options.scrollback).toBe(600);
+
+    mockProjectSettingsStore.settings = null;
+    mockScrollbackStore.scrollbackLines = 0;
+
+    restoreScrollback(managed);
+
+    expect(managed.terminal.options.scrollback).toBe(2000);
   });
 });

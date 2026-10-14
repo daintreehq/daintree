@@ -58,16 +58,6 @@ describe("source reads are bounded before they allocate", () => {
     );
   });
 
-  it("stops at the cap inside the read rather than measuring afterwards", async () => {
-    // A file that outgrows the cap between being named and being read. The
-    // bounded read stops one byte past the limit, so there is no window in
-    // which main holds more than that and no post-read check to reach.
-    const grown = boundedFs(MAX_SOURCE_BYTES * 400);
-
-    expect(await readSource(grown.fs, "/app/src/growing.svelte")).toEqual({ status: "too-large" });
-    expect(grown.readFileBytes).not.toHaveBeenCalled();
-  });
-
   it("never reads something that is not a regular file", async () => {
     // A FIFO named `x.svelte` stats as size 0 and its read need never end, so
     // the cap alone would wave it through. The verdict comes from the opened

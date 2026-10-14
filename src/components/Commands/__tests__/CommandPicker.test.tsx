@@ -120,26 +120,6 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("CommandPicker stale filtering", () => {
-  it("passes isFiltering=false when deferred value is synced with query", () => {
-    renderPicker();
-    expect(capturedProps).not.toBeNull();
-    expect(capturedProps!.isFiltering).toBe(false);
-  });
-
-  it("passes isFiltering=true when deferred value lags behind query", () => {
-    useDeferredValueSpy.setOverride("__STALE__");
-    renderPicker();
-
-    act(() => {
-      capturedProps!.onQueryChange("git");
-    });
-
-    expect(capturedProps!.isFiltering).toBe(true);
-    expect(capturedProps!.query).toBe("git");
-  });
-});
-
 describe("CommandPicker confirm guard", () => {
   it("does not call onSelect while stale", () => {
     const onSelect = vi.fn();

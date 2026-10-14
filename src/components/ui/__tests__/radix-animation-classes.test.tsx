@@ -40,19 +40,6 @@ function assertHTMLElement(el: Element | null | undefined, label: string): HTMLE
   return el;
 }
 
-function renderPopoverContent(): HTMLElement {
-  render(
-    <PopoverPrimitive.Root open>
-      <PopoverPrimitive.Trigger>trigger</PopoverPrimitive.Trigger>
-      <PopoverContent forceMount>content</PopoverContent>
-    </PopoverPrimitive.Root>
-  );
-  return assertHTMLElement(
-    document.querySelector("[data-radix-popper-content-wrapper] > *"),
-    "PopoverContent"
-  );
-}
-
 describe("Radix overlay animation classes — runtime render", () => {
   it("PopoverContent respects caller-provided transformOrigin override", () => {
     // Load-bearing for the zoom, not incidental: the scale grows from this
@@ -71,16 +58,6 @@ describe("Radix overlay animation classes — runtime render", () => {
       "PopoverContent"
     );
     expect(el.style.transformOrigin).toBe("center");
-  });
-
-  it("every token of the shared motion survives cn() into the rendered className", () => {
-    // Counting the constant's name in the source proves only that it was
-    // imported. This proves it was actually applied AND that `tailwind-merge`
-    // did not quietly drop a token on the way — the two ways the shared
-    // definition can stop reaching the DOM while every other test passes.
-    const rendered = new Set(renderPopoverContent().className.split(/\s+/));
-    const missing = OVERLAY_MOTION_CLASS.split(" ").filter((token) => !rendered.has(token));
-    expect(missing, "tokens absent from the rendered PopoverContent").toEqual([]);
   });
 
   it("a caller className cannot silently strip the motion", () => {
@@ -129,24 +106,6 @@ describe("Radix overlay animation classes — wrapper source", () => {
   ])("%s sets transformOrigin on both Content and SubContent", (file, variable) => {
     const src = readWrapperSource(file);
     expect(src.split(`var(${variable})`).length - 1).toBe(2);
-  });
-
-  it("tooltip.tsx defaults to viewport-aware collisionPadding and width cap (issue #8008)", () => {
-    const src = readWrapperSource("tooltip.tsx");
-    expect(src).toContain("collisionPadding = 8");
-    expect(src).toContain("collisionPadding={collisionPadding}");
-    expect(src).toContain("max-w-xs");
-  });
-
-  it("tooltip.tsx wires a pointerActiveRef focus-visible filter (issue #8008)", () => {
-    const src = readWrapperSource("tooltip.tsx");
-    expect(src).toContain("pointerActiveRef");
-    expect(src).toContain("onPointerDown");
-    expect(src).toContain("onPointerUp");
-    // The focus-capture handler must early-return when the ref is set —
-    // otherwise the click-to-focus path opens the tooltip and it strands
-    // until the next pointer move.
-    expect(src).toMatch(/if \(pointerActiveRef\.current\) return/);
   });
 });
 

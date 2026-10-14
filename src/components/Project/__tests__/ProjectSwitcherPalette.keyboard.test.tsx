@@ -186,7 +186,13 @@ import type {
   SearchableProject,
 } from "@/hooks/useProjectSwitcherPalette";
 
-const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
+const {
+  ProjectSwitcherPalette,
+  canSleepProject,
+  formatScratchCleanupCountdown,
+  getNewWindowMenuLabel,
+  getProjectSwitcherEnterHint,
+} = await import("../ProjectSwitcherPalette");
 
 function makeProject(overrides: Partial<SearchableProject> = {}): ProjectSwitcherProjectRow {
   return {
@@ -348,14 +354,6 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(screen.queryByLabelText("Remove project")).toBeNull();
   });
 
-  it("displays condensed footer with switch and right-click hints in modal mode", () => {
-    render(<ProjectSwitcherPalette {...defaultProps} />);
-    const footer = screen.getByTestId("palette-footer");
-    expect(footer.textContent).toContain("Switch");
-    expect(footer.textContent).not.toContain("Remove");
-    expect(footer.textContent).toContain("Right-click for more");
-  });
-
   it("Alt+Enter performs a normal switch and never triggers new-window", () => {
     const onSelectNewWindow = vi.fn();
     render(<ProjectSwitcherPalette {...defaultProps} onSelectNewWindow={onSelectNewWindow} />);
@@ -364,16 +362,6 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(defaultProps.onSelect).toHaveBeenCalledTimes(1);
     expect(defaultProps.onSelect).toHaveBeenCalledWith(defaultProps.results[0], "keyboard");
     expect(onSelectNewWindow).not.toHaveBeenCalled();
-  });
-
-  it("Meta+Enter still triggers the new-window shortcut", () => {
-    const onSelectNewWindow = vi.fn();
-    render(<ProjectSwitcherPalette {...defaultProps} onSelectNewWindow={onSelectNewWindow} />);
-    const input = screen.getByTestId("palette-input");
-    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
-    expect(onSelectNewWindow).toHaveBeenCalledTimes(1);
-    expect(onSelectNewWindow).toHaveBeenCalledWith(defaultProps.results[0]);
-    expect(defaultProps.onSelect).not.toHaveBeenCalled();
   });
 
   it("footer never shows a background hint when Alt is held (modal mode)", () => {
@@ -583,16 +571,6 @@ describe("ProjectSwitcherPalette keyboard on a scratch row", () => {
 
     expect(onCloseProject).not.toHaveBeenCalled();
   });
-
-  it("resolves the active descendant to the scratch row on screen", () => {
-    render(<ProjectSwitcherPalette {...scratchProps} />);
-    const activeDescendant = screen
-      .getByTestId("palette-input")
-      .getAttribute("aria-activedescendant");
-
-    expect(activeDescendant).toBe("project-option-s1");
-    expect(document.getElementById(activeDescendant!)).not.toBeNull();
-  });
 });
 
 describe("ProjectSwitcherPalette with a project open in another window (#12597)", () => {
@@ -798,5 +776,262 @@ describe("ProjectSwitcherPalette current workspace mark", () => {
     // The cursor is on the other row; the label is not the cursor.
     expect(there.getAttribute("aria-selected")).toBe("true");
     expect(here.getAttribute("aria-selected")).toBe("false");
+  });
+});
+
+function projectRow(overrides: Partial<ProjectSwitcherProjectRow> = {}): ProjectSwitcherProjectRow {
+  return {
+    kind: "project",
+    id: "p1",
+    name: "Project",
+    path: "/repo/p1",
+    emoji: "🌲",
+    lastOpened: 0,
+    frecencyScore: 3,
+    status: "background",
+    isActive: false,
+    isBackground: true,
+    isMissing: false,
+    isPinned: false,
+    processCount: 0,
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
+    displayPath: "p1",
+    section: "other",
+    ...overrides,
+  };
+}
+
+const presenceScratchRow: ProjectSwitcherScratchRow = {
+  kind: "scratch",
+  id: "s1",
+  name: "Scratch",
+  path: "/scratch/s1",
+  createdAt: 0,
+  lastOpened: 0,
+  isActive: false,
+  processCount: 0,
+  activeAgentCount: 0,
+  waitingAgentCount: 0,
+  blockedAgentCount: 0,
+  completedAgentCount: 0,
+  unacknowledgedCompletedAgentCount: 0,
+  snoozedAgentCount: 0,
+};
+
+describe("getNewWindowMenuLabel (#12597)", () => {
+  it("offers a new window for a project nobody holds", () => {
+    expect(getNewWindowMenuLabel(projectRow())).toBe("Open in new window");
+  });
+
+  it("says where the item goes for a project another window shows or is activating", () => {
+    // Under #12596 a new-window request for it brings the owner forward.
+    for (const state of ["foreground", "activating"] as const) {
+      expect(getNewWindowMenuLabel(projectRow({ openInOtherWindow: state }))).toBe("Go to window");
+    }
+  });
+
+  it("offers a new window for a project another window only keeps cached (#13274)", () => {
+    expect(getNewWindowMenuLabel(projectRow({ openInOtherWindow: "cached" }))).toBe(
+      "Open in new window"
+    );
+  });
+
+  it("offers nothing for a project this window is activating, whatever another window caches", () => {
+    expect(
+      getNewWindowMenuLabel(projectRow({ isOpenInThisWindow: true, openInOtherWindow: "cached" }))
+    ).toBeNull();
+    const row = projectRow({ isOpenInThisWindow: true, openInOtherWindow: "cached" });
+    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
+      keys: "↵",
+      label: "Switch",
+    });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({ keys: "↵", label: "Switch" });
+  });
+
+  it("offers nothing for a project this window shows or is activating", () => {
+    // The request would switch here — which clicking the row already does.
+    expect(getNewWindowMenuLabel(projectRow({ isOpenInThisWindow: true }))).toBeNull();
+  });
+
+  it("offers a new window for a project this window only keeps cached (#13274)", () => {
+    expect(
+      getNewWindowMenuLabel(projectRow({ isOpenInThisWindow: true, isCachedInThisWindow: true }))
+    ).toBe("Open in new window");
+  });
+
+  it("keeps the current and missing rows' existing guards", () => {
+    expect(getNewWindowMenuLabel(projectRow({ isActive: true }))).toBeNull();
+    expect(getNewWindowMenuLabel(projectRow({ isMissing: true }))).toBeNull();
+    expect(
+      getNewWindowMenuLabel(projectRow({ isMissing: true, openInOtherWindow: "foreground" }))
+    ).toBeNull();
+  });
+});
+
+describe("getProjectSwitcherEnterHint (#12597)", () => {
+  it("names nothing with nothing highlighted", () => {
+    expect(getProjectSwitcherEnterHint(undefined, false, true)).toBeNull();
+    expect(getProjectSwitcherEnterHint(undefined, true, true)).toBeNull();
+  });
+
+  it("keeps Switch and New window for a project nobody holds", () => {
+    expect(getProjectSwitcherEnterHint(projectRow(), false, true)).toEqual({
+      keys: "↵",
+      label: "Switch",
+    });
+    expect(getProjectSwitcherEnterHint(projectRow(), true, true, true)).toEqual({
+      keys: "⌘↵",
+      label: "New window",
+    });
+  });
+
+  it("names the modifier each platform actually has", () => {
+    const row = projectRow();
+    expect(getProjectSwitcherEnterHint(row, true, true, true)?.keys).toBe("⌘↵");
+    const other = getProjectSwitcherEnterHint(row, true, true, false)?.keys;
+    expect(other).toBe("Ctrl+↵");
+    expect(other).not.toContain("⌘");
+    const elsewhere = projectRow({ openInOtherWindow: "cached" });
+    expect(getProjectSwitcherEnterHint(elsewhere, true, true, false)?.keys).not.toContain("⌘");
+  });
+
+  it("says Go to window on either key for a project another window shows", () => {
+    const row = projectRow({ openInOtherWindow: "foreground" });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
+      keys: "↵",
+      label: "Go to window",
+    });
+    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
+      keys: "⌘↵",
+      label: "Go to window",
+    });
+  });
+
+  it("switches here to a project another window only keeps cached, or takes it to a new one (#13291)", () => {
+    const row = projectRow({ openInOtherWindow: "cached" });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
+      keys: "↵",
+      label: "Switch",
+    });
+    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
+      keys: "⌘↵",
+      label: "New window",
+    });
+  });
+
+  it("says Switch on either key for a project this window shows or is activating", () => {
+    const row = projectRow({ isOpenInThisWindow: true });
+    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({ keys: "↵", label: "Switch" });
+  });
+
+  it("switches here, or takes it to a new window, for a project this window keeps cached", () => {
+    const row = projectRow({ isOpenInThisWindow: true, isCachedInThisWindow: true });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({ keys: "↵", label: "Switch" });
+    expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
+      keys: "⌘↵",
+      label: "New window",
+    });
+  });
+
+  it("never promises a new window the keypress can't open", () => {
+    // Each of these falls through to the plain switch in the keyboard handler.
+    expect(getProjectSwitcherEnterHint(projectRow(), true, false)).toEqual({
+      keys: "↵",
+      label: "Switch",
+    });
+    expect(getProjectSwitcherEnterHint(projectRow({ isActive: true }), true, true)).toEqual({
+      keys: "↵",
+      label: "Switch",
+    });
+    // A missing project's Enter opens the relocation dialog, and says so.
+    expect(getProjectSwitcherEnterHint(projectRow({ isMissing: true }), true, true)).toEqual({
+      keys: "↵",
+      label: "Locate",
+    });
+    expect(getProjectSwitcherEnterHint(presenceScratchRow, true, true)).toEqual({
+      keys: "↵",
+      label: "Switch",
+    });
+  });
+
+  it("never marks the current row as elsewhere, whatever presence says", () => {
+    const row = projectRow({ isActive: true, openInOtherWindow: "foreground" });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({ keys: "↵", label: "Switch" });
+  });
+
+  it("keeps ↵ for an owned row when there is no new-window handler", () => {
+    const row = projectRow({ openInOtherWindow: "foreground" });
+    expect(getProjectSwitcherEnterHint(row, true, false)).toEqual({
+      keys: "↵",
+      label: "Go to window",
+    });
+  });
+});
+
+describe("canSleepProject", () => {
+  it("offers Sleep for the project on screen", () => {
+    // The point of #11802: "Free memory", which this replaces, hid itself for
+    // the active project, leaving the one you're looking at with no way to shut
+    // down short of destroying its layout.
+    expect(canSleepProject({ isMissing: false, status: "active" })).toBe(true);
+  });
+
+  it("hides Sleep for a project that is already asleep", () => {
+    // Better than the silent no-op the old action gave a closed project.
+    expect(canSleepProject({ isMissing: false, status: "closed" })).toBe(false);
+  });
+
+  it("hides Sleep for a missing project", () => {
+    // Nothing is loaded to shut down, whatever its last-known status was.
+    expect(canSleepProject({ isMissing: true, status: "background" })).toBe(false);
+    expect(canSleepProject({ isMissing: true, status: "active" })).toBe(false);
+  });
+
+  it("offers Sleep when the status is unknown", () => {
+    // A row with no status is not proof the project is shut, and refusing on
+    // that basis would silently strip the action off a live project.
+    expect(canSleepProject({ isMissing: false })).toBe(true);
+  });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = 1_700_000_000_000;
+const TTL_DAYS = 30;
+
+describe("formatScratchCleanupCountdown", () => {
+  it("returns null for fresh scratches outside the visibility window", () => {
+    // 25 days left -> outside the 7-day window
+    const lastOpened = NOW - 5 * DAY;
+    expect(formatScratchCleanupCountdown(lastOpened, NOW)).toBeNull();
+  });
+
+  it("renders 'in N days' inside the visibility window", () => {
+    // 5 days left
+    const lastOpened = NOW - (TTL_DAYS - 5) * DAY;
+    expect(formatScratchCleanupCountdown(lastOpened, NOW)).toBe("Auto-cleanup in 5 days");
+  });
+
+  it("renders 'tomorrow' when 1 day left", () => {
+    const lastOpened = NOW - (TTL_DAYS - 1) * DAY;
+    expect(formatScratchCleanupCountdown(lastOpened, NOW)).toBe("Auto-cleanup tomorrow");
+  });
+
+  it("renders 'today' when 0 days left", () => {
+    const lastOpened = NOW - TTL_DAYS * DAY;
+    expect(formatScratchCleanupCountdown(lastOpened, NOW)).toBe("Auto-cleanup today");
+  });
+
+  it("clamps negative remaining time to 'today'", () => {
+    const lastOpened = NOW - (TTL_DAYS + 5) * DAY;
+    expect(formatScratchCleanupCountdown(lastOpened, NOW)).toBe("Auto-cleanup today");
+  });
+
+  it("returns null for falsy lastOpened (defensive against bad data)", () => {
+    expect(formatScratchCleanupCountdown(0, NOW)).toBeNull();
   });
 });

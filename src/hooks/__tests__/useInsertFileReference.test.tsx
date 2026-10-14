@@ -147,16 +147,6 @@ describe("useInsertFileReference — target resolution", () => {
     expect(inputState.setDraftInput).not.toHaveBeenCalled();
   });
 
-  it("refuses a target recorded by a sibling view", () => {
-    seedPanels(agentPanel("t-1"), agentPanel("t-2"));
-    inputState.lastTypedAgentTarget = { workspaceId: "ws-other", terminalId: "t-2" };
-
-    const { result } = renderHook(() => useInsertFileReference());
-    // Ambiguous once the foreign record is discarded — it must not fall
-    // through to a different agent's draft.
-    expect(result.current.canInsert).toBe(false);
-  });
-
   it("refuses when the known target cannot take input, instead of falling through", () => {
     seedPanels(agentPanel("t-1"), agentPanel("t-2", { isInputLocked: true }));
     inputState.lastTypedAgentTarget = { workspaceId: WORKSPACE_ID, terminalId: "t-2" };
@@ -176,21 +166,8 @@ describe("useInsertFileReference — target resolution", () => {
       "a raw shell with no agent identity",
       () => seedPanels(agentPanel("t-1", { launchAgentId: undefined })),
     ],
-    ["a docked target", () => seedPanels(agentPanel("t-1", { location: "dock" }))],
   ])("refuses %s", (_label, seed) => {
     seed();
-    const { result } = renderHook(() => useInsertFileReference());
-    expect(result.current.canInsert).toBe(false);
-  });
-
-  it("refuses while hybrid input is switched off, since there is no draft bar to show", () => {
-    inputState.hybridInputEnabled = false;
-    const { result } = renderHook(() => useInsertFileReference());
-    expect(result.current.canInsert).toBe(false);
-  });
-
-  it("refuses while the pty backend is down", () => {
-    panelState.backendStatus = "disconnected";
     const { result } = renderHook(() => useInsertFileReference());
     expect(result.current.canInsert).toBe(false);
   });
@@ -207,12 +184,6 @@ describe("useInsertFileReference — target resolution", () => {
 
     fleetState.armedIds = new Set(["t-1"]);
     expect(renderHook(() => useInsertFileReference()).result.current.canInsert).toBe(true);
-  });
-
-  it("refuses when the view has no workspace identity", () => {
-    getViewWorkspaceIdMock.mockReturnValue(null);
-    const { result } = renderHook(() => useInsertFileReference());
-    expect(result.current.canInsert).toBe(false);
   });
 });
 

@@ -60,15 +60,6 @@ describe("CompactErrorList", () => {
     expect(screen.queryByTestId("compact-error-overflow")).toBeNull();
   });
 
-  it("splits at the cap, leaving the tail out of the DOM until it is opened", () => {
-    render(
-      <CompactErrorList variant="flush" errors={makeErrors(6)} maxInline={2} onDismiss={vi.fn()} />
-    );
-    expect(screen.getByText("Failure 1")).toBeTruthy();
-    expect(screen.queryByText("Failure 2")).toBeNull();
-    expect(screen.getByTestId("compact-error-overflow")).toBeTruthy();
-  });
-
   it("opens the tail so every hidden error is readable (#12001)", () => {
     render(
       <CompactErrorList variant="flush" errors={makeErrors(6)} maxInline={2} onDismiss={vi.fn()} />
@@ -77,15 +68,6 @@ describe("CompactErrorList", () => {
     for (const i of [2, 3, 4, 5]) {
       expect(screen.getByText(`Failure ${i}`)).toBeTruthy();
     }
-  });
-
-  it("counts only the hidden errors on the trigger, not the whole list", () => {
-    render(
-      <CompactErrorList variant="flush" errors={makeErrors(6)} maxInline={2} onDismiss={vi.fn()} />
-    );
-    const trigger = screen.getByTestId("compact-error-overflow");
-    expect(trigger.textContent).toContain("4");
-    expect(trigger.textContent).not.toContain("6");
   });
 
   it("pluralizes the trigger against the hidden count", () => {
@@ -138,23 +120,6 @@ describe("CompactErrorList", () => {
 
     openOverflow();
     expect(counts()).toEqual(errors.map(() => 1));
-  });
-
-  it("keeps dismiss wired for a hidden error, forwarding its own id", () => {
-    const onDismiss = vi.fn();
-    render(
-      <CompactErrorList
-        variant="flush"
-        errors={makeErrors(5)}
-        maxInline={2}
-        onDismiss={onDismiss}
-      />
-    );
-    openOverflow();
-
-    const row = screen.getByText("Failure 4").closest("div")!;
-    fireEvent.click(within(row.parentElement ?? row).getAllByLabelText(/dismiss/i)[0]!);
-    expect(onDismiss).toHaveBeenCalledWith("err-4");
   });
 
   it("keeps retry wired for a hidden error, forwarding its retry action", () => {

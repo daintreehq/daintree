@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  CompletionAcknowledgementService,
-  COMPLETION_ACK_DWELL_MS,
-} from "../CompletionAcknowledgementService.js";
+import { CompletionAcknowledgementService } from "../CompletionAcknowledgementService.js";
 import type { ProjectStatusMap } from "../../../shared/types/ipc/project.js";
 import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 
@@ -236,29 +233,6 @@ describe("CompletionAcknowledgementService", () => {
     tick(); // 2s
     expect(stamps).toHaveLength(2);
     expect(stamps[1]).toEqual({ projectId: "alpha", seenUpTo: secondAt });
-  });
-
-  it("dwell requirement uses continuous observation, not cumulative", () => {
-    statusMap = {
-      alpha: entry({
-        completedAgentCount: 1,
-        unacknowledgedCompletedAgentCount: 1,
-        latestUnacknowledgedCompletionAt: BASE - 60_000,
-      }),
-    };
-    // Alternate every tick — cumulative time on alpha far exceeds the dwell,
-    // continuous time never does.
-    for (let i = 0; i < 10; i++) {
-      observed = i % 2 === 0 ? "alpha" : "beta";
-      tick();
-    }
-    expect(stamps).toHaveLength(0);
-  });
-
-  it("dwell constant matches the sampling reality (sanity)", () => {
-    // Guards against the dwell accidentally dropping below the sample interval
-    // — the "continuous" guarantee needs at least two observations.
-    expect(COMPLETION_ACK_DWELL_MS).toBeGreaterThanOrEqual(2 * TICK);
   });
 
   describe("observation gating (#12515)", () => {

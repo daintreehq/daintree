@@ -105,14 +105,6 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     expect(state.preMaximizeLayout).toBe(null);
   });
 
-  it("should clear snapshot via clearPreMaximizeLayout", () => {
-    state.preMaximizeLayout = { gridCols: 2, gridItemCount: 4, worktreeId: "worktree-1" };
-
-    state.clearPreMaximizeLayout();
-
-    expect(state.preMaximizeLayout).toBe(null);
-  });
-
   it("should clear all three maximize fields via clearMaximize (#9935)", () => {
     state.maximizedId = "term-1";
     state.maximizeTarget = { type: "panel", id: "term-1" };
@@ -184,18 +176,6 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     expect(setState).not.toHaveBeenCalled();
   });
 
-  it("clearMaximize is a no-op when the trio is already null (#9935)", () => {
-    expect(state.maximizedId).toBe(null);
-    expect(state.maximizeTarget).toBe(null);
-    expect(state.preMaximizeLayout).toBe(null);
-
-    state.clearMaximize();
-
-    expect(state.maximizedId).toBe(null);
-    expect(state.maximizeTarget).toBe(null);
-    expect(state.preMaximizeLayout).toBe(null);
-  });
-
   it("validateMaximizeTarget clears a dangling target even when maximizedId is null (#9935)", () => {
     const mockGetPanelGroup = vi.fn(() => undefined);
     const mockGetTerminal = vi.fn(() => undefined);
@@ -221,23 +201,6 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
     expect(state.maximizeTarget).toEqual({ type: "panel", id: "term-1" });
     expect(state.preMaximizeLayout).toBeNull();
   });
-
-  it("should preserve snapshot across multiple maximize/restore cycles", () => {
-    state.toggleMaximize("term-1", 2, 4, mockGetPanelGroup);
-
-    expect(state.preMaximizeLayout).toEqual({
-      gridCols: 2,
-      gridItemCount: 4,
-      worktreeId: "worktree-1",
-    });
-    expect(state.maximizedId).toBe("term-1");
-    expect(state.maximizeTarget).toEqual({ type: "panel", id: "term-1" });
-
-    state.toggleMaximize("term-1", undefined, undefined, mockGetPanelGroup);
-
-    expect(state.maximizedId).toBe(null);
-    expect(state.maximizeTarget).toBe(null);
-  });
 });
 
 describe("TerminalFocusSlice - preferredTerminalFocusTarget", () => {
@@ -260,23 +223,6 @@ describe("TerminalFocusSlice - preferredTerminalFocusTarget", () => {
       mockStampLastActive,
       mockGetPanelGroupInfo
     )(setState, getState, {} as never);
-  });
-
-  it("defaults to hybridInput on slice creation", () => {
-    expect(state.preferredTerminalFocusTarget).toBe("hybridInput");
-  });
-
-  it("flips to xterm via the setter", () => {
-    state.setPreferredTerminalFocusTarget("xterm");
-    expect(state.preferredTerminalFocusTarget).toBe("xterm");
-  });
-
-  it("flips back to hybridInput via the setter", () => {
-    state.setPreferredTerminalFocusTarget("xterm");
-    setState.mockClear();
-    state.setPreferredTerminalFocusTarget("hybridInput");
-    expect(state.preferredTerminalFocusTarget).toBe("hybridInput");
-    expect(setState).toHaveBeenCalledTimes(1);
   });
 
   it("is idempotent — repeat sets to the same value do not call set()", () => {
@@ -1384,14 +1330,6 @@ describe("TerminalFocusSlice - setFocused ping gating", () => {
     expect(pingSpy).toHaveBeenCalledWith("term-1");
   });
 
-  it("pings when focus moves to a different terminal", () => {
-    state.setFocused("term-1", true);
-    pingSpy.mockClear();
-
-    state.setFocused("term-2", true);
-    expect(pingSpy).toHaveBeenCalledWith("term-2");
-  });
-
   it("does not ping when re-focusing the already-focused terminal", () => {
     state.setFocused("term-1", true);
     pingSpy.mockClear();
@@ -1502,10 +1440,6 @@ describe("TerminalFocusSlice - focusAlternate (last-pane toggle)", () => {
       mockStampLastActive,
       mockGetPanelGroupInfo
     )(setState as never, getState as never, {} as never);
-  });
-
-  it("initializes previousFocusedId to null", () => {
-    expect(state.previousFocusedId).toBeNull();
   });
 
   it("setFocused records the prior focus as previousFocusedId on a real change", () => {

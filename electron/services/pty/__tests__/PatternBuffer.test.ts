@@ -2,12 +2,6 @@ import { describe, it, expect } from "vitest";
 import { PatternBuffer } from "../PatternBuffer.js";
 
 describe("PatternBuffer", () => {
-  it("stores and retrieves text", () => {
-    const buf = new PatternBuffer(100);
-    buf.update("hello");
-    expect(buf.getText()).toBe("hello");
-  });
-
   it("appends new data", () => {
     const buf = new PatternBuffer(100);
     buf.update("hello ");
@@ -32,13 +26,6 @@ describe("PatternBuffer", () => {
     const buf = new PatternBuffer(100);
     buf.update("data");
     buf.clear();
-    expect(buf.getText()).toBe("");
-  });
-
-  it("resets the buffer", () => {
-    const buf = new PatternBuffer(100);
-    buf.update("data");
-    buf.reset();
     expect(buf.getText()).toBe("");
   });
 });

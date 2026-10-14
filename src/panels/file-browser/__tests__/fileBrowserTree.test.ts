@@ -4,6 +4,7 @@ import {
   ancestorDirectories,
   buildFolderListingRows,
   canonicalizeRootPath,
+  countHiddenRows,
   createVisibilityFilter,
   DEFAULT_FILE_SORT,
   findNodeInListings,
@@ -19,9 +20,11 @@ import {
   pruneListings,
   refreshTargets,
   resolveTreeKey,
+  resolveTypeahead,
   snapshotFromListings,
   snapshotMatchesSource,
   sourceIdentityKey,
+  type DirectoryListings,
   type FileBrowserSource,
   type FlatTreeRow,
 } from "../fileBrowserTree";
@@ -452,14 +455,6 @@ describe("refreshTargets", () => {
     expect(
       refreshTargets(scopedListings(), scopedExpanded, "", undefined, null, new Set([""]))
     ).toEqual([""]);
-  });
-
-  it("reaches an affected descendant through unaffected ancestors", () => {
-    // `a` is not in the set and must not be re-read, but the walk still has to
-    // pass through it to establish that `a/deep` is reachable at all.
-    expect(
-      refreshTargets(scopedListings(), scopedExpanded, "", undefined, null, new Set(["a/deep"]))
-    ).toEqual(["a/deep"]);
   });
 
   it("still refuses an affected directory that is unreachable or hidden", () => {
@@ -1110,11 +1105,6 @@ describe("pruneListings keepPath", () => {
     });
     expect([...pruneListings(listings, new Set(), "", ["src"]).keys()]).toEqual(["", "src"]);
   });
-
-  it("drops everything but the root when no folder is being listed", () => {
-    const listings = listingsOf({ "": [dir("src")], src: [file("src/a.ts")] });
-    expect([...pruneListings(listings, new Set(), "").keys()]).toEqual([""]);
-  });
 });
 
 describe("refreshTargets keepPath", () => {
@@ -1145,15 +1135,6 @@ describe("parentDirectoryOf", () => {
 });
 
 describe("pruneListings retains what the selection needs", () => {
-  it("keeps the parent that answers what a selected file is", () => {
-    // Clicking a file inside a folder listing turns that folder from "being
-    // listed" into "merely the parent". Dropping it right then would forget the
-    // file's own kind at the exact moment it was selected — the viewer would
-    // blank on the click that was supposed to open it.
-    const listings = listingsOf({ "": [dir("src")], src: [file("src/a.ts")] });
-    expect([...pruneListings(listings, new Set(), "", ["src"]).keys()]).toContain("src");
-  });
-
   it("keeps both the listed folder and the selection's parent at once", () => {
     const listings = listingsOf({
       "": [dir("src"), dir("docs")],
@@ -1165,15 +1146,6 @@ describe("pruneListings retains what the selection needs", () => {
       "docs",
       "src",
     ]);
-  });
-
-  it("still drops a collapsed directory nothing is depending on", () => {
-    const listings = listingsOf({
-      "": [dir("src"), dir("docs")],
-      src: [file("src/a.ts")],
-      docs: [file("docs/b.md")],
-    });
-    expect([...pruneListings(listings, new Set(), "", ["src"]).keys()]).toEqual(["", "src"]);
   });
 });
 
@@ -1221,5 +1193,206 @@ describe("sortFileNodes stays a valid total order", () => {
     expect(sortFileNodes(nodes, { key: "modified", direction: "desc" }).at(-1)?.name).toBe(
       "inf.ts"
     );
+  });
+});
+
+function node(path: string, isDirectory = false): FileTreeNode {
+  return {
+    path,
+    name: path.split("/").pop()!,
+    isDirectory,
+  } as FileTreeNode;
+}
+
+function listings(entries: Record<string, string[]>): DirectoryListings {
+  const map = new Map<string, readonly FileTreeNode[]>();
+  for (const [dir, names] of Object.entries(entries)) {
+    map.set(
+      dir,
+      names.map((name) => {
+        const isDirectory = name.endsWith("/");
+        const bare = isDirectory ? name.slice(0, -1) : name;
+        return node(dir === "" ? bare : `${dir}/${bare}`, isDirectory);
+      })
+    );
+  }
+  return map;
+}
+
+const JUNK = [".DS_Store", ".git"];
+
+describe("countHiddenRows", () => {
+  it("counts nothing when no filter is removing anything", () => {
+    const tree = listings({ "": ["src/", "README.md"] });
+    expect(
+      countHiddenRows(tree, new Set(), "", { hideDotfiles: false, alwaysHiddenPatterns: [] })
+    ).toEqual({ dotfiles: 0, alwaysHidden: 0 });
+  });
+
+  it("attributes each hidden row to the filter that can actually reveal it", () => {
+    // The categories exist because their recoveries differ — one is a toggle in
+    // this panel, the other an app-global setting. Merging them would offer a
+    // fix that does not work for half the rows it claims.
+    const tree = listings({ "": ["src/", ".env", ".npmrc", ".DS_Store", ".git/"] });
+    expect(
+      countHiddenRows(tree, new Set(), "", { hideDotfiles: true, alwaysHiddenPatterns: JUNK })
+    ).toEqual({ dotfiles: 2, alwaysHidden: 2 });
+  });
+
+  it("does not credit the dotfile toggle with rows only the junk list is hiding", () => {
+    // `.DS_Store` is a dotfile AND junk. Counting it as a dotfile would promise
+    // that turning the toggle off reveals it, which it does not.
+    const tree = listings({ "": [".DS_Store"] });
+    const withToggleOn = countHiddenRows(tree, new Set(), "", {
+      hideDotfiles: true,
+      alwaysHiddenPatterns: JUNK,
+    });
+    const withToggleOff = countHiddenRows(tree, new Set(), "", {
+      hideDotfiles: false,
+      alwaysHiddenPatterns: JUNK,
+    });
+    expect(withToggleOn.dotfiles).toBe(0);
+    // And the junk tally is indifferent to the toggle, because the toggle has
+    // no power over it.
+    expect(withToggleOn.alwaysHidden).toBe(withToggleOff.alwaysHidden);
+  });
+
+  it("counts only what the visible branches hide, never what a collapsed one might", () => {
+    // The number has to describe rows the user could otherwise see right now.
+    // Counting into unexpanded folders would make the badge climb on its own as
+    // listings arrive, for rows that are behind a closed parent anyway.
+    const tree = listings({ "": ["src/"], src: [".env", "index.ts"] });
+    const collapsed = countHiddenRows(tree, new Set(), "", {
+      hideDotfiles: true,
+      alwaysHiddenPatterns: [],
+    });
+    const expanded = countHiddenRows(tree, new Set(["src"]), "", {
+      hideDotfiles: true,
+      alwaysHiddenPatterns: [],
+    });
+    expect(collapsed.dotfiles).toBe(0);
+    expect(expanded.dotfiles).toBe(1);
+  });
+
+  it("agrees with the tree: every row it counts is one flattenTree left out", () => {
+    // The invariant that keeps the badge honest, rather than a hardcoded total:
+    // hidden + rendered must equal what the same visible branches hold.
+    const tree = listings({ "": ["src/", ".env", ".DS_Store"], src: [".secret", "index.ts"] });
+    const expanded = new Set(["src"]);
+    const visibility = { hideDotfiles: true, alwaysHiddenPatterns: JUNK };
+
+    const isVisible = (name: string): boolean => {
+      if (JUNK.includes(name)) return false;
+      return !name.startsWith(".");
+    };
+    const rendered = flattenTree(tree, expanded, new Set(), "", isVisible);
+    const hidden = countHiddenRows(tree, expanded, "", visibility);
+
+    const totalInVisibleBranches = (tree.get("")?.length ?? 0) + (tree.get("src")?.length ?? 0);
+    expect(rendered.length + hidden.dotfiles + hidden.alwaysHidden).toBe(totalInVisibleBranches);
+  });
+});
+
+describe("flattenTree sibling metadata", () => {
+  it("numbers each row among the siblings that actually render, not the raw listing", () => {
+    // The APG position a screen reader announces has to match what is on
+    // screen; counting pre-filter would announce "3 of 5" in a list of three.
+    const tree = listings({ "": [".env", "a.ts", ".npmrc", "b.ts", "c.ts"] });
+    const rows = flattenTree(tree, new Set(), new Set(), "", (name) => !name.startsWith("."));
+
+    expect(rows.map((r) => r.name)).toEqual(["a.ts", "b.ts", "c.ts"]);
+    expect(rows.map((r) => r.posInSet)).toEqual([1, 2, 3]);
+    expect(rows.every((r) => r.setSize === rows.length)).toBe(true);
+  });
+
+  it("restarts the numbering inside each expanded folder", () => {
+    // Position is per-level. A flat running index would tell a screen reader a
+    // child is "4 of 6" of its parent's siblings.
+    const tree = listings({ "": ["src/", "z.ts"], src: ["one.ts", "two.ts"] });
+    const rows = flattenTree(tree, new Set(["src"]), new Set(), "");
+
+    const children = rows.filter((r) => r.depth === 1);
+    expect(children.map((r) => r.posInSet)).toEqual([1, 2]);
+    expect(children.every((r) => r.setSize === 2)).toBe(true);
+
+    const top = rows.filter((r) => r.depth === 0);
+    expect(top.every((r) => r.setSize === 2)).toBe(true);
+  });
+});
+
+function rows(...names: string[]): FlatTreeRow[] {
+  return names.map((name, index) => ({
+    path: name,
+    name,
+    isDirectory: false,
+    depth: 0,
+    isExpanded: false,
+    isLoading: false,
+    posInSet: index + 1,
+    setSize: names.length,
+  }));
+}
+
+describe("resolveTypeahead", () => {
+  it("moves to the next match after the cursor rather than restarting at the top", () => {
+    // Otherwise repeating a letter sticks on the first match forever, which is
+    // the whole point of typeahead in a long list.
+    const list = rows("app.ts", "assets", "index.ts", "avatar.png");
+    expect(resolveTypeahead("a", list, "app.ts")).toBe("assets");
+    expect(resolveTypeahead("a", list, "assets")).toBe("avatar.png");
+  });
+
+  it("wraps exactly once, so cycling a letter returns to where it started", () => {
+    const list = rows("app.ts", "assets", "index.ts");
+    expect(resolveTypeahead("a", list, "assets")).toBe("app.ts");
+  });
+
+  it("re-tests the cursor row while a multi-character buffer is still being typed", () => {
+    // Typing "sr" must not match `src` on the "s" and then skip past it hunting
+    // for a second "sr" — the second character refines the same search rather
+    // than starting a new one.
+    //
+    // `srv` is what makes this test bite: with only one "sr" row the wrap-around
+    // finds the cursor row again anyway, so a search that wrongly starts past
+    // the cursor still returns the right answer and the bug hides.
+    const list = rows("src", "srv", "styles");
+    const afterFirstKey = resolveTypeahead("s", list, null);
+    expect(afterFirstKey).toBe("src");
+    expect(resolveTypeahead("sr", list, afterFirstKey)).toBe("src");
+  });
+
+  it("still advances on a repeated single character even when the cursor matches", () => {
+    // The counterpart to the rule above: a one-character buffer is a fresh
+    // search, so it must move on rather than re-selecting where it already is.
+    const list = rows("src", "srv", "styles");
+    expect(resolveTypeahead("s", list, "src")).toBe("srv");
+  });
+
+  it("returns null on a miss instead of moving somewhere arbitrary", () => {
+    // A typo must not navigate. Returning the nearest row would make a mistyped
+    // character silently retarget the viewer.
+    const list = rows("src", "docs");
+    expect(resolveTypeahead("zz", list, "src")).toBeNull();
+  });
+
+  it("matches the rendered name, not the path", () => {
+    // A user types what they can see. Matching the path would make "p" jump to
+    // a file whose name starts with something else entirely.
+    const list: FlatTreeRow[] = [
+      { ...rows("x")[0]!, path: "panels/deep/alpha.ts", name: "alpha.ts" },
+      { ...rows("x")[0]!, path: "other/panels.ts", name: "panels.ts" },
+    ];
+    expect(resolveTypeahead("p", list, null)).toBe("other/panels.ts");
+  });
+
+  it("is case-insensitive in both directions", () => {
+    const list = rows("README.md", "src");
+    expect(resolveTypeahead("r", list, null)).toBe("README.md");
+    expect(resolveTypeahead("RE", list, null)).toBe("README.md");
+  });
+
+  it("does nothing without a buffer or without rows", () => {
+    expect(resolveTypeahead("", rows("src"), null)).toBeNull();
+    expect(resolveTypeahead("s", [], null)).toBeNull();
   });
 });

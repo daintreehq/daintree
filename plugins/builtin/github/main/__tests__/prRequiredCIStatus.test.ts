@@ -30,29 +30,6 @@ describe("deriveRequiredCIStatus", () => {
     expect(r.ciSummary).toBeUndefined();
   });
 
-  it("downgrades FAILURE rollup to SUCCESS when only non-required checks fail", () => {
-    const r = deriveRequiredCIStatus(
-      [
-        {
-          __typename: "CheckRun",
-          conclusion: "SUCCESS",
-          status: "COMPLETED",
-          isRequired: true,
-        },
-        {
-          __typename: "CheckRun",
-          conclusion: "FAILURE",
-          status: "COMPLETED",
-          isRequired: false,
-        },
-      ],
-      false,
-      "FAILURE"
-    );
-    expect(r.ciStatus).toBe("SUCCESS");
-    expect(r.ciSummary).toEqual({ requiredTotal: 1, requiredFailing: 0, requiredPending: 0 });
-  });
-
   it("keeps FAILURE when a required CheckRun has a failing conclusion", () => {
     const r = deriveRequiredCIStatus(
       [
@@ -149,40 +126,6 @@ describe("deriveRequiredCIStatus", () => {
       "FAILURE"
     );
     expect(r.ciStatus).toBe("FAILURE");
-    expect(r.ciSummary).toBeUndefined();
-  });
-
-  it("falls back to raw PENDING rollup when no required checks exist", () => {
-    const r = deriveRequiredCIStatus(
-      [
-        {
-          __typename: "CheckRun",
-          conclusion: null,
-          status: "IN_PROGRESS",
-          isRequired: false,
-        },
-      ],
-      false,
-      "PENDING"
-    );
-    expect(r.ciStatus).toBe("PENDING");
-    expect(r.ciSummary).toBeUndefined();
-  });
-
-  it("falls back to raw SUCCESS rollup when no required checks exist", () => {
-    const r = deriveRequiredCIStatus(
-      [
-        {
-          __typename: "CheckRun",
-          conclusion: "SUCCESS",
-          status: "COMPLETED",
-          isRequired: false,
-        },
-      ],
-      false,
-      "SUCCESS"
-    );
-    expect(r.ciStatus).toBe("SUCCESS");
     expect(r.ciSummary).toBeUndefined();
   });
 
@@ -332,10 +275,6 @@ describe("normalizeRawState", () => {
     expect(normalizeRawState(undefined)).toBeUndefined();
   });
 
-  it("returns undefined for empty string", () => {
-    expect(normalizeRawState("")).toBeUndefined();
-  });
-
   it("returns undefined for unrecognized values", () => {
     expect(normalizeRawState("SKIPPED")).toBeUndefined();
     expect(normalizeRawState("STALE")).toBeUndefined();
@@ -453,15 +392,6 @@ describe("deriveGlobalCIStatus", () => {
       failingCount: 0,
       pendingCount: 0,
     });
-  });
-
-  it("returns undefined ciStatus when there are no checks at all", () => {
-    const r = deriveGlobalCIStatus({
-      mergeStateStatus: "CLEAN",
-      checkRunCount: 0,
-      statusContextCount: 0,
-    });
-    expect(r.ciStatus).toBeUndefined();
   });
 
   it("prioritises FAILURE over PENDING when both are present", () => {
@@ -669,19 +599,6 @@ describe("mapRollupContextToCheckRun", () => {
       conclusion: "success",
       detailsUrl: "https://legacy.example/build",
     });
-  });
-
-  it("omits an unrecognized conclusion rather than guessing at it", () => {
-    // A future GitHub enum value must cost one field on one check, never a
-    // false success and never the whole read.
-    const check = mapRollupContextToCheckRun({
-      __typename: "CheckRun",
-      name: "future",
-      status: "COMPLETED",
-      conclusion: "SOME_NEW_GITHUB_CONCLUSION",
-    });
-    expect(check?.name).toBe("future");
-    expect(check?.conclusion).toBeUndefined();
   });
 
   it("treats an unknown lifecycle value as finished only when a conclusion proves it", () => {

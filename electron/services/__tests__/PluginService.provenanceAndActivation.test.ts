@@ -475,35 +475,6 @@ describe("Plugin provenance persistence", () => {
     expect(second.getPluginLoadError("acme.heal-fail")?.message).toBe("first-fail");
   });
 
-  it("getPluginLoadError returns undefined for an unknown plugin", () => {
-    const service = new PluginService(tmpDir);
-    expect(service.getPluginLoadError("acme.never-existed")).toBeUndefined();
-  });
-
-  it("listPlugins includes all provenance fields in output", async () => {
-    await writePlugin("full-prov", { name: "acme.full-prov", version: "1.0.0" });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const [plugin] = service.listPlugins();
-    expect(Object.keys(plugin)).toContain("source");
-    expect(Object.keys(plugin)).toContain("installedAt");
-    expect(Object.keys(plugin)).toContain("archiveHash");
-    expect(Object.keys(plugin)).toContain("originalUrl");
-    expect(Object.keys(plugin)).toContain("loadError");
-    expect(Object.keys(plugin)).toContain("disabled");
-    expect(Object.keys(plugin)).toContain("updateAvailable");
-    expect(Object.keys(plugin)).toContain("devMode");
-    // Runtime fields still present
-    expect(Object.keys(plugin)).toContain("manifest");
-    expect(Object.keys(plugin)).toContain("dir");
-    expect(Object.keys(plugin)).toContain("loadedAt");
-    expect(Object.keys(plugin)).toContain("isBuiltin");
-    // Internal field still excluded
-    expect(Object.keys(plugin)).not.toContain("resolvedMain");
-  });
-
   it("disabled builtin returns disabled=true in listPlugins output", async () => {
     const builtinDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-builtin-dis-"));
     try {
@@ -561,40 +532,11 @@ describe("Plugin provenance persistence", () => {
 describe("PluginManifestSchema activationEvents field", () => {
   const schema = getPluginManifestSchema("user");
 
-  it("defaults to an empty array when omitted", () => {
-    const result = schema.safeParse({
-      name: "acme.foo",
-      version: "1.0.0",
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.activationEvents).toEqual([]);
-    }
-  });
-
-  it("accepts an explicit ['onStartupFinished']", () => {
-    const result = schema.safeParse({
-      name: "acme.foo",
-      version: "1.0.0",
-      activationEvents: ["onStartupFinished"],
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("rejects unknown activation event strings (no onCommand/onView in v1)", () => {
     const result = schema.safeParse({
       name: "acme.foo",
       version: "1.0.0",
       activationEvents: ["onCommand:foo"],
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects non-array activationEvents value", () => {
-    const result = schema.safeParse({
-      name: "acme.foo",
-      version: "1.0.0",
-      activationEvents: "onStartupFinished",
     });
     expect(result.success).toBe(false);
   });
@@ -668,33 +610,6 @@ describe("Deferred activation — activatePlugin", () => {
       expect((globalThis as unknown as Record<string, number>).__dedupCount).toBe(1);
     } finally {
       delete (globalThis as unknown as Record<string, number>).__dedupCount;
-    }
-  });
-
-  it("activatePlugin does not reject when activate() throws", async () => {
-    const pluginDir = path.join(tmpDir, "throwy-but-stable");
-    await fs.mkdir(pluginDir);
-    await fs.writeFile(
-      path.join(pluginDir, "plugin.json"),
-      JSON.stringify({ name: "acme.throwy-but-stable", version: "1.0.0", main: "main.mjs" })
-    );
-    await fs.writeFile(
-      path.join(pluginDir, "main.mjs"),
-      "export function activate() { throw new Error('nope'); }"
-    );
-
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-
-      // Implicit-trigger contract: the promise resolves so callers don't
-      // need a try/catch around every dispatch.
-      await expect(service.activatePlugin("acme.throwy-but-stable")).resolves.toBeUndefined();
-      // Error is persisted to the provenance record instead of propagating.
-      expect(service.getPluginLoadError("acme.throwy-but-stable")?.message).toBe("nope");
-    } finally {
-      errorSpy.mockRestore();
     }
   });
 

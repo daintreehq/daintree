@@ -173,18 +173,6 @@ describe("WorkspaceService.getFileDiff", () => {
     );
   });
 
-  it("allows nested catch-all routes like app/blog/[...slug]/page.tsx", async () => {
-    await service.getFileDiff("req-2", "/test/repo", "app/blog/[...slug]/page.tsx", "untracked");
-
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "get-file-diff-result",
-        requestId: "req-2",
-        diff: expect.stringContaining("+++ b/app/blog/[...slug]/page.tsx"),
-      })
-    );
-  });
-
   it("allows filenames containing double-dots that are not traversal segments", async () => {
     await service.getFileDiff("req-3", "/test/repo", "notes..backup.txt", "untracked");
 

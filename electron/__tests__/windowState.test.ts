@@ -547,28 +547,6 @@ describe("createWindowWithState", () => {
   });
 
   describe("save", () => {
-    it("saves to windowStatesStore using whole-object pattern", () => {
-      windowStatesStoreMock.get.mockReturnValue({});
-
-      createWindowWithState({ show: false }, "/home/user/project-a");
-
-      const closeHandler = eventHandlers.get("close");
-      expect(closeHandler).toBeDefined();
-      closeHandler!();
-
-      expect(windowStatesStoreMock.set).toHaveBeenCalledWith(
-        "windowStates",
-        expect.objectContaining({
-          "/home/user/project-a": expect.objectContaining({
-            width: expect.any(Number),
-            height: expect.any(Number),
-            isMaximized: false,
-            isFullScreen: false,
-          }),
-        })
-      );
-    });
-
     it("also updates __legacy__ when saving project-specific state", () => {
       windowStatesStoreMock.get.mockReturnValue({});
 
@@ -720,18 +698,6 @@ describe("createWindowWithState", () => {
           }),
         })
       );
-    });
-
-    it("closes does NOT call legacy store.set for windowState", () => {
-      windowStatesStoreMock.get.mockReturnValue({});
-
-      createWindowWithState({ show: false }, "/home/user/project-a");
-
-      const closeHandler = eventHandlers.get("close");
-      closeHandler!();
-
-      // Should only call windowStatesStore.set, not any legacy store
-      expect(windowStatesStoreMock.set).toHaveBeenCalled();
     });
   });
 

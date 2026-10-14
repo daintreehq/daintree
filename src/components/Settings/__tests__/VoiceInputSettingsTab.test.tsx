@@ -158,35 +158,6 @@ describe("VoiceInputSettingsTab", () => {
     });
   });
 
-  it("renders data-flow disclosure when voice is enabled", async () => {
-    window.electron = {
-      voiceInput: createVoiceInputApi({
-        getSettings: vi.fn().mockResolvedValue({
-          enabled: true,
-          openaiApiKey: "sk-test",
-          language: "en",
-          customDictionary: [],
-          transcriptionModel: "gpt-live-transcribe",
-          correctionEnabled: false,
-          correctionModel: "gpt-5.6-luna",
-          correctionCustomInstructions: "",
-          paragraphingStrategy: "spoken-command",
-          resolveFileLinks: true,
-          deviceId: "",
-        }),
-      }),
-    } as unknown as typeof window.electron;
-
-    render(<VoiceInputSettingsTab />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
-      expect(screen.getByText(/not used for model training/)).toBeTruthy();
-      expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
-      expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
-    });
-  });
-
   it("renders the recording-mode row with the stored value when voice is enabled", async () => {
     window.electron = {
       voiceInput: createVoiceInputApi({

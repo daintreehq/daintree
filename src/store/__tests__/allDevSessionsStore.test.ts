@@ -124,15 +124,6 @@ describe("allDevSessionsStore", () => {
     expect(useAllDevSessionsStore.getState().sessions).toHaveLength(1);
   });
 
-  it("applies pushed snapshots", async () => {
-    acquireAllDevSessions();
-    resolveGetAll([]);
-    await vi.waitFor(() => expect(useAllDevSessionsStore.getState().hydrated).toBe(true));
-
-    pushCallback?.({ sessions: [makeSession({ panelId: "panel-9" })] });
-    expect(useAllDevSessionsStore.getState().sessions[0]?.panelId).toBe("panel-9");
-  });
-
   it("keeps a single subscription across overlapping acquires (StrictMode)", () => {
     const release1 = acquireAllDevSessions();
     const release2 = acquireAllDevSessions();

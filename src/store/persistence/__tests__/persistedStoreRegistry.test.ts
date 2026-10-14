@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   _resetPersistedStoreRegistryForTests,
   listPersistedStores,
@@ -21,12 +21,12 @@ function makeStore(options: {
   };
 }
 
-afterEach(() => {
-  _resetPersistedStoreRegistryForTests();
-  vi.restoreAllMocks();
-});
-
 describe("persistedStoreRegistry", () => {
+  afterEach(() => {
+    _resetPersistedStoreRegistryForTests();
+    vi.restoreAllMocks();
+  });
+
   it("adds a registration and surfaces it via listPersistedStores", () => {
     const store = makeStore({ name: "daintree-test-a", version: 2 });
 
@@ -110,16 +110,92 @@ describe("persistedStoreRegistry", () => {
 
     expect(listPersistedStores()).toHaveLength(2);
   });
+});
 
-  it("_resetPersistedStoreRegistryForTests clears all entries", () => {
-    registerPersistedStore({
-      storeId: "ephemeral",
-      store: makeStore({ name: "daintree-ephemeral" }),
-      persistedStateType: "State",
-    });
+/**
+ * Regression guard: importing the store barrel must populate the registry with
+ * every persisted Zustand store. If someone deletes a `registerPersistedStore`
+ * call (or adds a new persisted store without one), this test fails and the
+ * new `actions.persistedStores` diagnostic silently drops the missing entry.
+ */
 
-    expect(listPersistedStores()).toHaveLength(1);
+const EXPECTED_STORE_IDS = [
+  "worktreeFilterStore",
+  "commandHistoryStore",
+  "helpPanelStore",
+  "portalStore",
+  "twoPaneSplitStore",
+  "preferencesStore",
+  "panelLimitStore",
+  "agentPreferencesStore",
+  "toolbarPreferencesStore",
+  "projectStore",
+  "urlHistoryStore",
+  "terminalSearchHistoryStore",
+  "notificationHistoryStore",
+  "diffNotesStore",
+  "forgeTokenCalloutStore",
+] as const;
+
+const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string> = {
+  worktreeFilterStore: "daintree-worktree-filters",
+  commandHistoryStore: "daintree-command-history",
+  helpPanelStore: "help-panel-storage",
+  portalStore: "portal-storage",
+  twoPaneSplitStore: "daintree-two-pane-split",
+  preferencesStore: "daintree-preferences",
+  panelLimitStore: "daintree-panel-limits",
+  agentPreferencesStore: "daintree-agent-preferences",
+  toolbarPreferencesStore: "daintree-toolbar-preferences",
+  projectStore: "project-storage",
+  urlHistoryStore: "daintree-url-history",
+  terminalSearchHistoryStore: "daintree-terminal-search-history",
+  notificationHistoryStore: "daintree-notification-history",
+  diffNotesStore: "daintree-diff-notes",
+  forgeTokenCalloutStore: "daintree-forge-token-callout",
+};
+
+describe("persisted store inventory", () => {
+  beforeAll(async () => {
     _resetPersistedStoreRegistryForTests();
-    expect(listPersistedStores()).toHaveLength(0);
+
+    await Promise.all([
+      import("../../worktreeFilterStore"),
+      import("../../commandHistoryStore"),
+      import("../../helpPanelStore"),
+      import("../../portalStore"),
+      import("../../twoPaneSplitStore"),
+      import("../../preferencesStore"),
+      import("../../panelLimitStore"),
+      import("../../agentPreferencesStore"),
+      import("../../toolbarPreferencesStore"),
+      import("../../projectStore"),
+      import("../../urlHistoryStore"),
+      import("../../terminalSearchHistoryStore"),
+      import("../../slices/notificationHistorySlice"),
+      import("../../diffNotesStore"),
+      import("../../forgeTokenCalloutStore"),
+    ]);
+  });
+
+  afterAll(() => {
+    _resetPersistedStoreRegistryForTests();
+  });
+
+  it("registers every known persisted store", () => {
+    const registeredIds = listPersistedStores()
+      .map((r) => r.storeId)
+      .sort();
+    const expected = [...EXPECTED_STORE_IDS].sort();
+    expect(registeredIds).toEqual(expected);
+  });
+
+  it("exposes each store's localStorage key through persist.getOptions()", () => {
+    const entries = listPersistedStores();
+    for (const storeId of EXPECTED_STORE_IDS) {
+      const entry = entries.find((r) => r.storeId === storeId);
+      expect(entry, `missing registration for ${storeId}`).toBeDefined();
+      expect(entry!.store.persist.getOptions().name).toBe(EXPECTED_STORAGE_KEYS[storeId]);
+    }
   });
 });

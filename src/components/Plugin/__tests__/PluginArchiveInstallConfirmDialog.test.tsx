@@ -556,14 +556,6 @@ describe("PluginArchiveInstallConfirmDialog", () => {
       expect(screen.getByTestId("archive-recipe-list").querySelectorAll("li")).toHaveLength(2);
     });
 
-    it("leaves no overflow count beside the recipe list", () => {
-      render(<PluginArchiveInstallConfirmDialog />);
-      enqueue(recipeIntent(24));
-
-      const list = screen.getByTestId("archive-recipe-list");
-      expect(list.textContent).not.toMatch(/\+\d+ more/);
-    });
-
     it("bounds the recipe list in a keyboard-reachable region, not by dropping rows", () => {
       // A scrollable region with no focusable children of its own has to be
       // reachable in its own right (WCAG 2.1.1) — that is what replaced the

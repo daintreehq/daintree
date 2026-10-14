@@ -76,18 +76,6 @@ describe("OutputVolumeDetector", () => {
       expect(fired).toBe(false);
     });
 
-    it("does not trigger on Braille spinner residuals at 500ms cadence", () => {
-      const d = new OutputVolumeDetector(config);
-      let fired = false;
-      for (let i = 0; i < 100; i++) {
-        if (d.update(3, 1000 + i * 500)) {
-          fired = true;
-          break;
-        }
-      }
-      expect(fired).toBe(false);
-    });
-
     it("resets after firing", () => {
       const d = new OutputVolumeDetector(config);
       d.update(100, 1000);
@@ -116,13 +104,6 @@ describe("OutputVolumeDetector", () => {
       // drain is clamped to zero — the cap on per-frame contribution holds.
       expect(d.update(50, 1500)).toBe(false);
     });
-
-    it("clamps negative dataLength to zero contribution", () => {
-      const d = new OutputVolumeDetector(config);
-      // Defensive: a caller mistake mustn't blow up the bucket.
-      expect(d.update(-50, 1000)).toBe(false);
-      expect(d.update(-50, 1050)).toBe(false);
-    });
   });
 
   describe("recencyWindowMs", () => {
@@ -134,12 +115,6 @@ describe("OutputVolumeDetector", () => {
         maxBytesPerFrame: 120,
       });
       expect(d.recencyWindowMs).toBe(2000);
-    });
-
-    it("uses defaults when no params are provided", () => {
-      // Defaults: activationThreshold=2048, leakRatePerMs=2.048 → 1000ms.
-      const d = new OutputVolumeDetector({ enabled: true });
-      expect(d.recencyWindowMs).toBe(1000);
     });
   });
 

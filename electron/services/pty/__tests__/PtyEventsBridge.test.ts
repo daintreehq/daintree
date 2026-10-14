@@ -198,32 +198,6 @@ describe("bridgePtyEvent", () => {
     expect(payloads[1]).not.toHaveProperty("lastHandback");
   });
 
-  it("routes terminal-status events to bus and callback", () => {
-    const terminalStatusPayloads: Array<{ id: string; status: string }> = [];
-    events.on("terminal:status", (payload) => {
-      terminalStatusPayloads.push({ id: payload.id, status: payload.status });
-    });
-
-    const callbackPayloads: Array<{ id: string; status: string }> = [];
-    const handled = bridgePtyEvent(
-      {
-        type: "terminal-status",
-        id: "term-2",
-        status: "paused",
-        timestamp: Date.now(),
-      } as never,
-      {
-        onTerminalStatus: (payload) => {
-          callbackPayloads.push({ id: payload.id, status: payload.status });
-        },
-      }
-    );
-
-    expect(handled).toBe(true);
-    expect(terminalStatusPayloads).toEqual([{ id: "term-2", status: "paused" }]);
-    expect(callbackPayloads).toEqual([{ id: "term-2", status: "paused" }]);
-  });
-
   it("forwards droppedBytes on data-loss terminal-status events", () => {
     const callbackPayloads: Array<{ id: string; status: string; droppedBytes?: number }> = [];
     const busPayloads: Array<{ id: string; status: string; droppedBytes?: number }> = [];

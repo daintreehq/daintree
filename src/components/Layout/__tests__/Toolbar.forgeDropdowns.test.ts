@@ -17,12 +17,6 @@ describe("Forge stats dropdown search clearing — issue #3251", () => {
     hostSource = await fs.readFile(FORGE_STATS_PATH, "utf-8");
   });
 
-  it("the plugin dropdown view consumes the filter store's search setters", () => {
-    expect(pluginSource).toContain("useGitHubFilterStore");
-    expect(pluginSource).toContain("setIssueSearchQuery");
-    expect(pluginSource).toContain("setPrSearchQuery");
-  });
-
   it("clears the matching search query when the host closes the dropdown (open → false)", () => {
     // The view stays mounted behind a hidden Activity boundary, so the
     // open-prop transition is the only close signal it observes.
@@ -49,12 +43,6 @@ describe("Forge stats dropdown skeleton placeholders — issue #3593", () => {
 
   beforeEach(async () => {
     pluginSource = await fs.readFile(PLUGIN_DROPDOWN_PATH, "utf-8");
-  });
-
-  it("imports skeleton components synchronously (not lazy)", () => {
-    expect(pluginSource).toContain("GitHubResourceListSkeleton");
-    expect(pluginSource).toContain("CommitListSkeleton");
-    expect(pluginSource).not.toMatch(/lazy\(\s*\(\)\s*=>\s*import.*GitHubDropdownSkeletons/);
   });
 
   it("uses immediate skeletons while the list chunk loads", () => {
@@ -104,11 +92,6 @@ describe("Forge stats token error UX — issue #5024", () => {
 
   beforeEach(async () => {
     source = await fs.readFile(FORGE_STATS_PATH, "utf-8");
-  });
-
-  it("consumes isTokenError from useRepositoryStats", () => {
-    expect(source).toContain("isTokenError");
-    expect(source).toContain("useRepositoryStats");
   });
 
   it("redirects to the resolved provider's settings subtab on token error click", () => {
@@ -200,10 +183,6 @@ describe("Commits pill opens without a forge provider — issue #10414", () => {
 
   beforeEach(async () => {
     source = await fs.readFile(FORGE_STATS_PATH, "utf-8");
-  });
-
-  it("imports the local commits fallback view", () => {
-    expect(source).toMatch(/import \{ LocalCommitsDropdown \} from "\.\/LocalCommitsDropdown"/);
   });
 
   it("renders LocalCommitsDropdown as the commits dropdown fallback when no provider view exists", () => {

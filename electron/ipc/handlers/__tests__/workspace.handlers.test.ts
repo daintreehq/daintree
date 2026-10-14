@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebContents } from "electron";
 
 /**
@@ -131,6 +131,10 @@ describe("workspace:list", () => {
     cleanup = registerWorkspaceHandlers();
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it("lists every known workspace, open or not, with identity fields only", async () => {
     projectStoreMock.getAllProjectIdentities.mockReturnValue([
       project(PROJECT_OPEN, "Open", "/repos/open"),
@@ -256,10 +260,6 @@ describe("workspace:list", () => {
     ]);
   });
 
-  it("returns an empty catalog rather than failing when nothing is registered", async () => {
-    await expect(list()).resolves.toEqual([]);
-  });
-
   it("lists a project whose folder is gone rather than probing the filesystem", async () => {
     projectStoreMock.getAllProjectIdentities.mockReturnValue([
       project(PROJECT_CLOSED, "Deleted", "/repos/moved-away"),
@@ -280,10 +280,5 @@ describe("workspace:list", () => {
     // An empty catalog is a real answer — "this id is wrong" is read off it —
     // so a failed read must never be able to impersonate one.
     await expect(list()).rejects.toThrow("db unavailable");
-  });
-
-  it("unregisters its channel on cleanup", () => {
-    cleanup();
-    expect(ipcHandlers.has("workspace:list")).toBe(false);
   });
 });

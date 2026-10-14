@@ -237,12 +237,6 @@ describe("useDevPreviewConsoleCapture", () => {
 });
 
 describe("useDevPreviewConsoleCapture — HMR liveness", () => {
-  it("starts with hmrDead false", () => {
-    const webview = makeWebviewElement();
-    const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
-    expect(result.current.hmrDead).toBe(false);
-  });
-
   it("flips hmrDead when Vite logs a failed websocket connection", () => {
     const webview = makeWebviewElement();
     const { result } = renderHook(() => useDevPreviewConsoleCapture(PANE_ID, webview, true, false));
@@ -386,18 +380,5 @@ describe("useDevPreviewConsoleCapture — HMR liveness", () => {
       );
     });
     expect(result.current.hmrDead).toBe(true);
-  });
-
-  it("isolates hmrDead between concurrent panes", () => {
-    const webview = makeWebviewElement();
-    // The hook reads its callback from the shared mock; render the second pane
-    // last so messageCb routes through the pane-2 instance, then target pane-1.
-    const { result: pane1 } = renderHook(() =>
-      useDevPreviewConsoleCapture(PANE_ID, webview, true, false)
-    );
-    act(() => {
-      addRowViaCb(row({ paneId: "pane-2", summaryText: "[vite] failed to connect to websocket." }));
-    });
-    expect(pane1.current.hmrDead).toBe(false);
   });
 });

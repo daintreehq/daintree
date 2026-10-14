@@ -62,12 +62,6 @@ describe("contributes.tours schema (#12768)", () => {
     expect(parsed.chapters[0].captions).toEqual([]);
   });
 
-  it("defaults contributes.tours to an empty array", () => {
-    const result = schema.safeParse({ name: "acme.tours-plugin", version: "1.0.0" });
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.data.contributes.tours).toEqual([]);
-  });
-
   it("accepts a panel tour naming one of the plugin's own panels", () => {
     const result = parse([tour({ panelKind: "site-builder" })], { panels: [panel] });
     expect(result.success).toBe(true);

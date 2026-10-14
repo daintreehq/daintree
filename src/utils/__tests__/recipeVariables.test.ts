@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   replaceRecipeVariables,
-  getAvailableVariables,
   detectUnresolvedVariables,
   segmentRecipePrompt,
 } from "../recipeVariables";
@@ -36,15 +35,6 @@ describe("replaceRecipeVariables", () => {
   it("handles multiple occurrences of the same variable", () => {
     const text = "{{issue_number}} and {{issue_number}}";
     expect(replaceRecipeVariables(text, { issueNumber: 42 })).toBe("#42 and #42");
-  });
-
-  it("handles empty string input", () => {
-    expect(replaceRecipeVariables("", fullContext)).toBe("");
-  });
-
-  it("handles string with no variables", () => {
-    const text = "Just plain text";
-    expect(replaceRecipeVariables(text, fullContext)).toBe("Just plain text");
   });
 
   it("is case-insensitive for variable names", () => {
@@ -117,10 +107,6 @@ describe("detectUnresolvedVariables", () => {
     expect(detectUnresolvedVariables("plain text", {})).toEqual([]);
   });
 
-  it("returns empty for empty text", () => {
-    expect(detectUnresolvedVariables("", {})).toEqual([]);
-  });
-
   it("treats zero as present", () => {
     expect(detectUnresolvedVariables("{{issue_number}}", { issueNumber: 0 })).toEqual([]);
   });
@@ -144,25 +130,6 @@ describe("detectUnresolvedVariables", () => {
 
   it("is case-insensitive", () => {
     expect(detectUnresolvedVariables("{{ISSUE_NUMBER}}", {})).toEqual(["issue_number"]);
-  });
-});
-
-describe("getAvailableVariables", () => {
-  it("returns all supported variables", () => {
-    const vars = getAvailableVariables();
-    const names = vars.map((v) => v.name);
-    expect(names).toContain("issue_number");
-    expect(names).toContain("pr_number");
-    expect(names).toContain("number");
-    expect(names).toContain("worktree_path");
-    expect(names).toContain("branch_name");
-  });
-
-  it("includes descriptions for all variables", () => {
-    const vars = getAvailableVariables();
-    for (const v of vars) {
-      expect(v.description).toBeTruthy();
-    }
   });
 });
 

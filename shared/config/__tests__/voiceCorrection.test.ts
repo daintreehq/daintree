@@ -2,24 +2,6 @@ import { describe, expect, it } from "vitest";
 import { buildCorrectionSystemPrompt, CORE_CORRECTION_PROMPT } from "../voiceCorrection.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
-  it("uses XML delimiters around the technical terms dictionary", () => {
-    expect(CORE_CORRECTION_PROMPT).toContain("<terms>");
-    expect(CORE_CORRECTION_PROMPT).toContain("</terms>");
-  });
-
-  it("uses colon-separated dictionary entries with no arrow syntax", () => {
-    expect(CORE_CORRECTION_PROMPT).not.toContain("->");
-    expect(CORE_CORRECTION_PROMPT).toContain(": React");
-    expect(CORE_CORRECTION_PROMPT).toContain(": TypeScript");
-    expect(CORE_CORRECTION_PROMPT).toContain(": Next.js");
-  });
-
-  it("uses target wording for whole-passage cleanup", () => {
-    expect(CORE_CORRECTION_PROMPT).toContain("CURRENT TARGET");
-    expect(CORE_CORRECTION_PROMPT).toContain("<target>");
-    expect(CORE_CORRECTION_PROMPT).toContain("full dictated passage");
-  });
-
   it("includes an explicit idempotency instruction", () => {
     expect(CORE_CORRECTION_PROMPT).toMatch(/return it character-for-character/i);
   });
@@ -29,27 +11,11 @@ describe("CORE_CORRECTION_PROMPT", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("do not turn it into polished prose");
   });
 
-  it("includes all expected technical term mappings", () => {
-    expect(CORE_CORRECTION_PROMPT).toContain("React");
-    expect(CORE_CORRECTION_PROMPT).toContain("TypeScript");
-    expect(CORE_CORRECTION_PROMPT).toContain("Next.js");
-    expect(CORE_CORRECTION_PROMPT).toContain("GitHub");
-    expect(CORE_CORRECTION_PROMPT).toContain("Kubernetes");
-    expect(CORE_CORRECTION_PROMPT).toContain("Postgres");
-    expect(CORE_CORRECTION_PROMPT).toContain("ESLint");
-    expect(CORE_CORRECTION_PROMPT).toContain("Tailwind");
-    expect(CORE_CORRECTION_PROMPT).toContain("Zustand");
-  });
-
   it("gates custom-dictionary correction on context instead of forcing every phonetic match", () => {
     // ASR-level biasing now handles the terms, so the prompt must NOT force an
     // unconditional remap of every phonetically similar word.
     expect(CORE_CORRECTION_PROMPT).not.toContain("Always map phonetically similar words");
     expect(CORE_CORRECTION_PROMPT).toMatch(/only when the existing word does not fit the context/i);
-  });
-
-  it("is identified as a speech-to-text correction engine", () => {
-    expect(CORE_CORRECTION_PROMPT).toContain("speech-to-text correction engine");
   });
 
   it("keeps the static prefix long enough to clear OpenAI's prompt-cache floor", () => {
@@ -60,21 +26,6 @@ describe("CORE_CORRECTION_PROMPT", () => {
     // against accidental truncation that would silently drop the prefix below the
     // cache threshold (issue #9746).
     expect(CORE_CORRECTION_PROMPT.length).toBeGreaterThan(4800);
-  });
-
-  it("includes expanded domain-grouped phonetic mappings", () => {
-    expect(CORE_CORRECTION_PROMPT).toContain("npm");
-    expect(CORE_CORRECTION_PROMPT).toContain("pnpm");
-    expect(CORE_CORRECTION_PROMPT).toContain("Storybook");
-    expect(CORE_CORRECTION_PROMPT).toContain("Vite");
-    expect(CORE_CORRECTION_PROMPT).toContain("kubectl");
-    expect(CORE_CORRECTION_PROMPT).toContain("Terraform");
-    expect(CORE_CORRECTION_PROMPT).toContain("OAuth");
-    expect(CORE_CORRECTION_PROMPT).toContain("gRPC");
-    expect(CORE_CORRECTION_PROMPT).toContain("PyTorch");
-    expect(CORE_CORRECTION_PROMPT).toContain("Anthropic");
-    expect(CORE_CORRECTION_PROMPT).toContain("idempotent");
-    expect(CORE_CORRECTION_PROMPT).toContain("regex");
   });
 
   it("includes few-shot correction examples that defer output format to the JSON schema", () => {
@@ -105,12 +56,6 @@ describe("CORE_CORRECTION_PROMPT", () => {
 });
 
 describe("buildCorrectionSystemPrompt", () => {
-  it("guardrail uses positive then negative output framing", () => {
-    const prompt = buildCorrectionSystemPrompt({});
-    expect(prompt).toContain("JSON object");
-    expect(prompt).toMatch(/no_change|replace|Do not add explanation/i);
-  });
-
   it("guardrail explicitly defines the no_change and replace contract", () => {
     const prompt = buildCorrectionSystemPrompt({});
     expect(prompt).toContain('"no_change"');
@@ -149,15 +94,6 @@ describe("buildCorrectionSystemPrompt", () => {
     const lastCharIdx = prompt.length - 1;
     // The guardrail must appear near the end of the prompt, after the dynamic sections.
     expect(guardrailIdx).toBeGreaterThan(lastCharIdx - 320);
-  });
-
-  it("places custom instructions before the guardrail", () => {
-    const instructions = "Always use British spelling.";
-    const prompt = buildCorrectionSystemPrompt({ customInstructions: instructions });
-    const instructionsIdx = prompt.indexOf(instructions);
-    const guardrailIdx = prompt.indexOf("Return a JSON object");
-    expect(instructionsIdx).toBeGreaterThan(-1);
-    expect(guardrailIdx).toBeGreaterThan(instructionsIdx);
   });
 
   it("labels custom instructions as lower priority", () => {

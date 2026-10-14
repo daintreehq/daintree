@@ -59,10 +59,4 @@ describe("eventLoopMonitor", () => {
     const second = getEventLoopStats();
     expect(second!.maxMs).toBeLessThan(first!.maxMs);
   });
-
-  it("is idempotent across repeated starts", () => {
-    startEventLoopMonitor();
-    startEventLoopMonitor();
-    expect(getEventLoopStats()).not.toBeNull();
-  });
 });

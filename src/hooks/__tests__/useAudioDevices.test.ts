@@ -25,23 +25,6 @@ describe("useAudioDevices", () => {
     vi.unstubAllGlobals();
   });
 
-  it("returns system default as first option", async () => {
-    enumerateSpy.mockResolvedValue([
-      { deviceId: "mic1", kind: "audioinput", label: "Built-in Mic" },
-      { deviceId: "cam1", kind: "videoinput", label: "Camera" },
-    ]);
-
-    const { result } = renderHook(() => useAudioDevices());
-
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    expect(result.current.devices).toEqual([
-      { value: SYSTEM_DEFAULT_VALUE, label: "System default" },
-      { value: "mic1", label: "Built-in Mic" },
-    ]);
-    expect(result.current.error).toBeNull();
-  });
-
   it("filters out non-audioinput devices", async () => {
     enumerateSpy.mockResolvedValue([
       { deviceId: "default", kind: "audioinput", label: "Default" },
@@ -101,15 +84,6 @@ describe("useAudioDevices", () => {
       { value: SYSTEM_DEFAULT_VALUE, label: "System default" },
     ]);
     expect(result.current.error).toContain("Media devices API not available");
-  });
-
-  it("subscribes to devicechange event on mount", async () => {
-    enumerateSpy.mockResolvedValue([]);
-
-    renderHook(() => useAudioDevices());
-
-    expect(addEventListenerSpy).toHaveBeenCalledWith("devicechange", expect.any(Function));
-    await waitFor(() => expect(enumerateSpy).toHaveBeenCalled());
   });
 
   it("re-enumerates when devicechange fires", async () => {

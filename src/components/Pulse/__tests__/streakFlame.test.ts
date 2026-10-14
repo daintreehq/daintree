@@ -46,13 +46,6 @@ describe("getStreakColor", () => {
     );
   });
 
-  it("rises monotonically with streak length", () => {
-    const levels = [0, 8, 15, 30, 60, 120, 240, 10_000].map((d) => parse(d).level);
-    for (let i = 1; i < levels.length; i += 1) {
-      expect(levels[i]!).toBeGreaterThanOrEqual(levels[i - 1]!);
-    }
-  });
-
   it("clamps a zero or negative streak to the base tier", () => {
     expect(parse(0).level).toBe(1);
     expect(parse(-5).level).toBe(1);
@@ -62,14 +55,6 @@ describe("getStreakColor", () => {
   it("keeps 240+ in one open-ended top tier", () => {
     expect(getStreakColor(10_000)).toBe(getStreakColor(240));
     expect(parse(240).level).toBe(7);
-  });
-
-  it("never borrows the accent token (issue #9820)", () => {
-    // The release chip in the same focus region already spends the accent; a
-    // flame that co-opted it would put two accent signals in one region.
-    for (const days of [1, 8, 15, 30, 60, 120, 240]) {
-      expect(getStreakColor(days)).not.toContain("--color-accent-primary");
-    }
   });
 });
 

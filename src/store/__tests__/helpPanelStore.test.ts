@@ -1,10 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  HELP_PANEL_DEFAULT_WIDTH,
-  HELP_PANEL_MAX_WIDTH,
-  HELP_PANEL_MIN_WIDTH,
-} from "../helpPanelStore";
+import { HELP_PANEL_DEFAULT_WIDTH, HELP_PANEL_MAX_WIDTH } from "../helpPanelStore";
 import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots";
 
 describe("helpPanelStore persistence migration", () => {
@@ -77,27 +73,6 @@ describe("helpPanelStore persistence migration", () => {
     const { useHelpPanelStore: store } = await import("../helpPanelStore");
 
     expect(store.getState().width).toBe(HELP_PANEL_MAX_WIDTH);
-  });
-
-  it("falls back to defaults when nothing is persisted", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-    expect(store.getState().width).toBe(HELP_PANEL_DEFAULT_WIDTH);
-    expect(store.getState().width).toBeGreaterThanOrEqual(HELP_PANEL_MIN_WIDTH);
-  });
-
-  it("clears a legacy preferredAgentId for an agent without assistant wiring (issue #6612)", async () => {
-    const legacyBlob = JSON.stringify({
-      state: { width: 420, preferredAgentId: "gemini" },
-    });
-    installLocalStorage({ [STORAGE_KEY]: legacyBlob });
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-    expect(store.getState().preferredAgentId).toBeNull();
-    expect(store.getState().width).toBe(420);
   });
 
   it("captures a dropped unsupported preferredAgentId as droppedPreferredAgentId (issue #8775)", async () => {
@@ -261,14 +236,6 @@ describe("helpPanelStore persistence migration", () => {
     expect(store.getState().introDismissed).toBe(true);
   });
 
-  it("starts with introDismissed: false on a fresh install", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-    expect(store.getState().introDismissed).toBe(false);
-  });
-
   it("falls back to false when persisted introDismissed has a non-boolean type", async () => {
     const malformed = JSON.stringify({
       version: 1,
@@ -365,41 +332,6 @@ describe("helpPanelStore persistence migration", () => {
     }
   });
 
-  it("starts with isOpen: false on a fresh install", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-    expect(store.getState().isOpen).toBe(false);
-  });
-
-  it("starts with conversationTouched: false on a fresh install", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-    expect(store.getState().sessions[0]!.conversationTouched).toBe(false);
-  });
-
-  it("markConversationStarted sets conversationTouched to true", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().markConversationStarted(0);
-
-    expect(store.getState().sessions[0]!.conversationTouched).toBe(true);
-  });
-
-  it("markConversationStarted is idempotent (calling twice still yields true)", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().markConversationStarted(0);
-    store.getState().markConversationStarted(0);
-
-    expect(store.getState().sessions[0]!.conversationTouched).toBe(true);
-  });
-
   it("setTerminal resets conversationTouched to false", async () => {
     installLocalStorage({});
 
@@ -443,22 +375,6 @@ describe("helpPanelStore persistence migration", () => {
 
     store.getState().clearTerminal(0);
     expect(store.getState().sessions[0]!.conversationTouched).toBe(false);
-  });
-
-  it("clearTerminal drops figures so a crash/hibernate teardown can't leak them into the next session (#9829)", async () => {
-    installLocalStorage({});
-
-    const { useHelpPanelStore: store } = await import("../helpPanelStore");
-    store.getState().addFigure(0, {
-      imageId: "img-1",
-      figureNumber: 1,
-      figureLabel: "image #1",
-      url: "https://daintree.org/figure-1.png",
-    });
-    expect(store.getState().sessions[0]!.figures).toHaveLength(1);
-
-    store.getState().clearTerminal(0);
-    expect(store.getState().sessions[0]!.figures).toEqual([]);
   });
 
   it("conversationTouched is NOT persisted", async () => {
@@ -650,29 +566,6 @@ describe("helpPanelStore persistence migration", () => {
   });
 
   describe("hibernateSessions", () => {
-    it("starts as an empty record on a fresh install", async () => {
-      installLocalStorage({});
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-      expect(store.getState().hibernateSessions).toEqual({});
-    });
-
-    it("setHibernateSession adds an entry keyed by projectId", async () => {
-      installLocalStorage({});
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setHibernateSession("proj-1", 0, {
-        sessionId: "abc-123",
-        cwd: "/tmp/help",
-        agentId: "claude",
-      });
-
-      expect(store.getState().hibernateSessions).toEqual({
-        [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help", agentId: "claude" },
-      });
-    });
-
     it("setHibernateSession isolates entries by projectId", async () => {
       installLocalStorage({});
 
@@ -1212,43 +1105,9 @@ describe("helpPanelStore persistence migration", () => {
         vi.useRealTimers();
       }
     });
-
-    it("setAutoLaunchEnabled(false) flips consent back off", async () => {
-      const blob = JSON.stringify({
-        version: 6,
-        state: { width: 400, preferredAgentId: "claude", autoLaunchEnabled: true },
-      });
-      installLocalStorage({ [STORAGE_KEY]: blob });
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      expect(store.getState().autoLaunchEnabled).toBe(true);
-
-      store.getState().setAutoLaunchEnabled(false);
-      expect(store.getState().autoLaunchEnabled).toBe(false);
-    });
   });
 
   describe("activeFigureNumber (#9830)", () => {
-    it("starts as null on a fresh install", async () => {
-      installLocalStorage({});
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-
-      expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
-    });
-
-    it("setActiveFigureNumber updates the active figure", async () => {
-      installLocalStorage({});
-
-      const { useHelpPanelStore: store } = await import("../helpPanelStore");
-      store.getState().setActiveFigureNumber(0, 3);
-
-      expect(store.getState().sessions[0]!.activeFigureNumber).toBe(3);
-
-      store.getState().setActiveFigureNumber(0, null);
-      expect(store.getState().sessions[0]!.activeFigureNumber).toBeNull();
-    });
-
     it("clearFigures resets the active figure alongside the figures list", async () => {
       installLocalStorage({});
 

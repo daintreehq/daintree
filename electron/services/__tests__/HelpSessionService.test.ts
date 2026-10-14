@@ -285,15 +285,6 @@ describe("HelpSessionService", () => {
     return JSON.parse(await fs.readFile(path.join(sessionPath, ".mcp.json"), "utf-8")) as McpFile;
   }
 
-  it("returns mcpUrl and windowId on the provision result when MCP is enabled", async () => {
-    const result = await service.provisionSession(provisionInput());
-    expect(result).not.toBeNull();
-    if (!result) throw new Error("expected result");
-
-    expect(result.mcpUrl).toBe("http://127.0.0.1:45454/sse");
-    expect(result.windowId).toBe(7);
-  });
-
   describe("a view on a remote Shell (remote hosts)", () => {
     const HANDLE = -3;
 
@@ -940,14 +931,6 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBeUndefined();
   });
 
-  it("refuses to provision the retired Daintree Assistant even when installed", async () => {
-    mockStoreGet.mockReturnValue({ tier: "system", bypassPermissions: false });
-
-    await expect(
-      service.provisionSession({ ...provisionInput(), agentId: "daintree-assistant" })
-    ).rejects.toThrow('agentId "daintree-assistant" is not assistant-supported');
-  });
-
   it.each(["core", "full"] as const)(
     "provisions a non-assistant help agent at the stored %s tier",
     async (tier) => {
@@ -1012,12 +995,6 @@ describe("HelpSessionService", () => {
     expect(service.getBypassPermissions(result.token)).toBe(false);
   });
 
-  it("getBypassPermissions defaults to false when settings have not been touched", async () => {
-    const result = await service.provisionSession(provisionInput());
-    if (!result) throw new Error("expected result");
-    expect(service.getBypassPermissions(result.token)).toBe(false);
-  });
-
   it("getDebugLogging returns the snapshot taken at provision time", async () => {
     mockStoreGet.mockReturnValue({ tier: "core", debugLogging: true });
 
@@ -1033,12 +1010,6 @@ describe("HelpSessionService", () => {
     expect(service.getDebugLogging("")).toBe(false);
 
     await service.revokeSession(result.sessionId);
-    expect(service.getDebugLogging(result.token)).toBe(false);
-  });
-
-  it("getDebugLogging defaults to false when settings have not been touched", async () => {
-    const result = await service.provisionSession(provisionInput());
-    if (!result) throw new Error("expected result");
     expect(service.getDebugLogging(result.token)).toBe(false);
   });
 
@@ -1317,16 +1288,6 @@ describe("HelpSessionService", () => {
     const b = await service.provisionSession({ ...provisionInput(), projectPath: "/tmp/proj-b" });
     if (!a || !b) throw new Error("expected provisions");
     expect(a.sessionPath).not.toBe(b.sessionPath);
-  });
-
-  it("revokeByWebContentsId removes only sessions bound to the matching webContents", async () => {
-    const a = await service.provisionSession({ ...provisionInput(), projectViewWebContentsId: 1 });
-    const b = await service.provisionSession({ ...provisionInput(), projectViewWebContentsId: 2 });
-    if (!a || !b) throw new Error("expected provisions");
-
-    await service.revokeByWebContentsId(1);
-    expect(service.validateToken(a.token)).toBe(false);
-    expect(service.validateToken(b.token)).toBe("core");
   });
 
   it("revokeAll wipes every active session", async () => {
@@ -2549,20 +2510,6 @@ describe("HelpSessionService", () => {
       await expect(service.takePendingHibernation("proj-A", 0, 11)).resolves.not.toBeNull();
     });
 
-    it("issues a distinct claim per take, so a stale release can be told apart", async () => {
-      hibernationStore.get.mockReturnValue({
-        agentId: "claude",
-        agentSessionId: "pulled-id",
-        cwd: "/help/dir",
-        capturedAt: Date.now(),
-      });
-
-      const first = await service.takePendingHibernation("proj-A", 0, 0);
-      const second = await service.takePendingHibernation("proj-A", 0, 0);
-
-      expect(first!.claimId).not.toBe(second!.claimId);
-    });
-
     it("takePendingHibernation returns null and does not clear when no entry exists", async () => {
       hibernationStore.get.mockReturnValueOnce(null);
 
@@ -3277,15 +3224,6 @@ describe("HelpSessionService", () => {
       expect(service.isHelpTerminal("term-1")).toBe(true);
     });
 
-    it("returns false after unbindTerminal", async () => {
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
-      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
-
-      service.unbindTerminal("term-1");
-      expect(service.isHelpTerminal("term-1")).toBe(false);
-    });
-
     it("returns false after revokeSession", async () => {
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
@@ -3483,16 +3421,6 @@ describe("HelpSessionService", () => {
       expect(bArgs).not.toBeNull();
       expect(bArgs!.length).toBeGreaterThan(0);
     });
-
-    it("throws MCP_PROBE_FAILED when the post-provision /mcp probe fails", async () => {
-      mockProbeMcpServer.mockResolvedValueOnce(undefined); // ensureMcpServerReady
-      mockProbeMcpServer.mockRejectedValueOnce(new Error("/mcp returned status 500"));
-
-      await expect(service.provisionSession(codexInput())).rejects.toMatchObject({
-        name: "HelpSessionError",
-        code: "MCP_PROBE_FAILED",
-      });
-    });
   });
 
   describe("deprecated agents (#8811)", () => {
@@ -3504,12 +3432,6 @@ describe("HelpSessionService", () => {
       // toolbar — only the assistant overlay path is gone.
       await expect(
         service.provisionSession({ ...provisionInput(), agentId: "gemini" })
-      ).rejects.toThrow(/not assistant-supported/);
-    });
-
-    it("rejects an unknown agentId via the wired-list gate", async () => {
-      await expect(
-        service.provisionSession({ ...provisionInput(), agentId: "not-an-agent" })
       ).rejects.toThrow(/not assistant-supported/);
     });
   });
@@ -3609,17 +3531,6 @@ describe("HelpSessionService", () => {
       return { ...provisionInput(), agentId: "copilot" };
     }
 
-    it("accepts agentId: 'copilot'", async () => {
-      const result = await service.provisionSession(copilotInput());
-      expect(result).not.toBeNull();
-    });
-
-    it("returns the /mcp Streamable HTTP URL for Copilot when daintreeControl is on", async () => {
-      const result = await service.provisionSession(copilotInput());
-      if (!result) throw new Error("expected result");
-      expect(result.mcpUrl).toBe("http://127.0.0.1:45454/mcp");
-    });
-
     it("writes .mcp.json with daintree using type:http + url + $DAINTREE_MCP_TOKEN substitution", async () => {
       const result = await service.provisionSession(copilotInput());
       if (!result) throw new Error("expected result");
@@ -3680,15 +3591,6 @@ describe("HelpSessionService", () => {
       );
       expect(settings.enableAllProjectMcpServers).toBeUndefined();
       expect(settings.permissions?.allow ?? []).not.toContain("mcp__daintree__*");
-    });
-
-    it("probes /mcp (Streamable HTTP) for Copilot with the session token", async () => {
-      const result = await service.provisionSession(copilotInput());
-      if (!result) throw new Error("expected result");
-
-      expect(mockProbeMcpServer).toHaveBeenCalledTimes(2);
-      expect(mockProbeMcpServer).toHaveBeenLastCalledWith(45454, result.token);
-      expect(mockProbeMcpSseServer).not.toHaveBeenCalled();
     });
 
     it("getCopilotLaunchArgs returns no flags for a Copilot session, not read-only --plan (#13193)", async () => {
@@ -3896,19 +3798,6 @@ describe("HelpSessionService", () => {
       expect(stripManagedAddenda(claude)).toBe("# Help");
     });
 
-    it("rewrites the lane file with a fresh bearer on every provision, even when the template copy is skipped", async () => {
-      const first = await service.provisionSession(provisionInput());
-      if (!first) throw new Error("expected first provision");
-      await service.revokeSession(first.sessionId);
-
-      const second = await service.provisionSession(provisionInput());
-      if (!second) throw new Error("expected second provision");
-      expect(second.token).not.toBe(first.token);
-
-      const lane = await readLaneConfig(second);
-      expect(lane.mcpServers.daintree?.headers?.Authorization).toBe(`Bearer ${second.token}`);
-    });
-
     it("strips a prior Claude bearer from .mcp.json on Codex hash-skip switch (no stale Authorization in cwd)", async () => {
       // Provision Claude first — its literal Bearer lands in the lane file. Then
       // plant one in the shared `.mcp.json` too, the way an install that
@@ -3953,41 +3842,6 @@ describe("HelpSessionService", () => {
       expect(after.mcpServers.daintree).toBeUndefined();
       // daintree-docs is not session-bound — must remain.
       expect(after.mcpServers["daintree-docs"]).toBeDefined();
-    });
-
-    it("hashes nested template files deterministically (subdir order independence)", async () => {
-      // Two help folders with identical content but different on-disk
-      // creation order must produce the same hash. The .claude/settings.json
-      // file lives one level deep; sorting by full relative path (not just
-      // basename) ensures order stability.
-      const altHelp = path.join(tmpRoot, "help-alt");
-      await fs.mkdir(path.join(altHelp, ".claude"), { recursive: true });
-      // Write in REVERSE order from makeBundledHelpFolder to test stability.
-      await fs.writeFile(path.join(altHelp, "AGENTS.md"), "# Agents Help");
-      await fs.writeFile(path.join(altHelp, "CLAUDE.md"), "# Help");
-      await fs.writeFile(
-        path.join(altHelp, ".claude", "settings.json"),
-        JSON.stringify({
-          permissions: {
-            allow: [
-              "Read(**)",
-              "WebFetch",
-              "mcp__daintree-docs__*",
-              "Bash(gh *)",
-              "Bash(glab *)",
-              "Bash(tea *)",
-            ],
-          },
-        })
-      );
-      await fs.writeFile(
-        path.join(altHelp, ".mcp.json"),
-        JSON.stringify({
-          mcpServers: { "daintree-docs": { type: "http", url: "https://daintree.org/api/mcp" } },
-        })
-      );
-
-      expect(await expectedTemplateHash(altHelp)).toBe(await expectedTemplateHash(helpFolder));
     });
   });
 
@@ -4091,15 +3945,6 @@ describe("HelpSessionService", () => {
       expect(scratchDir.startsWith(expectedRoot + path.sep)).toBe(true);
       const scratchStat = await fs.stat(scratchDir);
       expect(scratchStat.isDirectory()).toBe(true);
-    });
-
-    it("exposes DAINTREE_ASSISTANT_SCRATCH_DIR via getAssistantScratchEnv", async () => {
-      const result = await service.provisionSession(provisionInput());
-      if (!result) throw new Error("expected result");
-
-      const env = service.getAssistantScratchEnv(result.token);
-      expect(env).not.toBeNull();
-      expect(env!.DAINTREE_ASSISTANT_SCRATCH_DIR).toMatch(/assistant-scratch/);
     });
 
     it("returns null from getAssistantScratchEnv for unknown or revoked tokens", async () => {

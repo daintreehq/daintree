@@ -51,17 +51,11 @@ describe("scrubReportPath", () => {
     expect(result).toContain("Debian");
   });
 
-  it("redacts JSON-doubled WSL UNC paths", () => {
-    const json = JSON.stringify({ cwd: "\\\\wsl$\\Ubuntu\\home\\alice\\project" });
+  it.each(["wsl$", "wsl.localhost"])("redacts JSON-doubled %s UNC paths", (prefix) => {
+    const json = JSON.stringify({ cwd: `\\\\${prefix}\\Ubuntu\\home\\alice\\project` });
     const result = scrubReportPath(json);
     expect(result).not.toContain("alice");
     expect(result).toContain("Ubuntu");
-  });
-
-  it("redacts JSON-doubled WSL localhost paths", () => {
-    const json = JSON.stringify({ cwd: "\\\\wsl.localhost\\Ubuntu\\home\\carol" });
-    const result = scrubReportPath(json);
-    expect(result).not.toContain("carol");
   });
 
   it("leaves paths without a username unchanged", () => {

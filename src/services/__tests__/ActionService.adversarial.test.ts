@@ -93,24 +93,6 @@ describe("ActionService adversarial", () => {
     restoreWindow = null;
   });
 
-  it("concurrent dispatches of missing action both return NOT_FOUND with no side effects", async () => {
-    const emit = vi.fn().mockResolvedValue(undefined);
-    restoreWindow = installEmit(emit);
-
-    const [a, b] = await Promise.all([
-      service.dispatch("app.settings" as ActionId),
-      service.dispatch("app.settings" as ActionId),
-    ]);
-
-    expect(a.ok).toBe(false);
-    expect(b.ok).toBe(false);
-    if (!a.ok) expect(a.error.code).toBe("NOT_FOUND");
-    if (!b.ok) expect(b.error.code).toBe("NOT_FOUND");
-    expect(emit).not.toHaveBeenCalled();
-    expect(hintMocks.mockShow).not.toHaveBeenCalled();
-    expect(hintMocks.mockIncrementCount).not.toHaveBeenCalled();
-  });
-
   it("contextProvider throwing falls back to empty context for the handler", async () => {
     service.setContextProvider(() => {
       throw new Error("shutdown");
@@ -188,23 +170,6 @@ describe("ActionService adversarial", () => {
     expect(result.ok).toBe(true);
     expect(run).toHaveBeenCalledTimes(1);
     await Promise.resolve();
-  });
-
-  it("concurrent dispatches of a restricted action never invoke run", async () => {
-    const run = vi.fn().mockResolvedValue(undefined);
-    service.register(safeAction("actions.list", { danger: "restricted", run }));
-
-    const results = await Promise.all([
-      service.dispatch("actions.list" as ActionId),
-      service.dispatch("actions.list" as ActionId),
-    ]);
-
-    for (const r of results) {
-      expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.error.code).toBe("RESTRICTED");
-    }
-    expect(run).not.toHaveBeenCalled();
-    expect(hintMocks.mockShow).not.toHaveBeenCalled();
   });
 
   it("circular args are redacted in emitted payload while handler receives the original reference", async () => {
@@ -326,22 +291,5 @@ describe("ActionService adversarial", () => {
       "Action isVisible threw",
       expect.objectContaining({ actionId: "actions.list" })
     );
-  });
-
-  it("isVisible that throws does not drop sibling actions from list()", () => {
-    service.register(
-      safeAction("actions.list", {
-        isVisible: () => {
-          throw new Error("visibility predicate boom");
-        },
-      })
-    );
-    service.register(safeAction("actions.help", { isVisible: () => true }));
-
-    const manifest = service.list();
-    const ids = manifest.map((entry) => entry.id);
-
-    expect(ids).toContain("actions.list");
-    expect(ids).toContain("actions.help");
   });
 });

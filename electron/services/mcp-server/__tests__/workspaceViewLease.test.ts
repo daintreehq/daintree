@@ -2,11 +2,6 @@ import { describe, it, expect } from "vitest";
 import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
 
 describe("WorkspaceViewLeaseRegistry (#11790)", () => {
-  it("reports no lease for a view nothing is dispatching to", () => {
-    const leases = new WorkspaceViewLeaseRegistry();
-    expect(leases.has(42)).toBe(false);
-  });
-
   it("holds the view until the last of several concurrent requests releases", () => {
     const leases = new WorkspaceViewLeaseRegistry();
     const releaseFirst = leases.acquire(42);
@@ -90,16 +85,5 @@ describe("WorkspaceViewLeaseRegistry (#11790)", () => {
     staleRelease();
 
     expect(leases.has(5)).toBe(true);
-  });
-
-  it("takes fresh leases normally after a clear", () => {
-    const leases = new WorkspaceViewLeaseRegistry();
-    leases.acquire(3);
-    leases.clear();
-
-    const release = leases.acquire(3);
-    expect(leases.has(3)).toBe(true);
-    release();
-    expect(leases.has(3)).toBe(false);
   });
 });

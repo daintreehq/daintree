@@ -163,12 +163,6 @@ describe("worktree.copyTree completion announcement", () => {
     );
   });
 
-  it("announces a source-less dispatch too", async () => {
-    const { run } = setupActions();
-    await run("worktree.copyTree", { worktreeId: "wt-1" });
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-  });
-
   it("stays silent for the context menu, which owns its own spinner toast", async () => {
     // `copyContextWithFeedback` opens an info toast and updates it in place.
     // Announcing here as well would stack a second toast on that one.

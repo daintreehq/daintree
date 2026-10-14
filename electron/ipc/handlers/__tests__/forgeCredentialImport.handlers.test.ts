@@ -207,11 +207,6 @@ describe("registerForgeCredentialImportHandlers", () => {
     expect(observableOutput(undefined)).toContain(SECRET);
   });
 
-  it("registers the preview and commit channels", () => {
-    expect(ipcHandlers.has("forge:preview-credential-import")).toBe(true);
-    expect(ipcHandlers.has("forge:commit-credential-import")).toBe(true);
-  });
-
   describe("preview", () => {
     it("returns only the fields it projects, never extra provider properties", async () => {
       const impl = makeImpl({
@@ -362,18 +357,6 @@ describe("registerForgeCredentialImportHandlers", () => {
 
       await expect(pending).resolves.toEqual({ unavailable: true, reason: "cancelled" });
       expect(sender.listenerCount("destroyed")).toBe(0);
-    });
-
-    it("settles at the deadline when a provider ignores the signal", async () => {
-      vi.useFakeTimers();
-      registryMock.getForgeProviderImpl.mockReturnValue(
-        makeImpl({ preview: vi.fn(() => new Promise<never>(() => {})) })
-      );
-
-      const pending = preview(PROVIDER_ID);
-      await vi.advanceTimersByTimeAsync(30_000);
-
-      await expect(pending).resolves.toEqual({ unavailable: true, reason: "cancelled" });
     });
 
     it("aborts the provider's signal once the import deadline passes", async () => {

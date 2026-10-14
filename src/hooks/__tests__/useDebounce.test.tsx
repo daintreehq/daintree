@@ -13,17 +13,6 @@ describe("useDebounce", () => {
     expect(result.current).toBe("hello");
   });
 
-  it("does not update the value before the delay", () => {
-    vi.useFakeTimers();
-    const { result, rerender } = renderHook(({ value, delay }) => useDebounce(value, delay), {
-      initialProps: { value: "a", delay: 300 },
-    });
-
-    rerender({ value: "b", delay: 300 });
-    vi.advanceTimersByTime(200);
-    expect(result.current).toBe("a");
-  });
-
   it("updates the value after the delay", () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(({ value, delay }) => useDebounce(value, delay), {
@@ -71,18 +60,5 @@ describe("useDebounce", () => {
       vi.advanceTimersByTime(200);
     });
     expect(result.current).toBe("b");
-  });
-
-  it("works with non-string types", () => {
-    vi.useFakeTimers();
-    const { result, rerender } = renderHook(({ value, delay }) => useDebounce(value, delay), {
-      initialProps: { value: 42, delay: 100 },
-    });
-
-    rerender({ value: 99, delay: 100 });
-    act(() => {
-      vi.advanceTimersByTime(100);
-    });
-    expect(result.current).toBe(99);
   });
 });

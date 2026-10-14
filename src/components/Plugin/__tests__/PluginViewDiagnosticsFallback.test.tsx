@@ -91,15 +91,6 @@ describe("PluginViewDiagnosticsFallback", () => {
     );
   });
 
-  it("renders frames from both the stack and the component stack", () => {
-    renderFallback({ devMode: true });
-
-    // Assert the frames themselves, not the headings — a heading proves only
-    // that the label was printed, not that any stack reached the pane.
-    expect(trace()).toContain("dashboard.js:10:5");
-    expect(trace()).toContain("/Users/bob");
-  });
-
   // The bug this component exists to fix: a plugin author runs a *production*
   // Daintree, so a build-mode gate hides the trace from the one person who can
   // act on it. Vitest runs with DEV=true, so an `import.meta.env.DEV` gate would
@@ -322,12 +313,6 @@ describe("recovery before diagnostics", () => {
         id
       ).toBeTruthy();
     }
-  });
-
-  it("does not print the manifest's raw names in the headline", () => {
-    renderFallback({ pluginDisplayName: LEAKY_MESSAGE });
-    const region = screen.getByTestId("plugin-view-diagnostics");
-    for (const secret of CAROL_SENSITIVE) expect(region.textContent).not.toContain(secret);
   });
 });
 

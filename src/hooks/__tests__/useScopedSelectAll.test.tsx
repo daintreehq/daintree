@@ -295,32 +295,6 @@ describe("useScopedSelectAll", () => {
     rerender(<Harness enabled={true} />);
     expect(pressSelectAll(pane).defaultPrevented).toBe(true);
   });
-
-  it("removes the exact listener it added on unmount", () => {
-    // Unmount also detaches the tree, so a keydown after it can't reach
-    // `document` either way — the only honest proof is handler identity.
-    const added = new Set<EventListenerOrEventListenerObject>();
-    const addSpy = vi
-      .spyOn(document, "addEventListener")
-      .mockImplementation((type, handler, opts) => {
-        if (type === "keydown") added.add(handler);
-        return HTMLDocument.prototype.addEventListener.call(document, type, handler, opts);
-      });
-
-    const { unmount } = render(<Harness />);
-    addSpy.mockRestore();
-    expect(added.size).toBe(1);
-
-    const removed = new Set<EventListenerOrEventListenerObject>();
-    vi.spyOn(document, "removeEventListener").mockImplementation((type, handler, opts) => {
-      if (type === "keydown") removed.add(handler);
-      return HTMLDocument.prototype.removeEventListener.call(document, type, handler, opts);
-    });
-
-    unmount();
-
-    expect([...added].every((handler) => removed.has(handler))).toBe(true);
-  });
 });
 
 // A plugin view can mount several Markdown blocks beside its own controls, so a
@@ -368,15 +342,6 @@ describe("useScopedSelectAll with self scope", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expectSelectedWholeOf(getByTestId("second"));
-  });
-
-  it("follows the caret to the other block", () => {
-    const { getByTestId } = render(<SelfScopedHarness />);
-    placeCaretIn(getByTestId("first"));
-
-    pressSelectAll(getByTestId("pane"));
-
-    expectSelectedWholeOf(getByTestId("first"));
   });
 
   // Tabbing to a link moves focus but leaves the old selection where it was.

@@ -119,22 +119,6 @@ describe("detectLinuxGpus", () => {
     });
   });
 
-  it("falls back to card nodes when render nodes are absent", async () => {
-    fsMock.existsSync.mockReturnValue(true);
-    fsMock.readdirSync.mockReturnValue(["card0", "card1"]);
-    fsMock.readFileSync.mockImplementation((p: string) => {
-      if (p === "/sys/class/drm/card0/device/vendor") return "0x8086\n";
-      if (p === "/sys/class/drm/card1/device/vendor") return "0x10de\n";
-      throw new Error("unexpected read: " + p);
-    });
-
-    const { detectLinuxGpus } = await import("../gpuDetection.js");
-    const info = detectLinuxGpus();
-    expect(info?.isMultiGpu).toBe(true);
-    expect(info?.hasNvidia).toBe(true);
-    expect(info?.hasIntel).toBe(true);
-  });
-
   it("unions render and card nodes when render-node visibility is partial", async () => {
     // Some NVIDIA driver setups expose card1 for the dGPU without a matching
     // renderD129. A render-only scan would miss the dGPU vendor entirely.

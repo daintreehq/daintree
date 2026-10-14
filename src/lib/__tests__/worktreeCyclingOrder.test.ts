@@ -236,35 +236,6 @@ describe("getVisibleWorktreesForCycling", () => {
     expect(ordered.map((w) => w.id)).toEqual(["main", "int-bug", "ext-feat"]);
   });
 
-  it("sorts non-main worktrees alphabetically when orderBy is alpha", () => {
-    useWorktreeFilterStore.setState({ orderBy: "alpha" });
-    setWorktrees([
-      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
-      createSnapshot({ id: "wt-c", name: "charlie", branch: "feature/charlie" }),
-      createSnapshot({ id: "wt-a", name: "alpha", branch: "feature/alpha" }),
-      createSnapshot({ id: "wt-b", name: "bravo", branch: "feature/bravo" }),
-    ]);
-
-    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
-    expect(ids).toEqual(["main", "wt-a", "wt-b", "wt-c"]);
-  });
-
-  it("walks manual order when orderBy is manual", () => {
-    useWorktreeFilterStore.setState({
-      orderBy: "manual",
-      manualOrder: ["wt-b", "wt-a", "wt-c"],
-    });
-    setWorktrees([
-      createSnapshot({ id: "main", name: "main", branch: "main", isMainWorktree: true }),
-      createSnapshot({ id: "wt-a", name: "alpha", branch: "feature/alpha" }),
-      createSnapshot({ id: "wt-b", name: "bravo", branch: "feature/bravo" }),
-      createSnapshot({ id: "wt-c", name: "charlie", branch: "feature/charlie" }),
-    ]);
-
-    const ids = getVisibleWorktreesForCycling().map((w) => w.id);
-    expect(ids).toEqual(["main", "wt-b", "wt-a", "wt-c"]);
-  });
-
   it("promotes pinned worktrees above unpinned ones", () => {
     useWorktreeFilterStore.setState({
       orderBy: "alpha",

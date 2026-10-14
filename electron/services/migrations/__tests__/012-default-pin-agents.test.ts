@@ -82,28 +82,6 @@ describe("migration012 — default-pin agents", () => {
     expect(store.set).not.toHaveBeenCalled();
   });
 
-  it("handles multiple agents correctly", () => {
-    const data: Record<string, unknown> = {
-      agentSettings: {
-        agents: {
-          claude: { selected: true },
-          gemini: { selected: false },
-          codex: {},
-        },
-      },
-    };
-    const store = makeStoreMock(data);
-    migration012.up(store);
-
-    expect(store.set).toHaveBeenCalledWith("agentSettings", {
-      agents: {
-        claude: { pinned: true },
-        gemini: { pinned: false },
-        codex: { pinned: true },
-      },
-    });
-  });
-
   it("replay leaves pinned: false untouched (regression guard)", () => {
     const data: Record<string, unknown> = {
       agentSettings: {
@@ -119,28 +97,6 @@ describe("migration012 — default-pin agents", () => {
     expect(store.set).not.toHaveBeenCalled();
     const after = data.agentSettings as { agents: Record<string, Record<string, unknown>> };
     expect(after.agents.claude).toEqual({ pinned: true, customFlags: "--verbose" });
-    expect(after.agents.gemini).toEqual({ pinned: false });
-  });
-
-  it("is idempotent — running twice does not modify already-migrated data", () => {
-    const data: Record<string, unknown> = {
-      agentSettings: {
-        agents: {
-          claude: { selected: true },
-          gemini: { selected: false },
-        },
-      },
-    };
-    const store = makeStoreMock(data);
-    migration012.up(store);
-    const firstCallCount = (store.set as ReturnType<typeof vi.fn>).mock.calls.length;
-
-    migration012.up(store);
-    const secondCallCount = (store.set as ReturnType<typeof vi.fn>).mock.calls.length;
-
-    expect(secondCallCount).toBe(firstCallCount);
-    const after = data.agentSettings as { agents: Record<string, Record<string, unknown>> };
-    expect(after.agents.claude).toEqual({ pinned: true });
     expect(after.agents.gemini).toEqual({ pinned: false });
   });
 

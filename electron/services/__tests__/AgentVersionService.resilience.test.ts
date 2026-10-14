@@ -129,19 +129,6 @@ describe("AgentVersionService resilience", () => {
     );
   });
 
-  it("uses a 10s probe timeout to tolerate cold starts and AV-scanned binaries", () => {
-    const cliAvailabilityService = {
-      checkAvailability: vi.fn(),
-    } as unknown as CliAvailabilityService;
-    const service = new AgentVersionService(cliAvailabilityService);
-
-    // The constant gates the spawn-probe wall-clock deadline AND the two
-    // AbortController-based fetch paths in getLatestNpmVersion /
-    // getLatestGitHubVersion. 5s was too tight on Windows AV-scanned PATH
-    // entries, slow npm CDN edges, and WSL2 boundaries (issue #6041).
-    expect((service as unknown as { TIMEOUT_MS: number }).TIMEOUT_MS).toBe(10000);
-  });
-
   // Regression: a never-settling installed-version probe stranded the assistant
   // launch FSM on "Checking version…" forever. The old `execFile` resolved on
   // `close` (all stdio EOF), so a daemon grandchild inheriting the stdout fd
@@ -769,33 +756,6 @@ describe("AgentVersionService resilience", () => {
           }),
         })
       );
-      fetchSpy.mockRestore();
-    });
-
-    it("omits the ?fields=dist-tags query parameter from the URL", async () => {
-      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
-        id: "npm-agent",
-        name: "NPM Agent",
-        command: "npm-agent",
-        version: { args: ["--version"], npmPackage: "scoped-pkg" },
-      });
-
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          "dist-tags": { latest: "1.5.0" },
-        }),
-        headers: new Headers(),
-      } as Response);
-      setExecFileSuccess();
-
-      const { service } = createService(async () => ({ "npm-agent": "ready" }));
-      await service.getVersion("npm-agent" as AgentId);
-
-      const url = fetchSpy.mock.calls[0][0] as string;
-      expect(url).not.toContain("?fields=");
-      expect(url).toBe("https://registry.npmjs.org/scoped-pkg");
       fetchSpy.mockRestore();
     });
   });

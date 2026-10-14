@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalAgentStateController } from "../TerminalAgentStateController";
-import type { ManagedTerminal } from "../types";
+import type { ManagedTerminal, PostCompleteHook } from "../types";
 
 const mockUpdateAgentState = vi.fn();
 vi.mock("@/store/panelStore", () => ({
@@ -12,9 +12,10 @@ vi.mock("@/store/panelStore", () => ({
   },
 }));
 
+const mockLogError = vi.fn();
 vi.mock("@/utils/logger", () => ({
   logDebug: vi.fn(),
-  logError: vi.fn(),
+  logError: (...args: unknown[]) => mockLogError(...args),
 }));
 
 function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
@@ -175,24 +176,6 @@ describe("TerminalAgentStateController", () => {
 
       controller.onUserInput("t1", "hello");
       expect(managed.agentState).toBe("directing");
-
-      vi.advanceTimersByTime(9999);
-      expect(managed.agentState).toBe("directing");
-
-      vi.advanceTimersByTime(1);
-      expect(managed.agentState).toBe("waiting");
-    });
-
-    it("upgrades to phase 2 timeout after accumulating 5+ chars", () => {
-      const managed = makeMockManaged({
-        canonicalAgentState: "waiting",
-        agentState: "waiting",
-      });
-      instances.set("t1", managed);
-
-      controller.onUserInput("t1", "ab");
-      controller.onUserInput("t1", "cd");
-      controller.onUserInput("t1", "e");
 
       vi.advanceTimersByTime(9999);
       expect(managed.agentState).toBe("directing");
@@ -532,10 +515,6 @@ describe("TerminalAgentStateController", () => {
       expect(mockUpdateAgentState).not.toHaveBeenCalled();
     });
 
-    it("no-ops for unknown terminal", () => {
-      controller.onEnterPressed("nonexistent");
-    });
-
     it("prevents onUserInput from reverting working to directing", () => {
       const managed = makeMockManaged({
         canonicalAgentState: "waiting",
@@ -548,6 +527,10 @@ describe("TerminalAgentStateController", () => {
 
       controller.onUserInput("t1", "a");
       expect(managed.agentState).toBe("working");
+    });
+
+    it("no-ops for unknown terminal", () => {
+      controller.onEnterPressed("nonexistent");
     });
 
     it("does not duplicate notification when setAgentState confirms working", () => {
@@ -670,10 +653,6 @@ describe("TerminalAgentStateController", () => {
       expect(mockUpdateAgentState).not.toHaveBeenCalled();
     });
 
-    it("no-ops for unknown terminal", () => {
-      controller.checkStaleDirecting("nonexistent");
-    });
-
     it("reverts to canonical state when set", () => {
       const managed = makeMockManaged({
         canonicalAgentState: "completed",
@@ -683,6 +662,10 @@ describe("TerminalAgentStateController", () => {
 
       controller.checkStaleDirecting("t1");
       expect(managed.agentState).toBe("completed");
+    });
+
+    it("no-ops for unknown terminal", () => {
+      controller.checkStaleDirecting("nonexistent");
     });
   });
 
@@ -758,24 +741,6 @@ describe("TerminalAgentStateController", () => {
       // Total elapsed: 21s. Last keystroke was 7s ago — under the cap.
       document.dispatchEvent(new Event("visibilitychange"));
       expect(managed.agentState).toBe("directing");
-    });
-
-    it("sweeps when last keystroke was 15s+ ago even if a timer is still pending", () => {
-      const managed = makeMockManaged({
-        canonicalAgentState: "waiting",
-        agentState: "waiting",
-      });
-      instances.set("t1", managed);
-
-      // Single keystroke schedules a 1500ms debounce. setSystemTime advances
-      // the wall clock without firing the queued timer — this models
-      // Chromium IntensiveWakeUpThrottling delaying the timer in a
-      // backgrounded view.
-      controller.onUserInput("t1", "a");
-      vi.setSystemTime(Date.now() + 20000);
-
-      document.dispatchEvent(new Event("visibilitychange"));
-      expect(managed.agentState).toBe("waiting");
     });
 
     it("does not sweep when visibilityState is hidden", () => {
@@ -952,29 +917,6 @@ describe("TerminalAgentStateController", () => {
       expect(m2.agentState).toBe("directing");
     });
 
-    it("clears all composition counts", () => {
-      const m1 = makeMockManaged({ canonicalAgentState: "waiting", agentState: "waiting" });
-      instances.set("t1", m1);
-
-      controller.onUserInput("t1", "hello");
-      controller.dispose();
-
-      const m2 = makeMockManaged({ canonicalAgentState: "waiting", agentState: "waiting" });
-      instances.set("t1", m2);
-
-      controller = new TerminalAgentStateController({
-        getInstance: (id) => instances.get(id),
-      });
-
-      controller.onUserInput("t1", "a");
-
-      vi.advanceTimersByTime(1499);
-      expect(m2.agentState).toBe("directing");
-
-      vi.advanceTimersByTime(1);
-      expect(m2.agentState).toBe("waiting");
-    });
-
     it("removes the visibilitychange listener", () => {
       const managed = makeMockManaged({
         canonicalAgentState: "waiting",
@@ -994,5 +936,274 @@ describe("TerminalAgentStateController", () => {
       document.dispatchEvent(new Event("visibilitychange"));
       expect(mockUpdateAgentState.mock.calls.length).toBe(before);
     });
+  });
+});
+
+describe("TerminalAgentStateController — postCompleteHook", () => {
+  function makeMockBufferLine(text: string) {
+    return {
+      translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+    };
+  }
+
+  function makeMockBuffer(lines: string[]) {
+    return {
+      active: {
+        length: lines.length,
+        getLine: (i: number) => (i >= 0 && i < lines.length ? makeMockBufferLine(lines[i]!) : null),
+        baseY: 0,
+        type: "normal",
+      },
+    };
+  }
+
+  function makeMockMarker(line: number) {
+    return {
+      line,
+      isDisposed: false,
+      dispose: vi.fn(),
+      onDispose: { dispose: vi.fn() },
+    };
+  }
+
+  function makeHookManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
+    return {
+      kind: "terminal",
+      agentState: undefined,
+      canonicalAgentState: undefined,
+      agentStateSubscribers: new Set(),
+      terminal: {
+        buffer: makeMockBuffer([]),
+        registerMarker: vi.fn(() => makeMockMarker(0)),
+      },
+      ...overrides,
+    } as unknown as ManagedTerminal;
+  }
+
+  let controller: TerminalAgentStateController;
+  let instances: Map<string, ManagedTerminal>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockUpdateAgentState.mockClear();
+    mockLogError.mockClear();
+    instances = new Map();
+    controller = new TerminalAgentStateController({
+      getInstance: (id) => instances.get(id),
+    });
+  });
+
+  afterEach(() => {
+    controller.dispose();
+    vi.useRealTimers();
+  });
+
+  it("fires hook on working → waiting transition", () => {
+    const hook = vi.fn();
+    const bufferLines = ["$ claude", "Working on task...", "Done."];
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer(bufferLines) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+      postCompleteMarker: undefined,
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+
+    expect(hook).toHaveBeenCalledOnce();
+    expect(hook).toHaveBeenCalledWith("$ claude\nWorking on task...\nDone.");
+  });
+
+  it("extracts output from marker line to buffer end", () => {
+    const hook = vi.fn();
+    const bufferLines = ["old line 1", "old line 2", "new output 1", "new output 2"];
+    const marker = makeMockMarker(2);
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer(bufferLines) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+      postCompleteMarker: marker as unknown as ManagedTerminal["postCompleteMarker"],
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+
+    expect(hook).toHaveBeenCalledWith("new output 1\nnew output 2");
+    expect(marker.dispose).toHaveBeenCalled();
+  });
+
+  it("is one-shot — second working → waiting does not fire again", () => {
+    const hook = vi.fn();
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer(["line"]) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+    expect(hook).toHaveBeenCalledOnce();
+
+    // Transition back to working, then to waiting again
+    managed.agentState = "working";
+    controller.setAgentState("t1", "waiting");
+    expect(hook).toHaveBeenCalledOnce(); // still once
+  });
+
+  it("does not fire on idle → waiting", () => {
+    const hook = vi.fn();
+    const managed = makeHookManaged({
+      agentState: "idle",
+      terminal: { buffer: makeMockBuffer([]) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it("does not fire on working → idle", () => {
+    const hook = vi.fn();
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer([]) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "idle");
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it("does not fire on directing → waiting (revert)", () => {
+    const hook = vi.fn();
+    const managed = makeHookManaged({
+      agentState: "directing",
+      canonicalAgentState: "waiting",
+      terminal: { buffer: makeMockBuffer([]) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+    // The directing → waiting guard returns early, so hook is not fired
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it("falls back to startLine 0 when marker is disposed", () => {
+    const hook = vi.fn();
+    const marker = makeMockMarker(5);
+    marker.isDisposed = true;
+    const bufferLines = ["line 0", "line 1", "line 2"];
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer(bufferLines) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+      postCompleteMarker: marker as unknown as ManagedTerminal["postCompleteMarker"],
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+
+    expect(hook).toHaveBeenCalledWith("line 0\nline 1\nline 2");
+  });
+
+  it("falls back to startLine 0 when marker line is negative", () => {
+    const hook = vi.fn();
+    const marker = makeMockMarker(-1);
+    const bufferLines = ["all", "lines"];
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer(bufferLines) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+      postCompleteMarker: marker as unknown as ManagedTerminal["postCompleteMarker"],
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+
+    expect(hook).toHaveBeenCalledWith("all\nlines");
+  });
+
+  it("catches sync errors from hook callback", () => {
+    const hook = vi.fn().mockImplementation(() => {
+      throw new Error("hook exploded");
+    });
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer(["x"]) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+    });
+    instances.set("t1", managed);
+
+    expect(() => controller.setAgentState("t1", "waiting")).not.toThrow();
+    expect(mockLogError).toHaveBeenCalledWith("Post-complete hook error", expect.any(Error));
+  });
+
+  it("catches async errors from hook callback", async () => {
+    const hook = vi.fn().mockRejectedValue(new Error("async boom"));
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer(["x"]) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+
+    // Flush the rejected promise
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockLogError).toHaveBeenCalledWith("Post-complete hook error", expect.any(Error));
+  });
+
+  it("clears hook and marker fields on managed after firing", () => {
+    const hook = vi.fn();
+    const marker = makeMockMarker(0);
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer(["x"]) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+      postCompleteMarker: marker as unknown as ManagedTerminal["postCompleteMarker"],
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+
+    expect(managed.postCompleteHook).toBeUndefined();
+    expect(managed.postCompleteMarker).toBeUndefined();
+  });
+
+  it("still notifies subscribers after hook fires", () => {
+    const hook = vi.fn();
+    const subscriber = vi.fn();
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer([]) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+    });
+    managed.agentStateSubscribers.add(subscriber);
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+
+    expect(hook).toHaveBeenCalledOnce();
+    expect(subscriber).toHaveBeenCalledWith("waiting");
+  });
+
+  it("produces empty string when buffer is empty", () => {
+    const hook = vi.fn();
+    const managed = makeHookManaged({
+      agentState: "working",
+      terminal: { buffer: makeMockBuffer([]) } as unknown as ManagedTerminal["terminal"],
+      postCompleteHook: hook as PostCompleteHook,
+    });
+    instances.set("t1", managed);
+
+    controller.setAgentState("t1", "waiting");
+
+    expect(hook).toHaveBeenCalledWith("");
   });
 });

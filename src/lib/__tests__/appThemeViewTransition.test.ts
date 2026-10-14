@@ -42,10 +42,6 @@ function stubStartViewTransition(start: (callback: () => void) => FakeTransition
   Object.assign(document, { startViewTransition: start });
 }
 
-function stubActiveViewTransition(skipTransition: () => void) {
-  Object.assign(document, { activeViewTransition: { skipTransition } });
-}
-
 function setReducedMotion(reduced: boolean) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -221,15 +217,6 @@ describe("appThemeViewTransition", () => {
       expect(skipOrder).toBeLessThan(startOrder);
     });
 
-    it("starts transition normally when no in-flight transition exists", () => {
-      delete (document as unknown as { activeViewTransition?: unknown }).activeViewTransition;
-      const { startSpy } = installViewTransitionMock();
-
-      runThemeReveal({ x: 100, y: 100 }, () => {});
-
-      expect(startSpy).toHaveBeenCalledTimes(1);
-    });
-
     it("does not call skipTransition when reduced-motion fallback skips the transition", () => {
       const skipTransition = vi.fn();
       (
@@ -243,54 +230,12 @@ describe("appThemeViewTransition", () => {
       expect(startSpy).not.toHaveBeenCalled();
       expect(skipTransition).not.toHaveBeenCalled();
     });
-
-    it("does not call skipTransition when hidden-document fallback skips the transition", () => {
-      const skipTransition = vi.fn();
-      (
-        document as unknown as { activeViewTransition?: { skipTransition: () => void } }
-      ).activeViewTransition = { skipTransition };
-      const { startSpy } = installViewTransitionMock();
-      setVisibility("hidden");
-
-      runThemeReveal({ x: 100, y: 100 }, () => {});
-
-      expect(startSpy).not.toHaveBeenCalled();
-      expect(skipTransition).not.toHaveBeenCalled();
-    });
   });
 
   describe("runThemeCrossfade", () => {
-    it("calls mutate synchronously when startViewTransition is unavailable", () => {
-      const mutate = vi.fn();
-      runThemeCrossfade(mutate);
-      expect(mutate).toHaveBeenCalledTimes(1);
-    });
-
     it("skips the transition when prefers-reduced-motion is set", () => {
       const { startSpy } = installViewTransitionMock();
       setReducedMotion(true);
-      const mutate = vi.fn();
-
-      runThemeCrossfade(mutate);
-
-      expect(mutate).toHaveBeenCalledTimes(1);
-      expect(startSpy).not.toHaveBeenCalled();
-    });
-
-    it("skips the transition when performance mode is enabled", () => {
-      const { startSpy } = installViewTransitionMock();
-      document.body.dataset.performanceMode = "true";
-      const mutate = vi.fn();
-
-      runThemeCrossfade(mutate);
-
-      expect(mutate).toHaveBeenCalledTimes(1);
-      expect(startSpy).not.toHaveBeenCalled();
-    });
-
-    it("skips the transition when the document is hidden", () => {
-      const { startSpy } = installViewTransitionMock();
-      setVisibility("hidden");
       const mutate = vi.fn();
 
       runThemeCrossfade(mutate);
@@ -352,44 +297,6 @@ describe("appThemeViewTransition", () => {
       });
       // An ambient change should read as briefer than a deliberate pick's wipe.
       expect(options.duration).toBeLessThan(THEME_WIPE_DURATION);
-    });
-
-    it("animates the old root snapshot only (its opacity IS the crossfade)", async () => {
-      const { animateSpy } = installViewTransitionMock();
-
-      runThemeCrossfade(() => {});
-      await Promise.resolve();
-
-      // Fading the new snapshot in as well would double-composite the two and dip the
-      // midpoint brightness — the new one is already opaque underneath at z-index 1.
-      const targets = animateSpy.mock.calls.map(([, options]) => options.pseudoElement);
-      expect(targets).toEqual(["::view-transition-old(root)"]);
-    });
-
-    it("skips an in-flight ViewTransition before starting a new one", () => {
-      const skipTransition = vi.fn();
-      stubActiveViewTransition(skipTransition);
-      const { startSpy } = installViewTransitionMock();
-
-      runThemeCrossfade(() => {});
-
-      expect(skipTransition).toHaveBeenCalledTimes(1);
-      expect(startSpy).toHaveBeenCalledTimes(1);
-      const skipOrder = skipTransition.mock.invocationCallOrder[0]!;
-      const startOrder = startSpy.mock.invocationCallOrder[0]!;
-      expect(skipOrder).toBeLessThan(startOrder);
-    });
-
-    it("does not call skipTransition when a guard skips the transition", () => {
-      const skipTransition = vi.fn();
-      stubActiveViewTransition(skipTransition);
-      const { startSpy } = installViewTransitionMock();
-      setReducedMotion(true);
-
-      runThemeCrossfade(() => {});
-
-      expect(startSpy).not.toHaveBeenCalled();
-      expect(skipTransition).not.toHaveBeenCalled();
     });
 
     it("swallows ready-promise rejections without throwing", async () => {

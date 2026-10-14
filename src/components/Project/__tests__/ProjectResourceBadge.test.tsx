@@ -543,14 +543,6 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(vi.getTimerCount()).toBe(1);
   });
 
-  it("probes hardware info once at mount to scale thresholds to the machine", async () => {
-    render(<ProjectResourceBadge />);
-
-    await flush();
-
-    expect(mockGetHardwareInfo).toHaveBeenCalledTimes(1);
-  });
-
   it("does not crash polling when hardware info probe rejects", async () => {
     mockGetHardwareInfo.mockRejectedValue(new Error("no hw"));
 

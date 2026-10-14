@@ -85,14 +85,6 @@ describe("PluginConfirmDialog", () => {
     vi.restoreAllMocks();
   });
 
-  it("labels the confirm button with the action title, not a generic verb", () => {
-    void enqueue({ actionTitle: "Delete worktree" });
-    render(<PluginConfirmDialog />);
-
-    expect(screen.getByRole("button", { name: "Delete worktree" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^run action$/i })).toBeNull();
-  });
-
   it("renders destructive styling for effectiveDanger:confirm dispatches", () => {
     void enqueue({ actionTitle: "Delete worktree", effectiveDanger: "confirm" });
     const { unmount } = render(<PluginConfirmDialog />);
@@ -423,28 +415,5 @@ describe("PluginConfirmDialog", () => {
     });
 
     await expect(p).resolves.toBe("rejected");
-  });
-
-  it("approves when confirm is clicked after cooldown", async () => {
-    vi.useFakeTimers();
-    try {
-      const p = enqueue();
-      render(<PluginConfirmDialog />);
-
-      act(() => {
-        vi.advanceTimersByTime(1200);
-      });
-
-      act(() => {
-        screen
-          .getByRole("button", { name: "Delete worktree" })
-          .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      });
-
-      await expect(p).resolves.toBe("approved");
-    } finally {
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
   });
 });

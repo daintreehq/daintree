@@ -2,12 +2,6 @@ import { describe, it, expect } from "vitest";
 import { cleanTaskTitle, stripIdentityAffixes } from "../taskTitle.js";
 
 describe("cleanTaskTitle", () => {
-  it("strips Claude's leading spinner glyph", () => {
-    expect(cleanTaskTitle("✳ Explore possible solution approach")).toBe(
-      "Explore possible solution approach"
-    );
-  });
-
   it("strips each glyph of Claude's spinner set", () => {
     for (const glyph of ["·", "✢", "✳", "✶", "✻", "✽", "●", "✼", "✾", "⟡", "◇", "◆", "○"]) {
       expect(cleanTaskTitle(`${glyph} fix auth bug`)).toBe("fix auth bug");

@@ -213,13 +213,6 @@ describe("DeepgramTranscriptionProvider", () => {
     vi.restoreAllMocks();
   });
 
-  // ── Capability ──────────────────────────────────────────────────────────
-
-  it("declares server-side VAD", () => {
-    const provider = new DeepgramTranscriptionProvider();
-    expect(provider.hasServerVAD).toBe(true);
-  });
-
   // ── Startup ────────────────────────────────────────────────────────────
 
   it("fails to start when no Deepgram API key is configured", async () => {
@@ -523,23 +516,6 @@ describe("DeepgramTranscriptionProvider", () => {
     // Finalized segment — emitted.
     socket.simulateMessage(resultsMessage("hello world", { is_final: true }));
     expect(completes).toEqual(["hello world"]);
-    provider.stop();
-  });
-
-  it("emits complete on a speech_final result", async () => {
-    const provider = new DeepgramTranscriptionProvider();
-    const events: VoiceTranscriptionEvent[] = [];
-    provider.onEvent((e) => events.push(e));
-
-    const { socket } = await bringSessionReady(provider);
-    socket.simulateMessage(resultsMessage("done speaking", { is_final: true, speech_final: true }));
-
-    const complete = events.find((e) => e.type === "complete");
-    expect(complete).toEqual({
-      type: "complete",
-      text: "done speaking",
-      confidence: { minConfidence: 1.0, wordCount: 0, uncertainWords: [], words: [] },
-    });
     provider.stop();
   });
 

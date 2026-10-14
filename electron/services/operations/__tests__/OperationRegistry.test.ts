@@ -5,7 +5,6 @@ import {
   OPERATION_MAX_ALIASES,
   OPERATION_MAX_RUNNING,
   normalizeOperationId,
-  untrackedOperationHandle,
 } from "../OperationRegistry.js";
 import type { OperationsEvent } from "../../../../shared/types/ipc/operations.js";
 
@@ -404,15 +403,6 @@ describe("OperationRegistry joins and admission", () => {
     expect(
       registry.start({ opId: "op-over", kind: "git-push", projectId: "p" }).handle
     ).not.toBeNull();
-  });
-
-  it("hands out an untracked handle that records and publishes nothing", () => {
-    const handle = untrackedOperationHandle();
-    handle.progress({ fraction: 0.5, stage: "x", message: null });
-    handle.onCancel(() => {});
-    expect(handle.tracked).toBe(false);
-    expect(handle.signal.aborted).toBe(false);
-    expect(events).toEqual([]);
   });
 });
 

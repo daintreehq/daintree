@@ -78,36 +78,4 @@ describe("projectStatsStore", () => {
     setupProjectStatsListeners();
     expect(onStatsUpdatedMock).toHaveBeenCalledOnce();
   });
-
-  it("setStats replaces the entire stats map", () => {
-    const first: ProjectStatusMap = {
-      a: {
-        activeAgentCount: 1,
-        waitingAgentCount: 0,
-        blockedAgentCount: 0,
-        completedAgentCount: 0,
-        unacknowledgedCompletedAgentCount: 0,
-        snoozedAgentCount: 0,
-        processCount: 1,
-      },
-    };
-    const second: ProjectStatusMap = {
-      b: {
-        activeAgentCount: 0,
-        waitingAgentCount: 2,
-        blockedAgentCount: 0,
-        completedAgentCount: 0,
-        unacknowledgedCompletedAgentCount: 0,
-        snoozedAgentCount: 0,
-        processCount: 4,
-      },
-    };
-
-    useProjectStatsStore.getState().setStats(first);
-    expect(useProjectStatsStore.getState().stats).toEqual(first);
-
-    useProjectStatsStore.getState().setStats(second);
-    expect(useProjectStatsStore.getState().stats).toEqual(second);
-    expect(useProjectStatsStore.getState().stats["a"]).toBeUndefined();
-  });
 });

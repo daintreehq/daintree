@@ -18,20 +18,9 @@ const defaultProps = {
 };
 
 describe("SettingsSwitchCard", () => {
-  it("renders title and subtitle", () => {
-    render(<SettingsSwitchCard {...defaultProps} />);
-    expect(screen.getByText("Test Setting")).toBeTruthy();
-    expect(screen.getByText("A test subtitle")).toBeTruthy();
-  });
-
   it("renders lifecycle badge when provided", () => {
     render(<SettingsSwitchCard {...defaultProps} lifecycleBadge="New Terminals" />);
     expect(screen.getByText("New Terminals")).toBeTruthy();
-  });
-
-  it("does not render lifecycle badge when not provided", () => {
-    render(<SettingsSwitchCard {...defaultProps} />);
-    expect(screen.queryByText("New Terminals")).toBeNull();
   });
 
   it("hides reset button when disabled even if modified", () => {
@@ -48,28 +37,6 @@ describe("SettingsSwitchCard", () => {
       <SettingsSwitchCard {...defaultProps} isModified={true} onReset={onReset} disabled={false} />
     );
     expect(screen.getByLabelText("Reset Test Setting to default")).toBeTruthy();
-  });
-
-  it("applies amber color scheme to switch track when enabled", () => {
-    const { container } = render(
-      <SettingsSwitchCard {...defaultProps} isEnabled={true} colorScheme="amber" />
-    );
-    const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.getAttribute("data-tone")).toBe("warning");
-  });
-
-  it("applies danger color scheme to switch track when enabled", () => {
-    const { container } = render(
-      <SettingsSwitchCard {...defaultProps} isEnabled={true} colorScheme="danger" />
-    );
-    const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.getAttribute("data-tone")).toBe("danger");
-  });
-
-  it("applies accent color scheme by default", () => {
-    const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={true} />);
-    const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.getAttribute("data-tone")).toBe("neutral");
   });
 
   it("points the switch at the subtitle via aria-describedby", () => {

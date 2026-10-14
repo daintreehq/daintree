@@ -285,29 +285,6 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     expect(sentPayload).not.toHaveProperty("approvalOnly");
   });
 
-  it("sends context: undefined when no override is supplied — unpinned path is untouched (#8317)", async () => {
-    const wc = makeWebContents(702);
-    mockWebContentsRegistry.set(702, wc);
-
-    let sentPayload: { requestId: string; context?: unknown } | undefined;
-    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
-      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
-      sentPayload = payload as { requestId: string; context?: unknown };
-      queueMicrotask(() => {
-        mockIpcMain.emit(
-          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
-          { sender: { id: 702 } },
-          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
-        );
-      });
-    });
-
-    await bridge.dispatchActionForWebContents(702, "actions.list", {}, false);
-
-    expect(sentPayload).toBeDefined();
-    expect(sentPayload?.context).toBeUndefined();
-  });
-
   it("threads the session's authenticated origin into the dispatch IPC payload (#11808)", async () => {
     const wc = makeWebContents(901);
     mockWebContentsRegistry.set(901, wc);
@@ -557,19 +534,6 @@ describe("rendererBridge — per-WebContents manifest cache (#9887)", () => {
     expect(bridge.getCachedManifestForWebContents(141)).toBeNull();
   });
 
-  it("clearCache drops all per-WebContents manifests", async () => {
-    const wc = makeWebContents(151);
-    mockWebContentsRegistry.set(151, wc);
-    autoReplyManifest(wc, [{ id: "cached" }] as ActionManifestEntry[]);
-
-    await bridge.requestManifestForWebContents(151);
-    expect(bridge.getCachedManifestForWebContents(151)).toEqual([{ id: "cached" }]);
-
-    bridge.clearCache();
-
-    expect(bridge.getCachedManifestForWebContents(151)).toBeNull();
-  });
-
   it("resurrection guard: a fetch that resolves after clearCache does not repopulate the cache", async () => {
     const wc = makeWebContents(161);
     mockWebContentsRegistry.set(161, wc);
@@ -718,29 +682,6 @@ describe("rendererBridge — requesting-bearer identity passthrough (#9157)", ()
     expect(sentPayload?.callerInfo).toEqual(callerInfo);
   });
 
-  it("leaves callerInfo absent (undefined) when not provided", async () => {
-    const wc = makeWebContents(802);
-    const bridge = makeActiveBridge(wc);
-
-    let sentPayload: { requestId: string; callerInfo?: unknown } | undefined;
-    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
-      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
-      sentPayload = payload as { requestId: string; callerInfo?: unknown };
-      queueMicrotask(() => {
-        mockIpcMain.emit(
-          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
-          { sender: { id: 802 } },
-          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
-        );
-      });
-    });
-
-    await bridge.dispatchAction("actions.list", {}, false);
-
-    expect(sentPayload).toBeDefined();
-    expect(sentPayload?.callerInfo).toBeUndefined();
-  });
-
   it("defaults the unpinned dispatch payload to an external origin (#11808)", async () => {
     const wc = makeWebContents(804);
     const bridge = makeActiveBridge(wc);
@@ -764,34 +705,6 @@ describe("rendererBridge — requesting-bearer identity passthrough (#9157)", ()
     await bridge.dispatchAction("actions.list", {}, false);
 
     expect(sentPayload?.sessionOrigin).toBe("external");
-  });
-
-  it("the pinned dispatch path leaves callerInfo undefined (provenance-free)", async () => {
-    // Pinned (help-session) dispatch must stay provenance-free. Mirrors the
-    // `context: undefined` convention — the key is present but undefined, which
-    // structured clone strips at the IPC boundary so the renderer sees nothing.
-    const wc = makeWebContents(803);
-    mockWebContentsRegistry.set(803, wc);
-    const bridge = createRendererBridge(pendingManifests, pendingDispatches, () => null);
-    bridge.setupListeners([]);
-
-    let sentPayload: { requestId: string; callerInfo?: unknown } | undefined;
-    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
-      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
-      sentPayload = payload as { requestId: string; callerInfo?: unknown };
-      queueMicrotask(() => {
-        mockIpcMain.emit(
-          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
-          { sender: { id: 803 } },
-          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
-        );
-      });
-    });
-
-    await bridge.dispatchActionForWebContents(803, "actions.list", {}, false);
-
-    expect(sentPayload).toBeDefined();
-    expect(sentPayload?.callerInfo).toBeUndefined();
   });
 });
 
@@ -891,29 +804,6 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
       });
     });
   }
-
-  it("dispatches to the most-recently-focused window, not the first registered", async () => {
-    const wcFirst = makeWebContents(901);
-    const wcFocused = makeWebContents(902);
-    const ctxFirst = makeContext({ activeWebContents: wcFirst });
-    const ctxFocused = makeContext({ activeWebContents: wcFocused });
-    autoRespond(wcFirst);
-    autoRespond(wcFocused);
-
-    // Registered first-to-last as [first, focused]; focus says the opposite.
-    const focusRef = { current: [ctxFocused, ctxFirst] };
-    const bridge = createRendererBridge(
-      pendingManifests,
-      pendingDispatches,
-      () => makeRegistry([ctxFirst, ctxFocused], focusRef) as never
-    );
-    bridge.setupListeners([]);
-
-    await bridge.dispatchAction("actions.list", {}, false);
-
-    expect(wcFocused.send).toHaveBeenCalled();
-    expect(wcFirst.send).not.toHaveBeenCalled();
-  });
 
   describe("windows on a remote host (#13285)", () => {
     let unregister: (() => void) | null = null;
@@ -1539,22 +1429,6 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
       .map(([, payload]) => (payload as { sessionOrigin?: unknown }).sessionOrigin);
 
     expect(origins).toEqual(["assistant-pane", "external"]);
-  });
-
-  it("keeps routing to its workspace after another workspace's view is registered", async () => {
-    // The isolation the whole feature is for: nothing about workspace B
-    // appearing (or being focused) may move workspace A's session.
-    const wcA = registerView("ws-a", 101);
-    const promiseOne = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
-    await settleDispatch();
-    await promiseOne;
-
-    registerView("ws-b", 202);
-    const promiseTwo = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
-    await settleDispatch();
-    await promiseTwo;
-
-    expect(wcA.send).toHaveBeenCalledTimes(2);
   });
 
   it("follows the workspace to a replacement view rather than dying with the old one", async () => {

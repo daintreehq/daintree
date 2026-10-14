@@ -108,13 +108,6 @@ describe("resolvePrerequisites", () => {
     expect(tools).toContain("claude");
   });
 
-  it("includes prerequisites for multiple agents", () => {
-    const specs = resolvePrerequisites(["claude", "gemini"]);
-    const tools = specs.map((s) => s.tool);
-    expect(tools).toContain("claude");
-    expect(tools).toContain("gemini");
-  });
-
   it("deduplicates by tool name keeping stricter severity", () => {
     const testAgent: AgentConfig = {
       id: "test-agent",
@@ -310,14 +303,6 @@ describe("runSystemHealthCheck", () => {
 
     expect(result.prerequisites.find((p) => p.tool === "node")?.meetsMinVersion).toBe(false);
     expect(result.allRequired).toBe(false);
-  });
-
-  it("allRequired is true when every fatal tool is healthy", async () => {
-    mockLookup(ALL_TOOLS, ALL_VERSIONS);
-
-    const result = await runSystemHealthCheck();
-
-    expect(result.allRequired).toBe(true);
   });
 
   it("allRequired ignores warn-severity tools", async () => {

@@ -85,13 +85,6 @@ describe("ServiceConnectivityRegistry", () => {
   });
 
   describe("getSnapshot()", () => {
-    it("returns every tracked service with status `unknown` before start()", () => {
-      const snapshot = registry.getSnapshot();
-
-      expect(snapshot.github.status).toBe("unknown");
-      expect(snapshot.mcp.status).toBe("unknown");
-    });
-
     it("returns a fresh clone — mutating the result does not affect internal state", () => {
       const snapshot = registry.getSnapshot();
       snapshot.github.status = "reachable";
@@ -139,12 +132,6 @@ describe("ServiceConnectivityRegistry", () => {
   describe("derived states", () => {
     beforeEach(() => {
       registry.start();
-    });
-
-    it("maps GitHub `healthy` to `reachable`", () => {
-      gitHubHealth.emit({ status: "healthy", tokenVersion: 1, checkedAt: 1_000_000 });
-
-      expect(registry.getSnapshot().github.status).toBe("reachable");
     });
 
     it("maps GitHub `unhealthy` (token revoked) to `unknown`, NOT `unreachable`", () => {

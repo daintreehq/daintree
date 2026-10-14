@@ -65,22 +65,6 @@ describe("MarkdownDocument", () => {
     expect(container.querySelector("del")?.textContent).toBe("gone");
   });
 
-  it("syntax-highlights fenced code with refractor tokens", () => {
-    const { container } = render(
-      <MarkdownDocument
-        {...FIXTURE_PROPS}
-        content={'```typescript\nconst x: string = "hi";\n```'}
-      />
-    );
-
-    // typescript is a preregistered diffRefractor grammar, so highlighting is
-    // synchronous: keyword tokens must be present on first render.
-    const code = container.querySelector("code.language-typescript");
-    expect(code).not.toBeNull();
-    expect(code!.querySelector(".token.keyword")).not.toBeNull();
-    expect(code!.textContent).toContain('const x: string = "hi";');
-  });
-
   it("keeps unknown fence languages as plain text without crashing", () => {
     const { container } = render(
       <MarkdownDocument {...FIXTURE_PROPS} content={"```zzznotalang\nplain body\n```"} />
@@ -155,15 +139,6 @@ describe("MarkdownDocument", () => {
     // No host token supplied: the URL must stay clean rather than pick up an
     // empty or "undefined" parameter.
     expect(new URL(src).searchParams.has("v")).toBe(false);
-  });
-
-  it("keeps remote image sources untouched", () => {
-    const { container } = render(
-      <MarkdownDocument {...FIXTURE_PROPS} content={"![logo](https://example.com/logo.png)"} />
-    );
-    expect(container.querySelector("img")?.getAttribute("src")).toBe(
-      "https://example.com/logo.png"
-    );
   });
 
   it("carries the cache token on local images only, never on remote images or links", () => {

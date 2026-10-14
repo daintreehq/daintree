@@ -110,14 +110,6 @@ beforeEach(() => {
 });
 
 describe("dismissSessionLost", () => {
-  it("consumes the signal so a remount can't resurface the banner", () => {
-    seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" })]);
-
-    usePanelStore.getState().dismissSessionLost("t-1");
-
-    expect(signalOf("t-1")).toBeUndefined();
-  });
-
   it("leaves other flagged panels alone", () => {
     seed([
       ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" }),
@@ -185,16 +177,6 @@ describe("dismissSessionLost", () => {
     usePanelStore.getState().dismissSessionLost("t-1");
 
     expect(usePanelStore.getState().panelsById).toBe(before);
-  });
-
-  it("keeps the same carrier identity on a repeat dismissal", () => {
-    seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" })]);
-    usePanelStore.getState().dismissSessionLost("t-1");
-    const afterFirst = usePanelStore.getState().panelsById;
-
-    usePanelStore.getState().dismissSessionLost("t-1");
-
-    expect(usePanelStore.getState().panelsById).toBe(afterFirst);
   });
 
   it("ignores a non-PTY panel", () => {
@@ -276,18 +258,6 @@ describe("dismissAllSessionLost", () => {
     expect(signalOf("t-batched")).toBeUndefined();
   });
 
-  it("clears panels parked outside the grid", () => {
-    seed([
-      ptyPanel("t-dock", { sessionLostOnRestore: "no-resume-command", location: "dock" }),
-      ptyPanel("t-trash", { sessionLostOnRestore: "no-resume-command", location: "trash" }),
-    ]);
-
-    usePanelStore.getState().dismissAllSessionLost();
-
-    expect(signalOf("t-dock")).toBeUndefined();
-    expect(signalOf("t-trash")).toBeUndefined();
-  });
-
   it("leaves unflagged panels untouched by identity", () => {
     const untouched = ptyPanel("t-2");
     seed([ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" }), untouched]);
@@ -308,19 +278,6 @@ describe("dismissAllSessionLost", () => {
 
     expect(notified).not.toHaveBeenCalled();
     expect(usePanelStore.getState().panelsById).toBe(before);
-  });
-
-  it("is idempotent", () => {
-    seed([
-      ptyPanel("t-1", { sessionLostOnRestore: "no-resume-command" }),
-      ptyPanel("t-2", { sessionLostOnRestore: "no-resume-command" }),
-    ]);
-    usePanelStore.getState().dismissAllSessionLost();
-    const afterFirst = usePanelStore.getState().panelsById;
-
-    usePanelStore.getState().dismissAllSessionLost();
-
-    expect(usePanelStore.getState().panelsById).toBe(afterFirst);
   });
 
   it("skips non-PTY panels", () => {

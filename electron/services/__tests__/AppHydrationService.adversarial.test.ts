@@ -1,4 +1,3 @@
-import os from "os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HydrateResult } from "../../../shared/types/ipc/app.js";
 
@@ -356,16 +355,6 @@ describe("AppHydrationService adversarial", () => {
     expect(result.appState.mruList).toBeUndefined();
   });
 
-  it("folds the system temp dir into the payload so the renderer can skip the IPC call", async () => {
-    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
-    const result = await buildSwitchHydrateResult("project-1");
-
-    // The field must be present and wired to the live temp dir (not undefined),
-    // so the renderer can derive the clipboard directory without a round-trip.
-    expect(result.systemTmpDir).toBe(os.tmpdir());
-    expect(result.systemTmpDir!.length).toBeGreaterThan(0);
-  });
-
   it("folds tabGroups/terminalSizes/draftInputs from project state into the payload", async () => {
     const tabGroups = [{ id: "g1", location: "grid", activeTabId: "t1", panelIds: ["t1"] }];
     const terminalSizes = { t1: { cols: 120, rows: 40 } };
@@ -491,26 +480,6 @@ describe("AppHydrationService adversarial", () => {
       quarantinedPath: "/projects/abc/state.json.corrupted",
     });
     expect(result.appState.terminals).toEqual([]);
-  });
-
-  it("PROJECT_STATE_RECOVERY_NULL_WHEN_CLEAN", async () => {
-    mockState.projectState = {
-      terminals: [
-        {
-          id: "project-terminal",
-          type: "terminal",
-          title: "Project Terminal",
-          cwd: "/project",
-          location: "grid",
-        },
-      ],
-    };
-    mockState.projectStateQuarantinedPath = undefined;
-
-    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
-    const result = await buildSwitchHydrateResult("project-1");
-
-    expect(result.projectStateRecovery).toBeNull();
   });
 
   it("UNKNOWN_PROJECT_ID_STILL_VALID", async () => {

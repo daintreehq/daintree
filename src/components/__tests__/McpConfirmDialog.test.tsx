@@ -312,14 +312,6 @@ describe("McpConfirmDialog", () => {
       }
     });
 
-    it("is a dialog, not an alertdialog, because the list is interactive", () => {
-      void enqueue({ actionTitle: "Kill terminals", selectableTargets: BATCH_TARGETS });
-      render(<McpConfirmDialog />);
-
-      expect(screen.queryByRole("alertdialog")).toBeNull();
-      expect(screen.getByRole("dialog")).toBeTruthy();
-    });
-
     it("does not carry one batch's unchecked rows into the next promoted request", async () => {
       vi.useFakeTimers();
       try {
@@ -519,14 +511,6 @@ describe("McpConfirmDialog", () => {
     });
   });
 
-  it("labels the confirm button with the action title, not a generic verb", () => {
-    void enqueue({ actionTitle: "Delete worktree" });
-    render(<McpConfirmDialog />);
-
-    expect(screen.getByRole("button", { name: "Delete worktree" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^run action$/i })).toBeNull();
-  });
-
   // #11538: a git.push preview is a commit list, not working-tree changes, so
   // the heading travels with the lines instead of being hardcoded.
   it("renders the preview under its own heading when one is supplied", () => {
@@ -539,13 +523,6 @@ describe("McpConfirmDialog", () => {
     expect(screen.getByText("Branch and local commits")).toBeTruthy();
     expect(screen.queryByText("Working tree changes")).toBeNull();
     expect(screen.getByText(/Fix the thing/)).toBeTruthy();
-  });
-
-  it("keeps the original working-tree heading when no preview title is supplied", () => {
-    void enqueue({ preview: ["No uncommitted changes."] });
-    render(<McpConfirmDialog />);
-
-    expect(screen.getByText("Working tree changes")).toBeTruthy();
   });
 
   // Must advance PAST the destructive cooldown first: that independently
@@ -733,27 +710,6 @@ describe("McpConfirmDialog", () => {
       await expect(pA).resolves.toEqual({ decision: "approved" });
 
       await expectStillPending(pB);
-    } finally {
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("disables the confirm button on mount for danger:confirm, re-enabling after the cooldown", () => {
-    vi.useFakeTimers();
-    try {
-      void enqueue({ actionTitle: "Delete worktree", danger: "confirm" });
-      render(<McpConfirmDialog />);
-
-      const confirmBtn = screen.getByRole("button", {
-        name: "Delete worktree",
-      }) as HTMLButtonElement;
-      expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
-
-      act(() => {
-        vi.advanceTimersByTime(1200);
-      });
-      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();

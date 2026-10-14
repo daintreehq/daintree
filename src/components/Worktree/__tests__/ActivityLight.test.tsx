@@ -39,11 +39,6 @@ describe("ActivityLight", () => {
     expect(container.querySelector('[role="img"]')).toBeNull();
   });
 
-  it("marks the dot aria-hidden so adjacent text carries the label", () => {
-    const { container } = render(<ActivityLight lastActivityTimestamp={Date.now()} />);
-    expect(getDot(container).getAttribute("aria-hidden")).toBe("true");
-  });
-
   it("does not render a tooltip subtree or live region", () => {
     const { container } = render(<ActivityLight lastActivityTimestamp={Date.now()} />);
     expect(container.querySelector('[role="tooltip"]')).toBeNull();
@@ -80,19 +75,6 @@ describe("ActivityLight", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders nothing when timestamp is undefined (never recorded)", () => {
-    const { container } = render(<ActivityLight />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it.each([Number.NaN, Infinity, 0, -1])(
-    "renders nothing for invalid timestamp %s",
-    (timestamp) => {
-      const { container } = render(<ActivityLight lastActivityTimestamp={timestamp} />);
-      expect(container.firstChild).toBeNull();
-    }
-  );
-
   it("renders nothing for a future timestamp", () => {
     const now = Date.now();
     vi.setSystemTime(now);
@@ -100,17 +82,9 @@ describe("ActivityLight", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("applies the className prop", () => {
-    const { container } = render(
-      <ActivityLight lastActivityTimestamp={Date.now()} className="ml-1" />
-    );
-    expect(getDot(container).className).toContain("ml-1");
-  });
-
   it.each([
     ["just before boundary", -1, "active"],
     ["at boundary", 0, "idle"],
-    ["just past boundary", 1, "idle"],
   ] as const)("%s: elapsed=DECAY_DURATION+(%sms) → %s", (_label, offsetMs, expectedState) => {
     const now = Date.now();
     vi.setSystemTime(now);

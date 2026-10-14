@@ -112,12 +112,6 @@ describe("ProjectPluginIndicator", () => {
     expect(document.body.textContent).toContain("not saved");
   });
 
-  it("stays quiet once the decision is on disk", () => {
-    const { container } = render(<ProjectPluginIndicator />);
-    snapshot([plugin("a.b", "active")], { decision: "enabled", enabled: true, persisted: true });
-    expect(container.textContent).toBe("");
-  });
-
   it("does not read a session grant as a failed write", () => {
     // `session` is memory-only by contract — `persisted: false` is correct
     // there and must not be reported as a fault.

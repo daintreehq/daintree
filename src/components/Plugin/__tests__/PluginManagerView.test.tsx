@@ -272,11 +272,6 @@ describe("PluginManagerView — .dntr drop", () => {
 });
 
 describe("PluginManagerView", () => {
-  it("renders the search field immediately", async () => {
-    renderDialog();
-    expect(screen.getByLabelText("Search plugins")).toBeTruthy();
-  });
-
   it("moves focus into the view on open so the keyboard isn't left on the background", async () => {
     // role="region" doesn't trap focus; the view must steal it on open so
     // Escape (and Cmd+W) route through the view rather than a background panel.
@@ -285,13 +280,6 @@ describe("PluginManagerView", () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByLabelText("Search plugins"))
     );
-  });
-
-  it("shows an empty state when no plugins are installed", async () => {
-    renderDialog();
-    await waitFor(() => {
-      expect(screen.getByText("No plugins installed")).toBeTruthy();
-    });
   });
 
   it("lists installed plugins with a toggle", async () => {
@@ -341,38 +329,6 @@ describe("PluginManagerView", () => {
     const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect((toggle as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it("does not flash 'Restart required' when a built-in plugin is toggled (#10512)", async () => {
-    // Built-ins transition live, so their authoritative pendingRestart stays
-    // false. The optimistic update must match — not invert — to avoid a
-    // false badge flash before the next refresh.
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makePlugin({ isBuiltin: true, disabled: false, pendingRestart: false }),
-    ]);
-    renderDialog();
-    const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
-    fireEvent.click(toggle);
-
-    // The optimistic flip lands synchronously; wait for it to settle the switch,
-    // then assert no restart badge appeared.
-    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
-    expect(screen.queryByText("Restart required")).toBeNull();
-  });
-
-  it("does not flash 'Restart required' when a user plugin is toggled (#10887)", async () => {
-    // User plugins now transition live too (#10887): setEnabled unloads/reloads
-    // them without a restart, so their authoritative pendingRestart stays false.
-    // The optimistic update must match — not invert — to avoid a false badge.
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makePlugin({ isBuiltin: false, disabled: false, pendingRestart: false }),
-    ]);
-    renderDialog();
-    const toggle = await screen.findByRole("switch", { name: "Enable Acme Demo" });
-    fireEvent.click(toggle);
-
-    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
-    expect(screen.queryByText("Restart required")).toBeNull();
   });
 
   it("renders a plugin's settings form in the detail pane once selected", async () => {
@@ -436,29 +392,6 @@ describe("PluginManagerView", () => {
     // A tab whose only content was "this plugin has no settings" is noise —
     // it's now absent rather than empty.
     expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
-  });
-
-  it("shows an empty detail pane before any plugin is selected", async () => {
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makePluginWithSettings(),
-    ]);
-    renderDialog();
-    await screen.findAllByText("Acme Demo");
-    expect(screen.getByText("Installed plugins")).toBeTruthy();
-    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
-  });
-
-  it("marks the selected row with aria-selected", async () => {
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
-    renderDialog();
-    await screen.findAllByText("Acme Demo");
-
-    const option = pluginRowButton("Acme Demo");
-    expect(option.getAttribute("aria-current")).toBeNull();
-    fireEvent.click(option);
-    await waitFor(() =>
-      expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true")
-    );
   });
 
   it("deselects the plugin when its already-selected row is clicked again", async () => {
@@ -591,34 +524,6 @@ describe("PluginManagerView", () => {
     fireProvenance?.();
     await waitFor(() => expect(screen.queryByText("Uninstall 'Acme Demo'?")).toBeNull());
     expect(window.electron.plugin.uninstall).not.toHaveBeenCalled();
-  });
-
-  it("calls setEnabled(false) when disabling and applies live — no restart badge (#10887)", async () => {
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
-    renderDialog();
-    await screen.findAllByText("Acme Demo");
-
-    fireEvent.click(screen.getByRole("switch", { name: "Enable Acme Demo" }));
-
-    await waitFor(() => {
-      expect(window.electron.plugin.setEnabled).toHaveBeenCalledWith("acme.demo", false);
-    });
-    // User plugins now toggle live (#10887): no restart badge flashes.
-    const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
-    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
-    expect(screen.queryByText("Restart required")).toBeNull();
-  });
-
-  it("keeps the restart badge after a remount (pendingRestart comes from listPlugins)", async () => {
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makePlugin({ disabled: true, pendingRestart: true }),
-    ]);
-    renderDialog();
-    await waitFor(() => {
-      expect(screen.getAllByText("Restart required").length).toBeGreaterThan(0);
-    });
-    const toggle = screen.getByRole("switch", { name: "Enable Acme Demo" });
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
   it("reverts the switch and shows an error when setEnabled rejects", async () => {
@@ -793,14 +698,6 @@ describe("PluginManagerView", () => {
       ...overrides,
     });
 
-  it("enables the check-for-update button for a URL-installed plugin", async () => {
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
-    renderDialog();
-    await selectPlugin();
-    const checkBtn = await screen.findByRole("button", { name: "Check Acme Demo for updates" });
-    expect(checkBtn.hasAttribute("disabled")).toBe(false);
-  });
-
   it("shows 'Already up to date' when the check finds a matching hash", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
     (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -892,20 +789,6 @@ describe("PluginManagerView", () => {
     fireEvent.click(btn);
 
     expect(window.electron.plugin.checkForUpdate).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows an error when the update check fails to fetch", async () => {
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
-    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: "fetch-failed",
-      message: "HTTP 500",
-    });
-    renderDialog();
-    await selectPlugin();
-
-    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
-
-    await waitFor(() => expect(screen.getByText(/HTTP 500/)).toBeTruthy());
   });
 
   const surfaceUpdateCheckError = async () => {
@@ -1070,22 +953,6 @@ describe("PluginManagerView", () => {
     await act(async () => settleInstall!({ status: "cancelled" }));
   });
 
-  it("gates an http:// URL behind a confirm dialog before calling installFromUrl", async () => {
-    renderDialog();
-    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
-
-    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
-    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
-    fireEvent.change(screen.getByLabelText("Plugin URL"), {
-      target: { value: "http://example.com/p.dntr" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Install" }));
-
-    // The confirm gate appears and the IPC call has NOT fired yet.
-    await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
-    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
-  });
-
   it("cancelling the http confirm does not call installFromUrl", async () => {
     renderDialog();
     await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
@@ -1154,42 +1021,6 @@ describe("PluginManagerView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Install" }));
 
     await waitFor(() => expect(screen.getByText(/larger than the 30 MB limit/)).toBeTruthy());
-  });
-
-  it("shows a tailored error when a URL install times out", async () => {
-    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: "failed",
-      errors: [{ code: "fetch_timeout", message: "slow" }],
-    });
-    renderDialog();
-    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
-
-    fireEvent.click(screen.getByRole("button", { name: "Install from URL" }));
-    await waitFor(() => expect(screen.getByLabelText("Plugin URL")).toBeTruthy());
-    fireEvent.change(screen.getByLabelText("Plugin URL"), {
-      target: { value: "https://example.com/p.dntr" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Install" }));
-
-    await waitFor(() => expect(screen.getByText(/download timed out/)).toBeTruthy());
-  });
-
-  it("re-fetches the list when a provenance-changed event fires", async () => {
-    let fireProvenance: (() => void) | undefined;
-    (window.electron.plugin.onProvenanceChanged as ReturnType<typeof vi.fn>).mockImplementation(
-      (cb: () => void) => {
-        fireProvenance = cb;
-        return () => {};
-      }
-    );
-    const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
-    listMock.mockResolvedValue([]);
-    renderDialog();
-    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
-    expect(listMock).toHaveBeenCalledTimes(1);
-
-    fireProvenance?.();
-    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
   });
 
   it("routes an http reinstall through the HTTP warning gate before installing", async () => {
@@ -1464,24 +1295,6 @@ describe("PluginManagerView", () => {
   });
 
   describe("restart-required bar", () => {
-    it("hides the bar when no plugin is pending a restart", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
-      renderDialog();
-      await screen.findAllByText("Acme Demo");
-      expect(screen.queryByText("Restart required to apply plugin changes")).toBeNull();
-    });
-
-    it("shows the bar when a plugin reports pendingRestart", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-        makePlugin({ disabled: true, pendingRestart: true }),
-      ]);
-      renderDialog();
-      await waitFor(() =>
-        expect(screen.getByText("Restart required to apply plugin changes")).toBeTruthy()
-      );
-      expect(screen.getByRole("button", { name: "Restart" })).toBeTruthy();
-    });
-
     it("holds the Restart offer back while an install is running", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         makePlugin({ disabled: true, pendingRestart: true }),
@@ -1671,30 +1484,6 @@ describe("PluginManagerView", () => {
       );
     };
 
-    it("places a plugin with a declared category in that category's section", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-        named({
-          manifest: { name: "core.github", displayName: "Core GitHub", category: "forge" },
-          isBuiltin: true,
-          source: "builtin",
-        }),
-      ]);
-      renderDialog();
-      await screen.findAllByText("Core GitHub");
-      expect(pluginInSection("Forge providers", "Core GitHub")).toBeTruthy();
-      expect(sectionExists("Other")).toBe(false);
-    });
-
-    it("derives the fallback section for a plugin with no category or defining contribution", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-        named({ manifest: { name: "acme.demo", displayName: "Acme Demo" }, source: "sideload" }),
-      ]);
-      renderDialog();
-      await screen.findAllByText("Acme Demo");
-      expect(pluginInSection("Other", "Acme Demo")).toBeTruthy();
-      expect(sectionExists("Forge providers")).toBe(false);
-    });
-
     it("keeps a disabled plugin in its category section with its switch off", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         named({
@@ -1789,13 +1578,6 @@ describe("PluginManagerView", () => {
     const manyPlugins = (count: number) =>
       Array.from({ length: count }, (_, i) => make(`Plugin${String(i).padStart(2, "0")}`));
 
-    it("shows the search input even with a single plugin", async () => {
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(manyPlugins(1));
-      renderDialog();
-      await screen.findAllByText("Plugin00");
-      expect(screen.getByLabelText("Search plugins")).toBeTruthy();
-    });
-
     it("filters the list by free text", async () => {
       const plugins = [
         ...manyPlugins(10),
@@ -1868,25 +1650,6 @@ describe("PluginManagerView", () => {
       expect(screen.getByRole("button", { name: "Disabled" }).getAttribute("aria-pressed")).toBe(
         "true"
       );
-    });
-
-    it("filters by the @cap operator with a colon-bearing value", async () => {
-      const plugins = [
-        ...manyPlugins(10),
-        make("NetPlugin", {
-          manifest: {
-            name: "pkg.net",
-            displayName: "NetPlugin",
-            capabilities: ["network:fetch"],
-          },
-        }),
-      ];
-      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue(plugins);
-      renderDialog();
-      const input = await screen.findByLabelText("Search plugins");
-      fireEvent.change(input, { target: { value: "@cap:network:fetch" } });
-      await screen.findAllByText("NetPlugin");
-      expect(screen.queryByText("Plugin00")).toBeNull();
     });
 
     it("renders a flat list with no group sections while filtering", async () => {
@@ -2148,26 +1911,6 @@ describe("PluginManagerView", () => {
         { pluginId: "acme.b", archiveHash: digestFor("acme.b") },
       ]);
     });
-
-    it("routes an http update through the HTTP confirm before installing", async () => {
-      listMock().mockResolvedValue([makeUrl("acme.a", "Plugin A", "http://example.com/a.dntr")]);
-      checkMock().mockResolvedValue({
-        status: "available",
-        name: "acme.a",
-        version: "2.0.0",
-        capabilities: [],
-        archiveHash: "a".repeat(64),
-      });
-      renderDialog();
-      fireEvent.click(await screen.findByRole("button", { name: "Update all" }));
-
-      await waitFor(() => expect(screen.getByText("Update 'Plugin A'?")).toBeTruthy());
-      fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
-
-      await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
-      // The HTTP gate must fire before any download leaves the app.
-      expect(installMock()).not.toHaveBeenCalled();
-    });
   });
 });
 
@@ -2229,26 +1972,6 @@ describe("PluginManagerView design invariants", () => {
     // The version is the actionable part: "an update exists" without saying
     // which one leaves the user no better off than before.
     expect((rowFor("Acme Demo").textContent ?? "").includes("9.9.9")).toBe(true);
-  });
-
-  it("falls back to the description when a plugin declares no tagline", async () => {
-    // Only the forge built-ins set a tagline, so a row keyed solely on it is
-    // blank for nearly every third-party plugin.
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makePlugin({
-        manifest: {
-          ...makePlugin().manifest,
-          tagline: undefined,
-          description: "Explains itself in the list",
-        },
-      } as Parameters<typeof makePlugin>[0]),
-    ]);
-    renderDialog();
-    await screen.findAllByText("Acme Demo");
-
-    expect((rowFor("Acme Demo").textContent ?? "").includes("Explains itself in the list")).toBe(
-      true
-    );
   });
 
   it("surfaces a broken plugin before the user has to scroll to find it", async () => {

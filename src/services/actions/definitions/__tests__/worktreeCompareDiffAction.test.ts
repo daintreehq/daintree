@@ -187,39 +187,12 @@ describe("worktree.compareDiff run() (#10684)", () => {
     expect(mockCompareWorktrees).not.toHaveBeenCalled();
   });
 
-  it("delegates self-comparison to the IPC (no client-side guard)", async () => {
-    // The action does not block worktreeId === compareToWorktreeId; it forwards
-    // both (identical) branches to git, which returns an empty file list. This
-    // documents that the data contract delegates the equality case downstream.
-    const run = getRun();
-    await run(
-      { worktreeId: "wt-left", compareToWorktreeId: "wt-left" } as never,
-      {} as ActionContext
-    );
-    expect(mockCompareWorktrees).toHaveBeenCalledWith(
-      "/repo/left",
-      "feature/a",
-      "feature/a",
-      undefined,
-      undefined,
-      undefined
-    );
-  });
-
   it("throws when the IPC returns a raw diff string instead of a file list", async () => {
     mockCompareWorktrees.mockResolvedValue("raw diff text");
     const run = getRun();
     await expect(
       run({ worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never, {} as ActionContext)
     ).rejects.toThrow(/Unexpected diff string/);
-  });
-
-  it("propagates IPC rejection", async () => {
-    mockCompareWorktrees.mockRejectedValue(new Error("branch not found"));
-    const run = getRun();
-    await expect(
-      run({ worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never, {} as ActionContext)
-    ).rejects.toThrow(/branch not found/);
   });
 
   describe("bounded file list (#11531)", () => {

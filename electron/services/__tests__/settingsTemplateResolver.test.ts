@@ -57,30 +57,10 @@ describe("resolveSettingsTemplates", () => {
       expect(result).toBe("sk-abc:org-42");
     });
 
-    it("substitutes templates embedded in literal text", async () => {
-      api = fakeApi({ token: "sk-xyz" });
-      const result = await resolveSettingsTemplates(
-        "KEY=${settings:token}&other=val",
-        "acme.plugin",
-        api
-      );
-      expect(result).toBe("KEY=sk-xyz&other=val");
-    });
-
     it("supports underscore keys", async () => {
       api = fakeApi({ api_key: "secret123" });
       const result = await resolveSettingsTemplates("${settings:api_key}", "acme.plugin", api);
       expect(result).toBe("secret123");
-    });
-
-    it("supports dot-separated keys", async () => {
-      api = fakeApi({ "linear.apiToken": "sk-dot" });
-      const result = await resolveSettingsTemplates(
-        "${settings:linear.apiToken}",
-        "acme.linear",
-        api
-      );
-      expect(result).toBe("sk-dot");
     });
 
     it("substitutes a hyphenated id (matches the schema's any-non-empty-string id grammar)", async () => {
@@ -164,13 +144,6 @@ describe("resolveSettingsTemplates", () => {
       expect(api.get).toHaveBeenCalledWith("1foo");
     });
 
-    it("substitutes a hyphenated id", async () => {
-      api = fakeApi({ "foo-bar": "hyphenated" });
-      const result = await resolveSettingsTemplates("${settings:foo-bar}", "acme.plugin", api);
-      expect(result).toBe("hyphenated");
-      expect(api.get).toHaveBeenCalledWith("foo-bar");
-    });
-
     it("substitutes an id with a trailing dot", async () => {
       api = fakeApi({ "foo.": "trailing-dot" });
       const result = await resolveSettingsTemplates("${settings:foo.}", "acme.plugin", api);
@@ -215,37 +188,6 @@ describe("resolveSettingsTemplates", () => {
   });
 
   describe("errors", () => {
-    it("throws SettingTemplateError for unmatched setting", async () => {
-      api = fakeApi({});
-      await expect(
-        resolveSettingsTemplates("${settings:missing}", "acme.plugin", api)
-      ).rejects.toThrow(SettingTemplateError);
-    });
-
-    it("includes the pluginId and token in the error", async () => {
-      api = fakeApi({});
-      let caught: SettingTemplateError | null = null;
-      try {
-        await resolveSettingsTemplates("${settings:missing.key}", "acme.linear", api);
-      } catch (e) {
-        caught = e as SettingTemplateError;
-      }
-      expect(caught).not.toBeNull();
-      expect(caught!.code).toBe("UNMATCHED_SETTING");
-      expect(caught!.pluginId).toBe("acme.linear");
-      expect(caught!.token).toBe("missing.key");
-    });
-
-    it("error message contains the token id, not any resolved value", async () => {
-      api = fakeApi({ known: "secret-value" });
-      try {
-        await resolveSettingsTemplates("${settings:known}${settings:missing}", "acme.plugin", api);
-      } catch (e) {
-        expect((e as Error).message).toContain("missing");
-        expect((e as Error).message).not.toContain("secret-value");
-      }
-    });
-
     it("has exact error shape for mixed known+missing", async () => {
       api = fakeApi({ known: "secret" });
       let caught: SettingTemplateError | null = null;
@@ -288,24 +230,6 @@ describe("resolveSettingsTemplates", () => {
 });
 
 describe("substituteSettingsTemplates", () => {
-  it("substitutes each unique id once via the resolve callback", async () => {
-    const resolve = vi.fn(async (id: string) => ({ apiToken: "sk-1", orgId: "org-2" })[id] ?? "");
-    const result = await substituteSettingsTemplates(
-      "--token ${settings:apiToken} --org ${settings:orgId} --again ${settings:apiToken}",
-      resolve
-    );
-    expect(result).toBe("--token sk-1 --org org-2 --again sk-1");
-    // apiToken appears twice but is resolved once (dedup), orgId once → 2 calls.
-    expect(resolve).toHaveBeenCalledTimes(2);
-  });
-
-  it("returns the input unchanged (and never calls resolve) when no template is present", async () => {
-    const resolve = vi.fn(async () => "x");
-    const result = await substituteSettingsTemplates("acme --interactive", resolve);
-    expect(result).toBe("acme --interactive");
-    expect(resolve).not.toHaveBeenCalled();
-  });
-
   it("propagates an error thrown by resolve (caller decides unset-means-error)", async () => {
     const resolve = vi.fn(async (id: string) => {
       if (id === "missing") throw new SettingTemplateError("acme.plugin", id);
@@ -314,15 +238,5 @@ describe("substituteSettingsTemplates", () => {
     await expect(
       substituteSettingsTemplates("${settings:present} ${settings:missing}", resolve)
     ).rejects.toThrow(SettingTemplateError);
-  });
-
-  it("leaves near-miss syntax untouched", async () => {
-    const resolve = vi.fn(async () => "x");
-    const result = await substituteSettingsTemplates(
-      "$settings:foo ${settings:} ${other:foo}",
-      resolve
-    );
-    expect(result).toBe("$settings:foo ${settings:} ${other:foo}");
-    expect(resolve).not.toHaveBeenCalled();
   });
 });

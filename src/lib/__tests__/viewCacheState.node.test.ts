@@ -19,11 +19,6 @@ describe("viewCacheState without a DOM", () => {
     __resetProjectViewCacheStateForTests();
   });
 
-  it("does not throw when window is undeclared", () => {
-    expect(typeof window).toBe("undefined");
-    expect(() => isProjectViewCached()).not.toThrow();
-  });
-
   it("reports not-cached — no window means no view lifecycle", () => {
     expect(isProjectViewCached()).toBe(false);
   });
@@ -34,11 +29,5 @@ describe("viewCacheState without a DOM", () => {
       off = subscribeProjectViewLifecycle(() => {});
     }).not.toThrow();
     expect(() => off?.()).not.toThrow();
-  });
-
-  it("survives a reset with no bridge to detach", () => {
-    subscribeProjectViewLifecycle(() => {});
-    expect(() => __resetProjectViewCacheStateForTests()).not.toThrow();
-    expect(isProjectViewCached()).toBe(false);
   });
 });

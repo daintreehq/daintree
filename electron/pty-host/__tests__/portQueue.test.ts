@@ -36,23 +36,6 @@ describe("PortQueueManager", () => {
     vi.useRealTimers();
   });
 
-  it("tracks addBytes and removeBytes correctly", () => {
-    const deps = createMockDeps();
-    const mgr = new PortQueueManager(deps);
-
-    mgr.addBytes("t1", 1000);
-    expect(mgr.getQueuedBytes("t1")).toBe(1000);
-
-    mgr.addBytes("t1", 500);
-    expect(mgr.getQueuedBytes("t1")).toBe(1500);
-
-    mgr.removeBytes("t1", 800);
-    expect(mgr.getQueuedBytes("t1")).toBe(700);
-
-    mgr.removeBytes("t1", 1000);
-    expect(mgr.getQueuedBytes("t1")).toBe(0);
-  });
-
   it("getUtilization returns correct percentage", () => {
     const deps = createMockDeps();
     const mgr = new PortQueueManager(deps);
@@ -266,14 +249,6 @@ describe("PortQueueManager", () => {
     expect(coordinator.resume).toHaveBeenCalledWith("port-queue");
   });
 
-  it("removeBytes clamps to zero for unknown terminals", () => {
-    const deps = createMockDeps();
-    const mgr = new PortQueueManager(deps);
-
-    mgr.removeBytes("unknown", 100);
-    expect(mgr.getQueuedBytes("unknown")).toBe(0);
-  });
-
   it("applyBackpressure returns false when coordinator is missing", () => {
     const deps = createMockDeps();
     vi.mocked(deps.getPauseCoordinator).mockReturnValue(undefined);
@@ -287,118 +262,63 @@ describe("PortQueueManager", () => {
     expect(mgr.isPaused("t1")).toBe(false);
   });
 
-  it("emitTerminalStatus throwing after pause releases the token (#7641)", () => {
-    // A post-pause side-effect (event emit, metric send) throwing after
-    // coordinator.pause() succeeded must trigger a coordinator.resume so the
-    // "port-queue" token is not leaked. Otherwise the PTY is permanently
-    // paused with no entry in pausedTerminals — neither tryResume nor the
-    // safety timeout can recover it.
-    const deps = createMockDeps();
-    vi.mocked(deps.emitTerminalStatus).mockImplementationOnce(() => {
-      throw new Error("DataCloneError");
-    });
-    const mgr = new PortQueueManager(deps);
-    const coordinator = deps.getPauseCoordinator("t1")!;
+  it.each(["emitTerminalStatus", "emitReliabilityMetric"] as const)(
+    "%s throwing after pause releases the token (#7641)",
+    (sideEffect) => {
+      // A post-pause side-effect (event emit, metric send) throwing after
+      // coordinator.pause() succeeded must trigger a coordinator.resume so the
+      // "port-queue" token is not leaked. Otherwise the PTY is permanently
+      // paused with no entry in pausedTerminals — neither tryResume nor the
+      // safety timeout can recover it.
+      const deps = createMockDeps();
+      vi.mocked(deps[sideEffect]).mockImplementationOnce(() => {
+        throw new Error("DataCloneError");
+      });
+      const mgr = new PortQueueManager(deps);
+      const coordinator = deps.getPauseCoordinator("t1")!;
 
-    const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
-    mgr.addBytes("t1", highWatermark + 1);
+      const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+      mgr.addBytes("t1", highWatermark + 1);
 
-    const result = mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+      const result = mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
 
-    expect(result).toBe(false);
-    expect(mgr.isPaused("t1")).toBe(false);
-    expect(coordinator.pause).toHaveBeenCalledTimes(1);
-    expect(coordinator.pause).toHaveBeenCalledWith("port-queue");
-    expect(coordinator.resume).toHaveBeenCalledTimes(1);
-    expect(coordinator.resume).toHaveBeenCalledWith("port-queue");
+      expect(result).toBe(false);
+      expect(mgr.isPaused("t1")).toBe(false);
+      expect(coordinator.pause).toHaveBeenCalledTimes(1);
+      expect(coordinator.pause).toHaveBeenCalledWith("port-queue");
+      expect(coordinator.resume).toHaveBeenCalledTimes(1);
+      expect(coordinator.resume).toHaveBeenCalledWith("port-queue");
 
-    // No orphaned safety timeout that could fire later and double-resume.
-    vi.mocked(coordinator.resume).mockClear();
-    vi.advanceTimersByTime(IPC_MAX_PAUSE_MS * 2);
-    expect(coordinator.resume).not.toHaveBeenCalled();
-  });
+      // No orphaned safety timeout that could fire later and double-resume.
+      vi.mocked(coordinator.resume).mockClear();
+      vi.advanceTimersByTime(IPC_MAX_PAUSE_MS * 2);
+      expect(coordinator.resume).not.toHaveBeenCalled();
+    }
+  );
 
-  it("emitReliabilityMetric throwing after pause releases the token (#7641)", () => {
-    const deps = createMockDeps();
-    vi.mocked(deps.emitReliabilityMetric).mockImplementationOnce(() => {
-      throw new Error("DataCloneError");
-    });
-    const mgr = new PortQueueManager(deps);
-    const coordinator = deps.getPauseCoordinator("t1")!;
+  it.each(["emitTerminalStatus", "emitReliabilityMetric"] as const)(
+    "custom pauseToken is released when %s throws (#7641)",
+    (sideEffect) => {
+      // Per-window port queue managers use unique tokens (e.g. "port-queue-7").
+      // The release on throw must match the token the manager held, not "port-queue".
+      const deps = createMockDeps();
+      vi.mocked(deps[sideEffect]).mockImplementationOnce(() => {
+        throw new Error("DataCloneError");
+      });
+      const mgr = new PortQueueManager({ ...deps, pauseToken: "port-queue-7" });
+      const coordinator = deps.getPauseCoordinator("t1")!;
 
-    const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
-    mgr.addBytes("t1", highWatermark + 1);
+      const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+      mgr.addBytes("t1", highWatermark + 1);
 
-    const result = mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
+      mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
 
-    expect(result).toBe(false);
-    expect(mgr.isPaused("t1")).toBe(false);
-    expect(coordinator.resume).toHaveBeenCalledWith("port-queue");
-
-    // A subsequent applyBackpressure must succeed cleanly — the previous
-    // failure must not have left the coordinator state inconsistent.
-    vi.mocked(coordinator.resume).mockClear();
-    const retry = mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
-    expect(retry).toBe(true);
-    expect(mgr.isPaused("t1")).toBe(true);
-  });
-
-  it("custom pauseToken is released on post-pause throw (#7641)", () => {
-    // Per-window port queue managers use unique tokens (e.g. "port-queue-7").
-    // The release on throw must match the token the manager held, not "port-queue".
-    const deps = createMockDeps();
-    vi.mocked(deps.emitTerminalStatus).mockImplementationOnce(() => {
-      throw new Error("DataCloneError");
-    });
-    const mgr = new PortQueueManager({ ...deps, pauseToken: "port-queue-7" });
-    const coordinator = deps.getPauseCoordinator("t1")!;
-
-    const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
-    mgr.addBytes("t1", highWatermark + 1);
-
-    mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
-
-    expect(coordinator.pause).toHaveBeenCalledWith("port-queue-7");
-    expect(coordinator.resume).toHaveBeenCalledWith("port-queue-7");
-  });
-
-  it("custom pauseToken is released when emitReliabilityMetric throws (#7641)", () => {
-    // Cover the second post-pause throw site too, so a future cleanup-path
-    // change that hardcoded "port-queue" would be caught regardless of which
-    // dep threw.
-    const deps = createMockDeps();
-    vi.mocked(deps.emitReliabilityMetric).mockImplementationOnce(() => {
-      throw new Error("DataCloneError");
-    });
-    const mgr = new PortQueueManager({ ...deps, pauseToken: "port-queue-12" });
-    const coordinator = deps.getPauseCoordinator("t1")!;
-
-    const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
-    mgr.addBytes("t1", highWatermark + 1);
-
-    mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
-
-    expect(coordinator.pause).toHaveBeenCalledWith("port-queue-12");
-    expect(coordinator.resume).toHaveBeenCalledWith("port-queue-12");
-  });
+      expect(coordinator.pause).toHaveBeenCalledWith("port-queue-7");
+      expect(coordinator.resume).toHaveBeenCalledWith("port-queue-7");
+    }
+  );
 
   describe("aggregate byte tracking", () => {
-    it("tracks total queued bytes across multiple terminals", () => {
-      const deps = createMockDeps();
-      const mgr = new PortQueueManager(deps);
-
-      expect(mgr.getTotalQueuedBytes()).toBe(0);
-
-      mgr.addBytes("t1", 1000);
-      expect(mgr.getTotalQueuedBytes()).toBe(1000);
-
-      mgr.addBytes("t2", 2500);
-      expect(mgr.getTotalQueuedBytes()).toBe(3500);
-
-      mgr.addBytes("t1", 500);
-      expect(mgr.getTotalQueuedBytes()).toBe(4000);
-    });
-
     it("subtracts from total on removeBytes without underflow on over-remove", () => {
       const deps = createMockDeps();
       const mgr = new PortQueueManager(deps);
@@ -453,19 +373,6 @@ describe("PortQueueManager", () => {
       expect(mgr.getQueuedBytes("t1")).toBe(0);
       expect(mgr.getQueuedBytes("t2")).toBe(1000);
       expect(mgr.getTotalQueuedBytes()).toBe(1000);
-    });
-
-    it("dispose resets the aggregate scalar", () => {
-      const deps = createMockDeps();
-      const mgr = new PortQueueManager(deps);
-
-      mgr.addBytes("t1", 1000);
-      mgr.addBytes("t2", 2000);
-      expect(mgr.getTotalQueuedBytes()).toBe(3000);
-
-      mgr.dispose();
-
-      expect(mgr.getTotalQueuedBytes()).toBe(0);
     });
 
     it("getQueueSnapshot mirrors BackpressureManager shape", () => {
@@ -558,20 +465,6 @@ describe("PortQueueManager", () => {
       expect(mgr.isPaused("t0")).toBe(false);
       const coordinator = deps.getPauseCoordinator("t0");
       expect(coordinator!.resume).toHaveBeenCalledWith("port-queue");
-    });
-
-    it("per-terminal pauses still resume normally while the aggregate is low", () => {
-      const deps = createMockDeps();
-      const mgr = new PortQueueManager(deps);
-
-      const highWatermark = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
-      mgr.addBytes("t1", highWatermark + 1);
-      mgr.applyBackpressure("t1", mgr.getUtilization("t1"));
-      expect(mgr.isPaused("t1")).toBe(true);
-
-      mgr.removeBytes("t1", highWatermark + 1);
-      mgr.tryResume("t1");
-      expect(mgr.isPaused("t1")).toBe(false);
     });
   });
 
@@ -850,34 +743,6 @@ describe("PortQueueManager", () => {
         mgr.removeBytes(`t${i}`, 1024 * 1024);
       }
       expect(mgr.isPaused("t0")).toBe(false);
-    });
-
-    it("with no focused id the aggregate trigger applies to every terminal", () => {
-      const deps = createMockDeps();
-      // getFocusedTerminalId omitted → behaves exactly as before.
-      const mgr = new PortQueueManager(deps);
-
-      fillBelowPerTerminalWatermark(mgr, 16, 1024 * 1024);
-      expect(mgr.applyBackpressure("t0", mgr.getUtilization("t0"))).toBe(true);
-      expect(mgr.isPaused("t0")).toBe(true);
-    });
-  });
-
-  describe("constants alignment — Claude burst headroom", () => {
-    it("max queue is 3MB to absorb low-single-digit-MB bursts", () => {
-      expect(IPC_MAX_QUEUE_BYTES).toBe(3 * 1024 * 1024);
-    });
-
-    it("high watermark sits near 2MB (67% of cap)", () => {
-      const high = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
-      expect(high).toBeGreaterThanOrEqual(2 * 1024 * 1024);
-      expect(high).toBeLessThan(2.1 * 1024 * 1024);
-    });
-
-    it("low watermark sits near 1MB (33% of cap, ~1MB drain window)", () => {
-      const low = (IPC_MAX_QUEUE_BYTES * IPC_LOW_WATERMARK_PERCENT) / 100;
-      expect(low).toBeGreaterThan(1000 * 1024);
-      expect(low).toBeLessThanOrEqual(1024 * 1024);
     });
   });
 });

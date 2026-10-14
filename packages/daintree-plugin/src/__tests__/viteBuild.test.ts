@@ -1,23 +1,28 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
   resolveViteBin,
-  spawnViteWatch,
   findServerConfig,
   resolveVitePlan,
+  spawnViteWatch,
 } from "../lib/viteBuild.js";
+
+const watcher = vi.hoisted(() => ({ then: vi.fn(), kill: vi.fn() }));
+vi.mock("execa", () => ({ execa: vi.fn(() => watcher) }));
 
 describe("viteBuild", () => {
   it("resolveViteBin throws a fix-it message when Vite isn't installed", () => {
     expect(() => resolveViteBin("/nonexistent/plugin/dir")).toThrow(/Couldn't find Vite/);
   });
 
-  it("spawnViteWatch is synchronous so it returns a live child handle, not a process-exit promise", () => {
-    // An `async` spawnViteWatch would unwrap execa's ResultPromise and resolve
-    // only on the watcher's exit, hanging the dev loop. Lock it as a plain fn.
-    expect(spawnViteWatch.constructor.name).toBe("Function");
+  it("returns a live watcher without awaiting the long-running process", () => {
+    const child = spawnViteWatch(process.cwd());
+    expect(child).toBe(watcher);
+    expect(watcher.then).not.toHaveBeenCalled();
+    child.kill();
+    expect(watcher.kill).toHaveBeenCalledOnce();
   });
 });
 

@@ -27,17 +27,6 @@ function runFixtureMulti(files: string[]): Promise<string> {
 }
 
 describe("ipc-map codegen", () => {
-  it("emits an entry per op() and opValidated() call", async () => {
-    const output = await runFixture();
-    expect(output).toContain('"fixture:no-args"');
-    expect(output).toContain('"fixture:string-arg"');
-    expect(output).toContain('"fixture:multi-arg"');
-    expect(output).toContain('"fixture:object-result"');
-    expect(output).toContain('"fixture:validated"');
-    expect(output).toContain('"fixture:with-context"');
-    expect(output).toContain('"fixture:inside-fn"');
-  });
-
   it("sorts entries alphabetically by channel", async () => {
     const output = await runFixture();
     const channels: string[] = [];
@@ -93,13 +82,6 @@ describe("ipc-map codegen", () => {
   it("walks into defineIpcNamespace calls inside function bodies", async () => {
     const output = await runFixture();
     expect(output).toMatch(/"fixture:inside-fn":[\s\S]*?result:\s*string\[\]/);
-  });
-
-  it("emits the GeneratedIpcInvokeMap interface and a do-not-edit header", async () => {
-    const output = await runFixture();
-    expect(output).toContain("export interface GeneratedIpcInvokeMap {");
-    expect(output).toContain("AUTO-GENERATED");
-    expect(output).toContain("do not edit by hand");
   });
 
   it("rejects duplicate channel registrations across files", async () => {

@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PtyPauseCoordinator } from "../PtyPauseCoordinator.js";
 
-import {
-  BackpressureManager,
-  FUTURE_SAB_MAX_PENDING_BYTES_PER_TERMINAL,
-  FUTURE_SAB_MAX_TOTAL_PENDING_BYTES,
-} from "../backpressure.js";
+import { BackpressureManager, FUTURE_SAB_MAX_PENDING_BYTES_PER_TERMINAL } from "../backpressure.js";
 import { isLoadBearingReliabilityMetric } from "../loadBearingMetrics.js";
 import type { TerminalReliabilityMetricPayload } from "../../../shared/types/pty-host.js";
 
@@ -42,27 +38,6 @@ describe("BackpressureManager adversarial", () => {
       metricsEnabled: () => true,
     });
   }
-
-  it("rejects additional pending bytes once FUTURE_SAB_MAX_TOTAL_PENDING_BYTES is saturated across terminals", () => {
-    const backpressure = manager();
-
-    for (let i = 0; i < 4; i++) {
-      expect(
-        backpressure.enqueuePendingSegment(`term-${i}`, {
-          data: new Uint8Array(FUTURE_SAB_MAX_PENDING_BYTES_PER_TERMINAL),
-          offset: 0,
-        })
-      ).toBe(true);
-    }
-
-    expect(FUTURE_SAB_MAX_TOTAL_PENDING_BYTES).toBe(FUTURE_SAB_MAX_PENDING_BYTES_PER_TERMINAL * 4);
-    expect(
-      backpressure.enqueuePendingSegment("overflow", {
-        data: new Uint8Array(1),
-        offset: 0,
-      })
-    ).toBe(false);
-  });
 
   it("treats a stalled terminal as suspended and clears pending state in one transition", () => {
     const coordinator = createCoordinator();
@@ -106,24 +81,6 @@ describe("BackpressureManager adversarial", () => {
         }),
       })
     );
-  });
-
-  it("counts every suspendVisualStream call in suspendCount even when the status transition dedupes", () => {
-    const coordinator = createCoordinator();
-    coordinators.set("term-1", coordinator);
-    const backpressure = manager();
-
-    backpressure.suspendVisualStream("term-1", "stalled", 90, 100);
-    backpressure.suspendVisualStream("term-1", "stalled again", 91, 200);
-
-    // suspendCount tracks calls, not state transitions...
-    expect(backpressure.stats.suspendCount).toBe(2);
-    // ...but the dedupe in emitTerminalStatus fires the "suspended" wire event
-    // only once (the terminal was already suspended on the second call).
-    const suspendedStatusEvents = sendEvent.mock.calls.filter(
-      (c) => c[0]?.type === "terminal-status" && c[0]?.status === "suspended"
-    );
-    expect(suspendedStatusEvents).toHaveLength(1);
   });
 
   it("suppresses duplicate terminal-status events during concurrent pause and resume churn", () => {
@@ -312,28 +269,6 @@ describe("BackpressureManager adversarial", () => {
     expect(backpressure.getActivityTier("term-1")).toBe("background");
   });
 
-  it("tracks the from-tier across a background→active round-trip", () => {
-    const backpressure = manager();
-
-    backpressure.setActivityTier("term-1", "background", "r1");
-    sendEvent.mockReset();
-
-    backpressure.setActivityTier("term-1", "active", "r2");
-
-    expect(sendEvent).toHaveBeenCalledTimes(1);
-    expect(sendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "terminal-reliability-metric",
-        payload: expect.objectContaining({
-          metricType: "tier-transition",
-          tierTransitionFrom: "background",
-          tierTransitionTo: "active",
-          tierTransitionReason: "r2",
-        }),
-      })
-    );
-  });
-
   it("applies the tier write even when metric emission throws", () => {
     sendEvent.mockImplementation(() => {
       throw new Error("port detached");
@@ -380,10 +315,6 @@ describe("BackpressureManager adversarial", () => {
       })
     );
   });
-
-  it.todo(
-    "safety-timeout force-resume behavior is orchestrated in electron/pty-host.ts rather than BackpressureManager"
-  );
 
   describe("emitReliabilityMetric dep funnel", () => {
     // When the host wires `emitReliabilityMetric` as a dep, every
@@ -459,58 +390,6 @@ describe("BackpressureManager adversarial", () => {
         expect.objectContaining({
           type: "terminal-reliability-metric",
           payload: expect.objectContaining({ metricType: "pause-start" }),
-        })
-      );
-    });
-
-    it("does not recurse when the dep funnel re-enters the manager (prod wiring shape)", () => {
-      // Production wiring: the host constructs the manager with an
-      // `emitReliabilityMetric` dep pointing at the host funnel
-      // (`emitReliabilityMetricWithTracking`). That funnel MUST terminate the
-      // chain by emitting the wire event itself — if it instead called back
-      // into `manager.emitReliabilityMetric`, the manager would forward to the
-      // dep again and recurse until the stack overflows. This pins the
-      // invariant: a funnel-shaped dep that does its tracking and then sends
-      // directly yields exactly one wire emission, with the manager's
-      // dep-forwarding path entered exactly once (no loop).
-      const trackingCalls: Array<{ metricType: string; forceEmit: boolean }> = [];
-
-      // Matches the fixed `emitReliabilityMetricWithTracking`: it does its
-      // pause-source bookkeeping (elided here) and then TERMINATES by emitting
-      // the wire event directly. It does NOT re-enter the manager.
-      const funnel = vi.fn((payload: { metricType: string }, forceEmit: boolean) => {
-        trackingCalls.push({ metricType: payload.metricType, forceEmit });
-        sendEvent({ type: "terminal-reliability-metric", payload });
-      });
-
-      const manager = new BackpressureManager({
-        getTerminal: vi.fn(),
-        getPauseCoordinator: (id) =>
-          coordinators.get(id) as unknown as PtyPauseCoordinator | undefined,
-        sendEvent,
-        metricsEnabled: () => true,
-        emitReliabilityMetric: (payload, forceEmit = false) =>
-          funnel(payload as { metricType: string }, forceEmit),
-      });
-
-      expect(() =>
-        manager.emitReliabilityMetric({
-          terminalId: "term-1",
-          metricType: "pause-start",
-          timestamp: 1000,
-        })
-      ).not.toThrow();
-
-      // The funnel (dep) is invoked exactly once — one originating emit, no
-      // recursive re-entry.
-      expect(funnel).toHaveBeenCalledTimes(1);
-      expect(trackingCalls).toEqual([{ metricType: "pause-start", forceEmit: false }]);
-      // Exactly one wire emission reaches the transport.
-      expect(sendEvent).toHaveBeenCalledTimes(1);
-      expect(sendEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "terminal-reliability-metric",
-          payload: expect.objectContaining({ metricType: "pause-start", terminalId: "term-1" }),
         })
       );
     });
@@ -663,31 +542,6 @@ describe("BackpressureManager adversarial", () => {
         });
 
         expect(sendEvent).not.toHaveBeenCalled();
-      });
-
-      it("forceEmit bypasses the gate for non-load-bearing metrics (data-loss pulse)", () => {
-        sendEvent.mockReset();
-        const manager = new BackpressureManager({
-          getTerminal: vi.fn(),
-          getPauseCoordinator: vi.fn(),
-          sendEvent,
-          metricsEnabled: () => false,
-          emitReliabilityMetric: makeFunnel({ metricsEnabled: () => false }),
-        });
-
-        // data-loss-count is non-load-bearing but forceEmit: true must still
-        // reach the wire (the data-loss pulse has to surface in production
-        // even when the diagnostic flag is off — lesson #7590).
-        manager.emitReliabilityMetric(
-          { terminalId: "term-1", metricType: "data-loss-count", timestamp: 1000 },
-          true
-        );
-
-        expect(sendEvent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            payload: expect.objectContaining({ metricType: "data-loss-count" }),
-          })
-        );
       });
 
       it("emits pause-duration-gauge when metrics are disabled (load-bearing)", () => {

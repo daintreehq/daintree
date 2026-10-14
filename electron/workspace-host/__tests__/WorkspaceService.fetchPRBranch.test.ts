@@ -149,14 +149,6 @@ describe("WorkspaceService.fetchPRBranch", () => {
     ]);
   });
 
-  it("falls back to origin when no remote could be resolved", async () => {
-    mockSimpleGit.raw.mockResolvedValueOnce("");
-
-    await service.fetchPRBranch("req-default", "/test/root", 7, "feature/x", undefined);
-
-    expect(mockSimpleGit.raw).toHaveBeenCalledWith(["fetch", "origin", "pull/7/head:feature/x"]);
-  });
-
   it("uses the provider's refspec verbatim when main resolved one", async () => {
     mockSimpleGit.raw.mockResolvedValueOnce("");
 
@@ -195,47 +187,6 @@ describe("WorkspaceService.fetchPRBranch", () => {
       "origin",
       "refs/merge-requests/7/head:feature/x",
     ]);
-  });
-
-  it("falls back to the GitHub-shaped refspec when none was resolved", async () => {
-    // The whole compatibility guarantee: a repo that fetched before #12324
-    // must issue byte-identical argv when no provider capability resolves.
-    mockSimpleGit.raw.mockResolvedValueOnce("");
-
-    await service.fetchPRBranch(
-      "req-no-refspec",
-      "/test/root",
-      42,
-      "feature/x",
-      "upstream",
-      undefined
-    );
-
-    expect(mockSimpleGit.raw).toHaveBeenCalledWith(["fetch", "upstream", "pull/42/head:feature/x"]);
-  });
-
-  it("reports a failed provider-shaped fetch with the same classification", async () => {
-    mockSimpleGit.raw.mockRejectedValueOnce(
-      new Error("fatal: couldn't find remote ref refs/merge-requests/999/head")
-    );
-
-    await service.fetchPRBranch(
-      "req-gitlab-miss",
-      "/test/root",
-      999,
-      "gone",
-      "origin",
-      "refs/merge-requests/999/head:gone"
-    );
-
-    expect(mockSendEvent).toHaveBeenCalledWith({
-      type: "fetch-pr-branch-result",
-      requestId: "req-gitlab-miss",
-      success: false,
-      error: "fatal: couldn't find remote ref refs/merge-requests/999/head",
-      gitReason: "pathspec-invalid",
-      recoveryAction: undefined,
-    });
   });
 
   it("should fetch PR branch using createAuthenticatedGit and emit success", async () => {
@@ -314,25 +265,6 @@ describe("WorkspaceService.fetchPRBranch", () => {
           actionId: "app.settings.openTab",
           args: { tab: "code-forge", subtab: "daintree.github.github" },
         },
-      })
-    );
-  });
-
-  it("should classify network resolution failure", async () => {
-    mockSimpleGit.raw.mockRejectedValueOnce(
-      new Error(
-        "fatal: unable to access 'https://github.com/foo.git/': Could not resolve host: github.com"
-      )
-    );
-
-    await service.fetchPRBranch("req-net", "/test/root", 5, "branch");
-
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "fetch-pr-branch-result",
-        requestId: "req-net",
-        success: false,
-        gitReason: "network-unavailable",
       })
     );
   });

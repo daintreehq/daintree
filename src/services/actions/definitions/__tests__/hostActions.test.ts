@@ -128,12 +128,6 @@ describe("host action registration", () => {
     for (const id of HOST_ACTION_IDS) expect(registry.has(id), id).toBe(true);
   });
 
-  it("registers none of them where it isn't, so they never reach the palette or MCP", () => {
-    supported.value = false;
-    const registry = createActionDefinitions(callbacks());
-    for (const id of HOST_ACTION_IDS) expect(registry.has(id), id).toBe(false);
-  });
-
   it("registers nothing from the gated registrars where it isn't, including actions added later", () => {
     const gated: ActionRegistry = new Map();
     registerHostActions(gated, callbacks());

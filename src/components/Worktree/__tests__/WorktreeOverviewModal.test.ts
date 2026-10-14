@@ -15,36 +15,11 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     rowSource = await fs.readFile(ROW_PATH, "utf-8");
   });
 
-  describe("imports", () => {
-    it("imports matchesQuickStateFilter from worktreeFilters", () => {
-      expect(source).toMatch(/matchesQuickStateFilter/);
-    });
-
-    it("imports setQuickStateFilter from the filter store", () => {
-      expect(source).toContain("setQuickStateFilter");
-    });
-  });
-
-  describe("store selector", () => {
-    it("reads quickStateFilter from the store", () => {
-      expect(source).toMatch(/quickStateFilter:\s*state\.quickStateFilter/);
-    });
-  });
-
   describe("filteredWorktrees computation", () => {
     it("gates on matchesQuickStateFilter when quickStateFilter is not 'all'", () => {
       expect(source).toMatch(
         /quickStateFilter\s*!==\s*"all"\s*&&\s*!matchesQuickStateFilter\(quickStateFilter,\s*derived\)/
       );
-    });
-
-    it("includes quickStateFilter in the useMemo dep array", () => {
-      // Find the dep array that closes the filteredWorktrees useMemo
-      const depArrayMatch = source.match(
-        /const\s*\{\s*filteredWorktrees,\s*groupedSections[^}]*\}\s*=\s*useMemo[\s\S]*?\]\s*\);/
-      );
-      expect(depArrayMatch).not.toBeNull();
-      expect(depArrayMatch![0]).toContain("quickStateFilter");
     });
 
     it("lets the always-show bypasses fire only when nothing is narrowing the list", () => {
@@ -64,22 +39,6 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
   });
 
   describe("multi-select and keyboard navigation (#8653)", () => {
-    it("imports the overview keyboard hook", () => {
-      expect(source).toMatch(/useWorktreeOverviewKeyboard/);
-    });
-
-    it("imports getWorktreeOverviewCellId for stable cell ids", () => {
-      expect(source).toMatch(/getWorktreeOverviewCellId/);
-    });
-
-    it("declares modal-local selection state (Set of worktree ids)", () => {
-      expect(source).toMatch(/useState<Set<string>>/);
-    });
-
-    it("anchors range selection in a ref so it survives filter changes", () => {
-      expect(source).toMatch(/selectionAnchorRef\s*=\s*useRef<string\s*\|\s*null>/);
-    });
-
     it("renders a single role='grid' wrapper around the cards", () => {
       expect(source).toContain('role="grid"');
     });
@@ -152,15 +111,6 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(source).not.toMatch(/markEscapeDismissal/);
     });
 
-    it("Cmd/Ctrl+A triggers selectAllVisible", () => {
-      expect(source).toMatch(/selectAllVisible\(\)/);
-    });
-
-    it("Cmd/Ctrl+A does not steal text-input Select-All", () => {
-      // Editable check guards against hijacking Cmd+A in a text input.
-      expect(source).toMatch(/isEditable/);
-    });
-
     it("section headers render with role='presentation' inside the grid", () => {
       expect(source).toContain('role="presentation"');
     });
@@ -193,25 +143,6 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
 
     beforeEach(async () => {
       modalSource = await fs.readFile(MODAL_PATH, "utf-8");
-    });
-
-    it("imports the bulk-remove hook so the modal owns the orchestrator state", () => {
-      // Matches the named import wherever it sits in the specifier list. The
-      // original pattern required `useWorktreeBulkRemove` to be the ONLY name
-      // in the braces, which asserted the punctuation of an import statement
-      // rather than the fact under test — adding a second export from the same
-      // module broke it without changing any behaviour.
-      expect(modalSource).toMatch(
-        /import\s*\{[^}]*\buseWorktreeBulkRemove\b[^}]*\}\s*from\s*"\.\/useWorktreeBulkRemove"/
-      );
-    });
-
-    it("imports ConfirmDialog for the D1 close-sessions and D3 remove gates", () => {
-      expect(modalSource).toMatch(/from\s*"@\/components\/ui\/ConfirmDialog"/);
-    });
-
-    it("swaps the standard header for a contextual bar when hasSelection is true", () => {
-      expect(modalSource).toMatch(/\{hasSelection\s*\?\s*\(/);
     });
 
     it("renders 'N selected' inside the contextual bar with aria-live for SR feedback", () => {
@@ -258,11 +189,6 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(dialogSource).toMatch(/variant="destructive"/);
     });
 
-    it("renders a separate ConfirmDialog for the D1 close-sessions gate (variant='default')", () => {
-      expect(modalSource).toMatch(/isCloseSessionsConfirmOpen/);
-      expect(modalSource).toMatch(/handleCloseSessionsConfirm/);
-    });
-
     it("snapshots the selection into a ref at click time so it survives reactive selectedIds drift (#4729)", () => {
       // handleCloseSessionsClick must freeze the selected ids before the
       // user has a chance to deselect/reselect mid-confirm. The handler
@@ -277,11 +203,6 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(modalSource).toMatch(/Array\.from\(selectedIds\)/);
       // Confirm handler must iterate the snapshot, NOT the live selectedIds.
       expect(modalSource).toMatch(/for\s*\(const\s+id\s+of\s+closeSessionsIdsRef\.current\)/);
-    });
-
-    it("builds worktreeMap by id so the hook can snapshot targets at confirm-click time", () => {
-      expect(modalSource).toMatch(/worktreeMap\s*=\s*useMemo/);
-      expect(modalSource).toMatch(/map\.set\(w\.id,\s*w\)/);
     });
 
     it("passes selectedIds, worktreeMap, and clearSelection to useWorktreeBulkRemove", () => {

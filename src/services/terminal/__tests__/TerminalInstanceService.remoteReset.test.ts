@@ -210,3 +210,38 @@ describe("TerminalInstanceService — remote terminal reset", () => {
     expect(dropQueue).not.toHaveBeenCalled();
   });
 });
+
+type LostTestService = {
+  instances: Map<string, { terminal: { write: (data: string) => void } }>;
+  prewarmTerminal: (id: string, type: string, options: Record<string, unknown>) => Promise<unknown>;
+  addExitListener: (id: string, cb: (code: number | null) => void) => () => void;
+  reportLost: (id: string, note: string) => void;
+};
+
+describe("TerminalInstanceService — a terminal its host lost", () => {
+  let service: LostTestService;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    // Reached through Reflect: the test drives members the public type hides.
+    const mod: object = await import("../TerminalInstanceService");
+    service = Reflect.get(mod, "terminalInstanceService");
+    service.instances.clear();
+  });
+
+  it("tells the pane it exited, with no exit code, and says why in the scrollback", async () => {
+    await service.prewarmTerminal("t-lost", "terminal", {});
+    const managed = service.instances.get("t-lost")!;
+    const write = vi.spyOn(managed.terminal, "write");
+    const exits: Array<number | null> = [];
+    service.addExitListener("t-lost", (code) => exits.push(code));
+
+    service.reportLost("t-lost", "The host no longer has this terminal");
+
+    expect(exits).toEqual([null]);
+    expect(write).toHaveBeenCalledWith(
+      expect.stringContaining("[The host no longer has this terminal]")
+    );
+  });
+});

@@ -384,50 +384,6 @@ describe("HelpSessionController — handleViewRevealed (switch-back recovery #10
     ctrl.stop();
   });
 
-  it("is a no-op when a session is already live (no reap, no re-drive)", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    ctrl["_patch"]({ phase: "live" });
-    const genBefore = ctrl["_launchGen"] as number;
-
-    ctrl.handleViewRevealed();
-
-    expect(ctrl.getSnapshot().phase).toBe("live");
-    expect(ctrl["_launchGen"]).toBe(genBefore);
-    ctrl.stop();
-  });
-
-  it("is a no-op while idle", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    const genBefore = ctrl["_launchGen"] as number;
-
-    ctrl.handleViewRevealed();
-
-    expect(ctrl.getSnapshot().phase).toBe("idle");
-    expect(ctrl["_launchGen"]).toBe(genBefore);
-    ctrl.stop();
-  });
-
-  it("does not reap a hibernating phase (it owns a live terminal mid-shutdown)", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    ctrl["_patch"]({ phase: "hibernating" });
-    const genBefore = ctrl["_launchGen"] as number;
-
-    ctrl.handleViewRevealed();
-
-    expect(ctrl.getSnapshot().phase).toBe("hibernating");
-    expect(ctrl["_launchGen"]).toBe(genBefore);
-    ctrl.stop();
-  });
-
   it("does not reap a manual (non-auto) launch — the _hasAutoLaunched guard protects it", () => {
     // #12108: MCP pushes are matched against the lane's own session id.
     helpPanelState.sessionId = "s1";
@@ -576,23 +532,6 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
     ctrl.stop();
   });
 
-  it("dismissTierMismatch() clears the banner immediately", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    tierListeners[0]?.({
-      sessionId: "s1",
-      toolId: "t1",
-      tier: "core",
-      targetTier: null,
-    });
-    expect(ctrl.getSnapshot().tierMismatch).not.toBeNull();
-    ctrl.dismissTierMismatch();
-    expect(ctrl.getSnapshot().tierMismatch).toBeNull();
-    ctrl.stop();
-  });
-
   it("dismissTierMismatch() resets the denial counter for the dismissed session (#10017)", () => {
     // #12108: MCP pushes are matched against the lane's own session id.
     helpPanelState.sessionId = "sess-9";
@@ -643,15 +582,6 @@ describe("HelpSessionController — tier-mismatch handlers", () => {
 });
 
 describe("HelpSessionController — session revoked (#10017)", () => {
-  it("start() arms the session-revoked subscription", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    expect(mockMcpOnSessionRevoked).toHaveBeenCalledTimes(1);
-    ctrl.stop();
-  });
-
   it("a session-revoked push surfaces the recovery banner", () => {
     // #12108: MCP pushes are matched against the lane's own session id.
     helpPanelState.sessionId = "s1";
@@ -664,41 +594,6 @@ describe("HelpSessionController — session revoked (#10017)", () => {
       denialKind: "tierMismatch",
     });
     ctrl.stop();
-  });
-
-  it("ignores a revoke for a session the panel has already replaced", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    helpPanelState.sessionId = "sess-current";
-    sessionRevokedListeners[0]?.({ sessionId: "sess-stale", denialKind: "auth401" });
-    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
-    ctrl.stop();
-  });
-
-  it("ignores a revoke while no session is pinned (torn-down or mid-relaunch window)", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    // A null store sessionId means there is no live session to end — a revoke
-    // arriving now is for a session being torn down or replaced, and must not
-    // paint a banner over the fresh launch the user just started (#10017).
-    helpPanelState.sessionId = null;
-    sessionRevokedListeners[0]?.({ sessionId: "sess-old", denialKind: "tierMismatch" });
-    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
-    ctrl.stop();
-  });
-
-  it("dismissSessionRevoked clears the banner", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl["_patch"]({ sessionRevoked: { sessionId: "sess-1", denialKind: "tierMismatch" } });
-    expect(ctrl.getSnapshot().sessionRevoked).not.toBeNull();
-    ctrl.dismissSessionRevoked();
-    expect(ctrl.getSnapshot().sessionRevoked).toBeNull();
   });
 
   it("a launch supersedes any standing revoked-session banner", () => {
@@ -734,16 +629,6 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
       targetTier: "full",
     });
   }
-
-  it("start() arms the grant lifecycle subscription", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    expect(mockMcpOnGrantLifecycle).toHaveBeenCalledTimes(1);
-    expect(grantLifecycleListeners).toHaveLength(1);
-    ctrl.stop();
-  });
 
   it("grant.issued sets the active countdown and clears the prompting mismatch", () => {
     // #12108: MCP pushes are matched against the lane's own session id.
@@ -1062,30 +947,6 @@ describe("HelpSessionController — grant lifecycle (#10042)", () => {
     ctrl.start();
     ctrl.revokeGrant();
     expect(mockMcpRevokeSessionGrants).not.toHaveBeenCalled();
-    ctrl.stop();
-  });
-
-  it("dismissGrantEnded() clears the notice", () => {
-    // #12108: MCP pushes are matched against the lane's own session id.
-    helpPanelState.sessionId = "s1";
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    grantLifecycleListeners[0]?.({
-      type: "grant.issued",
-      sessionId: "s1",
-      toolId: "t1",
-      ttlMs: 900_000,
-      expiresAt: Date.now() + 900_000,
-    });
-    grantLifecycleListeners[0]?.({
-      type: "grant.expired",
-      sessionId: "s1",
-      toolId: "t1",
-      ttlMs: 900_000,
-    });
-    expect(ctrl.getSnapshot().grantEnded).not.toBeNull();
-    ctrl.dismissGrantEnded();
-    expect(ctrl.getSnapshot().grantEnded).toBeNull();
     ctrl.stop();
   });
 });

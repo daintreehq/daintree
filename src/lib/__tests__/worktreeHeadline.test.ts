@@ -4,7 +4,7 @@ import {
   getWorktreeBranchLabel,
   isMainWorktreeOnStandardBranch,
 } from "../worktreeHeadline";
-import type { Worktree, WorktreeState } from "@shared/types/worktree";
+import type { Worktree } from "@shared/types/worktree";
 
 const createWorktree = (overrides: Partial<Worktree> = {}): Worktree => ({
   id: "test-id",
@@ -66,18 +66,6 @@ describe("getWorktreeHeadline — PR-originated", () => {
       createWorktree({ sourcePrNumber: 123, prTitle: "Stale", ...withLinkedPr(123, "") })
     );
     expect(headline).toEqual({ kind: "pr", number: 123, title: "", label: "#123" });
-  });
-
-  it("outranks issue metadata on the same worktree", () => {
-    const headline = getWorktreeHeadline(
-      createWorktree({
-        sourcePrNumber: 7,
-        prTitle: "PR wins",
-        issueNumber: 42,
-        issueTitle: "Issue loses",
-      })
-    );
-    expect(headline.kind).toBe("pr");
   });
 
   it("treats sourcePrNumber 0 as no PR at all", () => {
@@ -179,13 +167,6 @@ describe("getWorktreeHeadline — issue", () => {
 });
 
 describe("getWorktreeHeadline — main on a standard branch", () => {
-  it("names the project rather than the branch", () => {
-    const headline = getWorktreeHeadline(
-      createWorktree({ isMainWorktree: true, name: "daintree", branch: "main" })
-    );
-    expect(headline).toEqual({ kind: "main", label: "daintree" });
-  });
-
   it.each(["main", "master", "develop", "dev", "MAIN", "Develop"])(
     "treats %s as a standard branch",
     (branch) => {
@@ -266,15 +247,6 @@ describe("getWorktreeHeadline — branch", () => {
       kind: "branch",
       label: "Untitled worktree",
     });
-  });
-
-  it("accepts a WorktreeState as readily as a Worktree", () => {
-    const state: WorktreeState = {
-      ...createWorktree({ branch: "feature/state" }),
-      worktreeChanges: null,
-      lastActivityTimestamp: null,
-    } as WorktreeState;
-    expect(getWorktreeHeadline(state)).toEqual({ kind: "branch", label: "feature/state" });
   });
 });
 

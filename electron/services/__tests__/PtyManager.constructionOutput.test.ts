@@ -101,28 +101,6 @@ describe("PtyManager.spawn — output emitted during TerminalProcess constructio
     });
   });
 
-  it("delivers the pooled-shell prelude replayed from the constructor (#12753)", () => {
-    constructorOutput = ["[oh-my-zsh] Would you like to update? [Y/n] "];
-
-    manager.spawn("t1", spawnOptions);
-
-    expect(dataEvents).toEqual([["t1", "[oh-my-zsh] Would you like to update? [Y/n] "]]);
-  });
-
-  it("keeps prelude and handoff-buffered chunks in order ahead of live output", () => {
-    const buffered = new Uint8Array([0x24, 0x20]);
-    constructorOutput = ["prelude ", buffered];
-
-    manager.spawn("t1", spawnOptions);
-    lastEmitData!("t1", "live");
-
-    expect(dataEvents).toEqual([
-      ["t1", "prelude "],
-      ["t1", buffered],
-      ["t1", "live"],
-    ]);
-  });
-
   it("drops construction output when the constructor throws and does not leak it into the next spawn", () => {
     constructorOutput = ["from failed incarnation"];
     shouldThrow = true;

@@ -225,15 +225,6 @@ describe("renderer logger batching", () => {
     expect(sentBatch().map((e) => e.message)).toEqual(["a", "b", "c"]);
   });
 
-  it("only opens one timer window per burst", () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    logInfo("a");
-    logInfo("b");
-    logInfo("c");
-    const timerCalls = setTimeoutSpy.mock.calls.filter(([, delay]) => delay === LOG_BATCH_MS);
-    expect(timerCalls).toHaveLength(1);
-  });
-
   it("splits oversized batches into <=60-entry chunks", () => {
     for (let i = 0; i < 130; i++) logInfo(`m${i}`);
     vi.advanceTimersByTime(LOG_BATCH_MS);

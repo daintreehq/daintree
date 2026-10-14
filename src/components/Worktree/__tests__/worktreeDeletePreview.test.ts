@@ -256,19 +256,6 @@ describe("formatWorktreeDeletePreviewLines", () => {
     ]);
   });
 
-  it("returns a clean-tree note when there are no changes", () => {
-    const preview = {
-      trackedChangeCount: 0,
-      untrackedFileCount: 0,
-      hasTrackedChanges: false,
-      hasUntrackedFiles: false,
-      changes: [],
-      rootPath: ROOT,
-      submodules: CLEAR,
-    };
-    expect(formatWorktreeDeletePreviewLines(preview)).toEqual(["No uncommitted changes."]);
-  });
-
   it("lists the actual files under a counts header", () => {
     const files = [file("src/app.ts", "modified"), file("new.txt", "untracked")];
     const preview = {

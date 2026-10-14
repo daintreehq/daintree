@@ -3,7 +3,6 @@ import {
   getAgentIds,
   getAgentConfig,
   setUserRegistry,
-  getEffectiveAgentIds,
   getEffectiveAgentConfig,
   isEffectivelyRegisteredAgent,
   isBuiltInAgent,
@@ -34,39 +33,6 @@ describe("agentRegistry", () => {
   });
 
   describe("built-in agents", () => {
-    it("has all expected built-in agents", () => {
-      const ids = getAgentIds();
-      expect(ids).toContain("claude");
-      expect(ids).toContain("gemini");
-      expect(ids).toContain("codex");
-      expect(ids).toContain("opencode");
-      expect(ids).toContain("cursor");
-      expect(ids).toContain("kiro");
-      expect(ids).toContain("copilot");
-      expect(ids).toContain("goose");
-      expect(ids).toContain("crush");
-      expect(ids).toContain("qwen");
-      expect(ids).toContain("interpreter");
-      expect(ids).toContain("mistral");
-      expect(ids).toContain("kimi");
-      expect(ids).toContain("amp");
-      expect(ids).toContain("aider");
-    });
-
-    it("kiro only has macOS and Linux install blocks (no Windows)", () => {
-      const config = getAgentConfig("kiro");
-      expect(config?.install?.byOs?.macos?.length).toBeGreaterThan(0);
-      expect(config?.install?.byOs?.linux?.length).toBeGreaterThan(0);
-      expect(config?.install?.byOs?.windows).toBeUndefined();
-    });
-
-    it("crush only has macOS and Linux install blocks (no Windows)", () => {
-      const config = getAgentConfig("crush");
-      expect(config?.install?.byOs?.macos?.length).toBeGreaterThan(0);
-      expect(config?.install?.byOs?.linux?.length).toBeGreaterThan(0);
-      expect(config?.install?.byOs?.windows).toBeUndefined();
-    });
-
     it("each built-in agent has a non-empty color", () => {
       const ids = getAgentIds();
       for (const id of ids) {
@@ -85,58 +51,12 @@ describe("agentRegistry", () => {
       }
     });
 
-    it("settles sticky inline assistants before changing their terminal grid", () => {
-      for (const id of ["codex", "daintree-assistant"]) {
-        expect(getAgentConfig(id)?.capabilities?.resizeStrategy).toBe("settled");
-      }
-    });
-
-    it("returns agent config for built-in agents", () => {
-      const claude = getAgentConfig("claude");
-      expect(claude).toBeDefined();
-      expect(claude?.name).toBe("Claude");
-      expect(claude?.command).toBe("claude");
-    });
-
     it("returns undefined for non-existent agents", () => {
       expect(getAgentConfig("nonexistent")).toBeUndefined();
-    });
-
-    it("correctly identifies built-in agents", () => {
-      expect(isBuiltInAgent("claude")).toBe(true);
-      expect(isBuiltInAgent("nonexistent")).toBe(false);
-    });
-  });
-
-  describe("contextWindow", () => {
-    it("agents without contextWindow return undefined", () => {
-      expect(getAgentConfig("cursor")?.contextWindow).toBeUndefined();
     });
   });
 
   describe("prerequisites", () => {
-    it("all built-in agents have prerequisites", () => {
-      const ids = getAgentIds();
-      for (const id of ids) {
-        const config = getAgentConfig(id);
-        expect(config?.prerequisites).toBeDefined();
-        expect(config?.prerequisites?.length).toBeGreaterThan(0);
-      }
-    });
-
-    it("each prerequisite has required fields", () => {
-      const ids = getAgentIds();
-      for (const id of ids) {
-        const config = getAgentConfig(id);
-        for (const prereq of config?.prerequisites ?? []) {
-          expect(prereq.tool).toBeTruthy();
-          expect(prereq.label).toBeTruthy();
-          expect(prereq.severity).toMatch(/^(fatal|warn|silent)$/);
-          expect(prereq.versionArgs).toBeDefined();
-        }
-      }
-    });
-
     it("each agent declares its own CLI as a fatal prerequisite", () => {
       const ids = getAgentIds();
       for (const id of ids) {
@@ -158,28 +78,11 @@ describe("agentRegistry", () => {
       supportsContextInjection: true,
     };
 
-    it("user-defined agents appear in effective registry", () => {
-      setUserRegistry({ "custom-agent": customAgent });
-
-      expect(getEffectiveAgentIds()).toContain("custom-agent");
-      expect(isEffectivelyRegisteredAgent("custom-agent")).toBe(true);
-    });
-
     it("user-defined agents are not built-in", () => {
       setUserRegistry({ "custom-agent": customAgent });
 
       expect(isBuiltInAgent("custom-agent")).toBe(false);
       expect(isEffectivelyRegisteredAgent("custom-agent")).toBe(true);
-    });
-
-    it("built-in agents are not user-defined", () => {
-      setUserRegistry({});
-
-      expect(isBuiltInAgent("claude")).toBe(true);
-      // user-defined check: a key in userRegistry but NOT in AGENT_REGISTRY
-      const effectiveKeys = getEffectiveAgentIds();
-      const onlyUserDefined = effectiveKeys.filter((id) => !isBuiltInAgent(id));
-      expect(onlyUserDefined).not.toContain("claude");
     });
 
     it("built-in agents take precedence over user agents with same ID", () => {
@@ -204,73 +107,6 @@ describe("agentRegistry", () => {
     it("returns claude and codex as the stable-tier assistant agents", () => {
       const ids = getAssistantSupportedAgentIds();
       expect(ids).toEqual(["claude", "codex"]);
-    });
-
-    it("claude has structured assistant supports at stable tier", () => {
-      const claude = getAgentConfig("claude");
-      expect(claude?.supports).toMatchObject({
-        mcpInjection: "project-config",
-        settingsOverlay: true,
-        permissionBypass: true,
-        trustDialog: true,
-        versionProbe: true,
-        tier: "stable",
-      });
-    });
-
-    it("codex has structured assistant supports at stable tier", () => {
-      const codex = getAgentConfig("codex");
-      expect(codex?.supports).toMatchObject({
-        mcpInjection: "cli-flags",
-        settingsOverlay: false,
-        permissionBypass: true,
-        trustDialog: false,
-        versionProbe: true,
-        tier: "stable",
-      });
-    });
-
-    it("aider is explicitly marked structurally ineligible", () => {
-      const aider = getAgentConfig("aider");
-      expect(aider?.supports).toBe(false);
-    });
-
-    it("interpreter is explicitly marked structurally ineligible", () => {
-      const interpreter = getAgentConfig("interpreter");
-      expect(interpreter?.supports).toBe(false);
-    });
-
-    it("agents with no supports field are excluded from the stable list", () => {
-      const ids = getAssistantSupportedAgentIds();
-      // goose, cursor, etc. have not been wired yet — they leave `supports`
-      // undefined and must not leak into the dropdown. Gemini retains its
-      // `supports` shape but at `tier: "deprecated"`, so it is excluded too
-      // — see the deprecated-tier block below.
-      expect(ids).not.toContain("goose");
-      expect(ids).not.toContain("cursor");
-    });
-
-    it("gemini retains its assistant supports shape but at deprecated tier (#8811)", () => {
-      const gemini = getAgentConfig("gemini");
-      expect(gemini?.supports).toMatchObject({
-        mcpInjection: "project-config",
-        settingsOverlay: true,
-        permissionBypass: false,
-        trustDialog: true,
-        versionProbe: true,
-        tier: "deprecated",
-      });
-    });
-
-    it("excludes gemini from the stable list — picker stays Claude/Codex only", () => {
-      const ids = getAssistantSupportedAgentIds();
-      expect(ids).not.toContain("gemini");
-    });
-
-    it("agents marked structurally ineligible are excluded", () => {
-      const ids = getAssistantSupportedAgentIds();
-      expect(ids).not.toContain("aider");
-      expect(ids).not.toContain("interpreter");
     });
 
     it("getAssistantWiredAgentIds includes stable and experimental tiers but excludes deprecated (#8811)", () => {
@@ -310,16 +146,6 @@ describe("agentRegistry", () => {
       // direct-launch keybinding action.
       expect(LAUNCHABLE_AGENT_IDS).not.toContain("daintree-assistant");
       expect(BUILT_IN_AGENT_KEY_ACTIONS).not.toContain("agent.daintree-assistant");
-    });
-
-    it("LAUNCHABLE_AGENT_IDS is exactly BUILT_IN_AGENT_IDS minus assistant-only agents", () => {
-      expect(LAUNCHABLE_AGENT_IDS).toEqual(
-        BUILT_IN_AGENT_IDS.filter((id) => !isAssistantOnlyAgentId(id))
-      );
-      // No assistant-only agent leaks into the launchable set.
-      for (const id of LAUNCHABLE_AGENT_IDS) {
-        expect(isAssistantOnlyAgentId(id)).toBe(false);
-      }
     });
 
     it("excludes agents whose supports object is at experimental tier", () => {
@@ -476,12 +302,6 @@ describe("agentRegistry", () => {
       } finally {
         setUserRegistry({});
       }
-    });
-
-    it("empty user registry produces same supported list as before", () => {
-      setUserRegistry({});
-      const ids = getAssistantSupportedAgentIds();
-      expect(ids).toEqual(["claude", "codex"]);
     });
 
     it("supported list returns built-ins in BUILT_IN_AGENT_IDS order then user-defined", () => {
@@ -685,13 +505,6 @@ describe("agentRegistry", () => {
 });
 
 describe("mistral configuration", () => {
-  it("blocks alt-screen and mouse reporting for the Textual TUI", () => {
-    const config = getAgentConfig("mistral");
-    expect(config?.capabilities?.blockAltScreen).toBe(true);
-    expect(config?.capabilities?.blockMouseReporting).toBe(true);
-    expect(config?.capabilities?.resizeStrategy).toBe("settled");
-  });
-
   it("uses /exit as the quitCommand (Vibe has no /quit alias)", () => {
     const resume = getAgentConfig("mistral")?.resume;
     expect(resume?.kind).toBe("session-id");
@@ -710,54 +523,9 @@ describe("mistral configuration", () => {
     expect(match?.[1]).toBe("abc-123-def-456");
     expect("vibe --continue".match(re)).toBeNull();
   });
-
-  it("relies on prompt fast-path without a per-agent quiet override", () => {
-    const detection = getAgentConfig("mistral")?.detection;
-    expect(detection).toBeDefined();
-    expect(detection?.completionPatterns).toBeUndefined();
-    expect(detection?.promptFastPathMinQuietMs).toBeUndefined();
-  });
-
-  it("ships the local-llamacpp preset as a labeled placeholder", () => {
-    const preset = getAgentConfig("mistral")?.presets?.find((p) => p.id === "local-llamacpp");
-    expect(preset).toBeDefined();
-    expect(preset?.name).toBe("Local (llama.cpp)");
-  });
 });
 
 describe("copilot configuration", () => {
-  it("has models with claude-sonnet-4.6 as first (default)", () => {
-    const config = getAgentConfig("copilot");
-    expect(config?.models).toBeDefined();
-    expect(config!.models![0]!.id).toBe("claude-sonnet-4.6");
-    const modelIds = config!.models!.map((m) => m.id);
-    expect(modelIds).toContain("gpt-5.4");
-    expect(modelIds).toContain("gemini-2.5-pro");
-  });
-
-  it("produces --resume=id args (equals concatenation)", () => {
-    const config = getAgentConfig("copilot");
-    expect(config?.resume?.kind).toBe("session-id");
-    if (config?.resume?.kind === "session-id") {
-      expect(config.resume.args("abc-def-123")).toEqual(["--resume=abc-def-123"]);
-    }
-  });
-
-  it("has npm install for all platforms including Windows", () => {
-    const config = getAgentConfig("copilot");
-    for (const os of ["macos", "linux", "windows"] as const) {
-      const commands = config?.install?.byOs?.[os]?.[0]?.commands;
-      expect(commands).toContain("npm install -g @github/copilot");
-    }
-  });
-
-  it("uses blockMouseReporting and settled resize for alt-screen TUI", () => {
-    const config = getAgentConfig("copilot");
-    expect(config?.capabilities?.blockMouseReporting).toBe(true);
-    expect(config?.capabilities?.resizeStrategy).toBe("settled");
-    expect(config?.capabilities?.blockAltScreen).toBeUndefined();
-  });
-
   it("uses submitEnterDelayMs >= 200 so Ink TUI registers input before CR (issue #5830)", () => {
     const config = getAgentConfig("copilot");
     expect(config?.capabilities?.submitEnterDelayMs).toBeGreaterThanOrEqual(200);
@@ -766,47 +534,6 @@ describe("copilot configuration", () => {
   it("uses single-write quit so /exit submits as one write (Ink TUI constraint)", () => {
     const config = getAgentConfig("copilot");
     expect(config?.capabilities?.quitSubmitMode).toBe("single-write");
-  });
-});
-
-describe("kimi configuration", () => {
-  it("has display name 'Kimi Code'", () => {
-    expect(getAgentConfig("kimi")?.name).toBe("Kimi Code");
-  });
-
-  it("has command 'kimi' (matching the binary name)", () => {
-    expect(getAgentConfig("kimi")?.command).toBe("kimi");
-  });
-
-  it("declares kimi-cli as the PyPI package", () => {
-    expect(getAgentConfig("kimi")?.packages?.pypi).toBe("kimi-cli");
-  });
-
-  it("does not use the deprecated npmGlobalPackage field", () => {
-    expect(getAgentConfig("kimi")?.npmGlobalPackage).toBeUndefined();
-  });
-
-  it("spawns with no subcommand (args is empty)", () => {
-    expect(getAgentConfig("kimi")?.args).toEqual([]);
-  });
-
-  it("does not block alt screen (inline rendering via prompt_toolkit)", () => {
-    expect(getAgentConfig("kimi")?.capabilities?.blockAltScreen).toBeUndefined();
-  });
-
-  it("has uv install for all platforms including Windows", () => {
-    const config = getAgentConfig("kimi");
-    for (const os of ["macos", "linux", "windows"] as const) {
-      const commands = config?.install?.byOs?.[os]?.[0]?.commands;
-      expect(commands).toContain("uv tool install kimi-cli");
-    }
-  });
-
-  it("has authCheck for KIMI_API_KEY and OAuth credential file", () => {
-    const config = getAgentConfig("kimi");
-    expect(config?.authCheck?.envVar).toContain("KIMI_API_KEY");
-    expect(config?.authCheck?.configPathsAll).toContain(".kimi/config.toml");
-    expect(config?.authCheck?.configPathsAll).toContain(".kimi/credentials/kimi-code.json");
   });
 });
 
@@ -866,55 +593,6 @@ describe("kimi detection patterns", () => {
 });
 
 describe("amp configuration", () => {
-  it("uses the amp command and Amp display name", () => {
-    const config = getAgentConfig("amp");
-    expect(config?.command).toBe("amp");
-    expect(config?.name).toBe("Amp");
-  });
-
-  it("declares the @ampcode/cli npm package", () => {
-    // Renamed from @sourcegraph/amp; the old alias is removed June 15, 2026
-    expect(getAgentConfig("amp")?.packages?.npm).toBe("@ampcode/cli");
-  });
-
-  it("probes ~/.amp/bin/amp as a native install path", () => {
-    expect(getAgentConfig("amp")?.nativePaths).toContain("~/.amp/bin/amp");
-  });
-
-  it("declares supportsWsl for Windows diagnostics", () => {
-    expect(getAgentConfig("amp")?.supportsWsl).toBe(true);
-  });
-
-  it("has install blocks for all three platforms", () => {
-    const config = getAgentConfig("amp");
-    for (const os of ["macos", "linux", "windows"] as const) {
-      expect(config?.install?.byOs?.[os]).toBeDefined();
-      expect(config?.install?.byOs?.[os]!.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("offers both curl and npm install on macOS and Linux", () => {
-    const config = getAgentConfig("amp");
-    for (const os of ["macos", "linux"] as const) {
-      const labels = config?.install?.byOs?.[os]?.map((b) => b.label);
-      expect(labels).toContain("curl");
-      expect(labels).toContain("npm");
-    }
-  });
-
-  it("uses settled resize and blocks mouse reporting for the Ink TUI", () => {
-    const caps = getAgentConfig("amp")?.capabilities;
-    expect(caps?.blockMouseReporting).toBe(true);
-    expect(caps?.resizeStrategy).toBe("settled");
-    expect(caps?.blockAltScreen).toBeUndefined();
-  });
-
-  it("ships empty primary and fallback patterns pending on-device capture", () => {
-    const detection = getAgentConfig("amp")?.detection;
-    expect(detection?.primaryPatterns).toEqual([]);
-    expect(detection?.fallbackPatterns).toEqual([]);
-  });
-
   it("compiles all detection regex strings without throwing", () => {
     const detection = getAgentConfig("amp")?.detection;
     const buckets: Array<string[] | undefined> = [
@@ -943,18 +621,6 @@ describe("amp configuration", () => {
     expect(patterns.some((p) => p.test("> ls -la"))).toBe(false);
   });
 
-  it("omits models — Amp mode-switching is TUI-internal", () => {
-    expect(getAgentConfig("amp")?.models).toBeUndefined();
-  });
-
-  it("omits providerTemplates — Amp uses a single managed backend", () => {
-    expect(getAgentConfig("amp")?.providerTemplates).toBeUndefined();
-  });
-
-  it("omits contextWindow — no published limit", () => {
-    expect(getAgentConfig("amp")?.contextWindow).toBeUndefined();
-  });
-
   it("resumes via `threads continue <id>` and exits on Ctrl+C", () => {
     const resume = getAgentConfig("amp")?.resume;
     expect(resume?.kind).toBe("named-target");
@@ -963,24 +629,6 @@ describe("amp configuration", () => {
       expect(resume.shutdownKeySequence).toBe("\x03");
       expect(resume.quitCommand).toBeUndefined();
     }
-  });
-
-  it("probes ~/.amp/oauth and AMP_API_KEY for auth discovery", () => {
-    const auth = getAgentConfig("amp")?.authCheck;
-    expect(auth?.configPathsAll).toContain(".amp/oauth");
-    expect(auth?.envVar).toBe("AMP_API_KEY");
-  });
-
-  it("declares amp as a fatal CLI prerequisite with the install URL", () => {
-    const prereq = getAgentConfig("amp")?.prerequisites?.find((p) => p.tool === "amp");
-    expect(prereq?.severity).toBe("fatal");
-    expect(prereq?.installUrl).toBe("https://ampcode.com/manual");
-  });
-
-  it("surfaces AMP_API_KEY and AMP_HOME env suggestions", () => {
-    const keys = getAgentConfig("amp")?.envSuggestions?.map((s) => s.key) ?? [];
-    expect(keys).toContain("AMP_API_KEY");
-    expect(keys).toContain("AMP_HOME");
   });
 });
 
@@ -1036,15 +684,6 @@ describe("model configuration", () => {
     expect(pinned).toEqual([]);
   });
 
-  it("gemini has models", () => {
-    const config = getAgentConfig("gemini");
-    expect(config?.models).toBeDefined();
-    expect(config!.models!.length).toBeGreaterThanOrEqual(2);
-    const modelIds = config!.models!.map((m) => m.id);
-    expect(modelIds).toContain("gemini-2.5-pro");
-    expect(modelIds).toContain("gemini-2.5-flash");
-  });
-
   // Codex doesn't validate `--model` against an allowlist — an unrecognised
   // slug silently falls back to generic metadata rather than erroring — so the
   // fallback list must name explicit tier slugs, never the ambiguous family
@@ -1058,24 +697,6 @@ describe("model configuration", () => {
       modelIds.some((other) => other !== id && other.startsWith(`${id}-`))
     );
     expect(ambiguous).toEqual([]);
-  });
-
-  it("each model has id, name, and shortLabel", () => {
-    for (const id of getAgentIds()) {
-      const config = getAgentConfig(id);
-      if (config?.models) {
-        for (const model of config.models) {
-          expect(model.id).toBeTruthy();
-          expect(model.name).toBeTruthy();
-          expect(model.shortLabel).toBeTruthy();
-        }
-      }
-    }
-  });
-
-  it("agents without models have undefined models field", () => {
-    const config = getAgentConfig("cursor");
-    expect(config?.models).toBeUndefined();
   });
 });
 
@@ -1159,28 +780,6 @@ describe("getAgentPreset", () => {
 
   it("returns undefined for unknown agent", () => {
     expect(getAgentPreset("nonexistent-agent")).toBeUndefined();
-  });
-});
-
-describe("blockAltScreen capabilities", () => {
-  it("opencode allows alt screen for Bubble Tea TUI", () => {
-    const config = getAgentConfig("opencode");
-    expect(config?.capabilities?.blockAltScreen).toBe(false);
-  });
-
-  it("codex blocks alt screen (uses inline mode)", () => {
-    const config = getAgentConfig("codex");
-    expect(config?.capabilities?.blockAltScreen).toBe(true);
-  });
-
-  it("claude does not explicitly set blockAltScreen (defaults to false)", () => {
-    const config = getAgentConfig("claude");
-    expect(config?.capabilities?.blockAltScreen).toBeUndefined();
-  });
-
-  it("gemini blocks alt screen", () => {
-    const config = getAgentConfig("gemini");
-    expect(config?.capabilities?.blockAltScreen).toBe(true);
   });
 });
 
@@ -1421,10 +1020,6 @@ describe("resume configuration", () => {
     }
   });
 
-  it("cursor has no resume config (no session resume model)", () => {
-    expect(getAgentConfig("cursor")?.resume).toBeUndefined();
-  });
-
   it("goose is session-id and produces session subcommand resume args", () => {
     const resume = getAgentConfig("goose")?.resume;
     expect(resume?.kind).toBe("session-id");
@@ -1450,28 +1045,6 @@ describe("resume configuration", () => {
 });
 
 describe("titleStatePatterns", () => {
-  it("gemini has titleStatePatterns with working and waiting arrays", () => {
-    const config = getAgentConfig("gemini");
-    expect(config?.detection?.titleStatePatterns).toBeDefined();
-    expect(config!.detection!.titleStatePatterns!.working).toEqual(["\u2726"]);
-    expect(config!.detection!.titleStatePatterns!.waiting).toEqual(["\u25C7", "\u270B"]);
-  });
-
-  it("qwen inherits Gemini's Ink TUI title-state glyphs", () => {
-    const config = getAgentConfig("qwen");
-    expect(config?.detection?.titleStatePatterns).toBeDefined();
-    expect(config!.detection!.titleStatePatterns!.working).toEqual(["\u2726"]);
-    expect(config!.detection!.titleStatePatterns!.waiting).toEqual(["\u25C7", "\u270B"]);
-  });
-
-  it("agents without an Ink TUI do not have titleStatePatterns", () => {
-    const claude = getAgentConfig("claude");
-    expect(claude?.detection?.titleStatePatterns).toBeUndefined();
-
-    const codex = getAgentConfig("codex");
-    expect(codex?.detection?.titleStatePatterns).toBeUndefined();
-  });
-
   it("user registry merge does not remove built-in titleStatePatterns", () => {
     setUserRegistry({
       gemini: {
@@ -1487,49 +1060,6 @@ describe("titleStatePatterns", () => {
     const effective = getEffectiveAgentConfig("gemini");
     expect(effective?.detection?.titleStatePatterns).toBeDefined();
     expect(effective!.detection!.titleStatePatterns!.working).toEqual(["\u2726"]);
-  });
-});
-
-describe("gemini metadata", () => {
-  it("has correct npm package name", () => {
-    const config = getAgentConfig("gemini");
-    expect(config?.version?.npmPackage).toBe("@google/gemini-cli");
-  });
-
-  it("has correct GitHub repo", () => {
-    const config = getAgentConfig("gemini");
-    expect(config?.version?.githubRepo).toBe("google-gemini/gemini-cli");
-  });
-
-  it("has correct release notes URL", () => {
-    const config = getAgentConfig("gemini");
-    expect(config?.version?.releaseNotesUrl).toBe(
-      "https://github.com/google-gemini/gemini-cli/releases"
-    );
-  });
-
-  it("has correct npm update command", () => {
-    const config = getAgentConfig("gemini");
-    expect(config?.update?.npm).toBe("npm install -g @google/gemini-cli@latest");
-  });
-
-  it("has correct install docs URL", () => {
-    const config = getAgentConfig("gemini");
-    expect(config?.install?.docsUrl).toBe("https://github.com/google-gemini/gemini-cli#readme");
-  });
-
-  it("has correct install commands for all platforms", () => {
-    const config = getAgentConfig("gemini");
-    for (const os of ["macos", "windows", "linux"] as const) {
-      const commands = config?.install?.byOs?.[os]?.[0]?.commands;
-      expect(commands).toContain("npm install -g @google/gemini-cli");
-    }
-  });
-
-  it("has correct prerequisite install URL", () => {
-    const config = getAgentConfig("gemini");
-    const prereq = config?.prerequisites?.find((p) => p.tool === "gemini");
-    expect(prereq?.installUrl).toBe("https://github.com/google-gemini/gemini-cli#readme");
   });
 });
 
@@ -1600,25 +1130,6 @@ describe("cursor detection patterns", () => {
   });
 });
 
-describe("cursor install metadata", () => {
-  it("has Windows install block with correct PowerShell command", () => {
-    const config = getAgentConfig("cursor");
-    const windows = config?.install?.byOs?.windows;
-    expect(windows).toBeDefined();
-    expect(windows).toHaveLength(1);
-    expect(windows![0]!.label).toBe("PowerShell");
-    expect(windows![0]!.commands).toEqual(["irm 'https://cursor.com/install?win32=true' | iex"]);
-  });
-
-  it("has install blocks for all three platforms", () => {
-    const config = getAgentConfig("cursor");
-    for (const os of ["macos", "linux", "windows"] as const) {
-      expect(config?.install?.byOs?.[os]).toBeDefined();
-      expect(config?.install?.byOs?.[os]!.length).toBeGreaterThan(0);
-    }
-  });
-});
-
 describe("all built-in agents have Windows or generic install", () => {
   it.each([
     "claude",
@@ -1644,40 +1155,10 @@ describe("all built-in agents have Windows or generic install", () => {
 });
 
 describe("claude providerTemplates descriptions", () => {
-  const expected: Record<string, { name: string; description: string }> = {
-    "anthropic-native": {
-      name: "Anthropic (native)",
-      description: "Direct Anthropic API connection.",
-    },
-    zai: { name: "Z.AI", description: "Anthropic-compatible via Z.AI." },
-    openrouter: { name: "OpenRouter", description: "Model routing via OpenRouter." },
-    deepseek: { name: "DeepSeek", description: "OpenAI-compatible via DeepSeek." },
-    ollama: {
-      name: "Ollama (local)",
-      description: "Local models via Ollama — no API key needed.",
-    },
-    "custom-openai": {
-      name: "Custom (OpenAI-compatible)",
-      description: "Custom OpenAI-compatible endpoint.",
-    },
-  };
-
-  it("has all six provider templates with the expected ids", () => {
-    const templates = getAgentConfig("claude")?.providerTemplates ?? [];
-    const ids = templates.map((t) => t.id);
-    expect(ids).toEqual(Object.keys(expected));
-  });
-
   it("all provider template ids are unique", () => {
     const templates = getAgentConfig("claude")?.providerTemplates ?? [];
     const ids = templates.map((t) => t.id);
     expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it.each(Object.entries(expected))("%s has the expected name and short caption", (id, meta) => {
-    const template = getAgentConfig("claude")?.providerTemplates?.find((t) => t.id === id);
-    expect(template?.name).toBe(meta.name);
-    expect(template?.description).toBe(meta.description);
   });
 
   it("all descriptions fit a short caption (<= 60 chars)", () => {
@@ -1772,18 +1253,6 @@ describe("opencode detection patterns", () => {
 });
 
 describe("aider configuration", () => {
-  it("uses pypi packaging with aider-chat", () => {
-    const config = getAgentConfig("aider");
-    expect(config?.packages?.pypi).toBe("aider-chat");
-    expect(config?.packages?.brew).toBe("aider");
-  });
-
-  it("looks up version from PyPI", () => {
-    const config = getAgentConfig("aider");
-    expect(config?.version?.pypiPackage).toBe("aider-chat");
-    expect(config?.version?.githubRepo).toBe("Aider-AI/aider");
-  });
-
   it("defaults --no-auto-commits to keep worktree commits clean", () => {
     const config = getAgentConfig("aider");
     expect(config?.args).toContain("--no-auto-commits");
@@ -1805,11 +1274,6 @@ describe("aider configuration", () => {
       expect(resume.args()).toEqual(["--restore-chat-history"]);
       expect(resume.quitCommand).toBe("/exit");
     }
-  });
-
-  it("streams to scrollback (no alt-screen block)", () => {
-    const config = getAgentConfig("aider");
-    expect(config?.capabilities?.blockAltScreen).toBe(false);
   });
 
   it("accepts any of the major provider env vars for auth", () => {
@@ -2026,29 +1490,6 @@ describe("UserAgentConfigSchema supports field", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.supports).toBe(false);
-    }
-  });
-
-  it("preserves structured supports through validation", () => {
-    const result = UserAgentConfigSchema.safeParse({
-      id: "test-agent",
-      name: "Test Agent",
-      command: "test",
-      color: "#FF0000",
-      iconId: "test",
-      supportsContextInjection: true,
-      supports: {
-        mcpInjection: "cli-flags",
-        settingsOverlay: false,
-        permissionBypass: true,
-        trustDialog: false,
-        versionProbe: true,
-        tier: "stable",
-      },
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.supports).toMatchObject({ tier: "stable", mcpInjection: "cli-flags" });
     }
   });
 

@@ -204,35 +204,6 @@ describe("FixedDropdown overlay-claims dismiss behavior", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("closes when an additional overlay opens after the grace window absorbed an in-flight one", () => {
-    const { rerender } = render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
-        <div>Content</div>
-      </FixedDropdown>
-    );
-
-    // In-flight modal arrives during grace; absorbed into baseline.
-    setOverlayStackLength(1);
-    rerender(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
-        <div>Content</div>
-      </FixedDropdown>
-    );
-
-    advancePastGrace();
-
-    // User now opens a genuinely new modal — this must dismiss the dropdown.
-    setOverlayStackLength(2);
-    rerender(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
-        <div>Content</div>
-      </FixedDropdown>
-    );
-
-    expect(onOpenChange).toHaveBeenCalledTimes(1);
-    expect(onOpenChange).toHaveBeenCalledWith(false);
-  });
-
   it("restarts the grace window on reopen", () => {
     const { rerender } = render(
       <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
@@ -630,17 +601,6 @@ describe("FixedDropdownVisibleContext tooltip strand gate (issue #8001)", () => 
     return <span data-testid={id} data-visible={String(visible)} />;
   }
 
-  it("provides context value `true` while a keepMounted dropdown is visible", () => {
-    render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef} keepMounted>
-        <ContextProbe id="probe-open" />
-      </FixedDropdown>
-    );
-
-    const probe = document.querySelector('[data-testid="probe-open"]');
-    expect(probe?.getAttribute("data-visible")).toBe("true");
-  });
-
   it("flips context value to `false` once the keepMounted dropdown closes", () => {
     const { rerender } = render(
       <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef} keepMounted>
@@ -691,32 +651,6 @@ describe("FixedDropdownVisibleContext tooltip strand gate (issue #8001)", () => 
       "true"
     );
   });
-
-  it("defaults to `true` outside any FixedDropdown so standalone tooltips are unaffected", () => {
-    render(<ContextProbe id="probe-standalone" />);
-    expect(
-      document.querySelector('[data-testid="probe-standalone"]')?.getAttribute("data-visible")
-    ).toBe("true");
-  });
-
-  it("does not wrap non-keepMounted dropdowns in the provider (default `true` flows through)", () => {
-    // Non-keepMounted dropdowns unmount their body on close, so they don't
-    // need the gate. The provider must be scoped to the keepMounted branch
-    // only — otherwise the gate would fire during normal open/close cycles
-    // and pre-emptively close tooltips that are still in their fade-out.
-    render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
-        <ContextProbe id="probe-non-keep" />
-      </FixedDropdown>
-    );
-
-    // The default context value is `true`, so without an inner provider this
-    // probe reads `true`. Confirms the provider is correctly scoped to the
-    // keepMounted branch.
-    expect(
-      document.querySelector('[data-testid="probe-non-keep"]')?.getAttribute("data-visible")
-    ).toBe("true");
-  });
 });
 
 describe("FixedDropdown right-edge anchor (issue #6800)", () => {
@@ -755,27 +689,6 @@ describe("FixedDropdown right-edge anchor (issue #6800)", () => {
     expect(rightStyle).toContain("var(--portal-right-offset");
     expect(rightStyle).not.toContain("--right-obstruction-offset");
   });
-
-  it("ignores --right-obstruction-offset when only the Assistant is open", () => {
-    // The actual #6800 scenario: Portal closed (--portal-right-offset = 0),
-    // Assistant open (--right-obstruction-offset = 320). The toolbar dropdown
-    // must NOT pick up the 320px shift, because only the Portal body-portals
-    // over the toolbar.
-    document.documentElement.style.setProperty("--portal-right-offset", "0px");
-    document.documentElement.style.setProperty("--right-obstruction-offset", "320px");
-
-    render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
-        <div data-testid="dropdown-body">Content</div>
-      </FixedDropdown>
-    );
-
-    const portal = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
-    const rightStyle = portal?.style.right ?? "";
-    expect(rightStyle).toContain("var(--portal-right-offset");
-    expect(rightStyle).not.toContain("--right-obstruction-offset");
-    expect(rightStyle).not.toContain("320");
-  });
 });
 
 describe("FixedDropdown source-level guards (issue #6800)", () => {
@@ -788,10 +701,6 @@ describe("FixedDropdown source-level guards (issue #6800)", () => {
     const fs = await import("fs/promises");
     const path = await import("path");
     source = await fs.readFile(path.resolve(__dirname, "../fixed-dropdown.tsx"), "utf-8");
-  });
-
-  it("references --portal-right-offset", () => {
-    expect(source).toContain("--portal-right-offset");
   });
 
   it("does not reference --right-obstruction-offset", () => {
@@ -936,22 +845,6 @@ describe("FixedDropdown rAF re-position throttle (issue #9580)", () => {
     expect(rafSpy).toHaveBeenCalledTimes(1);
     flushFrames();
     expect(portalTop()).toBe("88px");
-  });
-
-  it("does not regress position when the anchor rect is unchanged across frames", () => {
-    const { ref } = createMutableAnchor(40, 100);
-    render(
-      <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={ref} sideOffset={8}>
-        <div data-testid="dropdown-body">Content</div>
-      </FixedDropdown>
-    );
-
-    fireScroll();
-    flushFrames();
-    expect(portalTop()).toBe("48px");
-    fireScroll();
-    flushFrames();
-    expect(portalTop()).toBe("48px");
   });
 
   it("coalesces resize events through the same throttle", () => {

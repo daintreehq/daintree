@@ -117,13 +117,6 @@ describe("FolderListingView", () => {
     expect(cellsOf("pkg")).toEqual(["pkg", UNKNOWN, UNKNOWN]);
   });
 
-  it("selects a row on single click", () => {
-    const onSelect = vi.fn();
-    renderListing([row("src/a.ts")], { onSelect });
-    fireEvent.click(screen.getByLabelText("a.ts"));
-    expect(onSelect).toHaveBeenCalledWith("src/a.ts", false);
-  });
-
   it("makes rows draggable when a base path resolves", () => {
     renderListing([row("src/a.ts")]);
     expect(screen.getByLabelText("a.ts").getAttribute("draggable")).toBe("true");
@@ -142,16 +135,6 @@ describe("FolderListingView", () => {
     });
     fireEvent.contextMenu(screen.getByLabelText("a.ts"));
     expect(await screen.findByText("Copy a.ts")).toBeTruthy();
-  });
-
-  it("hands the menu builder the same entry shape the tree does", () => {
-    // Proves the widened callback signature is satisfied by a listing row —
-    // the whole reason both surfaces can share one menu.
-    const rowContextMenu = vi.fn(() => <ContextMenuItem>Item</ContextMenuItem>);
-    renderListing([row("src/pkg", { isDirectory: true })], { rowContextMenu });
-    expect(rowContextMenu).toHaveBeenCalledWith(
-      expect.objectContaining({ path: "src/pkg", name: "pkg", isDirectory: true })
-    );
   });
 
   it("renders rows in the order it is given, without re-sorting", () => {

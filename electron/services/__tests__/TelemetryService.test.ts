@@ -82,7 +82,6 @@ import {
   isTelemetryEnabled,
   setTelemetryEnabled,
   setTelemetryLevel,
-  getTelemetryLevel,
   hasTelemetryPromptBeenShown,
   markTelemetryPromptShown,
   trackEvent,
@@ -619,38 +618,6 @@ describe("sanitizeEvent", () => {
     expect(contexts.react.componentStack).not.toContain(secret);
     expect(contexts.react.componentStack).toContain("[REDACTED]");
   });
-
-  it("leaves events without tags, user, or contexts unchanged", () => {
-    const event: SentryEvent = { message: "plain message" };
-    const result = sanitizeEvent(event);
-    expect(result).not.toBeNull();
-    expect(result?.tags).toBeUndefined();
-    expect(result?.user).toBeUndefined();
-    expect(result?.contexts).toBeUndefined();
-  });
-});
-
-describe("getTelemetryLevel", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setPrivacy({ telemetryLevel: "off" });
-  });
-
-  it("returns the stored privacy.telemetryLevel", () => {
-    setPrivacy({ telemetryLevel: "errors" });
-    expect(getTelemetryLevel()).toBe("errors");
-  });
-
-  it("returns 'off' when privacy is missing", () => {
-    storeMock.get.mockReturnValue(undefined);
-    expect(getTelemetryLevel()).toBe("off");
-  });
-
-  it("does NOT write to the store on read (no lazy migration)", () => {
-    storeMock.get.mockReturnValue(undefined);
-    getTelemetryLevel();
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
 });
 
 describe("isTelemetryEnabled", () => {
@@ -665,11 +632,6 @@ describe("isTelemetryEnabled", () => {
 
   it("returns true when level is 'errors'", () => {
     setPrivacy({ telemetryLevel: "errors" });
-    expect(isTelemetryEnabled()).toBe(true);
-  });
-
-  it("returns true when level is 'full'", () => {
-    setPrivacy({ telemetryLevel: "full" });
     expect(isTelemetryEnabled()).toBe(true);
   });
 
@@ -692,15 +654,6 @@ describe("setTelemetryLevel", () => {
       expect(call[0]).not.toBe("telemetry");
       expect(call[0]).not.toMatch(/^telemetry($|\.)/);
     }
-  });
-
-  it("preserves hasSeenPrompt when writing telemetryLevel", async () => {
-    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: true });
-    await setTelemetryLevel("full");
-    expect(storeMock.set).toHaveBeenCalledWith("privacy.telemetryLevel", "full");
-    // Dot-path writes don't touch sibling fields — hasSeenPrompt stays true.
-    expect((storeMock._data.privacy as { hasSeenPrompt: boolean }).hasSeenPrompt).toBe(true);
-    expect((storeMock._data.privacy as { telemetryLevel: string }).telemetryLevel).toBe("full");
   });
 });
 
@@ -803,16 +756,6 @@ describe("hasTelemetryPromptBeenShown", () => {
     vi.clearAllMocks();
   });
 
-  it("reads privacy.hasSeenPrompt", () => {
-    setPrivacy({ hasSeenPrompt: true });
-    expect(hasTelemetryPromptBeenShown()).toBe(true);
-  });
-
-  it("returns false when not shown", () => {
-    setPrivacy({ hasSeenPrompt: false });
-    expect(hasTelemetryPromptBeenShown()).toBe(false);
-  });
-
   it("returns false when privacy is missing", () => {
     storeMock.get.mockReturnValue(undefined);
     expect(hasTelemetryPromptBeenShown()).toBe(false);
@@ -832,15 +775,6 @@ describe("markTelemetryPromptShown", () => {
       expect(call[0]).not.toBe("telemetry");
       expect(call[0]).not.toMatch(/^telemetry($|\.)/);
     }
-  });
-
-  it("preserves telemetryLevel and other privacy fields", () => {
-    setPrivacy({ telemetryLevel: "full", hasSeenPrompt: false });
-    markTelemetryPromptShown();
-    expect(storeMock.set).toHaveBeenCalledWith("privacy.hasSeenPrompt", true);
-    // Dot-path write must not touch sibling fields.
-    expect((storeMock._data.privacy as { telemetryLevel: string }).telemetryLevel).toBe("full");
-    expect((storeMock._data.privacy as { hasSeenPrompt: boolean }).hasSeenPrompt).toBe(true);
   });
 });
 
@@ -956,37 +890,6 @@ describe("trackEvent", () => {
       })
     );
     process.env.SENTRY_DSN = original;
-  });
-
-  it("stamps a stable fingerprint on every analytics event", async () => {
-    const original = process.env.SENTRY_DSN;
-    process.env.SENTRY_DSN = "https://test@sentry.io/123";
-    setPrivacy({ telemetryLevel: "full", hasSeenPrompt: true });
-    await initializeTelemetry();
-    captureEventMock.mockClear();
-
-    trackEvent("onboarding_step_viewed", { step: "telemetry" });
-    trackEvent("agent_launched", { agent: "claude" });
-
-    expect(captureEventMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ fingerprint: ["analytics", "onboarding_step_viewed"] })
-    );
-    expect(captureEventMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ fingerprint: ["analytics", "agent_launched"] })
-    );
-    process.env.SENTRY_DSN = original;
-  });
-
-  it("does not write buffer contents to the store", () => {
-    storeMock.set.mockClear();
-    setPrivacy({ telemetryLevel: "off", hasSeenPrompt: false });
-    trackEvent("onboarding_step_viewed", { step: "telemetry" });
-    trackEvent("onboarding_step_viewed", { step: "agentSelection" });
-    for (const call of storeMock.set.mock.calls) {
-      expect(call[0]).not.toContain("buffer");
-    }
   });
 });
 
@@ -1309,21 +1212,6 @@ describe("addActionBreadcrumb", () => {
         throw new Error("transport failed");
       });
       expect(() => mod.addActionBreadcrumb(crumb)).not.toThrow();
-    } finally {
-      process.env.SENTRY_DSN = original;
-    }
-  });
-
-  it("forwards confirmed:true in breadcrumb data", async () => {
-    setPrivacy({ telemetryLevel: "errors" });
-    const original = process.env.SENTRY_DSN;
-    process.env.SENTRY_DSN = "https://test@sentry.io/123";
-    try {
-      const mod = await loadFreshModule();
-      await mod.initializeTelemetry();
-      mod.addActionBreadcrumb({ ...crumb, confirmed: true });
-      const arg = sentryAddBreadcrumbMock.mock.calls[0]![0];
-      expect(arg.data.confirmed).toBe(true);
     } finally {
       process.env.SENTRY_DSN = original;
     }

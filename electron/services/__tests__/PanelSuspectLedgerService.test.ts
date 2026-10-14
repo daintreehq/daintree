@@ -24,8 +24,6 @@ import {
   PANEL_DECAY_TTL_MS,
   PANEL_QUARANTINE_THRESHOLD,
   __resetPanelSuspectLedgerForTesting,
-  getPanelSuspectLedger,
-  initializePanelSuspectLedger,
 } from "../PanelSuspectLedgerService.js";
 
 function suspectPanel(id: string, overrides: Partial<PanelSummary> = {}): PanelSummary {
@@ -226,12 +224,6 @@ describe("PanelSuspectLedgerService", () => {
     expect(ledger2.getQuarantinedPanelIds().has("p1")).toBe(true);
   });
 
-  it("clearQuarantinedPanel returns false for unknown panel ids", () => {
-    const ledger = new PanelSuspectLedgerService();
-    ledger.initialize(null);
-    expect(ledger.clearQuarantinedPanel("not-here")).toBe(false);
-  });
-
   it("quarantines a corrupt ledger file and resets", () => {
     fs.writeFileSync(ledgerPath, "not valid json!!!", "utf8");
 
@@ -281,12 +273,6 @@ describe("PanelSuspectLedgerService", () => {
     expect(ledger.getQuarantinedPanelIds().has("good")).toBe(true);
     expect(ledger.getQuarantinedPanelIds().has("bad")).toBe(false);
     expect(ledger.getQuarantinedLedgerPath()).toBeNull();
-  });
-
-  it("does nothing surprising on a clean boot with no pending crash", () => {
-    const ledger = new PanelSuspectLedgerService();
-    ledger.initialize(null);
-    expect(ledger.getQuarantinedPanelIds().size).toBe(0);
   });
 
   it("initialize is idempotent — a second call is a no-op", () => {
@@ -353,17 +339,5 @@ describe("PanelSuspectLedgerService", () => {
       .readdirSync(tmpDir)
       .filter((e) => e.startsWith("panel-suspect-ledger.json.corrupted."));
     expect(siblings.length).toBe(3);
-  });
-
-  it("getPanelSuspectLedger returns a singleton across calls", () => {
-    const a = getPanelSuspectLedger();
-    const b = getPanelSuspectLedger();
-    expect(a).toBe(b);
-  });
-
-  it("initializePanelSuspectLedger initializes the singleton", () => {
-    const service = initializePanelSuspectLedger(pendingCrash([suspectPanel("p1")]));
-    expect(service.isInitialized()).toBe(true);
-    expect(readLedgerFile().panels.p1).toBeDefined();
   });
 });

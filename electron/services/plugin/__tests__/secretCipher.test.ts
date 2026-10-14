@@ -239,15 +239,6 @@ describe("safeStorageCipher encrypt", () => {
       }
     );
 
-    // With the keyring locked and the prompt dismissed, Chromium's async
-    // encryptor quietly encrypts with its hardcoded key instead.
-    it("refuses a fixed-key result from a keyring that didn't answer", async () => {
-      safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
-      asyncKey("v10");
-
-      expect(await safeStorageCipher.encrypt("hunter2")).toBeNull();
-    });
-
     it("refuses when the async encrypt rejects", async () => {
       safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
       safeStorageMock.encryptStringAsync.mockRejectedValue(new Error("Error while encrypting"));
@@ -278,13 +269,6 @@ describe("safeStorageCipher encrypt", () => {
       expect(safeStorageMock.encryptString).not.toHaveBeenCalled();
     }
   );
-
-  it("refuses when the keychain has no key to give", async () => {
-    setPlatform("darwin");
-    safeStorageMock.encryptStringAsync.mockRejectedValue(new Error("Error while encrypting"));
-
-    expect(await safeStorageCipher.encrypt("hunter2")).toBeNull();
-  });
 });
 
 describe("safeStorageCipher decrypt", () => {

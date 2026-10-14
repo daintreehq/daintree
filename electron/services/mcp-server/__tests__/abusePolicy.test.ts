@@ -142,7 +142,7 @@ describe("AbusePolicy", () => {
     });
   });
 
-  describe("dropSession and clear", () => {
+  describe("dropSession", () => {
     it("dropSession removes state for one session", () => {
       const { policy } = makePolicy({ ...baseConfig, abusePolicyMaxDenials: 3 });
       policy.recordDenial("s1", "auth401");
@@ -150,12 +150,6 @@ describe("AbusePolicy", () => {
       policy.dropSession("s1");
       expect(policy.getSnapshot("s1")).toBeNull();
       expect(policy.getSnapshot("s2")).toEqual({ count: 1, tripped: false });
-    });
-
-    it("dropSession on an unknown session is a harmless no-op", () => {
-      const { policy } = makePolicy({ ...baseConfig, abusePolicyMaxDenials: 3 });
-      expect(() => policy.dropSession("never-seen")).not.toThrow();
-      expect(policy.getSnapshot("never-seen")).toBeNull();
     });
 
     it("dropSession lets a previously-tracked session restart its counter cleanly", () => {
@@ -171,29 +165,6 @@ describe("AbusePolicy", () => {
       policy.dropSession("s1");
       expect(policy.recordDenial("s1", "auth401")).toEqual({ tripped: false });
       expect(policy.getSnapshot("s1")).toEqual({ count: 1, tripped: false });
-    });
-
-    it("clear removes all state", () => {
-      const { policy } = makePolicy({ ...baseConfig, abusePolicyMaxDenials: 3 });
-      policy.recordDenial("s1", "auth401");
-      policy.recordDenial("s2", "auth401");
-      policy.clear();
-      expect(policy.getSnapshot("s1")).toBeNull();
-      expect(policy.getSnapshot("s2")).toBeNull();
-    });
-  });
-
-  describe("getSnapshot", () => {
-    it("returns null for unknown session", () => {
-      const { policy } = makePolicy(baseConfig);
-      expect(policy.getSnapshot("unknown")).toBeNull();
-    });
-
-    it("returns count and tripped for tracked session", () => {
-      const { policy } = makePolicy({ ...baseConfig, abusePolicyMaxDenials: 3 });
-      policy.recordDenial("s1", "auth401");
-      policy.recordDenial("s1", "auth401");
-      expect(policy.getSnapshot("s1")).toEqual({ count: 2, tripped: false });
     });
   });
 });

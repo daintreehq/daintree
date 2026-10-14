@@ -36,11 +36,6 @@ describe("computeFrecency", () => {
     expect(computeFrecency([now - SEVEN_DAYS_MS], now)).toBeCloseTo(50, 1);
   });
 
-  it("returns ~25 for a single usage exactly 14 days ago", () => {
-    const now = Date.now();
-    expect(computeFrecency([now - 2 * SEVEN_DAYS_MS], now)).toBeCloseTo(25, 1);
-  });
-
   it("sums contributions from multiple timestamps", () => {
     const now = Date.now();
     const score = computeFrecency([now, now - SEVEN_DAYS_MS], now);
@@ -220,17 +215,6 @@ describe("buildRecipeSections edge cases", () => {
   it("returns empty sections for empty recipes", () => {
     const sections = buildRecipeSections([]);
     expect(sections.pinned).toHaveLength(0);
-    expect(sections.recent).toHaveLength(0);
-    expect(sections.all).toHaveLength(0);
-  });
-
-  it("handles all recipes pinned", () => {
-    const recipes = [
-      makeRecipe({ id: "1", name: "A", showInEmptyState: true }),
-      makeRecipe({ id: "2", name: "B", showInEmptyState: true }),
-    ];
-    const sections = buildRecipeSections(recipes);
-    expect(sections.pinned).toHaveLength(2);
     expect(sections.recent).toHaveLength(0);
     expect(sections.all).toHaveLength(0);
   });

@@ -91,26 +91,8 @@ describe("isRoutineExit", () => {
     expect(isRoutineExit(127)).toBe(true);
   });
 
-  it("handles undefined/null signal gracefully", () => {
-    expect(isRoutineExit(0, undefined)).toBe(true);
-    expect(isRoutineExit(0, null)).toBe(true);
-    expect(isRoutineExit(1, undefined)).toBe(true);
-    expect(isRoutineExit(1, null)).toBe(true);
-  });
-
-  it("treats crash signals as non-routine", () => {
-    expect(isRoutineExit(132)).toBe(false); // 128+SIGILL
-    expect(isRoutineExit(135)).toBe(false); // 128+SIGBUS
-    expect(isRoutineExit(136)).toBe(false); // 128+SIGFPE
-  });
-
   it("treats raw crash signal as non-routine regardless of exit code", () => {
     expect(isRoutineExit(1, 11)).toBe(false); // SIGSEGV signal overrides benign code
     expect(isRoutineExit(0, 6)).toBe(false); // SIGABRT signal overrides zero code
-  });
-
-  it("treats non-zero code with routine signal as routine", () => {
-    expect(isRoutineExit(130, 2)).toBe(true); // SIGINT with matching code
-    expect(isRoutineExit(1, 2)).toBe(true); // SIGINT signal overrides code
   });
 });

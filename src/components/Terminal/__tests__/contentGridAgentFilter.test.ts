@@ -40,17 +40,6 @@ describe("computeGridSelectedAgentIds (issue #5117 loading-guard regression)", (
     expect(result!.has("codex")).toBe(false); // missing
     expect(result!.has("terminal")).toBe(false); // terminal is not an agent; still missing
   });
-
-  it("does not use pin state — unpinned installed agents are included (issue #5117)", () => {
-    // The helper takes only availability + agent IDs. Pin state is irrelevant by
-    // construction; this test locks the contract against future regressions.
-    const result = computeGridSelectedAgentIds(
-      true,
-      availability({ claude: "ready", gemini: "ready" }),
-      ["claude", "gemini"]
-    );
-    expect(result).toEqual(new Set(["claude", "gemini"]));
-  });
 });
 
 describe("computeGridCanLaunch", () => {

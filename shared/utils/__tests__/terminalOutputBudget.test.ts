@@ -358,19 +358,4 @@ describe("boundTerminalStatusOutput", () => {
       expect(bytesOf(bounded)).toBeLessThanOrEqual(maxBytes);
     }
   });
-
-  it("flags a cut tail that carried no flag yet and stays within the cap", () => {
-    const lines = numberedLines(100, 1000);
-    const bare: TerminalStatusEntry = {
-      terminalId: "t",
-      agentId: null,
-      agentState: null,
-      recentOutput: lines.join("\n"),
-    };
-
-    const bounded = boundTerminalStatusOutput(statusOf([bare]), CAP);
-
-    expect(bytesOf(bounded)).toBeLessThanOrEqual(CAP);
-    expect(bounded.terminals[0]!.recentOutputTruncated).toBe(true);
-  });
 });

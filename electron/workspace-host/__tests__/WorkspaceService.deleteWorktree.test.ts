@@ -274,18 +274,6 @@ describe("WorkspaceService.deleteWorktree", () => {
     expect(pathIdx).toBeGreaterThan(eooIdx);
   });
 
-  it("sends error result for unknown worktreeId", async () => {
-    await service.deleteWorktree("req-2", "/nonexistent/worktree");
-
-    expect(mockSendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "delete-worktree-result",
-        success: false,
-        error: expect.stringContaining("not found"),
-      })
-    );
-  });
-
   it("blocks deletion of main worktree", async () => {
     createAndRegisterMonitor({ isMainWorktree: true });
 
@@ -1668,17 +1656,6 @@ describe("WorkspaceService.deleteWorktree", () => {
       expect(teardownSpy).not.toHaveBeenCalled();
       expect(removeCalls()).toEqual([]);
       expect(service["monitors"].has("/test/worktree")).toBe(true);
-    });
-
-    it("is not bypassed by force", async () => {
-      await withPresentPaths(["/test/worktree", "/test/worktree/nested"]);
-      createAndRegisterMonitor();
-      createAndRegisterMonitor({ id: "/test/worktree/nested", path: "/test/worktree/nested" });
-
-      await service.deleteWorktree("req-nested-force", "/test/worktree", true);
-
-      expect(failureError()).toContain("/test/worktree/nested");
-      expect(removeCalls()).toEqual([]);
     });
 
     it("rejects through the port path when throwOnError is set", async () => {

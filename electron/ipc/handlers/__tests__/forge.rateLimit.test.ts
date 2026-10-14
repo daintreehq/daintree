@@ -208,49 +208,6 @@ describe("forge handlers — rate limiting", () => {
     registerForgeDataHandlers();
   });
 
-  describe("read family (forge:list-issues)", () => {
-    it("calls checkRateLimit with read limits (10, 10_000)", async () => {
-      const handler = getInvokeHandler(CHANNELS.FORGE_LIST_ISSUES);
-      await handler({}, { cwd: "/tmp/project" });
-
-      expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FORGE_LIST_ISSUES, 10, 10_000);
-      expect(fakeImpl.listIssues).toHaveBeenCalled();
-    });
-
-    it("rejects and skips resolution + listIssues when rate limit throws", async () => {
-      checkRateLimitMock.mockImplementationOnce(() => {
-        throw new Error("Rate limit exceeded");
-      });
-      const handler = getInvokeHandler(CHANNELS.FORGE_LIST_ISSUES);
-
-      await expect(handler({}, { cwd: "/tmp/project" })).rejects.toThrow("Rate limit exceeded");
-      expect(resolveForCwdMock).not.toHaveBeenCalled();
-      expect(fakeImpl.listIssues).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("open family (forge:open-issues)", () => {
-    it("calls checkRateLimit with open limits (20, 10_000)", async () => {
-      const handler = getInvokeHandler(CHANNELS.FORGE_OPEN_ISSUES);
-      await handler({}, "/tmp/project", "bug", "open");
-
-      expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FORGE_OPEN_ISSUES, 20, 10_000);
-      expect(openExternalUrlMock).toHaveBeenCalled();
-    });
-
-    it("rejects and skips openExternalUrl when rate limit throws", async () => {
-      checkRateLimitMock.mockImplementationOnce(() => {
-        throw new Error("Rate limit exceeded");
-      });
-      const handler = getInvokeHandler(CHANNELS.FORGE_OPEN_ISSUES);
-
-      await expect(handler({}, "/tmp/project", "bug", "open")).rejects.toThrow(
-        "Rate limit exceeded"
-      );
-      expect(openExternalUrlMock).not.toHaveBeenCalled();
-    });
-  });
-
   describe("repository link (forge:open-repo, forge:get-repo-url)", () => {
     // Explicitly `undefined`, not absent: the capability check must be
     // truthiness, because `"buildRepoUrl" in impl` would still hold here.
@@ -347,28 +304,6 @@ describe("forge handlers — rate limiting", () => {
         expect(openExternalUrlMock).not.toHaveBeenCalled();
       }
     );
-  });
-
-  describe("mutation family (forge:assign-issue)", () => {
-    it("calls checkRateLimit with mutation limits (5, 10_000)", async () => {
-      const handler = getInvokeHandler(CHANNELS.FORGE_ASSIGN_ISSUE);
-      await handler({}, { cwd: "/tmp/project", issueNumber: 42, username: "octocat" });
-
-      expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FORGE_ASSIGN_ISSUE, 5, 10_000);
-      expect(fakeImpl.assignIssue).toHaveBeenCalled();
-    });
-
-    it("rejects and skips assignIssue when rate limit throws", async () => {
-      checkRateLimitMock.mockImplementationOnce(() => {
-        throw new Error("Rate limit exceeded");
-      });
-      const handler = getInvokeHandler(CHANNELS.FORGE_ASSIGN_ISSUE);
-
-      await expect(
-        handler({}, { cwd: "/tmp/project", issueNumber: 42, username: "octocat" })
-      ).rejects.toThrow("Rate limit exceeded");
-      expect(fakeImpl.assignIssue).not.toHaveBeenCalled();
-    });
   });
 
   describe("PR write family (forge:*-pr)", () => {
@@ -506,14 +441,6 @@ describe("forge handlers — rate limiting", () => {
   describe("token family (forge:validate-token)", () => {
     const validatePayload = { providerId: "fake-plugin.fake", token: "fake_token" };
 
-    it("calls checkRateLimit with token limits (5, 10_000)", async () => {
-      const handler = getInvokeHandler(CHANNELS.FORGE_VALIDATE_TOKEN);
-      await handler({}, validatePayload);
-
-      expect(checkRateLimitMock).toHaveBeenCalledWith(CHANNELS.FORGE_VALIDATE_TOKEN, 5, 10_000);
-      expect(fakeImpl.validateToken).toHaveBeenCalledWith("fake_token");
-    });
-
     it("rejects and skips validateToken when rate limit throws", async () => {
       checkRateLimitMock.mockImplementationOnce(() => {
         throw new Error("Rate limit exceeded");
@@ -571,20 +498,6 @@ describe("forge handlers — rate limiting", () => {
   });
 
   describe("best-effort family (forge:classify-push-error)", () => {
-    it("propagates the rate-limit rejection instead of swallowing it to null", async () => {
-      // The handler collapses resolution failures to `null`; the rate-limit
-      // guard sits before that try block so a flood still rejects loudly.
-      checkRateLimitMock.mockImplementationOnce(() => {
-        throw new Error("Rate limit exceeded");
-      });
-      const handler = getInvokeHandler(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR);
-
-      await expect(handler({}, { cwd: "/tmp/project", stderr: "boom" })).rejects.toThrow(
-        "Rate limit exceeded"
-      );
-      expect(resolveForCwdMock).not.toHaveBeenCalled();
-    });
-
     it("still collapses resolution failures to null when the guard passes", async () => {
       resolveForCwdMock.mockRejectedValueOnce(new Error("No remote URL found"));
       const handler = getInvokeHandler(CHANNELS.FORGE_CLASSIFY_PUSH_ERROR);

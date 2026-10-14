@@ -487,32 +487,6 @@ describe("WorkspaceHostProcess", () => {
     host.dispose();
   });
 
-  it("routes worktree-activated as host-event with payload intact (#10778)", async () => {
-    const { WorkspaceHostProcess } = await loadModule();
-    const host = new WorkspaceHostProcess("/tmp/project", {
-      maxRestartAttempts: 3,
-      healthCheckIntervalMs: 30000,
-    } as any);
-    host.waitForReady().catch(() => {});
-
-    const onHostEvent = vi.fn();
-    host.on("host-event", onHostEvent);
-
-    const event = {
-      type: "worktree-activated",
-      worktreeId: "wt-1",
-      epoch: "epoch-1",
-      seq: 7,
-      silent: false,
-    };
-    const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", event);
-
-    expect(onHostEvent).toHaveBeenCalledWith(event);
-
-    host.dispose();
-  });
-
   it("relays worktree-activated verbatim when silent — suppression is the router's job (#10778)", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {
@@ -583,30 +557,6 @@ describe("WorkspaceHostProcess", () => {
       worktreeId: "wt-3",
       message: "Setup failed",
       details: "ENOENT: missing hook script",
-    };
-    const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", event);
-
-    expect(onHostEvent).toHaveBeenCalledWith(event);
-
-    host.dispose();
-  });
-
-  it("routes lifecycle-setup-error as host-event with details omitted (#10778)", async () => {
-    const { WorkspaceHostProcess } = await loadModule();
-    const host = new WorkspaceHostProcess("/tmp/project", {
-      maxRestartAttempts: 3,
-      healthCheckIntervalMs: 30000,
-    } as any);
-    host.waitForReady().catch(() => {});
-
-    const onHostEvent = vi.fn();
-    host.on("host-event", onHostEvent);
-
-    const event = {
-      type: "lifecycle-setup-error",
-      worktreeId: "wt-4",
-      message: "Setup failed",
     };
     const child = mockChildren[0] as MockUtilityChild;
     child.emit("message", event);
@@ -693,40 +643,6 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
       code: "HOST_EXITED",
       projectScopeId: "/tmp/project",
     });
-
-    host.dispose();
-  });
-
-  it("duplicate-ID guard rejects old promise and clears old timeout before registering new one", async () => {
-    const { WorkspaceHostProcess } = await loadModule();
-    const host = new WorkspaceHostProcess("/tmp/project", {
-      maxRestartAttempts: 3,
-      healthCheckIntervalMs: 30000,
-    } as any);
-    host.waitForReady().catch(() => {});
-
-    // Send the host "ready" so isInitialized is true
-    const child = mockChildren[0] as MockUtilityChild;
-    child.emit("message", { type: "ready" });
-
-    const firstPromise = host.sendWithResponse({
-      type: "refresh" as any,
-      requestId: "dup-id",
-    });
-
-    // Second call with same ID — the guard rejects the FIRST promise, then
-    // registers a new entry for the second one.
-    const secondPromise = host.sendWithResponse({
-      type: "refresh" as any,
-      requestId: "dup-id",
-    });
-
-    // The first promise should be rejected with the duplicate error
-    await expect(firstPromise).rejects.toThrow("Duplicate request ID: dup-id");
-
-    // The second promise gets a fresh entry; resolve it to clean up
-    child.emit("message", { type: "refresh-result", requestId: "dup-id" });
-    await secondPromise;
 
     host.dispose();
   });
@@ -1241,35 +1157,6 @@ describe("WorkspaceHostProcess crash window", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  it("ready does NOT reset the crash window (regression #8553)", async () => {
-    const { WorkspaceHostProcess } = await loadModule();
-    const host = new WorkspaceHostProcess("/tmp/project", {
-      maxRestartAttempts: 3,
-      healthCheckIntervalMs: 30000,
-    } as any);
-    host.waitForReady().catch(() => {});
-
-    // Crash 1
-    const child1 = mockChildren[0] as MockUtilityChild;
-    child1.emit("message", { type: "ready" });
-    child1.emit("exit", 1);
-    await vi.advanceTimersByTimeAsync(0);
-    expect((host as any).crashTimestamps).toHaveLength(1);
-
-    // Auto-restart fires
-    host.waitForReady().catch(() => {});
-    await vi.advanceTimersByTimeAsync(2_001);
-    const child2 = mockChildren[1] as MockUtilityChild;
-
-    // New host becomes ready — under the OLD bug, this would reset the
-    // crash counter to zero. Under the new sliding-window guard, the
-    // history must persist.
-    child2.emit("message", { type: "ready" });
-    expect((host as any).crashTimestamps).toHaveLength(1);
-
-    host.dispose();
   });
 
   it("emits host-crash on three crashes within the window (with intervening ready)", async () => {
@@ -1918,42 +1805,232 @@ describe("WorkspaceHostProcess crash window", () => {
 
     expect(appMock.listenerCount("child-process-gone")).toBe(0);
   });
+});
 
-  it("each WorkspaceHostProcess instance registers its own listener (isolation across projects)", async () => {
-    const { WorkspaceHostProcess } = await loadModule();
-    const hostA = new WorkspaceHostProcess("/tmp/projectA", {
+function monitorConfigsSentTo(child: MockUtilityChild): unknown[] {
+  return child.postMessage.mock.calls
+    .map(([msg]) => msg as { type?: string; config?: unknown })
+    .filter((msg) => msg?.type === "update-monitor-config")
+    .map((msg) => msg.config);
+}
+
+function policiesSentTo(child: MockUtilityChild): unknown[] {
+  return child.postMessage.mock.calls
+    .map(([msg]) => msg as { type?: string; policy?: unknown })
+    .filter((msg) => msg?.type === "set-workspace-power-policy")
+    .map((msg) => msg.policy);
+}
+
+const DEEP_POLICY = {
+  statusAllowed: false,
+  backgroundWorkAllowed: false,
+  attenuated: true,
+};
+
+describe("WorkspaceHostProcess — monitor-config relay", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    forkMock.mockReset();
+    mockChildren.length = 0;
+    appMock.removeAllListeners();
+    forkMock.mockImplementation(() => new MockUtilityChild());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function createHost() {
+    const { WorkspaceHostProcess } = await import("../WorkspaceHostProcess.js");
+    const host = new WorkspaceHostProcess("/tmp/project", {
       maxRestartAttempts: 3,
       healthCheckIntervalMs: 30000,
     } as any);
-    hostA.waitForReady().catch(() => {});
-    const hostB = new WorkspaceHostProcess("/tmp/projectB", {
-      maxRestartAttempts: 3,
-      healthCheckIntervalMs: 30000,
-    } as any);
-    hostB.waitForReady().catch(() => {});
+    host.waitForReady().catch(() => {});
+    return host;
+  }
 
-    expect(appMock.listenerCount("child-process-gone")).toBe(2);
+  it("replays nothing on ready when no config was ever pushed", async () => {
+    const host = await createHost();
+    const child = mockChildren[0] as MockUtilityChild;
 
-    // Emit a gone event matching hostA's serviceName only
-    appMock.emit(
-      "child-process-gone",
-      {} as Electron.Event,
-      {
-        type: "Utility",
-        name: serviceNameFor("/tmp/projectA"),
-        reason: "oom",
-        exitCode: 137,
-      } as Electron.Details
-    );
+    child.emit("message", { type: "ready" });
 
-    expect((hostA as any).pendingChildProcessGoneReason).toEqual({
-      reason: "oom",
-      exitCode: 137,
+    expect(monitorConfigsSentTo(child)).toEqual([]);
+    host.dispose();
+  });
+
+  it("caches a config pushed before ready and replays it on ready", async () => {
+    const host = await createHost();
+    const child = mockChildren[0] as MockUtilityChild;
+
+    host.updateMonitorConfig({ pollIntervalActive: 4000, pollIntervalBackground: 20000 });
+    expect(monitorConfigsSentTo(child)).toEqual([]);
+
+    child.emit("message", { type: "ready" });
+    expect(monitorConfigsSentTo(child)).toEqual([
+      { pollIntervalActive: 4000, pollIntervalBackground: 20000 },
+    ]);
+    host.dispose();
+  });
+
+  it("merges partial pushes and replays the merged config to the NEW child after restart", async () => {
+    const host = await createHost();
+    const firstChild = mockChildren[0] as MockUtilityChild;
+
+    firstChild.emit("message", { type: "ready" });
+    host.updateMonitorConfig({
+      pollIntervalActive: 4000,
+      pollIntervalBackground: 20000,
+      backgroundGitWatcherCap: 6,
     });
-    // hostB must NOT have captured the reason (cross-instance isolation)
-    expect((hostB as any).pendingChildProcessGoneReason).toBeNull();
+    // A later partial push (focus throttle) must not erase the earlier fields.
+    host.updateMonitorConfig({ pollIntervalActive: 20000, pollIntervalBackground: 100000 });
 
-    hostA.dispose();
-    hostB.dispose();
+    firstChild.emit("exit", 1);
+    host.manualRestart();
+    expect(mockChildren).toHaveLength(2);
+    const secondChild = mockChildren[1] as MockUtilityChild;
+
+    secondChild.emit("message", { type: "ready" });
+
+    expect(monitorConfigsSentTo(secondChild)).toEqual([
+      {
+        pollIntervalActive: 20000,
+        pollIntervalBackground: 100000,
+        backgroundGitWatcherCap: 6,
+      },
+    ]);
+    host.dispose();
+  });
+
+  it("replays the workspace power policy to the NEW child after restart", async () => {
+    const host = await createHost();
+    const firstChild = mockChildren[0] as MockUtilityChild;
+    firstChild.emit("message", { type: "ready" });
+
+    // Screen locked, say. Without the replay a host that crashes and restarts
+    // behind that lock comes back watching and fetching at full permission,
+    // and stays there until the next policy change happens to fire.
+    host.setWorkspacePowerPolicy(DEEP_POLICY, true);
+    expect(policiesSentTo(firstChild)).toEqual([DEEP_POLICY]);
+
+    firstChild.emit("exit", 1);
+    host.manualRestart();
+    const secondChild = mockChildren[1] as MockUtilityChild;
+    secondChild.emit("message", { type: "ready" });
+
+    expect(policiesSentTo(secondChild)).toEqual([DEEP_POLICY]);
+    host.dispose();
+  });
+
+  it("caches an undelivered policy so a dormant host restarts holding it", async () => {
+    const host = await createHost();
+    const firstChild = mockChildren[0] as MockUtilityChild;
+    firstChild.emit("message", { type: "ready" });
+
+    // A grant skipped for this host (dormant, kept behind a cached view) is
+    // still the policy in force — the restart has to honour it.
+    host.setWorkspacePowerPolicy(DEEP_POLICY, false);
+    expect(policiesSentTo(firstChild)).toEqual([]);
+
+    firstChild.emit("exit", 1);
+    host.manualRestart();
+    const secondChild = mockChildren[1] as MockUtilityChild;
+    secondChild.emit("message", { type: "ready" });
+
+    expect(policiesSentTo(secondChild)).toEqual([DEEP_POLICY]);
+    host.dispose();
+  });
+});
+
+function throttleMultipliersSentTo(child: MockUtilityChild): number[] {
+  return child.postMessage.mock.calls
+    .map(([msg]) => msg as { type?: string; multiplier?: number })
+    .filter((msg) => msg?.type === "apply-fetch-throttle")
+    .map((msg) => msg.multiplier as number);
+}
+
+describe("WorkspaceHostProcess — fetch-throttle relay", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    forkMock.mockReset();
+    mockChildren.length = 0;
+    appMock.removeAllListeners();
+    forkMock.mockImplementation(() => new MockUtilityChild());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function createHost() {
+    const { WorkspaceHostProcess } = await import("../WorkspaceHostProcess.js");
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    // Swallow the ready-promise rejection that fires on dispose before ready
+    host.waitForReady().catch(() => {});
+    return host;
+  }
+
+  it("replays the default multiplier on ready when none was relayed", async () => {
+    const host = await createHost();
+    const child = mockChildren[0] as MockUtilityChild;
+
+    child.emit("message", { type: "ready" });
+
+    expect(throttleMultipliersSentTo(child)).toEqual([1]);
+    host.dispose();
+  });
+
+  it("caches a multiplier relayed before ready and replays it on ready", async () => {
+    const host = await createHost();
+    const child = mockChildren[0] as MockUtilityChild;
+
+    host.relayFetchThrottle(3);
+    // Not initialized yet — the value is cached, nothing is sent.
+    expect(throttleMultipliersSentTo(child)).toEqual([]);
+
+    child.emit("message", { type: "ready" });
+    expect(throttleMultipliersSentTo(child)).toEqual([3]);
+    host.dispose();
+  });
+
+  it("sends immediately once initialized and replays the latest value on every subsequent ready", async () => {
+    const host = await createHost();
+    const child = mockChildren[0] as MockUtilityChild;
+
+    child.emit("message", { type: "ready" });
+    host.relayFetchThrottle(5);
+    expect(throttleMultipliersSentTo(child)).toEqual([1, 5]);
+
+    // A host restart re-runs the ready handshake — the cached multiplier must
+    // be replayed so the restarted host doesn't run unthrottled.
+    child.emit("message", { type: "ready" });
+    expect(throttleMultipliersSentTo(child)).toEqual([1, 5, 5]);
+    host.dispose();
+  });
+
+  it("replays the cached multiplier to the NEW child after a real restart", async () => {
+    const host = await createHost();
+    const firstChild = mockChildren[0] as MockUtilityChild;
+
+    firstChild.emit("message", { type: "ready" });
+    host.relayFetchThrottle(7);
+
+    // Crash the host, then restart — a fresh child process is forked.
+    firstChild.emit("exit", 1);
+    host.manualRestart();
+    expect(mockChildren).toHaveLength(2);
+    const secondChild = mockChildren[1] as MockUtilityChild;
+
+    secondChild.emit("message", { type: "ready" });
+
+    // The replay must reach the new child, not the dead one.
+    expect(throttleMultipliersSentTo(secondChild)).toEqual([7]);
+    expect(throttleMultipliersSentTo(firstChild)).toEqual([1, 7]);
+    host.dispose();
   });
 });

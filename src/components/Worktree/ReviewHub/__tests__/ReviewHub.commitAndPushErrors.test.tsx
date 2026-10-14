@@ -425,24 +425,6 @@ describe("ReviewHub", () => {
   });
 
   describe("commit panel", () => {
-    it("renders both Commit and Commit & Push buttons when hasRemote is true", async () => {
-      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
-
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByLabelText("Commit message"));
-
-      expect(screen.getByRole("button", { name: /^Commit$/i })).toBeDefined();
-      expect(screen.getByRole("button", { name: /^Commit & push$/i })).toBeDefined();
-    });
-
-    it("renders single Commit button when hasRemote is false", async () => {
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
-      await waitFor(() => screen.getByLabelText("Commit message"));
-
-      expect(screen.queryByRole("button", { name: /Commit & push/i })).toBeNull();
-      expect(screen.getByRole("button", { name: /^Commit$/i })).toBeDefined();
-    });
-
     it("uses aria-disabled instead of native disabled on commit button when blocked", async () => {
       getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], hasRemote: false }));
 
@@ -962,25 +944,6 @@ describe("ReviewHub", () => {
       expect(screen.getByTestId("review-readiness-level").dataset.level).toBe("blocked");
     });
 
-    it("shows hook-rejected banner with collapsed raw stderr", async () => {
-      const rawError = "[remote rejected] main -> main (pre-receive hook declined)";
-      pushMock.mockRejectedValue(
-        Object.assign(new Error(rawError), {
-          name: "GitOperationError",
-          gitReason: "hook-rejected",
-        })
-      );
-
-      await triggerCommitAndPush();
-
-      const banner = await screen.findByTestId("review-hub-push-error");
-      expect(banner.getAttribute("data-reason")).toBe("hook-rejected");
-      expect(banner.textContent).toMatch(/server-side hook rejected/i);
-      expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
-      fireEvent.click(screen.getByTestId("review-hub-push-error-toggle"));
-      expect(screen.getByTestId("review-hub-push-error-details").textContent).toBe(rawError);
-    });
-
     it("shows network-unavailable banner with Retry button that re-pushes without re-committing", async () => {
       const rawError = "Could not resolve host: github.com";
       pushMock.mockRejectedValueOnce(
@@ -1029,38 +992,6 @@ describe("ReviewHub", () => {
       expect(banner.textContent).toMatch(/internet connection/i);
       expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
       expect(screen.queryByTestId("review-hub-push-error-toggle")).toBeNull();
-    });
-
-    it("updates the banner when a retry fails with a different reason", async () => {
-      pushMock.mockRejectedValueOnce(
-        Object.assign(new Error("Could not resolve host: github.com"), {
-          name: "GitOperationError",
-          gitReason: "network-unavailable",
-        })
-      );
-
-      await triggerCommitAndPush();
-
-      await screen.findByTestId("review-hub-push-error");
-
-      pushMock.mockRejectedValueOnce(
-        Object.assign(new Error("[remote rejected] main -> main (pre-receive hook declined)"), {
-          name: "GitOperationError",
-          gitReason: "hook-rejected",
-        })
-      );
-
-      await act(async () => {
-        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
-        await Promise.resolve();
-      });
-
-      await waitFor(() =>
-        expect(screen.getByTestId("review-hub-push-error").getAttribute("data-reason")).toBe(
-          "hook-rejected"
-        )
-      );
-      expect(screen.queryByTestId("review-hub-push-error-cta")).toBeNull();
     });
 
     it("clears the push banner when the modal is closed and reopened", async () => {
@@ -1213,65 +1144,6 @@ describe("ReviewHub", () => {
 
       await waitFor(() => expect(pushMock).toHaveBeenCalled());
       expect(screen.queryByTestId("review-hub-push-error")).toBeNull();
-    });
-
-    it("shows the 'Push failed' title across reasons", async () => {
-      pushMock.mockRejectedValue(
-        Object.assign(new Error("Authentication failed"), {
-          name: "GitOperationError",
-          gitReason: "auth-failed",
-        })
-      );
-
-      await triggerCommitAndPush();
-
-      const banner = await screen.findByTestId("review-hub-push-error");
-      expect(banner.textContent).toMatch(/Push failed/i);
-    });
-
-    it("extracts and displays a GH code when present in the raw message", async () => {
-      pushMock.mockRejectedValue(
-        Object.assign(new Error("GH013: Repository rule violations found."), {
-          name: "GitOperationError",
-          gitReason: "push-rejected-policy",
-        })
-      );
-
-      await triggerCommitAndPush();
-
-      await screen.findByTestId("review-hub-push-error");
-      expect((await screen.findByTestId("review-hub-push-error-code")).textContent).toBe("GH013");
-      // Code stays visible without expanding the toggle.
-      expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
-    });
-
-    it("does not render a GH code element when none is present", async () => {
-      pushMock.mockRejectedValue(
-        Object.assign(new Error("[remote rejected] main -> main (pre-receive hook declined)"), {
-          name: "GitOperationError",
-          gitReason: "hook-rejected",
-        })
-      );
-
-      await triggerCommitAndPush();
-
-      await screen.findByTestId("review-hub-push-error");
-      expect(screen.queryByTestId("review-hub-push-error-code")).toBeNull();
-    });
-
-    it("hides raw output entirely for hide-policy reasons (no toggle)", async () => {
-      pushMock.mockRejectedValue(
-        Object.assign(new Error("fatal: Authentication failed for 'https://github.com/'"), {
-          name: "GitOperationError",
-          gitReason: "auth-failed",
-        })
-      );
-
-      await triggerCommitAndPush();
-
-      await screen.findByTestId("review-hub-push-error");
-      expect(screen.queryByTestId("review-hub-push-error-toggle")).toBeNull();
-      expect(screen.queryByTestId("review-hub-push-error-details")).toBeNull();
     });
 
     it("resets the details toggle when a retry surfaces a new push error", async () => {

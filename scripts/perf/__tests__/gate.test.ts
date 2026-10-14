@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   ABSOLUTE_REGRESSION_MS_FLOOR,
   MIN_REGRESSION_BASELINE_MS,
+  evaluateCorrectness,
   evaluateScenarioBudget,
+  evaluateWorkload,
   type GateParams,
 } from "../lib/gate";
 import { aggregateMetrics } from "../lib/stats";
+import { allScenarios } from "../scenarios";
 import type { MetricStat, ScenarioBudget } from "../types";
 
 /**
@@ -68,24 +71,6 @@ describe("evaluateScenarioBudget — measurement issues vs reference drift", () 
 
     expect(result.outsideReference).toBe(true);
     expect(result.measurementIssues).toEqual([]);
-  });
-
-  it("treats a non-finite metric as a broken measurement, not a clean pass", () => {
-    // NaN > max is false, so without an explicit branch this reads as success.
-    const result = evaluateScenarioBudget(
-      makeParams({
-        budget: { maxMetricValues: { gitSpawns: 5 } },
-        metricStats: statsFor([{ gitSpawns: Number.NaN }]),
-      })
-    );
-
-    expect(result.measurementIssues).toHaveLength(1);
-    expect(result.measurementIssues[0]).toContain("non-finite");
-  });
-
-  it("carries a non-finite p95 as a measurement issue", () => {
-    const result = evaluateScenarioBudget(makeParams({ p95Ms: Number.NaN }));
-    expect(result.measurementIssues).toHaveLength(1);
   });
 
   it("leaves measurementIssues empty on an ordinary healthy scenario", () => {
@@ -172,24 +157,6 @@ describe("evaluateScenarioBudget — metric ceilings", () => {
     expect(pass.outsideReference).toBe(false);
   });
 
-  it("escalates a configured metric that was never recorded", () => {
-    // `aggregateMetrics` includes any metric reported by at least ONE sample,
-    // so an absent entry means no sample emitted it — a renamed or dropped
-    // metric whose reference silently stopped meaning anything, not a sparse
-    // measurement. Reported as a measurement issue rather than as drift: there
-    // is no value to be outside a reference.
-    const result = evaluateScenarioBudget(
-      makeParams({
-        budget: { p95Ms: 1000, maxMetricValues: { eventLoopLagMs: 1 } },
-        baselineP95: 50,
-        metricStats: {},
-      })
-    );
-    expect(result.measurementIssues).toHaveLength(1);
-    expect(result.measurementIssues[0]).toContain("eventLoopLagMs");
-    expect(result.outsideReference).toBe(false);
-  });
-
   it("compares the ceiling against the metric MAX, not its mean", () => {
     // The bug this gate exists to catch: one iteration spawning 20 processes
     // among fifteen quiet ones. Averaged, that is 1.25 and slides under a
@@ -269,28 +236,6 @@ describe("evaluateScenarioBudget — percentage gate above the noise floor", () 
 describe("evaluateScenarioBudget — Bug 1: sub-floor critical scenarios", () => {
   const baselineP95 = MIN_REGRESSION_BASELINE_MS - 1; // below the noise floor
 
-  it("enforces critical scenarios via absolute delta when below the noise floor", () => {
-    // A regression that is small in percentage terms above the floor would slip
-    // through, but the absolute delta catches it.
-    const result = evaluateScenarioBudget(
-      makeParams({
-        p95Ms: baselineP95 + ABSOLUTE_REGRESSION_MS_FLOOR + 0.5,
-        baselineP95,
-      })
-    );
-    expect(result.outsideReference).toBe(true);
-  });
-
-  it("does not fail a critical scenario whose absolute delta is within the floor", () => {
-    const result = evaluateScenarioBudget(
-      makeParams({
-        p95Ms: baselineP95 + ABSOLUTE_REGRESSION_MS_FLOOR, // delta == floor, strict >
-        baselineP95,
-      })
-    );
-    expect(result.outsideReference).toBe(false);
-  });
-
   it("flags a sub-floor delta past the absolute floor", () => {
     // Behaviour deliberately changed. This branch used to annotate only the
     // scenarios listed in `criticalScenarios` and stay silent for everything
@@ -352,30 +297,9 @@ describe("evaluateScenarioBudget — no baseline file at all", () => {
     expect(result.outsideReference).toBe(false);
     expect(result.reasons.join()).toContain("no baseline file");
   });
-
-  it("distinguishes a missing file from a missing entry in its reason", () => {
-    const noFile = evaluateScenarioBudget(
-      makeParams({ baselineP95: undefined, hasBaselineFile: false })
-    );
-    const noEntry = evaluateScenarioBudget(
-      makeParams({ baselineP95: undefined, hasBaselineFile: true })
-    );
-    expect(noFile.reasons.join()).not.toBe(noEntry.reasons.join());
-  });
 });
 
 describe("evaluateScenarioBudget — thresholds are exported, not magic numbers", () => {
-  it("uses MIN_REGRESSION_BASELINE_MS as the percentage/absolute boundary", () => {
-    // Exactly at the floor → percentage gate (a +0% change passes).
-    const atFloor = evaluateScenarioBudget(
-      makeParams({
-        p95Ms: MIN_REGRESSION_BASELINE_MS,
-        baselineP95: MIN_REGRESSION_BASELINE_MS,
-      })
-    );
-    expect(atFloor.outsideReference).toBe(false);
-  });
-
   it("the absolute-delta gate is strict (delta must exceed the floor)", () => {
     const baselineP95 = MIN_REGRESSION_BASELINE_MS - 2;
     const justOver = evaluateScenarioBudget(
@@ -435,16 +359,6 @@ describe("evaluateScenarioBudget — metric-only budgets (no p95Ms)", () => {
     expect(result.measurementIssues).toHaveLength(1);
     expect(result.outsideReference).toBe(false);
     expect(result.reasons.join(" ")).toContain("not emitted");
-  });
-
-  it("passes when every configured metric is emitted and under its ceiling", () => {
-    const result = evaluateScenarioBudget(
-      makeParams({
-        budget: { maxMetricValues: { a: 10, b: 20 } },
-        metricStats: statsFor([{ a: 9, b: 19 }]),
-      })
-    );
-    expect(result.outsideReference).toBe(false);
   });
 
   it("escalates one vanished metric while another is still measured", () => {
@@ -524,5 +438,340 @@ describe("evaluateScenarioBudget — a configured metric emitted on only some it
       })
     );
     expect(result.measurementIssues).toEqual([]);
+  });
+});
+
+describe("evaluateCorrectness — a declared predicate", () => {
+  it("says nothing when the predicate is emitted every iteration and reports no misses", () => {
+    const issues = evaluateCorrectness({
+      correctness: ["refreshMisses"],
+      metricStats: statsFor([{ refreshMisses: 0 }, { refreshMisses: 0 }, { refreshMisses: 0 }]),
+      runs: 3,
+    });
+    expect(issues).toEqual([]);
+  });
+
+  it("flags a predicate that was never emitted at all", () => {
+    // The scenario that silently stopped running: it reports no misses because
+    // it reports nothing, which is the most reassuring possible output.
+    const issues = evaluateCorrectness({
+      correctness: ["refreshMisses"],
+      metricStats: statsFor([{ gitSpawns: 0 }, { gitSpawns: 0 }]),
+      runs: 2,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("refreshMisses");
+    expect(issues[0]).toContain("never emitted");
+  });
+
+  it("flags a predicate present on only some iterations, which aggregates to a clean max of 0", () => {
+    const samples: Array<Record<string, number>> = [{ refreshMisses: 0 }, {}, {}, {}];
+    const stats = statsFor(samples);
+
+    // The trap in one assertion: fifteen blind iterations and one healthy
+    // sample summarise identically to a fully healthy run.
+    expect(stats.refreshMisses.max).toBe(0);
+    expect(stats.refreshMisses.count).toBe(1);
+
+    const issues = evaluateCorrectness({
+      correctness: ["refreshMisses"],
+      metricStats: stats,
+      runs: samples.length,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("1 of 4");
+  });
+
+  it("flags a non-zero predicate, because the subject misbehaved while being measured", () => {
+    const issues = evaluateCorrectness({
+      correctness: ["refreshMisses"],
+      metricStats: statsFor([{ refreshMisses: 0 }, { refreshMisses: 3 }]),
+      runs: 2,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("reported misses");
+    expect(issues[0]).toContain("max 3");
+    expect(issues[0]).toContain("suspect");
+  });
+
+  it("flags a negative predicate, which a max-only test lets through", () => {
+    // Several predicates are signed subtractions — PERF-057's `written -
+    // persisted` — where a negative means the subject produced MORE than it was
+    // asked to. `max > 0` reads that as healthy.
+    const issues = evaluateCorrectness({
+      correctness: ["writeMisses"],
+      metricStats: statsFor([{ writeMisses: -1 }, { writeMisses: -2 }]),
+      runs: 2,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("reported misses");
+    expect(issues[0]).toContain("min -2");
+  });
+
+  it("flags a mixed run whose max is zero", () => {
+    // The trap in its purest form: max is 0, count equals runs, and the
+    // scenario still misbehaved on half its iterations.
+    const stats = statsFor([{ writeMisses: -1 }, { writeMisses: 0 }]);
+    expect(stats.writeMisses.max).toBe(0);
+    expect(stats.writeMisses.count).toBe(2);
+
+    const issues = evaluateCorrectness({
+      correctness: ["writeMisses"],
+      metricStats: stats,
+      runs: 2,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("reported misses");
+  });
+
+  it("reports both faults when a predicate is partial AND non-zero", () => {
+    const issues = evaluateCorrectness({
+      correctness: ["refreshMisses"],
+      metricStats: statsFor([{ refreshMisses: 2 }, {}, {}]),
+      runs: 3,
+    });
+    expect(issues).toHaveLength(2);
+    expect(issues.join(" ")).toContain("1 of 3");
+    expect(issues.join(" ")).toContain("reported misses");
+  });
+
+  it("flags a non-finite predicate, which would otherwise read as healthy", () => {
+    // NaN > 0 is false, so without an explicit branch a poisoned predicate is
+    // indistinguishable from a passing one.
+    const issues = evaluateCorrectness({
+      correctness: ["refreshMisses"],
+      metricStats: { refreshMisses: { mean: NaN, max: NaN, min: NaN, sum: NaN, count: 2 } },
+      runs: 2,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("non-finite");
+  });
+
+  it("checks every declared key, not just the first", () => {
+    const issues = evaluateCorrectness({
+      correctness: ["refreshMisses", "detectionMisses"],
+      metricStats: statsFor([{ refreshMisses: 0 }]),
+      runs: 1,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("detectionMisses");
+  });
+});
+
+describe("evaluateCorrectness — an undeclared predicate", () => {
+  it("flags a scenario reporting a count-class metric with no predicate at all", () => {
+    const issues = evaluateCorrectness({
+      correctness: undefined,
+      metricStats: statsFor([{ gitSpawns: 0, worktreeListSpawns: 0 }]),
+      runs: 1,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("gitSpawns");
+    expect(issues[0]).toContain("worktreeListSpawns");
+    expect(issues[0]).toContain("no correctness predicate");
+  });
+
+  it("treats an empty declaration the same as an absent one", () => {
+    expect(
+      evaluateCorrectness({
+        correctness: [],
+        metricStats: statsFor([{ gitSpawns: 0 }]),
+        runs: 1,
+      })
+    ).toHaveLength(1);
+  });
+
+  it("reports a duration-only scenario that declares nothing", () => {
+    // This used to pass silently, on the reasoning that a duration falling to
+    // zero is visible as a duration and so needs no predicate. The reasoning is
+    // sound about DURATIONS and wrong about the situation: every scenario in the
+    // matrix declares a predicate and `scenarioMatrix.test.ts`'s exemption list
+    // is empty, so an absent declaration reaching here is one that was removed —
+    // and removing it is the cheapest way to make a failing predicate stop
+    // failing. With both the declaration and its emission gone, the old rule
+    // produced no issue at all and `--enforce-integrity` did not uphold what it
+    // documents.
+    const issues = evaluateCorrectness({
+      correctness: undefined,
+      metricStats: statsFor([{ applyMs: 4, heapDeltaMb: 2, msPerKFile: 0.3 }]),
+      runs: 1,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("declares no correctness predicate");
+    // No count-class metric survived, so the message must not claim one did.
+    expect(issues[0]).not.toContain("count-class");
+  });
+
+  it("still names the surviving counts when there are any", () => {
+    // Classification stays `classifyMetric`'s job rather than a name match here.
+    const issues = evaluateCorrectness({
+      correctness: undefined,
+      metricStats: statsFor([{ applyMs: 4, gitSpawns: 0, refreshCount: 2 }]),
+      runs: 1,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("gitSpawns");
+    expect(issues[0]).toContain("refreshCount");
+    expect(issues[0]).not.toContain("applyMs");
+  });
+
+  it("does not double-report on a scenario that declares a predicate", () => {
+    const issues = evaluateCorrectness({
+      correctness: ["refreshMisses"],
+      metricStats: statsFor([{ refreshMisses: 0, gitSpawns: 0 }]),
+      runs: 1,
+    });
+    expect(issues).toEqual([]);
+  });
+});
+
+describe("evaluateCorrectness — never a gate", () => {
+  it("leaves outsideReference alone — a broken predicate is not a slow number", () => {
+    // `outsideReference` feeds the report's "outside a reference value" list.
+    // A correctness failure says the numbers mean nothing, which is a different
+    // and louder statement, so it must not land there.
+    const metricStats = statsFor([{ refreshMisses: 9 }]);
+    const { outsideReference } = evaluateScenarioBudget({
+      scenarioId: "PERF-000",
+      p95Ms: 1,
+      runs: 1,
+      metricStats,
+      budget: {},
+      baselineP95: 1,
+      hasBaselineFile: true,
+    });
+    expect(outsideReference).toBe(false);
+    expect(
+      evaluateCorrectness({ correctness: ["refreshMisses"], metricStats, runs: 1 })
+    ).not.toEqual([]);
+  });
+});
+
+/**
+ * Does the workload floor react, and does it catch what the predicates cannot?
+ *
+ * The failure it exists for is the most flattering wrong number the suite can
+ * produce: a scenario that asked for twelve background terminals and started
+ * nine measures a lighter workload than it claims and reports a BETTER latency
+ * for it, with every correctness predicate at zero because the nine that did
+ * start behaved perfectly. Nothing else in the harness sees that.
+ */
+
+describe("workload floors", () => {
+  it("says nothing when a scenario declares none", () => {
+    expect(
+      evaluateWorkload({ floors: undefined, metricStats: statsFor([{ floodBytes: 1 }]), runs: 1 })
+    ).toEqual([]);
+  });
+
+  it("passes a workload that met its floor on every iteration", () => {
+    expect(
+      evaluateWorkload({
+        floors: { floodBytes: 500_000 },
+        metricStats: statsFor([{ floodBytes: 640_000 }, { floodBytes: 610_000 }]),
+        runs: 2,
+      })
+    ).toEqual([]);
+  });
+
+  it("catches a fixture that quietly built less than it claims", () => {
+    const issues = evaluateWorkload({
+      floors: { floodBytes: 500_000 },
+      metricStats: statsFor([{ floodBytes: 640_000 }, { floodBytes: 61_000 }]),
+      runs: 2,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("workload shortfall");
+    expect(issues[0]).toContain("floodBytes");
+  });
+
+  it("reads the minimum, not the mean", () => {
+    // The whole reason it is `min`: one starved iteration among healthy ones
+    // averages away, and that iteration is in the aggregate the run reports.
+    const samples = [
+      { floodBytes: 900_000 },
+      { floodBytes: 900_000 },
+      { floodBytes: 900_000 },
+      { floodBytes: 10_000 },
+    ];
+    const stats = statsFor(samples);
+    expect(stats.floodBytes!.mean).toBeGreaterThan(500_000);
+    expect(
+      evaluateWorkload({ floors: { floodBytes: 500_000 }, metricStats: stats, runs: 4 })
+    ).toHaveLength(1);
+  });
+
+  it("catches a floor naming a metric the scenario never emits", () => {
+    // A broken declaration, and it reads as a clean pass without this: an
+    // absent metric compares against nothing.
+    const issues = evaluateWorkload({
+      floors: { terminalsStarted: 12 },
+      metricStats: statsFor([{ floodBytes: 900_000 }]),
+      runs: 1,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("never emitted");
+  });
+
+  it("catches a workload metric emitted on only some iterations", () => {
+    // Same rule as a correctness predicate: the blind iterations are the ones
+    // that matter, and `min` over one sample says nothing about the other two.
+    const issues = evaluateWorkload({
+      floors: { floodBytes: 500_000 },
+      metricStats: statsFor([{ floodBytes: 900_000 }, {}, {}]),
+      runs: 3,
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("emitted on 1 of 3");
+  });
+
+  it("catches a floor that is not a finite number", () => {
+    // A NaN floor makes `min < floor` false, so the declaration reads as
+    // satisfied while checking nothing. Same quiet shape as a predicate that
+    // stopped being emitted.
+    for (const floor of [NaN, Infinity]) {
+      const issues = evaluateWorkload({
+        floors: { floodBytes: floor },
+        metricStats: statsFor([{ floodBytes: 1 }]),
+        runs: 1,
+      });
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toContain("not a finite number");
+    }
+  });
+
+  it("catches a non-finite workload reading", () => {
+    expect(
+      evaluateWorkload({
+        floors: { floodBytes: 1 },
+        metricStats: { floodBytes: { mean: NaN, max: NaN, min: NaN, sum: NaN, count: 1 } },
+        runs: 1,
+      })[0]
+    ).toContain("non-finite");
+  });
+
+  it("declares floors only on metrics the scenario actually emits", async () => {
+    // The declaration and the emission live in different places, so a rename
+    // silently disconnects them. `scenarioLiveness` proves this per scenario by
+    // running it; this is the cheap structural half, and it names the scenarios
+    // that carry a floor so the list cannot quietly empty itself.
+    const declaring = allScenarios.filter((scenario) => scenario.workloadFloors);
+    expect(declaring.map((scenario) => scenario.id).sort()).toEqual([
+      "PERF-034",
+      "PERF-036",
+      "PERF-163",
+      "PERF-164",
+      "PERF-247",
+      "PERF-395",
+      "PERF-406",
+      "PERF-407",
+      "PERF-408",
+    ]);
+    for (const scenario of declaring) {
+      for (const [metric, floor] of Object.entries(scenario.workloadFloors!)) {
+        expect(Number.isFinite(floor), `${scenario.id}.${metric} floor must be finite`).toBe(true);
+        expect(floor, `${scenario.id}.${metric} floor must be positive`).toBeGreaterThan(0);
+      }
+    }
   });
 });

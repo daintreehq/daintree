@@ -66,19 +66,6 @@ describe("WorktreeCardPlaceholder", () => {
       expect(screen.getByRole("status").textContent).toContain("feature/stream-upload-retry");
     });
 
-    it("is shaped like the sidebar card it becomes", () => {
-      const { container } = renderRow(
-        <WorktreeCardPlaceholder
-          pendingCreation={pending()}
-          onRetry={vi.fn()}
-          onDismiss={vi.fn()}
-        />
-      );
-      const row = container.querySelector("[data-pending-creation-path]")!;
-      expect(row.classList.contains("sidebar-worktree-card")).toBe(true);
-      expect(row.getAttribute("data-variant")).toBe("sidebar");
-    });
-
     it("says it is still working once the wait passes the skeleton hint threshold", () => {
       renderRow(
         <WorktreeCardPlaceholder

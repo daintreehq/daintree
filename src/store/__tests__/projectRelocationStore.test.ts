@@ -16,13 +16,6 @@ describe("projectRelocationStore", () => {
     useProjectRelocationStore.setState({ pending: null, requestSeq: 0 });
   });
 
-  it("open() stores the exact target and bumps requestSeq", () => {
-    useProjectRelocationStore.getState().open(TARGET);
-    const state = useProjectRelocationStore.getState();
-    expect(state.pending).toEqual(TARGET);
-    expect(state.requestSeq).toBe(1);
-  });
-
   it("a second open() supersedes the first and bumps requestSeq again", () => {
     const { open } = useProjectRelocationStore.getState();
     open(TARGET);

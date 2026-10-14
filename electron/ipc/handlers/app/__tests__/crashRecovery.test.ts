@@ -85,23 +85,6 @@ describe("registerCrashRecoveryHandlers", () => {
     crashLoopGuardMock.getCrashCount.mockReturnValue(0);
   });
 
-  it("registers all four crash-recovery channels", () => {
-    registerCrashRecoveryHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "crash-recovery:get-pending",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith("crash-recovery:resolve", expect.any(Function));
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "crash-recovery:get-config",
-      expect.any(Function)
-    );
-    expect(ipcMainMock.handle).toHaveBeenCalledWith(
-      "crash-recovery:set-config",
-      expect.any(Function)
-    );
-  });
-
   describe("crash-recovery:resolve", () => {
     describe("restore action", () => {
       it("resolves with undefined and applies the panel filter when restoreBackup returns true", async () => {

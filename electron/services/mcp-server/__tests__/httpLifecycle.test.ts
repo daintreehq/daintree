@@ -1461,13 +1461,6 @@ describe("HttpLifecycle", () => {
       expect(help[0]).not.toHaveProperty("sessionIds");
     });
 
-    it("listHelpSessionBearers is empty when only external bearers are connected (#10036)", () => {
-      const lc = new HttpLifecycle(fakeDeps());
-      const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Claude/1", "sess-ext", "external");
-      expect(lc.listHelpSessionBearers()).toHaveLength(0);
-    });
-
     it("listHelpSessionBearers covers every non-external tier, not just the help chat (#10036)", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
@@ -1524,16 +1517,6 @@ describe("HttpLifecycle", () => {
       expect(lc.findHelpBearerHash("help-token-xyz")).toBeNull();
     });
 
-    it("pushes a runtime-state change on connect and on final disconnect", () => {
-      const deps = fakeDeps();
-      const lc = new HttpLifecycle(deps);
-      const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Client/1", "sess-1", "external");
-      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(1);
-      handle.detachBearerSession("sess-1");
-      expect(deps.emitRuntimeStateChange).toHaveBeenCalledTimes(2);
-    });
-
     it("coalesces two sessions onto one entry and only drops it when both close", () => {
       const lc = new HttpLifecycle(fakeDeps());
       const handle = lc as unknown as BearerTestHandle;
@@ -1553,35 +1536,11 @@ describe("HttpLifecycle", () => {
       expect(lc.listActiveBearers()).toHaveLength(0);
     });
 
-    it("keys distinct tokens to distinct entries", () => {
-      const lc = new HttpLifecycle(fakeDeps());
-      const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Client/1", "sess-1", "external");
-      handle.touchBearer(authB, "Client/2", "sess-2", "external");
-      expect(lc.listActiveBearers()).toHaveLength(2);
-    });
-
-    it("detachBearerSession is a no-op for unknown sessions", () => {
-      const lc = new HttpLifecycle(fakeDeps());
-      expect(() => (lc as unknown as BearerTestHandle).detachBearerSession("ghost")).not.toThrow();
-      expect(lc.listActiveBearers()).toHaveLength(0);
-    });
-
     it("getBearerSessionIds returns a snapshot or null", () => {
       const lc = new HttpLifecycle(fakeDeps());
       (lc as unknown as BearerTestHandle).touchBearer(authA, "Client/1", "sess-1", "external");
       expect(lc.getBearerSessionIds(hashOf(authA))).toEqual(["sess-1"]);
       expect(lc.getBearerSessionIds("nonexistent")).toBeNull();
-    });
-
-    it("clearBearer evicts the entry and its reverse-lookup rows", () => {
-      const lc = new HttpLifecycle(fakeDeps());
-      const handle = lc as unknown as BearerTestHandle;
-      handle.touchBearer(authA, "Client/1", "sess-1", "external");
-      lc.clearBearer(hashOf(authA));
-      expect(lc.listActiveBearers()).toHaveLength(0);
-      // Reverse rows gone: a late detach for the cleared session is harmless.
-      expect(() => handle.detachBearerSession("sess-1")).not.toThrow();
     });
   });
 

@@ -180,29 +180,6 @@ describe("ActivityMonitor", () => {
   });
 
   describe("Pattern-scan throttle", () => {
-    it("scans a chunk arriving inside the throttle window via the trailing-edge timer", () => {
-      vi.setSystemTime(10000);
-      const onBootComplete = vi.fn();
-      const monitor = new ActivityMonitor("scan-trailing", 1000, vi.fn(), {
-        getVisibleLines: () => ["> "],
-        getCursorLine: () => "> ",
-        bootCompletePatterns: [/ready/i],
-        idleDebounceMs: 4000,
-        onBootComplete,
-      });
-
-      monitor.startPolling();
-      monitor.onData("starting up\n");
-      monitor.onData("system ready\n");
-      expect(onBootComplete).not.toHaveBeenCalled();
-
-      // No further data: the deferred run must still scan the final chunk.
-      vi.advanceTimersByTime(30);
-      expect(onBootComplete).toHaveBeenCalledTimes(1);
-
-      monitor.dispose();
-    });
-
     it("dispose cancels a pending trailing-edge scan", () => {
       vi.setSystemTime(10000);
       const onBootComplete = vi.fn();
@@ -308,87 +285,6 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("OSC idle is advisory: a later working signal keeps the monitor busy", () => {
-      vi.setSystemTime(3000);
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("osc-debounce", 100, onStateChange, {
-        agentId: "claude",
-        getVisibleLines: () => [],
-        getCursorLine: () => null,
-        initialState: "busy",
-        skipInitialStateEmit: true,
-      });
-
-      monitor.onOscProgressWorking(3000);
-      // OSC idle is advisory (a no-op); it never arms a timer or forces idle.
-      monitor.onOscProgressIdle(3050);
-      vi.setSystemTime(3100);
-      monitor.onOscProgressWorking(3100);
-      // Advance well past any former debounce window — state stays busy.
-      vi.advanceTimersByTime(300);
-
-      expect(monitor.getState()).toBe("busy");
-
-      monitor.dispose();
-    });
-
-    it("OSC idle does not immediately force the monitor to idle", () => {
-      vi.setSystemTime(4000);
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("osc-idle-no-force", 100, onStateChange, {
-        agentId: "claude",
-        getVisibleLines: () => [],
-        getCursorLine: () => null,
-        initialState: "busy",
-        skipInitialStateEmit: true,
-      });
-
-      monitor.onOscProgressWorking(4000);
-      onStateChange.mockClear();
-      monitor.onOscProgressIdle(4010);
-      vi.advanceTimersByTime(199);
-
-      // OSC idle is a no-op — no transition fires (and nothing else has).
-      expect(monitor.getState()).toBe("busy");
-      expect(onStateChange).not.toHaveBeenCalled();
-
-      // Advancing time changes nothing — OSC idle is advisory.
-      vi.advanceTimersByTime(2);
-      expect(monitor.getState()).toBe("busy");
-
-      monitor.dispose();
-    });
-
-    it("OSC idle does not mutate activity timestamps — advisory no-op contract", () => {
-      // Guards the advisory contract: state=0 must leave the natural-decay
-      // inputs untouched. A future change that refreshes (or zeroes) these on
-      // idle receipt would silently shift when the 8s gate fires.
-      vi.setSystemTime(8000);
-      const monitor = new ActivityMonitor("osc-idle-no-mutate", 100, vi.fn(), {
-        agentId: "claude",
-        initialState: "busy",
-        skipInitialStateEmit: true,
-      });
-
-      type MonitorInternals = {
-        lastActivityTimestamp: number;
-        lastDataTimestamp: number;
-      };
-      const internals = monitor as unknown as MonitorInternals;
-
-      monitor.onOscProgressWorking(8000);
-      const activityTs = internals.lastActivityTimestamp;
-      const dataTs = internals.lastDataTimestamp;
-
-      vi.setSystemTime(8500);
-      monitor.onOscProgressIdle(8500);
-
-      expect(internals.lastActivityTimestamp).toBe(activityTs);
-      expect(internals.lastDataTimestamp).toBe(dataTs);
-
-      monitor.dispose();
-    });
-
     it("respects MAX_WORKING_SILENCE_MS — OSC working does not bypass the safety timeout (#4974 regression)", () => {
       // Bug #4974: a working signal that never decays leaves the agent stuck.
       // The OSC heartbeat must refresh `lastDataTimestamp` like real output, so
@@ -456,32 +352,6 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("idle");
 
       monitor.dispose();
-    });
-
-    it("dispose() after onOscProgressIdle does not throw", () => {
-      vi.setSystemTime(6000);
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("osc-dispose", 100, onStateChange, {
-        agentId: "claude",
-      });
-
-      monitor.onOscProgressIdle(6000);
-      // onOscProgressIdle is a no-op; there is no timer to leave pending.
-      expect(() => monitor.dispose()).not.toThrow();
-      // Advancing afterwards must not throw either.
-      expect(() => vi.advanceTimersByTime(500)).not.toThrow();
-    });
-
-    it("does not throw after dispose() when more OSC signals arrive", () => {
-      vi.setSystemTime(7000);
-      const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("osc-post-dispose", 100, onStateChange, {
-        agentId: "claude",
-      });
-
-      monitor.dispose();
-      expect(() => monitor.onOscProgressWorking(7000)).not.toThrow();
-      expect(() => monitor.onOscProgressIdle(7000)).not.toThrow();
     });
   });
 

@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
-import { CSS } from "@dnd-kit/utilities";
 import { SortableTerminal } from "../SortableTerminal";
 import { useDragHandle } from "../DragHandleContext";
 import type { PanelInstance } from "@shared/types/panel";
@@ -62,38 +61,6 @@ describe("SortableTerminal", () => {
     expect(outer.className).not.toContain("contain-layout");
   });
 
-  it("does not apply opacity-40 class on the inner div (opacity is now driven by framer-motion animate)", () => {
-    mockIsDragging = true;
-    const { container } = render(
-      <SortableTerminal terminal={terminal} sourceLocation="grid" sourceIndex={0}>
-        <div />
-      </SortableTerminal>
-    );
-    const inner = (container.firstChild as HTMLElement).firstChild as HTMLElement;
-    expect(inner.className).not.toContain("opacity-40");
-  });
-
-  it("renders drag ring class on the inner div when dragging", () => {
-    mockIsDragging = true;
-    const { container } = render(
-      <SortableTerminal terminal={terminal} sourceLocation="grid" sourceIndex={0}>
-        <div />
-      </SortableTerminal>
-    );
-    const inner = (container.firstChild as HTMLElement).firstChild as HTMLElement;
-    expect(inner.className).toContain("ring-2");
-  });
-
-  it("renders children through DragHandleProvider", () => {
-    mockIsDragging = false;
-    const { getByTestId } = render(
-      <SortableTerminal terminal={terminal} sourceLocation="grid" sourceIndex={0}>
-        <div data-testid="inner-child" />
-      </SortableTerminal>
-    );
-    expect(getByTestId("inner-child")).toBeTruthy();
-  });
-
   it("sets data-terminal-id on the outer motion wrapper", () => {
     mockIsDragging = false;
     const { container } = render(
@@ -117,17 +84,6 @@ describe("SortableTerminal", () => {
     const args = useSortableSpy.mock.calls[0]![0] as { animateLayoutChanges?: () => boolean };
     expect(typeof args.animateLayoutChanges).toBe("function");
     expect(args.animateLayoutChanges!()).toBe(false);
-  });
-
-  it("uses CSS.Translate.toString (not CSS.Transform.toString) to skip scale on the xterm canvas", () => {
-    mockIsDragging = false;
-    useSortableSpy.mockClear();
-    render(
-      <SortableTerminal terminal={terminal} sourceLocation="grid" sourceIndex={0}>
-        <div />
-      </SortableTerminal>
-    );
-    expect(CSS.Translate).toBeDefined();
   });
 
   it("forwards setActivatorNodeRef and listeners through DragHandleProvider for keyboard a11y", () => {

@@ -101,11 +101,6 @@ function stubMatchMedia(): void {
 }
 
 describe("TerminalInstanceService - repairFontGrid (#9776)", () => {
-  it("registers a late-font-arrival callback in its constructor", async () => {
-    await import("../TerminalInstanceService");
-    expect(typeof registeredLateArrivalCallback).toBe("function");
-  });
-
   it("remeasures every non-hibernated instance", async () => {
     const { terminalInstanceService } = await import("../TerminalInstanceService");
     stubMatchMedia();

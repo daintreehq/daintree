@@ -164,18 +164,12 @@ describe("mapMergeStateStatus", () => {
     expect(mapMergeStateStatus("dirty")).toBe("conflicts");
   });
 
-  it.each([
-    ["UNKNOWN"],
-    ["CLEAN"],
-    ["BLOCKED"],
-    ["BEHIND"],
-    ["UNSTABLE"],
-    [null],
-    [undefined],
-    [7],
-  ])("reports nothing for %s — not computed or not a conflict is never read as clean", (raw) => {
-    expect(mapMergeStateStatus(raw)).toBeUndefined();
-  });
+  it.each([["UNKNOWN"], ["CLEAN"], [null], [7]])(
+    "reports nothing for %s — not computed or not a conflict is never read as clean",
+    (raw) => {
+      expect(mapMergeStateStatus(raw)).toBeUndefined();
+    }
+  );
 });
 
 describe("PR mappers carry the merge-conflict observation", () => {

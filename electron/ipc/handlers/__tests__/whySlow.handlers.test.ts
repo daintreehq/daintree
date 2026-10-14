@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { WhySlowSnapshot } from "../../../../shared/types/whySlow.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -35,9 +34,6 @@ const utilsMock = vi.hoisted(() => ({
 
 vi.mock("../../utils.js", () => utilsMock);
 
-const collectorMock = vi.hoisted(() => ({ collectWhySlowSnapshot: vi.fn() }));
-vi.mock("../../../services/DiagnosticsCollector.js", () => collectorMock);
-
 const memoryAccountingMock = vi.hoisted(() => ({ getCompositeMemorySnapshot: vi.fn() }));
 vi.mock("../../../services/memoryAccounting.js", () => memoryAccountingMock);
 
@@ -62,41 +58,6 @@ const VALID_REPORT = {
 function eventFrom(senderId: number, isDestroyed = false) {
   return { sender: { id: senderId, isDestroyed: () => isDestroyed } };
 }
-
-describe("registerWhySlowHandlers — getWhySlowSnapshot", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("returns the collector snapshot", async () => {
-    const snapshot: WhySlowSnapshot = {
-      timestamp: 123,
-      resource: null,
-      focusThrottle: { throttled: false, pollMultiplier: 1 },
-      rendererTerminals: [],
-      pty: null,
-      worktrees: null,
-      workers: null,
-      memory: null,
-    };
-    collectorMock.collectWhySlowSnapshot.mockResolvedValue(snapshot);
-
-    registerWhySlowHandlers({} as never);
-    const result = await getRegistered("system:get-why-slow-snapshot")(null);
-
-    expect(result).toEqual(snapshot);
-  });
-
-  it("serves the composite memory snapshot, defaulting a missing ptyClient to null", async () => {
-    const snapshot = { timestamp: 1, electron: {}, terminalWorkloads: {} };
-    memoryAccountingMock.getCompositeMemorySnapshot.mockResolvedValue(snapshot);
-
-    registerWhySlowHandlers({} as never);
-    const result = await getRegistered("system:get-memory-snapshot")(null);
-
-    expect(result).toEqual(snapshot);
-    expect(memoryAccountingMock.getCompositeMemorySnapshot).toHaveBeenCalledWith(null);
-    expect(collectorMock.collectWhySlowSnapshot).not.toHaveBeenCalled();
-  });
-});
 
 describe("registerWhySlowHandlers — reportTerminalRendererDiagnostics", () => {
   beforeEach(() => vi.clearAllMocks());

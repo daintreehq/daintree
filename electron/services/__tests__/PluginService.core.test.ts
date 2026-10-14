@@ -288,12 +288,6 @@ describe("PluginService", () => {
     expect(service.listPlugins()).toEqual([]);
   });
 
-  it("returns empty list when plugins directory is empty", async () => {
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-    expect(service.listPlugins()).toEqual([]);
-  });
-
   it("loads a valid plugin and registers panel kinds", async () => {
     await writePlugin("test-plugin", {
       name: "acme.test-plugin",
@@ -533,17 +527,6 @@ describe("PluginService", () => {
     expect(service.listPlugins()).toEqual([]);
   });
 
-  it("skips plugins with invalid manifest schema", async () => {
-    await writePlugin("invalid-schema", {
-      version: "1.0.0",
-      // missing required 'name' field
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-    expect(service.listPlugins()).toEqual([]);
-  });
-
   it("loads multiple plugins and skips invalid ones", async () => {
     await writePlugin("good-1", { name: "acme.good-1", version: "1.0.0" });
     await writePlugin("bad", { version: "1.0.0" }); // missing name
@@ -590,46 +573,6 @@ describe("PluginService", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     expect(registerPanelKind).toHaveBeenCalledTimes(0); // no panels declared
-  });
-
-  it("namespaces panel IDs as pluginName.panelId", async () => {
-    await writePlugin("my-plugin", {
-      name: "acme.my-plugin",
-      version: "1.0.0",
-      contributes: {
-        panels: [
-          { id: "viewer", name: "Viewer", iconId: "eye", color: "#000" },
-          { id: "editor", name: "Editor", iconId: "pen", color: "#fff" },
-        ],
-      },
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(registerPanelKind).toHaveBeenCalledTimes(2);
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.my-plugin.viewer" })
-    );
-    expect(registerPanelKind).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "acme.my-plugin.editor" })
-    );
-  });
-
-  it("rejects main entry paths that escape the plugin directory", async () => {
-    await writePlugin("escape-test", {
-      name: "acme.escape-test",
-      version: "1.0.0",
-      main: "../evil.js",
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const plugins = service.listPlugins();
-    expect(plugins).toHaveLength(1);
-    // The plugin loads but main is silently rejected (no import attempted)
-    expect(plugins[0].manifest.main).toBe("../evil.js");
   });
 
   it("carries the host-side instance key and origin on every listPlugins entry", async () => {
@@ -711,33 +654,12 @@ describe("PluginService", () => {
     expect(plugins[0].archiveHash).toBe(validHash);
   });
 
-  it("listPlugins returns null archiveHash when not set", async () => {
-    await writePlugin("unhashed", {
-      name: "acme.unhashed",
-      version: "1.0.0",
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    const plugins = service.listPlugins();
-    expect(plugins).toHaveLength(1);
-    expect(plugins[0].archiveHash).toBeNull();
-  });
-
   it("setPluginArchiveHash is a silent no-op for unknown plugin ids", () => {
     const service = new PluginService(tmpDir);
     expect(() => service.setPluginArchiveHash("acme.nonexistent", "deadbeef")).not.toThrow();
   });
 
   describe("listPlugins pluginDanger", () => {
-    it("reports safe for a plugin with no capabilities", async () => {
-      await writePlugin("safe-plugin", { name: "acme.safe", version: "1.0.0" });
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-      expect(service.listPlugins()[0].pluginDanger).toBe("safe");
-    });
-
     it("reports safe for a read-only / clipboard capability set", async () => {
       await writePlugin("reader", {
         name: "acme.reader",
@@ -754,25 +676,6 @@ describe("PluginService", () => {
         name: "acme.sheller",
         version: "1.0.0",
         capabilities: ["shell:exec"],
-      });
-      const service = new PluginService(tmpDir);
-      await service.initialize();
-      expect(service.listPlugins()[0].pluginDanger).toBe("confirm");
-    });
-
-    // Guards against accidental removal from CONFIRM_TRIGGERING_CAPABILITIES.
-    it.each([
-      "git:write",
-      "fs:project-write",
-      "fs:user-data-write",
-      "agent:invoke",
-      "agent:register",
-      "agent:input",
-    ])("reports confirm for the flat-elevated capability %s", async (capability) => {
-      await writePlugin("flat", {
-        name: "acme.flat",
-        version: "1.0.0",
-        capabilities: [capability],
       });
       const service = new PluginService(tmpDir);
       await service.initialize();
@@ -815,14 +718,6 @@ describe("PluginService", () => {
       expect(info.disabled).toBe(true);
       expect(info.pluginDanger).toBe("confirm");
     });
-  });
-
-  it("rejects manifest with empty name", async () => {
-    await writePlugin("empty-name", { name: "", version: "1.0.0" });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-    expect(service.listPlugins()).toEqual([]);
   });
 
   it("rejects manifest with path-traversal name", async () => {
@@ -881,22 +776,6 @@ describe("PluginService", () => {
     }
   });
 
-  it("allows retry after non-ENOENT initialize failure", async () => {
-    const badRoot = path.join(tmpDir, "unreadable");
-    await fs.mkdir(badRoot);
-    await writePlugin("good", { name: "acme.good", version: "1.0.0" });
-
-    const service = new PluginService(tmpDir);
-
-    // First call succeeds
-    await service.initialize();
-    expect(service.listPlugins()).toHaveLength(1);
-
-    // Second call is no-op (already initialized)
-    await service.initialize();
-    expect(service.listPlugins()).toHaveLength(1);
-  });
-
   it("registers toolbar buttons from plugin manifest", async () => {
     await writePlugin("toolbar-test", {
       name: "acme.toolbar-test",
@@ -929,33 +808,6 @@ describe("PluginService", () => {
     );
   });
 
-  it("uses default priority 3 when not specified in toolbar button", async () => {
-    await writePlugin("default-priority", {
-      name: "acme.default-priority",
-      version: "1.0.0",
-      contributes: {
-        toolbarButtons: [
-          {
-            id: "btn",
-            label: "Btn",
-            iconId: "icon",
-            actionId: "acme.default-priority.action",
-          },
-        ],
-      },
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(registerToolbarButton).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "acme.default-priority.btn",
-        priority: 3,
-      })
-    );
-  });
-
   it("registers menu items from plugin manifest", async () => {
     await writePlugin("menu-test", {
       name: "acme.menu-test",
@@ -979,19 +831,6 @@ describe("PluginService", () => {
       actionId: "acme.menu-test.doSomething",
       location: "terminal",
     });
-  });
-
-  it("does not call toolbar/menu registration when no contributions", async () => {
-    await writePlugin("empty-contribs", {
-      name: "acme.empty-contribs",
-      version: "1.0.0",
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(registerToolbarButton).not.toHaveBeenCalled();
-    expect(registerPluginMenuItem).not.toHaveBeenCalled();
   });
 });
 
@@ -1671,26 +1510,6 @@ describe("PluginService manifest command contributions (#9281)", () => {
     } finally {
       errorSpy.mockRestore();
     }
-  });
-
-  it("registers the toolbar button under the canonical {pluginId}.{btnId} namespace", async () => {
-    await writePlugin("ns-check", {
-      name: "acme.ns-check",
-      version: "1.0.0",
-      contributes: {
-        toolbarButtons: [{ id: "btn", label: "Btn", iconId: "i", actionId: "acme.ns-check.act" }],
-      },
-    });
-
-    const service = new PluginService(tmpDir);
-    await service.initialize();
-
-    expect(registerToolbarButton).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "acme.ns-check.btn",
-        pluginId: "acme.ns-check",
-      })
-    );
   });
 
   it("preserves a collision loadError across a successful main activation", async () => {

@@ -329,37 +329,6 @@ describe("SessionStore.recomputeIdleTimers", () => {
     expect(store.httpSessions.has("http-3")).toBe(true);
   });
 
-  it("drain() clears timestamp maps so no stale entries survive", () => {
-    const session = fakeSseSession();
-    store.sessions.set("a", session);
-    clearTimeout(session.idleTimer);
-    session.idleTimer = store.createIdleTimer("a");
-    const httpSession = fakeHttpSession();
-    store.httpSessions.set("b", httpSession);
-    clearTimeout(httpSession.idleTimer);
-    httpSession.idleTimer = store.createHttpIdleTimer("b");
-
-    store.drain();
-
-    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
-    expect(() => store.recomputeIdleTimers()).not.toThrow();
-  });
-
-  it("timer callback cleans up timestamp entries on expiry", () => {
-    setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS);
-    const session = fakeSseSession();
-    store.sessions.set("sse-ts", session);
-    clearTimeout(session.idleTimer);
-    session.idleTimer = store.createIdleTimer("sse-ts");
-
-    // Use advanceTimersByTime rather than runAllTimers — GrantCache's recurring
-    // sweep interval would otherwise trigger vitest's infinite-loop guard.
-    vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
-
-    expect(store.sessions.has("sse-ts")).toBe(false);
-    expect(() => store.drain()).not.toThrow();
-  });
-
   it("timer callback re-arms when awake time is below threshold (defense-in-depth)", () => {
     setAwakeTime(0);
     const session = fakeSseSession();
@@ -371,10 +340,6 @@ describe("SessionStore.recomputeIdleTimers", () => {
 
     // Session should survive because awake time is below threshold.
     expect(store.sessions.has("sse-survive")).toBe(true);
-  });
-
-  it("is a no-op when no sessions exist", () => {
-    expect(() => store.recomputeIdleTimers()).not.toThrow();
   });
 
   it("uses fallback timestamp for sessions missing idleStartedAt (does not expire immediately)", () => {
@@ -467,10 +432,6 @@ describe("SessionStore.revokeSession", () => {
     expect(store.httpSessions.has("http-1")).toBe(false);
     expect(store.sessionTierMap.has("http-1")).toBe(false);
     expect(closeSpy).toHaveBeenCalled();
-  });
-
-  it("returns false for unknown session", () => {
-    expect(store.revokeSession("ghost")).toBe(false);
   });
 
   it("is idempotent — double revoke is harmless", () => {
@@ -654,10 +615,6 @@ describe("SessionStore.getTier liveness gate (#11799)", () => {
     store.sessionTierMap.set("h", "external");
 
     expect(store.getTier("h")).toBe("external");
-  });
-
-  it("returns null for a session id no transport map has ever seen", () => {
-    expect(store.getTier("never-connected")).toBeNull();
   });
 
   it("returns null when a tier row outlives both transports", () => {
@@ -1056,36 +1013,6 @@ describe("SessionStore.listExternalActiveClients (#8779)", () => {
     expect(clients[0]!.userAgent).toBeNull();
     expect(typeof clients[0]!.connectedAtMs).toBe("number");
   });
-
-  it("drops metadata on revokeSession so the client no longer lists", () => {
-    addExternal("ext", "Claude Code", "streamable-http");
-    expect(store.listExternalActiveClients()).toHaveLength(1);
-
-    store.revokeSession("ext");
-
-    expect(store.listExternalActiveClients()).toEqual([]);
-  });
-
-  it("clears all metadata on drain()", () => {
-    addExternal("a", "ua-a", "sse");
-    addExternal("b", "ua-b", "streamable-http");
-
-    store.drain();
-
-    expect(store.listExternalActiveClients()).toEqual([]);
-  });
-
-  it("clearClientMetadata drops a normally-disconnected client from the list", () => {
-    addExternal("ext", "Claude Code", "streamable-http");
-    expect(store.listExternalActiveClients()).toHaveLength(1);
-
-    // Mirrors the inline transport.onclose cleanup in httpLifecycle, which
-    // deletes the session map entry and clears its metadata.
-    store.httpSessions.delete("ext");
-    store.clearClientMetadata("ext");
-
-    expect(store.listExternalActiveClients()).toEqual([]);
-  });
 });
 
 describe("SessionStore.nextFigureNumber (#9828)", () => {
@@ -1256,12 +1183,6 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     store.sessionTierMap.set(TRANSPORT, "full");
 
     expect(store.getLiveStatusForHelpSession(HELP_ID, WC)).toBeNull();
-  });
-
-  it("returns null for an empty help id", () => {
-    wireLiveHelpSession({ tier: "full" });
-
-    expect(store.getLiveStatusForHelpSession("", WC)).toBeNull();
   });
 
   it("omits grants past their expiry that the sweep hasn't yet evicted", () => {

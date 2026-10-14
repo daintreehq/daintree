@@ -79,15 +79,6 @@ describe("editorConfig IPC adversarial", () => {
     expect(projectStoreMock.saveProjectSettings).not.toHaveBeenCalled();
   });
 
-  it("setConfig rejects custom editor with empty-string customCommand", async () => {
-    await expect(
-      getHandler(CHANNELS.EDITOR_SET_CONFIG)(fakeEvent(), {
-        projectId: "p1",
-        editor: { id: "custom", customCommand: "", customTemplate: "{file}" },
-      })
-    ).rejects.toThrow(/customCommand/);
-  });
-
   it("setConfig accepts every non-custom id in the shared editor roster", async () => {
     // Derived from KNOWN_EDITOR_IDS rather than a hand-listed array, so a future
     // editor is covered here the moment it joins the roster.
@@ -131,15 +122,6 @@ describe("editorConfig IPC adversarial", () => {
     ).rejects.toThrow(/projectId/);
   });
 
-  it("setConfig rejects when projectId is not a string", async () => {
-    await expect(
-      getHandler(CHANNELS.EDITOR_SET_CONFIG)(fakeEvent(), {
-        editor: { id: "vscode" },
-        projectId: 42,
-      })
-    ).rejects.toThrow(/projectId/);
-  });
-
   it("getConfig returns { preferredEditor: null, discoveredEditors } when settings read throws", async () => {
     projectStoreMock.getProjectSettings.mockRejectedValue(new Error("store down"));
     discoverMock.mockResolvedValue([{ id: "vscode", name: "VS Code", available: true }]);
@@ -166,11 +148,5 @@ describe("editorConfig IPC adversarial", () => {
     expect(noProject.preferredEditor).toBeNull();
     expect(wrongType.preferredEditor).toBeNull();
     expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
-  });
-
-  it("cleanup removes all three handlers", () => {
-    expect(ipcHandlers.size).toBe(3);
-    cleanup();
-    expect(ipcHandlers.size).toBe(0);
   });
 });

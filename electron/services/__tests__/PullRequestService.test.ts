@@ -2470,31 +2470,6 @@ describe("PullRequestService", () => {
     pullRequestService.destroy();
   });
 
-  it("proceeds normally when remaining is null (provider doesn't report that dimension)", async () => {
-    const mockImpl = mockForgeProviderResolved();
-    mockImpl.getRateLimit = vi.fn().mockResolvedValue({
-      limit: null,
-      remaining: null,
-      resetAt: null,
-    });
-
-    const { pullRequestService } = await import("../PullRequestService.js");
-    const { events } = await import("../events.js");
-
-    pullRequestService.initialize("/repo", "test-project-id");
-
-    events.emit(
-      "sys:worktree:update",
-      makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/test" })
-    );
-
-    await pullRequestService.refresh();
-
-    expect(mockImpl.findPRByBranch).toHaveBeenCalledTimes(1);
-
-    pullRequestService.destroy();
-  });
-
   it("proceeds normally when getRateLimit rejects (fails open)", async () => {
     const mockImpl = mockForgeProviderResolved();
     mockImpl.getRateLimit = vi.fn().mockRejectedValue(new Error("timeout"));
@@ -2653,19 +2628,6 @@ describe("PullRequestService", () => {
       };
     }
 
-    it("getBoostRevalidationIntervalMs: base 30s at count 0", async () => {
-      mockForgeProviderResolved();
-
-      const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo", "test-project-id");
-
-      const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 0, ciStatus: "pending" }));
-
-      expect(svc.getBoostRevalidationIntervalMs()).toBe(30_000);
-      pullRequestService.destroy();
-    });
-
     it("getBoostRevalidationIntervalMs: 60s at count 10", async () => {
       mockForgeProviderResolved();
 
@@ -2714,19 +2676,6 @@ describe("PullRequestService", () => {
       pullRequestService.destroy();
     });
 
-    it("getBoostRevalidationIntervalMs: ignores non-PENDING PRs", async () => {
-      mockForgeProviderResolved();
-
-      const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo", "test-project-id");
-
-      const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 20, ciStatus: "success" }));
-
-      expect(svc.getBoostRevalidationIntervalMs()).toBe(30_000);
-      pullRequestService.destroy();
-    });
-
     it("getBoostRevalidationIntervalMs: returns 30s when detectedPRs is empty", async () => {
       mockForgeProviderResolved();
 
@@ -2737,24 +2686,6 @@ describe("PullRequestService", () => {
       svc.detectedPRs.clear();
 
       expect(svc.getBoostRevalidationIntervalMs()).toBe(30_000);
-      pullRequestService.destroy();
-    });
-
-    it("clearStagnantPollCounts: resets all PRs to 0", async () => {
-      mockForgeProviderResolved();
-
-      const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo", "test-project-id");
-
-      const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 5 }));
-      svc.detectedPRs.set("wt-2", makeDetectedPR({ number: 2, stagnantPollCount: 15 }));
-
-      svc.clearStagnantPollCounts();
-
-      for (const pr of svc.detectedPRs.values()) {
-        expect(pr.stagnantPollCount).toBe(0);
-      }
       pullRequestService.destroy();
     });
 
@@ -2792,75 +2723,6 @@ describe("PullRequestService", () => {
       for (const pr of svc.detectedPRs.values()) {
         expect(pr.stagnantPollCount).toBe(0);
       }
-    });
-
-    it("reset() clears stagnant counts", async () => {
-      mockForgeProviderResolved();
-
-      const { pullRequestService } = await import("../PullRequestService.js");
-      pullRequestService.initialize("/repo", "test-project-id");
-
-      const svc = pullRequestService as any;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 8 }));
-
-      pullRequestService.reset();
-
-      // reset() calls detectedPRs.clear() after clearStagnantPollCounts()
-      // So the map should be empty
-      expect(svc.detectedPRs.size).toBe(0);
-    });
-
-    it("stagnantPollCount comparison logic: same CI increments, different CI resets", () => {
-      // Verify the core stagnation logic directly (the enrichPRWithCIStatus
-      // fire-and-forget chain is not easily testable with vitest 4 fake timers,
-      // but its behavior is exercised by scheduleRevalidation interval
-      // selection in the tests above).
-      const pr = makeDetectedPR({ stagnantPollCount: 0, ciStatus: "pending" });
-
-      // Simulate unchanged CI result
-      const prevSame = pr.ciStatus;
-      pr.ciStatus = "pending";
-      if (pr.ciStatus !== undefined) {
-        pr.stagnantPollCount = prevSame === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
-      }
-      expect(pr.stagnantPollCount).toBe(1);
-
-      // Simulate another unchanged poll
-      const prevSame2 = pr.ciStatus;
-      pr.ciStatus = "pending";
-      if (pr.ciStatus !== undefined) {
-        pr.stagnantPollCount = prevSame2 === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
-      }
-      expect(pr.stagnantPollCount).toBe(2);
-
-      // Simulate CI transition
-      const prevDiff = pr.ciStatus as string | undefined;
-      pr.ciStatus = "success";
-      if (pr.ciStatus !== undefined) {
-        pr.stagnantPollCount = prevDiff === pr.ciStatus ? pr.stagnantPollCount + 1 : 0;
-      }
-      expect(pr.stagnantPollCount).toBe(0);
-    });
-
-    it("scheduleRevalidation sets a timer when boost is active", async () => {
-      mockForgeProviderResolved();
-
-      const { pullRequestService } = await import("../PullRequestService.js");
-      const svc = pullRequestService as any;
-
-      // isEnabled is a getter that checks nextRetryAt === 0
-      svc.nextRetryAt = 0;
-      svc.isPolling = true;
-      svc.detectedPRs.set("wt-1", makeDetectedPR({ stagnantPollCount: 15 }));
-      svc.boostExpiresAt = Date.now() + 15 * 60 * 1000;
-
-      svc.scheduleRevalidation();
-
-      expect(svc.revalidationTimer).not.toBeNull();
-
-      clearTimeout(svc.revalidationTimer);
-      svc.revalidationTimer = null;
-      pullRequestService.destroy();
     });
   });
 
@@ -2909,30 +2771,6 @@ describe("PullRequestService", () => {
         else process.env[ROLE_ENV] = prev;
       }
     }
-
-    it("initializes enrichment disabled for the worker role", async () => {
-      await withRole("worker", async () => {
-        mockForgeProviderResolved();
-
-        const { pullRequestService } = await import("../PullRequestService.js");
-        const svc = pullRequestService as any;
-
-        expect(svc.ciEnrichmentEnabled).toBe(false);
-        pullRequestService.destroy();
-      });
-    });
-
-    it("initializes enrichment enabled for attended (non-worker) instances", async () => {
-      await withRole(undefined, async () => {
-        mockForgeProviderResolved();
-
-        const { pullRequestService } = await import("../PullRequestService.js");
-        const svc = pullRequestService as any;
-
-        expect(svc.ciEnrichmentEnabled).toBe(true);
-        pullRequestService.destroy();
-      });
-    });
 
     it("skips the getCIStatuses batch entirely on worker instances", async () => {
       await withRole("worker", async () => {

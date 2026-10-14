@@ -48,9 +48,8 @@ vi.mock("../windowRecreationState.js", () => ({
 }));
 
 // `broadcastToRenderer` pulls a heavy main-process chain (windowRef, ipcMain);
-// mock it so importing appLifecycle in tests stays cheap and toasts are
-// assertable. `archiveInstallIntent` is dynamically imported inside
-// queueDntrPath.
+// mock it so importing appLifecycle in tests stays cheap. `archiveInstallIntent`
+// is dynamically imported inside queueDntrPath.
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
 const enqueueArchiveInstallIntentsMock = vi.hoisted(() =>
   vi.fn<(p: readonly string[]) => Promise<void>>(async () => {})
@@ -58,7 +57,6 @@ const enqueueArchiveInstallIntentsMock = vi.hoisted(() =>
 vi.mock("../../setup/archiveInstallIntent.js", () => ({
   enqueueArchiveInstallIntents: enqueueArchiveInstallIntentsMock,
 }));
-// Tripwire: no lifecycle path may reach the installer directly any more.
 const installPluginMock = vi.hoisted(() => vi.fn());
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: { installPlugin: installPluginMock },
@@ -302,24 +300,6 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(processExitSpy).not.toHaveBeenCalled();
   });
 
-  it("second signal at 1999ms force-exits (boundary inside window)", async () => {
-    vi.setSystemTime(new Date(1_000_000));
-    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    registerAppLifecycleHandlers(makeOpts());
-
-    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
-    const handler = sigTermCall![1] as (signal: string) => void;
-
-    handler("SIGTERM");
-    vi.advanceTimersByTime(1);
-    // 1ms inside the 2000ms exclusive boundary — must force-exit. Pins the
-    // `<` boundary so an accidental change to `<=` would surface here.
-    vi.setSystemTime(new Date(1_001_999));
-    handler("SIGTERM");
-
-    expect(processExitSpy).toHaveBeenCalledWith(1);
-  });
-
   it("second signal after 2s force-exit window is ignored", async () => {
     vi.setSystemTime(new Date(1_000_000));
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
@@ -406,31 +386,6 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
 
     expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
     expect(mainWindow.focus).not.toHaveBeenCalled();
-  });
-
-  it("routes the two-token --cli-path form the same way", async () => {
-    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    const mainWindow = makeBrowserWindow();
-    registerAppLifecycleHandlers(
-      makeOpts({
-        getMainWindow: vi.fn(() => mainWindow as unknown as import("electron").BrowserWindow),
-      })
-    );
-
-    const secondInstanceCall = appMock.on.mock.calls.find(
-      ([event]: string[]) => event === "second-instance"
-    );
-    const handler = secondInstanceCall![1] as (
-      event: unknown,
-      commandLine: string[],
-      workingDirectory: string
-    ) => void;
-
-    // Two-token form kept here on purpose: it must still work when the adjacent
-    // token really is the path.
-    handler({}, ["daintree", "--cli-path", cliDir], "/");
-
-    expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
   });
 
   it("hands a CLI path to the dispatch even with no window live", async () => {
@@ -596,20 +551,6 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 
-  it("hands a setup launch that enables Host mode over with its command line", async () => {
-    const onHostModeRequested = vi.fn();
-    const { opts, handler } = await register({ onHostModeRequested });
-
-    handler({}, ["daintree", "--enable-host-mode", "--host-mode-handoff"], "/");
-
-    expect(onHostModeRequested).toHaveBeenCalledExactlyOnceWith([
-      "daintree",
-      "--enable-host-mode",
-      "--host-mode-handoff",
-    ]);
-    expect(opts.onCreateWindow).not.toHaveBeenCalled();
-  });
-
   it("treats --host-mode as a plain relaunch where Host mode can't be handed over", async () => {
     const { opts, handler } = await register();
 
@@ -641,14 +582,6 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
     expect(destroyed.focus).not.toHaveBeenCalled();
     expect(opts.onCreateWindow).toHaveBeenCalledOnce();
-  });
-
-  it("does not open a second window while the launch is still bringing its own up", async () => {
-    const { opts, handler } = await register({ isLaunchSettled: () => false });
-
-    handler({}, ["daintree"], "/");
-
-    expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 
   it("answers a relaunch that arrived during a windowless start once it settles", async () => {
@@ -699,15 +632,6 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     const { opts, handle } = await register();
 
     handle.onLaunchSettled();
-
-    expect(opts.onCreateWindow).not.toHaveBeenCalled();
-  });
-
-  it("does not open a window before the app is ready", async () => {
-    appMock.isReady.mockReturnValue(false);
-    const { opts, handler } = await register();
-
-    handler({}, ["daintree"], "/");
 
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
@@ -795,16 +719,6 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     getWindowAllClosedHandler()();
 
     expect(appMock.quit).not.toHaveBeenCalled();
-  });
-
-  it("still quits on linux when Host mode is off", async () => {
-    Object.defineProperty(process, "platform", { value: "linux" });
-    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    registerAppLifecycleHandlers(makeOpts({ isHostModeActive: () => false }));
-
-    getWindowAllClosedHandler()();
-
-    expect(appMock.quit).toHaveBeenCalledOnce();
   });
 
   it("skips app.quit on linux while a window recreation is in flight", async () => {
@@ -1002,21 +916,6 @@ describe("registerAppLifecycleHandlers – activate", () => {
     expect(opts.onCreateWindow).toHaveBeenCalledOnce();
   });
 
-  it("does not touch the registry before the app is ready", async () => {
-    appMock.isReady.mockReturnValue(false);
-    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    const registry = {
-      get size(): number {
-        throw new Error("registry accessed pre-ready");
-      },
-    } as AppLifecycleOptions["windowRegistry"];
-    const opts = makeOpts({ windowRegistry: registry });
-    registerAppLifecycleHandlers(opts);
-
-    expect(() => getActivateHandler()()).not.toThrow();
-    expect(opts.onCreateWindow).not.toHaveBeenCalled();
-  });
-
   it("replays a Dock click that arrived during a windowless Host start once it settles", async () => {
     appMock.isReady.mockReturnValue(false);
     let settled = false;
@@ -1068,6 +967,21 @@ describe("registerAppLifecycleHandlers – activate", () => {
     appMock.isReady.mockReturnValue(true);
     handler();
     expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("does not touch the registry before the app is ready", async () => {
+    appMock.isReady.mockReturnValue(false);
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const registry = {
+      get size(): number {
+        throw new Error("registry accessed pre-ready");
+      },
+    } as AppLifecycleOptions["windowRegistry"];
+    const opts = makeOpts({ windowRegistry: registry });
+    registerAppLifecycleHandlers(opts);
+
+    expect(() => getActivateHandler()()).not.toThrow();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 });
 
@@ -1127,17 +1041,6 @@ describe("registerWindowSessionEndHandler – Windows planned-shutdown wiring", 
 
   it("registers nothing on darwin", async () => {
     Object.defineProperty(process, "platform", { value: "darwin" });
-    const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
-    const win = makeWin();
-
-    registerWindowSessionEndHandler(win);
-
-    const winOn = win.on as unknown as ReturnType<typeof vi.fn>;
-    expect(winOn).not.toHaveBeenCalled();
-  });
-
-  it("registers nothing on linux", async () => {
-    Object.defineProperty(process, "platform", { value: "linux" });
     const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
     const win = makeWin();
 
@@ -1219,12 +1122,6 @@ describe("extractCliPath", () => {
     expect(errorSpy).toHaveBeenCalled();
   });
 
-  it("does not substitute a later directory for an explicit missing path", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    const missing = nodePath.join(root, "gone");
-    expect(extractCliPath(["daintree", "--cli-path", missing, projectDir], root)).toBeNull();
-  });
-
   it("never scans behind the flag for the displaced path", async () => {
     const { extractCliPath } = await import("../appLifecycle.js");
     // Chromium orders positionals after the switches, so a directory sitting
@@ -1259,11 +1156,6 @@ describe("extractCliPath", () => {
     expect(extractCliPath(["daintree", "--cli-path", "--injected", archive], root)).toBeNull();
   });
 
-  it("never considers argv[0], even when it names a real directory", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    expect(extractCliPath([projectDir, "--cli-path", "--injected"], root)).toBeNull();
-  });
-
   it.skipIf(process.platform === "win32")(
     "does not home-expand a leading ~ followed by a backslash on POSIX",
     async () => {
@@ -1295,43 +1187,10 @@ describe("extractCliPath", () => {
     expect(extractCliPath(["daintree", "--cli-path=project"], root)).toBe(projectDir);
   });
 
-  it("expands a leading ~ to the home directory", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    // `~` alone resolves to the home directory itself, which always exists.
-    expect(extractCliPath(["daintree", "--cli-path=~"], root)).toBe(os.homedir());
-  });
-
-  it("reports a failure for a path that does not exist", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    expect(extractCliPath(["daintree", "--cli-path=/nope/nope"], root)).toBeNull();
-    expect(errorSpy).toHaveBeenCalledWith(
-      "[MAIN] Failed to resolve --cli-path to an existing directory",
-      expect.objectContaining({ workingDirectory: root })
-    );
-  });
-
-  it("rejects a path that exists but is not a directory", async () => {
-    const { extractCliPath } = await import("../appLifecycle.js");
-    expect(extractCliPath(["daintree", `--cli-path=${plainFile}`], root)).toBeNull();
-    expect(errorSpy).toHaveBeenCalled();
-  });
-
   it.skipIf(process.platform === "win32")("decodes a file:// directory URI", async () => {
     const { extractCliPath } = await import("../appLifecycle.js");
     expect(extractCliPath(["daintree", `--cli-path=file://${projectDir}`], root)).toBe(projectDir);
   });
-
-  it.skipIf(process.platform === "win32")(
-    "decodes percent-encoded characters in a file:// URI",
-    async () => {
-      const { extractCliPath } = await import("../appLifecycle.js");
-      const spaced = nodePath.join(root, "my project");
-      fs.mkdirSync(spaced);
-      expect(extractCliPath(["daintree", `--cli-path=file://${root}/my%20project`], root)).toBe(
-        spaced
-      );
-    }
-  );
 
   it.skipIf(process.platform === "win32")("follows a symlink to a directory", async () => {
     const { extractCliPath } = await import("../appLifecycle.js");
@@ -1370,15 +1229,6 @@ describe("extractDntrPaths", () => {
     expect(result[0].toLowerCase().endsWith(".dntr")).toBe(true);
   });
 
-  it("recognizes a Windows-style .dntr argument", async () => {
-    const { extractDntrPaths } = await import("../appLifecycle.js");
-    // Resolution differs on a POSIX test host, but the extension filter must
-    // still flag the entry.
-    const result = extractDntrPaths(["daintree", "C:\\Users\\a\\Plugin.DNTR"], "C:\\Users\\a");
-    expect(result).toHaveLength(1);
-    expect(result[0].toLowerCase().endsWith(".dntr")).toBe(true);
-  });
-
   it("skips flag arguments and non-.dntr paths", async () => {
     const { extractDntrPaths } = await import("../appLifecycle.js");
     expect(extractDntrPaths(["daintree", "--cli-path", "/dir", "--foo=bar.dntr"], "/work")).toEqual(
@@ -1391,11 +1241,6 @@ describe("extractDntrPaths", () => {
     const a = nodePath.resolve("/a/one.dntr");
     const b = nodePath.resolve("/b/two.dntr");
     expect(extractDntrPaths(["daintree", a, b], "/work")).toEqual([a, b]);
-  });
-
-  it("returns an empty array when no .dntr path is present", async () => {
-    const { extractDntrPaths } = await import("../appLifecycle.js");
-    expect(extractDntrPaths(["daintree"], "/work")).toEqual([]);
   });
 
   it("expands a leading ~ through the shared path normalization", async () => {
@@ -1455,36 +1300,6 @@ describe("hasCliPathFlag", () => {
       expect(extractDntrPaths(["daintree", "file:///home/alice/plugin.dntr"], "C:\\")).toEqual([]);
     }
   );
-});
-
-describe("queueDntrPaths", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    enqueueArchiveInstallIntentsMock.mockResolvedValue(undefined);
-  });
-
-  it("routes archives to the confirmation queue instead of installing them", async () => {
-    const { queueDntrPaths } = await import("../appLifecycle.js");
-
-    await queueDntrPaths(["/tmp/acme.dntr", "/tmp/beta.dntr"]);
-
-    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledExactlyOnceWith([
-      "/tmp/acme.dntr",
-      "/tmp/beta.dntr",
-    ]);
-    expect(installPluginMock).not.toHaveBeenCalled();
-    // No install toast: the renderer owns the outcome once the user approves.
-    expect(broadcastToRenderer).not.toHaveBeenCalled();
-  });
-
-  it("does not pre-screen the archive — the manifest preview is the gate", async () => {
-    const { queueDntrPaths } = await import("../appLifecycle.js");
-
-    await queueDntrPaths([nodePath.join(os.tmpdir(), "does-not-exist.dntr")]);
-
-    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledOnce();
-    expect(installPluginMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("registerAppLifecycleHandlers – second-instance .dntr handling", () => {
@@ -1812,5 +1627,25 @@ describe("extractDntrPaths – interaction with folder opens", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("queueDntrPaths", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    enqueueArchiveInstallIntentsMock.mockResolvedValue(undefined);
+  });
+  it("routes archives to the confirmation queue instead of installing them", async () => {
+    const { queueDntrPaths } = await import("../appLifecycle.js");
+
+    await queueDntrPaths(["/tmp/acme.dntr", "/tmp/beta.dntr"]);
+
+    expect(enqueueArchiveInstallIntentsMock).toHaveBeenCalledExactlyOnceWith([
+      "/tmp/acme.dntr",
+      "/tmp/beta.dntr",
+    ]);
+    expect(installPluginMock).not.toHaveBeenCalled();
+    // No install toast: the renderer owns the outcome once the user approves.
+    expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
 });

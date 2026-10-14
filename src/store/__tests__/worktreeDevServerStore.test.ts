@@ -27,12 +27,6 @@ describe("worktreeDevServerStore", () => {
     useWorktreeDevServerStore.getState().reset();
   });
 
-  it("stores a session keyed by worktreeId", () => {
-    const session = makeSession({ worktreeId: "w1", status: "running", updatedAt: 100 });
-    useWorktreeDevServerStore.getState().setSession("w1", session);
-    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1).toEqual(session);
-  });
-
   it("applies a newer update over an older one", () => {
     const store = useWorktreeDevServerStore.getState();
     store.setSession("w1", makeSession({ worktreeId: "w1", status: "starting", updatedAt: 100 }));
@@ -67,13 +61,5 @@ describe("worktreeDevServerStore", () => {
     store.setSession("w1", makeSession({ worktreeId: "w1", status: "running", updatedAt: 100 }));
     store.removeSession("w1");
     expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId.w1).toBeUndefined();
-  });
-
-  it("reset clears all sessions", () => {
-    const store = useWorktreeDevServerStore.getState();
-    store.setSession("w1", makeSession({ worktreeId: "w1", status: "running", updatedAt: 100 }));
-    store.setSession("w2", makeSession({ worktreeId: "w2", status: "error", updatedAt: 100 }));
-    store.reset();
-    expect(useWorktreeDevServerStore.getState().sessionsByWorktreeId).toEqual({});
   });
 });

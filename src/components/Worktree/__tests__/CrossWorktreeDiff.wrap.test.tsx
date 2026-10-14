@@ -7,7 +7,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 // Cross-worktree compare passed no `wrapLines` at all before #12170, so it
 // always scrolled horizontally with no reachable way out. These cover the
-// toggle and the prose default; stepping stays in its own suite.
+// toggle and the prose default, alongside the file stepping they share a
+// toolbar with.
 
 const worktrees = new Map([
   [
@@ -54,8 +55,10 @@ vi.mock("@/components/ui/AppDialog", () => {
 });
 
 vi.mock("../DiffViewer", () => ({
-  DiffViewer: ({ wrapLines }: { wrapLines?: boolean }) => (
-    <div data-testid="diff-viewer" data-wrap-lines={String(wrapLines)} />
+  DiffViewer: ({ diff, wrapLines }: { diff: string; wrapLines?: boolean }) => (
+    <div data-testid="diff-viewer" data-wrap-lines={String(wrapLines)}>
+      {diff}
+    </div>
   ),
 }));
 
@@ -210,5 +213,122 @@ describe("CrossWorktreeDiff wrap toggle (#12170)", () => {
     expect(document.activeElement).toBe(button);
     expect(button.tabIndex).toBe(0);
     expect(screen.getByLabelText("Next file").tabIndex).toBe(-1);
+  });
+});
+
+const FILES = [
+  { path: "src/alpha.ts", status: "M", insertions: 3, deletions: 1 },
+  { path: "src/beta.ts", status: "M", insertions: 1, deletions: 1 },
+  { path: "src/gamma.ts", status: "A", insertions: 9, deletions: 0 },
+];
+
+async function setupSteppingComparison() {
+  mockCompareWorktrees.mockImplementation((_path, _b1, _b2, filePath?: string) =>
+    Promise.resolve(
+      filePath === undefined
+        ? { branch1: "main", branch2: "feature", files: FILES }
+        : `diff --git a/${filePath} b/${filePath}\n--- a/${filePath}\n+++ b/${filePath}\n@@ -1 +1 @@\n-old\n+new`
+    )
+  );
+
+  render(
+    <TooltipProvider>
+      <CrossWorktreeDiff isOpen onClose={vi.fn()} initialWorktreeId={null} />
+    </TooltipProvider>
+  );
+  fireEvent.click(screen.getByText("Base"));
+  fireEvent.click(screen.getByText("Compare"));
+
+  await waitFor(() => {
+    expect(screen.getByText("alpha.ts")).toBeTruthy();
+  });
+}
+
+describe("CrossWorktreeDiff file stepping", () => {
+  it("`]` with no selection opens the first file", async () => {
+    await setupSteppingComparison();
+
+    fireEvent.keyDown(window, { key: "]" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("1 of 3");
+    });
+    expect(mockCompareWorktrees).toHaveBeenLastCalledWith(
+      "/wt/left",
+      "main",
+      "feature",
+      "src/alpha.ts",
+      undefined,
+      false
+    );
+  });
+
+  it("steps forward and back through the comparison set", async () => {
+    await setupSteppingComparison();
+
+    fireEvent.keyDown(window, { key: "]" });
+    await waitFor(() => {
+      expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("1 of 3");
+    });
+
+    fireEvent.keyDown(window, { key: "]" });
+    await waitFor(() => {
+      expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("2 of 3");
+    });
+    expect(mockCompareWorktrees).toHaveBeenLastCalledWith(
+      "/wt/left",
+      "main",
+      "feature",
+      "src/beta.ts",
+      undefined,
+      false
+    );
+
+    fireEvent.keyDown(window, { key: "[" });
+    await waitFor(() => {
+      expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("1 of 3");
+    });
+  });
+
+  it("does not step past either end", async () => {
+    await setupSteppingComparison();
+
+    // `[` with nothing selected is a no-op (no file fetch happens).
+    const callsBefore = mockCompareWorktrees.mock.calls.length;
+    fireEvent.keyDown(window, { key: "[" });
+    expect(mockCompareWorktrees.mock.calls.length).toBe(callsBefore);
+
+    fireEvent.keyDown(window, { key: "]" }); // 1 of 3
+    fireEvent.keyDown(window, { key: "]" }); // 2 of 3
+    fireEvent.keyDown(window, { key: "]" }); // 3 of 3
+    await waitFor(() => {
+      expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("3 of 3");
+    });
+
+    const callsAtEnd = mockCompareWorktrees.mock.calls.length;
+    fireEvent.keyDown(window, { key: "]" });
+    expect(mockCompareWorktrees.mock.calls.length).toBe(callsAtEnd);
+    const next = screen.getByLabelText("Next file");
+    expect(next.getAttribute("aria-disabled")).toBe("true");
+    // Unavailable, not natively disabled, so a focused button keeps focus; and
+    // activating it at the end is a no-op like the key.
+    expect(next.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(next);
+    expect(mockCompareWorktrees.mock.calls.length).toBe(callsAtEnd);
+  });
+
+  it("stepper buttons navigate like the bracket keys", async () => {
+    await setupSteppingComparison();
+
+    fireEvent.click(screen.getByText("alpha.ts"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("1 of 3");
+    });
+    expect(screen.getByLabelText("Previous file").getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.click(screen.getByLabelText("Next file"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe("2 of 3");
+    });
   });
 });

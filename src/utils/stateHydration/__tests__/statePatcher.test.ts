@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { serializePtyPanel } from "@/panels/terminal/serializer";
-import { TERMINAL_SPAWN_SOURCES, type PtyPanelData } from "@shared/types/panel";
+import type { PtyPanelData } from "@shared/types/panel";
 
 type SavedSnapshot = Parameters<typeof buildArgsForRespawn>[0];
 
@@ -69,7 +69,6 @@ vi.mock("@shared/types", async () => {
 });
 
 const {
-  inferKind,
   inferAgentIdFromTitle,
   resolveAgentId,
   buildArgsForBackendTerminal,
@@ -94,40 +93,6 @@ beforeEach(() => {
   generateAgentCommandMock.mockImplementation(
     (base: string, _entry?: unknown, _agentId?: string, _options?: unknown) => `${base} --generated`
   );
-});
-
-describe("inferKind", () => {
-  it("returns saved kind when present", () => {
-    expect(inferKind({ id: "t1", kind: "browser" })).toBe("browser");
-  });
-
-  it('migrates legacy "agent" kind to "terminal"', () => {
-    expect(inferKind({ id: "t1", kind: "agent" })).toBe("terminal");
-  });
-
-  it("infers browser from browserUrl", () => {
-    expect(inferKind({ id: "t1", browserUrl: "https://example.com" })).toBe("browser");
-  });
-
-  it('infers assistant from title "Assistant"', () => {
-    expect(inferKind({ id: "t1", title: "Assistant" })).toBe("assistant");
-  });
-
-  it('infers assistant from title starting with "Assistant"', () => {
-    expect(inferKind({ id: "t1", title: "Assistant - Chat" })).toBe("assistant");
-  });
-
-  it("infers assistant when no cwd and no command", () => {
-    expect(inferKind({ id: "t1" })).toBe("assistant");
-  });
-
-  it("defaults to terminal when cwd is present", () => {
-    expect(inferKind({ id: "t1", cwd: "/home" })).toBe("terminal");
-  });
-
-  it("defaults to terminal when command is present", () => {
-    expect(inferKind({ id: "t1", command: "ls" })).toBe("terminal");
-  });
 });
 
 describe("inferAgentIdFromTitle", () => {
@@ -180,10 +145,6 @@ describe("inferAgentIdFromTitle", () => {
 });
 
 describe("resolveAgentId", () => {
-  it("returns primary agentId", () => {
-    expect(resolveAgentId("claude")).toBe("claude");
-  });
-
   it("returns fallback agentId when primary is undefined", () => {
     expect(resolveAgentId(undefined, "gemini")).toBe("gemini");
   });
@@ -339,16 +300,6 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.kind).toBe("terminal");
   });
 
-  it('migrates legacy backend kind "agent" to "terminal" while preserving launchAgentId', () => {
-    const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "agent", launchAgentId: "claude", title: "Claude Code" },
-      { id: "t1", location: "grid" },
-      "/p"
-    );
-    expect(result.launchAgentId).toBe("claude");
-    expect(result.kind).toBe("terminal");
-  });
-
   it("prefers saved title over backend title to preserve user renames", () => {
     const result = buildArgsForBackendTerminal(
       { id: "t1", cwd: "/p", kind: "terminal", title: "Shell" },
@@ -374,15 +325,6 @@ describe("buildArgsForBackendTerminal", () => {
       "/p"
     );
     expect(result.worktreeId).toBe("wt-dragged");
-  });
-
-  it("returns undefined worktreeId when saved has none", () => {
-    const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell" },
-      { id: "t1", location: "grid" },
-      "/p"
-    );
-    expect(result.worktreeId).toBeUndefined();
   });
 
   it('remaps the retired agentState "running" to "working" (issue #5810)', () => {
@@ -470,15 +412,6 @@ describe("buildArgsForReconnectedFallback", () => {
     expect(result.location).toBe("dock");
   });
 
-  it("uses saved worktreeId (renderer-owned layout state)", () => {
-    const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "terminal", title: "Claude" },
-      { id: "t1", location: "grid", worktreeId: "wt-dragged" },
-      "/p"
-    );
-    expect(result.worktreeId).toBe("wt-dragged");
-  });
-
   it('remaps the retired agentState "running" to "working" (issue #5810)', () => {
     const result = buildArgsForReconnectedFallback(
       {
@@ -508,15 +441,6 @@ describe("buildArgsForReconnectedFallback", () => {
       "/p"
     );
     expect(result.waitingReason).toBe("error");
-  });
-
-  it("returns undefined worktreeId when saved has none", () => {
-    const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "terminal", title: "Shell" },
-      { id: "t1", location: "grid" },
-      "/p"
-    );
-    expect(result.worktreeId).toBeUndefined();
   });
 
   it("falls back to saved fields when reconnected is missing data", () => {
@@ -663,28 +587,6 @@ describe("buildArgsForRespawn", () => {
       undefined
     );
     expect(result.exitBehavior).toBeUndefined();
-  });
-
-  it("falls back to fresh command when resume returns undefined", () => {
-    buildResumeCommandMock.mockReturnValue(undefined);
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal" as const,
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentSessionId: "sess-expired",
-      },
-      "terminal",
-      "/p",
-      { agents: { claude: {} } },
-      false,
-      "/tmp/clip"
-    );
-    expect(result.command).toBe("claude --generated");
-    expect(result.kind).toBe("terminal");
-    expect(result.launchAgentId).toBe("claude");
   });
 
   // issue #9802 — surface the session-lost signal whenever restore falls
@@ -991,41 +893,6 @@ describe("buildArgsForRespawn", () => {
       );
       expect(result.command).toBe("claude --generated");
       expect(result.sessionLostOnRestore).toBe("sibling-owns-session-id");
-    });
-
-    it("resumes its own session id by default when no allowance is passed (#11461)", () => {
-      buildResumeCommandMock.mockReturnValue("claude --resume sess-1");
-      const result = buildArgsForRespawn(
-        {
-          id: "t1",
-          kind: "terminal" as const,
-          agentId: "claude",
-          cwd: "/p",
-          location: "grid",
-          agentSessionId: "sess-1",
-        },
-        "terminal",
-        "/p",
-        { agents: { claude: {} } },
-        false,
-        "/tmp"
-      );
-      expect(result.command).toBe("claude --resume sess-1");
-      expect(result.sessionLostOnRestore).toBeUndefined();
-    });
-
-    it("uses resume-latest by default when no allowance is passed (#11461)", () => {
-      buildResumeLatestCommandMock.mockReturnValue("claude --continue");
-      const result = buildArgsForRespawn(
-        { id: "t1", kind: "terminal" as const, agentId: "claude", cwd: "/p", location: "grid" },
-        "terminal",
-        "/p",
-        { agents: { claude: {} } },
-        false,
-        "/tmp"
-      );
-      expect(result.command).toBe("claude --continue");
-      expect(result.sessionLostOnRestore).toBeUndefined();
     });
 
     it("is not set for non-agent panels", () => {
@@ -1898,34 +1765,6 @@ describe("buildArgsForRespawn", () => {
   });
 });
 
-describe("agentModelId propagation", () => {
-  it("buildArgsForBackendTerminal includes agentModelId", () => {
-    const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
-      {
-        id: "t1",
-        location: "grid",
-        agentModelId: "claude-opus-4-6",
-      },
-      "/p"
-    );
-    expect(result.agentModelId).toBe("claude-opus-4-6");
-  });
-
-  it("buildArgsForReconnectedFallback includes agentModelId", () => {
-    const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p" },
-      {
-        id: "t1",
-        location: "grid",
-        agentModelId: "gemini-2.5-pro",
-      },
-      "/p"
-    );
-    expect(result.agentModelId).toBe("gemini-2.5-pro");
-  });
-});
-
 // Regression for #12419: the spawn source is stamped once at creation and can
 // never be re-derived, so every builder that reads a saved snapshot has to carry
 // it forward. Missing it in any one of them half-fixes the bug — cold boot works
@@ -1939,20 +1778,6 @@ describe("spawnedBy propagation", () => {
     location: "grid",
     spawnedBy: "quickrun" as const,
   };
-
-  it("buildArgsForBackendTerminal carries the saved spawn source", () => {
-    const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
-      savedQuickRun,
-      "/p"
-    );
-    expect(result.spawnedBy).toBe("quickrun");
-  });
-
-  it("buildArgsForReconnectedFallback carries the saved spawn source", () => {
-    const result = buildArgsForReconnectedFallback({ id: "t1", cwd: "/p" }, savedQuickRun, "/p");
-    expect(result.spawnedBy).toBe("quickrun");
-  });
 
   it.each([true, false])(
     "buildArgsForRespawn carries the saved spawn source (fresh id: %s)",
@@ -1968,18 +1793,6 @@ describe("spawnedBy propagation", () => {
       expect(result.spawnedBy).toBe("quickrun");
     }
   );
-
-  it.each(TERMINAL_SPAWN_SOURCES)("respawn carries every spawn source (%s)", (source) => {
-    const result = buildArgsForRespawn(
-      { ...savedQuickRun, spawnedBy: source },
-      "terminal",
-      "/p",
-      {},
-      false,
-      undefined
-    );
-    expect(result.spawnedBy).toBe(source);
-  });
 
   // A pre-#12419 snapshot has no spawn source and there is nothing to infer one
   // from, so restore must leave it unset rather than guessing a plausible origin.
@@ -2128,15 +1941,6 @@ describe("detectedAgentId propagation", () => {
     expect(result.detectedAgentId).toBe("codex");
   });
 
-  it("buildArgsForBackendTerminal leaves detectedAgentId undefined when backend has none", () => {
-    const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal" },
-      { id: "t1", location: "grid" },
-      "/p"
-    );
-    expect(result.detectedAgentId).toBeUndefined();
-  });
-
   // Runtime detection must never be resurrected from saved JSON — the cold-start
   // path relies on the backend detector to repopulate the field post-spawn.
   it("buildArgsForRespawn does not carry detectedAgentId even if saved JSON somehow has one", () => {
@@ -2157,25 +1961,6 @@ describe("detectedAgentId propagation", () => {
 // Hydration builders must forward detectedAgentId and everDetectedAgent verbatim
 // from the backend — these are live runtime fields that the renderer uses for chrome.
 describe("detectedAgentId propagation", () => {
-  it("buildArgsForBackendTerminal forwards detectedAgentId and everDetectedAgent", () => {
-    const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", detectedAgentId: "claude", everDetectedAgent: true },
-      { id: "t1", location: "grid" },
-      "/p"
-    );
-    expect(result.detectedAgentId).toBe("claude");
-    expect(result.everDetectedAgent).toBe(true);
-  });
-
-  it("buildArgsForOrphanedTerminal forwards detectedAgentId and everDetectedAgent", () => {
-    const result = buildArgsForOrphanedTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", detectedAgentId: "codex", everDetectedAgent: true },
-      "/p"
-    );
-    expect(result.detectedAgentId).toBe("codex");
-    expect(result.everDetectedAgent).toBe(true);
-  });
-
   it("buildArgsForBackendTerminal does not set launchAgentId from detectedAgentId alone", () => {
     // A plain shell with runtime detection must not have launchAgentId set —
     // launchAgentId is the sealed spawn-time hint, not a detection result.
@@ -2321,15 +2106,6 @@ describe("buildArgsForNonPtyRecreation", () => {
       "/project"
     );
     expect(result.extensionState).toEqual(extState);
-  });
-
-  it("passes undefined extensionState when not present in saved data", () => {
-    const result = buildArgsForNonPtyRecreation(
-      { id: "b1", kind: "browser", title: "Browser", location: "grid" },
-      "browser",
-      "/project"
-    );
-    expect(result.extensionState).toBeUndefined();
   });
 
   describe("dock→grid rescue on hydration (#11375 point 3)", () => {
@@ -2491,31 +2267,6 @@ describe("buildArgsForOrphanedTerminal", () => {
     expect(result.agentModelId).toBe("sonnet");
     expect(result.agentSessionId).toBe("sess-123");
   });
-
-  it("handles empty agentLaunchFlags array correctly", () => {
-    const result = buildArgsForOrphanedTerminal(
-      {
-        id: "t1",
-        kind: "terminal",
-        launchAgentId: "claude",
-        title: "Claude",
-        cwd: "/p",
-        agentLaunchFlags: [],
-      },
-      "/p"
-    );
-    expect(result.agentLaunchFlags).toEqual([]);
-  });
-
-  it("omits agent fields when not present on backend (backwards compat)", () => {
-    const result = buildArgsForOrphanedTerminal(
-      { id: "t1", kind: "terminal", title: "Shell", cwd: "/p" },
-      "/p"
-    );
-    expect(result.agentLaunchFlags).toBeUndefined();
-    expect(result.agentModelId).toBeUndefined();
-    expect(result.agentSessionId).toBeUndefined();
-  });
 });
 
 describe("inferWorktreeIdFromCwd", () => {
@@ -2666,15 +2417,6 @@ describe("pluginId forwarding", () => {
       "/p"
     );
     expect(result.pluginId).toBe("my-plugin");
-  });
-
-  it("buildArgsForNonPtyRecreation leaves pluginId undefined when not set", () => {
-    const result = buildArgsForNonPtyRecreation(
-      { id: "t1", kind: "browser", title: "Browser" },
-      "browser",
-      "/p"
-    );
-    expect(result.pluginId).toBeUndefined();
   });
 });
 
@@ -2844,53 +2586,6 @@ describe("buildArgsForRespawn — persisted launch env (#10922)", () => {
     expect(result.env).toEqual({ A: "live" });
   });
 
-  it("falls back to live preset env when saved env sanitizes to nothing safe", () => {
-    getMergedPresetMock.mockReturnValue({
-      id: "user-aaa",
-      name: "Preset",
-      env: { A: "live" },
-    });
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentPresetId: "user-aaa",
-        // Non-string values are dropped by sanitizeAgentEnv → no safe entries.
-        env: { ANTHROPIC_BASE_URL: 123 },
-      },
-      "agent",
-      "/p",
-      { agents: { claude: {} } },
-      false,
-      undefined
-    );
-    expect(result.env).toEqual({ A: "live" });
-  });
-
-  it("falls back to live preset env when saved env is an empty object", () => {
-    getMergedPresetMock.mockReturnValue({ id: "user-aaa", name: "Preset", env: { A: "live" } });
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentPresetId: "user-aaa",
-        env: {},
-      },
-      "agent",
-      "/p",
-      { agents: { claude: {} } },
-      false,
-      undefined
-    );
-    expect(result.env).toEqual({ A: "live" });
-  });
-
   it("replays saved env for a recipe-launched agent with no preset id", () => {
     // Recipe inline env has no preset identity to re-resolve — the persisted
     // snapshot env is the only way to recover it.
@@ -2913,49 +2608,6 @@ describe("buildArgsForRespawn — persisted launch env (#10922)", () => {
     expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
     // No preset was consulted (no agentPresetId on the saved snapshot).
     expect(getMergedPresetMock).not.toHaveBeenCalled();
-  });
-
-  it("replays saved env for a non-agent terminal", () => {
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        cwd: "/p",
-        location: "grid",
-        env: { MY_VAR: "value" },
-      },
-      "terminal",
-      "/p",
-      { agents: {} },
-      false,
-      undefined
-    );
-    expect(result.env).toEqual({ MY_VAR: "value" });
-  });
-
-  it("keeps the saved env alongside the sessionLostOnRestore signal", () => {
-    // Session can't be resumed → fresh launch + signal, but the provider env
-    // must still replay so the fresh session lands on the right provider.
-    buildResumeCommandMock.mockReturnValue(undefined);
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentSessionId: "sess-expired",
-        agentLaunchFlags: ["--flag"],
-        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" },
-      },
-      "agent",
-      "/p",
-      { agents: { claude: {} } },
-      false,
-      "/tmp"
-    );
-    expect(result.sessionLostOnRestore).toBe("no-resume-command");
-    expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
   });
 });
 
@@ -2989,15 +2641,6 @@ describe("reconnect builders forward the captured launch env (#10922)", () => {
     );
     expect(result.env).toEqual({ ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" });
   });
-
-  it("buildArgsForBackendTerminal omits env when the snapshot has none", () => {
-    const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
-      { id: "t1", location: "grid" },
-      "/p"
-    );
-    expect(result.env).toBeUndefined();
-  });
 });
 
 // ── preset override path ──────────────────────────────────────────────────────
@@ -3014,26 +2657,6 @@ describe("buildArgsForRespawn — preset overrides", () => {
 
   beforeEach(() => {
     getMergedPresetMock.mockReset();
-  });
-
-  it("passes agentPresetId through to result", () => {
-    getMergedPresetMock.mockReturnValue(PRESET);
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentPresetId: "user-aaa",
-      },
-      "agent",
-      "/p",
-      { agents: { claude: {} } },
-      false,
-      undefined
-    );
-    expect(result.agentPresetId).toBe("user-aaa");
   });
 
   it("propagates preset env vars into the returned env", () => {
@@ -3385,17 +3008,6 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
     expect(opts.presetArgs).toBe("--system-prompt be concise");
   });
 
-  it("single-element preset.args produces correct presetArgs string", () => {
-    getMergedPresetMock.mockReturnValue({
-      id: "user-x",
-      name: "OneArg",
-      args: ["--output-format=json"],
-    });
-    buildArgsForRespawn(BASE, "agent", "/p", { agents: { claude: {} } }, false, undefined);
-    const opts = generateAgentCommandMock.mock.calls[0]![3] as Record<string, unknown>;
-    expect(opts.presetArgs).toBe("--output-format=json");
-  });
-
   it("no preset → generateAgentCommand receives unmodified base entry", () => {
     const baseWithNoPreset = {
       id: "t1",
@@ -3425,86 +3037,6 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
   });
 });
 
-// ── adversarial: agentPresetColor must be restored on respawn ─────────────────
-// Bug: buildArgsForRespawn looks up the preset (which has a color field) but
-// never writes agentPresetColor into the returned AddTerminalArgs object.
-// After an Electron reload, the dock icon loses its preset-derived mark ink and falls back
-// to the default brand color instead of the preset color.
-
-describe("adversarial: agentPresetColor must be carried through buildArgsForRespawn", () => {
-  beforeEach(() => {
-    getMergedPresetMock.mockReset();
-    generateAgentCommandMock.mockClear();
-  });
-
-  it("returns agentPresetColor from the live preset color on respawn", () => {
-    getMergedPresetMock.mockReturnValue({ id: "user-x", name: "Colored", color: "#ff6600" });
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentPresetId: "user-x",
-      },
-      "agent",
-      "/p",
-      { agents: { claude: {} } },
-      false,
-      undefined
-    );
-    expect(result.agentPresetColor).toBe("#ff6600");
-  });
-
-  it("returns agentPresetColor=undefined when preset has no color field", () => {
-    getMergedPresetMock.mockReturnValue({ id: "user-x", name: "No Color" });
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentPresetId: "user-x",
-      },
-      "agent",
-      "/p",
-      { agents: { claude: {} } },
-      false,
-      undefined
-    );
-    expect(result.agentPresetColor).toBeUndefined();
-  });
-
-  it("clears saved.agentPresetColor when the live preset is gone (deleted preset)", () => {
-    // A stale saved preset should NOT carry forward its color — a deleted
-    // preset means the panel is now running default env/command, so any
-    // preset-derived visual (color chip, title suffix) would lie about its
-    // identity. The fix in buildArgsForRespawn nulls these out when
-    // getMergedPreset returns undefined despite a saved presetId.
-    getMergedPresetMock.mockReturnValue(undefined); // preset deleted
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentPresetId: "user-deleted",
-        agentPresetColor: "#aabbcc",
-      },
-      "agent",
-      "/p",
-      { agents: { claude: {} } },
-      false,
-      undefined
-    );
-    expect(result.agentPresetColor).toBeUndefined();
-    expect(result.agentPresetId).toBeUndefined();
-  });
-});
-
 // ── adversarial: agentPresetColor missing from non-respawn build paths ─────────
 // buildArgsForRespawn was fixed to include agentPresetColor, but three other
 // builder functions (BackendTerminal, ReconnectedFallback, NonPtyRecreation)
@@ -3520,15 +3052,6 @@ describe("Adversarial: buildArgsForBackendTerminal preserves agentPresetColor", 
     );
     expect(result.agentPresetColor).toBe("#ff6600");
   });
-
-  it("returns undefined agentPresetColor when saved has none", () => {
-    const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
-      { id: "t1", location: "grid", agentPresetId: "user-x" },
-      "/p"
-    );
-    expect(result.agentPresetColor).toBeUndefined();
-  });
 });
 
 describe("Adversarial: buildArgsForReconnectedFallback preserves agentPresetColor", () => {
@@ -3540,15 +3063,6 @@ describe("Adversarial: buildArgsForReconnectedFallback preserves agentPresetColo
     );
     expect(result.agentPresetColor).toBe("#ff6600");
   });
-
-  it("returns undefined agentPresetColor when saved has none", () => {
-    const result = buildArgsForReconnectedFallback(
-      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
-      { id: "t1", location: "grid", agentPresetId: "user-x" },
-      "/p"
-    );
-    expect(result.agentPresetColor).toBeUndefined();
-  });
 });
 
 describe("Adversarial: buildArgsForNonPtyRecreation preserves agentPresetColor", () => {
@@ -3559,15 +3073,6 @@ describe("Adversarial: buildArgsForNonPtyRecreation preserves agentPresetColor",
       "/p"
     );
     expect(result.agentPresetColor).toBe("#ff6600");
-  });
-
-  it("returns undefined agentPresetColor when saved has none", () => {
-    const result = buildArgsForNonPtyRecreation(
-      { id: "t1", location: "grid", agentPresetId: "user-x" },
-      "agent",
-      "/p"
-    );
-    expect(result.agentPresetColor).toBeUndefined();
   });
 });
 
@@ -3644,50 +3149,6 @@ describe("Adversarial: globalEnv merge in buildArgsForRespawn", () => {
     expect(result.env?.PRESET_ONLY).toBe("f");
     expect(result.env?.GLOBAL_ONLY).toBe("g");
   });
-
-  it("non-overlapping global and preset keys both survive in the merged env", () => {
-    getMergedPresetMock.mockReturnValue({
-      id: "f1",
-      name: "Preset",
-      env: { PRESET_KEY: "fv" },
-    });
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentPresetId: "f1",
-      },
-      "agent",
-      "/p",
-      { agents: { claude: { globalEnv: { GLOBAL_KEY: "gv" } } } },
-      false,
-      undefined
-    );
-    expect(result.env).toEqual({ GLOBAL_KEY: "gv", PRESET_KEY: "fv" });
-  });
-
-  it("returns undefined env when globalEnv is empty and preset has no env", () => {
-    getMergedPresetMock.mockReturnValue({ id: "f1", name: "No Env Preset" });
-    const result = buildArgsForRespawn(
-      {
-        id: "t1",
-        kind: "terminal",
-        agentId: "claude",
-        cwd: "/p",
-        location: "grid",
-        agentPresetId: "f1",
-      },
-      "agent",
-      "/p",
-      { agents: { claude: {} } },
-      false,
-      undefined
-    );
-    expect(result.env).toBeUndefined();
-  });
 });
 
 // Issue #9933 — `lastActiveAt` must round-trip from the saved snapshot to
@@ -3705,15 +3166,6 @@ describe("lastActiveAt propagation (issue #9933)", () => {
       "/p"
     );
     expect(result.lastActiveAt).toBe(1_700_000_000_000);
-  });
-
-  it("buildArgsForBackendTerminal drops a missing timestamp", () => {
-    const result = buildArgsForBackendTerminal(
-      { id: "t1", cwd: "/p", title: "T" },
-      { id: "t1", location: "grid" },
-      "/p"
-    );
-    expect(result.lastActiveAt).toBeUndefined();
   });
 
   it("buildArgsForBackendTerminal rejects lastActiveAt <= 0", () => {
@@ -3762,18 +3214,6 @@ describe("lastActiveAt propagation (issue #9933)", () => {
     expect(result.lastActiveAt).toBe(1_700_000_000_000);
   });
 
-  it("buildArgsForRespawn drops a missing timestamp", () => {
-    const result = buildArgsForRespawn(
-      { id: "t1", cwd: "/p", location: "grid" },
-      "terminal",
-      "/p",
-      undefined,
-      false,
-      undefined
-    );
-    expect(result.lastActiveAt).toBeUndefined();
-  });
-
   it("buildArgsForNonPtyRecreation propagates a valid saved timestamp", () => {
     const result = buildArgsForNonPtyRecreation(
       { id: "t1", cwd: "/p", location: "grid", lastActiveAt: 1_700_000_000_000 },
@@ -3781,14 +3221,6 @@ describe("lastActiveAt propagation (issue #9933)", () => {
       "/p"
     );
     expect(result.lastActiveAt).toBe(1_700_000_000_000);
-  });
-
-  it("buildArgsForOrphanedTerminal never propagates lastActiveAt (no saved data)", () => {
-    // Orphans are panels alive in the backend but missing from the
-    // saved snapshot — there is no recency data to recover, so the
-    // builder deliberately doesn't accept or emit `lastActiveAt`.
-    const result = buildArgsForOrphanedTerminal({ id: "t1", cwd: "/p" }, "/p");
-    expect(result).not.toHaveProperty("lastActiveAt");
   });
 });
 

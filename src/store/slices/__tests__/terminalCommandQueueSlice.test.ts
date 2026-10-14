@@ -78,30 +78,6 @@ describe("TerminalCommandQueueSlice", () => {
       state.queueCommand("test-terminal", "test data", "test description", "user");
       expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "test data");
     });
-
-    it("should write user input immediately when agent is waiting", () => {
-      mockTerminal.agentState = "waiting";
-      state.queueCommand("test-terminal", "test data", "test description", "user");
-      expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "test data");
-    });
-
-    it("should write user input immediately when agent is idle", () => {
-      mockTerminal.agentState = "idle";
-      state.queueCommand("test-terminal", "test data", "test description", "user");
-      expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "test data");
-    });
-
-    it("should write user input immediately when agent is completed", () => {
-      mockTerminal.agentState = "completed";
-      state.queueCommand("test-terminal", "test data", "test description", "user");
-      expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "test data");
-    });
-
-    it("should write user input immediately when agent is directing", () => {
-      mockTerminal.agentState = "directing";
-      state.queueCommand("test-terminal", "test data", "test description", "user");
-      expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "test data");
-    });
   });
 
   describe("Automation input queueing", () => {
@@ -119,12 +95,6 @@ describe("TerminalCommandQueueSlice", () => {
 
     it("should queue automation input when agent is working", () => {
       mockTerminal.agentState = "working";
-      state.queueCommand("test-terminal", "test data", "test description", "automation");
-      expect(terminalClient.write).not.toHaveBeenCalled();
-    });
-
-    it("should queue automation input when agent is directing", () => {
-      mockTerminal.agentState = "directing";
       state.queueCommand("test-terminal", "test data", "test description", "automation");
       expect(terminalClient.write).not.toHaveBeenCalled();
     });

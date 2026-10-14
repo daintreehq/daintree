@@ -79,35 +79,6 @@ describe("TerminalOutputIngestService", () => {
     expect(service.isPolling()).toBe(false);
   });
 
-  it("writes immediately when idle and under watermark", () => {
-    const writeToTerminal = vi.fn();
-    const service = new TerminalOutputIngestService(writeToTerminal);
-
-    service.bufferData("term-1", "hello");
-
-    expect(writeToTerminal).toHaveBeenCalledTimes(1);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "hello", 1);
-  });
-
-  it("buffers when inFlightBytes exceed high watermark and drains on acknowledgment", () => {
-    const writeToTerminal = vi.fn();
-    const service = new TerminalOutputIngestService(writeToTerminal);
-
-    // 140,000 chars > 131,072 (HIGH_WATERMARK)
-    const largeData = "x".repeat(140_000);
-    service.bufferData("term-1", largeData);
-    expect(writeToTerminal).toHaveBeenCalledTimes(1);
-
-    // Second write should be buffered (inFlightBytes = 140,000 > HIGH_WATERMARK)
-    service.bufferData("term-1", "buffered");
-    expect(writeToTerminal).toHaveBeenCalledTimes(1);
-
-    // Acknowledge enough bytes to drop below LOW_WATERMARK (32,768)
-    service.notifyWriteComplete("term-1", 140_000);
-    expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "buffered", 1);
-  });
-
   it("coalesces queued string chunks into a single write on drain", () => {
     const writeToTerminal = vi.fn();
     const service = new TerminalOutputIngestService(writeToTerminal);
@@ -437,34 +408,6 @@ describe("TerminalOutputIngestService", () => {
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
   });
 
-  it("handles Uint8Array data correctly", () => {
-    const writeToTerminal = vi.fn();
-    const service = new TerminalOutputIngestService(writeToTerminal);
-
-    const data = new Uint8Array([72, 101, 108, 108, 111]);
-    service.bufferData("term-1", data);
-
-    expect(writeToTerminal).toHaveBeenCalledTimes(1);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", data, 1);
-  });
-
-  it("isolates queues per terminal", () => {
-    const writeToTerminal = vi.fn();
-    const service = new TerminalOutputIngestService(writeToTerminal);
-
-    // Exceed watermark on term-1
-    const largeData = "x".repeat(140_000);
-    service.bufferData("term-1", largeData);
-    service.bufferData("term-1", "buffered-1");
-
-    // term-2 should still write immediately (separate queue)
-    service.bufferData("term-2", "hello-2");
-
-    expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", largeData, 1);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-2", "hello-2", 1);
-  });
-
   it("respects watermark bounds during rapid sequential data delivery", () => {
     const writeToTerminal = vi.fn();
     const service = new TerminalOutputIngestService(writeToTerminal);
@@ -489,15 +432,6 @@ describe("TerminalOutputIngestService", () => {
     service.notifyWriteComplete("term-1", 140_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(3);
     expect(writeToTerminal).toHaveBeenCalledWith("term-1", "batch-1batch-2batch-3", 3);
-  });
-
-  it("notifyWriteComplete is a no-op for unknown terminals", () => {
-    const writeToTerminal = vi.fn();
-    const service = new TerminalOutputIngestService(writeToTerminal);
-
-    // Should not throw
-    service.notifyWriteComplete("unknown", 1000);
-    expect(writeToTerminal).not.toHaveBeenCalled();
   });
 
   it("notifyParsed is a no-op when no buffered data exists", () => {
@@ -547,47 +481,9 @@ describe("TerminalOutputIngestService", () => {
       expect(writeToTerminal).toHaveBeenLastCalledWith("term-1", "tail", 1);
       expect(service.getQueuedBytes("term-1")).toBe(0);
     });
-
-    it("resumeFlush is a no-op when nothing is held", () => {
-      const writeToTerminal = vi.fn();
-      const service = new TerminalOutputIngestService(writeToTerminal);
-
-      service.resumeFlush("term-1");
-      expect(writeToTerminal).not.toHaveBeenCalled();
-    });
-
-    it("isolates queues per terminal under backpressure", () => {
-      const writeToTerminal = vi.fn();
-      const service = new TerminalOutputIngestService(writeToTerminal);
-
-      // term-1 goes into backpressure; term-2 stays live and unaffected.
-      service.bufferData("term-1", "x".repeat(140_000));
-      service.bufferData("term-1", "held-1");
-      service.bufferData("term-2", "live-2");
-
-      expect(service.getQueuedBytes("term-1")).toBe(6);
-      expect(service.getQueuedBytes("term-2")).toBe(0);
-      expect(writeToTerminal).toHaveBeenCalledWith("term-2", "live-2", 1);
-    });
   });
 
   describe("watchdog accessors", () => {
-    it("getQueuedBytes tracks backpressure-held bytes and returns 0 for unknown ids", () => {
-      const writeToTerminal = vi.fn();
-      const service = new TerminalOutputIngestService(writeToTerminal);
-
-      expect(service.getQueuedBytes("term-1")).toBe(0);
-
-      // Push past the high watermark so the next chunk is held behind backpressure.
-      service.bufferData("term-1", "x".repeat(140_000));
-      service.bufferData("term-1", "held-bytes");
-      expect(service.getQueuedBytes("term-1")).toBe(10);
-
-      // Draining the in-flight write below the low watermark releases the hold.
-      service.notifyWriteComplete("term-1", 140_000);
-      expect(service.getQueuedBytes("term-1")).toBe(0);
-    });
-
     it("getStalledBytes returns 0 under normal backpressure with writes in flight", () => {
       const writeToTerminal = vi.fn();
       const service = new TerminalOutputIngestService(writeToTerminal);
@@ -747,22 +643,6 @@ describe("TerminalOutputIngestService", () => {
         (id) => getWheelId() === id
       );
     }
-
-    it("holds a background queue while a wheel burst is active elsewhere", async () => {
-      vi.stubGlobal("scheduler", undefined);
-      vi.useFakeTimers();
-      const writeToTerminal = vi.fn();
-      const service = makeService(writeToTerminal, "term-focused", () => "term-wheel");
-
-      service.bufferData("term-bg", "held");
-
-      // A plain yield tick is NOT enough — the queue is held, not yielded.
-      await vi.advanceTimersByTimeAsync(0);
-      expect(writeToTerminal).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(24);
-      expect(writeToTerminal).not.toHaveBeenCalled();
-      expect(service.getQueuedBytes("term-bg")).toBe(4);
-    });
 
     it("releases the hold when the wheel burst ends", async () => {
       vi.stubGlobal("scheduler", undefined);

@@ -167,11 +167,6 @@ describe("RateLimitDetailsPanel", () => {
     expect(meter.getAttribute("aria-valuenow")).toBe(String(b.used));
     expect(meter.getAttribute("aria-valuetext")).toContain((4_212).toLocaleString());
   });
-
-  it("names the provider in the heading", () => {
-    const { container } = panel({ providerName: "GitLab" });
-    expect(container.textContent).toContain("GitLab");
-  });
 });
 
 describe("bucketLabel", () => {

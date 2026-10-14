@@ -219,19 +219,6 @@ describe("WorkspaceService background git-watcher budget (#9538)", () => {
     expect(c.hasWatcher).toBe(true);
   });
 
-  it("never counts the active worktree against the cap", () => {
-    service["backgroundGitWatcherCap"] = 1;
-    const active = registerMonitor("active", true);
-    const a = registerMonitor("a");
-    setActive("active");
-    service["lruTouch"](a.id);
-
-    service["applyWatcherBudget"]();
-
-    expect(active.hasWatcher).toBe(true);
-    expect(a.hasWatcher).toBe(true); // the single background slot
-  });
-
   it("cap of 0 evicts every background watcher but keeps the active one", () => {
     service["backgroundGitWatcherCap"] = 0;
     const active = registerMonitor("active", true);

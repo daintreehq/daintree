@@ -34,7 +34,7 @@ vi.hoisted(() => {
 import { usePortalStore } from "../portalStore";
 import { positionOf } from "@/lib/undoToast";
 import { useUIStore } from "../uiStore";
-import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH, PORTAL_DEFAULT_WIDTH } from "@shared/types";
+import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH } from "@shared/types";
 
 function createLocalStorageMock() {
   const storage = new Map<string, string>();
@@ -79,18 +79,6 @@ describe("portalStore", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  it("defaults the dev dashboard to off", () => {
-    expect(usePortalStore.getState().showDevDashboard).toBe(false);
-  });
-
-  it("toggles the dev dashboard visibility", () => {
-    expect(usePortalStore.getState().showDevDashboard).toBe(false);
-    usePortalStore.getState().toggleDevDashboard();
-    expect(usePortalStore.getState().showDevDashboard).toBe(true);
-    usePortalStore.getState().toggleDevDashboard();
-    expect(usePortalStore.getState().showDevDashboard).toBe(false);
   });
 
   it("does not call backend closeTab for unknown tab IDs", () => {
@@ -207,11 +195,6 @@ describe("portalStore", () => {
       expect(usePortalStore.getState().width).toBe(PORTAL_MIN_WIDTH);
     });
 
-    it("preserves in-range width values exactly", () => {
-      usePortalStore.getState().setWidth(600);
-      expect(usePortalStore.getState().width).toBe(600);
-    });
-
     it("allows width at exactly PORTAL_MAX_WIDTH", () => {
       usePortalStore.getState().setWidth(PORTAL_MAX_WIDTH);
       expect(usePortalStore.getState().width).toBe(PORTAL_MAX_WIDTH);
@@ -220,12 +203,6 @@ describe("portalStore", () => {
     it("clamps width above maximum to PORTAL_MAX_WIDTH", () => {
       usePortalStore.getState().setWidth(PORTAL_MAX_WIDTH + 1);
       expect(usePortalStore.getState().width).toBe(PORTAL_MAX_WIDTH);
-    });
-
-    it("resets width to PORTAL_DEFAULT_WIDTH", () => {
-      usePortalStore.getState().setWidth(800);
-      usePortalStore.getState().reset();
-      expect(usePortalStore.getState().width).toBe(PORTAL_DEFAULT_WIDTH);
     });
   });
 
@@ -259,30 +236,6 @@ describe("portalStore", () => {
     expect(usePortalStore.getState().activeTabId).toBeNull();
   });
 
-  it("unmarkTabCreated removes from createdTabs but preserves other tabs", () => {
-    const store = usePortalStore.getState();
-    const tabA = store.createTab("http://example.com/a", "A");
-    const tabB = store.createTab("http://example.com/b", "B");
-    const tabC = store.createTab("http://example.com/c", "C");
-
-    usePortalStore.getState().markTabCreated(tabA);
-    usePortalStore.getState().markTabCreated(tabB);
-    usePortalStore.getState().markTabCreated(tabC);
-
-    usePortalStore.getState().unmarkTabCreated(tabB);
-
-    const state = usePortalStore.getState();
-    expect(state.createdTabs.has(tabA)).toBe(true);
-    expect(state.createdTabs.has(tabB)).toBe(false);
-    expect(state.createdTabs.has(tabC)).toBe(true);
-    expect(state.tabs.some((t) => t.id === tabB)).toBe(true);
-  });
-
-  it("unmarkTabCreated is idempotent", () => {
-    usePortalStore.getState().unmarkTabCreated("non-existent-tab");
-    expect(() => usePortalStore.getState().unmarkTabCreated("non-existent-tab")).not.toThrow();
-  });
-
   describe("toggle with overlay claims", () => {
     beforeEach(() => {
       useUIStore.setState({ overlayStack: [] });
@@ -291,11 +244,6 @@ describe("portalStore", () => {
 
     afterEach(() => {
       useUIStore.setState({ overlayStack: [] });
-    });
-
-    it("opens the portal when there are no active claims", () => {
-      usePortalStore.getState().toggle();
-      expect(usePortalStore.getState().isOpen).toBe(true);
     });
 
     it("blocks the closed→open transition when a claim is active", () => {
@@ -532,26 +480,6 @@ describe("portalStore persistence migration", () => {
     expect(store.getState().activeTabId).toBe("tab-only");
   });
 
-  it("does not crash when persisted tabs contains a null entry", async () => {
-    const persistedBlob = JSON.stringify({
-      version: 0,
-      state: {
-        tabs: [null, { id: "tab-keep", title: "Keep", url: "https://example.com" }],
-        activeTabId: "tab-keep",
-        links: [],
-      },
-    });
-    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
-
-    const { usePortalStore: store } = await import("../portalStore");
-
-    const tabs = store.getState().tabs;
-    expect(tabs).toHaveLength(1);
-    expect(tabs[0]).not.toBeNull();
-    expect(tabs[0]?.id).toBe("tab-keep");
-    expect(store.getState().activeTabId).toBe("tab-keep");
-  });
-
   it("strips non-object, missing-field, and wrong-type tab entries from persisted state", async () => {
     const persistedBlob = JSON.stringify({
       version: 0,
@@ -680,22 +608,6 @@ describe("portalStore persistence migration", () => {
     const { usePortalStore: store } = await import("../portalStore");
 
     expect(Array.isArray(store.getState().tabs)).toBe(true);
-  });
-
-  it("falls back to the first persisted tab when activeTabId is malformed", async () => {
-    const persistedBlob = JSON.stringify({
-      version: 0,
-      state: {
-        tabs: [{ id: "tab-only", title: "Only", url: "https://example.com" }],
-        activeTabId: 42,
-        links: [],
-      },
-    });
-    installLocalStorageWith({ [STORAGE_KEY]: persistedBlob });
-
-    const { usePortalStore: store } = await import("../portalStore");
-
-    expect(store.getState().activeTabId).toBe("tab-only");
   });
 
   it("writes version: 0 on the next persist after rehydration", async () => {

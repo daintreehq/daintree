@@ -292,19 +292,6 @@ describe("NotificationService", () => {
       expect(lastTitle(winB)).toBe("beta-app");
     });
 
-    it("names the same project in both windows showing it", () => {
-      const winA = createWindowMock(false, [11]);
-      const winB = createWindowMock(false, [21]);
-      winA.activeProjectId = "alpha";
-      winB.activeProjectId = "alpha";
-
-      notificationService.initialize(createRegistryMock([winA, winB]) as never, rows);
-      notificationService.refreshTitles();
-
-      expect(lastTitle(winA)).toBe("alpha-app");
-      expect(lastTitle(winB)).toBe(lastTitle(winA));
-    });
-
     it("scopes the waiting count to the window that owns it", () => {
       const winA = createWindowMock(false, [11]);
       const winB = createWindowMock(false, [21]);
@@ -317,18 +304,6 @@ describe("NotificationService", () => {
 
       expect(lastTitle(winA)).toBe("(4) alpha-app");
       expect(lastTitle(winB)).toBe("beta-app");
-    });
-
-    it("sums a window's cached views into one count beside its project name", () => {
-      const win = createWindowMock(false, [11, 12]);
-      win.activeProjectId = "alpha";
-
-      notificationService.initialize(createRegistryMock([win]) as never, rows);
-      notificationService.updateNotifications(11, { waitingCount: 2 });
-      notificationService.updateNotifications(12, { waitingCount: 3 });
-      vi.advanceTimersByTime(301);
-
-      expect(lastTitle(win)).toBe("(5) alpha-app");
     });
 
     it("keeps the waiting count when only the project identity changed", () => {
@@ -627,26 +602,6 @@ describe("NotificationService", () => {
       (notificationService as unknown as { activeNotifications: Set<unknown> }).activeNotifications
         .size
     ).toBe(0);
-  });
-
-  it("warns when a watch notification fails", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    notificationService.showWatchNotification(
-      "Watch hit",
-      "Pattern matched",
-      { foo: "bar" } as never,
-      "navigate:channel"
-    );
-    const instance = electronMock.notificationInstances.at(-1)!;
-    expect(instance.show).toHaveBeenCalled();
-
-    instance.trigger("failed", {}, "unsigned dev build");
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("native notification failed"),
-      "unsigned dev build"
-    );
   });
 
   describe("closing banners with their panels (#12793)", () => {

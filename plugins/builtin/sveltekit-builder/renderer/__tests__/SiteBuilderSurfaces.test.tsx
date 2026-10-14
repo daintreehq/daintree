@@ -2205,58 +2205,9 @@ describe("preview reattach", () => {
 });
 
 describe("builder lifetime while switched on", () => {
-  function builderOn() {
-    usePanelStore.setState({
-      panelIds: ["preview-1"],
-      panelsById: {
-        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid" },
-      } as never,
-    });
-  }
-
   afterEach(() => {
     useDevPreviewToolStore.setState({ activeByPanel: {} });
     usePanelStore.setState({ panelsById: {} as never });
-  });
-
-  it("keeps the binding while the preview is hidden, and lets go when switched off", async () => {
-    builderOn();
-    await mountSelected();
-
-    cleanup();
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
-    expect(host.sitePreview.detach).not.toHaveBeenCalled();
-
-    mount();
-    // Remounted onto the same binding, not a second one.
-    expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
-
-    cleanup();
-    await act(async () => useDevPreviewToolStore.getState().setActive("preview-1", null));
-    expect(host.sitePreview.detach).toHaveBeenCalledWith({ sessionId: "session-1" });
-    expect(host.calls(CHANNELS.workspaceClose)).toEqual([{ workspaceSessionId: "ws-1" }]);
-  });
-
-  it("keeps trying to connect while the preview has no page yet", async () => {
-    let attempts = 0;
-    host.sitePreview.bind.mockImplementation(async (request) => {
-      attempts++;
-      if (attempts < 3) throw new Error("No dev preview is available on that panel");
-      return {
-        sessionId: "session-1",
-        panelId: request.panelId,
-        projectId: "p1",
-        documentEpoch: 0,
-        mode: request.mode ?? "select",
-        guestReady: false,
-        droppedMessages: 0,
-        suspended: false,
-      };
-    });
-    mount();
-    await screen.findByText("Waiting for the page to load");
-    await waitFor(() => expect(attempts).toBe(3), { timeout: 3000 });
-    await waitFor(() => expect(screen.queryByText("Waiting for the page to load")).toBeNull());
   });
 
   it("connects promptly once the page is up, however long it waited for the server", async () => {

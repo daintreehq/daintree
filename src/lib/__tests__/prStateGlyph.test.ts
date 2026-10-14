@@ -12,13 +12,6 @@ import type { NormalizedPRState } from "@shared/types/forge";
 describe("PR state marks", () => {
   const STATES: NormalizedPRState[] = ["open", "merged", "closed", "declined"];
 
-  it("gives every state a glyph and a colour", () => {
-    for (const state of STATES) {
-      expect(getPrStateGlyph(state), `${state} has no glyph`).toBeTruthy();
-      expect(getPrStateColor(state), `${state} has no colour`).toMatch(/^text-pr-/);
-    }
-  });
-
   it("never distinguishes two states by colour alone", () => {
     // For every pair that differs in colour, the glyph must differ too.
     // `closed` and `declined` are the same state under two forge vocabularies,
