@@ -57,9 +57,10 @@ beforeEach(() => {
 describe("PortsView", () => {
   it("lists active forwards and offers detected ports that aren't forwarded yet", async () => {
     render(<PortsView hostId="studio-01" />);
-    expect(await screen.findByText("localhost:5173")).toBeTruthy();
-    expect(screen.getByText(/port 5173 on Studio · Dev preview/)).toBeTruthy();
-    const detected = await screen.findByRole("list", { name: "Detected ports" });
+    const row = (await screen.findByText("localhost:5173")).closest("tr")!;
+    expect(row.textContent).toContain("Studio");
+    expect(row.textContent).toContain("Dev preview");
+    const detected = await screen.findByRole("table", { name: "Ports listening on Studio" });
     expect(detected.textContent).toContain("9229");
     expect(detected.textContent).not.toContain("5173");
   });
@@ -76,7 +77,7 @@ describe("PortsView", () => {
       origin: "manual",
     });
 
-    const detected = await screen.findByRole("list", { name: "Detected ports" });
+    const detected = await screen.findByRole("table", { name: "Ports listening on Studio" });
     fireEvent.click(detected.querySelector("button")!);
     expect(api.forward).toHaveBeenCalledWith({
       hostId: "studio-01",
@@ -84,7 +85,9 @@ describe("PortsView", () => {
       origin: "detected",
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Stop forwarding port 5173" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Stop forwarding localhost:5173 from Studio" })
+    );
     expect(api.stop).toHaveBeenCalledWith({ forwardId: "f1" });
   });
 
@@ -100,9 +103,11 @@ describe("PortsView", () => {
       }),
     ]);
     render(<PortsView hostId="studio-01" />);
-    const row = (await screen.findByText("localhost:5173")).closest("li")!;
-    expect(row.textContent!.match(/Dev preview/g)).toHaveLength(1);
-    expect(screen.getByText(/web · port 3000 on Studio · Forwarded by you/)).toBeTruthy();
+    const row = (await screen.findByText("localhost:5173")).closest("tr")!;
+    const originCell = (tr: Element) => tr.querySelectorAll("td")[4]!;
+    expect(originCell(row).textContent).toBe("Dev preview");
+    const labelled = screen.getByText("localhost:3001").closest("tr")!;
+    expect(originCell(labelled).textContent).toBe("web · Forwarded by you");
   });
 
   it("rejects a port out of range without asking main", async () => {

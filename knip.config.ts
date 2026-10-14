@@ -80,6 +80,7 @@ const baseConfig: KnipConfig = {
     "src/components/Fleet/__preview__/preview.tsx",
     "src/components/Canopy/__preview__/preview.tsx",
     "src/components/Hosts/__preview__/hostPresencePreview.tsx",
+    "src/components/Hosts/__preview__/portsPreview.tsx",
     "src/components/Commands/__preview__/commandPicker.tsx",
     "src/components/Commands/__preview__/commandBuilder.tsx",
     "src/components/DevPreview/__preview__/preview.tsx",
