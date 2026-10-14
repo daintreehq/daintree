@@ -19,7 +19,7 @@ import {
 import { resolveSessionPresentation } from "@/lib/handBackPresentation";
 import { useRunHandBackState } from "@/hooks/useRunHandBackState";
 import { useRunParkState } from "@/hooks/useRunParkState";
-import { CirclePause } from "@/components/icons";
+import { ParkedCircle } from "@/components/icons";
 import { useRunCanopyPlacement } from "@/hooks/useRunCanopyPlacement";
 import { useWallClock } from "@/hooks/useWallClock";
 import { canopyEvidenceParts } from "@/lib/canopyRefinementPresentation";
@@ -146,6 +146,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   const commandId = `${idBase}-command`;
   const evidenceId = `${idBase}-evidence`;
   const parkId = `${idBase}-park`;
+  const stateId = `${idBase}-state`;
   // The metadata tooltips sit inside the title tooltip's trigger, so pointing
   // at one would otherwise open both.
   const [isOverMeta, setIsOverMeta] = useState(false);
@@ -212,6 +213,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
               // read twice and change the toggle's name whenever they change.
               aria-labelledby={titleId}
               aria-describedby={[
+                StateIcon && glyphState ? stateId : null,
                 showCommand ? commandId : null,
                 canopy !== undefined ? evidenceId : null,
                 park.parked ? parkId : null,
@@ -276,7 +278,7 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
                         <span id={parkId} className="sr-only">
                           {park.note !== null ? `Parked: ${park.note}` : "Parked"}
                         </span>
-                        <CirclePause className="w-3 h-3" aria-hidden="true" />
+                        <ParkedCircle className="w-3 h-3" aria-hidden="true" />
                       </span>
                     </TooltipTrigger>
                     <TooltipContent side="bottom" className="max-w-xs">
@@ -293,14 +295,21 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
                 )}
 
                 {StateIcon && glyphState && (
-                  <StateIcon
-                    className={cn(
-                      "w-3 h-3",
-                      SESSION_COLORS[glyphState],
-                      glyphState === "working" && "animate-spin-slow motion-reduce:animate-none"
-                    )}
-                    aria-label={SESSION_LABELS[glyphState]}
-                  />
+                  <>
+                    {/* The glyph is aria-hidden, so its label is never read: the
+                        state rides the row's description instead. */}
+                    <span id={stateId} className="sr-only">
+                      {SESSION_LABELS[glyphState]}
+                    </span>
+                    <StateIcon
+                      className={cn(
+                        "w-3 h-3",
+                        SESSION_COLORS[glyphState],
+                        glyphState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                      )}
+                      aria-label={SESSION_LABELS[glyphState]}
+                    />
+                  </>
                 )}
 
                 <Tooltip>

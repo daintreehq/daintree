@@ -8,6 +8,12 @@ import {
   InteractingCircle,
   ExitedCircle,
   AskingCircle,
+  DoneCircle,
+  UnreadCircle,
+  BlockedCircle,
+  ParkedCircle,
+  SnoozedCircle,
+  IdleCircle,
 } from "../AgentStateCircles";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -38,6 +44,12 @@ describe("AgentStateCircles a11y", () => {
     ["InteractingCircle", InteractingCircle],
     ["ExitedCircle", ExitedCircle],
     ["AskingCircle", AskingCircle],
+    ["DoneCircle", DoneCircle],
+    ["UnreadCircle", UnreadCircle],
+    ["BlockedCircle", BlockedCircle],
+    ["ParkedCircle", ParkedCircle],
+    ["SnoozedCircle", SnoozedCircle],
+    ["IdleCircle", IdleCircle],
   ])("%s defaults to aria-hidden='true'", (_name, Component) => {
     const { container } = render(<Component />);
     const glyph = glyphBox(container);
@@ -50,6 +62,12 @@ describe("AgentStateCircles a11y", () => {
     ["InteractingCircle", InteractingCircle],
     ["ExitedCircle", ExitedCircle],
     ["AskingCircle", AskingCircle],
+    ["DoneCircle", DoneCircle],
+    ["UnreadCircle", UnreadCircle],
+    ["BlockedCircle", BlockedCircle],
+    ["ParkedCircle", ParkedCircle],
+    ["SnoozedCircle", SnoozedCircle],
+    ["IdleCircle", IdleCircle],
   ])("%s allows callers to override aria-hidden and supply a label", (_name, Component) => {
     const { container } = render(
       <Component aria-hidden={undefined} role="img" aria-label="Working" />
@@ -230,6 +248,11 @@ describe("AgentStateCircles a11y", () => {
     ["InteractingCircle", InteractingCircle],
     ["ExitedCircle", ExitedCircle],
     ["AskingCircle", AskingCircle],
+    ["DoneCircle", DoneCircle],
+    ["BlockedCircle", BlockedCircle],
+    ["ParkedCircle", ParkedCircle],
+    ["SnoozedCircle", SnoozedCircle],
+    ["IdleCircle", IdleCircle],
   ])("%s renders the same stroke weight as a Lucide icon at any size", (_name, Component) => {
     const { container: custom } = render(<Component />);
     const customSvg = custom.querySelector("svg")!;
@@ -243,23 +266,26 @@ describe("AgentStateCircles a11y", () => {
     expect(customRatio).toBeCloseTo(lucideRatio, 3);
   });
 
-  // InteractingCircle and ExitedCircle draw inner detail lines that are
-  // deliberately thinner than the outer ring (hand-tuned to 0.75x and 0.9x of the
-  // ring stroke). The #9705 fix scaled the ring AND the inner lines by the same
-  // factor, so this proportion must be preserved. Asserting the inner/outer ratio
-  // (not the literal stroke-width) catches a regression where the ring is rescaled
-  // but the inner lines are forgotten, or vice versa.
+  // Every mark inside a ring takes the ring's own stroke: a lighter plus or bar
+  // went to a blur at 12px on a 1x screen while the ring around it stayed crisp.
+  // Asserting the inner/outer ratio (not the literal stroke-width) catches a
+  // regression where the ring is rescaled but its marks are forgotten, or one
+  // mark drifts lighter than the rest.
   it.each([
-    ["InteractingCircle", InteractingCircle, 0.75],
-    ["ExitedCircle", ExitedCircle, 0.9],
-  ])("%s keeps its inner detail strokes proportional to the ring", (_name, Component, ratio) => {
+    ["InteractingCircle", InteractingCircle],
+    ["ExitedCircle", ExitedCircle],
+    ["AskingCircle", AskingCircle],
+    ["DoneCircle", DoneCircle],
+    ["BlockedCircle", BlockedCircle],
+    ["ParkedCircle", ParkedCircle],
+  ])("%s draws its inner mark at the ring's stroke weight", (_name, Component) => {
     const { container } = render(<Component />);
     const ringStroke = parseFloat(container.querySelector("circle")!.getAttribute("stroke-width")!);
-    const lines = container.querySelectorAll("line");
-    expect(lines.length).toBeGreaterThan(0);
-    for (const line of lines) {
-      const lineStroke = parseFloat(line.getAttribute("stroke-width")!);
-      expect(lineStroke / ringStroke).toBeCloseTo(ratio, 2);
+    const marks = container.querySelectorAll("line, path");
+    expect(marks.length).toBeGreaterThan(0);
+    for (const mark of marks) {
+      const markStroke = parseFloat(mark.getAttribute("stroke-width")!);
+      expect(markStroke / ringStroke).toBeCloseTo(1, 2);
     }
   });
 });

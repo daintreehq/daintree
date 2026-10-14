@@ -136,7 +136,7 @@ cn(DOCK_STATUS_PILL_CLASS, isOpen && DOCK_STATUS_PILL_OPEN_CLASS);
 
 - **Open** is the neutral ladder's top rung: `bg-overlay-emphasis` on the pills; `--dock-item-bg-active` / `--dock-item-border-active` on the chips, whose `:root` defaults are `overlay-emphasis` and `border-strong` and which light themes lift to white. Neither default nor any theme override may be accent-derived. The open fill is repeated under `hover:` so pointing at an open item never drops it back to the hover step.
 - **Hover** is one fill for the whole strip: `--dock-item-bg-hover` (`overlay-medium`), chips and pills alike.
-- **Agent-state glyph** on a chip is `DOCK_STATE_GLYPH_CLASS` (12px), the size the tab strip, panel header and sidebar draw it beside a 14px kind icon. The plain-command spinner and finished check in the same slot take the same size.
+- **Agent-state glyph** on a chip is `DOCK_STATE_GLYPH_CLASS` (12px), the size the tab strip and sidebar draw it beside a 14px kind icon. The pane header is the exception: it draws the glyph alone at 16px past the close button. The plain-command spinner and finished check in the same slot take the same size.
 - **Separators** inside a chip (title | command) are `bg-border-divider`, like every other separator.
 - The launch pill (`DockLaunchButton.tsx`) intentionally does NOT keep its accent focus-visible ring after a pointer-dismissed dropdown (see comment near `wasPointerCloseRef`); keyboard dismissal still restores focus for WAI-ARIA.
 

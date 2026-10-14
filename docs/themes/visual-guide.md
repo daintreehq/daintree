@@ -194,31 +194,22 @@ A very subtle tint appears on hover — in dark themes this is ~3% white, in lig
 Each worktree card shows:
 
 - **Branch name** in `text-primary` (bold)
-- **Agent status chip** — a small colored pill using `activity-*` tokens
+- **Agent state glyph**, as in Agent State Glyphs below
 - **Path/description** in `text-secondary`
 - **Action buttons** (visible on hover) with `sidebar-action-hover-bg`
 
-### Agent Status Chips
+### Agent State Glyphs
 
-Status chips are small rounded pills that show the real-time state of an AI agent:
+Agent state is a glyph, not a pill. Every state is a circle, or a circle with a mark inside, drawn at one outer diameter (`src/components/icons/AgentStateCircles.tsx`):
 
-```
-[Working]  [Idle]  [Waiting]  [Approval]
-```
+- **Working:** `SpinnerCircle` in `state-working` (green), always spinning
+- **Waiting:** `HollowCircle` in `state-waiting` (amber); an agent asking a question adds a `?`
+- **Directing:** ring with a plus in `category-blue`
+- **Finished:** ring with a check in `text-secondary`, white in the pane header
+- **Unread hand-back:** solid disc with a dot cut out, in `text-primary`, the one filled glyph
+- **Exited:** ring with a dash in `text-secondary`
 
-Their background uses the activity color at the theme's `state-chip-bg-opacity` (dark: 15%, light: 12%):
-
-```css
-background: rgba(var(--activity-color-rgb), var(--state-chip-bg-opacity));
-border: 1px solid rgba(var(--activity-color-rgb), var(--state-chip-border-opacity));
-```
-
-Colors:
-
-- **Working/Active:** `activity-working` (typically green) — pulsing animation
-- **Idle:** `activity-idle` (gray/muted) — static
-- **Waiting:** `activity-waiting` (amber/yellow) — needs user input
-- **Completed:** `activity-completed` (defaults to `status-success`)
+The pane header draws the glyph alone at 16px in a fixed 20px slot past the close button, never inside a tinted chip. Lists, tabs and the dock draw it at 12px beside the kind icon.
 
 There is no dedicated `activity-failed` token — failure surfaces use `status-danger` directly (e.g. `dock-item-bg-failed`).
 

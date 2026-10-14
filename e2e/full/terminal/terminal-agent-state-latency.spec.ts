@@ -374,7 +374,7 @@ test.describe("Full: agent-state transitions, status surfaces, and hidden-pane d
     await measureWorkingToWaiting(window, "visible.cycle1");
     await expect(agentPanel.locator(SEL.terminal.agentStateChip)).toHaveAttribute(
       "aria-label",
-      "Agent state: done"
+      "Agent state: finished"
     );
     await expect(agentPanel).toHaveAttribute("data-agent-state", "waiting");
     await measureWaitingToWorking(window, "visible.cycle1");
@@ -658,7 +658,7 @@ test.describe("Full: agent-state transitions, status surfaces, and hidden-pane d
       // Reading the visible hand-back settles its glyph without changing raw waiting.
       await expect(panel.locator(SEL.terminal.agentStateChip)).toHaveAttribute(
         "aria-label",
-        "Agent state: done"
+        "Agent state: finished"
       );
       await expect(panel).toHaveAttribute("data-agent-state", "waiting");
     });

@@ -40,9 +40,11 @@ const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
 };
 
 /**
- * The chip itself: the state's glyph in its tinted circle. Shared with the
- * canopy panel's pane header, which draws a terminal the way its own pane does
- * without that pane's store entry.
+ * The chip itself: the state's glyph on its own in a fixed 20px slot. Every
+ * glyph is already a ring with its mark inside, so the chip draws no ring or
+ * tint of its own — a ring around a ring read as a circle inside a circle.
+ * Shared with the canopy panel's pane header, which draws a terminal the way
+ * its own pane does without that pane's store entry.
  */
 export function AgentStateChip({
   agentState,
@@ -53,35 +55,22 @@ export function AgentStateChip({
 }) {
   const StateIcon = SESSION_ICONS[agentState];
   if (!StateIcon) return null;
-  // Settled: done and unread are solid glyphs and stand on their own, so they
-  // drop the chip's tinted ring — a ring around a disc read as a circle inside a
-  // circle. Neither gets a hue of its own (#12002): they are not asking for
-  // anything, and stay apart from each other by their cut-out mark.
-  const isSolid = agentState === "completed" || agentState === "unread";
-  const chipStyle =
-    agentState === "working"
-      ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
-      : agentState === "directing"
-        ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-        : isSolid
-          ? "border-transparent"
-          : agentState === "exited"
-            ? "bg-overlay-soft border-divider"
-            : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+  // Finished is white here rather than the settled grey it wears in lists: the
+  // title bar shows one agent, and its ring has no chip around it to carry it.
+  const tone = agentState === "completed" ? "text-text-primary" : SESSION_COLORS[agentState];
   return (
     <div
       className={cn(
-        "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
-        "transition-[background-color,border-color,color] duration-150 ease-out reduce-motion:transition-none",
-        chipStyle,
-        SESSION_COLORS[agentState]
+        "inline-flex items-center justify-center w-5 h-5 shrink-0",
+        "transition-colors duration-150 ease-out reduce-motion:transition-none",
+        tone
       )}
       role="status"
       aria-label={ariaLabel}
     >
       <StateIcon
         className={cn(
-          isSolid ? "w-4 h-4" : "w-3 h-3",
+          "w-4 h-4",
           agentState === "working" && "animate-spin-slow",
           "motion-reduce:animate-none"
         )}

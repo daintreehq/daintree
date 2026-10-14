@@ -20,14 +20,14 @@ export {
   BookDashed, // a Scratchpad's notes are temporary — kept only while its terminal is open; the dashed outline reads as a mode, not a warning
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
-  CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from Pilot's observed CircleCheck
+  CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from the observed finished ring (DoneCircle)
   CircleArrowUp, // a CLI below the version Daintree needs — the same up-arrow-in-a-circle plugins show for an available update
-  CircleCheck, // finished run — blue awaiting review, neutral once acknowledged (Pilot's review and done bands)
-  CircleDashed, // run the user snoozed — quiet until it wakes (Pilot's snoozed band)
-  CircleDot, // shell that is alive and doing nothing, so the amber hollow circle means waiting and only waiting (Pilot's idle band)
+  CircleCheck, // a check that passed or a step that is done (setup, forge, review) — a finished agent draws DoneCircle on the family's own ring instead
+  CircleDashed, // a check or step that has not run yet (PR checks, setup) — Pilot's snoozed band draws SnoozedCircle on the family's own ring instead
+  CircleDot, // an open issue on forge surfaces — Pilot's idle band draws IdleCircle on the family's own ring instead
   CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
-  CirclePause, // run the user parked — shelved on purpose (Pilot's parked band)
-  CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
+  CirclePause, // the Park action in menus, and paused statuses elsewhere — a parked run's own mark is ParkedCircle on the family's ring
+  CircleSlash, // something refused or skipped (MCP calls, clones, conflicts) — an agent blocked on an error draws BlockedCircle on the family's ring
   CircleX, // anything that failed: CI, an environment, a pane that could not load — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
   Clock, // recency sort order (most recently opened first); a canopy row's time in its current state
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused

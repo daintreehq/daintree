@@ -148,11 +148,11 @@ test("Agent indicator and exit badge — states and themes", async ({ page }) =>
       if (reduceMotion) {
         expect(property, "reduced motion keeps a transition").toBe("none");
       } else {
-        expect(property).toContain("background-color");
+        expect(property).toContain("color");
         expect(duration).toBe("0.15s");
       }
-      // Sample the chip one frame into the flip and again once it has settled:
-      // eased, the two differ; reduced, the first frame is already the last.
+      // Sample the glyph's ink one frame into the flip and again once it has
+      // settled: eased, the two differ; reduced, the first frame is the last.
       const [early, settled] = await target.evaluate(async (el) => {
         const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
         (Reflect.get(window, "__setAgentState") as (id: string, s: string) => void)(
@@ -161,9 +161,9 @@ test("Agent indicator and exit badge — states and themes", async ({ page }) =>
         );
         await frame();
         await frame();
-        const first = getComputedStyle(el).backgroundColor;
+        const first = getComputedStyle(el).color;
         await new Promise((resolve) => setTimeout(resolve, 400));
-        return [first, getComputedStyle(el).backgroundColor];
+        return [first, getComputedStyle(el).color];
       });
       await expect(target).toHaveAttribute("aria-label", /waiting/i);
       if (reduceMotion) expect(early, "reduced motion interpolated the chip").toBe(settled);
@@ -182,14 +182,14 @@ test("Agent indicator and exit badge — states and themes", async ({ page }) =>
           t.pause();
           t.currentTime = 75;
         }
-        return { count: transitions.length, background: getComputedStyle(el).backgroundColor };
+        return { count: transitions.length, ink: getComputedStyle(el).color };
       });
       if (reduceMotion) {
         expect(paused.count, "reduced motion started a transition").toBe(0);
       } else {
         expect(paused.count, "no transition to pause").toBeGreaterThan(0);
-        expect(paused.background).not.toBe(early);
-        expect(paused.background).not.toBe(settled);
+        expect(paused.ink).not.toBe(early);
+        expect(paused.ink).not.toBe(settled);
       }
       written.push(
         await snap(
