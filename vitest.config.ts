@@ -87,6 +87,8 @@ export default defineConfig({
       "build",
       "release",
       "**/*.integration.test.{js,ts}",
+      // Playwright specs against a plugin's panel preview, run by `playwright test`.
+      "plugins/**/review/*.spec.ts",
       ...REMOTE_HOSTS_ONLY_TESTS,
     ],
     testTimeout: 15000,

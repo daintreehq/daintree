@@ -612,6 +612,7 @@ declare function composePanelStory(meta: PanelStoriesMeta, story?: PanelStory): 
 declare const PREVIEW_READY_ATTRIBUTE = "data-daintree-preview-ready";
 /** Why the preview failed, beside {@link PREVIEW_READY_ATTRIBUTE}`="failed"`. */
 declare const PREVIEW_FAILURE_ATTRIBUTE = "data-daintree-preview-failure";
+
 /**
  * Where the preview's Tailwind CSS comes from.
  *

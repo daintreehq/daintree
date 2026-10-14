@@ -58,6 +58,7 @@ const IGNORE = [
   "**/__mocks__/**",
   "**/__fixtures__/**",
   "**/*.{test,spec}.*",
+  "**/*.stories.*",
   "**/*.d.{ts,mts,cts}",
   "**/*.config.*",
 ];

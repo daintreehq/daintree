@@ -96,6 +96,7 @@ describe("@daintreehq/plugin-sdk/react — React stays external", () => {
       "data.js",
       "testing.js",
       "testing-preview.js",
+      "testing-playwright.js",
     ]) {
       expect(outputs, `metafile is missing ${entry}`).toContain(entry);
     }
@@ -131,6 +132,40 @@ describe("@daintreehq/plugin-sdk/react — React stays external", () => {
       expect(specifier).toMatch(/^react(-dom)?(\/|$)/);
     }
     expect(externals).toContain("react-dom/client");
+  });
+
+  it("keeps the preview's build tools inside the testing/playwright entry", () => {
+    // esbuild, Tailwind and Playwright are optional peers: an entry that
+    // reached one, statically or through a lazy chunk, would fail to load for
+    // a plugin that never installed it.
+    const tooling = /^(@playwright\/test|esbuild|tailwindcss)(\/|$)/;
+    const outputs = metafile.outputs;
+    const reached = (entry: string): Set<string> => {
+      const externals = new Set<string>();
+      const seen = new Set<string>();
+      const pending = [entry];
+      while (pending.length > 0) {
+        const out = pending.pop()!;
+        if (seen.has(out)) continue;
+        seen.add(out);
+        for (const imported of outputs[out]?.imports ?? []) {
+          if (imported.external) externals.add(imported.path);
+          else pending.push(imported.path);
+        }
+      }
+      return externals;
+    };
+    const entries = Object.keys(outputs).filter((out) => !path.basename(out).startsWith("chunk-"));
+    for (const entry of entries) {
+      const tools = [...reached(entry)].filter((specifier) => tooling.test(specifier));
+      if (path.basename(entry) === "testing-playwright.js") {
+        expect(tools).toEqual(
+          expect.arrayContaining(["@playwright/test", "esbuild", "tailwindcss"])
+        );
+      } else {
+        expect(tools, `${path.basename(entry)} reaches the preview's build tools`).toEqual([]);
+      }
+    }
   });
 
   it("emits react as an external import of the react entry", () => {

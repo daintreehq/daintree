@@ -450,6 +450,12 @@ If the point is for the project to present as a purpose-built application rather
 
 `viewId` must name a declared `contributes.views` entry — a dangling id is a validation error — and that view's panel must not be `hasPty: true`. One slot exists today, it is project-scope only, and the frame keeps a control that swaps back to the stock launcher in both directions. See [Surfaces](./project-local.md#surfaces).
 
+## Work on panel UI in the preview
+
+To see a panel, drive it, or check a change to it, use the [panel preview](./dev-loop.md#preview-a-panel-outside-daintree), not the running app. Write a story in `review/panel.stories.tsx` for each state the panel can be in, and run `npm run test:preview`: it renders every story against a mock host in a background browser and saves a verified screenshot of each in `test-results/`, which you can read. A capture fails on a console error or a story that did not render, so a passing run is evidence rather than a guess. The scaffold writes the stories file, the spec and `playwright.config.ts` for a template with a view.
+
+Do not drive Daintree's own window to test a panel. Computer use on macOS acts on the frontmost window and cannot target a background one, so an agent testing in a Daintree window takes over whichever window the user has focused and switches it to the plugin's project. A plugin view also renders inline in the host document ([views.md](./views.md)), so input aimed at one pane cannot be held to it. The preview is the supported way for an agent to see and drive a panel. Load the plugin in Daintree for what only the host can show: activation, the worker, real data and the performance numbers below.
+
 ## Verify it loaded
 
 1. Open the project in Daintree. First time, a dialog names the plugins and asks once — **Always enable** persists the decision for this project, in Daintree's own store, never in the repository.
