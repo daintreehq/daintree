@@ -2,6 +2,7 @@ import type { Ref } from "react";
 import React from "react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import { TRUNCATION_DISCLOSURE_ATTR } from "@/lib/accessibility";
 
 const FOCUSABLE_TAGS = new Set(["BUTTON", "A", "INPUT", "SELECT", "TEXTAREA", "AUDIO", "VIDEO"]);
 
@@ -59,6 +60,9 @@ export function TruncatedTooltip({
   const extraProps: Record<string, unknown> = { ref: mergedRef };
   if (focusable && !isFocusable && showTooltip) {
     extraProps.tabIndex = 0;
+    // A tab stop that only reveals text: a dialog's initial focus passes over
+    // it, or opening the dialog would open this tooltip.
+    extraProps[TRUNCATION_DISCLOSURE_ATTR] = "";
   }
 
   return (

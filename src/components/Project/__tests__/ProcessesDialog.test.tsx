@@ -143,9 +143,9 @@ describe("ProcessesDialog (#13175)", () => {
     await renderOpen();
 
     const headings = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
-    expect(headings).toEqual(["Birch1 terminal", "Cedar1 terminal", "Plugins"]);
+    expect(headings).toEqual(["Birch1 terminal", "Cedar1 terminal", "Plugins1 process"]);
     expect(screen.getAllByText("~300 MB")).toHaveLength(2);
-    expect(screen.getByText("Not sampled")).toBeTruthy();
+    expect(screen.getAllByText("not sampled")).toHaveLength(2);
     // Plugin rows are list-only.
     const pluginRow = screen.getByTestId("plugin-process-row");
     expect(pluginRow.querySelector("button")).toBeNull();
@@ -155,7 +155,7 @@ describe("ProcessesDialog (#13175)", () => {
     mockGetSnapshot.mockResolvedValue(snapshot({ terminals: [terminal("a", { title: "shell" })] }));
     await renderOpen();
 
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
     expect(mockKill).not.toHaveBeenCalled();
 
     const confirm = await screen.findByRole("alertdialog");
@@ -177,7 +177,7 @@ describe("ProcessesDialog (#13175)", () => {
     mockGetSnapshot.mockResolvedValue(snapshot({ terminals: [terminal("a", { title: "shell" })] }));
     await renderOpen();
 
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
     await screen.findByRole("alertdialog");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Kill terminal" }));
@@ -198,7 +198,7 @@ describe("ProcessesDialog (#13175)", () => {
     mockGetSnapshot.mockResolvedValue(snapshot({ terminals: [terminal("a", { title: "shell" })] }));
     await renderOpen();
 
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
     await screen.findByRole("alertdialog");
     mockGetInfo.mockResolvedValue({ id: "a", spawnedAt: 50, hasPty: true });
     await act(async () => {
@@ -219,7 +219,7 @@ describe("ProcessesDialog (#13175)", () => {
     mockGetInfo.mockRejectedValue(new Error("Terminal dev-term not found"));
     await renderOpen();
 
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'web' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop dev server 'web' in Cedar" }));
     await screen.findByRole("alertdialog");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Stop dev server" }));
@@ -240,8 +240,8 @@ describe("ProcessesDialog (#13175)", () => {
       () => new Promise((resolve) => (releaseFirst = resolve))
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'first' in Cedar" }));
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'second' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'first' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'second' in Cedar" }));
     const confirm = await screen.findByRole("alertdialog");
     await act(async () => {
       releaseFirst([]);
@@ -257,7 +257,7 @@ describe("ProcessesDialog (#13175)", () => {
     mockGetAllSessions.mockRejectedValue(new Error("ipc down"));
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Kill 'web' in Cedar" }));
+      fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'web' in Cedar" }));
     });
 
     expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -270,7 +270,7 @@ describe("ProcessesDialog (#13175)", () => {
     );
     await renderOpen();
 
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
     const confirm = await screen.findByRole("alertdialog");
 
     expect(confirm.textContent).toContain("can't be restored");
@@ -286,7 +286,7 @@ describe("ProcessesDialog (#13175)", () => {
         </TooltipProvider>
       ));
     });
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
     await screen.findByRole("alertdialog");
 
     await act(async () => {
@@ -314,7 +314,7 @@ describe("ProcessesDialog (#13175)", () => {
     mockGetSnapshot.mockResolvedValue(snapshot({ terminals: [terminal("a", { title: "shell" })] }));
     await renderOpen();
 
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
     await screen.findByRole("alertdialog");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -333,7 +333,7 @@ describe("ProcessesDialog (#13175)", () => {
     ]);
     await renderOpen();
 
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'web' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop dev server 'web' in Cedar" }));
     await screen.findByRole("alertdialog");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Stop dev server" }));
@@ -348,7 +348,7 @@ describe("ProcessesDialog (#13175)", () => {
     mockKill.mockRejectedValue(new Error("no such terminal"));
     await renderOpen();
 
-    fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
     await screen.findByRole("alertdialog");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Kill terminal" }));
@@ -419,8 +419,8 @@ describe("ProcessesDialog (#13175)", () => {
 
       const row = screen.getByTestId("closed-process-row");
       expect(row.textContent).toContain("npm run dev");
-      expect(row.textContent).toContain("Cedar");
-      expect(row.textContent).toContain("Closed 2m ago");
+      expect(row.closest("section")?.textContent).toContain("Cedar");
+      expect(row.textContent).toContain("Terminal closed 2m ago");
       expect(row.textContent).toContain("node, esbuild");
       expect(row.textContent).toContain("2 processes");
       expect(row.textContent).toContain("~1.0 GB");
@@ -489,7 +489,7 @@ describe("ProcessesDialog (#13175)", () => {
         () => new Promise((resolve) => (resolveSessions = resolve))
       );
 
-      fireEvent.click(screen.getByRole("button", { name: "Kill 'shell' in Cedar" }));
+      fireEvent.click(screen.getByRole("button", { name: "Kill terminal 'shell' in Cedar" }));
       fireEvent.click(screen.getByRole("button", { name: "Kill 1 process from 'npm run dev'" }));
       await act(async () => {
         resolveSessions([]);
