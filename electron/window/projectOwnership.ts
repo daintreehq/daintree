@@ -10,6 +10,7 @@ import type {
 import type { Project } from "../../shared/types/project.js";
 import { hasPendingActivation } from "./projectActivationClaims.js";
 import { isWindowOnRemoteHost, switchWindowToLocal } from "./windowHost.js";
+import { cachedViewBusy } from "./cachedViewBusy.js";
 
 export { claimProjectActivation } from "./projectActivationClaims.js";
 
@@ -89,6 +90,34 @@ export function findOtherProjectOwner(
     }
   }
   return activatingOwner ?? cachedOwner;
+}
+
+/**
+ * Make way for a project to open in the requesting window when another window
+ * only holds it in its cache (#13291). That window's cached view is released,
+ * so nothing it shows, and not the host it is on, changes. An owner showing the
+ * project, or on its way to it, is answered as the owner to bring forward;
+ * null means the project is free to open here.
+ *
+ * Synchronous, and called in the same tick as the requester's claim, so the
+ * project never has a live view in two windows. `workspaceKey` is the key the
+ * owner's manager holds the view under (a host's view is host-scoped). A view
+ * that can't be released (it backs a running assistant or an MCP request) is
+ * an error: the other window is never switched to the project instead.
+ */
+export function releaseCachedOwner(
+  owner: ProjectOwner | null,
+  workspaceKey: string,
+  projectName: string
+): ProjectOwner | null {
+  if (owner?.state !== "cached") return owner;
+  // A window bringing its own cached view to the front is on its way to it:
+  // the view reads as cached until its switch flips the active pointer.
+  if (hasPendingActivation(workspaceKey, owner.context.windowId)) {
+    return { ...owner, state: "activating" };
+  }
+  if (owner.projectViewManager.releaseCachedView(workspaceKey)) return null;
+  throw cachedViewBusy(projectName);
 }
 
 /** Bring a window to the front, restoring it first if it was minimized. */

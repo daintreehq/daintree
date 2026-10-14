@@ -51,6 +51,30 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
+vi.mock("@/components/Hosts/Overview/HostAddProjectDialog", () => ({
+  HostAddProjectDialog: ({
+    hostName,
+    onClose,
+    onOpened,
+  }: {
+    hostName: string;
+    onClose: () => void;
+    onOpened: (result: { kind: "opened"; hostId: string; projectId: string }) => void;
+  }) => (
+    <>
+      <button
+        type="button"
+        onClick={() => onOpened({ kind: "opened", hostId: "h1", projectId: "p-new" })}
+      >
+        Clone onto {hostName}
+      </button>
+      <button type="button" onClick={onClose}>
+        Cancel adding
+      </button>
+    </>
+  ),
+}));
+
 import { HostProjectPicker } from "../HostProjectPicker";
 
 const listHostProjects = vi.fn<(payload: { hostId: string }) => Promise<HostProjectSummary[]>>();
@@ -96,14 +120,32 @@ describe("HostProjectPicker", () => {
     );
   });
 
-  it("says a host has no projects and offers its project list in a new window", async () => {
+  it("says a host has no projects and offers to add one there, never another empty window", async () => {
     listHostProjects.mockResolvedValue([]);
-    await renderPicker();
+    const onClose = await renderPicker();
     expect(await screen.findByText("studio-01 has no projects yet.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open studio-01 in a new window" }));
+    expect(screen.queryByRole("button", { name: /in a new window/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add project on studio-01…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clone onto studio-01" }));
+    expect(onClose).toHaveBeenCalled();
     await waitFor(() =>
-      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "h1", newWindow: true })
+      expect(switchWindowHost).toHaveBeenCalledWith({
+        hostId: "h1",
+        newWindow: false,
+        projectId: "p-new",
+      })
     );
+    expect(switchWindowHost).not.toHaveBeenCalledWith({ hostId: "h1", newWindow: true });
+  });
+
+  it("returns to the empty host's list when adding a project is cancelled", async () => {
+    listHostProjects.mockResolvedValue([]);
+    const onClose = await renderPicker();
+    fireEvent.click(await screen.findByRole("button", { name: "Add project on studio-01…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel adding" }));
+    expect(await screen.findByText("studio-01 has no projects yet.")).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(switchWindowHost).not.toHaveBeenCalled();
   });
 
   it("says so when the host can't be listed, and lists it again on Retry", async () => {

@@ -12,6 +12,7 @@ import { useHostList } from "@/components/Hosts/hostList";
 import { clientPlatform, localHostLabel } from "@/components/Hosts/hostModel";
 import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
 import { matchesTokens, queryTokens } from "@/components/Hosts/hostProjectSearch";
+import { HostAddProjectDialog } from "@/components/Hosts/Overview/HostAddProjectDialog";
 
 // Past this the list says how many it isn't showing; the rest stay a search away.
 const MAX_RESULTS = 100;
@@ -36,6 +37,8 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
   const hostName = useHostName(hostId);
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
+  // An empty host's way in: a folder already there, or a clone made there.
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,10 +107,7 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
     [results, selectedIndex, open, load.status, retry]
   );
 
-  const openHostWindow = useCallback(() => {
-    onClose();
-    void switchToHost(hostId, true);
-  }, [hostId, onClose]);
+  const startAdding = useCallback(() => setAdding(true), []);
 
   const renderItem = useCallback(
     (
@@ -156,6 +156,22 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
       ? `Couldn't list the projects on ${hostName}.`
       : `${hostName} has no projects yet.`;
 
+  // Another window on the same empty host would only offer this list again.
+  if (adding) {
+    return (
+      <HostAddProjectDialog
+        hostId={hostId}
+        hostName={hostName}
+        // Backing out of adding one returns to the list it was offered from.
+        onClose={() => setAdding(false)}
+        onOpened={(result) => {
+          onClose();
+          void switchToHost(result.hostId, false, result.projectId);
+        }}
+      />
+    );
+  }
+
   return (
     <SearchablePalette<HostProjectSummary>
       tier="command"
@@ -193,8 +209,8 @@ export function HostProjectPicker({ hostId, onClose }: { hostId: HostId; onClose
             Retry
           </Button>
         ) : load.status === "loaded" && projects.length === 0 ? (
-          <Button size="sm" variant="outline" onClick={openHostWindow}>
-            Open {hostName} in a new window
+          <Button size="sm" variant="outline" onClick={startAdding}>
+            Add project on {hostName}…
           </Button>
         ) : undefined
       }

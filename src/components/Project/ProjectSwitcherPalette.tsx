@@ -644,10 +644,16 @@ export function canSleepProject(project: { isMissing: boolean; status?: string }
 /**
  * Whether the row reads as open in another window (#12597): picking it goes to
  * that window, and the row says so before Enter does. Never on the current row,
- * whose place is here, nor on a missing one, whose Enter goes to Locate.
+ * whose place is here, nor on a missing one, whose Enter goes to Locate. One
+ * another window only keeps cached opens here, so it isn't marked (#13291).
  */
 function isOpenElsewhere(project: SearchableProject): boolean {
-  return project.openInOtherWindow !== undefined && !project.isActive && !project.isMissing;
+  return (
+    project.openInOtherWindow !== undefined &&
+    project.openInOtherWindow !== "cached" &&
+    !project.isActive &&
+    !project.isMissing
+  );
 }
 
 /**

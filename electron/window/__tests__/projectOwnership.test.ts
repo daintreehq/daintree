@@ -16,6 +16,7 @@ import {
   findOtherProjectOwner,
   hasLiveProjectView,
   redirectToProjectOwner,
+  releaseCachedOwner,
   revealWindow,
 } from "../projectOwnership.js";
 import type { ProjectViewManager } from "../ProjectViewManager.js";
@@ -223,6 +224,56 @@ describe("revealWindow", () => {
     revealWindow(win as never);
     expect(win.show).not.toHaveBeenCalled();
     expect(win.focus).not.toHaveBeenCalled();
+  });
+});
+
+describe("releaseCachedOwner", () => {
+  function ownerIn(state: "foreground" | "activating" | "cached", released: boolean) {
+    const pvm = { ...makePvm("q", ["q", "p"]), releaseCachedView: vi.fn(() => released) };
+    const win = makeBrowserWindow();
+    return {
+      owner: { context: makeContext(2, pvm, win), projectViewManager: pvm, state } as never,
+      pvm,
+      win,
+    };
+  }
+
+  it("lets a window holding the project only in its cache give its view up, and switches nothing", () => {
+    const { owner, pvm, win } = ownerIn("cached", true);
+    expect(releaseCachedOwner(owner, "studio-01:p", "P")).toBeNull();
+    expect(pvm.releaseCachedView).toHaveBeenCalledWith("studio-01:p");
+    expect(getAppWebContentsMock).not.toHaveBeenCalled();
+    expect(win.show).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
+  });
+
+  it("fails rather than switching the other window when its cached view can't be released", () => {
+    const { owner, win } = ownerIn("cached", false);
+    expect(() => releaseCachedOwner(owner, "p", "P")).toThrow(
+      expect.objectContaining({ code: "PROJECT_OPEN_FAILED" })
+    );
+    expect(getAppWebContentsMock).not.toHaveBeenCalled();
+    expect(win.show).not.toHaveBeenCalled();
+  });
+
+  it("keeps a window showing the project, or on its way to it, as the owner to bring forward", () => {
+    for (const state of ["foreground", "activating"] as const) {
+      const { owner, pvm } = ownerIn(state, true);
+      expect(releaseCachedOwner(owner, "p", "P")).toBe(owner);
+      expect(pvm.releaseCachedView).not.toHaveBeenCalled();
+    }
+    expect(releaseCachedOwner(null, "p", "P")).toBeNull();
+  });
+
+  it("leaves a cached view alone while its own window is switching to it", () => {
+    const { owner, pvm } = ownerIn("cached", true);
+    const release = claimProjectActivation("p", 2);
+    try {
+      expect(releaseCachedOwner(owner, "p", "P")).toMatchObject({ state: "activating" });
+      expect(pvm.releaseCachedView).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
   });
 });
 

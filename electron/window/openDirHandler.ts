@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { BrowserWindow } from "electron";
 import type {
   OpenFoldersInNewWindow,
@@ -10,7 +11,12 @@ import {
   getPendingOpenDirPaths,
   setOpenDirConsumer,
 } from "../setup/environment.js";
-import { decideProjectOpenTarget, type ProjectOpenSource } from "./windowOpenPolicy.js";
+import {
+  decideProjectOpenTarget,
+  type OpenWorld,
+  type ProjectOpenSource,
+} from "./windowOpenPolicy.js";
+import { cachedViewBusy } from "./cachedViewBusy.js";
 import { setNewWindowOpener } from "./newWindowOpen.js";
 import {
   holdWindowForOpen,
@@ -143,6 +149,7 @@ export async function routeProjectOpen(
   // world between deciding on a window and claiming it. A cached view moving to
   // a new window is released inside that span too, so the project never has a
   // live view in two windows.
+  const world = snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed);
   let decision = decideProjectOpenTarget(
     {
       projectId: project?.id ?? null,
@@ -152,7 +159,7 @@ export async function routeProjectOpen(
       disposition: routing.disposition,
       initiatingWindowId: routing.initiatingWindowId,
     },
-    snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed)
+    world
   );
   const releaseFrom = decision.kind === "focus" ? undefined : decision.releaseFromWindowId;
   if (
@@ -160,6 +167,20 @@ export async function routeProjectOpen(
     !(project !== null && deps.releaseCachedView?.(project.id, releaseFrom) === true)
   ) {
     decision = { kind: "activate", windowId: releaseFrom, reason: "owner" };
+  }
+
+  // A window asked for this project in the app; another window keeping it only
+  // cached, which can't let it go, is never switched to it on that window's
+  // behalf (#13291). Whatever it shows stays.
+  if (
+    routing.source === "in-app" &&
+    project !== null &&
+    decision.kind === "activate" &&
+    decision.reason === "owner" &&
+    decision.windowId !== routing.initiatingWindowId &&
+    keepsOnlyCached(world, decision.windowId, project.id)
+  ) {
+    throw cachedViewBusy(basename(project.path) || project.path);
   }
 
   const win =
@@ -214,6 +235,22 @@ export async function routeProjectOpen(
  * execution time, inside the serialized chain, so it sees the windows as they
  * are once the opens ahead of it have landed.
  */
+/**
+ * Whether `windowId` holds the project's live view in its background only,
+ * behind another workspace it is showing. A window on the project picker shows
+ * nothing to lose, so showing the project there is no switch away from anything.
+ */
+function keepsOnlyCached(world: OpenWorld, windowId: number, projectId: string): boolean {
+  const holder = world.windows.find((w) => w.windowId === windowId);
+  return (
+    holder !== undefined &&
+    holder.viewProjectIds.includes(projectId) &&
+    holder.activeProjectId !== null &&
+    holder.activeProjectId !== projectId &&
+    holder.bridgeProjectId !== projectId
+  );
+}
+
 export function installOpenDirConsumer(deps: OpenDirHandlerDeps): void {
   if (openDirConsumerInstalled) return;
   openDirConsumerInstalled = true;

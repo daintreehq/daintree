@@ -138,11 +138,11 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
     });
   });
 
-  it("goes to a window keeping the project cached, or takes it to a new one (#13274)", () => {
+  it("switches here to a project another window only keeps cached, or takes it to a new one (#13291)", () => {
     const row = projectRow({ openInOtherWindow: "cached" });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
       keys: "↵",
-      label: "Go to window",
+      label: "Switch",
     });
     expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
       keys: "⌘↵",

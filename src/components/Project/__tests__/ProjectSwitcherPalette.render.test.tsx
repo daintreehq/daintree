@@ -2488,12 +2488,12 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
     expect(screen.getByRole("option", { name: /Payments,\s*Open in another window/ })).toBeTruthy();
   });
 
-  it("marks cached and still-activating owners the same way", () => {
+  it("marks owners showing the project and still-activating ones the same way", () => {
     render(
       <ProjectSwitcherPalette
         {...modalProps}
         results={[
-          makeProject({ id: "a", name: "Alpha", openInOtherWindow: "cached" }),
+          makeProject({ id: "a", name: "Alpha", openInOtherWindow: "foreground" }),
           makeProject({ id: "b", name: "Beta", openInOtherWindow: "activating" }),
         ]}
       />
@@ -2509,6 +2509,8 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
         results={[
           makeProject({ id: "free", name: "Free" }),
           makeProject({ id: "local", name: "Local", isOpenInThisWindow: true }),
+          // Picking it opens it here: the other window lets its cached view go (#13291).
+          makeProject({ id: "cached", name: "Cached", openInOtherWindow: "cached" }),
           makeProject({
             id: "current",
             name: "Current",
@@ -2542,7 +2544,7 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
         results={[
           makeProject({
             name: "Payments",
-            openInOtherWindow: "cached",
+            openInOtherWindow: "foreground",
             lastOpened: Date.now() - 2 * 3600000,
             resumableAgentCount: 2,
           }),

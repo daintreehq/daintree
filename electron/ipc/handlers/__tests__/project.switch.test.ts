@@ -2440,7 +2440,8 @@ describe("project switch/reopen redirects to the window that owns the project (#
   }
 
   /** A manager whose views are `views` (project ids) and whose active one is `active`. */
-  function makeOwnerPvm(active: string | null, views: string[]) {
+  function makeOwnerPvm(active: string | null, initialViews: string[]) {
+    const views = [...initialViews];
     const webContentsByProject = new Map(
       views.map((projectId, i) => [projectId, makeViewWebContents(300 + i)])
     );
@@ -2462,6 +2463,12 @@ describe("project switch/reopen redirects to the window that owns the project (#
           : null
       ),
       webContentsFor: (projectId: string) => webContentsByProject.get(projectId)!,
+      releaseCachedView: vi.fn((projectId: string) => {
+        const index = views.indexOf(projectId);
+        if (index < 0 || projectId === active) return false;
+        views.splice(index, 1);
+        return true;
+      }),
     };
   }
 
@@ -2609,50 +2616,53 @@ describe("project switch/reopen redirects to the window that owns the project (#
       return { senderPvm, ownerPvm, ownerWindow, ownerAppWebContents, ...handlers };
     }
 
-    it("has the owning window's renderer switch to it, and reports it", async () => {
+    it("opens it here once that window lets its cached view go, and leaves that window alone (#13291)", async () => {
       const { senderPvm, ownerPvm, ownerWindow, ownerAppWebContents, switchHandler } =
         setupCached();
 
       const result = await switchHandler(SENDER_EVENT, TARGET.id, OUTGOING);
 
-      expect(result).toEqual({
-        outcome: "activated-elsewhere",
-        project: TARGET,
-        targetWindowId: 2,
-      });
-      // The owner's renderer runs the switch so it can save the layout it is
-      // leaving; main never swaps the owner's view behind its back.
-      expect(ownerAppWebContents.send).toHaveBeenCalledWith(CHANNELS.MENU_ACTION, {
-        actionId: "project.switch",
-        args: { projectId: TARGET.id },
-      });
+      expect(result).toEqual({ outcome: "switched", project: TARGET });
+      expect(ownerPvm.releaseCachedView).toHaveBeenCalledWith(TARGET.id);
+      expect(senderPvm.switchTo).toHaveBeenCalled();
+      // Nothing the other window shows changes, and it doesn't come forward.
+      expect(ownerAppWebContents.send).not.toHaveBeenCalled();
       expect(ownerPvm.switchTo).not.toHaveBeenCalled();
-      expect(ownerWindow.focus).toHaveBeenCalled();
-
-      expect(senderPvm.switchTo).not.toHaveBeenCalled();
-      expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+      expect(ownerWindow.focus).not.toHaveBeenCalled();
     });
 
-    it("parks the focus intent on the owner's manager for the switch it triggers", async () => {
-      const { ownerPvm, switchHandler } = setupCached();
+    it("keeps the focus intent for this window's own switch", async () => {
+      const { senderPvm, ownerPvm, switchHandler } = setupCached();
       const focusIntent = { intent: "focus-next-waiting" };
 
       await switchHandler(SENDER_EVENT, TARGET.id, undefined, { focusIntent });
 
-      expect(ownerPvm.setPendingFocusIntent).toHaveBeenCalledWith(TARGET.id, focusIntent);
+      expect(senderPvm.setPendingFocusIntent).toHaveBeenCalledWith(TARGET.id, focusIntent);
+      expect(ownerPvm.setPendingFocusIntent).not.toHaveBeenCalled();
     });
 
-    it("redirects a reopen the same way", async () => {
-      const { senderPvm, ownerAppWebContents, reopenHandler } = setupCached();
+    it("fails, switching neither window, when that window can't let its cached view go", async () => {
+      const { senderPvm, ownerPvm, ownerWindow, ownerAppWebContents, switchHandler } =
+        setupCached();
+      ownerPvm.releaseCachedView.mockReturnValue(false);
+
+      await expect(switchHandler(SENDER_EVENT, TARGET.id, OUTGOING)).rejects.toMatchObject({
+        code: "PROJECT_OPEN_FAILED",
+      });
+      expect(senderPvm.switchTo).not.toHaveBeenCalled();
+      expect(ownerAppWebContents.send).not.toHaveBeenCalled();
+      expect(ownerWindow.focus).not.toHaveBeenCalled();
+    });
+
+    it("handles a reopen the same way", async () => {
+      const { senderPvm, ownerPvm, ownerAppWebContents, reopenHandler } = setupCached();
 
       const result = await reopenHandler(SENDER_EVENT, TARGET.id);
 
-      expect(result).toMatchObject({ outcome: "activated-elsewhere", targetWindowId: 2 });
-      expect(ownerAppWebContents.send).toHaveBeenCalledWith(
-        CHANNELS.MENU_ACTION,
-        expect.objectContaining({ actionId: "project.switch" })
-      );
-      expect(senderPvm.switchTo).not.toHaveBeenCalled();
+      expect(result).toEqual({ outcome: "switched", project: TARGET });
+      expect(ownerPvm.releaseCachedView).toHaveBeenCalledWith(TARGET.id);
+      expect(ownerAppWebContents.send).not.toHaveBeenCalled();
+      expect(senderPvm.switchTo).toHaveBeenCalled();
     });
   });
 
