@@ -52,6 +52,12 @@
       "import": "./dist/testing-preview.js",
       "default": "./dist/testing-preview.js"
     },
+    "./testing/plugin-ui": {
+      "types": "./testing-plugin-ui.d.ts",
+      "import": "./browser/plugin-ui.js",
+      "default": "./browser/plugin-ui.js"
+    },
+    "./testing/preview.css": "./browser/preview.css",
     "./plugin-ui": {
       "types": "./plugin-ui.d.ts"
     },
@@ -61,10 +67,14 @@
   },
   "files": [
     "dist",
+    "browser",
     "plugin-ui.d.ts",
+    "testing-plugin-ui.d.ts",
     "view-globals.d.ts"
   ],
-  "sideEffects": false,
+  "sideEffects": [
+    "*.css"
+  ],
   "engines": {
     "node": ">=22.13"
   },
@@ -72,9 +82,11 @@
     "access": "public"
   },
   "scripts": {
-    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup",
+    "build": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup && npm run build:browser",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepare": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup"
+    "prepare": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\" && tsup",
+    "build:browser": "node ../../scripts/build-plugin-ui-browser.mjs",
+    "prepack": "npm run build:browser"
   },
   "dependencies": {
     "yaml": "^2.9.1"

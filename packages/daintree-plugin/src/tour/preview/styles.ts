@@ -142,5 +142,8 @@ export async function compilePreviewCss(sources: string[], theme: PreviewTheme):
       return { path: id, base, content };
     },
   });
-  return `${theme.css}${hostRootVariablesCss}\n${compiler.build([...candidates])}\n${HOST_TOUR_CSS}${HARNESS_CSS}`;
+  // The host's root defaults first, so the theme's variables win as the inline
+  // ones the app sets on <html> do; light themes carry their own dialog plane
+  // and shadow stack.
+  return `${hostRootVariablesCss}\n${theme.css}${compiler.build([...candidates])}\n${HOST_TOUR_CSS}${HARNESS_CSS}`;
 }

@@ -1,0 +1,15 @@
+// Types for `@daintreehq/plugin-sdk/testing/plugin-ui`, a browser build of
+// `@daintreehq/plugin-ui` for pages that render plugin UI outside Daintree: a
+// plugin's preview, its visual tests. Its exports are the host's, so its types
+// are the ambient declaration's. Style it with
+// `@daintreehq/plugin-sdk/testing/preview.css`, and serve React 19.2 or later
+// through the page's import map: the build leaves React out so the page has
+// one copy, and imports hooks (`useEffectEvent`) that 19.2 introduced.
+//
+// Host behaviour a page cannot perform stays inert: actions are refused,
+// toasts are not shown, a worker call is refused, and DiffView draws its patch
+// as plain text.
+
+// Brings in the ambient `declare module "@daintreehq/plugin-ui"` it re-exports.
+import "./plugin-ui.js";
+export * from "@daintreehq/plugin-ui";

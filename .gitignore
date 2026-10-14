@@ -6,6 +6,8 @@ node_modules/
 dist/
 dist-electron/
 dist-typecheck/
+# The plugin SDK's browser build of the UI kit (scripts/build-plugin-ui-browser.mjs)
+packages/plugin-sdk/browser/
 out/
 release/
 *.asar

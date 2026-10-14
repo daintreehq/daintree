@@ -25,11 +25,22 @@ export const TOOLTIP_CARD_PADDING = "px-3 py-1.5";
 
 type TooltipProviderProps = React.ComponentProps<typeof TooltipPrimitiveType.Provider>;
 
+// Whether a TooltipProvider is above. The app mounts one at its root; a page
+// that renders the plugin UI kit on its own (the plugin preview) has none, and
+// Radix throws for a tooltip without one, so `Tooltip` brings its own there.
+const TooltipProviderPresentContext = React.createContext(false);
+
 const TooltipProvider = ({ children, ...props }: TooltipProviderProps) => {
   const radix = useRadixPrimitives();
   if (!radix) return <>{children}</>;
   const Provider = radix.TooltipPrimitive.Provider;
-  return <Provider {...props}>{children}</Provider>;
+  return (
+    <Provider {...props}>
+      <TooltipProviderPresentContext.Provider value={true}>
+        {children}
+      </TooltipProviderPresentContext.Provider>
+    </Provider>
+  );
 };
 TooltipProvider.displayName = "TooltipProvider";
 
@@ -100,6 +111,7 @@ const Tooltip = ({
   ...props
 }: TooltipProps) => {
   const radix = useRadixPrimitives();
+  const hasProvider = React.useContext(TooltipProviderPresentContext);
   // When the surrounding keepMounted FixedDropdown closes, force
   // `open={false}` on the Radix Root so any tooltip whose dismiss path was
   // skipped by the synchronous `display:none` gets explicitly closed before
@@ -220,7 +232,7 @@ const Tooltip = ({
   // transition, clearing any internal state the prop-forced close skipped
   // (issue #8001). The hidden tree has no user-visible state worth
   // preserving since the forced close already invalidated it.
-  return (
+  const root = (
     <Root
       key={dropdownVisible ? "visible" : "hidden"}
       {...props}
@@ -234,6 +246,9 @@ const Tooltip = ({
       </TooltipTriggerNodeContext.Provider>
     </Root>
   );
+  if (hasProvider) return root;
+  const Provider = radix.TooltipPrimitive.Provider;
+  return <Provider>{root}</Provider>;
 };
 Tooltip.displayName = "Tooltip";
 

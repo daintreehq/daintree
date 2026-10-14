@@ -272,9 +272,18 @@ describe("preview page", () => {
     expect(css).toContain("box-sizing: border-box");
     expect(css).toContain(".tour-click-ring");
     // Host-derived variables tokens like bg-surface-dialog resolve through.
-    expect(css).toMatch(
-      /\.light \{[^}]*--theme-surface-dialog: var\(--theme-surface-panel-elevated\)/
-    );
+    expect(css).toMatch(/:root \{[^}]*--shadow-modal:/);
+  });
+
+  it("lets a light theme's chrome win over the host's dark defaults", async () => {
+    const source = path.join(tmpDir, "scene.js");
+    await fs.writeFile(source, 'const c = "bg-surface-dialog shadow-modal";');
+    const css = await compilePreviewCss([source], previewTheme("bondi"));
+    // Every rule here is unlayered `:root`, so the last declaration is the one in force.
+    const winning = (name: string) =>
+      [...css.matchAll(new RegExp(`${name}:\\s*([^;]+);`, "g"))].at(-1)?.[1];
+    expect(winning("--theme-surface-dialog")).toBe("var(--theme-surface-panel-elevated)");
+    expect(winning("--shadow-modal")).toContain("--theme-shadow-dialog");
   });
 
   it("scans the plugin's scripts for classes without entering dependencies or hidden folders", async () => {
