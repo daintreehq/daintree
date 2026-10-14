@@ -2,7 +2,6 @@ import type { PulseRangeDays } from "@shared/types";
 import type { ForgeProjectHealthPayload } from "@shared/types/ipc/forge";
 import { cn } from "@/lib/utils";
 import {
-  XCircle,
   CheckCircle2,
   Clock,
   CircleMinus,
@@ -13,24 +12,24 @@ import {
   GitMerge,
 } from "lucide-react";
 import { systemClient } from "@/clients/systemClient";
+import { Badge } from "@/components/ui/badge";
+import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatMediumDate, formatTimeAgo } from "@/utils/timeAgo";
 import { formatCompactCount, formatCountExact } from "@/lib/formatCount";
 
-type ChipTone = "neutral" | "danger" | "warning";
+type ChipTone = "neutral" | "error" | "warning";
 
-// Routine signals share one neutral body and ink; only a state that asks the
-// user to act takes a status tint, so a failing build or an open alert is the
-// one coloured thing in the row instead of one hue among six. The tint stays
-// on the fill, edge and glyph — the label keeps primary ink, which holds
-// 4.5:1 on every theme where status-coloured text does not.
+// Routine signals share the neutral badge; only a state that asks the user to
+// act takes a status tone, so a failing build or an open alert is the one
+// coloured thing in the row instead of one hue among six. The tone stays on
+// the fill and the glyph: the label keeps primary ink, which holds 4.5:1 on
+// every theme where status-coloured text does not.
 const TONE_CLASS: Record<ChipTone, string> = {
   neutral:
-    "border-border-default bg-overlay-subtle text-text-secondary hover:bg-overlay-medium hover:text-text-primary [&_svg]:text-text-secondary",
-  danger:
-    "border-status-error/40 bg-status-error/10 text-text-primary hover:bg-status-error/15 [&_svg]:text-status-error",
-  warning:
-    "border-status-warning/40 bg-status-warning/10 text-text-primary hover:bg-status-warning/15 [&_svg]:text-status-warning",
+    "border-border-default group-hover:bg-overlay-medium group-hover:text-text-primary [&_svg]:text-text-secondary",
+  error: "border-transparent text-text-primary group-hover:bg-status-error/15",
+  warning: "border-transparent text-text-primary group-hover:bg-status-warning/15",
 };
 
 interface HealthChipProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -39,21 +38,26 @@ interface HealthChipProps extends React.ButtonHTMLAttributes<HTMLButtonElement> 
   ref?: React.Ref<HTMLButtonElement>;
 }
 
-// Spreads the rest so a TooltipTrigger can wrap it `asChild`.
+// A clickable badge is a real button wrapping `Badge`, as badge.tsx asks. Spreads
+// the rest so a TooltipTrigger can wrap it `asChild`.
 function HealthChip({ icon, children, tone = "neutral", className, ...props }: HealthChipProps) {
   return (
     <button
       type="button"
       {...props}
-      className={cn(
-        "inline-flex h-6 min-w-0 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border px-2 text-xs font-medium tabular-nums",
-        "transition-colors duration-150 ease-out [&_svg]:h-3.5 [&_svg]:w-3.5 [&_svg]:shrink-0",
-        TONE_CLASS[tone],
-        className
-      )}
+      className={cn("group inline-flex min-w-0 shrink-0 cursor-pointer rounded-full", className)}
     >
-      {icon}
-      {children}
+      <Badge
+        tone={tone}
+        shape="pill"
+        className={cn(
+          "h-6 min-w-0 max-w-full gap-1.5 border px-2 tabular-nums [&_svg]:h-3.5 [&_svg]:w-3.5",
+          TONE_CLASS[tone]
+        )}
+      >
+        {icon}
+        {children}
+      </Badge>
     </button>
   );
 }
@@ -74,6 +78,12 @@ function CountLabel({ count, one, many }: { count: number; one: string; many: st
   );
 }
 
+const { Icon: FailedIcon, toneClass: failedTone } = SEVERITY_VISUAL.error;
+
+function FailedMark() {
+  return <FailedIcon aria-hidden="true" className={failedTone} />;
+}
+
 function ciChip(status: ForgeProjectHealthPayload["ciStatus"]): {
   icon: React.ReactNode;
   label: string;
@@ -81,9 +91,9 @@ function ciChip(status: ForgeProjectHealthPayload["ciStatus"]): {
 } {
   switch (status) {
     case "failure":
-      return { icon: <XCircle />, label: "CI failing", tone: "danger" };
+      return { icon: <FailedMark />, label: "CI failing", tone: "error" };
     case "error":
-      return { icon: <XCircle />, label: "CI error", tone: "danger" };
+      return { icon: <FailedMark />, label: "CI error", tone: "error" };
     case "pending":
     case "expected":
       return { icon: <Clock />, label: "CI running", tone: "neutral" };
@@ -126,7 +136,7 @@ function ReleaseChip({
           <span className="sr-only">, latest release</span>
         </HealthChip>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-80">
+      <TooltipContent side="top">
         <span className="block break-all font-mono">{release.tagName}</span>
         <span className="block text-text-secondary">
           Latest release{published !== null ? `, ${formatMediumDate(published)}` : ""}
@@ -145,7 +155,7 @@ export function PulseHealthSignals({
 }) {
   const openUrl = (path: string) => {
     const url = path.startsWith("http") ? path : `${health.repoUrl}${path}`;
-    systemClient.openExternal(url);
+    void systemClient.openExternal(url);
   };
 
   const ci = ciChip(health.ciStatus);
@@ -162,7 +172,7 @@ export function PulseHealthSignals({
   const alertsChip = alerts > 0 && (
     <HealthChip
       key="alerts"
-      icon={<ShieldAlert />}
+      icon={<ShieldAlert aria-hidden="true" className="text-status-warning" />}
       onClick={() => openUrl("/security/dependabot")}
       tone="warning"
     >
