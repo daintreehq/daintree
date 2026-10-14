@@ -10,6 +10,29 @@ type CircleProps = SVGProps<SVGSVGElement> & { className?: string };
 // share one span, x 5-11: a lighter or shorter mark goes to a blur at 12px on a
 // 1x screen while the ring around it stays crisp.
 
+// The ring the static glyphs share, with a faint wash of its own colour inside so
+// the circle has a little body against the surface rather than a bare outline.
+// A tint of the glyph's hue, not a neutral lift, so it moves with each theme's
+// own state colour; at 10% it stays well clear of the solid unread disc and of
+// the inner marks drawn over it. The spinner and the dashed snoozed ring stay
+// unfilled: a static fill behind a moving arc smears, and a wash would close
+// the snooze's gaps. `data-glyph-wash` drops it under forced colours (index.css),
+// where its opacity would otherwise survive as a grey disc of system ink.
+function WashedRing() {
+  return (
+    <circle
+      cx="8"
+      cy="8"
+      r="6"
+      stroke="currentColor"
+      strokeWidth="1.333"
+      fill="currentColor"
+      fillOpacity={0.1}
+      data-glyph-wash=""
+    />
+  );
+}
+
 // Drawn in CSS (`.spinner-circle` in index.css), not as an <svg>: Chromium will
 // not run a transform animation on the compositor when its target is an svg
 // (trace: compositeFailed 1024, "transform-related property cannot be
@@ -40,7 +63,7 @@ export function HollowCircle({ className, ...props }: CircleProps) {
       data-agent-state-glyph=""
       {...props}
     >
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <WashedRing />
     </svg>
   );
 }
@@ -55,7 +78,7 @@ export function InteractingCircle({ className, ...props }: CircleProps) {
       data-agent-state-glyph=""
       {...props}
     >
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <WashedRing />
       <line
         x1="8"
         y1="5"
@@ -88,7 +111,7 @@ export function ExitedCircle({ className, ...props }: CircleProps) {
       data-agent-state-glyph=""
       {...props}
     >
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <WashedRing />
       <line
         x1="5"
         y1="8"
@@ -104,7 +127,9 @@ export function ExitedCircle({ className, ...props }: CircleProps) {
 
 // The waiting ring with a question mark in it: an agent that is waiting and is
 // asking the user something. A refinement of the hollow circle, never a new
-// hue, so it still reads as waiting first.
+// hue, so it still reads as waiting first. The mark is typographic rather than
+// a cartoon curl: a tight bowl, a short straight stem, and a dot exactly the
+// stroke's width, drawn as a round cap on a zero-length segment.
 export function AskingCircle({ className, ...props }: CircleProps) {
   return (
     <svg
@@ -115,15 +140,14 @@ export function AskingCircle({ className, ...props }: CircleProps) {
       data-agent-state-glyph=""
       {...props}
     >
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <WashedRing />
       <path
-        d="M6.25 6.35a1.8 1.8 0 0 1 3.5.6c0 1-1.75 1.15-1.75 1.15"
+        d="M6.4 6.45A1.6 1.6 0 1 1 9.23 7.48C8.75 7.92 8 8.2 8 8.8M8 11.15h.01"
         stroke="currentColor"
         strokeWidth="1.333"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      <circle cx="8" cy="10.75" r="0.75" fill="currentColor" />
     </svg>
   );
 }
@@ -140,7 +164,7 @@ export function DoneCircle({ className, ...props }: CircleProps) {
       data-agent-state-glyph=""
       {...props}
     >
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <WashedRing />
       <path
         d="M5.5 8L7.17 9.67L10.5 6.33"
         stroke="currentColor"
@@ -168,7 +192,7 @@ export function BlockedCircle({ className, ...props }: CircleProps) {
       data-agent-state-glyph=""
       {...props}
     >
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <WashedRing />
       <line
         x1="6.23"
         y1="9.77"
@@ -194,7 +218,7 @@ export function ParkedCircle({ className, ...props }: CircleProps) {
       data-agent-state-glyph=""
       {...props}
     >
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <WashedRing />
       <path
         d="M6 5.75v4.5M10 5.75v4.5"
         stroke="currentColor"
@@ -243,7 +267,7 @@ export function IdleCircle({ className, ...props }: CircleProps) {
       data-agent-state-glyph=""
       {...props}
     >
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.333" />
+      <WashedRing />
       <circle cx="8" cy="8" r="1.25" fill="currentColor" />
     </svg>
   );
