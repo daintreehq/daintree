@@ -1,0 +1,213 @@
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /* Native checkboxes/radios paint their checked state in the text colour,
+     matching the house `Checkbox` primitive — never the OS cobalt, and not the
+     theme accent either. A checked option is membership, and accent restraint
+     allows at most ONE load-bearing accent per focus region; a checkbox group
+     spending it on every tick is precisely what the rule excludes.
+
+     `--checkbox-accent` stays as a seam for the rare control whose colour
+     carries meaning; a semantic accent-colour utility still wins, since
+     utilities sit in a later layer. The AccentColor keyword keeps any context
+     without the vars on OS behaviour. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--checkbox-accent, var(--color-text-primary, AccentColor));
+  }
+
+  /* Neutral option controls: membership, not emphasis. */
+  .checkbox-neutral {
+    --checkbox-accent: var(--color-text-primary);
+  }
+
+  /* The app's focus ring for anything that does not draw its own: a raw
+     control, a programmatically focused container, a third-party widget. Left
+     to Chromium it gets the UA's 1px blue auto ring, a hue no theme renders.
+     This sits in the base layer, so every component's `focus-visible:outline-*`
+     or `outline-hidden` utility still wins, and the forced-colors and
+     increased-contrast blocks further down still set the floor. */
+  *:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+    transition:
+      outline-color var(--focus-transition-duration) var(--focus-transition-easing),
+      outline-offset var(--focus-transition-duration) var(--focus-transition-easing),
+      box-shadow var(--focus-transition-duration) var(--focus-transition-easing);
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family:
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      Roboto,
+      Helvetica,
+      Arial,
+      sans-serif;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Global scrollbar styling */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+
+  *::-webkit-scrollbar {
+    width: var(--scrollbar-width);
+    height: var(--scrollbar-width);
+  }
+
+  *::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 3px;
+    min-height: 20px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: var(--scrollbar-track);
+  }
+
+  /* The dialog column. Header, body and footer all land 1.5rem from the card's
+     inner edge — on every platform, whether or not the body is scrolling.
+
+     The body reserves a scrollbar gutter so its content does not jump sideways
+     the moment it crosses the overflow threshold. What that gutter costs is not
+     a constant: macOS overlay scrollbars reserve nothing, classic scrollbars
+     reserve their full width, and no CSS primitive reports which happened. So
+     `publishScrollbarGutter()` measures it, and the padding here absorbs it
+     instead of asking the header and footer to add it back — a compensating
+     literal in the chrome was right on exactly one platform and wrong on the
+     rest (#12101).
+
+     `max()` floors the padding at zero if a platform ever reserves more than
+     the column itself; negative padding cannot claw space back from a native
+     scrollbar, so widening the column is the only safe overflow. */
+  .dialog-body-inset {
+    padding-inline: max(0px, calc(1.5rem - var(--app-scrollbar-gutter, 0px)));
+    scrollbar-gutter: stable both-edges;
+  }
+
+  /* The agent grid draws its own scrollbar — the GridScrollbar component, a
+     chunky physical handle modelled on xterm's (VS Code's) slider, sitting in
+     a real reserved gutter. The native scrollbar is hidden entirely: the grid
+     still scrolls via wheel, keyboard and programmatic scroll; only the visual
+     bar is replaced. xterm's own viewport scrollbar is unaffected — it is
+     scoped by `.xterm .xterm-viewport`. */
+  #panel-grid {
+    scrollbar-width: none;
+  }
+
+  #panel-grid::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Xterm font - required for correct font measurement */
+  .xterm {
+    font-family: var(--font-mono);
+  }
+
+  /* Hide native viewport scrollbar — xterm v6 provides its own overlay scrollbar.
+     Contain overscroll so terminal scrollback can't chain into the outer
+     scrollable panel grid (#8805). */
+  .xterm .xterm-viewport {
+    scrollbar-width: none;
+    overscroll-behavior-y: contain;
+  }
+  .xterm .xterm-viewport::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Full-screen TUIs (vim, htop, lazygit, AI agent UIs) run on the alternate
+     screen buffer, which has no scrollback. xterm v6's overlay scrollbar would
+     otherwise draw a non-functional full-height thumb over the TUI. Hide it
+     while the alt buffer is active; XtermAdapter toggles `.terminal-alt-buffer`
+     on the wrapper from the onBufferChange signal. The overlay is absolutely
+     positioned, so hiding it shifts no content, and the normal-buffer scrollbar
+     (where scrollback actually exists) is untouched. */
+  .terminal-alt-buffer .xterm-scrollbar {
+    display: none !important;
+  }
+
+  /* Mitigate xterm #5893 / #9812: the DOM renderer applies negative inline
+     letter-spacing to emoji spans because OffscreenCanvas.measureText mismeasures
+     them. Author !important wins over the inline style at the same origin. We clamp
+     to 0 rather than `initial` because Daintree sets letterSpacing: 0 (xtermConfig.ts),
+     so the .xterm-rows baseline is ~0px. Only negative values are matched: positive
+     corrections for wide glyphs (CJK) are measured correctly and left alone; sub-pixel
+     bleed from clamping a rare legitimate negative correction beats the multi-px emoji
+     collapse. Chromium has serialized both `letter-spacing: -Npx` and
+     `letter-spacing:-Npx`; keep both forms covered. Remove when on @xterm/xterm >=7.0.0. */
+  .xterm-rows span[style*="letter-spacing: -"],
+  .xterm-rows span[style*="letter-spacing:-"] {
+    letter-spacing: 0 !important;
+  }
+
+  /* Consistent monospace font stack.
+
+     Ligatures off: the mono face (JetBrains Mono) draws `--` as one long dash,
+     `->` and `!=` as arrows and symbols, and in the UI the mono face is almost
+     always showing something to be read or typed character for character — a
+     command's `--flag`, a path, a hash. The terminal and the editor set their
+     own font and are untouched by this. */
+  code,
+  kbd,
+  samp,
+  pre,
+  .font-mono {
+    font-family: var(--font-mono);
+    font-variant-ligatures: none;
+  }
+
+  /* CodeMirror defaults to a bare `monospace`, which renders as serif on
+     some systems when JetBrains Mono hasn't finished loading. Force the
+     full mono stack on every CodeMirror instance. */
+  .cm-editor,
+  .cm-editor .cm-scroller {
+    font-family: var(--font-mono);
+  }
+
+  /* Subtle noise texture for grid background */
+  .bg-noise {
+    position: relative;
+  }
+  .bg-noise::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    /* The noise.png fallback must stay here: a relative url() inside a :root
+       custom property resolves against the document, not this stylesheet, so
+       themes swap the texture via --grain-image (data-URI or `none`) and the
+       bundled asset remains the unset/"fine" default. */
+    background-image: var(--grain-image, url("../../assets/noise.png"));
+    background-repeat: repeat;
+    opacity: var(--theme-grain-opacity, 0.02);
+    mix-blend-mode: var(--theme-grain-blend, overlay);
+    pointer-events: none;
+    z-index: 0;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}

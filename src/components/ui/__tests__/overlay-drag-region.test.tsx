@@ -10,6 +10,7 @@ import { ContextMenuContent, ContextMenuSubContent } from "../context-menu";
 import { DropdownMenuContent, DropdownMenuSubContent } from "../dropdown-menu";
 import { PopoverContent } from "../popover";
 import { primeRadix } from "../radix-loader";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 /**
  * Issue #12347 — overlay content portals to `document.body`, outside the
@@ -130,7 +131,7 @@ describe("the opt-out stays wired to a real rule", () => {
     // every assertion above passes while the bug is fully back. The
     // descendant half is what carries the opt-out to the menu items, which
     // never carry the class themselves.
-    const css = readFileSync(path.join(UI_DIR, "..", "..", "index.css"), "utf8");
+    const css = readIndexCss();
     // Built from NO_DRAG, not spelled again: renaming the class in the
     // primitives and here, but not in the stylesheet, would otherwise ship a
     // class with no rule behind it and leave this suite green.

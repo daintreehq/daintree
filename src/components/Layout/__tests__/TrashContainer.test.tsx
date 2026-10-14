@@ -9,8 +9,7 @@ import { UI_TRANSIENT_HINT_DWELL_MS } from "@/lib/animationUtils";
 import type { PanelInstance } from "@shared/types/panel";
 import type { TrashedTerminal } from "@/store/slices";
 import { DROP_TARGET_FRAME } from "@/components/DragDrop/dropIndicator";
-import * as fs from "fs/promises";
-import * as path from "path";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 let emptyTrashSpy: (...args: unknown[]) => unknown;
 
@@ -710,15 +709,13 @@ describe("TrashContainer", () => {
 
 describe("Trash pulse stylesheet - Issue #3113", () => {
   it("should have trash-pulse animation in index.css", async () => {
-    const filePath = path.resolve(__dirname, "../../../index.css");
-    const content = await fs.readFile(filePath, "utf-8");
+    const content = readIndexCss();
     expect(content).toContain("@keyframes trash-pulse");
     expect(content).toContain(".animate-trash-pulse");
   });
 
   it("should include animate-trash-pulse in the reduce-motion variant override", async () => {
-    const filePath = path.resolve(__dirname, "../../../index.css");
-    const content = await fs.readFile(filePath, "utf-8");
+    const content = readIndexCss();
     expect(content).toMatch(
       /@variant\s+reduce-motion\s*\{[\s\S]*?\.animate-trash-pulse[\s\S]*?animation:\s*none/
     );

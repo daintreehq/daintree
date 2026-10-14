@@ -1,0 +1,225 @@
+/* Respect user's motion preferences — OS prefers-reduced-motion and the
+ * Daintree-level "Reduce UI animations" toggle (body[data-reduce-animations])
+ * both remove spatial motion while leaving opacity changes intact.
+ * WCAG 2.2 SC 2.3.3: remove motion, don't just speed it up.
+ *
+ * Single source of truth via `@variant reduce-motion` — the variant emits
+ * both the OS media query and the body-attribute selector. See the
+ * `@custom-variant reduce-motion` definition in styles/design-contract.css.
+ */
+@variant reduce-motion {
+  .animate-activity-pulse,
+  .animate-checkbox-check,
+  .animate-breathe,
+  .animate-spin,
+  .animate-spin-slow,
+  .animate-pulse-delayed,
+  .animate-pulse-immediate,
+  .animate-skeleton-shimmer,
+  .animate-badge-bump,
+  .animate-action-row-bump,
+  .animate-activity-blip,
+  .animate-trash-pulse,
+  .animate-diagnostics-flash,
+  .animate-upstream-badge-flash,
+  .animate-border-flash,
+  .animate-figure-arrive {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    will-change: auto;
+  }
+
+  /* Reduced motion removes the pulse, not the anti-flicker gate: a static bone
+   * that appears for a 100ms load is exactly the flash the gate exists to stop.
+   * A zero-length reveal filling backwards holds the bone hidden for the gate,
+   * then shows it in one step — no motion at all. */
+  .animate-pulse-delayed {
+    animation: skeleton-reveal 0s var(--anti-flicker-delay) backwards;
+  }
+
+  .tour-click-ring {
+    display: none;
+  }
+
+  /* The countdown still runs; the draining ring is motion, so it holds full. */
+  .tour-countdown-ring {
+    animation: none;
+  }
+
+  /* Same for the recorder's chord window: the wait still ends on time, and the
+   * bar holds full as a static "still listening" mark instead of draining. */
+  .animate-chord-window {
+    animation: none;
+  }
+
+  /* The all-clear flash has no static form: snapping it to opacity 1 like the
+   * cues above would paint the whole window. The component skips mounting it,
+   * and this covers a preference that flips mid-pulse. */
+  .animate-all-clear-flash {
+    display: none;
+  }
+
+  /* The global `transition: none` rules below would strip the anti-flicker
+   * delay (200ms for palette, 400ms for surface), letting any sub-frame stale
+   * flip flash the surface to a dim opacity. Keep stale surfaces at full
+   * opacity instead. WCAG 2.3.3. */
+  .palette-results-stale,
+  .surface-stale {
+    opacity: 1 !important;
+    transition: none !important;
+  }
+
+  /* Hide the shimmer sweep entirely — `animation: none` alone leaves a static
+   * gradient stripe visible. WCAG 2.3.3: remove motion, don't freeze it.
+   */
+  .animate-skeleton-shimmer::after {
+    display: none;
+    will-change: auto;
+  }
+
+  /* Empty-grid launcher entry stagger — drop the keyframes and snap every
+   * section to its resting state. The sections' `motion-safe:` utilities
+   * cover both preferences too; this rule also clears the `opacity: 0` the
+   * stagger's `fill-mode-backwards` would otherwise hold. */
+  .launcher-section-enter {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  /* Press-snap controls outside `Button` (choice cards, recipe cards, launcher
+   * quick actions). `active:scale-*` emits the individual `scale` property, so
+   * the `transform: none` button reset below cannot neutralize it — see the
+   * Tailwind v4 trap in `docs/themes/interaction-state-recipes.md`. That reset
+   * also excludes the recipe cards outright: they are Radix context-menu
+   * triggers, so they carry a `data-state` attribute. Kill the press scale
+   * explicitly. */
+  .press-scale {
+    scale: none !important;
+  }
+
+  /* Fleet polish animations — opacity-only already, but drop the keyframe
+   * entirely to keep WCAG 2.3.3 strict compliance. The bar stripe pseudos
+   * stay at their static opacity (1); only the dedicated exit overlay is
+   * hidden since it has no static-state purpose.
+   */
+  .animate-fleet-bar-refocus-pulse::before,
+  .animate-fleet-bar-commit-flash::before {
+    animation: none;
+    will-change: auto;
+  }
+
+  .fleet-exit-pulse-overlay {
+    animation: none;
+    opacity: 0;
+    will-change: auto;
+  }
+
+  .fleet-preview-enter-overlay {
+    animation: none;
+    opacity: 0;
+    will-change: auto;
+  }
+
+  /* FileChangeList row-recency — the bar has no static-state purpose, so drop
+   * it entirely under reduced motion. WCAG 2.3.3: remove motion, don't freeze.
+   */
+  .file-change-row-new::before {
+    animation: none;
+    opacity: 0;
+    will-change: auto;
+  }
+
+  /* Card input-time receipt — strip the keyframe and keep the overlay
+   * invisible. Unlike `border-flash`, this overlay has no static-state
+   * meaning, so `opacity: 0` (not `opacity: 1`) is the correct rest state.
+   */
+  .animate-input-receipt-flash {
+    animation: none;
+    opacity: 0;
+    will-change: auto;
+  }
+
+  /* Label swap under reduced motion — animation removed entirely. The swap
+   * still happens (the new value renders), it just snaps into place rather
+   * than crossfading. WCAG 2.3.3: remove motion, don't just speed it up.
+   */
+  .animate-label-swap-out,
+  .animate-label-swap-in {
+    animation: none;
+    transform: none !important;
+    will-change: auto;
+  }
+
+  .animate-label-swap-out {
+    opacity: 0;
+  }
+
+  /* Banner slot — drop the height interpolation under reduced motion so the
+   * banner appears/disappears without spatial motion. WCAG 2.3.3.
+   */
+  .banner-slot {
+    transition: none;
+  }
+
+  /* Palette body height transition — drop the height interpolation. */
+  .palette-body-height {
+    transition: none !important;
+  }
+
+  /* Chevron rotation — drop the rotation transition. */
+  [data-animated-chevron] {
+    transition: none !important;
+  }
+
+  /* Grid-rows expand/collapse reveals (filter sections et al.) — height
+   * interpolation is spatial motion; the content still snaps open/closed.
+   * WCAG 2.3.3. */
+  [data-animated-reveal] {
+    transition: none !important;
+  }
+
+  /* Focused elements and buttons (below) keep only their opacity transition:
+   * the focus ring's outline motion and any press or hover interpolation go,
+   * but a focused palette card or a pill that is also a button still fades.
+   * `transition: none` here used to cancel those surfaces' fades too. */
+  *:focus-visible {
+    transition-property: opacity !important;
+  }
+
+  .animate-activity-pulse,
+  .animate-breathe,
+  .panel-state-compiling,
+  .panel-state-working {
+    transition: none;
+  }
+
+  button:not([data-state="open"]):not([data-state="closed"]),
+  [role="button"]:not([data-state="open"]):not([data-state="closed"]),
+  [type="button"]:not([data-state="open"]):not([data-state="closed"]),
+  [type="submit"]:not([data-state="open"]):not([data-state="closed"]),
+  [type="reset"]:not([data-state="open"]):not([data-state="closed"]) {
+    transform: none !important;
+    transition-property: opacity !important;
+  }
+
+  /* Radix overlay enter/exit (popover, dropdown, context-menu, select,
+   * tooltip) via tw-animate-css. Zero out spatial transforms; fade
+   * (opacity) is intentionally preserved. WCAG 2.3.3.
+   */
+  [data-state][data-side] {
+    --tw-enter-scale: 1;
+    --tw-exit-scale: 1;
+    --tw-enter-translate-x: 0;
+    --tw-enter-translate-y: 0;
+    --tw-exit-translate-x: 0;
+    --tw-exit-translate-y: 0;
+  }
+
+  /* The drop list's wipe is spatial motion too; keep only its fade. */
+  .overlay-motion-drop[data-state="open"],
+  .overlay-motion-drop[data-state="open"][data-side="top"] {
+    animation-name: overlay-fade-in;
+  }
+}

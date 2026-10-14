@@ -1,8 +1,6 @@
 // @vitest-environment jsdom
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, beforeAll, beforeEach, vi, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import type { ReactNode } from "react";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
@@ -13,6 +11,7 @@ import { notify } from "@/lib/notify";
 import { dispatchEscape, _resetForTests as resetEscapeStack } from "@/lib/escapeStack";
 import { primeRadix } from "../radix-loader";
 import { Toaster } from "../toaster";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 // The app root supplies the TooltipProvider. The trigger renders its child
 // as-is; the content is dropped so tooltip text can't collide with queries.
@@ -1787,7 +1786,7 @@ describe("Toast controls and layering", () => {
   });
 
   function zLayers(): Record<string, number> {
-    const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+    const css = readIndexCss();
     const layers: Record<string, number> = {};
     for (const m of css.matchAll(/--(z-[a-z-]+):\s*(\d+);/g)) layers[m[1]!] = Number(m[2]);
     return layers;

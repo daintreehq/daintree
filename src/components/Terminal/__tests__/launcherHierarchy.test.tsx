@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { reduceMotionSelectors } from "./launcherMotionContract";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 /**
  * The composition contracts behind issue #11987.
@@ -287,7 +288,7 @@ describe("launcher column — composite widgets are one tab stop", () => {
 
 describe("launcher column — teaching never reads as an action", () => {
   it("exempts the tip's control from the button borders in BOTH contrast modes", () => {
-    const css = readFileSync(resolve(LAUNCHER_DIR, "../../index.css"), "utf-8");
+    const css = readIndexCss();
     // macOS fires only `prefers-contrast: more`; Windows swaps in system
     // colours via `forced-colors: active`. The blocks are separate on purpose,
     // so the exemption has to exist in each of them independently — a single

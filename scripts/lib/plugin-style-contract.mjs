@@ -22,6 +22,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { HOST_CSS_ENTRY, readHostStylesheet } from "./host-css.mjs";
 
 export const PLUGIN_STYLE_CONTRACT_MODULE_ID = "virtual:daintree-plugin-style-contract";
 
@@ -55,9 +56,6 @@ const CONTRACT_SOURCES = {
 const STANDALONE_SOURCES = {
   tailwindPreflightCss: "node_modules/tailwindcss/preflight.css",
 };
-
-/** The host stylesheet whose root-level variables the standalone preview needs. */
-const HOST_STYLESHEET = "src/index.css";
 
 /**
  * The custom properties the host stylesheet declares on `:root`, `.light` and
@@ -115,10 +113,11 @@ function renderModule(onFile) {
     onFile?.(absolute);
     exports.push(`export const ${name} = ${JSON.stringify(readFileSync(absolute, "utf-8"))};`);
   }
-  const host = path.join(REPO_ROOT, HOST_STYLESHEET);
-  onFile?.(host);
+  // The entry's `:root` / `.light` / `.dark` rules live across its host
+  // partials, so read them expanded and watch every one of them.
+  const host = readHostStylesheet(HOST_CSS_ENTRY, { onFile }).css;
   exports.push(
-    `export const hostRootVariablesCss = ${JSON.stringify(hostRootVariablesCss(readFileSync(host, "utf-8")))};`
+    `export const hostRootVariablesCss = ${JSON.stringify(hostRootVariablesCss(host))};`
   );
   return exports.join("\n");
 }

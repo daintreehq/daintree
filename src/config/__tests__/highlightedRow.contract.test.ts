@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILT_IN_APP_SCHEMES } from "@shared/theme/themes";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 /**
  * The highlighted-row language (docs/themes/interaction-state-recipes.md,
@@ -104,7 +105,7 @@ describe("highlighted-row language", () => {
       .map(({ rel }) => rel);
     expect(offenders).toEqual([]);
 
-    const css = fs.readFileSync(path.join(REPO_ROOT, "src/index.css"), "utf8");
+    const css = readIndexCss();
     expect(css).not.toMatch(/\.palette-row[^{]*::before/);
   });
 

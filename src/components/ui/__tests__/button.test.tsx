@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
 import { render, fireEvent } from "@testing-library/react";
-import { readFileSync } from "fs";
-import { resolve } from "path";
 import { describe, expect, it, vi } from "vitest";
 import { getOverlayContrastWarnings } from "@shared/theme/colorValidator";
 import { BUILT_IN_APP_SCHEMES } from "@shared/theme/themes";
@@ -9,6 +7,7 @@ import type { AppColorScheme } from "@shared/theme/types";
 
 import { Button, buttonVariants } from "../button";
 import { FilterChip } from "../FilterChip";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 describe("buttonVariants", () => {
   it("uses specific transition instead of transition-all", () => {
@@ -269,7 +268,7 @@ describe("Button pressed toggle", () => {
   // needs a system-colour border from the forced-colors block, keyed on the
   // hook Button writes.
   it("keeps a forced-colors border for a pressed toggle", () => {
-    const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+    const css = readIndexCss();
     const forced = css.slice(css.indexOf("@media (forced-colors: active)"));
     const rule = /([^{}]*)\{\s*border:\s*2px solid ButtonText;/g;
     const selectors = [...forced.matchAll(rule)].map((m) => m[1]!);
@@ -356,7 +355,7 @@ describe("link variant", () => {
   // Both high-contrast blocks frame every button; a link's underline is its
   // affordance there, so each block must exempt it independently.
   it("is exempt from the high-contrast button frame in both media blocks", () => {
-    const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf-8");
+    const css = readIndexCss();
     for (const marker of ["@media (forced-colors: active)", "@media (prefers-contrast: more)"]) {
       const start = css.indexOf(marker);
       expect(start, `${marker} block is missing`).toBeGreaterThan(-1);

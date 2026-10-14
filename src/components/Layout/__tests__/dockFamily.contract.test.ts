@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DOCK_CHIP_CLASS, DOCK_CHIP_OPEN_CLASS, DOCK_STATE_GLYPH_CLASS } from "../dockChipStyles";
 import { DOCK_STATUS_PILL_CLASS, DOCK_STATUS_PILL_OPEN_CLASS } from "../dockStatusPill";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 /**
  * The dock is one family: the worktree's chips, the project's status pills,
@@ -43,7 +44,7 @@ describe("dock chips", () => {
     expect(utilities(DOCK_CHIP_OPEN_CLASS).some((u) => /(^|:)ring/.test(u))).toBe(false);
     expect(DOCK_CHIP_OPEN_CLASS).not.toMatch(/accent/);
 
-    const css = fs.readFileSync(path.join(SRC, "index.css"), "utf8");
+    const css = readIndexCss();
     for (const token of ["--dock-item-bg-active", "--dock-item-border-active"]) {
       const declaration = css.match(new RegExp(`${token}:\\s*([^;]+);`));
       expect(declaration, token).not.toBeNull();

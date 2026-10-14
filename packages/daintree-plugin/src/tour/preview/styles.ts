@@ -40,7 +40,7 @@ ${tailwindUtilitiesCss.trim()}
 
 /**
  * Host rules the mockup kit relies on that live in the host's own stylesheet
- * rather than the design contract. Mirrors `.tour-click-ring` in src/index.css.
+ * rather than the design contract. Mirrors `.tour-click-ring` in src/styles/host/animations.css.
  */
 const HOST_TOUR_CSS = `@keyframes tour-click-ring {
   0% { opacity: 0.9; transform: scale(0.3); }

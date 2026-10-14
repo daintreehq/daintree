@@ -1,0 +1,199 @@
+/* --- Electron Window Controls --- */
+
+/* The draggable area (Title Bar) */
+.app-drag-region {
+  -webkit-app-region: drag;
+  user-select: none; /* Vital: prevents text cursor from appearing while dragging */
+  cursor: default; /* Forces arrow cursor instead of text beam */
+}
+
+/* Non-draggable interactive elements (Buttons, Inputs).
+   Descendants opt out too — nested wrappers inside an interactive control
+   would otherwise inherit `drag` from the toolbar parent and re-introduce
+   dead-click zones over the children.
+
+   Overlay content portaled to `document.body` (menus, popovers, selects,
+   dropdowns) needs this class as well. Chromium derives the OS drag region
+   geometrically, as drag rects minus no-drag rects, so a portaled surface
+   that never claims a no-drag rect has the toolbar's `drag` showing through
+   wherever the two overlap — and every item painted over the toolbar is
+   swallowed as a window drag instead of being clickable (#12347). The
+   descendant selector then carries the opt-out to the items inside. */
+.app-no-drag,
+.app-no-drag * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* Safety strip for resizing on Windows frameless windows.
+   This reserves the top 3px for the OS resize cursor so the drag
+   handler doesn't steal the mouse event at the very edge.
+*/
+.window-resize-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 50;
+  -webkit-app-region: no-drag;
+  pointer-events: auto; /* Allow OS to catch resize events */
+  cursor: ns-resize; /* Show vertical resize cursor */
+}
+
+/* Performance Mode Overrides — narrow the transition kill-list to expensive
+ * properties only. Keeps cheap state-feedback transitions alive (color,
+ * background-color, opacity, outline-color, border-color) so hover/focus/
+ * selected cues still respond. Expensive properties — transform, width,
+ * height, box-shadow, backdrop-filter, filter — are stripped by the
+ * !important narrowing. Animations remain fully suppressed; performance
+ * mode targets resource conservation, not vestibular safety (see the
+ * `reduce-motion` variant for that). */
+body[data-performance-mode="true"] *,
+body[data-performance-mode="true"] *::before,
+body[data-performance-mode="true"] *::after {
+  animation: none !important;
+  transition-property: color, background-color, opacity, outline-color, border-color !important;
+  will-change: auto !important;
+}
+
+/* Ensure delayed skeletons don't stay invisible when animations are disabled */
+body[data-performance-mode="true"] .animate-pulse-delayed,
+body[data-performance-mode="true"] .animate-pulse-immediate,
+body[data-performance-mode="true"] .animate-hint-fade-in {
+  opacity: 1 !important;
+}
+
+/* Stale surfaces use a 150ms opacity transition with an anti-flicker delay
+ * (200ms for `.palette-results-stale`, 400ms for `.surface-stale`). The
+ * narrowed perf-mode wildcard preserves the `opacity` transition-property, so
+ * the delay would still apply — `opacity: 1 !important` alone would wait for
+ * the delay before resetting. Kill the transition outright on these scoped
+ * selectors so the reset is instant when performance mode kicks in mid-stale. */
+body[data-performance-mode="true"] .palette-results-stale,
+body[data-performance-mode="true"] .surface-stale {
+  opacity: 1 !important;
+  transition: none !important;
+}
+
+/* The global wildcard above kills the shimmer animation but the ::after
+ * pseudo-element still paints its static gradient stripe — hide it.
+ */
+body[data-performance-mode="true"] .animate-skeleton-shimmer::after,
+body[data-performance-mode="true"] .pulse-skeleton-shimmer::after {
+  display: none !important;
+}
+
+/* Disable backdrop effects in performance mode */
+body[data-performance-mode="true"] .surface-overlay {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background-color: var(--color-surface-sidebar) !important;
+}
+
+/* F1 (light) — match the elevated floating-surface base in performance mode.
+ * `.light` lives on <html>, `data-performance-mode` on <body>, so the light
+ * class is an ANCESTOR of the perf-mode attribute, not a descendant. */
+.light body[data-performance-mode="true"] .surface-overlay {
+  background-color: var(--color-surface-panel-elevated) !important;
+}
+
+body[data-performance-mode="true"] .surface-overlay.active-sessions-menu {
+  background-color: var(--color-surface-canvas) !important;
+}
+
+/* Command HUD glass — the generic backdrop-blur kill rule below strips the
+ * frost in performance mode; give it a solid elevated surface so it stays
+ * legible (mirrors the .surface-overlay perf fallback above). */
+body[data-performance-mode="true"] .command-hud-glass {
+  background-color: var(--color-surface-panel-elevated) !important;
+}
+.light body[data-performance-mode="true"] .command-hud-glass {
+  background-color: var(--color-surface-panel-elevated) !important;
+}
+
+body[data-performance-mode="true"] .surface-chrome {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background-color: var(--color-surface-sidebar) !important;
+}
+
+body[data-performance-mode="true"] .surface-toolbar {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background-color: var(--color-surface-toolbar) !important;
+}
+
+/* A remote window's unlit patches follow the strip onto the solid surface. */
+body[data-performance-mode="true"] .surface-toolbar[data-remote-window] {
+  --remote-occluder: var(--color-surface-toolbar);
+}
+
+/* Disable terminal glow in performance mode */
+body[data-performance-mode="true"] .terminal-selected,
+body[data-performance-mode="true"] .terminal-focused,
+body[data-performance-mode="true"] .assistant-focused {
+  box-shadow: inset 0 0 0 1px var(--theme-overlay-medium) !important;
+}
+
+/* Reduce modal backdrop blur in performance mode */
+body[data-performance-mode="true"] [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Power saving (#12515) — nothing visible: locked or hidden window, hidden
+ * document, or a cached view (usePowerSavingMotion). Stops only what LOOPS: one
+ * looping element keeps the compositor producing frames at display rate for as
+ * long as it runs. An explicit list, never a wildcard, so one-shot transitions
+ * and Radix Presence exits are untouched. Each glyph keeps its resting frame
+ * and colour — the same static rendering reduced motion already uses. A window
+ * that can still be seen never gets this; it gets the reduced rate below.
+ * Transient loaders
+ * (`animate-spin`, the gated skeleton pulses) are left alone: they end on
+ * their own, and a frozen one would read as a hang. */
+body[data-power-saving="true"] .animate-spin-slow,
+body[data-power-saving="true"] .animate-activity-pulse,
+body[data-power-saving="true"] .animate-breathe,
+body[data-power-saving="true"] .animate-pulse,
+body[data-power-saving="true"] .motion-safe\:animate-pulse,
+body[data-power-saving="true"] .forge-status-error {
+  animation: none;
+  will-change: auto;
+}
+
+/* Reduced rate — battery, a blurred but visible window, or the efficiency
+ * profile. The loops keep running so a glance still shows what is working, but
+ * eased motion at display rate becomes a few discrete steps per second (steps
+ * apply per keyframe interval). Only the timing function changes, so whatever
+ * already resolved to `animation: none` for reduced motion stays still. */
+body[data-motion-rate="reduced"] .animate-spin-slow {
+  /* Half the foreground rate, which the CSS contract test holds us to: 8.3
+   * steps a second at 18 degrees. Discrete rotation reads as ticking rather
+   * than motion below roughly 8 steps a second or past a 30 degree step, and
+   * this tier covers a window that is visible and genuinely live underneath —
+   * its worktrees keep watching while blurred. Dropping it further buys about
+   * four aborted draws a second against a compositor that wakes 60 times
+   * either way, so the rate is spent on being legible. */
+  animation-timing-function: steps(20, end);
+}
+
+body[data-motion-rate="reduced"] .animate-activity-pulse,
+body[data-motion-rate="reduced"] .animate-breathe,
+body[data-motion-rate="reduced"] .animate-pulse,
+body[data-motion-rate="reduced"] .motion-safe\:animate-pulse,
+body[data-motion-rate="reduced"] .forge-status-error {
+  animation-timing-function: steps(2, end);
+}
+
+body[data-motion-rate="reduced"] .animate-skeleton-shimmer::after,
+body[data-motion-rate="reduced"] .pulse-skeleton-shimmer::after {
+  animation-timing-function: steps(8, end);
+}
+
+/* `animation: none` alone leaves the shimmer's gradient stripe parked mid-bone. */
+body[data-power-saving="true"] .animate-skeleton-shimmer::after,
+body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
+  display: none;
+  will-change: auto;
+}

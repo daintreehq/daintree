@@ -197,14 +197,14 @@ const EXCEPTIONS: {
       "An 8x8px status mark: rounded-full would make it a circle and any scale step would round it past recognition",
   },
   {
-    file: "src/index.css",
+    file: "src/styles/host/base.css",
     match: "border-radius: 3px",
     count: 1,
     reason:
       "Scrollbar thumb: radius is half the thumb width, so it tracks the scrollbar, not the theme",
   },
   {
-    file: "src/index.css",
+    file: "src/styles/host/animations.css",
     match: "border-radius: 1px",
     count: 1,
     reason: "File-change recency rail is 2px wide; 1px is its half-width cap",

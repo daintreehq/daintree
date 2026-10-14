@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import { readToolbarCss } from "@/__tests__/support/cssManifest";
 import { extractAtRuleBlocks } from "./cssBlocks";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
 const PROBLEMS_BUTTON_PATH = path.resolve(__dirname, "../ToolbarProblemsButton.tsx");
@@ -16,7 +17,6 @@ const COPY_TREE_ACTION_PATH = path.resolve(
   __dirname,
   "../../../services/actions/definitions/worktreeContextActions.ts"
 );
-const INDEX_CSS_PATH = path.resolve(__dirname, "../../../index.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
   let source: string;
@@ -254,7 +254,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       );
 
       // Whatever entry motion the check uses must be one reduced motion strips.
-      const css = await fs.readFile(INDEX_CSS_PATH, "utf-8");
+      const css = readIndexCss();
       const reduced = extractAtRuleBlocks(css, "@variant reduce-motion").join("\n");
       for (const cls of glyphs![2]!.split(/\s+/).filter((c) => c.startsWith("animate-"))) {
         expect(reduced).toContain(`.${cls}`);

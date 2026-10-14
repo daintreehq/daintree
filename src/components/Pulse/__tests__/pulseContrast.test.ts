@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 const CARD_PATH = resolve(__dirname, "../ProjectPulseCard.tsx");
 const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
@@ -330,7 +331,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("forced-colors block paints the shape with CanvasText and sizes it per level", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const block = mediaBlockSlice(content, "@media (forced-colors: active)");
     expect(block).toContain(".pulse-heat-cell-shape");
     expect(block).toContain("CanvasText");
@@ -341,7 +342,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("forced-colors block borders every legend swatch like the grid cells it explains", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const block = mediaBlockSlice(content, "@media (forced-colors: active)");
     // Legend swatches are <span>s, so they miss the ButtonText border every
     // grid <button> gets. Without one the empty swatch paints Canvas-on-Canvas
@@ -353,7 +354,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("forced-colors block redraws the latest-active marker as a non-shadow outline", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const block = mediaBlockSlice(content, "@media (forced-colors: active)");
     expect(block).toMatch(
       /\.pulse-heat-cell\[data-latest-active\]\s*{[^}]*outline:[^;]*CanvasText/
@@ -361,7 +362,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("prefers-contrast block bumps heat-cell border to 1px theme-text", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const block = mediaBlockSlice(content, "@media (prefers-contrast: more)");
     expect(block).toContain(".pulse-heat-cell");
     expect(block).toMatch(/\.pulse-heat-cell\s*{[^}]*border-width:\s*1px/);
@@ -369,7 +370,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
   });
 
   it("the two contrast blocks stay separate (CLAUDE.md dual-block guard)", async () => {
-    const content = await readFile(INDEX_CSS_PATH, "utf-8");
+    const content = readIndexCss();
     const forcedStart = content.indexOf("@media (forced-colors: active)");
     const contrastStart = content.indexOf("@media (prefers-contrast: more)");
     expect(forcedStart).toBeGreaterThan(-1);
@@ -393,7 +394,7 @@ describe("Pulse — no surface can express failure (issue #11172)", () => {
     // that moved there would otherwise escape this scan entirely.
     ["design-contract.css", DESIGN_CONTRACT_CSS_PATH],
   ])("%s carries no missed-day token, class, or label", async (_name, path) => {
-    const content = await readFile(path, "utf-8");
+    const content = path === INDEX_CSS_PATH ? readIndexCss() : await readFile(path, "utf-8");
     expect(content).not.toMatch(MISSED_DAY_SURFACE);
   });
 

@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readFile } from "fs/promises";
-import { resolve } from "path";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 const suppressMock = vi.hoisted(() => vi.fn());
 const getPanelStateMock = vi.hoisted(() => vi.fn());
@@ -101,7 +100,7 @@ describe("diagnostics dock layout signal (issue #12264)", () => {
     // Read the duration out of the stylesheet rather than restating it: a
     // corrective pass shorter than the animation measures a mid-transition box,
     // and the two values drifting apart is exactly how that regresses.
-    const css = await readFile(resolve(__dirname, "../../index.css"), "utf-8");
+    const css = readIndexCss();
     // The dock shares its rule with the output drawer, so the selector list may
     // name more than the dock.
     const rule = /\.diagnostics-dock\s*(?:,[^{]*)?\{[^}]*transition:\s*height\s+(\d+)ms/.exec(css);

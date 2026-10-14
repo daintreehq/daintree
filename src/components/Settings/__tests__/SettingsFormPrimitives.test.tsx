@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { readFileSync } from "fs";
-import { resolve } from "path";
 import { render as rtlRender, screen, fireEvent, type RenderOptions } from "@testing-library/react";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsSelect } from "../SettingsSelect";
@@ -14,6 +12,7 @@ import { PresetColorPicker } from "../PresetColorPicker";
 import { SettingsGroup } from "../SettingsGroup";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
   return rtlRender(ui, { wrapper: TooltipProvider, ...options });
@@ -943,9 +942,7 @@ describe("SettingsCheckbox", () => {
     );
     expect(animationClasses.length).toBeGreaterThan(0);
 
-    const killed = reduceMotionKilledClasses(
-      readFileSync(resolve(__dirname, "../../../index.css"), "utf8")
-    );
+    const killed = reduceMotionKilledClasses(readIndexCss());
     animationClasses.forEach((name) => expect([...killed]).toContain(name));
   });
 });

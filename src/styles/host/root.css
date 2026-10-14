@@ -1,0 +1,216 @@
+:root {
+  interpolate-size: allow-keywords;
+
+  /* Dialog surface is polarity-aware (consumed via `bg-surface-dialog`). `:root`
+     is the dark source of truth: dark dialogs sit on `surface-panel` (the
+     historical look), not the lightest `surface-panel-elevated` plane, whose
+     grey reads as washed-out against the near-black workbench. Light themes get
+     the elevated plane from the theme engine (`APP_THEME_POLARITY_VARIABLES` in
+     shared/theme/themes.ts, the round-2 light-contrast audit). */
+  --theme-surface-dialog: var(--theme-surface-panel);
+
+  /* Z-index tier system
+   * Establishes a clear stacking hierarchy for UI layers.
+   * Higher tiers always appear above lower tiers.
+   *
+   * Tier 30: The scrim behind a panel-tier sheet (the Theme Browser shield)
+   * Tier 40: Fixed panels (dock, sidebars)
+   * Tier 50: Portal overlay
+   * Tier 55: Maximized content (terminals)
+   * Tier 56: Ambient overlays — the window visual bell (the all-clear flash)
+   *          and the panel move ghost — so they stay under every modal scrim,
+   *          popover and toast
+   * Tier 58: The top toolbar. Above the Portal and Theme Browser sheets,
+   *          which start below it, and under every modal scrim; it used to
+   *          share 60 with modals, which left DOM order to decide
+   * Tier 60: Modal dialogs (full-screen overlays)
+   * Tier 70: Popovers, dropdowns, tooltips (can appear above modals)
+   * Tier 75: Nested dialogs (dialogs triggered from within popovers)
+   * Tier 80: Toast notifications (always visible)
+   * Tier 85: Menus opened from a toast (must clear the toast that owns them)
+   * Tier 90: Drag shields — a transparent full-window cover while a divider
+   *          drags, so iframes and webviews cannot swallow the pointer
+   */
+  --z-panel-scrim: 30;
+  --z-panel: 40;
+  --z-portal: 50;
+  --z-maximized: 55;
+  --z-visual-bell: 56;
+  --z-toolbar: 58;
+  --z-modal: 60;
+  --z-popover: 70;
+  --z-nested-dialog: 75;
+  --z-toast: 80;
+  --z-toast-overlay: 85;
+  --z-drag-shield: 90;
+
+  /* Legacy floating-chrome shadow stack. The :root values are the ORIGINAL
+   * black-derived stack and remain the dark-mode source of truth (byte-for-byte
+   * unchanged). E7 re-expresses this on top of the single cool-slate engine
+   * source (--theme-shadow-floating/-dialog) ONLY on light, in the theme
+   * engine's `APP_THEME_POLARITY_VARIABLES` (shared/theme/themes.ts) — on
+   * light the old stack re-derived every layer from --theme-shadow-color (pure
+   * black on 6/7 light themes) and baked a DARK inset top-highlight, a black
+   * hairline on the element's top edge (wrong direction on near-white). On
+   * light the inset top-highlight becomes a true white bevel. */
+  --shadow-overlay:
+    0 1px 0 var(--theme-overlay-soft) inset,
+    0 12px 40px color-mix(in srgb, var(--theme-shadow-color) 89%, transparent);
+  --shadow-modal:
+    0 1px 0 var(--theme-overlay-medium) inset,
+    0 20px 56px color-mix(in srgb, var(--theme-shadow-color) 81%, transparent);
+  --shadow-dock-popover:
+    0 1px 0 var(--theme-overlay-strong) inset,
+    0 25px 70px -10px color-mix(in srgb, var(--theme-shadow-color) 97%, transparent);
+  --shadow-dock-panel-popover:
+    0 1px 0 var(--theme-overlay-strong) inset,
+    0 10px 40px -10px color-mix(in srgb, var(--theme-shadow-color) 78%, transparent),
+    0 20px 60px -15px color-mix(in srgb, var(--theme-shadow-color) 56%, transparent),
+    0 30px 80px -20px color-mix(in srgb, var(--theme-shadow-color) 75%, transparent);
+  /* A pressed or recessed well. Tailwind's `shadow-inner` geometry, drawn in
+   * the theme's shadow colour rather than stock black. The alpha is set, not
+   * mixed: the shadow colour is itself translucent on light themes, and a 5%
+   * mix of it would all but vanish. */
+  --shadow-inset: inset 0 2px 4px 0 rgb(from var(--theme-shadow-color) r g b / 0.05);
+  --border-overlay: var(--theme-border-strong);
+  --border-dock-popup: color-mix(
+    in oklab,
+    var(--theme-border-strong) 85%,
+    var(--theme-text-primary)
+  );
+  --border-divider: var(--theme-border-divider);
+
+  --dock-bg: var(--color-surface-sidebar);
+  --dock-border: var(--border-divider);
+  --dock-shadow: 0 -2px 12px rgb(from var(--theme-shadow-color) r g b / 0.35);
+  --dock-padding-x: 0.5rem;
+  --dock-padding-y: 0.375rem;
+  --dock-gap: 0.375rem;
+  --dock-item-height: 2rem;
+  /* dock-item-bg / dock-item-bg-active / dock-item-border-active are OPTIONAL
+     extension keys (shared/theme/extensionRegistry.ts). Themes override them
+     via inline vars on <html>, which beat these :root fallbacks in the
+     cascade; a self-referential var() fallback here would be an invalid
+     custom-property cycle. Omission keeps these exact values. */
+  --dock-item-bg: var(--theme-overlay-subtle);
+  --dock-item-bg-hover: var(--theme-overlay-medium);
+  /* Open is the neutral lift the status pills use (bg-overlay-emphasis), never
+     accent: accent is the focus ring's. */
+  --dock-item-bg-active: var(--theme-overlay-emphasis);
+  --dock-item-border: var(--theme-border-subtle);
+  --dock-item-border-active: var(--theme-border-strong);
+  --dock-item-bg-waiting: color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
+  --dock-item-border-waiting: rgb(from var(--color-activity-waiting) r g b / 0.3);
+  --state-chip-bg-opacity: var(--theme-state-chip-bg-opacity, 0.15);
+  --state-chip-border-opacity: var(--theme-state-chip-border-opacity, 0.4);
+  --label-pill-bg-opacity: var(--theme-label-pill-bg-opacity, 0.1);
+  --label-pill-border-opacity: var(--theme-label-pill-border-opacity, 0.2);
+  --scrollbar-width: var(--theme-scrollbar-width, 6px);
+  --scrollbar-thumb: var(--theme-scrollbar-thumb, var(--color-state-idle));
+  --scrollbar-thumb-hover: var(
+    --theme-scrollbar-thumb-hover,
+    color-mix(in oklab, var(--scrollbar-thumb) 85%, var(--color-text-primary))
+  );
+  /* The grabbed step, one further along the same ramp as hover — xterm's slider
+     has the same three (rest / hover / active), and a drag that looks like a
+     hover gives no confirmation the handle was caught. Derived, not a theme
+     token: every theme's ramp already points toward its own text colour. */
+  --scrollbar-thumb-active: color-mix(
+    in oklab,
+    var(--scrollbar-thumb-hover) 70%,
+    var(--color-text-primary)
+  );
+  --scrollbar-track: var(--theme-scrollbar-track, transparent);
+  --scroll-shadow-color: var(--color-surface-panel);
+  --panel-state-edge-width: var(--theme-panel-state-edge-width, 2px);
+  --panel-state-edge-inset-block: var(--theme-panel-state-edge-inset-block, 4px);
+  --panel-state-edge-radius: var(--theme-panel-state-edge-radius, 2px);
+  --focus-ring-offset: var(--theme-focus-ring-offset, 2px);
+  --chrome-noise-texture: var(--theme-chrome-noise-texture, none);
+
+  /* B1 — Category pill (and subtle/border) blend surface + mix strength. The
+   * category-*-subtle/-border tokens in the @theme block (styles/design-contract.css)
+   * mix the category hue
+   * into --pill-surface at --category-subtle-mix / --category-border-mix.
+   * The :root defaults reproduce the ORIGINAL behavior (mix into surface-canvas
+   * at 12% / 28%) so DARK is byte-for-byte unchanged. On light (the theme
+   * engine's `APP_THEME_POLARITY_VARIABLES`) the base is re-pointed to the
+   * elevated plane — category pills render on elevated/floating chrome, so
+   * mixing into canvas produced a fill DARKER than its real container (an
+   * inverted figure-ground; a Fleet pill on elevated read recessed) — and the
+   * mix strength is raised because 12% over a near-white surface is sub-JND.
+   * Consumers on a different surface can locally override --pill-surface. */
+  --pill-surface: var(--color-surface-canvas);
+  --category-subtle-mix: 12%;
+  --category-border-mix: 28%;
+
+  --animation-duration: 150ms;
+  --transition-duration: 150ms;
+  --terminal-animation-duration: 50ms;
+  --focus-transition-duration: 150ms;
+  --focus-transition-easing: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Anti-flicker (Doherty) gate — 400ms perceptual floor below which loading
+   * affordances should stay hidden. Used by `.animate-pulse-delayed` skeletons
+   * and discrete-action stale surfaces (`.surface-stale`).
+   * Mirror of UI_DOHERTY_THRESHOLD in src/lib/animationUtils.ts; the contract
+   * test in src/lib/__tests__/animationUtils.test.ts enforces parity. */
+  --anti-flicker-delay: 400ms;
+  /* Palette typed-input stale-dim gate — 200ms. Shorter than Doherty because
+   * keystrokes arrive every ~200ms at normal typing speed, so a 400ms gate
+   * would almost never fire before being reset. Industry convention (Algolia
+   * `stalledSearchDelay`, React `useDeferredValue` examples) is 200ms.
+   * Mirror of UI_PALETTE_STALE_DELAY in src/lib/animationUtils.ts. */
+  --anti-flicker-delay-palette: 200ms;
+  --background: var(--theme-surface-canvas);
+  --foreground: var(--theme-text-primary);
+  --card: var(--theme-surface-panel);
+  --card-foreground: var(--theme-text-primary);
+  --popover: var(--theme-surface-panel-elevated);
+  --popover-foreground: var(--theme-text-primary);
+  --primary: var(--theme-accent-primary);
+  --primary-foreground: var(--theme-accent-foreground);
+  --secondary: var(--theme-surface-panel-elevated);
+  --secondary-foreground: var(--theme-text-primary);
+  --muted: var(--theme-surface-panel);
+  --muted-foreground: var(--theme-text-secondary);
+  --destructive: var(--theme-status-danger);
+  --destructive-foreground: var(--theme-text-inverse);
+  --border: var(--theme-border-default);
+  --input: var(--theme-surface-input);
+  --ring: var(--theme-focus-ring);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: var(--theme-surface-sidebar);
+  --sidebar-foreground: var(--theme-text-primary);
+  --sidebar-primary: var(--theme-accent-primary);
+  --sidebar-primary-foreground: var(--theme-accent-foreground);
+  --sidebar-accent: var(--theme-overlay-soft);
+  --sidebar-accent-foreground: var(--theme-text-primary);
+  --sidebar-border: var(--theme-border-default);
+  --sidebar-ring: var(--theme-accent-primary);
+}
+
+/* Compact density mode for dock - reduced padding and heights */
+[data-dock-density="compact"] {
+  --dock-padding-y: 0.25rem;
+  --dock-gap: 0.25rem;
+  --dock-item-height: 1.75rem;
+}
+
+/* Comfortable density mode for dock - increased padding and heights */
+[data-dock-density="comfortable"] {
+  --dock-padding-y: 0.5rem;
+  --dock-gap: 0.5rem;
+  --dock-item-height: 2.25rem;
+}
+
+.dark {
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+}

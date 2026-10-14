@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -55,7 +54,7 @@ describe("ContentFadeIn under reduced motion", () => {
   });
 
   it("has no reduce-motion rule stripping the keyframe", () => {
-    const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+    const css = readIndexCss();
     const classes = new Set(
       (render(<ContentFadeIn>x</ContentFadeIn>).container.firstElementChild?.className ?? "")
         .split(/\s+/)
