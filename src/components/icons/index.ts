@@ -10,7 +10,7 @@ export * from "./brands";
 // Each was chosen to fit the metaphor.
 export {
   Activity, // project pulse / live activity heartbeat
-  AppWindow, // where an opened folder lands — a window of its own or the current one
+  AppWindow, // where an opened folder or host lands — a window of its own or the current one
   ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike
   ArrowDownAZ, // alphabetical sort order (A to Z)
   ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
@@ -21,7 +21,7 @@ export {
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from the observed finished ring (DoneCircle)
-  CircleArrowUp, // a CLI below the version Daintree needs — the same up-arrow-in-a-circle plugins show for an available update
+  CircleArrowUp, // a CLI below the version Daintree needs, or a host whose build was refused — the same up-arrow-in-a-circle plugins show for an available update
   CircleCheck, // a check that passed or a step that is done (setup, forge, review) — a finished agent draws DoneCircle on the family's own ring instead
   CircleDashed, // a check or step that has not run yet (PR checks, setup) — Pilot's snoozed band draws SnoozedCircle on the family's own ring instead
   CircleDot, // an open issue on forge surfaces — Pilot's idle band draws IdleCircle on the family's own ring instead
@@ -41,7 +41,7 @@ export {
   FolderTree, // Daintree's own file browser panel (the worktree file tree)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
   Gauge, // git that could run faster on this worktree — the suggestion to route a WSL checkout's git through WSL
-  GitBranch, // the branch a folder has checked out — where an agent's work is going
+  GitBranch, // the branch a folder has checked out — where an agent's work is going, and what continues on another host
   GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
   GitMergeConflict, // a PR whose branch the forge reports as conflicting with its base — takes the CI glyph's place, since the conflict has to be resolved first
   GitPullRequest, // forge provider / code-host plugin category
@@ -68,9 +68,11 @@ export {
   Server, // a machine a window runs on — the toolbar's host switcher, beside the project pill
   ServerOff, // the window's host with its link down — the same machine, crossed out, never an alarm
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
+  Settings2, // managing a list of things in Settings — hosts, presets — kept apart from Settings, which is project settings
   Sprout, // origin / first step (main worktree, first agent launch)
   Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
   TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
+  Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

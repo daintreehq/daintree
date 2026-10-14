@@ -44,6 +44,21 @@
     color: CanvasText !important;
   }
 
+  /* The same uncaught class colour greys a menu's own marks: the current-row
+     tick and the leading icons are drawn in secondary ink, which stayed
+     zinc-grey on the white canvas at ~2.6:1. A highlighted row is an outline
+     here, not a fill, so its marks stay on Canvas too. */
+  [role="menu"] svg:is(.text-text-primary, .text-text-secondary, .text-text-muted) {
+    color: CanvasText !important;
+  }
+
+  /* A separator is a 1px background, which forced colours paint as Canvas, so
+     a menu's sections ran together. Drawn as a border it survives. */
+  [role="menu"] [role="separator"] {
+    height: 0;
+    border-top: 1px solid CanvasText;
+  }
+
   /* Inside a button the forced pair is ButtonText on ButtonFace, which a custom
      contrast theme can set apart from CanvasText on Canvas. */
   button [data-severity-glyph],

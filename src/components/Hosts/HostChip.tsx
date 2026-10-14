@@ -13,9 +13,19 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Server, ServerOff } from "@/components/icons";
+import {
+  AppWindow,
+  CircleArrowUp,
+  GitBranch,
+  Plus,
+  Server,
+  ServerOff,
+  Settings2,
+  Unplug,
+} from "@/components/icons";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { TimeAgo } from "@/components/ui/TimeAgo";
 import { pluralize } from "@/lib/pluralize";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -38,6 +48,8 @@ import {
   clientPlatform,
   describeHostMenuState,
   hostChipStatus,
+  hostMenuNoteAge,
+  hostMenuRowHasTrouble,
   hostChipStatusText,
   localHostLabel,
   splitHostName,
@@ -80,13 +92,58 @@ async function disconnectFromHost(hostId: string, hostName: string): Promise<voi
   }
 }
 
+const MENU_ICON_CLASS = "mr-2 h-3.5 w-3.5 shrink-0 text-text-secondary";
+
+/**
+ * The column the current host's tick lives in. Action rows keep it empty, so
+ * their icons stand under the hosts' platform marks and every label in the
+ * menu starts on one edge.
+ */
+function TickColumn() {
+  return <span className="mr-2 w-3.5 shrink-0" aria-hidden="true" />;
+}
+
+/** The host's platform mark, or a plain machine until a handshake says which. */
+function HostMark({ row }: { row: HostMenuRow }) {
+  return (
+    <span
+      data-menu-icon=""
+      className="flex h-4 w-3.5 shrink-0 items-center justify-center text-text-secondary"
+      aria-hidden="true"
+    >
+      {row.platform ? (
+        <PlatformGlyph platform={row.platform} />
+      ) : (
+        <Server className="h-3 w-3" aria-hidden="true" />
+      )}
+    </span>
+  );
+}
+
+/** A destination in a submenu: the same mark and state the host list shows. */
 function HostSubmenuLabel({ row }: { row: HostMenuRow }) {
+  const { state } = describeHostMenuState(row);
+  const trouble = hostMenuRowHasTrouble(row);
   return (
     <>
-      <span className="mr-2 flex w-3.5 shrink-0 justify-center text-text-secondary">
-        <PlatformGlyph platform={row.platform} />
+      <span className="mr-2 flex self-start">
+        <HostMark row={row} />
       </span>
-      <span className="truncate">{row.name}</span>
+      {/* Laid out like the host list: the name keeps the row, and its state
+          drops to a line of its own rather than squeezing the name's end. */}
+      <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4">
+        <span className="max-w-full break-words">{row.name}</span>
+        {state && (
+          <span
+            className={cn(
+              "ml-auto shrink-0 text-2xs",
+              trouble ? "text-text-primary" : "text-text-secondary"
+            )}
+          >
+            {state}
+          </span>
+        )}
+      </span>
     </>
   );
 }
@@ -99,26 +156,63 @@ function HostMenuItem({
   onPick: (row: HostMenuRow, newWindow: boolean) => void;
 }) {
   const { state, note } = describeHostMenuState(row);
+  // A link that has gone wrong carries the chip's own warning mark and full
+  // ink; connecting and not connected stay quiet, and connected never goes green.
+  const trouble = hostMenuRowHasTrouble(row);
+  const noteAge = hostMenuNoteAge(row);
+  const TroubleGlyph = SEVERITY_GLYPH.warning;
   return (
     <DropdownMenuItem
       className="items-start gap-2"
       data-host-id={row.hostId}
       aria-current={row.isCurrent ? "true" : undefined}
+      textValue={row.name}
       onClick={(event) => onPick(row, isNewWindowClick(event))}
     >
       <span className="flex h-4 w-3.5 shrink-0 items-center" aria-hidden="true">
-        {row.isCurrent && <Check className="h-3.5 w-3.5 text-text-secondary" />}
+        {row.isCurrent && <Check className="h-3.5 w-3.5 text-text-primary" />}
       </span>
-      <span className="flex h-4 shrink-0 items-center text-text-secondary">
-        <PlatformGlyph platform={row.platform} />
-      </span>
+      <HostMark row={row} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex min-w-0 items-baseline gap-3">
-          {/* Wraps rather than truncates: "build-east-01" and "build-east-02" differ at the end. */}
-          <span className="min-w-0 break-words font-medium text-text-primary">{row.name}</span>
-          {state && <span className="ml-auto shrink-0 text-2xs text-text-secondary">{state}</span>}
+        {/* The name keeps the whole row when it needs it and the state drops
+            below it: "build-east-01" and "build-east-02" differ at the end. */}
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-3">
+          <span
+            className={cn(
+              "max-w-full break-words text-text-primary",
+              row.isCurrent ? "font-semibold" : "font-medium"
+            )}
+          >
+            {row.name}
+          </span>
+          {state && (
+            <span
+              data-host-trouble={trouble ? "" : undefined}
+              className={cn(
+                "ml-auto flex shrink-0 items-baseline gap-1 text-2xs",
+                trouble || row.isCurrent ? "font-medium text-text-primary" : "text-text-secondary"
+              )}
+            >
+              {trouble && (
+                <TroubleGlyph
+                  className="h-3 w-3 shrink-0 translate-y-0.5 text-status-warning"
+                  aria-hidden="true"
+                />
+              )}
+              {state}
+            </span>
+          )}
         </span>
-        {note && <span className="text-2xs text-text-secondary">{note}</span>}
+        {noteAge ? (
+          <TimeAgo
+            verbose
+            prefix={noteAge.prefix}
+            timestamp={noteAge.at}
+            className="text-2xs text-text-secondary"
+          />
+        ) : (
+          note && <span className="text-2xs text-text-secondary">{note}</span>
+        )}
       </span>
     </DropdownMenuItem>
   );
@@ -342,18 +436,23 @@ export function HostChip() {
               : `Working on ${name} over SSH. Project files, terminals and agents run there${latency !== null ? `. ${latency} ms round trip` : ""}`}
           </TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="center" pointer className="w-64">
+        <DropdownMenuContent align="center" pointer className="w-72">
           <DropdownMenuLabel>Working on</DropdownMenuLabel>
           {rows.map((row) => (
             <HostMenuItem key={row.hostId} row={row} onPick={pick} />
           ))}
           <DropdownMenuSeparator />
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger>Open in new window</DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="min-w-44">
+            <DropdownMenuSubTrigger>
+              <TickColumn />
+              <AppWindow data-menu-icon className={MENU_ICON_CLASS} aria-hidden="true" />
+              Open in new window
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-60">
               {rows.map((row) => (
                 <DropdownMenuItem
                   key={row.hostId}
+                  textValue={row.name}
                   data-new-window-host-id={row.hostId}
                   onSelect={() => void switchToHost(row.hostId, true)}
                 >
@@ -364,11 +463,16 @@ export function HostChip() {
           </DropdownMenuSub>
           {projectId && otherHosts.length > 0 && (
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Continue this branch on…</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="min-w-44">
+              <DropdownMenuSubTrigger>
+                <TickColumn />
+                <GitBranch data-menu-icon className={MENU_ICON_CLASS} aria-hidden="true" />
+                Continue this branch on…
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-60">
                 {otherHosts.map((row) => (
                   <DropdownMenuItem
                     key={row.hostId}
+                    textValue={row.name}
                     data-continue-host-id={row.hostId}
                     onSelect={() => void openProjectOnHost(row.hostId, projectId)}
                   >
@@ -385,22 +489,50 @@ export function HostChip() {
               data-update-host-id={offer.hostId}
               onSelect={() => runHostUpdate(offer.target, offer.hostId)}
             >
+              <TickColumn />
+              <CircleArrowUp data-menu-icon className={MENU_ICON_CLASS} aria-hidden="true" />
               {offer.label}
             </DropdownMenuItem>
           ))}
           <DropdownMenuSeparator />
           {overviewAvailable && (
             <DropdownMenuActionItem actionId={HOSTS_OVERVIEW_ACTION_ID}>
+              <TickColumn />
+              <Server data-menu-icon className={MENU_ICON_CLASS} aria-hidden="true" />
               Hosts overview…
             </DropdownMenuActionItem>
           )}
-          <DropdownMenuActionItem actionId="host.add">Add host…</DropdownMenuActionItem>
-          <DropdownMenuItem onSelect={openHostsSettingsTab}>Manage hosts…</DropdownMenuItem>
+          <DropdownMenuActionItem actionId="host.add">
+            <TickColumn />
+            <Plus data-menu-icon className={MENU_ICON_CLASS} aria-hidden="true" />
+            Add host…
+          </DropdownMenuActionItem>
+          <DropdownMenuItem onSelect={openHostsSettingsTab}>
+            <TickColumn />
+            <Settings2 data-menu-icon className={MENU_ICON_CLASS} aria-hidden="true" />
+            Manage hosts…
+          </DropdownMenuItem>
           {canDisconnect && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem data-testid="host-chip-disconnect" onSelect={requestDisconnect}>
-                Disconnect {name} from this device
+              {/* Two lines rather than one that wraps: the host it names and
+                  the scope ("this device", nothing on the host stops). */}
+              <DropdownMenuItem
+                data-testid="host-chip-disconnect"
+                className="items-start"
+                aria-label={`Disconnect ${name} from this device`}
+                onSelect={requestDisconnect}
+              >
+                <TickColumn />
+                <Unplug
+                  data-menu-icon
+                  className={cn(MENU_ICON_CLASS, "mt-px")}
+                  aria-hidden="true"
+                />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="break-words">Disconnect {name}</span>
+                  <span className="text-2xs text-text-secondary">From this device</span>
+                </span>
               </DropdownMenuItem>
             </>
           )}
