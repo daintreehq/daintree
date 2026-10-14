@@ -218,6 +218,11 @@
     backdrop-filter: none;
     background-color: var(--theme-surface-toolbar);
   }
+
+  /* A remote window's unlit patches follow the strip onto the solid surface. */
+  .surface-toolbar[data-remote-window] {
+    --remote-occluder: var(--theme-surface-toolbar);
+  }
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -225,6 +230,10 @@
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background-color: var(--theme-surface-toolbar);
+  }
+
+  .surface-toolbar[data-remote-window] {
+    --remote-occluder: var(--theme-surface-toolbar);
   }
 }
 
