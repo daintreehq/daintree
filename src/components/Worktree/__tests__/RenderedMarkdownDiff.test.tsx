@@ -18,6 +18,10 @@ vi.mock("@/components/ui/EmptyState", () => ({
 }));
 
 import { RenderedMarkdownDiff } from "../RenderedMarkdownDiff";
+import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+
+// The app's own kit host, so the kit reaches the app services mocked here.
+installAppPluginKitHost();
 
 const ROOT = "/repo";
 const FILE = "/repo/docs/guide.md";

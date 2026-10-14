@@ -41,6 +41,7 @@ vi.mock("@/store", () => ({
   useErrorStore: () => ({ errors: [] }),
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
+vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 
 vi.mock("@/store/telemetryPreviewStore", () => ({
   useTelemetryPreviewStore: () => ({ active: false, events: [] }),
@@ -53,6 +54,10 @@ vi.mock("@/hooks", async (importOriginal) => {
     useOverlayState: () => {},
   };
 });
+vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
+  useOverlayState: () => {},
+}));
 
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
