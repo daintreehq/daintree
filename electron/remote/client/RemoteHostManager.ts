@@ -6,6 +6,8 @@ import type {
   HostId,
 } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { createLogger } from "../../utils/logger.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { acceptHostPush } from "../hybrid/eventsPush.js";
 import { appErrorEnvelope, hostDisconnectedEnvelope } from "../link/envelopes.js";
 import { Lane } from "../link/frames.js";
@@ -38,6 +40,22 @@ import {
 import { LinkClient, type LinkClientOptions, type LinkClientState } from "./LinkClient.js";
 import type { LinkTransport } from "./transport.js";
 
+const logger = createLogger("main:RemoteHostManager");
+
+/**
+ * Why this Shell closed a view's endpoint on a host. The host only hears that
+ * the Shell closed it; this is the Shell's half of that story.
+ */
+type ShellEndpointCloseCause =
+  /** The view was destroyed (closed, or evicted to save memory). */
+  | "view-closed"
+  /** The view is bound to another host, or to this machine, now. */
+  | "view-moved"
+  /** A fresh session could not reopen it. */
+  | "reopen-refused"
+  /** The connection itself was stopped (idle release, forgetting the host, quit). */
+  | "connection-stopped";
+
 /**
  * Where events from a host land: the local views bound to its endpoints. The
  * connection names views by `WebContents` id and never holds the objects.
@@ -64,6 +82,8 @@ export interface ViewSink {
 interface OpenEndpoint {
   endpointId: string;
   projectId: string | null;
+  /** The session it was opened on, which a resume keeps and a fresh session replaces. */
+  sessionId: string | null;
 }
 
 /** A local view's endpoint is live on a session: newly opened, or carried over by a resume. */
@@ -190,6 +210,11 @@ export class HostConnection {
 
   get lastSeen(): number | null {
     return this.link.lastSeen;
+  }
+
+  /** The session id the host last gave this connection, kept while the link is down. */
+  get lastSessionId(): string | null {
+    return this.link.lastSessionId;
   }
 
   get hostInfo(): HostInfo | null {
@@ -336,6 +361,7 @@ export class HostConnection {
     this.forgetEndpoints();
     this.pendingCloses.clear();
     for (const [webContentsId, open] of discarded) {
+      this.logEndpointClosed(webContentsId, open, "connection-stopped");
       this.notifyClosed({ webContentsId, endpointId: open.endpointId });
     }
     // A discarded connection must not stay reachable through live views' listeners.
@@ -527,7 +553,7 @@ export class HostConnection {
 
   /** The view now belongs to another host (or this machine): close its endpoint here. */
   retireView(webContentsId: number): void {
-    this.closeEndpoint(webContentsId);
+    this.closeEndpoint(webContentsId, "view-moved");
   }
 
   /** Whether the view still belongs to this host, by its authoritative binding. */
@@ -589,7 +615,7 @@ export class HostConnection {
     // A resume keeps the host's endpoints, so the views' streams move to the new session.
     for (const [webContentsId, open] of [...this.endpoints]) {
       if (!this.isBoundHere(webContentsId)) {
-        this.closeEndpoint(webContentsId);
+        this.closeEndpoint(webContentsId, "view-moved");
         continue;
       }
       notifyEndpointOpened(this.openedListeners, {
@@ -603,10 +629,12 @@ export class HostConnection {
     // view's next call; the rest are discarded.
     const reopened: number[] = [];
     for (const [webContentsId, open] of reopen) {
-      const endpointId = this.isBoundHere(webContentsId)
+      const boundHere = this.isBoundHere(webContentsId);
+      const endpointId = boundHere
         ? this.ensureEndpoint(session, webContentsId, open.projectId)
         : null;
       if (endpointId === null) {
+        this.logEndpointClosed(webContentsId, open, boundHere ? "reopen-refused" : "view-moved");
         this.unwatch(webContentsId);
         this.notifyClosed({ webContentsId, endpointId: open.endpointId });
       } else {
@@ -654,27 +682,54 @@ export class HostConnection {
     });
     if (result === "refused") return null;
     this.pendingCloses.delete(endpointId);
-    this.endpoints.set(webContentsId, { endpointId, projectId });
+    const sessionId = this.link.lastSessionId;
+    this.endpoints.set(webContentsId, { endpointId, projectId, sessionId });
     this.viewsByEndpoint.set(endpointId, webContentsId);
+    logger.info("Remote host view endpoint opened", {
+      hostId: this.hostId,
+      sessionId,
+      endpointId,
+      webContentsId,
+      projectId,
+    });
     if (!this.watched.has(webContentsId)) {
       this.watched.set(
         webContentsId,
-        this.views.watch(webContentsId, () => this.closeEndpoint(webContentsId))
+        this.views.watch(webContentsId, () => this.closeEndpoint(webContentsId, "view-closed"))
       );
     }
     notifyEndpointOpened(this.openedListeners, { session, webContentsId, endpointId });
     return endpointId;
   }
 
-  private closeEndpoint(webContentsId: number): void {
+  private closeEndpoint(webContentsId: number, cause: ShellEndpointCloseCause): void {
     this.unwatch(webContentsId);
     const open = this.endpoints.get(webContentsId);
     if (!open) return;
     this.endpoints.delete(webContentsId);
     this.viewsByEndpoint.delete(open.endpointId);
     this.liveAssistants.delete(webContentsId);
-    if (!this.postClose(this.session, open.endpointId)) this.pendingCloses.add(open.endpointId);
+    const posted = this.postClose(this.session, open.endpointId);
+    if (!posted) this.pendingCloses.add(open.endpointId);
+    this.logEndpointClosed(webContentsId, open, cause, { closeQueued: !posted });
     this.notifyClosed({ webContentsId, endpointId: open.endpointId });
+  }
+
+  private logEndpointClosed(
+    webContentsId: number,
+    open: OpenEndpoint,
+    cause: ShellEndpointCloseCause,
+    extra: { closeQueued?: boolean } = {}
+  ): void {
+    logger.info("Remote host view endpoint closed", {
+      hostId: this.hostId,
+      sessionId: open.sessionId,
+      endpointId: open.endpointId,
+      webContentsId,
+      projectId: open.projectId,
+      cause,
+      ...extra,
+    });
   }
 
   private postClose(session: LinkSession | null, endpointId: string): boolean {
@@ -904,9 +959,17 @@ export class RemoteHostManager {
       const link = this.connections.get(hostId)?.linkState;
       if (link?.status === "version-mismatch") continue;
       if (link?.status === "unreachable" && link.retryAt === null) continue;
-      console.log(`[RemoteHosts] Closing the unused connection to ${hostId}`);
+      const idle = {
+        hostId,
+        sessionId: this.connections.get(hostId)?.lastSessionId ?? null,
+        idleMs: now - (this.lastUsed.get(hostId) ?? now),
+      };
+      logger.info("Closing the unused connection to a remote host", idle);
       void this.disconnect(hostId).catch((error: unknown) => {
-        console.warn(`[RemoteHosts] Closing the unused connection to ${hostId} failed:`, error);
+        logger.warn("Closing the unused connection to a remote host failed", {
+          ...idle,
+          reason: formatErrorMessage(error, "disconnect failed"),
+        });
       });
     }
   }

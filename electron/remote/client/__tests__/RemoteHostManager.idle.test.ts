@@ -4,6 +4,7 @@ import { TEST_HANDSHAKE, waitFor } from "../../link/__tests__/linkTestUtils.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
 import { RemoteHostManager } from "../RemoteHostManager.js";
 import { SshAccessError, TransportError, type LinkTransport } from "../transport.js";
+import { logBuffer } from "../../../services/LogBuffer.js";
 
 function memoryStore(): RemoteHostsStore {
   let value: { hosts: HostDescriptor[] } | undefined;
@@ -50,6 +51,7 @@ function setup(transport: LinkTransport = unreachable) {
 
 describe("RemoteHostManager idle release", () => {
   it("closes a connection nothing has used for the release window", async () => {
+    logBuffer.clear();
     const h = setup();
     h.manager.connect(h.hostId);
     h.advance(999);
@@ -60,6 +62,17 @@ describe("RemoteHostManager idle release", () => {
     h.manager.sweepIdle();
     expect(h.manager.get(h.hostId)).toBeUndefined();
     expect(h.manager.connectionState(h.hostId)).toEqual({ status: "disconnected" });
+    // Through the logger, which production keeps: a console.log there is stripped.
+    expect(
+      logBuffer
+        .getFiltered({ sources: ["main:RemoteHostManager"] })
+        .map((entry) => ({ message: entry.message, context: entry.context }))
+    ).toEqual([
+      {
+        message: "Closing the unused connection to a remote host",
+        context: { hostId: h.hostId, sessionId: null, idleMs: 1_000 },
+      },
+    ]);
   });
 
   it("keeps a held connection however long the work takes", () => {

@@ -34,6 +34,18 @@ export interface Disposable {
   dispose(): void;
 }
 
+/** Why a host gave up a remote Shell's session for good, taking its endpoints with it. */
+export type RemoteSessionExpiryCause =
+  | "goodbye"
+  | "protocol-error"
+  | "grace-expired"
+  | "session-cap"
+  | "session-replaced"
+  | "host-shutdown";
+
+/** Why a remote view's endpoint closed: the Shell closed it, or its session expired. */
+export type RemoteEndpointCloseCause = "client-closed" | RemoteSessionExpiryCause;
+
 /**
  * One renderer attached to this Host: a local project view (wrapping its real
  * `WebContents`) or a remote view (wrapping a link session). Registry,
@@ -66,6 +78,10 @@ export interface ClientEndpoint {
   request(method: string, payload: unknown, options?: EndpointRequestOptions): Promise<unknown>;
   onClose(cb: () => void): Disposable;
   isClosed(): boolean;
+  /** A remote view's link session id, which the Shell logs too; absent for a local view. */
+  readonly linkSessionId?: string;
+  /** Why a remote view's endpoint closed, once it has; absent for a local view. */
+  readonly closeCause?: RemoteEndpointCloseCause | null;
 }
 
 /**

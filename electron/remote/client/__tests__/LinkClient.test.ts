@@ -2,6 +2,7 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
+import { logBuffer } from "../../../services/LogBuffer.js";
 import {
   HostModeOffError,
   SshAccessError,
@@ -32,12 +33,23 @@ afterEach(async () => {
   client = null;
 });
 
-function failingTransport(detail: string): LinkTransport & { opens: number } {
+function failingTransport(detail: string): LinkTransport & {
+  opens: number;
+  message: string;
+  detail: string | (() => string);
+  /** "access" fails as ssh refusing the login does, which stops the retries. */
+  kind: "unreachable" | "access";
+} {
   const t = {
     opens: 0,
+    message: "unreachable",
+    detail: detail as string | (() => string),
+    kind: "unreachable" as "unreachable" | "access",
     async open() {
       t.opens++;
-      throw new TransportError("unreachable", detail);
+      const said = typeof t.detail === "function" ? t.detail() : t.detail;
+      if (t.kind === "access") throw new SshAccessError(said);
+      throw new TransportError(t.message, said);
     },
   };
   return t;
@@ -67,6 +79,76 @@ describe("LinkClient backoff", () => {
     expect(delays.slice(0, 4)).toEqual([5, 10, 20, 20]);
     expect(states[0]).toEqual({ status: "connecting", attempt: 1 });
     expect(states[1]).toMatchObject({ status: "unreachable", detail: "Connection timed out" });
+  });
+
+  it("logs a host that stays down once, not on every retry, and again when what it sees changes", async () => {
+    logBuffer.clear();
+    const transport = failingTransport("Connection timed out");
+    client = new LinkClient({
+      hostId: "host-studio",
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+    });
+    client.start();
+    await waitFor(() => transport.opens >= 5);
+    // What production's info floor keeps; the retries in between are debug.
+    const lines = () =>
+      logBuffer
+        .getFiltered({ sources: ["main:LinkClient"] })
+        .filter((entry) => entry.level !== "debug")
+        .map((entry) => ({ message: entry.message, context: entry.context }));
+    expect(lines()).toEqual([
+      {
+        message: "Dialling remote host",
+        context: { hostId: "host-studio", attempt: 1, previousSessionId: null },
+      },
+      {
+        message: "Remote host unreachable",
+        context: {
+          hostId: "host-studio",
+          attempt: 1,
+          previousSessionId: null,
+          failure: "unreachable",
+          detail: "Connection timed out",
+          retryInMs: 1,
+        },
+      },
+    ]);
+    const failures = () => lines().filter((line) => line.message === "Remote host unreachable");
+
+    // Only the per-attempt forward socket's nonce differs: still the same failure.
+    let seenBefore = transport.opens;
+    let nonce = 0;
+    transport.detail = () =>
+      `connect ENOENT /tmp/daintree/l-1a2b3c4d-${(++nonce).toString(16).padStart(8, "0")}.sock`;
+    await waitFor(() => transport.opens >= seenBefore + 3);
+    expect(failures()).toHaveLength(2);
+    expect(failures().at(-1)?.context).toMatchObject({
+      detail: expect.stringContaining("ENOENT /tmp/daintree/"),
+    });
+
+    // The same retrying failure, until ssh refuses the login and retrying stops: that is news.
+    seenBefore = transport.opens;
+    transport.message = "ssh couldn't log in to the host";
+    transport.detail = "Permission denied (publickey).";
+    await waitFor(() => transport.opens >= seenBefore + 3);
+    expect(failures()).toHaveLength(3);
+    transport.kind = "access";
+    await waitFor(() => {
+      const state = client!.getState();
+      return state.status === "unreachable" && state.retryAt === null;
+    });
+    expect(failures()).toHaveLength(4);
+    expect(failures().at(-1)?.context).toEqual({
+      hostId: "host-studio",
+      attempt: expect.any(Number),
+      previousSessionId: null,
+      failure: "ssh couldn't log in to the host",
+      detail: "Permission denied (publickey).",
+      stoppedRetrying: true,
+    });
   });
 
   it("says when the host answered but Daintree there isn't in Host mode", async () => {
