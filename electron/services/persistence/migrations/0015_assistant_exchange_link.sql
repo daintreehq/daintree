@@ -41,7 +41,8 @@ CREATE INDEX `assistant_exchanges_purge_idx` ON `assistant_exchanges` (`purge_af
 CREATE TABLE IF NOT EXISTS `assistant_exchange_hosts` (
 	`host_id` text PRIMARY KEY NOT NULL,
 	`sender_credential` text NOT NULL,
-	`cursor` integer NOT NULL DEFAULT 0 CHECK (`cursor` >= 0)
+	`cursor` integer NOT NULL DEFAULT 0 CHECK (`cursor` >= 0),
+	`reset_since` integer
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS `assistant_exchange_journal` (

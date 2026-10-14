@@ -60,6 +60,8 @@ function toEntry(row: JournalRow): JournalEntry {
 export class AssistantExchangeJournal {
   private readonly now: () => number;
   private readonly newCredential: () => string;
+  /** The last attempt mark handed out, so marks never repeat even once a row is gone. */
+  private lastAttempt = 0;
 
   constructor(
     private readonly sqlite: Database.Database,
@@ -110,7 +112,8 @@ export class AssistantExchangeJournal {
           "SELECT unresolved_at FROM assistant_exchange_journal WHERE host_id = ? AND message_id = ?"
         )
         .get(hostId, messageId) as { unresolved_at: number | null } | undefined;
-      const attempt = Math.max(now, (previous?.unresolved_at ?? 0) + 1);
+      const attempt = Math.max(now, this.lastAttempt + 1, (previous?.unresolved_at ?? 0) + 1);
+      this.lastAttempt = attempt;
       this.sqlite
         .prepare(
           `INSERT INTO assistant_exchange_journal (host_id, message_id, sent_at, unresolved_at, record, updated_at)
@@ -136,44 +139,54 @@ export class AssistantExchangeJournal {
   }
 
   /**
-   * A lookup found no record of `attempt`. Within the retry window that means
-   * it never arrived (the host keeps every record it took far longer), and the
-   * id may be sent again; past it, the record may have been purged, so the
-   * send is marked lapsed instead.
+   * A lookup found no record of `attempt`. Within the retry window of the
+   * first send that means it never arrived (the host keeps every record it
+   * took far longer), and the id may be sent again; past it, the record may
+   * have been purged, so the send is marked lapsed instead.
    */
   resolveMissing(hostId: string, messageId: string, attempt: number, retryWindowMs: number): void {
+    const sentAt = this.get(hostId, messageId)?.sentAt ?? attempt;
     this.settle(
       hostId,
       messageId,
       attempt,
-      this.now() - attempt <= retryWindowMs ? "forget" : "lapse"
+      this.now() - sentAt <= retryWindowMs ? "forget" : "lapse"
     );
   }
 
-  /** The clock's reading, to mark where a listing that restarts from the beginning began. */
-  mark(): number {
-    return this.now();
-  }
-
   /**
-   * After a listing restarted from the beginning and was read to its end:
-   * records the host no longer listed were purged there, and go here too.
+   * One page of the host's changes and the cursor after it, together or not
+   * at all. A page that restarts from the beginning opens a full listing,
+   * kept open across sessions until a page ends it; then records the host no
+   * longer listed were purged there, and go here too.
    */
-  pruneUnseen(hostId: string, since: number): void {
-    this.sqlite
-      .prepare(
-        "DELETE FROM assistant_exchange_journal WHERE host_id = ? AND record IS NOT NULL AND unresolved_at IS NULL AND updated_at < ?"
-      )
-      .run(hostId, since);
-  }
-
-  /** One page of the host's changes and the cursor after it, together or not at all. */
   applyChanges(hostId: string, changes: ExchangeChanges): void {
     this.sqlite.transaction(() => {
+      const now = this.now();
       for (const record of changes.records) this.upsert(hostId, record);
+      if (changes.reset) {
+        this.sqlite
+          .prepare(
+            "UPDATE assistant_exchange_hosts SET reset_since = COALESCE(reset_since, ?) WHERE host_id = ?"
+          )
+          .run(now, hostId);
+      }
       this.sqlite
         .prepare("UPDATE assistant_exchange_hosts SET cursor = ? WHERE host_id = ?")
         .run(changes.cursor, hostId);
+      if (changes.hasMore) return;
+      const open = this.sqlite
+        .prepare("SELECT reset_since FROM assistant_exchange_hosts WHERE host_id = ?")
+        .get(hostId) as { reset_since: number | null } | undefined;
+      if (open?.reset_since == null) return;
+      this.sqlite
+        .prepare(
+          "DELETE FROM assistant_exchange_journal WHERE host_id = ? AND record IS NOT NULL AND unresolved_at IS NULL AND updated_at < ?"
+        )
+        .run(hostId, open.reset_since);
+      this.sqlite
+        .prepare("UPDATE assistant_exchange_hosts SET reset_since = NULL WHERE host_id = ?")
+        .run(hostId);
     })();
   }
 

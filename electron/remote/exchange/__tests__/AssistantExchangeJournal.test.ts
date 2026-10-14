@@ -109,7 +109,7 @@ describe("AssistantExchangeJournal", () => {
     journal.credential("studio");
     const lost = journal.noteSending("studio", "lost");
     journal.noteSending("studio", "arrived");
-    expect(journal.unresolved("studio")).toEqual(["arrived", "lost"]);
+    expect(journal.unresolved("studio")).toEqual(["lost", "arrived"]);
 
     journal.recordAnswer("studio", record("arrived", 2));
     journal.resolveMissing("studio", "lost", lost, 60_000);
@@ -135,8 +135,10 @@ describe("AssistantExchangeJournal", () => {
 
   it("marks a send lapsed, not missing, once the host may have purged what it took", () => {
     journal.credential("studio");
-    const attempt = journal.noteSending("studio", "m-1");
+    journal.noteSending("studio", "m-1");
     clock += 60_001;
+    // Sent again just now: the window still runs from the first send.
+    const attempt = journal.noteSending("studio", "m-1");
     journal.resolveMissing("studio", "m-1", attempt, 60_000);
     expect(journal.get("studio", "m-1")).toMatchObject({
       unresolvedAt: null,
@@ -145,21 +147,47 @@ describe("AssistantExchangeJournal", () => {
     });
   });
 
-  it("drops records a full listing from the beginning no longer has, keeping sends still in doubt", () => {
+  it("drops records a full listing from the beginning no longer has, even one read across a restart", () => {
     journal.credential("studio");
     journal.recordAnswer("studio", record("purged", 1));
     journal.recordAnswer("studio", record("kept", 2));
+    journal.recordAnswer("studio", record("later", 3));
     journal.noteSending("studio", "in-doubt");
     clock += 10;
-    const mark = journal.mark();
     journal.applyChanges("studio", {
       records: [record("kept", 2)],
-      cursor: 9,
-      hasMore: false,
+      cursor: 2,
+      hasMore: true,
       reset: true,
     });
-    journal.pruneUnseen("studio", mark);
-    expect(journal.list("studio").map((entry) => entry.messageId)).toEqual(["kept", "in-doubt"]);
+    // The listing broke off here; nothing is dropped until it is read to its end.
+    sqlite.close();
+    open();
+    expect(journal.list("studio")).toHaveLength(4);
+    clock += 10;
+    journal.applyChanges("studio", {
+      records: [record("later", 3)],
+      cursor: 3,
+      hasMore: false,
+      reset: false,
+    });
+    expect(journal.list("studio").map((entry) => entry.messageId)).toEqual([
+      "kept",
+      "later",
+      "in-doubt",
+    ]);
+  });
+
+  it("never hands out the same attempt mark twice, even once the earlier attempt's row is gone", () => {
+    journal.credential("studio");
+    const first = journal.noteSending("studio", "m-1");
+    journal.abandonAttempt("studio", "m-1", first);
+    expect(journal.get("studio", "m-1")).toBeNull();
+    const second = journal.noteSending("studio", "m-1");
+    expect(second).toBeGreaterThan(first);
+    // A late answer about the first attempt leaves the second in doubt.
+    journal.resolveMissing("studio", "m-1", first, 60_000);
+    expect(journal.get("studio", "m-1")?.unresolvedAt).toBe(second);
   });
 
   it("never replaces a newer record with an older one, wherever the older one came from", () => {

@@ -132,14 +132,20 @@ export class AssistantExchangeClient {
   async send(hostId: HostId, payload: AssistantSendPayload): Promise<AssistantSendResult> {
     this.checkHost(hostId, "admit");
     const { journal } = this.deps;
-    if (journal.get(hostId, payload.messageId)?.lapsedAt != null) {
-      throw new AppError({
-        code: "VALIDATION",
-        message: `Exchange ${payload.messageId} went unanswered past its retry window; send it as a new message`,
-      });
-    }
     const session = await this.open(hostId);
     await this.authenticate(hostId, session);
+    const entry = journal.get(hostId, payload.messageId);
+    // Past the window the host's record may be gone, so only a lookup is safe.
+    const pastWindow =
+      entry?.lapsedAt != null ||
+      (entry?.unresolvedAt != null && Date.now() - entry.sentAt > EXCHANGE_RETRY_WINDOW_MS);
+    if (pastWindow) {
+      if (entry?.unresolvedAt != null) await this.lookUp(hostId, session, payload.messageId);
+      throw new AppError({
+        code: "VALIDATION",
+        message: `Exchange ${payload.messageId} went unanswered past its retry window; look it up or send a new message`,
+      });
+    }
     const attempt = journal.noteSending(hostId, payload.messageId);
     let answer: unknown;
     try {
@@ -209,18 +215,15 @@ export class AssistantExchangeClient {
     const session = given && given.isOpen ? given : await this.open(hostId);
     await this.authenticate(hostId, session);
     const { journal } = this.deps;
-    // A listing that restarts from the beginning, read to its end, is the host's whole set.
-    let restartedAt: number | null = null;
     for (let page = 0; page < MAX_RECONCILE_PAGES; page++) {
-      const cursor = journal.cursor(hostId);
-      const mark = journal.mark();
-      const changes = await this.listPage(hostId, session, cursor, MAX_EXCHANGE_PAGE);
-      if (changes.reset) restartedAt = mark;
+      const changes = await this.listPage(
+        hostId,
+        session,
+        journal.cursor(hostId),
+        MAX_EXCHANGE_PAGE
+      );
       journal.applyChanges(hostId, changes);
-      if (!changes.hasMore) {
-        if (restartedAt !== null) journal.pruneUnseen(hostId, restartedAt);
-        break;
-      }
+      if (!changes.hasMore) break;
     }
     for (const messageId of journal.unresolved(hostId)) {
       await this.lookUp(hostId, session, messageId);
