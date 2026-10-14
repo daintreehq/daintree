@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readCssWithImports } from "@/__tests__/support/cssManifest";
+import { readToolbarCss } from "@/__tests__/support/cssManifest";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
@@ -20,7 +20,7 @@ const TOOLBAR_TSX = path.join(REPO_ROOT, "src/components/Layout/Toolbar.tsx");
 // the cascade would silently re-break HC users otherwise.
 
 function readForcedColorsBlocks(file: string): string {
-  const content = readCssWithImports(file);
+  const content = file === TOOLBAR_CSS ? readToolbarCss() : fs.readFileSync(file, "utf8");
   const blocks: string[] = [];
   const marker = "@media (forced-colors: active)";
 

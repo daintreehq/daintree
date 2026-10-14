@@ -26,6 +26,15 @@ export function readCssWithImports(cssPath: string): string {
     inlined++;
     return readCssWithImports(path.resolve(path.dirname(cssPath), rel));
   });
+  // Package imports (`tailwindcss`) stay as they are; a relative one this
+  // reader cannot expand would hide its partial's rules from every guard.
+  const relativeImports =
+    source.replace(/\/\*[\s\S]*?\*\//g, "").match(/@import\s+(?:url\(\s*)?["']?\.{1,2}\//g) ?? [];
+  if (relativeImports.length !== inlined) {
+    throw new Error(
+      `${cssPath}: ${relativeImports.length - inlined} relative @import(s) not in the plain \`@import "./x.css";\` form`
+    );
+  }
   return inlined === 0 ? source : result;
 }
 
