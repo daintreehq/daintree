@@ -832,12 +832,13 @@ export class RemoteHostsClient {
       // machine and offers the host's project list: binding it with no view of
       // the host's behind it made a window whose calls went to the host while
       // its chip, copy and pickers all said This Mac.
-      if (targetProjectId === undefined) {
+      const offerProjects = (): SwitchWindowHostResult => {
         this.projectOffers.set(windowId, hostId);
         this.options.windows.watchWindow(windowId, () => this.projectOffers.delete(windowId));
         this.options.windows.offerHostProjects?.(windowId);
         return { outcome: "window-opened", hostId };
-      }
+      };
+      if (targetProjectId === undefined) return offerProjects();
       // Asked again here, and the project claimed for this window in the same
       // tick: another request may have taken it while this one waited, and
       // one arriving now finds this window instead of building a second view.
@@ -852,6 +853,15 @@ export class RemoteHostsClient {
           windowId,
           projectName
         ) ?? null;
+      // A project this switch picked itself, which another window started
+      // showing while it waited for its turn: nothing was asked of that window,
+      // so it isn't brought forward. This one offers the host's list instead.
+      if (
+        requestedProjectId === undefined &&
+        (holder !== null || this.shownElsewhere(hostId, targetProjectId, windowId))
+      ) {
+        return newWindow ? offerProjects() : { outcome: "choose-project", hostId };
+      }
       const shower = isLocalHostId(hostId)
         ? (this.options.windows.redirectToLocalOwner?.(targetProjectId, windowId) ?? null)
         : (this.options.windows.projectOwner?.(hostId, targetProjectId, windowId)?.windowId ??

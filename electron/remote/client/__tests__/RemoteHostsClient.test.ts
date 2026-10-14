@@ -626,6 +626,36 @@ describe("RemoteHostsClient", () => {
       ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-8" });
     });
 
+    it("brings no window forward when the project it resumed was taken while it waited its turn", async () => {
+      windows.recentProjectsOnHost = vi.fn(() => ["proj-9"]);
+      let shownIn2 = false;
+      windows.projectOwner = vi.fn(() => (shownIn2 ? { windowId: 2, showing: true } : null));
+      windows.revealWindow = vi.fn();
+      // The window is still busy with an earlier switch when this one resolves its project.
+      let finishFirst: () => void = () => {};
+      vi.mocked(windows.openRemoteProject).mockImplementationOnce(
+        () => new Promise<void>((resolve) => (finishFirst = resolve))
+      );
+      const first = client.switchWindowToHostProject(1, "studio-01", "proj-1");
+      await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalledTimes(1));
+      const second = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+      });
+      await vi.waitFor(() =>
+        expect(manager.connect("studio-01").describeProject).toHaveBeenCalledWith("proj-9")
+      );
+      // Every wait before its turn settles; the switch now queues behind the first.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(windows.revealWindow).not.toHaveBeenCalled();
+      shownIn2 = true;
+      finishFirst();
+      await first;
+      await expect(second).resolves.toEqual({ outcome: "choose-project", hostId: "studio-01" });
+      expect(windows.revealWindow).not.toHaveBeenCalled();
+      expect(windows.openRemoteProject).toHaveBeenCalledTimes(1);
+    });
+
     it("walks the whole of this window's history on the host before the host's memory", async () => {
       manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
       const gone = ["g1", "g2", "g3", "g4", "g5", "g6"];
