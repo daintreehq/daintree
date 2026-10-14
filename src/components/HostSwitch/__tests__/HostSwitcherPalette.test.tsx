@@ -110,6 +110,7 @@ function host(
       lastSeenAt: null,
       addedAt: 1,
       notificationsEnabled: false,
+      assistantMessagingEnabled: false,
     },
     connection,
     summary: null,

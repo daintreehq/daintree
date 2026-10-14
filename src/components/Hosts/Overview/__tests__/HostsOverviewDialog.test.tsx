@@ -99,6 +99,7 @@ function entry(id: string, connection: HostListEntry["connection"]): HostListEnt
       lastSeenAt: null,
       addedAt: 1,
       notificationsEnabled: false,
+      assistantMessagingEnabled: false,
     },
     connection,
     summary: null,

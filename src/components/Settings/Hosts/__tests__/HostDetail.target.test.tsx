@@ -33,6 +33,7 @@ function entry(name = "studio-01"): HostListEntry {
       lastSeenAt: null,
       addedAt: 0,
       notificationsEnabled: false,
+      assistantMessagingEnabled: false,
     },
     connection: { status: "disconnected" },
     summary: null,

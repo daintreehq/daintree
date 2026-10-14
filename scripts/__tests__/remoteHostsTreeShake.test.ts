@@ -32,6 +32,7 @@ const GATED_DIRS = [
   "plugins",
   "projects",
   "hybrid",
+  "assistant",
 ];
 
 async function bundledInputs(remoteHosts: boolean): Promise<string[]> {
