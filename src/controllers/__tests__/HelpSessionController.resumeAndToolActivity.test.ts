@@ -1248,49 +1248,82 @@ describe("HelpSessionController — taking over a running host assistant (#13360
     ctrl.stop();
   });
 
-  it("leaves a pane a newer take-over is committing when a superseded one unwinds", async () => {
-    const ctrl = new HelpSessionController();
-    ctrl.start();
-    ctrl["_launchGen"] = 7;
-    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "adopted", lane });
-    let releaseFirst!: () => void;
-    const firstCommitted = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let calls = 0;
-    panelStoreState.addPanel = vi.fn(async (args: { existingId: string }) => {
-      calls++;
-      if (calls === 1) await firstCommitted;
+  /** An addPanel whose commits settle only when the test says so, in any order. */
+  function deferredCommits() {
+    const releases: Array<() => void> = [];
+    const addPanel = vi.fn(async (args: { existingId: string }) => {
+      await new Promise<void>((resolve) => releases.push(resolve));
       panelStoreState.panelsById[args.existingId] = { id: args.existingId };
       return args.existingId;
     });
+    return { addPanel, release: (n: number) => releases[n]?.() };
+  }
 
-    const first = ctrl["_executeLaunch"](
-      7,
+  function adoptAt(ctrl: HelpSessionController, gen: number) {
+    ctrl["_launchGen"] = gen;
+    return ctrl["_executeLaunch"](
+      gen,
       { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
       { id: "p1", path: "/repo" },
       undefined
     );
-    await vi.waitFor(() => expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1));
-    // A newer launch takes the same PTY over while the first is still committing.
-    ctrl["_launchGen"] = 8;
-    const second = ctrl["_executeLaunch"](
-      8,
-      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
-      { id: "p1", path: "/repo" },
-      undefined
-    );
-    await vi.waitFor(() => expect(panelStoreState.addPanel).toHaveBeenCalledTimes(2));
-    releaseFirst();
-    await Promise.all([first, second]);
+  }
 
+  it("leaves a pane a newer take-over is still committing when a superseded one unwinds", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "adopted", lane });
+    helpPanelState.sessions = {};
+    helpPanelState.setTerminal = vi.fn((slot: number, terminalId: string) => {
+      helpPanelState.sessions[slot] = { terminalId };
+    });
+    const commits = deferredCommits();
+    panelStoreState.addPanel = commits.addPanel;
+
+    const first = adoptAt(ctrl, 7);
+    await vi.waitFor(() => expect(commits.addPanel).toHaveBeenCalledTimes(1));
+    const second = adoptAt(ctrl, 8);
+    await vi.waitFor(() => expect(commits.addPanel).toHaveBeenCalledTimes(2));
+
+    // The superseded take-over settles while the newer one is still committing.
+    commits.release(0);
+    await first;
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
-    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
-      0,
-      "terminal-live",
-      "claude",
-      "sess-live"
-    );
+
+    commits.release(1);
+    await second;
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(helpPanelState.sessions[0]).toEqual({ terminalId: "terminal-live" });
+    ctrl.stop();
+  });
+
+  it("removes the pane once, after the last superseded take-over settles", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "adopted", lane });
+    helpPanelState.sessions = {};
+    const commits = deferredCommits();
+    panelStoreState.addPanel = commits.addPanel;
+
+    const first = adoptAt(ctrl, 7);
+    await vi.waitFor(() => expect(commits.addPanel).toHaveBeenCalledTimes(1));
+    const second = adoptAt(ctrl, 8);
+    await vi.waitFor(() => expect(commits.addPanel).toHaveBeenCalledTimes(2));
+    // Both superseded, by a launch that takes nothing over (a cancel, say).
+    ctrl["_launchGen"] = 9;
+
+    commits.release(1);
+    await second;
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    commits.release(0);
+    await first;
+
+    // Only this view's pane, and never the host's process.
+    expect(panelStoreState.removePanel).toHaveBeenCalledTimes(1);
+    expect(panelStoreState.removePanel).toHaveBeenCalledWith("terminal-live", {
+      backendAlreadyClosed: true,
+    });
+    expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
     ctrl.stop();
   });
 

@@ -360,7 +360,7 @@ export class HelpSessionController {
   // auto-launch path bumping the gen) still lets the owner release.
   private _isLaunchingGen = -1;
   private _hasAutoLaunched = false;
-  // Host terminal id → the generation of the latest launch taking it over (#13360).
+  // Host terminal id → launches still committing a pane for it (#13360).
   private readonly _adoptingTerminals = new Map<string, number>();
   private _pendingSessionId: string | null = null;
   private _pendingNewTerminalId: string | null = null;
@@ -1295,32 +1295,39 @@ export class HelpSessionController {
     const agentState = coerceAgentState(lane.agentState);
     const geometry =
       lane.cols !== null && lane.rows !== null ? { cols: lane.cols, rows: lane.rows } : undefined;
-    // The latest launch taking this PTY over owns its pane: a superseded one
-    // must not remove a pane a newer one is still committing.
-    this._adoptingTerminals.set(lane.terminalId, gen);
-    const panelId = await usePanelStore.getState().addPanel({
-      kind: "terminal",
-      existingId: lane.terminalId,
-      launchAgentId: lane.agentId,
-      cwd: lane.cwd ?? launchProject.path,
-      ...(lane.title ? { title: lane.title } : {}),
-      location: "overlay",
-      excludeFromPersistence: true,
-      removeOnExit: true,
-      // Already running on the host, so the cap that gates new spawns doesn't apply.
-      bypassLimits: true,
-      agentState,
-      waitingReason: agentState === "waiting" ? coerceWaitingReason(lane.waitingReason) : undefined,
-      lastStateChange: lane.lastStateChange ?? undefined,
-      ...(geometry ? { initialTerminalGeometry: geometry } : {}),
-    });
-    const ownsPane = this._adoptingTerminals.get(lane.terminalId) === gen;
-    if (ownsPane) this._adoptingTerminals.delete(lane.terminalId);
+    // Every launch taking this PTY over commits the same pane. A superseded
+    // one may only remove it once no other is still committing it.
+    const terminalId = lane.terminalId;
+    this._adoptingTerminals.set(terminalId, (this._adoptingTerminals.get(terminalId) ?? 0) + 1);
+    let panelId: string | null;
+    try {
+      panelId = await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        existingId: lane.terminalId,
+        launchAgentId: lane.agentId,
+        cwd: lane.cwd ?? launchProject.path,
+        ...(lane.title ? { title: lane.title } : {}),
+        location: "overlay",
+        excludeFromPersistence: true,
+        removeOnExit: true,
+        // Already running on the host, so the cap that gates new spawns doesn't apply.
+        bypassLimits: true,
+        agentState,
+        waitingReason:
+          agentState === "waiting" ? coerceWaitingReason(lane.waitingReason) : undefined,
+        lastStateChange: lane.lastStateChange ?? undefined,
+        ...(geometry ? { initialTerminalGeometry: geometry } : {}),
+      });
+    } finally {
+      const pending = (this._adoptingTerminals.get(terminalId) ?? 1) - 1;
+      if (pending > 0) this._adoptingTerminals.set(terminalId, pending);
+      else this._adoptingTerminals.delete(terminalId);
+    }
     if (gen !== this._launchGen) {
-      // Only this view's pane goes, and only while no newer launch has it: the
-      // process is the host's, and still the lane's.
+      // Only this view's pane goes, and only once no launch is still committing
+      // it or has bound it: the process is the host's, and still the lane's.
       const boundNow = useHelpPanelStore.getState().sessions[this.slot]?.terminalId;
-      if (panelId && ownsPane && boundNow !== panelId) {
+      if (panelId && !this._adoptingTerminals.has(terminalId) && boundNow !== panelId) {
         usePanelStore.getState().removePanel(panelId, { backendAlreadyClosed: true });
       }
       return "stale";

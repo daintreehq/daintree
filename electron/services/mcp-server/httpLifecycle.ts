@@ -1975,6 +1975,17 @@ export class HttpLifecycle {
     const missingWorkspaceRoute = (): Error =>
       new WorkspaceBindingError(boundWorkspaceId ?? "", "not-found");
 
+    /**
+     * Pinned at handshake and torn down since — a take-over retiring the
+     * assistant's transports (#13360), a revoke, an idle reap — while a call
+     * was still on its way. Such a call fails closed, as a gone pin does,
+     * rather than falling through to a route that follows focus.
+     */
+    const goneBinding = (): SessionBindingError | null =>
+      pinnedWebContentsId !== null && !this.deps.sessionStore.sessionWebContentsMap.has(sessionId)
+        ? new SessionBindingError(pinnedWebContentsId)
+        : null;
+
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
         if (boundWorkspaceId !== null) {
@@ -1986,9 +1997,8 @@ export class HttpLifecycle {
         if (id !== undefined && pinnedManifest) {
           return pinnedManifest(id);
         }
-        if (id === undefined && pinnedWebContentsId !== null) {
-          return Promise.reject(new SessionBindingError(pinnedWebContentsId));
-        }
+        const gone = goneBinding();
+        if (gone) return Promise.reject(gone);
         return this.deps.requestManifest();
       };
 
@@ -2006,15 +2016,18 @@ export class HttpLifecycle {
     const bridgeReveal = this.deps.revealOwnedRun;
     const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
       bridgeReveal
-        ? (workspaceId, actionId, args, confirmed) =>
-            bridgeReveal(
+        ? (workspaceId, actionId, args, confirmed) => {
+            const gone = goneBinding();
+            if (gone) return Promise.reject(gone);
+            return bridgeReveal(
               workspaceId,
               actionId,
               args,
               confirmed ?? false,
               sessionOrigin,
               preferredWebContentsId
-            )
+            );
+          }
         : undefined;
 
     const dispatchAction: import("./sessionServer.js").SessionServerDeps["dispatchAction"] = (
@@ -2067,13 +2080,8 @@ export class HttpLifecycle {
             })
           : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
       }
-      // Pinned at handshake and torn down since — a take-over retiring the
-      // assistant's transports (#13360), a revoke, an idle reap — while this
-      // call was still on its way. It fails closed, as a gone pin does, rather
-      // than falling through to the unpinned route that follows focus.
-      if (id === undefined && pinnedWebContentsId !== null) {
-        return Promise.reject(new SessionBindingError(pinnedWebContentsId));
-      }
+      const gone = goneBinding();
+      if (gone) return Promise.reject(gone);
       // Unpinned external/api-key dispatch — surface the requesting bearer's
       // identity so the confirm dialog can name the client (#9157). Returns
       // null (→ undefined) for help-session bearers, so callerInfo never

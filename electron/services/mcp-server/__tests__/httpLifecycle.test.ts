@@ -1671,6 +1671,8 @@ describe("HttpLifecycle", () => {
 
     it("fails a pinned session's call closed once its binding is torn down mid-flight", async () => {
       const deps = pinnedOriginDeps();
+      const revealOwnedRun = vi.fn();
+      deps.revealOwnedRun = revealOwnedRun as unknown as HttpLifecycleDeps["revealOwnedRun"];
       const lc = new HttpLifecycle(deps);
       deps.sessionStore.sessionOriginMap.set("sess-teardown", "assistant-pane");
       deps.sessionStore.sessionWebContentsMap.set("sess-teardown", 7);
@@ -1688,6 +1690,11 @@ describe("HttpLifecycle", () => {
         SessionBindingError
       );
       await expect(sessionDeps.requestManifest()).rejects.toBeInstanceOf(SessionBindingError);
+      // Nor may a reveal raise whichever window shows the run's workspace.
+      await expect(
+        sessionDeps.revealOwnedRun?.("ws-a", "terminal.revealOwned", {}, false)
+      ).rejects.toBeInstanceOf(SessionBindingError);
+      expect(revealOwnedRun).not.toHaveBeenCalled();
       expect(deps.dispatchAction).not.toHaveBeenCalled();
       expect(deps.dispatchActionForWebContents).not.toHaveBeenCalled();
       expect(deps.requestManifest).not.toHaveBeenCalled();
