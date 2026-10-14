@@ -64,6 +64,7 @@ function host(id: string, connection: HostConnectionState = CONNECTED): HostList
       lastSeenAt: null,
       addedAt: 1,
       notificationsEnabled: false,
+      assistantMessagingEnabled: false,
     },
     connection,
     summary: null,

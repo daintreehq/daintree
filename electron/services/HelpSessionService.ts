@@ -223,6 +223,24 @@ export interface ProvisionResult {
   windowId: number;
 }
 
+/** Why a help session stopped being the one its lane runs. */
+export type HelpSessionEndReason =
+  "probe-failed" | "revoked" | "displaced" | "relaunched" | "discarded";
+
+export interface HelpSessionEndedEvent {
+  projectId: string;
+  slot: number;
+  sessionId: string;
+  reason: HelpSessionEndReason;
+}
+
+/** The help session a lane is running right now, with the PTY it is bound to. */
+export interface RunningLaneSession {
+  sessionId: string;
+  terminalId: string;
+  projectViewWebContentsId: number;
+}
+
 export interface AssistantLaneSnapshot {
   slotKey: string;
   agentSessionId: string;
@@ -267,6 +285,12 @@ interface HelpSessionRecord {
   debugLogging: boolean;
   createdAt: number;
   revoked: boolean;
+  /**
+   * Set when a revoke starts. `revoked` only lands after the capture's
+   * graceful-kill await, and the bearer has to stay valid for that capture, but
+   * the lane has stopped being reachable the moment its teardown began.
+   */
+  ending?: boolean;
   /**
    * The conversation this lane's PTY is running, once known: the id assigned
    * at spawn (Claude's `--session-id`, or the id a resume reopened), or one a
@@ -621,6 +645,7 @@ export class HelpSessionService {
    */
   private readonly panelVisibleByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
+  private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -647,6 +672,60 @@ export class HelpSessionService {
    */
   setOnMcpSessionRevoked(cb: ((token: string, sessionId: string) => void) | null): void {
     this.onMcpSessionRevokedFn = cb;
+  }
+
+  /**
+   * Hear every help session that stops being the one its lane runs: revoked,
+   * displaced, relaunched onto another PTY, discarded, or never live because
+   * its probe failed. Unlike {@link setOnMcpSessionRevoked} this takes any
+   * number of listeners, never sees the bearer, and a throwing listener can't
+   * stop the others or the teardown around it.
+   */
+  addSessionEndedListener(listener: (event: HelpSessionEndedEvent) => void): () => void {
+    this.sessionEndedListeners.add(listener);
+    return () => {
+      this.sessionEndedListeners.delete(listener);
+    };
+  }
+
+  private emitSessionEnded(
+    record: Pick<HelpSessionRecord, "projectId" | "slot" | "sessionId">,
+    reason: HelpSessionEndReason
+  ): void {
+    const event: HelpSessionEndedEvent = {
+      projectId: record.projectId,
+      slot: record.slot,
+      sessionId: record.sessionId,
+      reason,
+    };
+    for (const listener of [...this.sessionEndedListeners]) {
+      try {
+        listener(event);
+      } catch (err) {
+        console.warn("[HelpSessionService] Session-ended listener failed:", record.sessionId, err);
+      }
+    }
+  }
+
+  /**
+   * The session `(projectId, slot)` is running now: live, not being torn down,
+   * and bound to the PTY that is the lane's active terminal. Null when the lane
+   * has no running assistant. Reports only; never provisions or launches.
+   */
+  getRunningLaneSession(projectId: string, slot: number): RunningLaneSession | null {
+    const terminalId = this.activeHelpTerminalBySlotKey.get(assistantSlotKey(projectId, slot));
+    if (!terminalId) return null;
+    for (const record of this.sessionsById.values()) {
+      if (record.projectId !== projectId || record.slot !== slot) continue;
+      if (record.revoked || record.ending) continue;
+      if (this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
+      return {
+        sessionId: record.sessionId,
+        terminalId,
+        projectViewWebContentsId: record.projectViewWebContentsId,
+      };
+    }
+    return null;
   }
 
   setPendingHibernationStore(store: PendingHelpHibernationStore | null): void {
@@ -750,6 +829,7 @@ export class HelpSessionService {
     // renderer-supplied slot here could evict a sibling lane's PTY using a
     // bearer that was only ever issued for its own.
     const slotKey = assistantSlotKey(record.projectId, record.slot);
+    const priorTerminal = this.terminalBySessionId.get(record.sessionId);
     const existingTerminal = this.activeHelpTerminalBySlotKey.get(slotKey);
     if (existingTerminal && existingTerminal !== terminalId) {
       this.killTerminal(existingTerminal, "help-session-displaced");
@@ -758,6 +838,9 @@ export class HelpSessionService {
 
     this.activeHelpTerminalBySlotKey.set(slotKey, terminalId);
     this.terminalBySessionId.set(record.sessionId, terminalId);
+    // The same bearer now drives a different PTY: whatever reached the old run
+    // must not carry over to this one.
+    if (priorTerminal && priorTerminal !== terminalId) this.emitSessionEnded(record, "relaunched");
     return true;
   }
 
@@ -1425,6 +1508,7 @@ export class HelpSessionService {
             teardownErr
           );
         }
+        this.emitSessionEnded(record, "probe-failed");
         if (input.agentId === "claude" || input.agentId === "copilot") {
           await this.stripStaleDaintreeMcpEntry(sessionPath);
           // The lane file was written moments ago with the bearer the probe just
@@ -1585,6 +1669,12 @@ export class HelpSessionService {
   ): Promise<void> {
     const record = this.sessionsById.get(sessionId);
     if (!record || record.revoked) return;
+    // Before the capture await: the lane stops being reachable now, while the
+    // bearer stays valid for the agent flushing its transcript.
+    if (!record.ending) {
+      record.ending = true;
+      this.emitSessionEnded(record, "revoked");
+    }
 
     const terminalId = this.terminalBySessionId.get(sessionId);
     const slotKey = assistantSlotKey(record.projectId, record.slot);
@@ -1965,7 +2055,14 @@ export class HelpSessionService {
    * in-flight capture ownership, so a late capture can't resurrect it.
    */
   async discardConversation(projectId: string, slot: number): Promise<void> {
-    if (!this.pendingHibernationStore || !projectId) return;
+    if (!projectId) return;
+    // Starting over ends the lane's run whether or not a resume store is wired.
+    for (const record of this.sessionsById.values()) {
+      if (record.projectId === projectId && record.slot === slot && !record.revoked) {
+        this.emitSessionEnded(record, "discarded");
+      }
+    }
+    if (!this.pendingHibernationStore) return;
     const slotKey = assistantSlotKey(projectId, slot);
     this.pendingCapturesBySlotKey.delete(slotKey);
     this.claimsBySlotKey.delete(slotKey);
@@ -2041,6 +2138,7 @@ export class HelpSessionService {
           err
         );
       }
+      this.emitSessionEnded(prior, "displaced");
     }
     // Also clear any stale active-terminal binding the renderer never
     // confirmed via `markTerminalForToken` — leaving it would leak this

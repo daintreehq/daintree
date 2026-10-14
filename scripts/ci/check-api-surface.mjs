@@ -3,7 +3,7 @@
 //
 // The package is the public type surface third-party plugins compile against,
 // exposed through its entry points — `.`, `./react`, `./files`, `./data`,
-// `./testing` and `./testing/preview` (each `dist/<entry>.d.ts`), plus the hand-written `./plugin-ui`, `./testing/plugin-ui` and `./view-globals` declarations. Nothing else in CI notices when a code change alters
+// `./testing`, `./testing/preview` and `./testing/playwright` (each `dist/<entry>.d.ts`), plus the hand-written `./plugin-ui`, `./testing/plugin-ui` and `./view-globals` declarations. Nothing else in CI notices when a code change alters
 // that exported shape: only runtime contract tests are gated. This guard
 // snapshots the built declarations into git-tracked report files so any change
 // to the surface forces a reviewed, committed update.
@@ -59,6 +59,11 @@ const ENTRIES = [
     name: "./testing/preview",
     dist: path.join(root, "packages/plugin-sdk/dist/testing-preview.d.ts"),
     snapshot: path.join(root, "packages/plugin-sdk/api-report/testing-preview.d.ts"),
+  },
+  {
+    name: "./testing/playwright",
+    dist: path.join(root, "packages/plugin-sdk/dist/testing-playwright.d.ts"),
+    snapshot: path.join(root, "packages/plugin-sdk/api-report/testing-playwright.d.ts"),
   },
   // Hand-written rather than built: an ambient `declare module` for the
   // host-served `@daintreehq/plugin-ui`, which has no package of its own. It

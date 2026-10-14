@@ -1,4 +1,5 @@
 import { defineConfig, type Options } from "tsup";
+import { pluginStyleContractEsbuild } from "../../scripts/lib/plugin-style-contract.mjs";
 
 const sharedDts = {
   resolve: true,
@@ -14,10 +15,13 @@ const shared = {
   // on either one can delete the other's freshly written output.
   clean: false,
   dts: sharedDts,
-  external: ["zod", "react", "react-dom"],
+  external: ["zod", "react", "react-dom", "@playwright/test", "esbuild", "tailwindcss"],
+  // `testing/playwright` compiles a panel's classes against the host's design
+  // contract, inlined from the same bytes the renderer compiles with.
+  esbuildPlugins: [pluginStyleContractEsbuild()],
 } satisfies Options;
 
-// One JS build for all six entries, but the `testing` and `data` declarations
+// One JS build for all seven entries, but the `testing` and `data` declarations
 // each come from their own dts-only pass. When either shares a dts bundle with
 // `index` (`data` does through `editFile`'s `PluginFsApi`), tsup's dts bundler hoists their common `shared/types/plugin` declarations
 // into a chunk file and `dist/index.d.ts` collapses to a handful of re-export
@@ -41,6 +45,7 @@ export default defineConfig((override) => {
       data: "src/data.ts",
       testing: "src/testing.ts",
       "testing-preview": "src/testing-preview.ts",
+      "testing-playwright": "src/testing-playwright.ts",
     },
     dts: {
       ...shared.dts,
@@ -78,6 +83,13 @@ export default defineConfig((override) => {
       entry: { "testing-preview": "src/testing-preview.ts" },
       dts: { ...shared.dts, only: true },
     },
+    {
+      ...shared,
+      // `testing/playwright`, the panel preview fixtures. Its own pass for the
+      // same reason: it reaches `shared/types/plugin.ts` through the preview.
+      entry: { "testing-playwright": "src/testing-playwright.ts" },
+      dts: { ...shared.dts, only: true },
+    },
   ];
 });
 
@@ -97,7 +109,7 @@ export default defineConfig((override) => {
 // `tsconfig.json` (used by `typecheck`) stays clean. Mirrors
 // `packages/daintree-plugin/tsup.config.ts`.
 //
-// Both entries in `external` are also `peerDependencies`, which tsup auto-externalizes
+// Every entry in `external` is also a peer dependency, which tsup auto-externalizes
 // on its own (as `^name($|/|\\)` regexes, so subpaths like
 // `react/jsx-runtime` are covered without listing them). The two mechanisms
 // are redundant on purpose: the peer declaration is the consumer-facing
@@ -108,6 +120,11 @@ export default defineConfig((override) => {
 // Without keeping zod external, the dts bundler inlines zod's CJS runtime and
 // mangles the qualified `z.ZodType` reference into invalid `undefined<T>`
 // syntax. Externalizing it emits a clean `import type { z } from "zod"`.
+//
+// `@playwright/test`, `esbuild`, `tailwindcss`: optional peers that only the
+// `testing/playwright` entry imports, so a plugin that never runs the preview
+// never installs them. `@playwright/test` must be the spec's own copy, or
+// `test.extend` registers fixtures on a second runner.
 //
 // `react`: the `react` entry's hooks import `useState`/`useEffect`/etc. for
 // real. Bundling React here would inline a *second* React copy (and, since

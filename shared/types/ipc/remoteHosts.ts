@@ -23,6 +23,7 @@ export interface UpdateHostPayload {
   name?: string;
   connection?: HostConnection;
   notificationsEnabled?: boolean;
+  assistantMessagingEnabled?: boolean;
 }
 
 export interface WindowHostInfo {

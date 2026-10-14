@@ -457,7 +457,7 @@ describe("McpConfirmDialog", () => {
       void enqueue({ offerSessionApproval: true, danger: "safe", actionTitle: "Push" });
       render(<McpConfirmDialog />);
 
-      const box = screen.getByRole("checkbox", { name: "Allow for the rest of this session" });
+      const box = screen.getByRole("checkbox", { name: "Allow for this session" });
       expect(box.getAttribute("aria-checked")).toBe("false");
       expect(screen.getByText("Agent in a terminal pane")).toBeTruthy();
     });
@@ -466,9 +466,7 @@ describe("McpConfirmDialog", () => {
       void enqueue({ danger: "safe" });
       render(<McpConfirmDialog />);
 
-      expect(
-        screen.queryByRole("checkbox", { name: "Allow for the rest of this session" })
-      ).toBeNull();
+      expect(screen.queryByRole("checkbox", { name: "Allow for this session" })).toBeNull();
     });
 
     it("approves for the session when the box is ticked, and once when it is not", async () => {
@@ -487,23 +485,21 @@ describe("McpConfirmDialog", () => {
       render(<McpConfirmDialog />);
 
       act(() => {
-        fireEvent.click(
-          screen.getByRole("checkbox", { name: "Allow for the rest of this session" })
-        );
+        fireEvent.click(screen.getByRole("checkbox", { name: "Allow for this session" }));
       });
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Push" }));
+        fireEvent.click(screen.getByRole("button", { name: "Push and allow for session" }));
       });
       await expect(session).resolves.toEqual({ decision: "approved", scope: "session" });
 
       // The promoted request must not inherit the tick.
       expect(
         screen
-          .getByRole("checkbox", { name: "Allow for the rest of this session" })
+          .getByRole("checkbox", { name: "Allow for this session" })
           .getAttribute("aria-checked")
       ).toBe("false");
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Push" }));
+        fireEvent.click(screen.getByRole("button", { name: "Push once" }));
       });
       await expect(once).resolves.toEqual({ decision: "approved" });
     });
@@ -512,7 +508,7 @@ describe("McpConfirmDialog", () => {
       void enqueue({ approvalReason: "above-tier", danger: "safe" });
       render(<McpConfirmDialog />);
 
-      expect(screen.getByText(/needs your approval to run/)).toBeTruthy();
+      expect(screen.getByText(/needs your approval/)).toBeTruthy();
     });
   });
 
@@ -656,6 +652,19 @@ describe("McpConfirmDialog", () => {
     });
     render(<McpConfirmDialog />);
 
+    expect(
+      screen.getByText(/Permanently removes the worktree directory and any uncommitted changes\./)
+    ).toBeTruthy();
+  });
+
+  it("keeps the action description beside the rationale, since each can carry its own warning", () => {
+    void enqueue({
+      actionTitle: "Delete worktree",
+      dangerRationale: "Permanently removes the worktree directory and any uncommitted changes.",
+    });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Permanently delete a worktree.")).toBeTruthy();
     expect(
       screen.getByText(/Permanently removes the worktree directory and any uncommitted changes\./)
     ).toBeTruthy();
@@ -1035,11 +1044,18 @@ describe("McpConfirmDialog", () => {
   describe("assistant Daintree confirmations preference (#13137)", () => {
     const PREFERENCE_GROUP = "Daintree confirmations for the assistant";
 
+    // The preference sits behind a collapsed disclosure; open it when present.
+    function expandPreference() {
+      const toggle = screen.queryByRole("button", { name: /Daintree confirmations/ });
+      if (toggle) act(() => fireEvent.click(toggle));
+    }
+
     async function renderLoaded() {
       render(<McpConfirmDialog />);
       await act(async () => {
         await Promise.resolve();
       });
+      expandPreference();
     }
 
     function segment(label: string): HTMLElement {
@@ -1053,17 +1069,15 @@ describe("McpConfirmDialog", () => {
       expect(screen.getByRole("radiogroup", { name: PREFERENCE_GROUP })).toBeTruthy();
       expect(segment("Follow global setting").getAttribute("aria-checked")).toBe("true");
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Settings > Daintree Assistant > Daintree confirmations");
-      expect(text).toContain(
-        "Right now it asks, following Settings > Agents > Skip permission prompts, which is off."
-      );
-      expect(text).toContain("this request still needs your answer");
+      expect(text).toContain("Follow global setting · asks");
+      expect(text).toContain("Follows Settings > Agents > Skip permission prompts (off)");
+      expect(text).toContain("even if you cancel");
     });
 
     it.each([
-      ["inherit", true, "Right now it doesn't ask, following"],
-      ["always-ask", true, "Right now it asks."],
-      ["never-ask", false, "Right now it doesn't ask."],
+      ["inherit", true, "Follow global setting · doesn't ask"],
+      ["always-ask", true, "Always ask · asks"],
+      ["never-ask", false, "Never ask · doesn't ask"],
     ] as const)(
       "states what %s resolves to with the global setting %s",
       async (preference, globalSkip, expected) => {
@@ -1109,6 +1123,7 @@ describe("McpConfirmDialog", () => {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(0);
         });
+        expandPreference();
 
         act(() => {
           fireEvent.click(segment("Never ask"));

@@ -88,6 +88,8 @@ type ConfirmDialogBaseProps = {
   cooldownKey?: string | number;
   zIndex?: DialogZIndex;
   initialFocus?: DialogInitialFocus;
+  /** Forwarded to {@link AppDialog.focusResetKey}. */
+  focusResetKey?: string | number;
   /**
    * Forwarded to {@link AppDialog.restoreFocusTo}: a logical successor to
    * receive focus when the trigger has unmounted before close (e.g. the row a
@@ -165,6 +167,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     variant,
     zIndex,
     initialFocus,
+    focusResetKey,
     restoreFocusTo,
     onCloseComplete,
     hasPreview = false,
@@ -284,6 +287,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       hasPreview={hasPreview}
       zIndex={zIndex}
       initialFocus={initialFocus}
+      focusResetKey={focusResetKey}
       restoreFocusTo={restoreFocusTo}
       onCloseComplete={onCloseComplete}
     >

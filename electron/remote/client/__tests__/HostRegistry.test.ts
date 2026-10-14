@@ -41,6 +41,7 @@ describe("HostRegistry", () => {
       lastSeenAt: null,
       addedAt: 1_000,
       notificationsEnabled: false,
+      assistantMessagingEnabled: false,
     });
     expect(isValidRemoteHostId(added.id)).toBe(true);
     expect(registry.list()).toEqual([added]);
@@ -152,6 +153,35 @@ describe("HostRegistry", () => {
     );
   });
 
+  it("keeps assistant messaging off until it is turned on, apart from notifications", () => {
+    const registry = new HostRegistry(memoryStore());
+    const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box.example" } });
+    expect(host.assistantMessagingEnabled).toBe(false);
+    const notifying = registry.update({ hostId: host.id, notificationsEnabled: true });
+    expect(notifying.assistantMessagingEnabled).toBe(false);
+    const enabled = registry.update({ hostId: host.id, assistantMessagingEnabled: true });
+    expect(enabled).toMatchObject({ assistantMessagingEnabled: true, notificationsEnabled: true });
+    expect(() =>
+      registry.update({
+        hostId: host.id,
+        assistantMessagingEnabled: "yes" as unknown as boolean,
+      })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+    expect(registry.get(host.id)?.assistantMessagingEnabled).toBe(true);
+  });
+
+  it("keeps assistant messaging through a rename but not onto a different machine", () => {
+    const registry = new HostRegistry(memoryStore());
+    const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box.example" } });
+    registry.update({ hostId: host.id, assistantMessagingEnabled: true });
+    expect(registry.update({ hostId: host.id, name: "Box" }).assistantMessagingEnabled).toBe(true);
+    const moved = registry.update({
+      hostId: host.id,
+      connection: { kind: "ssh", target: "other.example" },
+    });
+    expect(moved.assistantMessagingEnabled).toBe(false);
+  });
+
   it("forgets a host and reports changes", () => {
     const registry = new HostRegistry(memoryStore());
     const listener = vi.fn();
@@ -242,6 +272,7 @@ describe("HostRegistry", () => {
       lastSeenAt: 1,
       addedAt: 1,
       notificationsEnabled: false,
+      assistantMessagingEnabled: false,
     };
     const registry = new HostRegistry(
       memoryStore({
@@ -290,6 +321,7 @@ describe("HostRegistry", () => {
         lastSeenAt: 5,
         addedAt: 1,
         notificationsEnabled: true,
+        assistantMessagingEnabled: false,
       },
     ]);
     // Reading changes nothing on disk; the next write saves the new shape.

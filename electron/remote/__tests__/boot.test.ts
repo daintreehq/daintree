@@ -67,6 +67,12 @@ const m = vi.hoisted(() => {
       hold: vi.fn((_hostId: string) => () => {}),
       addUseCheck: vi.fn((_check: unknown) => () => {}),
     },
+    registry: {
+      get: vi.fn(
+        (hostId: string) =>
+          ({ "messaging-on": { assistantMessagingEnabled: true } })[hostId] ?? null
+      ),
+    },
     router: { name: "router" },
     dispose: vi.fn(async () => record("client.dispose")),
   };
@@ -385,6 +391,13 @@ vi.mock("../metrics/clientInstall.js", () => ({
 vi.mock("../metrics/hostMetricsHost.js", () => ({
   installHostMetricsHost: metrics.installHostMetricsHost,
 }));
+const messaging = vi.hoisted(() => {
+  const uninstall = vi.fn();
+  return { uninstall, installAssistantMessagingPolicy: vi.fn((_deps: unknown) => uninstall) };
+});
+vi.mock("../assistant/install.js", () => ({
+  installAssistantMessagingPolicy: messaging.installAssistantMessagingPolicy,
+}));
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));
@@ -420,7 +433,11 @@ vi.mock("../host/hostModeDefaults.js", async () => {
 });
 
 import { startRemoteHosts, stopRemoteHosts } from "../boot.js";
-import { _resetRemoteServicesForTest, getRemoteService } from "../runtime.js";
+import {
+  _resetRemoteServicesForTest,
+  getRemoteService,
+  registerRemoteService,
+} from "../runtime.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind } from "../link/messages.js";
 
@@ -491,6 +508,18 @@ describe("startRemoteHosts", () => {
     expect(m.clientOpenedListeners.size).toBe(0);
     // Both boot paths already started the workspace client; boot never starts one.
     expect(m.ensureWorkspaceClient).not.toHaveBeenCalled();
+  });
+
+  it("holds the assistant messaging policy from start, reading each host's opt-in live", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(messaging.installAssistantMessagingPolicy).toHaveBeenCalledTimes(1);
+    const [deps] = messaging.installAssistantMessagingPolicy.mock.calls[0] as [
+      { isHostMessagingEnabled(hostId: string): boolean },
+    ];
+    expect(deps.isHostMessagingEnabled("messaging-on")).toBe(true);
+    expect(deps.isHostMessagingEnabled("unknown-host")).toBe(false);
+    await stopRemoteHosts();
+    expect(messaging.uninstall).toHaveBeenCalledTimes(1);
   });
 
   it("answers hosts' view requests from start, and releases them on stop", async () => {
@@ -998,6 +1027,19 @@ describe("startRemoteHosts", () => {
       "remote:s1:view-11",
       "remote:s1:view-12",
     ]);
+  });
+
+  it("releases a Shell's assistant lanes when its session expires, and every Shell's when Host mode stops", async () => {
+    const policy = { releaseLinkSession: vi.fn(), releaseRemoteShells: vi.fn() };
+    registerRemoteService("assistantMessagingPolicy", policy as never);
+    await startRemoteHosts({ hostMode: true });
+
+    for (const l of m.server.expiredListeners) l({ sessionId: "s1", clientId: "c" });
+    expect(policy.releaseLinkSession.mock.calls).toEqual([["s1"]]);
+    expect(policy.releaseRemoteShells).not.toHaveBeenCalled();
+
+    await getRemoteService("hostMode")!.stopListening();
+    expect(policy.releaseRemoteShells).toHaveBeenCalledTimes(1);
   });
 
   it("admits hybrid host legs and routes MCP to the lease holder in Host mode", async () => {

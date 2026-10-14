@@ -22,7 +22,7 @@ import { attachHostPluginAssets, installPluginHost } from "../plugins/install.js
 import { installPluginParityHost } from "../plugins/parity/install.js";
 import { installHostPortService } from "../ports/hostPorts.js";
 import { installProjectsHost } from "../projects/hostInstall.js";
-import { registerRemoteService } from "../runtime.js";
+import { getRemoteService, registerRemoteService } from "../runtime.js";
 import {
   attachTerminalBridge,
   detachTerminalBridge,
@@ -148,6 +148,9 @@ async function buildHostListener(
     launchCommand: hostLaunchCommand(),
     observeWorkingAgents: async () => (await observeAgents())?.working ?? null,
   });
+  // Runs after the server closes: closing ends every session without an expiry
+  // event, and no Shell can resume one, so their lanes are released here.
+  teardowns.push(() => getRemoteService("assistantMessagingPolicy")?.releaseRemoteShells());
   teardowns.push(() => server.close());
   teardowns.push(registerRemoteService("hostServer", server));
 
@@ -273,6 +276,8 @@ async function buildHostListener(
         detachTerminalBridge(endpointId);
         detachWorktreePortBridge(endpointId);
       }
+      // That Shell can't come back as this session, so the lanes it enrolled are done.
+      getRemoteService("assistantMessagingPolicy")?.releaseLinkSession(sessionId);
       notify();
     })
   );

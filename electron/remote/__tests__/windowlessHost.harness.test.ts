@@ -95,6 +95,8 @@ vi.mock("../../services/HelpSessionService.js", () => ({
       helpSessions.revoked.push(id);
     },
     revokeSession: async () => undefined,
+    addSessionEndedListener: () => () => {},
+    getRunningLaneSession: () => null,
   },
 }));
 

@@ -126,12 +126,19 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = fa
     vite: "^8.0.0",
   };
   if (needsReact) {
-    devDeps.react = "^19.0.0";
-    devDeps["react-dom"] = "^19.0.0";
+    // 19.2 at least: the panel preview renders with the SDK's browser build of
+    // the kit, which uses `useEffectEvent`.
+    devDeps.react = "^19.2.0";
+    devDeps["react-dom"] = "^19.2.0";
     // React 19 still ships types separately; without these the generated
     // `panel.tsx` fails `tsc` on the `react` import and the JSX namespace.
     devDeps["@types/react"] = "^19.0.0";
     devDeps["@types/react-dom"] = "^19.0.0";
+    // The panel preview (`review/`, `npm run test:preview`): optional peers of
+    // the SDK that only `@daintreehq/plugin-sdk/testing/playwright` loads.
+    devDeps["@playwright/test"] = "^1.63.0";
+    devDeps.esbuild = "^0.28.2";
+    devDeps.tailwindcss = "^4.3.3";
   }
   if (needsServer) {
     // Runtime dependency, not a devDependency: the spawned `node dist/server.js`
@@ -168,6 +175,7 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = fa
       scripts["dev:server"] = "vite build --watch --config vite.config.server.ts --no-emptyOutDir";
     }
   }
+  if (needsReact) scripts["test:preview"] = "playwright test";
   scripts.validate = "daintree-plugin validate";
   if (!ctx.projectLocal) {
     // A project plugin is distributed by being committed, not as a .dntr.
@@ -294,6 +302,8 @@ dist/
 *.dntr
 .dev-marker
 .tour-preview/
+test-results/
+playwright-report/
 `;
 
 /**
@@ -310,6 +320,8 @@ dist/
 const PROJECT_GITIGNORE = `node_modules/
 *.dntr
 .dev-marker
+test-results/
+playwright-report/
 
 # dist/ is deliberately NOT ignored, and is force-included below.
 #
@@ -462,6 +474,66 @@ export default function Panel(): React.ReactElement {
 `;
 }
 
+function panelStories(ctx: ScaffoldContext): string {
+  return `import type { PanelStoriesMeta, PanelStory } from "@daintreehq/plugin-sdk/testing/preview";
+import Panel from "../src/panel";
+
+/**
+ * The panel's states, rendered outside Daintree against a mock view host. Each
+ * named export is one state: add one per state the panel can be in (empty,
+ * loading, an error, populated), with the channel answers that produce it in
+ * \`fixtures.channels\`. \`npm run test:preview\` captures every story
+ * (review/panel.spec.ts). Nothing in review/ ships: the build reads src/ only.
+ */
+export default {
+  title: ${q(ctx.displayName)},
+  component: Panel,
+  args: { pluginId: ${q(ctx.scopedName)} },
+} satisfies PanelStoriesMeta;
+
+/** The panel as it first opens. */
+export const Default: PanelStory = {};
+`;
+}
+
+const PANEL_SPEC = `import { test } from "@daintreehq/plugin-sdk/testing/playwright";
+
+// Every story in review/panel.stories.tsx under every theme listed here, built
+// and served without Daintree running. Add a built-in theme id to capture it
+// too. The screenshots land in test-results/; a capture fails on a console
+// error or a story that did not render, and finish() on one that never ran.
+test.use({ previewOptions: { themes: ["daintree"] } });
+
+test("every panel story renders", async ({ preview }) => {
+  for (const story of preview.stories) {
+    for (const theme of preview.themes) {
+      await preview.open(story, theme);
+      await preview.snap(\`\${story}-\${theme}\`);
+    }
+  }
+  await preview.finish();
+});
+`;
+
+/** `npm run test:preview`. Install a browser once with `npx playwright install chromium`. */
+const PLAYWRIGHT_CONFIG = `import { defineConfig } from "@playwright/test";
+
+// The panel preview's specs. The viewport is the panel's size.
+export default defineConfig({
+  testDir: "review",
+  use: { browserName: "chromium", viewport: { width: 640, height: 480 } },
+});
+`;
+
+/** The panel preview a view-bearing template starts with. */
+function previewFiles(ctx: ScaffoldContext): Record<string, string> {
+  return {
+    "review/panel.stories.tsx": panelStories(ctx),
+    "review/panel.spec.ts": PANEL_SPEC,
+    "playwright.config.ts": PLAYWRIGHT_CONFIG,
+  };
+}
+
 function mcpEntry(ctx: ScaffoldContext): string {
   return `import type { PluginHostApi } from "@daintreehq/plugin-sdk";
 
@@ -579,6 +651,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         "src/index.ts": viewEntry(ctx),
         "src/panel.tsx": panelComponent(ctx),
         [PANEL_ICON_PATH]: PANEL_ICON_SVG,
+        ...previewFiles(ctx),
       };
     }
     case "mcp": {
@@ -647,6 +720,7 @@ function templateFiles(ctx: ScaffoldContext): Record<string, string> {
         "src/panel.tsx": panelComponent(ctx),
         [PANEL_ICON_PATH]: PANEL_ICON_SVG,
         "src/server.ts": mcpServer(ctx),
+        ...previewFiles(ctx),
       };
     }
   }

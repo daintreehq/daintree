@@ -12,11 +12,9 @@ import {
   type PanelStory,
 } from "./stories.js";
 import { DEFAULT_PREVIEW_THEME_ID, applyPreviewTheme, type PreviewTheme } from "./themes.js";
+import { PREVIEW_FAILURE_ATTRIBUTE, PREVIEW_READY_ATTRIBUTE } from "./attributes.js";
 
-/** Attribute the page's readiness is published on: `ready` or `failed`, absent while pending. */
-export const PREVIEW_READY_ATTRIBUTE = "data-daintree-preview-ready";
-/** Why the preview failed, beside {@link PREVIEW_READY_ATTRIBUTE}`="failed"`. */
-export const PREVIEW_FAILURE_ATTRIBUTE = "data-daintree-preview-failure";
+export { PREVIEW_FAILURE_ATTRIBUTE, PREVIEW_READY_ATTRIBUTE };
 
 /**
  * Where the preview's Tailwind CSS comes from.
