@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/Kbd";
 import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PathTail } from "@/components/ui/PathTail";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -239,11 +240,26 @@ function PathCrumbs({
  * full name is the option's accessible name, and the tooltip whenever it is
  * cut — on hover, or on the row the arrow keys are on.
  */
-function EntryName({ entry, reveal }: { entry: HostDirectoryEntry; reveal?: boolean }) {
+function EntryName({
+  entry,
+  reveal,
+  onDismiss,
+}: {
+  entry: HostDirectoryEntry;
+  reveal?: boolean;
+  onDismiss?: () => void;
+}) {
   const { head, tail, extension } = splitFileName(entry.name, entry.kind);
   return (
     <span className="flex min-w-0 flex-1 whitespace-pre">
-      <TruncatedTooltip content={entry.name} focusable={false} open={reveal || undefined}>
+      <TruncatedTooltip
+        content={entry.name}
+        focusable={false}
+        open={reveal || undefined}
+        onOpenChange={(next) => {
+          if (!next) onDismiss?.();
+        }}
+      >
         <span className="min-w-0 truncate">{head}</span>
       </TruncatedTooltip>
       {(tail || extension) && <span className="shrink-0">{`${tail}${extension}`}</span>}
@@ -310,14 +326,15 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   const host = usePickerHost(request.hostId);
   const showProgress = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
 
+  // Each listing request gets its own five seconds.
   useEffect(() => {
-    if (!loading) {
-      setStillWorking(false);
-      return;
-    }
+    if (!loading) return;
     const timer = setTimeout(() => setStillWorking(true), UI_STILL_WORKING_MS);
-    return () => clearTimeout(timer);
-  }, [loading, directory, reloadKey]);
+    return () => {
+      clearTimeout(timer);
+      setStillWorking(false);
+    };
+  }, [loading, directory, reloadKey, showHidden, request.hostId]);
 
   // AppDialog is told not to place focus: the path field takes it, a frame
   // after the field mounts, so the dialog has already recorded the invoker it
@@ -380,7 +397,9 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         setPathDraft(result.path);
         setSelectedNames((current) =>
           sameFolder
-            ? current.filter((name) => result.entries.some((entry) => entry.name === name))
+            ? current.filter((name) =>
+                result.entries.some((entry) => entry.name === name && isSelectable(entry, request))
+              )
             : []
         );
         setActiveIndex((index) =>
@@ -416,7 +435,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     [listing, loadError]
   );
   const selectedEntries = ready
-    ? entries.filter((entry) => selectedNames.includes(entry.name))
+    ? entries.filter((entry) => selectedNames.includes(entry.name) && isSelectable(entry, request))
     : [];
   const choice = ready ? resolveChoice(request, listing.path, selectedEntries) : null;
   const confirmLabel = confirmButtonLabel(request, choice?.length ?? 0);
@@ -512,6 +531,12 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
     if (!activeEntry) return;
     if (event.key === "Enter") {
       event.preventDefault();
+      // In a multi-select, Enter on a file confirms what is selected, as the
+      // button would, rather than picking that one file alone.
+      if (multiple && !isNavigable(activeEntry) && choice && selectedEntries.length > 0) {
+        confirm();
+        return;
+      }
       open(activeEntry);
     } else if (event.key === " ") {
       // Space toggles membership in a multi-select, as the listbox pattern
@@ -759,6 +784,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                   <EntryName
                     entry={entry}
                     reveal={keyboardCursor && ready && index === activeIndex}
+                    onDismiss={() => setKeyboardCursor(false)}
                   />
                   {entry.size !== null && (
                     <span className="shrink-0 pl-2 text-right text-xs font-normal tabular-nums text-text-secondary">
@@ -769,18 +795,19 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
                     {selected && <Check className="h-4 w-4 text-text-primary" aria-hidden />}
                   </span>
                   {navigable ? (
-                    <span
-                      aria-hidden="true"
-                      title={`Open ${entry.name}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        open(entry);
-                      }}
-                      onDoubleClick={(event) => event.stopPropagation()}
-                      className="-my-1 -mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-medium hover:text-text-primary"
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </span>
+                    <RowControlTooltip label={`Open ${entry.name}`} shortcut="Enter">
+                      <span
+                        aria-hidden="true"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          open(entry);
+                        }}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                        className={cn(ROW_CONTROL_CLASS, "-my-1 -mr-1.5")}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </span>
+                    </RowControlTooltip>
                   ) : (
                     <span className="-mr-1.5 w-6 shrink-0" aria-hidden="true" />
                   )}
