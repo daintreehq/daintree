@@ -440,6 +440,34 @@ describe("AssistantMessagingPolicy", () => {
     });
   });
 
+  it("tells change listeners when an enrollment begins or ends, however it ends (#13335)", () => {
+    const h = harness();
+    let changes = 0;
+    const off = h.policy.onChange(() => changes++);
+    h.run("proj", 0, "s1");
+    const enrolled = h.policy.enroll(lane(), SHELL_A);
+    if (!enrolled.ok) throw new Error("expected enrollment");
+    expect(changes).toBe(1);
+    h.policy.releaseLinkSession("link-other");
+    expect(changes).toBe(1);
+    h.policy.releaseLinkSession("link-a");
+    expect(changes).toBe(2);
+
+    h.policy.enroll(lane(), SHELL_A);
+    h.end("proj", 0, "s1");
+    expect(changes).toBe(4);
+
+    h.policy.enroll(lane(), SHELL_A);
+    // Relaunched in place: the next read drops the stale enrollment and says so.
+    h.run("proj", 0, "s2");
+    expect(h.policy.getEnrollment(lane())).toBeNull();
+    expect(changes).toBe(6);
+
+    off();
+    h.policy.enroll(lane(), SHELL_A);
+    expect(changes).toBe(6);
+  });
+
   it("carries none of this on Windows", () => {
     const h = harness({ platform: "win32" });
     h.run("proj", 0, "s1");

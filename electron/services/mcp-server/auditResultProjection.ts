@@ -97,6 +97,55 @@ function projectHandbackCarrier(result: unknown): unknown {
   return { ...record, ...reduceRows("terminals"), ...reduceRows("results") };
 }
 
+/**
+ * A task id as the exchange store mints it, a UUID. Anything else a caller
+ * sent is dropped: a short id-shaped string can still be a few words of a
+ * message.
+ */
+const AUDIT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const REPLY_STATES: ReadonlySet<string> = new Set(["input-required", "completed"]);
+
+function auditId(value: unknown): string | null {
+  return typeof value === "string" && AUDIT_ID_PATTERN.test(value) ? value : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * An inbox page reduced to how much came back (#13335): never a body, and
+ * never the sending host or lane, which are labels another machine chose.
+ */
+function projectInbox(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  if (record === null || !Array.isArray(record.messages)) return { status: "unrecognized" };
+  let bodyChars = 0;
+  const taskIds: Array<string | null> = [];
+  for (const message of record.messages) {
+    const row = asRecord(message);
+    bodyChars += finiteNumber(row?.bodyChars) ?? 0;
+    taskIds.push(auditId(row?.taskId));
+  }
+  return {
+    messageCount: record.messages.length,
+    bodyChars,
+    taskIds,
+    cursor: finiteNumber(record.cursor),
+    hasMore: record.hasMore === true,
+  };
+}
+
+function projectReply(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  if (record === null) return { status: "unrecognized" };
+  return {
+    taskId: auditId(record.taskId),
+    state: typeof record.state === "string" && REPLY_STATES.has(record.state) ? record.state : null,
+    revision: finiteNumber(record.revision),
+  };
+}
+
 const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown> = new Map<
   string,
   (result: unknown) => unknown
@@ -105,10 +154,50 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
   ["terminal.getStatus", projectHandbackCarrier],
   ["terminal.waitUntilIdle", projectHandbackCarrier],
   ["terminal.waitUntilIdleBatch", projectHandbackCarrier],
+  ["assistant.getInbox", projectInbox],
+  ["assistant.reply", projectReply],
 ]);
 
 /** The value to summarize for `toolId`'s audit record: its projection when it has one, else the result as is. */
 export function projectAuditResult(toolId: string, result: unknown): unknown {
   const projection = AUDIT_RESULT_PROJECTIONS.get(toolId);
   return projection ? projection(result) : result;
+}
+
+/**
+ * Tools whose arguments are conversation (#13335). The generic summarizer
+ * keeps any string of 50 characters or fewer verbatim, which is a whole short
+ * message, so these are rebuilt from named fields first: ids that look like
+ * ids, enums from their own set, and the length of the text — never the text.
+ * A malformed call is reduced the same way, since refusals are audited too.
+ */
+const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = new Map<
+  string,
+  (args: unknown) => unknown
+>([
+  [
+    "assistant.getInbox",
+    (args) => {
+      const record = asRecord(args);
+      return { cursor: finiteNumber(record?.cursor), limit: finiteNumber(record?.limit) };
+    },
+  ],
+  [
+    "assistant.reply",
+    (args) => {
+      const record = asRecord(args);
+      return {
+        taskId: auditId(record?.taskId),
+        state:
+          typeof record?.state === "string" && REPLY_STATES.has(record.state) ? record.state : null,
+        textChars: typeof record?.text === "string" ? record.text.length : null,
+      };
+    },
+  ],
+]);
+
+/** The arguments to summarize for `toolId`'s audit record and activity strip. */
+export function projectAuditArgs(toolId: string, args: unknown): unknown {
+  const projection = AUDIT_ARGS_PROJECTIONS.get(toolId);
+  return projection ? projection(args) : args;
 }

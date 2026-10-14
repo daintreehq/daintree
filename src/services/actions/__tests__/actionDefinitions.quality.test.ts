@@ -456,7 +456,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // What the prose has to carry is where a switch with no project lands and
   // that the host move is confirmed in a dialog. Registered only where Remote
   // Hosts is, and off the external surface, so the external total does not move.
-  const MAX_COHORT_TOTAL_BYTES = 19_400;
+  // 19_400 → 19_800 for #13335's `assistant.getInbox` and `assistant.reply` on
+  // core, measured at 19_776 B. Only about 50 B were spare. What the prose has
+  // to carry is that a body is another machine's words to weigh, never the
+  // user's instructions, and how a question differs from a final reply. Offered
+  // only to an enrolled lane's assistant and off the external surface, so the
+  // external total does not move.
+  const MAX_COHORT_TOTAL_BYTES = 19_800;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1404,6 +1410,8 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
+      // Not strict, but its required fields share names with other schemas' own.
+      "assistant.reply": { taskId: "task-placeholder", state: "completed", text: "noop" },
     };
 
     const failures: string[] = [];

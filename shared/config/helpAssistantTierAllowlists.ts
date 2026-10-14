@@ -126,6 +126,10 @@ export const CORE_TIER_TOOLS = [
   "slashCommands.list",
 
   "help.displayImage",
+  // An enrolled lane's own inbox (#13335). Offered only while the caller's own
+  // lane is enrolled for messaging, and run only for that lane's help session.
+  "assistant.getInbox",
+  "assistant.reply",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -255,6 +259,9 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   // Opens a dialog in the window the user is watching, which only the
   // assistant pinned to that window should do.
   "diagnostics.openReview",
+  // A lane's inbox belongs to the assistant enrolled in it, never a pane (#13335).
+  "assistant.getInbox",
+  "assistant.reply",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

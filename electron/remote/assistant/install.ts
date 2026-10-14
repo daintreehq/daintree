@@ -1,15 +1,20 @@
+import type Database from "better-sqlite3";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
+import { setAssistantMessagingRuntime } from "../../services/mcp-server/assistantMessagingTools.js";
+import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
-import { getSharedSqlite } from "../../services/persistence/db.js";
 import { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
+import { AssistantExchangeStore } from "../exchange/AssistantExchangeStore.js";
 import type { LinkSession } from "../link/session.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { AssistantExchangeClient } from "./AssistantExchangeClient.js";
+import { AssistantInbox } from "./AssistantInbox.js";
 import { AssistantMessagingPolicy } from "./AssistantMessagingPolicy.js";
+import { AssistantMessagingRuntime } from "./AssistantMessagingRuntime.js";
 
 /** What the messaging controls need beyond the policy itself. */
 export interface AssistantMessagingSurface {
@@ -31,12 +36,28 @@ export interface AssistantMessagingPolicyInstallDeps {
   isHostMessagingEnabled(hostId: HostId): boolean;
   hasHosts(): boolean;
   onHostsChanged(listener: () => void): () => void;
+  /** Told whenever a lane may have gained or lost its inbox tools. */
+  onAvailabilityChanged?(): void;
 }
 
-/** Registers the process's one messaging policy; the returned teardown disposes it. */
+function openExchangeDatabase(): Database.Database | null {
+  try {
+    if (getSharedSqlite() === null) getSharedDb();
+    return getSharedSqlite();
+  } catch (err) {
+    console.error("[AssistantMessaging] Exchange records are unavailable:", err);
+    return null;
+  }
+}
+
+/**
+ * Registers the process's one messaging policy, and the runtime an enrolled
+ * lane's own tools run against; the returned teardown disposes both.
+ */
 export function installAssistantMessagingPolicy(
   deps: AssistantMessagingPolicyInstallDeps
 ): () => void {
+  const store = new AssistantExchangeStore(openExchangeDatabase());
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),
@@ -77,16 +98,31 @@ export function installAssistantMessagingPolicy(
     hasHosts: deps.hasHosts,
     revision: () => revision,
   });
+  const runtime = new AssistantMessagingRuntime({
+    policy,
+    store,
+    inbox: new AssistantInbox(),
+    getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
+  });
+  const onAvailabilityChanged = deps.onAvailabilityChanged;
+  const stopListening = onAvailabilityChanged
+    ? runtime.onAvailabilityChanged(onAvailabilityChanged)
+    : () => {};
+  const unregisterRuntime = setAssistantMessagingRuntime(runtime);
   // A view that mounted before the policy existed read it as unavailable.
   push();
   return () => {
+    stopListening();
+    unregisterRuntime();
     unregisterSurface();
     unregister();
     offHosts();
     offPolicy();
     watched?.off("spawn-result", reconcile);
     watched = null;
+    runtime.dispose();
     policy.dispose();
+    onAvailabilityChanged?.();
   };
 }
 

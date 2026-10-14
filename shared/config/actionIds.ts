@@ -538,6 +538,10 @@ export const BUILT_IN_ACTION_IDS = [
   "help.openCommandsFolder",
   "help.resumePastSession",
 
+  // -- assistantMessagingActions --
+  "assistant.getInbox",
+  "assistant.reply",
+
   // -- uiActions --
   "ui.sidebar.resetWidth",
 
@@ -624,4 +628,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",
+  // Main-process only, keyed on the caller's help-session bearer: a plugin has
+  // no lane and no inbox (#13335).
+  "assistant.getInbox",
+  "assistant.reply",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

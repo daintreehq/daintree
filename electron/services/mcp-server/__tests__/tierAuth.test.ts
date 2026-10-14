@@ -439,6 +439,29 @@ describe("shouldExposeTool", () => {
     expect(TIER_ALLOWLISTS.external.has(entry.id)).toBe(true);
     expect(shouldExposeTool(entry, "external")).toBe(false);
   });
+  // #13335: an assistant's inbox tools are offered only while its own lane is
+  // enrolled for messaging, and never to a pane or an api-key client.
+  it.each(["assistant.getInbox", "assistant.reply"])(
+    "offers %s only to the assistant of an enrolled lane",
+    (id) => {
+      const entry = makeEntry({ id });
+      const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
+      expect(shouldExposeTool(entry, "core", assistant)).toBe(false);
+      expect(shouldExposeTool(entry, "core", { ...assistant, assistantMessaging: true })).toBe(
+        true
+      );
+      expect(
+        shouldExposeTool(entry, "full", {
+          workspaceBound: false,
+          paneApproval: true,
+          assistantMessaging: true,
+        })
+      ).toBe(false);
+      expect(
+        shouldExposeTool(entry, "external", { workspaceBound: false, assistantMessaging: true })
+      ).toBe(false);
+    }
+  );
 });
 
 // #10701 / #11537: the curated `MCP_TOOL_ALLOWLIST` is the ONLY tool surface an
@@ -2579,7 +2602,9 @@ describe("isWithheldFromBoundSession (#11789)", () => {
 // decides whether a panel tool could be reached, the origin decides whether the
 // unscoped form or the owned twin is.
 describe("unscoped panel tools are reserved for renderer-owned origins (#12407)", () => {
-  const ASSISTANT = { workspaceBound: false, rendererOwnedOrigin: true };
+  // An assistant whose lane is enrolled for messaging, so its own inbox tools
+  // (#13335), reserved here too, are on its surface alongside the rest.
+  const ASSISTANT = { workspaceBound: false, rendererOwnedOrigin: true, assistantMessaging: true };
   const TWIN_KEYS = new Set<string>(Object.keys(OWNED_TWIN_TOOLS));
   const TWIN_VALUES = new Set<string>(Object.values(OWNED_TWIN_TOOLS));
 

@@ -2024,6 +2024,15 @@ describe("HelpSessionService", () => {
       expect(service.getRunningLaneSession("proj-1", 1)).toBeNull();
     });
 
+    it("names a session's lane until the session is revoked (#13335)", async () => {
+      const result = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!result) throw new Error("expected result");
+      expect(service.getSessionLane(result.sessionId)).toEqual({ projectId: "proj-1", slot: 1 });
+      expect(service.getSessionLane("no-such-session")).toBeNull();
+      await service.revokeSession(result.sessionId);
+      expect(service.getSessionLane(result.sessionId)).toBeNull();
+    });
+
     it("ends a revoked session before its capture finishes, keeping its bearer for the capture", async () => {
       const store = {
         get: vi.fn().mockReturnValue(null),

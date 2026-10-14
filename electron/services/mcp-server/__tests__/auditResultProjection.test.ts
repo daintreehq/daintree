@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { projectAuditResult } from "../auditResultProjection.js";
+import { projectAuditArgs, projectAuditResult } from "../auditResultProjection.js";
+import { summarizeMcpArgs, summarizeMcpResult } from "../../../../shared/utils/mcpArgsSummary.js";
 
 const TOOL = "terminal.readLastMessageOwned";
 const PROSE = "PROSE-SENTINEL the agent's private hand-off";
@@ -165,5 +166,84 @@ describe("projectAuditResult — handback carriers (#12488)", () => {
       timedOut: false,
     };
     expect(projectAuditResult("terminal.waitUntilIdle", result)).toEqual(result);
+  });
+});
+
+describe("assistant messaging audit entries carry no body (#13335)", () => {
+  const SHORT = "BODY-SENTINEL ok";
+  const LONG = `BODY-SENTINEL ${"x".repeat(10_000)}`;
+  const HOST = "HOST-SENTINEL";
+  const TASK = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+  it.each([SHORT, LONG])("summarizes a reply's arguments without its text", (text) => {
+    const summary = summarizeMcpArgs(
+      projectAuditArgs("assistant.reply", { taskId: TASK, state: "completed", text })
+    );
+    expect(summary).not.toContain("BODY-SENTINEL");
+    expect(JSON.parse(summary)).toEqual({
+      taskId: TASK,
+      state: "completed",
+      textChars: text.length,
+    });
+  });
+
+  it("drops a task id that is not one the store mints, however id-shaped", () => {
+    const summary = summarizeMcpArgs(
+      projectAuditArgs("assistant.reply", {
+        taskId: "BODY-SENTINEL",
+        state: "completed",
+        text: "x",
+      })
+    );
+    expect(summary).not.toContain("BODY-SENTINEL");
+    expect(JSON.parse(summary).taskId).toBeNull();
+  });
+
+  it("measures, never keeps, a malformed reply's fields", () => {
+    const summary = summarizeMcpArgs(
+      projectAuditArgs("assistant.reply", {
+        taskId: "BODY-SENTINEL smuggled in an id",
+        state: "BODY-SENTINEL",
+        text: 42,
+        extra: SHORT,
+      })
+    );
+    expect(summary).not.toContain("BODY-SENTINEL");
+    expect(JSON.parse(summary)).toEqual({ taskId: null, state: null, textChars: null });
+  });
+
+  it("summarizes an inbox page by its size, without bodies or sender labels", () => {
+    const result = {
+      messages: [SHORT, LONG].map((body, i) => ({
+        taskId: i === 0 ? TASK : "not-a-uuid",
+        messageId: `msg-${i}`,
+        contextId: "ctx",
+        state: "submitted",
+        receivedAt: 1,
+        provenance: { sendingHost: HOST, sendingLane: HOST, hopCount: 1 },
+        bodyChars: body.length,
+        untrustedBody: body,
+      })),
+      cursor: 2,
+      hasMore: false,
+    };
+    const summary = summarizeMcpResult(projectAuditResult("assistant.getInbox", result));
+    expect(summary).not.toContain("BODY-SENTINEL");
+    expect(summary).not.toContain("HOST-SENTINEL");
+    expect(projectAuditResult("assistant.getInbox", result)).toEqual({
+      messageCount: 2,
+      bodyChars: SHORT.length + LONG.length,
+      taskIds: [TASK, null],
+      cursor: 2,
+      hasMore: false,
+    });
+    expect(projectAuditResult("assistant.getInbox", { text: SHORT })).toEqual({
+      status: "unrecognized",
+    });
+  });
+
+  it("leaves other tools' arguments to the generic summarizer", () => {
+    const args = { url: "https://daintree.org/a.png" };
+    expect(projectAuditArgs("help.displayImage", args)).toBe(args);
   });
 });
