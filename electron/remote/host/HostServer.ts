@@ -303,10 +303,19 @@ export class HostServer {
   }
 
   private closeSessions(): void {
-    if (this.live.size > 0 || this.resumable.size > 0) {
-      logger.info("Host server closing; dropping its remote sessions", {
-        attachedSessionIds: [...this.live.keys()],
-        parkedSessionIds: [...this.resumable.keys()],
+    // One line each: the logger clamps arrays shorter than the session cap.
+    for (const ctx of this.live.values()) {
+      logger.info("Remote session ended; the host server is closing", {
+        sessionId: ctx.sessionId,
+        clientId: ctx.client.clientId,
+        attached: true,
+      });
+    }
+    for (const entry of this.resumable.values()) {
+      logger.info("Remote session ended; the host server is closing", {
+        sessionId: entry.sessionId,
+        clientId: entry.clientId,
+        attached: false,
       });
     }
     for (const ctx of [...this.live.values()]) ctx.session.close("shutting-down");

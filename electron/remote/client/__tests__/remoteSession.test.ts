@@ -65,6 +65,7 @@ import {
 import { _resetLocalEndpointsForTesting } from "../../../ipc/localEndpoint.js";
 import type { IpcContext } from "../../../ipc/types.js";
 import { AppError } from "../../../utils/errorTypes.js";
+import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
@@ -733,6 +734,8 @@ describe("remote session wiring", () => {
     await invoke(HOST_CHANNEL, VIEW_A, {});
     await invoke(HOST_CHANNEL, VIEW_B, {});
     opened.length = 0;
+    const firstSessionId = h.manager.get(HOST_ID)!.lastSessionId;
+    logBuffer.clear();
 
     // Past the resume grace, so the next session is a fresh one; VIEW_B moved away meanwhile.
     h.allowConnect.value = false;
@@ -749,6 +752,8 @@ describe("remote session wiring", () => {
     // missed, so the Shell tells the reopened view itself, once.
     expect(h.sink.resyncs).toEqual([{ webContentsId: VIEW_A, reason: "reconnected" }]);
 
+    const secondSessionId = h.manager.get(HOST_ID)!.lastSessionId;
+    expect(secondSessionId).not.toBe(firstSessionId);
     h.sink.gone(VIEW_A);
     expect(closed.at(-1)).toEqual({
       hostId: HOST_ID,
@@ -757,6 +762,27 @@ describe("remote session wiring", () => {
     });
     await h.manager.disconnect(HOST_ID);
     expect(closed).toHaveLength(2);
+
+    // Each close is logged under the session the endpoint lived on, with why.
+    const closes = logBuffer
+      .getFiltered({ sources: ["main:RemoteHostManager"] })
+      .filter((entry) => entry.message === "Remote host view endpoint closed")
+      .map((entry) => entry.context);
+    expect(closes).toEqual([
+      expect.objectContaining({
+        hostId: HOST_ID,
+        sessionId: firstSessionId,
+        webContentsId: VIEW_B,
+        endpointId: "view-12",
+        cause: "view-moved",
+      }),
+      expect.objectContaining({
+        sessionId: secondSessionId,
+        webContentsId: VIEW_A,
+        endpointId: "view-11",
+        cause: "view-closed",
+      }),
+    ]);
   });
 
   describe("assistant liveness (#13349)", () => {

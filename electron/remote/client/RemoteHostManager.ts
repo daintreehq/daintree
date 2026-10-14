@@ -82,6 +82,8 @@ export interface ViewSink {
 interface OpenEndpoint {
   endpointId: string;
   projectId: string | null;
+  /** The session it was opened on, which a resume keeps and a fresh session replaces. */
+  sessionId: string | null;
 }
 
 /** A local view's endpoint is live on a session: newly opened, or carried over by a resume. */
@@ -680,11 +682,12 @@ export class HostConnection {
     });
     if (result === "refused") return null;
     this.pendingCloses.delete(endpointId);
-    this.endpoints.set(webContentsId, { endpointId, projectId });
+    const sessionId = this.link.lastSessionId;
+    this.endpoints.set(webContentsId, { endpointId, projectId, sessionId });
     this.viewsByEndpoint.set(endpointId, webContentsId);
     logger.info("Remote host view endpoint opened", {
       hostId: this.hostId,
-      sessionId: this.link.lastSessionId,
+      sessionId,
       endpointId,
       webContentsId,
       projectId,
@@ -720,7 +723,7 @@ export class HostConnection {
   ): void {
     logger.info("Remote host view endpoint closed", {
       hostId: this.hostId,
-      sessionId: this.link.lastSessionId,
+      sessionId: open.sessionId,
       endpointId: open.endpointId,
       webContentsId,
       projectId: open.projectId,

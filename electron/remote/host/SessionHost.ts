@@ -146,6 +146,8 @@ interface SessionState {
   handle: EndpointSessionHandle;
   /** When the Shell last used this host through a view; null until it does. */
   lastActiveAt: number | null;
+  /** Channels already logged as unsendable here, so one that always fails warns once. */
+  unsendableChannels: Set<string>;
 }
 
 /**
@@ -358,6 +360,7 @@ export class SessionHost {
         overHighWaterTimer: null,
         handle: undefined as unknown as EndpointSessionHandle,
         lastActiveAt: null,
+        unsendableChannels: new Set(),
       };
       created.handle = {
         sessionId: created.sessionId,
@@ -588,11 +591,14 @@ export class SessionHost {
     } catch (error) {
       // Unencodable or oversized: only this event is lost, but the Shell's view
       // of it is now wrong, so it repaints.
-      logger.warn("Dropped an event to a remote view", {
-        ...describeEndpoint(endpoint),
-        channel: frame.channel,
-        reason: formatErrorMessage(error, "unsendable"),
-      });
+      if (!state.unsendableChannels.has(frame.channel)) {
+        state.unsendableChannels.add(frame.channel);
+        logger.warn("Dropped an event to a remote view; later ones on its channel go unlogged", {
+          ...describeEndpoint(endpoint),
+          channel: frame.channel,
+          reason: formatErrorMessage(error, "unsendable"),
+        });
+      }
       state.stale.add(endpoint.clientEndpointId);
       state.staleReason = "overflow";
       this.maybeFinishResync(state);

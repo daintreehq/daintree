@@ -103,6 +103,17 @@ export interface LinkClientOptions {
 }
 
 const SHORT_SESSION_MS = 5_000;
+
+/**
+ * A failure's detail with what changes on every attempt taken out (the
+ * per-attempt forward socket's path, nonces), so the same failure repeating
+ * is recognised as the same.
+ */
+function failureShape(detail: string | null): string {
+  if (detail === null) return "";
+  return detail.replace(/\/[^\s'"()]+/g, "<path>").replace(/\b[0-9a-f]{8,}\b/gi, "<id>");
+}
+
 /** Past the 5 s ping and its answer: long enough that one is overdue, well short of the 20 s idle timeout. */
 const QUIET_AFTER_MS = 7_000;
 const QUIET_CHECK_MS = 1_000;
@@ -476,7 +487,9 @@ export class LinkClient {
     const { initialMs = 500, maxMs = 30_000, jitter = 0.3 } = this.options.backoff ?? {};
     const base = Math.min(maxMs, initialMs * 2 ** Math.min(this.failures - 1, 30));
     const delay = Math.max(0, Math.round(base * (1 - jitter * this.random())));
-    this.logFailure("Remote host unreachable", detail ?? "unknown", {
+    const retry = options.parked ? "stopped" : "scheduled";
+    const signature = `${failureShape(detail)}|${options.hostModeOff ? "host-mode-off" : ""}|${retry}`;
+    this.logFailure("Remote host unreachable", signature, {
       detail,
       ...(options.hostModeOff ? { hostModeOff: true } : {}),
       ...(options.parked ? { stoppedRetrying: true } : { retryInMs: delay }),
@@ -501,7 +514,8 @@ export class LinkClient {
   private logFailure(message: string, signature: string, context: Record<string, unknown>): void {
     const line = {
       hostId: this.options.hostId ?? null,
-      attempt: this.attempt,
+      // Zero after a session that dropped soon after its handshake: no dial failed.
+      ...(this.attempt > 0 ? { attempt: this.attempt } : {}),
       previousSessionId: this.sessionId,
       ...context,
     };

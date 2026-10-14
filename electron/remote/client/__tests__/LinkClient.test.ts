@@ -33,13 +33,20 @@ afterEach(async () => {
   client = null;
 });
 
-function failingTransport(detail: string): LinkTransport & { opens: number; detail: string } {
+function failingTransport(detail: string): LinkTransport & {
+  opens: number;
+  detail: string | (() => string);
+  hostModeOff: boolean;
+} {
   const t = {
     opens: 0,
-    detail,
+    detail: detail as string | (() => string),
+    hostModeOff: false,
     async open() {
       t.opens++;
-      throw new TransportError("unreachable", t.detail);
+      const said = typeof t.detail === "function" ? t.detail() : t.detail;
+      if (t.hostModeOff) throw new HostModeOffError(said);
+      throw new TransportError("unreachable", said);
     },
   };
   return t;
@@ -106,11 +113,32 @@ describe("LinkClient backoff", () => {
       },
     ]);
 
-    const seenBefore = transport.opens;
-    transport.detail = "Connection refused";
+    // Only the per-attempt forward path differs: still the same failure.
+    let seenBefore = transport.opens;
+    let nonce = 0;
+    transport.detail = () =>
+      `connect ENOENT /tmp/daintree/l-1a2b3c4d-${(++nonce).toString(16).padStart(8, "0")}.sock`;
     await waitFor(() => transport.opens >= seenBefore + 3);
     expect(lines().filter((line) => line.message === "Remote host unreachable")).toHaveLength(2);
+    expect(lines().at(-1)?.context).toMatchObject({ detail: expect.stringContaining("ENOENT") });
+
+    seenBefore = transport.opens;
+    transport.detail = "Connection refused";
+    await waitFor(() => transport.opens >= seenBefore + 3);
+    expect(lines().filter((line) => line.message === "Remote host unreachable")).toHaveLength(3);
     expect(lines().at(-1)?.context).toMatchObject({ detail: "Connection refused" });
+
+    // The same words, but now it stops retrying: that is news.
+    transport.hostModeOff = true;
+    await waitFor(() => {
+      const state = client!.getState();
+      return state.status === "unreachable" && state.retryAt === null;
+    });
+    expect(lines().at(-1)?.context).toMatchObject({
+      detail: "Connection refused",
+      hostModeOff: true,
+      stoppedRetrying: true,
+    });
   });
 
   it("says when the host answered but Daintree there isn't in Host mode", async () => {

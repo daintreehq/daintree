@@ -503,14 +503,16 @@ describe("HostServer session resume", () => {
     expect(host[2]!.context).toMatchObject({ ...who, parkedMs: expect.any(Number) });
     expect(host[3]!.context).toMatchObject({ sessionId, cause: "goodbye", by: "remote" });
 
-    const shell = logged("main:LinkClient");
+    // A drop this soon after the handshake also logs the retry's backoff,
+    // unless the machine stalled past the short-session window; not asserted.
+    const shell = logged("main:LinkClient").filter(
+      (entry) => entry.message !== "Remote host unreachable"
+    );
     const link = { hostId: "host-studio", sessionId };
     expect(shell.map((entry) => entry.message)).toEqual([
       "Dialling remote host",
       "Remote host link established",
       "Remote host link closed",
-      // Dropped within seconds of the handshake, so the retry goes through backoff.
-      "Remote host unreachable",
       "Dialling remote host",
       "Remote host link resumed",
       "Remote host link closed",
@@ -526,12 +528,11 @@ describe("HostServer session resume", () => {
       hostId: "host-studio",
       previousSessionId: sessionId,
     });
-    expect(shell[4]!.context).toMatchObject({ previousSessionId: sessionId });
-    expect(shell[5]!.context).toMatchObject(link);
-    expect(shell[6]!.context).toMatchObject({ ...link, reason: "client stopped", by: "local" });
+    expect(shell[4]!.context).toMatchObject(link);
+    expect(shell[5]!.context).toMatchObject({ ...link, reason: "client stopped", by: "local" });
 
     // Ids survive the logger's redaction, and nothing secret rides along.
-    const written = JSON.stringify([...host, ...shell]);
+    const written = JSON.stringify([...host, ...logged("main:LinkClient")]);
     expect(written).not.toContain("[redacted]");
     expect(written).not.toContain(server.token);
     expect(written).not.toContain(firstSecret);

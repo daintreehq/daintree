@@ -77,13 +77,20 @@ vi.mock("../../services/PluginService.js", async () => ({
 const helpSessions = vi.hoisted(() => ({
   provisioned: [] as Array<Record<string, unknown>>,
   revoked: [] as number[],
+  /** Sessions provisioned and not yet revoked, by the view handle they are pinned to. */
+  live: [] as Array<{ handle: number; helpSessionId: string }>,
 }));
 vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     provisionSession: async (input: Record<string, unknown>) => {
       helpSessions.provisioned.push(input);
+      const helpSessionId = `session-${helpSessions.provisioned.length}`;
+      helpSessions.live.push({
+        handle: input.projectViewWebContentsId as number,
+        helpSessionId,
+      });
       return {
-        sessionId: "session-1",
+        sessionId: helpSessionId,
         sessionPath: "/host/userData/help-sessions/abc",
         token: "bearer-minted-on-the-host",
         tier: "action",
@@ -93,11 +100,16 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     },
     revokeByWebContentsId: async (id: number) => {
       helpSessions.revoked.push(id);
+      helpSessions.live = helpSessions.live.filter((session) => session.handle !== id);
     },
     helpSessionRefsForWebContentsId: (id: number) =>
-      helpSessions.provisioned
-        .filter((input) => input.projectViewWebContentsId === id)
-        .map(() => ({ helpSessionId: "session-1", terminalId: "terminal-help-1", slot: 0 })),
+      helpSessions.live
+        .filter((session) => session.handle === id)
+        .map(({ helpSessionId }) => ({
+          helpSessionId,
+          terminalId: `terminal-${helpSessionId}`,
+          slot: 0,
+        })),
     revokeSession: async () => undefined,
     addSessionEndedListener: () => () => {},
     getRunningLaneSession: () => null,
@@ -154,6 +166,7 @@ afterEach(async () => {
   _resetHostResidencyForTesting();
   helpSessions.provisioned.length = 0;
   helpSessions.revoked.length = 0;
+  helpSessions.live.length = 0;
 });
 
 async function harness(): Promise<RemoteHarness> {
@@ -374,9 +387,19 @@ describe("host handlers with no window here, over the real link", () => {
           projectId: "proj-2",
           cause: "project-rebound",
           previousProjectId: "proj-1",
-          helpSessions: [{ helpSessionId: "session-1", terminalId: "terminal-help-1", slot: 0 }],
+          helpSessions: [{ helpSessionId: "session-1", terminalId: "terminal-session-1", slot: 0 }],
         }),
       ]);
+
+      // An assistant for the project it shows now.
+      data(
+        await r.invoke(CHANNELS.HELP_PROVISION_SESSION, view, {
+          projectId: "proj-2",
+          projectPath: r.projects.get("proj-2")!.path,
+          agentId: "claude",
+        })
+      );
+      expect(helpSessions.provisioned).toHaveLength(2);
 
       // The view going (its endpoint closes on the host) takes its sessions
       // with it, and the host's log says the Shell closed it.
@@ -390,9 +413,13 @@ describe("host handlers with no window here, over the real link", () => {
         expect.objectContaining({
           sessionId: endpoint.linkSessionId,
           endpointId: endpoint.endpointId,
+          projectId: "proj-2",
           cause: "client-closed",
+          helpSessions: [{ helpSessionId: "session-2", terminalId: "terminal-session-2", slot: 0 }],
         }),
       ]);
+      // The assistant's bearer is the host's own and never reaches the log.
+      expect(JSON.stringify(helpLog())).not.toContain("bearer-minted-on-the-host");
       expect(
         logBuffer
           .getFiltered({ sources: ["main:SessionHost"] })
