@@ -150,8 +150,8 @@ function hostUpdateOffers(
 
 /**
  * Where this window works, right of the project switcher: "This Mac", or
- * "SSH · studio-01" on a host's tinted surface so a remote window reads as a
- * different place at a glance. Hidden until a host other than this machine
+ * "SSH · studio-01" with the window's light behind it, so a remote window reads
+ * as a different place at a glance. Hidden until a host other than this machine
  * exists, and never in a build without Remote Hosts. Picking a host only goes
  * there, as it is; bringing the current branch along is its own item.
  */
@@ -262,32 +262,31 @@ export function HostChip() {
         className={cn(
           // Quieter than the project pill beside it; only its menu takes a
           // select's shape. Locally it is a small text chip; on a host it
-          // steps up a size, since working elsewhere is the thing to notice.
-          "app-no-drag pointer-events-auto ml-1.5 flex min-w-0 shrink items-center rounded-[var(--radius-md)]",
+          // takes the pill's material a size down, lit by the light behind it.
+          "app-no-drag pointer-events-auto ml-1.5 flex min-w-0 shrink items-center rounded-[var(--radius-md)] text-xs",
           "transition-colors focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-2",
           isLocalWindow
-            ? "h-7 max-w-56 gap-1.5 px-2 text-xs text-text-secondary hover:bg-overlay-subtle hover:text-text-primary aria-expanded:bg-overlay-subtle aria-expanded:text-text-primary"
-            : // A different place, not a problem, and not a second accent: the strip
-              // around it already wears the remote hue (toolbar.css), and the chip
-              // is its label, edged and marked in the same hue rather than filled,
-              // since a status fill read as a warning beside the project pill. The
+            ? "h-7 max-w-56 gap-1.5 px-2 text-text-secondary hover:bg-overlay-subtle hover:text-text-primary aria-expanded:bg-overlay-subtle aria-expanded:text-text-primary"
+            : // A different place, not a problem, and not a second accent: the
+              // window's light (toolbar.css) says where it is, never a status
+              // fill, which read as a warning beside the project pill. The
               // border also carries the shape under forced colours.
-              "h-8 max-w-80 gap-2 border border-category-slate bg-overlay-subtle px-2.5 text-sm text-text-primary hover:bg-overlay-hover aria-expanded:bg-overlay-hover"
+              "host-chip-remote relative h-8 max-w-72 gap-1.5 border px-2.5 text-text-primary"
         )}
       >
         {isLocalWindow ? (
           <PlatformGlyph platform={currentRow.platform} className="shrink-0" />
         ) : (
-          <HostGlyph className="h-4 w-4 shrink-0 text-category-slate-text" aria-hidden="true" />
+          <HostGlyph className="host-chip-source h-4 w-4 shrink-0" aria-hidden="true" />
         )}
         {/* The name's middle gives way before the link's state, which never truncates. */}
-        <span className="flex min-w-0 max-w-48 shrink font-medium">
+        <span className="flex min-w-0 max-w-40 shrink font-medium">
           {isLocalWindow ? (
             <span className="truncate">{name}</span>
           ) : (
             <>
               {/* "SSH · " and the name's end never clip; only its middle gives way. */}
-              <span className="shrink-0 whitespace-pre">SSH · </span>
+              <span className="shrink-0 whitespace-pre font-normal">SSH · </span>
               <span className="min-w-0 truncate">{nameHead}</span>
               <span className="shrink-0">{nameTail}</span>
               {nameDomain && (

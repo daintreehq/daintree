@@ -2476,8 +2476,9 @@ body[data-performance-mode="true"] .surface-toolbar {
   background-color: var(--color-surface-toolbar) !important;
 }
 
+/* A remote window's unlit patches follow the strip onto the solid surface. */
 body[data-performance-mode="true"] .surface-toolbar[data-remote-window] {
-  background-color: var(--remote-toolbar-surface) !important;
+  --remote-occluder: var(--color-surface-toolbar);
 }
 
 /* Disable terminal glow in performance mode */
