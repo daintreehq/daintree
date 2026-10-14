@@ -13,6 +13,7 @@ import {
   type HostHandshakeInfo,
   type HostId,
   type HostListEntry,
+  type HostRecentUse,
   isLocalHostId,
   type OperationId,
   type OperationOutcome,
@@ -94,6 +95,11 @@ export const remoteHostsNamespace = defineIpcNamespace({
       async (): Promise<HostListEntry[]> =>
         // Empty until the remote runtime has started.
         getRemoteService("remoteHostsClient")?.list() ?? []
+    ),
+    listRecent: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listRecent,
+      async (): Promise<HostRecentUse[]> =>
+        getRemoteService("remoteHostsClient")?.listRecent() ?? []
     ),
     add: op(
       REMOTE_HOSTS_METHOD_CHANNELS.add,

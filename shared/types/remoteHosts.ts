@@ -291,6 +291,15 @@ export interface HostListEntry {
 }
 
 /**
+ * When a window on this machine last landed on a host, "local" included: what
+ * the host switcher orders by. Kept on this device only.
+ */
+export interface HostRecentUse {
+  hostId: HostId;
+  lastUsedAt: number;
+}
+
+/**
  * The drive lease: one frontend drives a host project at a time. The Host
  * arbitrates it, and the terminal resize lease follows it.
  */

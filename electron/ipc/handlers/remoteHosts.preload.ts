@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const REMOTE_HOSTS_METHOD_CHANNELS = {
   list: "remote-hosts:list",
+  listRecent: "remote-hosts:list-recent",
   add: "remote-hosts:add",
   update: "remote-hosts:update",
   forget: "remote-hosts:forget",

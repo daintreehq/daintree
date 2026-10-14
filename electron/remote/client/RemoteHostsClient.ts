@@ -11,6 +11,7 @@ import {
   type HostDescriptor,
   type HostId,
   type HostListEntry,
+  type HostRecentUse,
 } from "../../../shared/types/remoteHosts.js";
 import type {
   AddHostPayload,
@@ -258,6 +259,11 @@ export class RemoteHostsClient {
         this.detached.onConnectionState(hostId, connection);
       })
     );
+  }
+
+  /** When windows here last landed on each host, most recent first. */
+  listRecent(): HostRecentUse[] {
+    return this.options.registry.recentUses();
   }
 
   list(): HostListEntry[] {
@@ -673,7 +679,7 @@ export class RemoteHostsClient {
       this.publishPendingSwitch(pendingWindowId, committed);
     };
     try {
-      return await this.runSwitch(
+      const result = await this.runSwitch(
         askingWindowId,
         hostId,
         newWindow,
@@ -684,6 +690,20 @@ export class RemoteHostsClient {
         commitPending,
         (name) => void (pendingProjectName = name)
       );
+      // A window is showing that host now: it's the one the switcher offers first.
+      if (
+        result.outcome === "switched" ||
+        result.outcome === "window-opened" ||
+        result.outcome === "focused-elsewhere"
+      ) {
+        try {
+          this.options.registry.recordUse(hostId);
+        } catch (error) {
+          // The window moved either way; only the switcher's order misses it.
+          console.error("[RemoteHostsClient] Couldn't record host use:", error);
+        }
+      }
+      return result;
     } finally {
       settlePending();
     }
