@@ -683,7 +683,11 @@ if (!gotTheLock) {
           console.error("[main] removeDirectPort failed during cache:", err);
         }
         try {
-          getWorktreePortBrokerRef()?.closePortsForView(wcId);
+          // A routed MCP request in flight may be reading the store this port
+          // feeds; its settle closes the port once the view is idle (#13348).
+          if (!getMcpServerServiceRef()?.hasDispatchLease(wcId)) {
+            getWorktreePortBrokerRef()?.closePortsForView(wcId);
+          }
         } catch (err) {
           console.error("[main] closePortsForView failed during cache:", err);
         }

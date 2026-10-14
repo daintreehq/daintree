@@ -25,6 +25,7 @@ import {
 } from "../../window/webContentsRegistry.js";
 import { thawThenSend } from "../../utils/thawThenSend.js";
 import type { WorkspaceViewLeaseRegistry } from "./workspaceViewLease.js";
+import type { RoutedViewWorktreePort } from "./worktreeViewPort.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
 import type {
   McpBearerIdentity,
@@ -305,8 +306,17 @@ export function createRendererBridge(
    * without one (tests, older construction paths) simply takes no leases —
    * views then stay ordinary eviction candidates, the pre-#11790 behavior.
    */
-  viewLeases?: WorkspaceViewLeaseRegistry
+  viewLeases?: WorkspaceViewLeaseRegistry,
+  /**
+   * Restores a cached view's worktree port for routed dispatch (#13348).
+   * Optional for the same reason as `viewLeases`: without it a routed dispatch
+   * reaches the view with whatever port it has, the pre-#13348 behavior. Used
+   * only alongside `viewLeases`, whose count is what says a cached view is idle
+   * again — without it there is no safe moment to close a restored port.
+   */
+  worktreePort?: RoutedViewWorktreePort
 ) {
+  const routedWorktreePort = viewLeases ? worktreePort : undefined;
   let cachedManifest: ActionManifestEntry[] | null = null;
 
   // Per-WebContents manifest cache for pinned help sessions (#9887). The shared
@@ -659,6 +669,20 @@ export function createRendererBridge(
     }
   }
 
+  /**
+   * Hand a routed view's worktree port back to the cache once its last routed
+   * request settles. Manifest requests restore nothing but still count: one can
+   * be the last request out after a dispatch restored the port.
+   */
+  function releaseWorktreePort(webContentsId: number): void {
+    if (!routedWorktreePort || viewLeases?.has(webContentsId)) return;
+    try {
+      routedWorktreePort.release(webContentsId);
+    } catch (err) {
+      console.warn("[MCP] Failed to close a cached view's worktree port:", err);
+    }
+  }
+
   function sendManifestRequest(
     resolveWebContents: () => Electron.WebContents,
     onResolved: (manifest: ActionManifestEntry[]) => void,
@@ -713,6 +737,7 @@ export function createRendererBridge(
         settled = true;
         unwatchDestroyed();
         releaseLease?.();
+        if (route) releaseWorktreePort(webContentsId);
       };
 
       // Taken after every listener that could throw is wired, so a failed setup
@@ -816,6 +841,7 @@ export function createRendererBridge(
         settled = true;
         unwatchDestroyed();
         releaseLease?.();
+        if (route) releaseWorktreePort(webContentsId);
       };
 
       // See sendManifestRequest: after the listener wiring so a throwing setup
@@ -859,7 +885,26 @@ export function createRendererBridge(
       };
 
       if (route) {
-        thawThenSend(webContents, () => pendingDispatches.has(requestId), send);
+        const isPending = () => pendingDispatches.has(requestId);
+        thawThenSend(webContents, isPending, () => {
+          if (!routedWorktreePort) {
+            send();
+            return;
+          }
+          // A cached view's worktree store went quiet when its port closed, so
+          // an action reading it would miss every worktree made since (#13348).
+          // Sent whatever the outcome: most actions never read that store, and
+          // refusing would fail them over a port they do not need.
+          void Promise.resolve()
+            .then(() =>
+              routedWorktreePort.prepare(webContents, resolveDispatchedWorkspace(webContentsId))
+            )
+            .catch(() => false)
+            .then(() => {
+              if (!isPending() || webContents.isDestroyed()) return;
+              send();
+            });
+        });
       } else {
         send();
       }

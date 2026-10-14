@@ -71,6 +71,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { waitForWorktreeSnapshot } from "@/store/worktreeSnapshotSync";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
 
 const REJECTION_RESULT: ActionDispatchResult = {
@@ -107,6 +108,13 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
     message: "Confirmation request timed out before the user responded.",
   },
 };
+
+/**
+ * How long a dispatch waits for an in-flight worktree snapshot (#13348): the
+ * worktree port's own request deadline, well inside main's 30s dispatch clock,
+ * so a stuck fetch costs the action its fresh map but never its run.
+ */
+const MCP_SNAPSHOT_WAIT_MS = 10_000;
 
 /**
  * Of the gated actions that carry a `recipeId`, the ones that actually START
@@ -1099,6 +1107,19 @@ export function useMcpBridge(): void {
         approvalReason,
         authorization,
       }) => {
+        // Main started its 30s clock when it sent this; ours starts a beat
+        // later, which is the safe direction to be wrong in only for reporting
+        // — for the destructive re-check below we compare against it directly.
+        // Taken before the snapshot wait below, which spends that same clock.
+        const receivedAt = Date.now();
+        // A background view's worktree port is restored just before main sends
+        // this, so the snapshot it fetched may still be on its way. Everything
+        // below reads the worktree store, which has to hold it first (#13348).
+        const snapshot = waitForWorktreeSnapshot(MCP_SNAPSHOT_WAIT_MS);
+        if (snapshot) {
+          await snapshot;
+          if (disposed) return;
+        }
         // An agent pane's replayed snapshot names its worktree by id only, so
         // describe it from this view's store once, up front (#12486): the
         // confirm preview and the dispatch must read the same context, or the
@@ -1110,10 +1131,6 @@ export function useMcpBridge(): void {
           replayedContext !== undefined && sessionOrigin === "external"
             ? withReplayedWorktreeDetails(replayedContext, lookupViewWorktree)
             : replayedContext;
-        // Main started its 30s clock when it sent this; ours starts a beat
-        // later, which is the safe direction to be wrong in only for reporting
-        // — for the destructive re-check below we compare against it directly.
-        const receivedAt = Date.now();
         let confirmationDecision: McpConfirmationDecision | undefined;
         // Set only when the user ticked "Allow for this session" on a dialog
         // main said may offer it (#12692); main mints the grant, never this.

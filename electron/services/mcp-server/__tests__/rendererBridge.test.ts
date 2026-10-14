@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 
 const { mockIpcMain, mockWebContentsRegistry, mockProjectViews, mockWindowForWebContents } =
@@ -76,8 +76,9 @@ import {
 import { registerRemoteService } from "../../../remote/runtime.js";
 import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
+import type { RoutedViewWorktreePort } from "../worktreeViewPort.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
-import { buildMcpErrorPayload, RETRIABLE_ERROR_CODES } from "../shared.js";
+import { buildMcpErrorPayload, MCP_DISPATCH_TIMEOUT_MS, RETRIABLE_ERROR_CODES } from "../shared.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 /**
@@ -2113,6 +2114,273 @@ describe("rendererBridge — thaw and eviction lease for routed operations (#117
     await promise;
 
     expect(leases.has(101)).toBe(false);
+  });
+});
+
+describe("rendererBridge — worktree port for a cached routed view (#13348)", () => {
+  let pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>;
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+  let leases: WorkspaceViewLeaseRegistry;
+  let worktreePort: {
+    prepare: Mock<RoutedViewWorktreePort["prepare"]>;
+    release: Mock<RoutedViewWorktreePort["release"]>;
+  };
+  let bridge: ReturnType<typeof createRendererBridge>;
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    mockProjectViews.clear();
+    vi.mocked(unfreezeWebContents).mockClear();
+    vi.mocked(unfreezeWebContents).mockResolvedValue(undefined);
+    pendingManifests = new Map();
+    pendingDispatches = new Map();
+    leases = new WorkspaceViewLeaseRegistry();
+    worktreePort = {
+      prepare: vi.fn<RoutedViewWorktreePort["prepare"]>().mockResolvedValue(true),
+      release: vi.fn<RoutedViewWorktreePort["release"]>(),
+    };
+    bridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => null,
+      leases,
+      worktreePort
+    );
+    bridge.setupListeners([]);
+  });
+
+  function registerView(workspaceId: string, id: number): FakeWebContents {
+    const wc = makeWebContents(id);
+    mockWebContentsRegistry.set(id, wc);
+    mockProjectViews.set(workspaceId, [...(mockProjectViews.get(workspaceId) ?? []), wc]);
+    return wc;
+  }
+
+  function settleDispatch(webContentsId: number, requestId: string): void {
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: webContentsId } },
+      { requestId, result: { ok: true, result: "done" } }
+    );
+  }
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve: (value: T) => void = () => {};
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  it("sends the dispatch only after the thawed view's worktree port is ready", async () => {
+    // The incident: the action ran against a store whose port closed when the
+    // view was cached, so a worktree created moments earlier was "not found".
+    const wc = registerView("ws-a", 101);
+    const thaw = deferred<void>();
+    vi.mocked(unfreezeWebContents).mockReturnValue(thaw.promise);
+    const ready = deferred<boolean>();
+    worktreePort.prepare.mockReturnValue(ready.promise);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "agent.launch", {}, false);
+    await flushThaw();
+    // Not before the thaw: a frozen renderer cannot confirm a port.
+    expect(worktreePort.prepare).not.toHaveBeenCalled();
+
+    thaw.resolve();
+    await flushThaw();
+    expect(worktreePort.prepare).toHaveBeenCalledWith(wc, undefined);
+    expect(wc.send).not.toHaveBeenCalled();
+
+    ready.resolve(true);
+    await flushThaw();
+    expect(wc.send).toHaveBeenCalledWith(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST,
+      expect.objectContaining({ actionId: "agent.launch" })
+    );
+
+    settleDispatch(101, [...pendingDispatches.keys()][0]);
+    await promise;
+  });
+
+  it.each([
+    ["could not be restored", () => Promise.resolve(false)],
+    ["rejected", () => Promise.reject(new Error("broker gone"))],
+    [
+      "threw synchronously",
+      () => {
+        throw new Error("broker gone");
+      },
+    ],
+  ])("still dispatches when the port %s", async (_label, outcome) => {
+    // Most actions never read the worktree store; refusing them over a port
+    // they do not need would turn a degraded view into a dead one.
+    const wc = registerView("ws-a", 101);
+    worktreePort.prepare.mockImplementation(outcome);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    settleDispatch(101, [...pendingDispatches.keys()][0]);
+    await promise;
+  });
+
+  it("never sends a request that settled while the port was being restored", async () => {
+    const wc = registerView("ws-a", 101);
+    const ready = deferred<boolean>();
+    worktreePort.prepare.mockReturnValue(ready.promise);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+    expect(worktreePort.prepare).toHaveBeenCalled();
+
+    wc.triggerDestroyed();
+    await expect(promise).rejects.toBeInstanceOf(WorkspaceBindingError);
+
+    ready.resolve(true);
+    await flushThaw();
+    expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("releases the port, and never sends, when the deadline passes while it is restored", async () => {
+    vi.useFakeTimers();
+    try {
+      const wc = registerView("ws-a", 101);
+      const ready = deferred<boolean>();
+      worktreePort.prepare.mockReturnValue(ready.promise);
+
+      const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+      const outcome = promise.catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worktreePort.prepare).toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS);
+      expect(await outcome).toBeInstanceOf(Error);
+      expect(pendingDispatches.size).toBe(0);
+      expect(leases.has(101)).toBe(false);
+      expect(worktreePort.release).toHaveBeenCalledWith(101);
+
+      ready.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(wc.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers the caller even when closing the port throws", async () => {
+    registerView("ws-a", 101);
+    worktreePort.release.mockImplementation(() => {
+      throw new Error("broker gone");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+      await flushThaw();
+      settleDispatch(101, [...pendingDispatches.keys()][0]);
+
+      await expect(promise).resolves.toMatchObject({ result: { ok: true } });
+      expect(leases.has(101)).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("manages no port without a lease registry to say when the view is idle", async () => {
+    const wc = registerView("ws-a", 101);
+    const unleased = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => null,
+      undefined,
+      worktreePort
+    );
+    unleased.setupListeners([]);
+
+    const promise = unleased.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    settleDispatch(101, [...pendingDispatches.keys()][0]);
+    await promise;
+
+    expect(worktreePort.prepare).not.toHaveBeenCalled();
+    expect(worktreePort.release).not.toHaveBeenCalled();
+  });
+
+  it("closes the port only when the view's last routed request settles", async () => {
+    registerView("ws-a", 101);
+
+    const first = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    const second = bridge.dispatchActionForWorkspace("ws-a", "worktree.list", {}, false);
+    await flushThaw();
+    const [firstId, secondId] = [...pendingDispatches.keys()];
+
+    settleDispatch(101, firstId);
+    await first;
+    // The second request is still reading the store this port feeds.
+    expect(worktreePort.release).not.toHaveBeenCalled();
+
+    settleDispatch(101, secondId);
+    await second;
+    expect(worktreePort.release).toHaveBeenCalledTimes(1);
+    expect(worktreePort.release).toHaveBeenCalledWith(101);
+  });
+
+  it("restores nothing for a manifest request, but counts it toward the last release", async () => {
+    // tools/list reads the action registry, not the worktree store. It can
+    // still be the last request out after a dispatch restored the port.
+    registerView("ws-a", 101);
+
+    const dispatch = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    const manifest = bridge.requestManifestForWorkspace("ws-a");
+    await flushThaw();
+    expect(worktreePort.prepare).toHaveBeenCalledTimes(1);
+
+    settleDispatch(101, [...pendingDispatches.keys()][0]);
+    await dispatch;
+    expect(worktreePort.release).not.toHaveBeenCalled();
+
+    const [manifestId] = [...pendingManifests.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+      { sender: { id: 101 } },
+      { requestId: manifestId, manifest: [] }
+    );
+    await manifest;
+    expect(worktreePort.release).toHaveBeenCalledWith(101);
+  });
+
+  it("leaves the unpinned focused-window path alone", async () => {
+    // The active view's port belongs to activation, and it is never cached.
+    const activeWc = makeWebContents(707);
+    const registryBridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () =>
+        ({
+          focusOrder: () => [
+            {
+              browserWindow: { isDestroyed: () => false },
+              services: {
+                projectViewManager: { getActiveView: () => ({ webContents: activeWc }) },
+              },
+            },
+          ],
+        }) as never,
+      leases,
+      worktreePort
+    );
+    registryBridge.setupListeners([]);
+
+    const promise = registryBridge.dispatchAction("actions.list", {}, false);
+    await flushThaw();
+    settleDispatch(707, [...pendingDispatches.keys()][0]);
+    await promise;
+
+    expect(worktreePort.prepare).not.toHaveBeenCalled();
+    expect(worktreePort.release).not.toHaveBeenCalled();
   });
 });
 
