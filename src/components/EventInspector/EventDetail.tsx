@@ -5,6 +5,9 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilterChip } from "@/components/ui/FilterChip";
+import { TimeAgo } from "@/components/ui/TimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { sanitizeErrorText } from "@/utils/errorText";
 
 interface EventDetailProps {
@@ -16,34 +19,50 @@ interface EventDetailProps {
 
 interface ContextPillProps {
   label: string;
+  /** Lowercase name for the hint: "Filter by {noun}", "Clear {noun} filter". */
+  noun: string;
   value: string | number;
   filterKey: keyof EventFilterOptions;
   currentFilters: EventFilterOptions;
   onToggle: (key: keyof EventFilterOptions, value: string | number) => void;
 }
 
-function ContextPill({ label, value, filterKey, currentFilters, onToggle }: ContextPillProps) {
+function ContextPill({
+  label,
+  noun,
+  value,
+  filterKey,
+  currentFilters,
+  onToggle,
+}: ContextPillProps) {
   const strValue = String(value);
   const isActive = currentFilters[filterKey] === value;
+  const { ref: labelRef, isTruncated } = useTruncationDetection();
 
   return (
-    <div className="grid grid-cols-[100px_1fr] gap-2 items-center">
+    <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-2 items-center">
       <span className="text-text-secondary">{label}:</span>
-      <Tooltip>
+      {/* The plugin kit's chip disclosure: a clipped id shows in full above
+          the hint, and the tooltip then stays while it is being read. */}
+      <Tooltip autoDismiss={!isTruncated}>
         <TooltipTrigger asChild>
           <FilterChip
             selected={isActive}
+            labelRef={labelRef}
             onClick={(e) => {
               e.stopPropagation();
               onToggle(filterKey, value);
             }}
             className="w-fit max-w-full"
           >
-            <span className="truncate">{strValue}</span>
+            {strValue}
           </FilterChip>
         </TooltipTrigger>
         <TooltipContent side="bottom">
-          {isActive ? "Click to clear filter" : `Filter by ${label}`}
+          {isTruncated ? <div className="font-mono break-all">{strValue}</div> : null}
+          <div className={isTruncated ? "text-text-secondary" : undefined}>
+            {isActive ? `Clear ${noun} filter` : `Filter by ${noun}`}
+          </div>
         </TooltipContent>
       </Tooltip>
     </div>
@@ -99,42 +118,55 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
     return `${date.toLocaleDateString()} ${time}.${date.getMilliseconds().toString().padStart(3, "0")}`;
   };
 
-  const getTimeSince = (timestamp: number) => {
-    const now = Date.now();
-    const diff = now - timestamp;
-    if (diff < 1000) return `${diff}ms ago`;
-    if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    return `${Math.floor(diff / 3600000)}h ago`;
-  };
-
   return (
     <div className={cn("flex flex-col h-full min-h-0", className)}>
-      <div className="flex-shrink-0 px-3 py-2 border-b border-divider">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1 min-w-0 space-y-1">
-            <h3 className="font-mono text-xs font-semibold text-text-primary truncate">
+      <div className="@container/event-header flex-shrink-0 px-3 py-2 border-b border-divider space-y-1">
+        <div className="flex items-center justify-between gap-3">
+          <TruncatedTooltip
+            content={<span className="font-mono break-all">{event.type}</span>}
+            side="bottom"
+            align="start"
+          >
+            <h3 className="min-w-0 truncate rounded-[var(--radius-sm)] font-mono text-xs font-semibold text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary">
               {event.type}
             </h3>
-            <div className="flex items-center gap-2 text-2xs text-text-secondary">
-              <span className="font-mono" title={new Date(event.timestamp).toISOString()}>
-                {formatTimestamp(event.timestamp)}
-              </span>
-              <span>•</span>
-              <span>{getTimeSince(event.timestamp)}</span>
-              <span>•</span>
-              <span className="capitalize">{event.source}</span>
-            </div>
-          </div>
+          </TruncatedTooltip>
           {/* Keyed by event: identical payloads on two events should not carry
-              one's confirmation onto the other. */}
+              one's confirmation onto the other. Icon-only once the pane is
+              too narrow to spare the label from the event name. */}
           <CopyButton
-            key={event.id}
+            key={`${event.id}-label`}
             label="Copy JSON"
             aria-label="Copy payload JSON"
             text={sanitizeErrorText(formattedPayload)}
             announcement="Payload copied"
+            className="@max-[360px]/event-header:hidden"
           />
+          <CopyButton
+            key={`${event.id}-icon`}
+            aria-label="Copy payload JSON"
+            text={sanitizeErrorText(formattedPayload)}
+            announcement="Payload copied"
+            className="hidden @max-[360px]/event-header:inline-flex"
+          />
+        </div>
+        {/* Wraps between whole items, never inside one, and with no
+            separators to strand at a line end. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-2xs text-text-secondary">
+          <Tooltip autoDismiss={false}>
+            <TooltipTrigger asChild>
+              <time
+                dateTime={new Date(event.timestamp).toISOString()}
+                tabIndex={0}
+                className="font-mono tabular-nums whitespace-nowrap rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+              >
+                {formatTimestamp(event.timestamp)}
+              </time>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{new Date(event.timestamp).toISOString()}</TooltipContent>
+          </Tooltip>
+          <TimeAgo timestamp={event.timestamp} className="whitespace-nowrap" />
+          <span className="capitalize whitespace-nowrap">{event.source}</span>
         </div>
       </div>
 
@@ -189,6 +221,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
                   {event.payload.worktreeId !== undefined && (
                     <ContextPill
                       label="Worktree"
+                      noun="worktree"
                       value={event.payload.worktreeId}
                       filterKey="worktreeId"
                       currentFilters={filters}
@@ -198,6 +231,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
                   {event.payload.agentId !== undefined && (
                     <ContextPill
                       label="Agent"
+                      noun="agent"
                       value={event.payload.agentId}
                       filterKey="agentId"
                       currentFilters={filters}
@@ -207,6 +241,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
                   {event.payload.runId !== undefined && (
                     <ContextPill
                       label="Run"
+                      noun="run"
                       value={event.payload.runId}
                       filterKey="runId"
                       currentFilters={filters}
@@ -216,6 +251,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
                   {event.payload.terminalId !== undefined && (
                     <ContextPill
                       label="Terminal"
+                      noun="terminal"
                       value={event.payload.terminalId}
                       filterKey="terminalId"
                       currentFilters={filters}
@@ -225,6 +261,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
                   {event.payload.issueNumber !== undefined && (
                     <ContextPill
                       label="Issue #"
+                      noun="issue"
                       value={event.payload.issueNumber}
                       filterKey="issueNumber"
                       currentFilters={filters}
@@ -234,6 +271,7 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
                   {event.payload.prNumber !== undefined && (
                     <ContextPill
                       label="PR #"
+                      noun="PR"
                       value={event.payload.prNumber}
                       filterKey="prNumber"
                       currentFilters={filters}
@@ -261,16 +299,19 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
             <div className="px-3 pb-2.5 space-y-1.5 text-xs">
               <div className="grid grid-cols-[100px_1fr] gap-2">
                 <span className="text-text-secondary">Event ID:</span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="font-mono text-xs truncate">{event.id}</span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{event.id}</TooltipContent>
-                </Tooltip>
+                <TruncatedTooltip
+                  content={<span className="font-mono break-all">{event.id}</span>}
+                  side="bottom"
+                  align="start"
+                >
+                  <span className="min-w-0 truncate font-mono text-xs rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary">
+                    {event.id}
+                  </span>
+                </TruncatedTooltip>
               </div>
               <div className="grid grid-cols-[100px_1fr] gap-2">
                 <span className="text-text-secondary">Type:</span>
-                <span className="font-mono text-xs">{event.type}</span>
+                <span className="font-mono text-xs break-all">{event.type}</span>
               </div>
               <div className="grid grid-cols-[100px_1fr] gap-2">
                 <span className="text-text-secondary">Source:</span>
@@ -283,12 +324,15 @@ export function EventDetail({ event, hasEvents = true, className }: EventDetailP
               {event.payload?.traceId && (
                 <div className="grid grid-cols-[100px_1fr] gap-2">
                   <span className="text-text-secondary">Trace ID:</span>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="font-mono text-xs truncate">{event.payload.traceId}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">{event.payload.traceId}</TooltipContent>
-                  </Tooltip>
+                  <TruncatedTooltip
+                    content={<span className="font-mono break-all">{event.payload.traceId}</span>}
+                    side="bottom"
+                    align="start"
+                  >
+                    <span className="min-w-0 truncate font-mono text-xs rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary">
+                      {event.payload.traceId}
+                    </span>
+                  </TruncatedTooltip>
                 </div>
               )}
             </div>
