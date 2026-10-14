@@ -5,13 +5,14 @@ import { EVENT_LOCALITY, getChannelLocality } from "../../ipc/channelLocality.js
  * Hybrid push channels and which machine a remote-bound view takes them from.
  * `events:push` is decided per event instead (see {@link eventsPushSource}).
  * - `shell`: this machine's own state (keep-awake is held per machine, a
- *   config import or project/scratch switch here is about this window).
+ *   project/scratch switch here is about this window).
  * - `both`: meaningful from either side (a config reload on the host changes
- *   the agent registry; one here changes menus and the keymap).
+ *   the agent registry; one here changes menus and the keymap; settings
+ *   imported here, or copied to the host, change what its windows show).
  */
 const HYBRID_PUSH_SOURCE: Readonly<Record<string, "shell" | "both">> = {
   [CHANNELS.KEEP_AWAKE_STATE_CHANGED]: "shell",
-  [CHANNELS.CONFIG_BUNDLE_IMPORTED]: "shell",
+  [CHANNELS.CONFIG_BUNDLE_IMPORTED]: "both",
   [CHANNELS.PROJECT_ON_SWITCH]: "shell",
   [CHANNELS.SCRATCH_ON_SWITCH]: "shell",
   [CHANNELS.APP_CONFIG_RELOADED]: "both",

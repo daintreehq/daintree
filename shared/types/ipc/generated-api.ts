@@ -1228,6 +1228,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["session-restore:update-config"]["args"]
     ): Promise<IpcInvokeMap["session-restore:update-config"]["result"]>;
   };
+  settingsCopy: {
+    apply(
+      ...args: IpcInvokeMap["settings-copy:apply"]["args"]
+    ): Promise<IpcInvokeMap["settings-copy:apply"]["result"]>;
+    preview(
+      ...args: IpcInvokeMap["settings-copy:preview"]["args"]
+    ): Promise<IpcInvokeMap["settings-copy:preview"]["result"]>;
+  };
   shortcutHints: {
     getCounts(
       ...args: IpcInvokeMap["shortcut-hints:get-counts"]["args"]

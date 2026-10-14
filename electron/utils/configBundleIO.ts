@@ -1,11 +1,12 @@
 import { findSecretInValue } from "../../shared/utils/secretScrubber.js";
+import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
+import { isFileBundleSectionId } from "../../shared/config/portableSettings.js";
 import { stripUtf8Bom } from "./stripUtf8Bom.js";
 import {
   CONFIG_BUNDLE_APP_ID,
   CONFIG_BUNDLE_MAX_BYTES,
   CONFIG_BUNDLE_SCHEMA_VERSION,
   ConfigBundleEnvelopeSchema,
-  isConfigBundleSectionId,
   type ConfigBundleSectionId,
 } from "../../shared/types/configBundle.js";
 
@@ -30,11 +31,16 @@ function childPath(parent: string, key: string): string {
   return parent ? `${parent}.${key}` : key;
 }
 
-function walk(value: unknown, path: string, omitted: string[]): OmitWalkResult {
+/** Keys whose value is an environment map: agent and preset `env`, an agent's `globalEnv`. */
+const ENV_MAP_KEYS: ReadonlySet<string> = new Set(["env", "globalEnv"]);
+
+/** Sections whose whole payload is an environment map. */
+const ENV_MAP_SECTIONS: ReadonlySet<string> = new Set<ConfigBundleSectionId>(["globalEnvironment"]);
+
+function walk(value: unknown, path: string, omitted: string[], envMap = false): OmitWalkResult {
   if (typeof value === "string") {
-    // Value-level detection, not a field-name blocklist: agent settings carry
-    // `customPresets[].env`, `globalEnv`, and a `[key: string]: unknown` escape
-    // hatch, so a secret can appear under any key at any depth.
+    // Value-level detection everywhere, since a secret can sit in a flag or an
+    // argument as well as an env map; names are checked only inside env maps.
     if (findSecretInValue(value)) {
       omitted.push(path);
       return OMIT;
@@ -59,7 +65,13 @@ function walk(value: unknown, path: string, omitted: string[]): OmitWalkResult {
   if (value !== null && typeof value === "object") {
     const next: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      const result = walk(child, childPath(path, key), omitted);
+      // A value pattern won't recognise an arbitrary password, so an env entry
+      // whose NAME says it holds a credential is withheld whatever it contains.
+      if (envMap && isSensitiveEnvKey(key)) {
+        omitted.push(childPath(path, key));
+        continue;
+      }
+      const result = walk(child, childPath(path, key), omitted, ENV_MAP_KEYS.has(key));
       if (result === OMIT) continue;
       // defineProperty, not `next[key] = …`: a key literally named `__proto__`
       // would otherwise hit the legacy prototype setter, changing the object's
@@ -85,13 +97,40 @@ function walk(value: unknown, path: string, omitted: string[]): OmitWalkResult {
  * still importable data, and importing it would overwrite a working credential
  * on the target machine with a literal placeholder.
  */
-export function omitSecretValues<T>(value: T, pathPrefix = ""): { value: T; omitted: string[] } {
+export function omitSecretValues<T>(
+  value: T,
+  pathPrefix = "",
+  options: { envMap?: boolean } = {}
+): { value: T; omitted: string[] } {
   const omitted: string[] = [];
-  const result = walk(value, pathPrefix, omitted);
+  const result = walk(value, pathPrefix, omitted, options.envMap ?? false);
   return { value: (result === OMIT ? undefined : result) as T, omitted };
 }
 
 export type ConfigBundleSections = Partial<Record<ConfigBundleSectionId, unknown>>;
+
+/**
+ * Withhold every secret-bearing value from each section before it leaves this
+ * machine, by value pattern and, inside environment maps, by name. A withheld
+ * entry is absent rather than blanked, and the target merges env maps per key,
+ * so its own value for that name is left as it was.
+ */
+export function omitSectionSecrets(sections: ConfigBundleSections): {
+  sections: ConfigBundleSections;
+  omittedSecretPaths: string[];
+} {
+  const omittedSecretPaths: string[] = [];
+  const cleaned: ConfigBundleSections = {};
+  for (const [id, payload] of Object.entries(sections) as [ConfigBundleSectionId, unknown][]) {
+    if (payload === undefined) continue;
+    const { value, omitted } = omitSecretValues(payload, id, {
+      envMap: ENV_MAP_SECTIONS.has(id),
+    });
+    omittedSecretPaths.push(...omitted);
+    if (value !== undefined) cleaned[id] = value;
+  }
+  return { sections: cleaned, omittedSecretPaths };
+}
 
 export interface BuildConfigBundleResult {
   json: string;
@@ -108,21 +147,18 @@ export function buildConfigBundle(
   sections: ConfigBundleSections,
   exportedAt: string
 ): BuildConfigBundleResult {
-  const omittedSecretPaths: string[] = [];
-  const cleaned: Record<string, unknown> = {};
-  const included: ConfigBundleSectionId[] = [];
-
+  // Only what a file may carry: a section that travels only when someone asks
+  // for it (permission bypass, global environment) never lands in a file
+  // that is later imported with no per-section choice.
+  const fileSections: ConfigBundleSections = {};
   for (const [id, payload] of Object.entries(sections) as [ConfigBundleSectionId, unknown][]) {
-    if (payload === undefined) continue;
-    const { value, omitted } = omitSecretValues(payload, id);
-    omittedSecretPaths.push(...omitted);
-    // A section can be withheld entirely (its whole value looked like a secret).
-    // JSON.stringify would drop the undefined key anyway, so reporting the
-    // section as included would overstate what the file actually carries.
-    if (value === undefined) continue;
-    cleaned[id] = value;
-    included.push(id);
+    if (isFileBundleSectionId(id)) fileSections[id] = payload;
   }
+  const { sections: cleaned, omittedSecretPaths } = omitSectionSecrets(fileSections);
+  // A section can be withheld entirely (its whole value looked like a secret).
+  // JSON.stringify would drop the undefined key anyway, so reporting the
+  // section as included would overstate what the file actually carries.
+  const included = Object.keys(cleaned) as ConfigBundleSectionId[];
 
   const json = JSON.stringify(
     {
@@ -203,7 +239,10 @@ export function parseConfigBundle(json: string): ParseConfigBundleResult {
   const unknownSections: string[] = [];
 
   for (const [key, payload] of Object.entries(envelope.data.sections)) {
-    if (isConfigBundleSectionId(key)) {
+    // A section only Copy settings sends (permission bypass, global
+    // environment) is refused from a file like any section this build doesn't
+    // know: a hand-edited file must not turn on what Export never writes.
+    if (isFileBundleSectionId(key)) {
       sections[key] = payload;
     } else {
       unknownSections.push(key);

@@ -1403,6 +1403,10 @@ export const CHANNELS = {
   PLUGIN_PARITY_INSTALL_ON_HOST: "plugin-parity:install-on-host",
   PLUGIN_PARITY_UPDATE_ON_HOST: "plugin-parity:update-on-host",
   PLUGIN_PARITY_CLAIM_SWITCH_NOTICE: "plugin-parity:claim-switch-notice",
+
+  // Remote Hosts: settingsCopy (shell).
+  SETTINGS_COPY_PREVIEW: "settings-copy:preview",
+  SETTINGS_COPY_APPLY: "settings-copy:apply",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

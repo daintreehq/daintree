@@ -31,6 +31,7 @@ import { installClipboardSplits } from "./hybrid/clipboard.js";
 import { installPickerSplits } from "./hybrid/pickers.js";
 import { installPluginClient } from "./plugins/install.js";
 import { installPluginInstallSplits, installPluginParityClient } from "./plugins/parity/install.js";
+import { installSettingsCopyClient } from "./settingsCopy/install.js";
 import { installPortForwardClient } from "./ports/clientInstall.js";
 import { installHostSwitchService } from "./projects/clientInstall.js";
 import { registerRemoteService } from "./runtime.js";
@@ -216,6 +217,14 @@ function startClient(options: StartRemoteHostsOptions): void {
   // Plugin comparison and install-on-host, reached from Settings with no view needed.
   teardowns.push(
     installPluginParityClient({
+      client: client.client,
+      sessionFor: usedSessionFor,
+      holdHost: (hostId) => client.manager.hold(hostId),
+    })
+  );
+  // This machine's settings copied to a host, from Settings with no view needed.
+  teardowns.push(
+    installSettingsCopyClient({
       client: client.client,
       sessionFor: usedSessionFor,
       holdHost: (hostId) => client.manager.hold(hostId),

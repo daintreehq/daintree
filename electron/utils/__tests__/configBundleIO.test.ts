@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildConfigBundle, omitSecretValues, parseConfigBundle } from "../configBundleIO.js";
+import {
+  buildConfigBundle,
+  omitSecretValues,
+  omitSectionSecrets,
+  parseConfigBundle,
+} from "../configBundleIO.js";
 import {
   CONFIG_BUNDLE_MAX_BYTES,
   CONFIG_BUNDLE_SCHEMA_VERSION,
@@ -226,5 +231,76 @@ describe("parseConfigBundle — byte cap", () => {
     const result = parseConfigBundle(multibyte);
     expect(result.ok).toBe(false);
     expect(result.errors[0]).toContain("too large");
+  });
+});
+
+describe("credential names in environment maps (#13346)", () => {
+  it("withholds an env entry whose name says credential, whatever its value", () => {
+    const { sections, omittedSecretPaths } = omitSectionSecrets({
+      agentSettings: {
+        claude: {
+          customFlags: "--verbose",
+          globalEnv: { AWS_SECRET_ACCESS_KEY: "plainword", DB_PASSWORD: "hunter2", REGION: "eu" },
+          customPresets: [{ id: "p", name: "P", env: { API_KEY: "x", MODE: "fast" } }],
+        },
+      },
+    });
+    expect(sections.agentSettings).toEqual({
+      claude: {
+        customFlags: "--verbose",
+        globalEnv: { REGION: "eu" },
+        customPresets: [{ id: "p", name: "P", env: { MODE: "fast" } }],
+      },
+    });
+    expect(omittedSecretPaths.sort()).toEqual([
+      "agentSettings.claude.customPresets[0].env.API_KEY",
+      "agentSettings.claude.globalEnv.AWS_SECRET_ACCESS_KEY",
+      "agentSettings.claude.globalEnv.DB_PASSWORD",
+    ]);
+  });
+
+  it("checks names only inside env maps, so an ordinary field named like one survives", () => {
+    const { sections } = omitSectionSecrets({ notificationSettings: { TOKEN: "chime.wav" } });
+    expect(sections.notificationSettings).toEqual({ TOKEN: "chime.wav" });
+  });
+
+  it("treats the whole global environment section as an env map", () => {
+    const { sections, omittedSecretPaths } = omitSectionSecrets({
+      globalEnvironment: { GITHUB_TOKEN: "anything", PATH_EXTRA: "/opt/bin" },
+    });
+    expect(sections.globalEnvironment).toEqual({ PATH_EXTRA: "/opt/bin" });
+    expect(omittedSecretPaths).toEqual(["globalEnvironment.GITHUB_TOKEN"]);
+  });
+});
+
+describe("sections that never travel in a file (#13346)", () => {
+  it("leaves permission bypass and the global environment out of an export", () => {
+    const { json, sections } = buildConfigBundle(
+      {
+        worktreeConfig: { pathPattern: "{parent-dir}/wt/{branch-slug}" },
+        permissionBypass: { globalSkipPermissions: true },
+        globalEnvironment: { LANG: "C" },
+      },
+      EXPORTED_AT
+    );
+    expect(sections).toEqual(["worktreeConfig"]);
+    expect(Object.keys(JSON.parse(json).sections)).toEqual(["worktreeConfig"]);
+  });
+
+  it("refuses them from a hand-edited file, like a section this build doesn't know", () => {
+    const result = parseConfigBundle(
+      JSON.stringify({
+        schemaVersion: CONFIG_BUNDLE_SCHEMA_VERSION,
+        exportedAt: EXPORTED_AT,
+        app: "daintree",
+        sections: {
+          hibernation: { enabled: true },
+          permissionBypass: { globalSkipPermissions: true },
+        },
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(Object.keys(result.sections)).toEqual(["hibernation"]);
+    expect(result.unknownSections).toEqual(["permissionBypass"]);
   });
 });

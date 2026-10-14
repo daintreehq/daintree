@@ -1,4 +1,4 @@
-import { dialog, BrowserWindow } from "electron";
+import { dialog } from "electron";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { defineIpcNamespace, op } from "../define.js";
@@ -7,6 +7,8 @@ import { CONFIG_BUNDLE_METHOD_CHANNELS } from "./configBundle.preload.js";
 import type { HandlerDependencies } from "../types.js";
 import { broadcastToRenderer } from "../utils.js";
 import { buildConfigBundle, parseConfigBundle } from "../../utils/configBundleIO.js";
+import { getConfigBundleService, runConfigWrite } from "../../services/configBundleRuntime.js";
+import { FILE_BUNDLE_SECTION_IDS } from "../../../shared/config/portableSettings.js";
 import {
   CONFIG_BUNDLE_MAX_BYTES,
   type ConfigBundlePreview,
@@ -49,33 +51,8 @@ function broadcastConfigImported(): void {
   broadcastToRenderer(CHANNELS.CONFIG_BUNDLE_IMPORTED);
 }
 
-export function registerConfigBundleHandlers(deps: HandlerDependencies): () => void {
-  /** Serializes `applyImport` across all windows; see the op for why. */
-  let applyChain: Promise<void> = Promise.resolve();
-
-  const rebuildMenu = async () => {
-    const win =
-      deps.mainWindow && !deps.mainWindow.isDestroyed()
-        ? deps.mainWindow
-        : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-    if (!win) return;
-    const { createApplicationMenu } = await import("../../menu.js");
-    createApplicationMenu(win, deps.cliAvailabilityService);
-  };
-
-  // Lazily imported for the same reason `rebuildMenu` is: this handler is
-  // registered at boot and neither module belongs on that path.
-  const refreshTitleBar = async () => {
-    const { refreshTitleBarOverlayTheme } = await import("./appTheme.js");
-    refreshTitleBarOverlayTheme();
-  };
-
-  const loadService = async () => {
-    const { ConfigBundleService } = await import("../../services/ConfigBundleService.js");
-    return new ConfigBundleService({ rebuildMenu, refreshTitleBar });
-  };
-  let servicePromise: ReturnType<typeof loadService> | undefined;
-  const getService = () => (servicePromise ??= loadService());
+export function registerConfigBundleHandlers(_deps: HandlerDependencies): () => void {
+  const getService = getConfigBundleService;
 
   const namespace = defineIpcNamespace({
     name: "configBundle",
@@ -103,7 +80,7 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
           // the dialog opened — another window may have changed a setting while
           // the picker sat open.
           const service = await getService();
-          const sections = await service.collect();
+          const sections = await service.collect(FILE_BUNDLE_SECTION_IDS);
           const {
             json,
             omittedSecretPaths,
@@ -203,19 +180,12 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
             };
           }
 
-          // Serialized across every window: two imports interleaving their
-          // section writes could roll one back over the other's changes, since
-          // each holds its own pre-import snapshot.
+          // Serialized with every other config write, from any window or a
+          // Shell copying to this machine as a host: two applies interleaving
+          // their section writes could roll one back over the other's changes,
+          // since each holds its own pre-import snapshot.
           const service = await getService();
-          const run = applyChain.then(
-            () => service.apply(parsed.sections),
-            () => service.apply(parsed.sections)
-          );
-          applyChain = run.then(
-            () => undefined,
-            () => undefined
-          );
-          const report = await run;
+          const report = await runConfigWrite(() => service.apply(parsed.sections));
 
           if (report.outcome === "applied") broadcastConfigImported();
           return report;

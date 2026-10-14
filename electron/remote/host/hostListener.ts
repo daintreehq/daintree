@@ -23,6 +23,7 @@ import { ControlKind, type LinkClientInfo } from "../link/messages.js";
 import type { LinkSession } from "../link/session.js";
 import { attachHostPluginAssets, installPluginHost } from "../plugins/install.js";
 import { installPluginParityHost } from "../plugins/parity/install.js";
+import { installSettingsCopyHost } from "../settingsCopy/install.js";
 import { installHostPortService } from "../ports/hostPorts.js";
 import { installProjectsHost } from "../projects/hostInstall.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
@@ -182,6 +183,8 @@ async function buildHostListener(
   teardowns.push(installProjectsHost(server));
   // Plugin inventory for attached Shells, and installs one sends on request.
   teardowns.push(installPluginParityHost(server));
+  // Settings an attached Shell copies here, previewed and applied on request.
+  teardowns.push(installSettingsCopyHost(server));
   // Plugin prompts go to the project's driving frontend; view bundles are
   // served per endpoint alongside its other streams.
   teardowns.push(installPluginHost());

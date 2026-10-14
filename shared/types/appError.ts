@@ -67,6 +67,9 @@ export type AppErrorCode =
   | "HOST_DISCONNECTED"
   | "OUTCOME_UNKNOWN"
   | "HOST_VERSION_MISMATCH"
+  // A host's settings changed after the copy to it was previewed; it applies
+  // nothing and asks for a fresh preview rather than write over the change.
+  | "SETTINGS_PREVIEW_STALE"
   // ssh reached the host, but Daintree there isn't running in Host mode.
   | "HOST_MODE_OFF"
   // ssh reached the host and couldn't log in: authentication or the host key
