@@ -277,7 +277,8 @@ function copyBuiltInWorkflows() {
  * consumed by the host's Vite renderer build (not loaded by the plugin at
  * runtime), `shared/` holds `import type`-only siblings esbuild erases (never
  * loaded at runtime — same compile-time category as `main`/`renderer`), and
- * `__tests__/` and `__fixtures__/` are dev-only. Every other subdirectory a plugin bundles (`bin/`,
+ * `__tests__/`, `__fixtures__/` and `review/` (the
+ * plugin panel preview's `panel.stories.tsx`) are dev-only. Every other subdirectory a plugin bundles (`bin/`,
  * `mcp/`, `view/`, …) is shipped as-is so `./`-relative `command`/`args` paths
  * resolve at runtime instead of ENOENT-ing (#10579).
  *
@@ -295,6 +296,7 @@ export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set([
   "guest",
   "__tests__",
   "__fixtures__",
+  "review",
 ]);
 
 /**

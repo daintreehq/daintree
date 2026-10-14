@@ -161,6 +161,40 @@ export interface PluginStyleRuntimeOptions {
    * against a compiler that has since forgotten its classes.
    */
   readonly onCompacted?: () => void;
+  /**
+   * Called whenever generated CSS failed to install.
+   *
+   * The runtime keeps the previous sheet on a failure, which is right for the
+   * app — partially styled beats suddenly unstyled — but it leaves the page
+   * looking finished while some classes have no CSS. A caller that has to know
+   * the styling is complete (the plugin panel preview, before it reports itself
+   * ready) listens here; the app's behaviour is the same with or without it.
+   */
+  readonly onInstallFailure?: (failure: PluginStyleInstallFailure) => void;
+}
+
+/** One failed attempt to install generated plugin CSS. */
+export interface PluginStyleInstallFailure {
+  /**
+   * `rebuild` is a batch of new classes that did not reach the sheet; they are
+   * re-offered the next time the DOM carries them. `compaction` is a rebuild
+   * from live classes that did not complete; the existing sheet stays.
+   */
+  readonly phase: "rebuild" | "compaction";
+  readonly error: string;
+  /** Classes in the failed batch, for `rebuild`. */
+  readonly candidates?: number;
+}
+
+function reportInstallFailure(
+  options: PluginStyleRuntimeOptions,
+  failure: PluginStyleInstallFailure
+): void {
+  try {
+    options.onInstallFailure?.(failure);
+  } catch {
+    // A listener must not turn a contained styling failure into a thrown one.
+  }
 }
 
 export async function createPluginStyleRuntime(
@@ -282,6 +316,12 @@ export async function createPluginStyleRuntime(
         // it `added` stays empty, the early return below skips the compaction
         // check entirely, and the ceiling is permanent.
         void compact();
+        // Dropped, not queued: they reach the compiler again only when the DOM
+        // carrying them changes, so until then they have no CSS.
+        reportInstallFailure(options, {
+          phase: "rebuild",
+          error: `candidate ceiling of ${MAX_TRACKED_CANDIDATES} reached`,
+        });
         break;
       }
       added.push(token);
@@ -319,8 +359,9 @@ export async function createPluginStyleRuntime(
       lastGoodCss = css;
       return true;
     } catch (error) {
+      const message = formatErrorMessage(error, "unknown error");
       logWarn("[pluginStyleRuntime] failed to install plugin styles; keeping the previous sheet", {
-        error: formatErrorMessage(error, "unknown error"),
+        error: message,
         candidates: added.length,
       });
       if (lastGoodCss) {
@@ -330,6 +371,11 @@ export async function createPluginStyleRuntime(
           // The sink itself is unusable; nothing further to try.
         }
       }
+      reportInstallFailure(options, {
+        phase: "rebuild",
+        error: message,
+        candidates: added.length,
+      });
       return false;
     }
   }
@@ -405,9 +451,11 @@ export async function createPluginStyleRuntime(
       // memoised must be allowed to prepare again on its next mount.
       options.onCompacted?.();
     } catch (error) {
+      const message = formatErrorMessage(error, "unknown error");
       logWarn("[pluginStyleRuntime] compaction failed; keeping the existing compiler", {
-        error: formatErrorMessage(error, "unknown error"),
+        error: message,
       });
+      reportInstallFailure(options, { phase: "compaction", error: message });
     } finally {
       compacting = false;
     }

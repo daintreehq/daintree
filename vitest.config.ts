@@ -42,6 +42,12 @@ export default defineConfig({
       "@daintreehq/tour/mock-app": path.resolve(__dirname, "./packages/tour/src/mock-app.ts"),
       "@daintreehq/tour": path.resolve(__dirname, "./packages/tour/src/index.ts"),
       "@daintreehq/plugin-ui": path.resolve(__dirname, "./src/pluginUi/index.ts"),
+      // Source, so a story suite runs against this tree's preview rather than
+      // whichever `dist/` the workspace link happens to point at.
+      "@daintreehq/plugin-sdk/testing/preview": path.resolve(
+        __dirname,
+        "./packages/plugin-sdk/src/testing-preview.ts"
+      ),
     },
   },
   test: {

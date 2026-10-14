@@ -10,88 +10,19 @@ import {
   exceedsClientMetadataDepth,
   type ClientMetadataRejection,
 } from "@shared/utils/mcpClientMetadata";
+import {
+  MAX_EXTENSION_STATE_BYTES,
+  applyExtensionStatePatch,
+  byteLength,
+  commitExtensionState,
+  mergePatch,
+  parseCanonical,
+  serializeOrUndefined,
+  withinCap,
+  type ExtensionStateCommit,
+} from "@shared/utils/extensionState";
 
 type Set = PanelRegistryStoreApi["setState"];
-
-/**
- * Ceiling on one panel's persisted extension state, measured as serialized
- * JSON bytes.
- *
- * `extensionState` rides the panel record into the project's `state.json` on
- * every layout save, so an unbounded bag is an unbounded write amplification on
- * a path the user never sees. 64KB is far above what the state this exists for
- * costs — a file browser's expanded-path set, selection and sort is a few
- * hundred bytes even for a deep tree — and far below anything that would make a
- * layout save noticeable. A plugin wanting to persist more than this wants
- * `host.storage`, which is per-plugin, off the layout path, and unbounded.
- */
-const MAX_EXTENSION_STATE_BYTES = 64 * 1024;
-
-/**
- * Re-read a bag from its own serialization.
- *
- * The input is always `JSON.stringify` of an object this module built, so the
- * result is an object — narrowed by check rather than asserted, because the
- * whole point of the round trip is that nothing here trusts its input.
- */
-function parseCanonical(serialized: string): Record<string, unknown> {
-  const parsed: unknown = JSON.parse(serialized);
-  if (typeof parsed !== "object" || parsed === null) return {};
-  // Rebuilt entry by entry rather than handed back directly: `fromEntries`
-  // defines own data properties, so a bag containing a literal `__proto__` key
-  // stays a key instead of quietly re-pointing the object's prototype.
-  return Object.fromEntries(Object.entries(parsed));
-}
-
-/**
- * `JSON.stringify`, with both of its failure modes collapsed to `undefined`.
- *
- * It throws on a cyclic value, a BigInt or a throwing `toJSON`, and it also
- * *returns* `undefined` outright for a value whose `toJSON` returns undefined —
- * which is not an exception and would crash the caller rather than being
- * rejected.
- */
-function serializeOrUndefined(value: unknown): string | undefined {
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? serialized : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-// Byte length, not `String.length`: the latter counts UTF-16 code units, so
-// ~30k CJK characters would measure as well under a 64KB cap while occupying
-// ~90KB once encoded.
-function byteLength(serialized: string): number {
-  return new TextEncoder().encode(serialized).length;
-}
-
-/** Merge a patch into a bag, with `undefined` removing the key. */
-function mergePatch(
-  current: Record<string, unknown>,
-  patch: Record<string, unknown>
-): Record<string, unknown> {
-  const draft: Record<string, unknown> = { ...current };
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined) delete draft[key];
-    else draft[key] = value;
-  }
-  return draft;
-}
-
-/**
- * Whether a bag that serializes to `bytes` may replace one of `currentBytes`.
- *
- * A bag that is somehow already over the cap — legacy state, or spawn arguments
- * that never passed through here — must still be shrinkable, or the writer is
- * locked out of the only operation that could fix it.
- */
-function withinCap(bytes: number, currentBytes: () => number): boolean {
-  if (bytes <= MAX_EXTENSION_STATE_BYTES) return true;
-  const current = currentBytes();
-  return current > MAX_EXTENSION_STATE_BYTES && bytes < current;
-}
 
 interface CommitOutcome {
   /** State to hand back from the zustand updater. */
@@ -100,59 +31,21 @@ interface CommitOutcome {
   changed: boolean;
 }
 
-/**
- * Canonicalize a merged bag, compare it against what is stored, and commit.
- *
- * The shared half of both write policies: what differs between them is who may
- * write, what they may write, and whether the version moves — not how the
- * result is stored.
- */
-function commitMergedState(
+/** Write a commit decided by the shared rules onto the panel record. */
+function applyCommit(
   state: PanelRegistrySlice,
   id: string,
   panel: PanelInstance,
-  currentSerialized: string | undefined,
-  serialized: string,
-  extensionStateVersion: number | undefined
+  commit: ExtensionStateCommit
 ): CommitOutcome {
-  // Store what will actually be persisted, not what the caller handed us.
-  //
-  // Two things fall out of the round trip. The value is *detached*: a caller
-  // holding a reference to a patch it submitted — or to the `initialArgs`
-  // object it read — can no longer mutate store state behind the setter's
-  // back, skipping validation, the cap and every subscriber. And it is
-  // *canonical*: `NaN` and a `Date` become `null` and an ISO string here
-  // rather than silently at the next restart, so what the view reads back on
-  // remount is what it will read back after a restart.
-  const merged = parseCanonical(serialized);
-
-  // A view that re-persists identical state on every render — the common
-  // shape when the state is derived — must not churn the store or schedule
-  // a layout save. Compared on the canonical form, because the patch carries
-  // fresh object identities every time.
-  if (currentSerialized === serialized) {
-    // ...unless the VERSION still has to move. A migration whose result is
-    // byte-identical to what it read is a real migration — the plugin has
-    // confirmed the bag matches its current schema — and returning here
-    // without re-stamping would leave the record on the old version, so the
-    // plugin would migrate the same bag again on every single mount.
-    if (extensionStateVersion === panel.extensionStateVersion) {
-      return { next: state, changed: false };
-    }
-    const restamped = {
-      ...state.panelsById,
-      [id]: { ...panel, extensionStateVersion },
-    };
-    saveNormalized(restamped, state.panelIds);
-    return { next: { panelsById: restamped }, changed: false };
-  }
-
-  const newById = {
-    ...state.panelsById,
-    [id]: { ...panel, extensionState: merged, extensionStateVersion },
-  };
+  if (commit.kind === "unchanged") return { next: state, changed: false };
+  const updated: PanelInstance =
+    commit.kind === "restamp"
+      ? { ...panel, extensionStateVersion: commit.version }
+      : { ...panel, extensionState: commit.state, extensionStateVersion: commit.version };
+  const newById = { ...state.panelsById, [id]: updated };
   saveNormalized(newById, state.panelIds);
-  return { next: { panelsById: newById }, changed: true };
+  return { next: { panelsById: newById }, changed: commit.kind === "replace" };
 }
 
 /**
@@ -186,36 +79,6 @@ export const createExtensionStateActions = (
       // `setPanelClientMetadata`, which owns a single reserved key.
       if (panel.pluginId === undefined) return state;
 
-      const current = panel.extensionState ?? {};
-      const draft = mergePatch(current, patch);
-
-      const serialized = serializeOrUndefined(draft);
-      if (serialized === undefined) {
-        // A cyclic value, a BigInt, or a throwing `toJSON` would otherwise fail
-        // later inside the layout save, where it reads as a persistence bug
-        // rather than as a plugin handing us something that cannot round-trip.
-        logWarn("Plugin panel state was not serializable; ignoring the update", {
-          panelId: id,
-          pluginId: panel.pluginId,
-        });
-        return state;
-      }
-
-      // Measured only when the draft is actually over, and deliberately not
-      // through `serializeOrUndefined`: `current` is whatever a previous write
-      // or a spawn seeded, and this path has always let an unserializable one
-      // throw rather than silently measuring it as zero bytes.
-      const bytes = byteLength(serialized);
-      if (!withinCap(bytes, () => byteLength(JSON.stringify(current) ?? ""))) {
-        logWarn("Plugin panel state exceeds the size limit; ignoring the update", {
-          panelId: id,
-          pluginId: panel.pluginId,
-          bytes,
-          limit: MAX_EXTENSION_STATE_BYTES,
-        });
-        return state;
-      }
-
       // The write gate is the only place the state version moves (#12280). A
       // plugin that writes has, by doing so, produced a bag at the version it
       // currently declares — and it can only reach inside `extensionState`, so
@@ -230,18 +93,35 @@ export const createExtensionStateActions = (
       const extensionStateVersion =
         kindConfig !== undefined ? kindConfig.stateVersion : panel.extensionStateVersion;
 
+      const result = applyExtensionStatePatch(panel.extensionState, patch, {
+        current: panel.extensionStateVersion,
+        next: extensionStateVersion,
+      });
+      if (!result.ok) {
+        if (result.reason === "not-serializable") {
+          // A cyclic value, a BigInt, or a throwing `toJSON` would otherwise fail
+          // later inside the layout save, where it reads as a persistence bug
+          // rather than as a plugin handing us something that cannot round-trip.
+          logWarn("Plugin panel state was not serializable; ignoring the update", {
+            panelId: id,
+            pluginId: panel.pluginId,
+          });
+        } else {
+          logWarn("Plugin panel state exceeds the size limit; ignoring the update", {
+            panelId: id,
+            pluginId: panel.pluginId,
+            bytes: result.bytes,
+            limit: MAX_EXTENSION_STATE_BYTES,
+          });
+        }
+        return state;
+      }
+
       // Nothing to write is still a success: the caller's desired state IS what
       // is stored, and reporting failure would make every idempotent re-persist
       // look like a rejection.
       accepted = true;
-      return commitMergedState(
-        state,
-        id,
-        panel,
-        serializeOrUndefined(current),
-        serialized,
-        extensionStateVersion
-      ).next;
+      return applyCommit(state, id, panel, result.commit).next;
     });
     return accepted;
   },
@@ -321,13 +201,16 @@ export const createExtensionStateActions = (
       // kind and declares no `stateVersion`, so reusing that branch would stamp
       // `undefined` and erase a version a restore had carried forward — on
       // behalf of a caller that wrote nothing the panel's own schema describes.
-      const committed = commitMergedState(
+      const committed = applyCommit(
         state,
         id,
         panel,
-        currentSerialized,
-        serialized,
-        panel.extensionStateVersion
+        commitExtensionState(
+          currentSerialized,
+          serialized,
+          panel.extensionStateVersion,
+          panel.extensionStateVersion
+        )
       );
       outcome = { ok: true, changed: committed.changed };
       return committed.next;

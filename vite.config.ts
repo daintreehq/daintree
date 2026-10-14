@@ -1999,6 +1999,11 @@ export default defineConfig(({ command, mode }) => {
           __dirname,
           "./packages/plugin-sdk/src/react.ts"
         ),
+        // Only the plugin panel preview page imports this.
+        "@daintreehq/plugin-sdk/testing/preview": path.resolve(
+          __dirname,
+          "./packages/plugin-sdk/src/testing-preview.ts"
+        ),
         // refractor/core eagerly imports parse-entities, whose browser-condition
         // decode-named-character-reference touches `document` at module scope —
         // that crashes the diff-tokenize Web Worker at startup. Pin the package's
