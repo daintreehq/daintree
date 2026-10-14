@@ -403,6 +403,7 @@ export const CHANNEL_LOCALITY = {
   "help-assistant:get-live-session-status": "host",
   "help-assistant:get-settings": "host",
   "help-assistant:set-settings": "host",
+  "help:adopt-detached-session": "host",
   "help:discard-conversation": "host",
   "help:get-folder-path": "host",
   "help:get-pinned-action-context": "host",

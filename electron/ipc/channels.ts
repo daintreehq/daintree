@@ -626,6 +626,7 @@ export const CHANNELS = {
   HELP_TAKE_PENDING_HIBERNATION: "help:take-pending-hibernation",
   HELP_RESTORE_PENDING_HIBERNATION: "help:restore-pending-hibernation",
   HELP_LIST_PENDING_HIBERNATION_SLOTS: "help:list-pending-hibernation-slots",
+  HELP_ADOPT_DETACHED_SESSION: "help:adopt-detached-session",
   HELP_DISCARD_CONVERSATION: "help:discard-conversation",
   HELP_LIST_PAST_SESSIONS: "help:list-past-sessions",
   HELP_REPORT_PANEL_OPEN: "help:report-panel-open",

@@ -392,6 +392,38 @@ describe("McpServerService help-bearer revocation (#12993)", () => {
       lookup.mockRestore();
     }
   });
+
+  it("retires a taken-over assistant's transports and keeps what it owns (#13360)", () => {
+    const ledger = service._sessionStore.resourceOwnership;
+    const principal = helpOwnershipPrincipal("help-session-4");
+    ledger.bindPrincipal("transport-4", principal);
+    ledger.record(ledger.ownerOf("transport-4"), [{ kind: "worktree", id: "/repo/wt-4" }]);
+    const lookup = vi
+      .spyOn(
+        (service as unknown as { httpLifecycle: { findHelpBearerHash(t: string): string | null } })
+          .httpLifecycle,
+        "findHelpBearerHash"
+      )
+      .mockReturnValue("hash-help-4");
+    const teardown = vi
+      .spyOn(service, "disconnectBearer")
+      .mockReturnValue({ tokenHash: "hash-help-4", disconnected: true });
+    const revoke = vi.spyOn(service, "revokeOwnershipPrincipal");
+    try {
+      service.resetHelpTransports("help-token-4");
+
+      expect(lookup).toHaveBeenCalledWith("help-token-4");
+      expect(teardown).toHaveBeenCalledWith("hash-help-4");
+      expect(revoke).not.toHaveBeenCalled();
+      // Unlike a revoke, the principal survives: the worktree it made is still its own.
+      expect(ledger.creatorOf("worktree", "/repo/wt-4")).toBe(principalOwnerKey(principal));
+    } finally {
+      teardown.mockRestore();
+      revoke.mockRestore();
+      lookup.mockRestore();
+      ledger.revokePrincipal(principal);
+    }
+  });
 });
 
 function fakeHttpSession(): McpHttpSession {

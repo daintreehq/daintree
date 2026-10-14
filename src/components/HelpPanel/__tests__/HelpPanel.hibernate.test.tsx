@@ -942,6 +942,28 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
     expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
   });
 
+  it("offers Resume for an assistant still running on the host, with no id to resume by (#13360)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    // The process never stopped, so there's nothing to resume by id or by
+    // command — the launch takes the running assistant over instead.
+    mockBuildResumeCommand.mockReturnValue(undefined);
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: false,
+      live: true,
+    });
+
+    const { findByTestId, queryByTestId } = await act(async () =>
+      render(<HelpPanel width={380} />)
+    );
+
+    expect(await findByTestId("help-resume-assistant")).toBeTruthy();
+    expect(queryByTestId("help-start-assistant")).toBeNull();
+  });
+
   it("does not offer Resume when the captured agent is no longer installed", async () => {
     helpPanelState.autoLaunchEnabled = false;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };

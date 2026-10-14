@@ -14,6 +14,8 @@ import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { ActionContext } from "@shared/types/actions";
 import type { HelpAssistantTier } from "@shared/types";
+import { coerceAgentState, coerceWaitingReason } from "@shared/types/agent";
+import type { HelpAdoptResult } from "@shared/types/ipc/help";
 import {
   buildResumeCommand,
   reconcileDecorationFlags,
@@ -358,6 +360,8 @@ export class HelpSessionController {
   // auto-launch path bumping the gen) still lets the owner release.
   private _isLaunchingGen = -1;
   private _hasAutoLaunched = false;
+  // Host terminal id → launches still committing a pane for it (#13360).
+  private readonly _adoptingTerminals = new Map<string, number>();
   private _pendingSessionId: string | null = null;
   private _pendingNewTerminalId: string | null = null;
   /**
@@ -1258,6 +1262,97 @@ export class HelpSessionController {
     return { panelId: newId };
   }
 
+  /**
+   * Take over this lane's assistant if it is still running on the host with
+   * no view of its own (#13360), and bind it to the lane as a pane on the
+   * existing PTY: nothing is spawned or provisioned, and the conversation
+   * never stopped, so there is no resume to announce.
+   *
+   * - `bound`: the lane now shows the running assistant.
+   * - `occupied`: another view has it, or whether it does couldn't be told.
+   * - `absent`: nothing runs in the lane; launch as usual.
+   * - `stale`: this launch was superseded meanwhile. The assistant keeps
+   *   running, pinned to this view, and the next launch here takes it again.
+   */
+  private async _adoptRunningLane(
+    gen: number,
+    launchProject: HelpProjectRef
+  ): Promise<"bound" | "occupied" | "absent" | "stale"> {
+    const adopt = window.electron.help.adoptDetachedSession;
+    if (!adopt) return "absent";
+    let result: HelpAdoptResult | null;
+    try {
+      result = await adopt(launchProject.id, this.slot);
+    } catch (err) {
+      logError("HelpPanel: couldn't ask the host for a running assistant", err);
+      return "occupied";
+    }
+    if (gen !== this._launchGen) return "stale";
+    if (!result || result.status === "absent") return "absent";
+    if (result.status === "occupied") return "occupied";
+
+    const lane = result.lane;
+    const agentState = coerceAgentState(lane.agentState);
+    const geometry =
+      lane.cols !== null && lane.rows !== null ? { cols: lane.cols, rows: lane.rows } : undefined;
+    // Every launch taking this PTY over commits the same pane. A superseded
+    // one may only remove it once no other is still committing it.
+    const terminalId = lane.terminalId;
+    this._adoptingTerminals.set(terminalId, (this._adoptingTerminals.get(terminalId) ?? 0) + 1);
+    let panelId: string | null;
+    try {
+      panelId = await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        existingId: lane.terminalId,
+        launchAgentId: lane.agentId,
+        cwd: lane.cwd ?? launchProject.path,
+        ...(lane.title ? { title: lane.title } : {}),
+        location: "overlay",
+        excludeFromPersistence: true,
+        removeOnExit: true,
+        // Already running on the host, so the cap that gates new spawns doesn't apply.
+        bypassLimits: true,
+        agentState,
+        waitingReason:
+          agentState === "waiting" ? coerceWaitingReason(lane.waitingReason) : undefined,
+        lastStateChange: lane.lastStateChange ?? undefined,
+        ...(geometry ? { initialTerminalGeometry: geometry } : {}),
+      });
+    } finally {
+      const pending = (this._adoptingTerminals.get(terminalId) ?? 1) - 1;
+      if (pending > 0) this._adoptingTerminals.set(terminalId, pending);
+      else this._adoptingTerminals.delete(terminalId);
+    }
+    if (gen !== this._launchGen) {
+      // Only this view's pane goes, and only once no launch is still committing
+      // it or has bound it: the process is the host's, and still the lane's.
+      const boundNow = useHelpPanelStore.getState().sessions[this.slot]?.terminalId;
+      if (panelId && !this._adoptingTerminals.has(terminalId) && boundNow !== panelId) {
+        usePanelStore.getState().removePanel(panelId, { backendAlreadyClosed: true });
+      }
+      return "stale";
+    }
+    if (!panelId || !usePanelStore.getState().panelsById[panelId]) return "stale";
+
+    const store = useHelpPanelStore.getState();
+    store.clearHibernateSession(launchProject.id, this.slot);
+    store.setTerminal(this.slot, panelId, lane.agentId, lane.sessionId);
+    // A running conversation has history to lose: marked as such, a preferred
+    // agent that differs from the one taken over asks before replacing it
+    // rather than switching on its own.
+    store.markConversationStarted(this.slot);
+    this._patch({ phase: "live" });
+    window.electron.help.markTerminal(panelId).catch((err) => {
+      logError("Failed to mark help terminal", err);
+    });
+    // A pane on a running PTY starts with only what it prints next; the screen
+    // it already drew comes from the host's snapshot, as for any restored pane.
+    void import("@/services/TerminalInstanceService")
+      .then(({ terminalInstanceService }) => terminalInstanceService.fetchAndRestore(panelId))
+      .catch((err: unknown) => logError("Failed to restore the taken-over assistant", err));
+    return "bound";
+  }
+
   private async _executeLaunch(
     gen: number,
     options: HelpLaunchOptions,
@@ -1303,7 +1398,37 @@ export class HelpSessionController {
       // open straight at "provisioning"; the empty-state flow starts at the
       // version probe.
       this._patch({ phase: reservedId ? "provisioning" : "version-checking" });
-      const folderPath = await window.electron.help.getFolderPath();
+      const folderPathRequest = Promise.resolve(window.electron.help.getFolderPath());
+      // Settled below unless the take-over binds first; never left unhandled.
+      folderPathRequest.catch(() => undefined);
+
+      // #13360: a host assistant outlives the view that launched it. Before
+      // anything here can displace it — the version probe, a resume claim,
+      // provisioning — ask whether this lane's assistant is still running, and
+      // show it instead of launching. Replacing launches (new session, run
+      // anyway, a starter prompt, a picked conversation) don't ask: displacing
+      // it is what they are for.
+      if (!reservedId && !options.seedPrompt && !options.resumeTarget) {
+        const adoption = await this._adoptRunningLane(gen, launchProject);
+        if (adoption === "bound") {
+          reached = true;
+          return;
+        }
+        if (adoption === "stale") {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+          return;
+        }
+        // Provisioning over an occupied lane displaces the running assistant
+        // (#7509). Only a launch the user asked for may do that; one that only
+        // restores (#10819), or starts itself (#10699), stands down. A spent
+        // auto-launch stays spent, or every input sync would ask again.
+        if (adoption === "occupied" && (options.resumeOnly || options.isAutoLaunch)) {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch: false });
+          return;
+        }
+      }
+
+      const folderPath = await folderPathRequest;
       if (gen !== this._launchGen) {
         this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
         return;

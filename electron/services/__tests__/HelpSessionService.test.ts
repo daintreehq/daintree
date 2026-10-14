@@ -44,6 +44,7 @@ const {
     setSessionIdResolver: vi.fn(),
     setHelpSessionTerminalResolver: vi.fn(),
     disconnectHelpBearer: vi.fn(),
+    resetHelpTransports: vi.fn(),
     recordTurnOutcome: vi.fn(),
     getRuntimeState: vi.fn<
       () => import("../../../shared/types/ipc/mcpServer.js").McpRuntimeSnapshot
@@ -222,6 +223,7 @@ describe("HelpSessionService", () => {
     mockMcpServerService.setHelpSessionWebContentsResolver.mockClear();
     mockMcpServerService.setSessionIdResolver.mockClear();
     mockMcpServerService.disconnectHelpBearer.mockClear();
+    mockMcpServerService.resetHelpTransports.mockClear();
     mockMcpServerService.recordTurnOutcome.mockClear();
     mockProbeMcpServer.mockReset();
     mockProbeMcpServer.mockResolvedValue(undefined);
@@ -328,6 +330,268 @@ describe("HelpSessionService", () => {
           projectViewWebContentsId: -3.5,
         })
       ).rejects.toThrow(/windowId/);
+    });
+
+    describe("an assistant outliving its view (#13360)", () => {
+      const NEXT_HANDLE = -4;
+      const liveProbe = vi.fn(async () => ({
+        cwd: "/tmp/project",
+        title: "Claude",
+        agentState: "waiting",
+        waitingReason: "prompt",
+        cols: 120,
+        rows: 40,
+      }));
+      const live = (terminalId: string) => terminalId === "term-remote";
+
+      async function launchRemote() {
+        const result = await service.provisionSession({
+          ...provisionInput(),
+          windowId: HANDLE,
+          projectViewWebContentsId: HANDLE,
+        });
+        if (!result) throw new Error("expected result");
+        expect(service.markTerminalForToken(result.token, "term-remote")).toBe(true);
+        return result;
+      }
+
+      beforeEach(() => {
+        liveProbe.mockClear();
+        mockMcpServerService.resetHelpTransports.mockClear();
+      });
+
+      it("keeps a running assistant when its view's endpoint closes, pinned to nothing live", async () => {
+        const result = await launchRemote();
+
+        await service.detachByWebContentsId(HANDLE);
+
+        expect(service.validateToken(result.token)).toBe("core");
+        expect(mockPtyKill).not.toHaveBeenCalled();
+        expect(mockPtyGracefulKill).not.toHaveBeenCalled();
+        expect(mockMcpServerService.disconnectHelpBearer).not.toHaveBeenCalled();
+        // Still pinned to the closed handle, which no endpoint will ever reuse.
+        expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+        expect(service.getAssistantBackends("proj-1")).toEqual([
+          { terminalId: "term-remote", webContentsId: HANDLE, slot: 0 },
+        ]);
+      });
+
+      it("revokes a session the closed view provisioned but never launched", async () => {
+        const result = await service.provisionSession({
+          ...provisionInput(),
+          windowId: HANDLE,
+          projectViewWebContentsId: HANDLE,
+        });
+        if (!result) throw new Error("expected result");
+
+        await service.detachByWebContentsId(HANDLE);
+
+        expect(service.validateToken(result.token)).toBe(false);
+      });
+
+      it("never detaches a local view's assistant", async () => {
+        const result = await service.provisionSession(provisionInput());
+        if (!result) throw new Error("expected result");
+        expect(service.markTerminalForToken(result.token, "term-local")).toBe(true);
+
+        await service.detachByWebContentsId(42);
+
+        expect(service.validateToken(result.token)).toBe(false);
+        expect(mockPtyKill).toHaveBeenCalledWith("term-local", "help-session-revoked");
+      });
+
+      it("hands the running assistant to the next view of its project", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const adopted = await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+
+        expect(adopted).toEqual({
+          status: "adopted",
+          lane: {
+            sessionId: result.sessionId,
+            terminalId: "term-remote",
+            agentId: "claude",
+            cwd: "/tmp/project",
+            title: "Claude",
+            agentState: "waiting",
+            waitingReason: "prompt",
+            lastStateChange: null,
+            cols: 120,
+            rows: 40,
+          },
+        });
+        expect(liveProbe).toHaveBeenCalledWith("term-remote");
+        // Same bearer and PTY; tool calls now go to the new view, after the
+        // client reconnects off the transports the take-over retired.
+        expect(service.validateToken(result.token)).toBe("core");
+        expect(service.getWebContentsIdForToken(result.token)).toBe(NEXT_HANDLE);
+        expect(service.getWebContentsIdForSessionId(result.sessionId)).toBe(NEXT_HANDLE);
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledWith(result.token);
+        expect(mockMcpServerService.disconnectHelpBearer).not.toHaveBeenCalled();
+        expect(mockPtyKill).not.toHaveBeenCalled();
+      });
+
+      it("refuses a lane another live view holds, and lets the holding view take it again", async () => {
+        const result = await launchRemote();
+
+        expect(await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe)).toEqual({
+          status: "occupied",
+        });
+        expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+        expect(mockMcpServerService.resetHelpTransports).not.toHaveBeenCalled();
+
+        // A launch superseded after the host moved the assistant over can claim it again.
+        const again = await service.adoptDetachedSession("proj-1", 0, HANDLE, liveProbe);
+        expect(again.status).toBe("adopted");
+      });
+
+      it("finds nothing in another project's lane or an empty one", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        expect(await service.adoptDetachedSession("proj-2", 0, NEXT_HANDLE, liveProbe)).toEqual({
+          status: "absent",
+        });
+        expect(await service.adoptDetachedSession("proj-1", 1, NEXT_HANDLE, liveProbe)).toEqual({
+          status: "absent",
+        });
+        expect(liveProbe).not.toHaveBeenCalled();
+      });
+
+      it("revokes a detached assistant whose PTY is gone instead of handing it over", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const adopted = await service.adoptDetachedSession(
+          "proj-1",
+          0,
+          NEXT_HANDLE,
+          async () => null
+        );
+
+        expect(adopted).toEqual({ status: "absent" });
+        expect(service.validateToken(result.token)).toBe(false);
+      });
+
+      it("ends a detached assistant whose PTY exits, and leaves an attached one to its view", async () => {
+        const detached = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        const attached = await service.provisionSession({
+          ...provisionInput(),
+          slot: 1,
+          windowId: NEXT_HANDLE,
+          projectViewWebContentsId: NEXT_HANDLE,
+        });
+        if (!attached) throw new Error("expected result");
+        expect(service.markTerminalForToken(attached.token, "term-attached")).toBe(true);
+
+        service.handleTerminalExit("term-remote");
+        service.handleTerminalExit("term-attached");
+
+        await vi.waitFor(() => expect(service.validateToken(detached.token)).toBe(false));
+        expect(service.validateToken(attached.token)).toBe("core");
+      });
+
+      it("refuses to hand over a terminal the session was rebound away from mid-probe", async () => {
+        const result = await launchRemote();
+
+        const adopted = await service.adoptDetachedSession("proj-1", 0, HANDLE, async () => {
+          expect(service.markTerminalForToken(result.token, "term-respawned")).toBe(true);
+          return {};
+        });
+
+        expect(adopted).toEqual({ status: "occupied" });
+      });
+
+      it("leaves the assistant running when its liveness can't be told", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const adopted = await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, async () => {
+          throw new Error("pty-host timed out");
+        });
+
+        expect(adopted).toEqual({ status: "occupied" });
+        expect(service.validateToken(result.token)).toBe("core");
+        expect(service.getWebContentsIdForToken(result.token)).toBe(HANDLE);
+      });
+
+      it("is still displaced by a launch that means to replace it", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const replacement = await service.provisionSession({
+          ...provisionInput(),
+          windowId: NEXT_HANDLE,
+          projectViewWebContentsId: NEXT_HANDLE,
+        });
+
+        expect(replacement).not.toBeNull();
+        expect(service.validateToken(result.token)).toBe(false);
+        expect(mockPtyKill).toHaveBeenCalledWith("term-remote", "help-session-displaced");
+        expect(await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe)).toEqual({
+          status: "absent",
+        });
+      });
+
+      it("waits for a launch already provisioning the lane before taking it over", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        const provisioning = service.provisionSession({
+          ...provisionInput(),
+          windowId: NEXT_HANDLE,
+          projectViewWebContentsId: NEXT_HANDLE,
+        });
+        const adopting = service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        const [, adopted] = await Promise.all([provisioning, adopting]);
+
+        // Had the take-over run alongside the launch it would have been handed
+        // the assistant the launch then killed; queued behind it, it finds the
+        // lane holding no running assistant.
+        expect(adopted).toEqual({ status: "absent" });
+        expect(liveProbe).not.toHaveBeenCalled();
+      });
+
+      it("tells a remote view about a detached lane, with the panel state it went with", async () => {
+        service.reportPanelOpen("proj-1", true);
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        // The next view mounts with its panel closed and says so before it asks.
+        service.reportPanelOpen("proj-1", false);
+
+        expect(service.peekPendingHibernation("proj-1", 0, { isTerminalLive: live })).toEqual({
+          agentId: "claude",
+          agentSessionId: "",
+          cwd: expect.any(String),
+          panelWasOpen: true,
+          live: true,
+        });
+        expect(service.listPendingHibernationSlots("proj-1", { isTerminalLive: live })).toEqual([
+          0,
+        ]);
+        // Without the remote view's liveness there is nothing running to report.
+        expect(service.peekPendingHibernation("proj-1", 0)).toBeNull();
+        expect(service.listPendingHibernationSlots("proj-1")).toEqual([]);
+      });
+
+      it("doesn't report a lane whose assistant is still attached to its view", async () => {
+        await launchRemote();
+
+        expect(service.peekPendingHibernation("proj-1", 0, { isTerminalLive: live })).toBeNull();
+        expect(service.listPendingHibernationSlots("proj-1", { isTerminalLive: live })).toEqual([]);
+      });
+
+      it("drops a detached lane whose PTY has exited instead of reporting it running", async () => {
+        const result = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+
+        expect(service.peekPendingHibernation("proj-1", 0, { isTerminalLive: () => false })).toBe(
+          null
+        );
+        await vi.waitFor(() => expect(service.validateToken(result.token)).toBe(false));
+      });
     });
   });
 

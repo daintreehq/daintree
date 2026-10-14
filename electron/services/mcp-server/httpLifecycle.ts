@@ -34,7 +34,7 @@ import type {
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
 import { projectAuditResult } from "./auditResultProjection.js";
 import { helpOwnershipPrincipal } from "./resourceOwnership.js";
-import { WorkspaceBindingError } from "./rendererBridge.js";
+import { SessionBindingError, WorkspaceBindingError } from "./rendererBridge.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
@@ -1810,6 +1810,16 @@ export class HttpLifecycle {
         !this.deps.sessionStore.httpSessions.has(newSessionId)
       ) {
         discardUninitializedSession();
+      } else if (
+        pin !== null &&
+        transport.sessionId !== undefined &&
+        this.resolveSessionPin(authHeader)?.webContentsId !== pin.webContentsId
+      ) {
+        // The bearer's pin moved while this handshake was out — a view took
+        // the assistant over (#13360), which retires the bearer's transports —
+        // but this one only registered afterwards, still holding the pin it
+        // resolved first. Retire it as well; the client reconnects onto the new pin.
+        this.deps.sessionStore.revokeSession(transport.sessionId);
       }
     } catch (err) {
       console.error("[MCP] Streamable HTTP request failed:", err);
@@ -1965,6 +1975,17 @@ export class HttpLifecycle {
     const missingWorkspaceRoute = (): Error =>
       new WorkspaceBindingError(boundWorkspaceId ?? "", "not-found");
 
+    /**
+     * Pinned at handshake and torn down since — a take-over retiring the
+     * assistant's transports (#13360), a revoke, an idle reap — while a call
+     * was still on its way. Such a call fails closed, as a gone pin does,
+     * rather than falling through to a route that follows focus.
+     */
+    const goneBinding = (): SessionBindingError | null =>
+      pinnedWebContentsId !== null && !this.deps.sessionStore.sessionWebContentsMap.has(sessionId)
+        ? new SessionBindingError(pinnedWebContentsId)
+        : null;
+
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
         if (boundWorkspaceId !== null) {
@@ -1976,6 +1997,8 @@ export class HttpLifecycle {
         if (id !== undefined && pinnedManifest) {
           return pinnedManifest(id);
         }
+        const gone = goneBinding();
+        if (gone) return Promise.reject(gone);
         return this.deps.requestManifest();
       };
 
@@ -1993,15 +2016,18 @@ export class HttpLifecycle {
     const bridgeReveal = this.deps.revealOwnedRun;
     const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
       bridgeReveal
-        ? (workspaceId, actionId, args, confirmed) =>
-            bridgeReveal(
+        ? (workspaceId, actionId, args, confirmed) => {
+            const gone = goneBinding();
+            if (gone) return Promise.reject(gone);
+            return bridgeReveal(
               workspaceId,
               actionId,
               args,
               confirmed ?? false,
               sessionOrigin,
               preferredWebContentsId
-            )
+            );
+          }
         : undefined;
 
     const dispatchAction: import("./sessionServer.js").SessionServerDeps["dispatchAction"] = (
@@ -2054,6 +2080,8 @@ export class HttpLifecycle {
             })
           : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
       }
+      const gone = goneBinding();
+      if (gone) return Promise.reject(gone);
       // Unpinned external/api-key dispatch — surface the requesting bearer's
       // identity so the confirm dialog can name the client (#9157). Returns
       // null (→ undefined) for help-session bearers, so callerInfo never

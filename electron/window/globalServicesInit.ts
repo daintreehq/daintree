@@ -378,6 +378,9 @@ export function startMcpServerOnce(registry: WindowRegistry): Promise<void> {
       helpSessionService.setOnMcpSessionRevoked((token, sessionId) =>
         mcpServerService.disconnectHelpBearer(token, sessionId)
       );
+      helpSessionService.setOnMcpSessionRepinned((token) =>
+        mcpServerService.resetHelpTransports(token)
+      );
       await mcpServerService.start(registry);
     } catch (err) {
       console.error("[MAIN] MCP server failed to start:", err);
@@ -1362,6 +1365,10 @@ export async function initGlobalServices(
           }
           const { helpSessionService } = await import("../services/HelpSessionService.js");
           helpSessionService.setPtyClient(ptyClient);
+          // A detached host assistant (#13360) has no view to notice its exit.
+          ptyClient.on("exit", (terminalId: string) =>
+            helpSessionService.handleTerminalExit(terminalId)
+          );
         } catch (err) {
           console.warn("[MAIN] Failed to wire HelpSessionService PtyClient:", err);
         }

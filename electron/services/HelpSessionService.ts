@@ -17,6 +17,7 @@ import {
   hasAssistantMcpImplementation,
 } from "../../shared/config/agentRegistry.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
+import type { HelpAdoptResult } from "../../shared/types/ipc/help.js";
 import type { HelpAssistantDaintreeConfirmations } from "../../shared/types/ipc/api.js";
 import {
   assistantSkipsDaintreeConfirmations,
@@ -241,6 +242,21 @@ export interface RunningLaneSession {
   projectViewWebContentsId: number;
 }
 
+/**
+ * What a take-over learns about a detached assistant's PTY (#13360): enough
+ * for the new view to show the running pane without asking the pty-host
+ * itself, which refuses assistant terminals to a generic reconnect.
+ */
+export interface HelpAdoptProbe {
+  cwd?: string;
+  title?: string;
+  agentState?: string;
+  waitingReason?: string;
+  lastStateChange?: number;
+  cols?: number;
+  rows?: number;
+}
+
 export interface AssistantLaneSnapshot {
   slotKey: string;
   agentSessionId: string;
@@ -291,6 +307,21 @@ interface HelpSessionRecord {
    * the lane has stopped being reachable the moment its teardown began.
    */
   ending?: boolean;
+  /**
+   * When the remote view this assistant was pinned to went away while its PTY
+   * was running (#13360). A host assistant outlives its view the way the
+   * host's grid agents do; it keeps its PTY, bearer and lane, stays pinned to
+   * the closed endpoint's handle so its tool calls fail closed, and waits for
+   * the next view of its own project to take it over. Never set for a local
+   * view, whose WebContents going is handled by `revokeByWebContentsId`.
+   */
+  detachedAt?: number;
+  /**
+   * Whether the assistant panel was open when the view went, frozen at that
+   * moment: the next view mounts with its panel closed and reports so before
+   * it asks, and that report must not cost the user the reopen (#10815).
+   */
+  panelOpenAtDetach?: boolean;
   /**
    * The conversation this lane's PTY is running, once known: the id assigned
    * at spawn (Claude's `--session-id`, or the id a resume reopened), or one a
@@ -646,6 +677,7 @@ export class HelpSessionService {
   private readonly panelVisibleByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
+  private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -726,6 +758,19 @@ export class HelpSessionService {
       };
     }
     return null;
+  }
+
+  /**
+   * Wire the MCP transport reset run when a view takes a running assistant
+   * over (#13360). A transport snapshots its pin when it is built, so the only
+   * way to move the assistant's tool calls to the new view is to retire its
+   * transports: the client reconnects with the same bearer, and the handshake
+   * pins it to the view the record now names. Unlike the revoke callback this
+   * must leave the bearer's ownership principal alone, or everything the
+   * assistant launched would stop being its own. Idempotent re-set.
+   */
+  setOnMcpSessionRepinned(cb: ((token: string) => void) | null): void {
+    this.onMcpSessionRepinnedFn = cb;
   }
 
   setPendingHibernationStore(store: PendingHelpHibernationStore | null): void {
@@ -1097,7 +1142,17 @@ export class HelpSessionService {
     // provision in parallel here; the shared session DIRECTORY they write into
     // is serialized separately, inside `doProvision`.
     const pathHash = projectPathHash(input.projectPath);
-    const lockKey = assistantSlotKey(input.projectId, input.slot ?? 0);
+    return this.withLaneLock(assistantSlotKey(input.projectId, input.slot ?? 0), () =>
+      this.doProvision(input, helpFolder, pathHash)
+    );
+  }
+
+  /**
+   * Run `fn` holding the lane's provision lock. Adoption takes the same lock
+   * as provisioning (#13360), so a view taking a running assistant over and a
+   * launch that would displace it can never interleave.
+   */
+  private async withLaneLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
     const previous = this.provisionLocks.get(lockKey);
     let resolveLock!: () => void;
     const next = new Promise<void>((resolve) => {
@@ -1112,7 +1167,7 @@ export class HelpSessionService {
     if (previous) await previous;
 
     try {
-      return await this.doProvision(input, helpFolder, pathHash);
+      return await fn();
     } finally {
       resolveLock();
       // Drop the lock entry once it resolves so the map doesn't grow without
@@ -1871,13 +1926,30 @@ export class HelpSessionService {
    */
   peekPendingHibernation(
     projectId: string,
-    slot: number
+    slot: number,
+    options?: { isTerminalLive?: (terminalId: string) => boolean }
   ): {
     agentId: string;
     agentSessionId: string;
     cwd: string;
     panelWasOpen: boolean;
+    live?: boolean;
   } | null {
+    // A remote view asking about a lane whose assistant outlived its last view
+    // (#13360) is told it is running, ahead of any conversation pointer: what
+    // it offers then is to show that process, not to resume a transcript.
+    if (options?.isTerminalLive) {
+      const detached = this.findDetachedLane(projectId, slot, options.isTerminalLive);
+      if (detached) {
+        return {
+          agentId: detached.agentId,
+          agentSessionId: detached.agentSessionId ?? "",
+          cwd: detached.sessionPath,
+          panelWasOpen: detached.panelOpenAtDetach === true,
+          live: true,
+        };
+      }
+    }
     if (!this.pendingHibernationStore) return null;
     const entry = this.pendingHibernationStore.get(assistantSlotKey(projectId, slot));
     if (!entry) return null;
@@ -2099,11 +2171,56 @@ export class HelpSessionService {
    * conversations would be unreachable despite still being on disk. Returns
    * lanes in slot order.
    */
-  listPendingHibernationSlots(projectId: string): number[] {
-    if (!this.pendingHibernationStore || !projectId) return [];
-    return ASSISTANT_SLOTS.filter((slot) =>
-      Boolean(this.pendingHibernationStore?.get(assistantSlotKey(projectId, slot)))
+  listPendingHibernationSlots(
+    projectId: string,
+    options?: { isTerminalLive?: (terminalId: string) => boolean }
+  ): number[] {
+    if (!projectId) return [];
+    const isTerminalLive = options?.isTerminalLive;
+    return ASSISTANT_SLOTS.filter(
+      (slot) =>
+        (isTerminalLive !== undefined &&
+          this.findDetachedLane(projectId, slot, isTerminalLive) !== null) ||
+        Boolean(this.pendingHibernationStore?.get(assistantSlotKey(projectId, slot)))
     );
+  }
+
+  /**
+   * The record serving `(projectId, slot)`: unrevoked, bound to the lane's
+   * active terminal, and not on its way out through a capture-revoke. The one
+   * a view could take over, if any; whether it may is the caller's question.
+   */
+  private findLaneBackend(projectId: string, slot: number): HelpSessionRecord | null {
+    const terminalId = this.activeHelpTerminalBySlotKey.get(assistantSlotKey(projectId, slot));
+    if (!terminalId) return null;
+    for (const record of this.sessionsById.values()) {
+      if (record.revoked || record.projectId !== projectId || record.slot !== slot) continue;
+      if (this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
+      if (record.ending || this.captureRevokesInFlight.has(record.sessionId)) return null;
+      return record;
+    }
+    return null;
+  }
+
+  /**
+   * The lane's detached assistant (#13360), if its PTY is still running. A
+   * detached one whose PTY has exited has nobody left to end it: it is revoked
+   * here, as the next view would on taking it over, so a dead lane never reads
+   * as running. Its conversation pointer was written at spawn and stays.
+   */
+  private findDetachedLane(
+    projectId: string,
+    slot: number,
+    isTerminalLive: (terminalId: string) => boolean
+  ): HelpSessionRecord | null {
+    const record = this.findLaneBackend(projectId, slot);
+    if (!record || record.detachedAt === undefined) return null;
+    const terminalId = this.terminalBySessionId.get(record.sessionId);
+    if (terminalId && isTerminalLive(terminalId)) return record;
+    void this.revokeSession(record.sessionId).catch((err: unknown) => {
+      console.warn("[HelpSessionService] Revoking an exited detached assistant failed:", err);
+    });
+    return null;
   }
 
   /**
@@ -2205,6 +2322,147 @@ export class HelpSessionService {
         this.revokeSession(record.sessionId, { captureHibernation: true, rendererGone: true })
       )
     );
+  }
+
+  /**
+   * A remote view's endpoint closed (#13360): eviction, the Shell quitting or
+   * restarting, or a link that stayed down past its resume grace. The view is
+   * gone, but the assistant it launched is a process on this host like any
+   * grid agent, and may be in the middle of work nobody can see: a scheduled
+   * wakeup, a monitor, subagents. So a running one is detached rather than
+   * killed — its PTY, bearer and lane stay, its pin stays on the closed handle
+   * (which is never reused, so its tool calls fail closed), and the next view
+   * of the same project takes it over through `adoptDetachedSession`.
+   *
+   * A session that never got a PTY has nothing worth keeping and is revoked,
+   * as before. A local view never comes here: its WebContents going is
+   * `revokeByWebContentsId`, unchanged.
+   */
+  async detachByWebContentsId(webContentsId: number): Promise<void> {
+    if (!isRemoteEndpointHandle(webContentsId)) return this.revokeByWebContentsId(webContentsId);
+    for (const [slotKey, claim] of this.claimsBySlotKey) {
+      if (claim.ownerWebContentsId === webContentsId) this.claimsBySlotKey.delete(slotKey);
+    }
+    const detachedAt = Date.now();
+    const revokes: Promise<void>[] = [];
+    for (const record of [...this.sessionsById.values()]) {
+      if (record.revoked || record.projectViewWebContentsId !== webContentsId) continue;
+      if (record.detachedAt !== undefined) continue;
+      if (this.findLaneBackend(record.projectId, record.slot) === record) {
+        record.detachedAt = detachedAt;
+        record.panelOpenAtDetach = this.panelOpenByProjectId.get(record.projectId) === true;
+      } else {
+        revokes.push(this.revokeSession(record.sessionId));
+      }
+    }
+    await Promise.all(revokes);
+  }
+
+  /**
+   * Hand the lane's running assistant to the remote view `webContentsId`
+   * (#13360). The caller has already established that the view is bound to
+   * `projectId` on this host; this decides whether the lane has an assistant
+   * to give it:
+   *
+   * - `adopted`: a detached one, or one already pinned to this very view (a
+   *   launch superseded after the host had moved it over can claim it again).
+   *   Its record is re-pinned and its MCP transports are retired so the
+   *   client reconnects onto the new pin; the PTY, bearer, conversation and
+   *   ownership principal are untouched.
+   * - `occupied`: another live view has it. Nothing changes.
+   * - `absent`: nothing runs in the lane. A detached record whose PTY turns
+   *   out to be gone is revoked on the way.
+   *
+   * Runs under the lane's provision lock, so a take-over and a launch that
+   * would displace the assistant are strictly ordered. `probe` answers whether
+   * the PTY still runs (null when it doesn't) and what a pane needs to show
+   * it; it is awaited, so everything is re-checked after it.
+   */
+  async adoptDetachedSession(
+    projectId: string,
+    slot: number,
+    webContentsId: number,
+    probe: (terminalId: string) => Promise<HelpAdoptProbe | null>
+  ): Promise<HelpAdoptResult> {
+    if (this.disposed || !projectId || !isRemoteEndpointHandle(webContentsId)) {
+      return { status: "absent" };
+    }
+    const claimableBy = (record: HelpSessionRecord): boolean =>
+      record.detachedAt !== undefined || record.projectViewWebContentsId === webContentsId;
+    return this.withLaneLock(assistantSlotKey(projectId, slot), async () => {
+      const record = this.findLaneBackend(projectId, slot);
+      if (!record) return { status: "absent" };
+      if (!claimableBy(record)) return { status: "occupied" };
+      const terminalId = this.terminalBySessionId.get(record.sessionId)!;
+
+      let probed: HelpAdoptProbe | null;
+      try {
+        probed = await probe(terminalId);
+      } catch (err) {
+        // Not knowing is not the same as gone: leave it running, and tell the
+        // caller the lane is taken rather than invite it to launch over it.
+        console.warn("[HelpSessionService] Probing a detached assistant failed:", err);
+        return { status: "occupied" };
+      }
+
+      const current = this.findLaneBackend(projectId, slot);
+      if (!current) return { status: "absent" };
+      if (current !== record || !claimableBy(record)) return { status: "occupied" };
+      // Rebound to another PTY while the probe was out: what it answered was
+      // about a terminal the session no longer runs.
+      if (this.terminalBySessionId.get(record.sessionId) !== terminalId) {
+        return { status: "occupied" };
+      }
+      if (!probed) {
+        await this.revokeSession(record.sessionId);
+        return { status: "absent" };
+      }
+
+      record.windowId = webContentsId;
+      record.projectViewWebContentsId = webContentsId;
+      delete record.detachedAt;
+      delete record.panelOpenAtDetach;
+      try {
+        this.onMcpSessionRepinnedFn?.(record.token);
+      } catch (err) {
+        console.warn("[HelpSessionService] Resetting a taken-over assistant's MCP failed:", err);
+      }
+      return {
+        status: "adopted",
+        lane: {
+          sessionId: record.sessionId,
+          terminalId,
+          agentId: record.agentId,
+          cwd: probed.cwd ?? null,
+          title: probed.title ?? null,
+          agentState: probed.agentState ?? null,
+          waitingReason: probed.waitingReason ?? null,
+          lastStateChange: probed.lastStateChange ?? null,
+          cols: probed.cols ?? null,
+          rows: probed.rows ?? null,
+        },
+      };
+    });
+  }
+
+  /**
+   * A PTY exited (#13360). A detached assistant has no view to notice that,
+   * so its session goes here, as the view's own exit handling would have
+   * ended it — otherwise its bearer would stay valid and its lane look taken
+   * for as long as nobody asks after the project. The conversation pointer
+   * written at spawn stays, so the next view resumes it. An attached session
+   * is left to its view, as before.
+   */
+  handleTerminalExit(terminalId: string): void {
+    if (!terminalId) return;
+    for (const [sessionId, boundId] of [...this.terminalBySessionId]) {
+      if (boundId !== terminalId) continue;
+      const record = this.sessionsById.get(sessionId);
+      if (!record || record.revoked || record.detachedAt === undefined) continue;
+      void this.revokeSession(sessionId).catch((err: unknown) => {
+        console.warn("[HelpSessionService] Revoking an exited detached assistant failed:", err);
+      });
+    }
   }
 
   async revokeByWindowId(windowId: number): Promise<void> {
@@ -2608,6 +2866,7 @@ export class HelpSessionService {
     this.setOnMcpSessionRevoked((token, sessionId) =>
       mcpServerService.disconnectHelpBearer(token, sessionId)
     );
+    this.setOnMcpSessionRepinned((token) => mcpServerService.resetHelpTransports(token));
     if (!mcpServerService.isEnabled()) {
       // setEnabled() will only call start() internally if it has its own
       // `registry` already set — which it doesn't on cold boot if the
