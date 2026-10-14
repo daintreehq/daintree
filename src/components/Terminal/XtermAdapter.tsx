@@ -46,6 +46,7 @@ import {
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
 import { terminalUploadSurface } from "./uploads/pendingUploads";
+import type { TerminalFocusTarget } from "./terminalFocus";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 
 export interface XtermAdapterProps {
@@ -68,6 +69,12 @@ export interface XtermAdapterProps {
    * the Assistant overlay and the Dev Preview console (#11809).
    */
   onDropSelect?: () => void;
+  /**
+   * Where a click on this terminal would put the keyboard, which is where a
+   * file drop lands when neither the terminal nor its pane's input bar holds
+   * it. Omitted where there is no pane to activate, so a click goes to xterm.
+   */
+  dropClickTarget?: () => TerminalFocusTarget;
   /**
    * Fired once per live `attach()`, after the service has been told the
    * terminal is visible. Lets the owning pane re-arm anything that captured an
@@ -95,6 +102,7 @@ export function XtermAdapter({
   onExit,
   onInput,
   onDropSelect,
+  dropClickTarget,
   onAttached,
   className,
   getRefreshTier,
@@ -212,6 +220,7 @@ export function XtermAdapter({
     isInputLocked,
     onInput: stableOnInput,
     onDropSelect,
+    dropClickTarget,
     // The same stable reader the instance service gets, so a drop relativizes
     // its `@file` token against the cwd the terminal is in when it lands.
     cwdProvider: stableCwdProvider,

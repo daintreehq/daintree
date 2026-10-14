@@ -23,6 +23,7 @@ vi.mock("@/store/panelStore", () => ({
 
 import { useDragDrop } from "../../hooks/useDragDrop";
 import { useAttachFiles, useAttachFromHost } from "../../hooks/useAttachFiles";
+import { _resetPaneDropRoutingForTests, registerPaneDropTarget } from "../paneDropRouting";
 
 const view = { focus: vi.fn() } as unknown as EditorView;
 
@@ -103,6 +104,56 @@ describe("composer drops in a remote window", () => {
     });
     expect(insertFileAttachments.mock.calls[0]).toHaveLength(5);
     expect(insertFileAttachments.mock.calls[0]![4]).toEqual({ uploadSurface: "composer:t1" });
+  });
+});
+
+describe("an Option-drop on a bar whose terminal holds the keyboard", () => {
+  afterEach(() => {
+    act(() => _resetPaneDropRoutingForTests());
+  });
+
+  function renderPaneDragDrop() {
+    const take = vi.fn(() => true);
+    registerPaneDropTarget("t1", "xterm", { ownsFocus: () => true, canTake: () => true, take });
+    const hook = renderHook(() => {
+      const ref = useRef<EditorView | null>(view);
+      return useDragDrop(ref, "/srv/proj/src", undefined, "t1", {
+        uploadSurface: "composer:t1",
+        addToProjectDirectory: () => "/srv/proj",
+        sharesPaneDrops: true,
+      });
+    });
+    return { take, result: hook.result };
+  }
+
+  it("stays on the bar, lit, and adds to the project", async () => {
+    const { take, result } = renderPaneDragDrop();
+    act(() => result.current.handleDragEnter(dropEvent(true)));
+    expect(result.current.isDragOverFiles).toBe(true);
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent(true));
+    });
+    expect(take).not.toHaveBeenCalled();
+    expect(insertFileAttachments).toHaveBeenCalledWith(
+      expect.anything(),
+      view,
+      expect.any(Array),
+      "/srv/proj/src",
+      { uploadSurface: "composer:t1", destination: { kind: "worktree", directory: "/srv/proj" } }
+    );
+  });
+
+  it("goes to the terminal without Option, and leaves the bar unlit", async () => {
+    const { take, result } = renderPaneDragDrop();
+    act(() => result.current.handleDragEnter(dropEvent(false)));
+    expect(result.current.isDragOverFiles).toBe(false);
+
+    await act(async () => {
+      await result.current.handleDrop(dropEvent(false));
+    });
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(insertFileAttachments).not.toHaveBeenCalled();
   });
 });
 

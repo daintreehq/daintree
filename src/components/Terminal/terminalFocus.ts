@@ -99,6 +99,36 @@ export function shouldSuppressUnfocusedClick(options: {
 }
 
 /**
+ * Where a plain click on a pane's terminal would put the keyboard: the
+ * activation click on an unfocused grid pane is swallowed, and the pane hands
+ * the keyboard to its remembered target; any other click reaches xterm. A file
+ * drop that finds neither of the pane's surfaces holding the keyboard lands
+ * there, as that click would have.
+ *
+ * Link cells and Shift, the click's other exemptions, are left out: xterm
+ * tracks no link hover while a native drag is over it, and nobody Shift-drops
+ * a file to select terminal text.
+ */
+export function getTerminalClickTarget(options: {
+  location: string;
+  isFocused: boolean;
+  preferredTarget: TerminalFocusTarget;
+  hasHybridInputSurface: boolean;
+  isInputDisabled: boolean;
+  hybridInputEnabled: boolean;
+}): TerminalFocusTarget {
+  const { location, isFocused, ...focus } = options;
+  return shouldSuppressUnfocusedClick({
+    location,
+    isFocused,
+    isCursorPointer: false,
+    isShiftKey: false,
+  })
+    ? getTerminalFocusTarget(focus)
+    : "xterm";
+}
+
+/**
  * Whether an unfocused-pane pointerdown is likely synthesized by an assistive
  * technology (VoiceOver/NVDA cursor routing) rather than a physical pointing
  * device. AT-synthesized events are indistinguishable from real clicks by
