@@ -1,0 +1,75 @@
+name: Install dependencies
+description: >-
+  Set up Node and restore the installed tree from cache, running npm ci only when the cache misses.
+
+inputs:
+  node-version:
+    description: Node.js version to install.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      id: node
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    # The postinstall rebuilds the two `file:` native addons in place, so their
+    # build output lands in electron/native/*, outside node_modules. The key
+    # covers everything the install reads: the manifests and lockfile (so a
+    # manifest out of sync with the lockfile still reaches npm ci and fails
+    # there), .npmrc, the postinstall and its node-pty patches, and the addon
+    # sources it compiles.
+    - name: Restore installed dependencies
+      id: restore
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+          electron/native/*/build
+          electron/native/*/bin
+        key: installed-v1-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('package.json', 'package-lock.json', 'packages/*/package.json', '.npmrc', 'scripts/postinstall.cjs', 'scripts/patchNodePty*.cjs', 'electron/native/*/binding.gyp', 'electron/native/*/package.json', 'electron/native/*/src/**') }}
+
+    # Each workspace's `prepare` builds its dist/ from source, which npm ci
+    # would have run. It is not cached because its inputs are the workspace
+    # sources, not the lockfile.
+    - name: Build workspace packages
+      if: steps.restore.outputs.cache-hit == 'true'
+      shell: bash
+      run: npm run prepare --workspaces --if-present
+
+    - name: Locate npm cache
+      id: npm-cache
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: echo "dir=$(npm config get cache)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore npm cache
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache@v5
+      with:
+        path: ${{ steps.npm-cache.outputs.dir }}
+        key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+        restore-keys: |
+          npm-${{ runner.os }}-
+
+    - name: npm ci
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: npm ci
+
+    # Saved straight after the install rather than in a post step, so caches
+    # later steps write under node_modules/.cache never leak into this entry.
+    - name: Save installed dependencies
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: |
+          node_modules
+          packages/*/node_modules
+          electron/native/*/build
+          electron/native/*/bin
+        key: ${{ steps.restore.outputs.cache-primary-key }}

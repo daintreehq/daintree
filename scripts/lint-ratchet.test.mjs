@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { checkShrinkageGuard, aggregateByRule, checkByRule } from "./lint-ratchet.mjs";
+import {
+  checkShrinkageGuard,
+  aggregateByRule,
+  checkByRule,
+  findErrorLevelSkips,
+} from "./lint-ratchet.mjs";
 
 // These import the pure helpers directly from the script — the `invokedDirectly`
 // guard means importing the module does not spawn ESLint or touch the baseline.
@@ -181,5 +186,36 @@ describe("checkByRule", () => {
     const { disappeared, regressed } = checkByRule({ toString: 3 }, { "no-console": 1 });
     expect(disappeared).toEqual(["toString"]);
     expect(regressed).toEqual([]);
+  });
+});
+
+describe("findErrorLevelSkips", () => {
+  const configs = {
+    "/repo/src/__tests__/a.test.ts": { rules: { "react-compiler/react-compiler": [1] } },
+    "/repo/src/__tests__/b.test.ts": { rules: { "@typescript-eslint/no-floating-promises": [2] } },
+    "/repo/e2e/core/c.ts": {
+      rules: { "@typescript-eslint/no-unsafe-type-assertion": "error", "no-console": [2] },
+    },
+    "/repo/src/store/prod.ts": { rules: { "react-compiler/react-compiler": [2] } },
+  };
+  const getConfig = async (filePath) => configs[filePath];
+
+  it("reports skipped rules that are errors on test files", async () => {
+    expect(await findErrorLevelSkips(Object.keys(configs), getConfig)).toEqual([
+      {
+        filePath: "/repo/src/__tests__/b.test.ts",
+        ruleId: "@typescript-eslint/no-floating-promises",
+      },
+      { filePath: "/repo/e2e/core/c.ts", ruleId: "@typescript-eslint/no-unsafe-type-assertion" },
+    ]);
+  });
+
+  it("ignores production files and files with no config", async () => {
+    expect(
+      await findErrorLevelSkips(
+        ["/repo/src/store/prod.ts", "/repo/src/__tests__/none.test.ts"],
+        getConfig
+      )
+    ).toEqual([]);
   });
 });

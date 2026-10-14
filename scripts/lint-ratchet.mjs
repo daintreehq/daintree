@@ -15,27 +15,24 @@
  *     the baseline is a hard failure too — silencing a rule in config would
  *     otherwise drop the total and sneak past the count gate.
  *
- * Usage:
- *   node scripts/lint-ratchet.mjs                   # check mode (CI)
- *   node scripts/lint-ratchet.mjs --update          # write current counts as new baseline
- *   node scripts/lint-ratchet.mjs --update --force  # bypass the shrinkage / disappeared guards
+ * Usage (through npm, which sets the heap ESLint needs):
+ *   npm run lint:ratchet                            # check mode (CI)
+ *   npm run lint:ratchet -- --update                # write current counts as new baseline
+ *   npm run lint:ratchet -- --update --force        # bypass the shrinkage / disappeared guards
+ *
+ * ESLint options live in scripts/lint-ratchet-options.mjs.
  */
 
-import { execSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { TEST_FILE_PATTERN, TEST_FILE_SKIPPED_RULES } from "./lint-ratchet-options.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT = join(__dirname, "..");
 const BASELINE_FILE = join(ROOT, "scripts", "baselines", "eslint-warnings-baseline.json");
 const UPDATE_SHRINKAGE_THRESHOLD = 0.1;
-
-// Test files still get linted (editor + raw `npm run lint`), but their warnings
-// don't count toward the ratchet — test patterns like `as Foo` partial mocks
-// aren't product debt. Errors are still counted for all files below.
-const TEST_FILE_PATTERN = /[/\\](__tests__|e2e)[/\\]|\.(?:test|spec)\.[^.]+$/;
 
 /**
  * Core shrinkage guard. Returns `{ blocked: true, message }` when the count
@@ -124,56 +121,49 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function main() {
+function severityOf(entry) {
+  const level = Array.isArray(entry) ? entry[0] : entry;
+  if (level === 2 || level === "error") return 2;
+  if (level === 1 || level === "warn") return 1;
+  return 0;
+}
+
+/**
+ * Test files where the config itself makes one of TEST_FILE_SKIPPED_RULES an
+ * error. Turning such a rule off there would hide an error, so any hit fails
+ * the ratchet. `getConfig` resolves a file's config without the override.
+ */
+export async function findErrorLevelSkips(filePaths, getConfig) {
+  const testFiles = filePaths.filter((filePath) => TEST_FILE_PATTERN.test(filePath));
+  const configs = await Promise.all(testFiles.map((filePath) => getConfig(filePath)));
+  return testFiles.flatMap((filePath, i) =>
+    TEST_FILE_SKIPPED_RULES.filter((ruleId) => severityOf(configs[i]?.rules?.[ruleId]) === 2).map(
+      (ruleId) => ({ filePath, ruleId })
+    )
+  );
+}
+
+async function main() {
   const isUpdate = process.argv.includes("--update");
   const force = process.argv.includes("--force");
 
-  // Run ESLint and capture output
-  let lintOutput;
-  try {
-    lintOutput = execSync("npx eslint . --format json", {
-      cwd: ROOT,
-      encoding: "utf-8",
-      maxBuffer: 50 * 1024 * 1024, // 50MB buffer for large output
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        // ESLint loading the whole tree + the typescript-eslint parser routinely
-        // approaches Node's default ~2 GB old-space ceiling and OOMs on the macOS
-        // nightly runner. Bump headroom so JSON formatter has room for the full
-        // result graph. Appended so any caller-provided NODE_OPTIONS wins on tie.
-        NODE_OPTIONS: `--max-old-space-size=8192 ${process.env.NODE_OPTIONS ?? ""}`.trim(),
-      },
-    });
-  } catch (error) {
-    // ESLint exits with code 1 when there are warnings/errors
-    // The output is still valid JSON in stdout
-    if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-      console.error("❌ ESLint output exceeded buffer size (50MB)");
-      console.error("   Try reducing the number of files or increasing maxBuffer");
-      process.exit(1);
+  const { ESLint } = await import("eslint");
+  const eslint = await ESLint.fromOptionsModule(
+    new URL("./lint-ratchet-options.mjs", import.meta.url)
+  );
+  const results = await eslint.lintFiles(["."]);
+
+  const baseConfig = new ESLint({ cwd: ROOT });
+  const errorLevelSkips = await findErrorLevelSkips(
+    results.map((file) => file.filePath),
+    (filePath) => baseConfig.calculateConfigForFile(filePath)
+  );
+  if (errorLevelSkips.length > 0) {
+    for (const { filePath, ruleId } of errorLevelSkips) {
+      console.error(
+        `::error::rule "${ruleId}" is an error in ${filePath}, but the ratchet turns it off on test files. Remove it from TEST_FILE_SKIPPED_RULES in scripts/lint-ratchet-options.mjs.`
+      );
     }
-
-    lintOutput = error.stdout || "";
-
-    // If stdout is empty, ESLint likely failed before producing JSON
-    if (!lintOutput || lintOutput.trim() === "") {
-      console.error("❌ ESLint failed to produce output");
-      console.error("   Error:", error.message);
-      if (error.stderr) {
-        console.error("   stderr:", error.stderr);
-      }
-      process.exit(1);
-    }
-  }
-
-  let results;
-  try {
-    results = JSON.parse(lintOutput);
-  } catch (error) {
-    console.error("❌ Failed to parse ESLint JSON output");
-    console.error("First 500 chars of output:", lintOutput.substring(0, 500));
-    console.error("Parse error:", error.message);
     process.exit(1);
   }
 
@@ -360,5 +350,8 @@ function main() {
 
 const invokedDirectly = process.argv[1] && process.argv[1] === __filename;
 if (invokedDirectly) {
-  main();
+  main().catch((error) => {
+    console.error("❌ ESLint failed:", error);
+    process.exit(1);
+  });
 }
