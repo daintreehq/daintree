@@ -131,7 +131,7 @@ describe("LifecycleCommandApprovalDialog", () => {
 
     expect(await findSourcePath("/repo/.daintree/config.json")).toBeDefined();
     const blocks = [...document.querySelectorAll("pre")].map((pre) => pre.textContent);
-    expect(blocks).toEqual(["npm install\n./scripts/bootstrap.sh", "docker compose down"]);
+    expect(blocks).toEqual(["npm install", "./scripts/bootstrap.sh", "docker compose down"]);
   });
 
   it("approves exactly the fingerprint it displayed, then closes", async () => {
@@ -220,7 +220,7 @@ describe("LifecycleCommandApprovalDialog", () => {
 
     renderDialog();
 
-    expect(await screen.findByText(/nothing is waiting for approval/i)).toBeDefined();
+    expect(await screen.findByText("No commands need approval")).toBeDefined();
     expect(approveButton().disabled).toBe(true);
     expect(screen.getByRole("button", { name: "Close" })).toBeDefined();
   });

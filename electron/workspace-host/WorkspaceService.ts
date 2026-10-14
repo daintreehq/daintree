@@ -4323,6 +4323,17 @@ export class WorkspaceService {
     if (!projectRootPath) throw new Error("Cannot review commands before a project is loaded");
     const review = await this.lifecycleService.getCommandReview(monitor.path, projectRootPath);
     this.applyCommandApprovalFlag(monitor, projectRootPath, review !== null);
+    // What approving sets running straight away is part of what is approved.
+    const intent = this.setupAwaitingApproval.get(monitor);
+    if (review && intent?.provisionResource) {
+      const label = await this.lifecycleService.setupProvisionLabel(
+        monitor.path,
+        projectRootPath,
+        intent.environmentId,
+        monitor.worktreeMode
+      );
+      if (label) return { ...review, provisionAfterSetup: label };
+    }
     return review;
   }
 
