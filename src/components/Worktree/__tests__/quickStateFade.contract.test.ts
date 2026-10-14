@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 // The sidebar's quick state filter and Pilot's filter bar are one control
 // drawn twice: same glyphs, same active underline, and the same dimmed glyph
@@ -55,7 +56,7 @@ describe("quick state filter empty-glyph dimming", () => {
   });
 
   it("dims an empty glyph without hiding it, and restores it in both contrast modes", () => {
-    const css = read(path.resolve(here, "../../../index.css"));
+    const css = readIndexCss();
     const base = css.match(/\n\.quick-state-glyph-empty \{\s*opacity: ([\d.]+);/);
     expect(base, "no base dimming rule").not.toBeNull();
     const step = Number(base![1]);
@@ -77,7 +78,7 @@ describe("quick state filter empty-glyph dimming", () => {
     // redraw keys off the radio's own checked state, so it only reaches a bar
     // that marks its segments and exposes the selection as aria-checked — a bar
     // that went back to aria-pressed would lose its underline silently.
-    const css = read(path.resolve(here, "../../../index.css"));
+    const css = readIndexCss();
     const redraws = mediaBlocks(css, "forced-colors: active").filter((block) =>
       /\[data-quick-state-segment\]\[aria-checked="true"\]::after/.test(block)
     );

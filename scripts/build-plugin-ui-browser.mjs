@@ -27,6 +27,7 @@ import {
   REACT_SPECIFIER,
   dropFullWindowRule,
   facadeRequiredExports,
+  readCustomProperties,
   readStringArray,
   rewriteLocalUrls,
   scannableModules,
@@ -123,7 +124,11 @@ const candidates = new Scanner({}).scanFiles(
     extension: path.extname(file).slice(1),
   }))
 );
-const hostCss = dropFullWindowRule(compiler.build(candidates));
+// Plus the theme variables the kit's own sheets read, which no host rule or kit
+// class may name: without them `preview.css` would leave those rules unset.
+const hostCss = dropFullWindowRule(
+  compiler.build([...candidates, ...readCustomProperties(componentCss)])
+);
 // The kit's sheets load after the host's in the app (they come with the kit's
 // chunk), and unlayered, which MarkdownDocument.css and syntax-tokens.css rely on.
 const optimized = optimize(`${hostCss}\n${componentCss}`, { minify: false }).code;

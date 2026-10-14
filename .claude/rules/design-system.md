@@ -41,7 +41,7 @@ Semantic exceptions where decay, width, or sequencing *is* the signal (`Activity
 
 Use the narrowest transition property set — never widen to bare `transition` or `transition-all`. Keep `transform` out of press snaps (copy `src/styles/components/toolbar/controls.css` or `button.tsx`'s `active:scale-[0.98] active:duration-[1ms]`). Box-shadow either interpolates in its own named 150ms slot **or** snaps with `active:shadow-none`, never both.
 
-Focus-ring transitions are wired once globally in `src/index.css` `*:focus-visible` — never restate them, and never add a per-element `outline-*` transition. The ring's colour and width are component-owned. Never suppress a ring without a replacement, and use `outline-hidden`, never `outline-none`.
+Focus-ring transitions are wired once globally in `src/styles/host/base.css` `*:focus-visible` — never restate them, and never add a per-element `outline-*` transition. The ring's colour and width are component-owned. Never suppress a ring without a replacement, and use `outline-hidden`, never `outline-none`.
 
 Patterns: `docs/themes/interaction-state-recipes.md`.
 
@@ -70,6 +70,6 @@ Agent-state glyphs are app-wide vocabulary, all drawn at the spinner's outer dia
 
 ## High contrast
 
-`@media (prefers-contrast: more)` and `@media (forced-colors: active)` in `src/index.css` are separate on purpose — macOS fires only the former, Windows swaps in system colors. **Never consolidate them.** Rationale is inline in the block comments.
+`@media (prefers-contrast: more)` (`src/styles/host/prefers-contrast.css`) and `@media (forced-colors: active)` (`src/styles/host/forced-colors.css`) are separate on purpose — macOS fires only the former, Windows swaps in system colors. **Never consolidate them.** Rationale is inline in the block comments.
 
 Forced-colors drops `box-shadow`, so Tailwind `ring-*` vanishes there — re-declare badge cut-outs as an outline.

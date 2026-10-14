@@ -15,8 +15,6 @@ import {
   SnoozedCircle,
   IdleCircle,
 } from "../AgentStateCircles";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { CheckCircle2 } from "lucide-react";
 import { glyphBox } from "./glyphBox";
 import { ClaudeIcon } from "../brands/ClaudeIcon";
@@ -26,6 +24,7 @@ import { GooseIcon } from "../brands/GooseIcon";
 import { PythonIcon } from "../brands/PythonIcon";
 import { DockerIcon } from "../brands/DockerIcon";
 import { AiderIcon } from "../brands/AiderIcon";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 describe("DaintreeIcon a11y", () => {
   it("is decorative and exposes no aria-label", () => {
@@ -102,10 +101,7 @@ describe("AgentStateCircles a11y", () => {
     const STROKE = 1.333;
     const pct = (units: number, of: number) => (units / of) * 100;
 
-    const css = readFileSync(path.resolve(__dirname, "../../../index.css"), "utf8").replace(
-      /\/\*[\s\S]*?\*\//g,
-      ""
-    );
+    const css = readIndexCss().replace(/\/\*[\s\S]*?\*\//g, "");
 
     /** The body between a `{` and its matching `}`. */
     const blockAt = (source: string, open: number): string => {

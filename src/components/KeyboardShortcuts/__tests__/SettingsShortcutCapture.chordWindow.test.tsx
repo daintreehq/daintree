@@ -1,12 +1,10 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { CHORD_TIMEOUT_MS } from "@/services/KeybindingService";
 import { SettingsShortcutCapture } from "../SettingsShortcutCapture";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 // Deliberately not the shipping 1000ms: the bar has to follow the constant, not
 // happen to agree with it.
@@ -39,8 +37,6 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
-
-const INDEX_CSS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../index.css");
 
 const bar = () => document.querySelector<HTMLElement>("[data-chord-window]");
 
@@ -142,7 +138,7 @@ function blocksAfter(css: string, prelude: RegExp): string[] {
 }
 
 describe("chord window motion contract", () => {
-  const css = fs.readFileSync(INDEX_CSS, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const css = readIndexCss().replace(/\/\*[\s\S]*?\*\//g, "");
   const topLevel = css.replace(/@variant[^{]*\{(?:[^{}]|\{[^{}]*\})*\}/g, "");
 
   it("drains from full to empty on a linear clock set by the component", () => {

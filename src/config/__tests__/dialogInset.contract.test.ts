@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { SCROLLBAR_GUTTER_VAR } from "@/lib/scrollbarGutter";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 // A dialog's header, body and footer sit in three different boxes and are
 // supposed to land on one column. Nothing renders wrong when they drift — the
@@ -41,7 +42,6 @@ const SCAN_ROOTS = [
 ];
 
 const APP_DIALOG_PATH = path.join(REPO_ROOT, "src/components/ui/AppDialog.tsx");
-const INDEX_CSS_PATH = path.join(REPO_ROOT, "src/index.css");
 
 const APP_DIALOG_MODULE = "/AppDialog";
 const DEFAULT_DIALOG_BINDING = "AppDialog";
@@ -281,7 +281,7 @@ describe("dialog inset contract — one column for header, body and footer", () 
   it("keeps the measured-gutter plumbing joined up from module to stylesheet", () => {
     // Comments go first: the block above the selector quotes the very figures
     // asserted below, and a commented-out rule must not satisfy the contract.
-    const css = fs.readFileSync(INDEX_CSS_PATH, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const css = readIndexCss().replace(/\/\*[\s\S]*?\*\//g, "");
 
     // Exactly one — a second rule for the same selector would silently win.
     const declarations = css.match(new RegExp(`\\.${BODY_INSET_CLASS}\\s*\\{`, "g")) ?? [];

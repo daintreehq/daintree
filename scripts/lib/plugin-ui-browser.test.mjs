@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   dropFullWindowRule,
   facadeRequiredExports,
+  readCustomProperties,
   readStringArray,
   rewriteLocalUrls,
   scannableModules,
@@ -97,6 +98,24 @@ describe("scannableModules", () => {
       "\0rolldown/runtime.js",
     ];
     expect(scannableModules(ids, "/repo")).toEqual(["/repo/src/a.ts", "/repo/src/b.tsx"]);
+  });
+});
+
+describe("readCustomProperties", () => {
+  it("lists each variable a sheet reads once, sorted, fallbacks included", () => {
+    const css =
+      ".token{color:var(--color-syntax-keyword)}\n" +
+      ".a{border:2px solid var( --color-surface-input, var(--fallback-ring))}\n" +
+      ".b{color:var(--color-syntax-keyword)}";
+    expect(readCustomProperties(css)).toEqual([
+      "--color-surface-input",
+      "--color-syntax-keyword",
+      "--fallback-ring",
+    ]);
+  });
+
+  it("ignores declarations, which a sheet writes rather than reads", () => {
+    expect(readCustomProperties(":root{--kit-gap:4px}")).toEqual([]);
   });
 });
 

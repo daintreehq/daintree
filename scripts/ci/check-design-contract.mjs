@@ -17,9 +17,10 @@
  * failure mode an extraction like this invites.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { HOST_PARTIAL_DIR, readHostStylesheet } from "../lib/host-css.mjs";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const CONTRACT = "src/styles/design-contract.css";
@@ -142,16 +143,48 @@ if (!indexSource.includes(`@import "./styles/design-contract.css"`)) {
   compiler read the same bytes, and that import is what makes it the same bytes.`);
 }
 
-// A token or variant left behind in index.css is not shared with plugins, which
-// is the drift this split exists to prevent.
-const strippedIndex = blankNonStructural(indexSource);
-for (const { line, text } of topLevelConstructs(strippedIndex)) {
-  const name = /^@([\w-]+)/.exec(text)?.[1] ?? "";
-  if (name === "theme" || name === "custom-variant") {
-    fail(
-      `${INDEX}:${line} — \`@${name}\` belongs in ${CONTRACT}. Tokens and variants declared ` +
-        `here reach the host only; plugin views compile against the contract file.`
-    );
+// A token or variant left behind in index.css — or in the host partials it was
+// split into — is not shared with plugins, which is the drift this split exists
+// to prevent.
+let hostFiles = [];
+let hostReadFailed = false;
+try {
+  hostFiles = readHostStylesheet(path.join(root, INDEX)).files;
+} catch (error) {
+  hostReadFailed = true;
+  fail(error.message);
+}
+for (const file of hostFiles) {
+  const relative = path.relative(root, file.path);
+  for (const { line, text } of topLevelConstructs(blankNonStructural(file.source))) {
+    const name = /^@([\w-]+)/.exec(text)?.[1] ?? "";
+    if (name === "theme" || name === "custom-variant") {
+      fail(
+        `${relative}:${line} — \`@${name}\` belongs in ${CONTRACT}. Tokens and variants declared ` +
+          `here reach the host only; plugin views compile against the contract file.`
+      );
+    }
+  }
+}
+
+// A partial nothing imports would ship nothing and escape the scan above.
+const partialDir = path.join(root, "src", HOST_PARTIAL_DIR);
+const imported = new Set(hostFiles.map((file) => file.path));
+if (imported.size !== hostFiles.length) {
+  fail(
+    `${INDEX} imports a host partial more than once, which duplicates its rules in the cascade.`
+  );
+}
+if (!hostReadFailed && existsSync(partialDir)) {
+  for (const entry of readdirSync(partialDir, { withFileTypes: true })) {
+    const name = entry.name;
+    if (entry.isDirectory()) {
+      fail(`src/${HOST_PARTIAL_DIR}/${name}/ — host partials are one flat directory.`);
+    } else if (name.endsWith(".css") && !imported.has(path.join(partialDir, name))) {
+      fail(
+        `src/${HOST_PARTIAL_DIR}/${name} is not imported by ${INDEX}, so none of its rules ship.`
+      );
+    }
   }
 }
 

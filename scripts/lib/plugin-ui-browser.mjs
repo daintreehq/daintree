@@ -88,6 +88,17 @@ export function scannableModules(moduleIds, root) {
 }
 
 /**
+ * Every custom property a stylesheet reads through `var()`, sorted. The kit's
+ * own sheets (syntax tokens, the data table, the colour area) read theme
+ * variables the host compile emits only when something marks them used: passed
+ * to `compiler.build` as candidates, they are declared in `preview.css` even
+ * when no host rule or kit class happens to name them.
+ */
+export function readCustomProperties(css) {
+  return [...new Set([...css.matchAll(/var\(\s*(--[\w-]+)/g)].map((match) => match[1]))].sort();
+}
+
+/**
  * The host's full-window rule (`html, body, #root` at 100% with overflow
  * hidden) clips a preview page that scrolls, so the preview drops it. Exactly
  * one must be found: a reworded rule would otherwise slip through unnoticed.

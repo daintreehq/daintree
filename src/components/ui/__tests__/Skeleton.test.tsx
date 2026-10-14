@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -537,7 +538,7 @@ describe("SkeletonHint", () => {
 });
 
 describe("animate-hint-fade-in CSS contract", () => {
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+  const css = readIndexCss();
   // The `@custom-variant` definitions moved to the design contract, which the
   // plugin Tailwind compiler consumes alongside index.css (#12220). The
   // keyframe and the utility that uses the variant still live in index.css.
@@ -582,7 +583,7 @@ describe("animate-hint-fade-in CSS contract", () => {
 describe("animate-skeleton-shimmer CSS contract", () => {
   // Read the source CSS once. Build pipeline transforms (Tailwind, autoprefixer)
   // shouldn't matter — we're asserting authored intent in src/index.css.
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+  const css = readIndexCss();
 
   it("declares the skeleton-shimmer keyframe", () => {
     expect(css).toMatch(/@keyframes\s+skeleton-shimmer\b/);
@@ -611,7 +612,7 @@ describe("animate-skeleton-shimmer CSS contract", () => {
 });
 
 describe("skeleton bone motion CSS contract", () => {
-  const css = readFileSync(resolve(__dirname, "../../../index.css"), "utf8");
+  const css = readIndexCss();
 
   /** The body of the first `@keyframes name { … }` block. */
   function keyframes(name: string): string {

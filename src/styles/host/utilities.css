@@ -1,0 +1,177 @@
+@layer utilities {
+  /* Floating Radix surfaces (menus, popovers, palette, NotificationCenter).
+   * The base rule below is the ORIGINAL dark behavior (sidebar @94%, frosted)
+   * and is left byte-for-byte unchanged. F1 re-points these to the elevated
+   * plane and forces them opaque ONLY on light, in the `.light .surface-overlay`
+   * override below — on light the old sidebar base was DARKER than canvas (e.g.
+   * bondi), so every menu read as a dark blob over the editor, and the 94%
+   * transparency only admitted the darker canvas behind it; the material blur is
+   * also inert on near-white (RC-9), so the surface must be solid/opaque. */
+  .surface-overlay {
+    --scroll-shadow-color: var(--color-surface-sidebar);
+    background-color: var(--color-surface-sidebar);
+    background-color: color-mix(in oklab, var(--color-surface-sidebar) 94%, transparent);
+    border: 1px solid var(--border-overlay);
+    -webkit-backdrop-filter: blur(var(--theme-material-blur))
+      saturate(var(--theme-material-saturation));
+    backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
+  }
+
+  /* F1 (light) — elevate the floating surface to the brightest plane and force
+   * it opaque (no transparency mix). */
+  .light .surface-overlay {
+    --scroll-shadow-color: var(--color-surface-panel-elevated);
+    background-color: var(--color-surface-panel-elevated);
+  }
+
+  /* Solid stand-in for the frosted overlay background, for marks that have to
+     punch a hole in their own backdrop — the inbox unread badge sitting on the
+     corner of a status icon. The surface is 94% + backdrop-blur on dark and no
+     flat colour reproduces that, but at ring width the missing 6% is invisible,
+     whereas mixing in transparency would tint the ring with whatever the
+     popover happens to be floating over. */
+  .surface-overlay {
+    --overlay-surface-solid: var(--color-surface-sidebar);
+  }
+
+  .light .surface-overlay {
+    --overlay-surface-solid: var(--color-surface-panel-elevated);
+  }
+
+  /* Cmd+K command HUD — a distinct dark-glass "spotlight" surface. Deeper than
+   * .surface-overlay (canvas plane vs sidebar) so it reads as its own command
+   * mode floating over the terminals. The blur + saturation are applied on the
+   * element via Tailwind using the theme material tokens; this rule carries the
+   * tint + float shadow.
+   *
+   * The tint is dense enough to hold the text on its own. It sits over scrolling
+   * terminal output, and blur does not lower the luminance of what is behind it;
+   * at 70% a Retina Chromium frame that drops the blur for a band near the panel
+   * edge showed that output crisply through the rows and the footer. At 88% the
+   * content behind contributes an eighth, which reads as texture, not text. */
+  .command-hud-glass {
+    background-color: color-mix(in oklab, var(--color-surface-canvas) 88%, transparent);
+    box-shadow:
+      var(--shadow-modal),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  }
+
+  /* Light schemes: lift to the elevated plane and brighten the inner sheen so the
+   * glass stays legible over a near-white canvas. */
+  .light .command-hud-glass {
+    background-color: color-mix(in oklab, var(--color-surface-panel-elevated) 92%, transparent);
+    box-shadow:
+      var(--shadow-modal),
+      inset 0 1px 0 0 rgba(255, 255, 255, 0.55);
+  }
+
+  /* High-contrast users want solid chrome behind text; drop the frosted-glass
+   * material. Same shape as the prefers-reduced-transparency fallbacks in
+   * toolbar.css and panels.css. Inside @layer utilities so the layer
+   * specificity matches the base rule above. */
+  @media (prefers-contrast: more) {
+    .surface-overlay {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
+
+    .light .surface-overlay {
+      background-color: var(--color-surface-panel-elevated);
+    }
+
+    /* High-contrast users want solid chrome — drop the frosted material. */
+    .command-hud-glass {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
+
+    .light .command-hud-glass {
+      background-color: var(--color-surface-panel-elevated);
+    }
+  }
+
+  /* Reduce Transparency (macOS) / transparency effects off (Windows) asks for
+   * solid chrome; same fallbacks as prefers-contrast above, kept as their own
+   * at-rule because the two preferences are set independently. The toolbar and
+   * panel chrome carry the same rule in their own sheets. */
+  @media (prefers-reduced-transparency: reduce) {
+    .surface-overlay {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
+
+    .light .surface-overlay {
+      background-color: var(--color-surface-panel-elevated);
+    }
+
+    .command-hud-glass {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background-color: var(--color-surface-sidebar);
+    }
+
+    .light .command-hud-glass {
+      background-color: var(--color-surface-panel-elevated);
+    }
+  }
+
+  .control-hover:hover {
+    background-color: var(--theme-overlay-strong);
+  }
+
+  .shadow-overlay {
+    box-shadow: var(--shadow-overlay);
+  }
+
+  .shadow-modal {
+    box-shadow: var(--shadow-modal);
+  }
+
+  .border-divider {
+    border-color: var(--border-divider);
+  }
+
+  /* The same token between the children of a divide-y list. */
+  .divide-divider > :not(:last-child) {
+    border-color: var(--border-divider);
+  }
+
+  .border-overlay {
+    border-color: var(--border-overlay);
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  @keyframes settings-pulse {
+    0% {
+      background-color: color-mix(in oklab, var(--color-accent-primary) 15%, transparent);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+
+  .settings-highlight {
+    animation: settings-pulse 1.5s ease-out;
+    border-radius: var(--radius-md);
+  }
+
+  webview {
+    color-scheme: normal;
+  }
+
+  [data-dragging="true"] webview,
+  [data-dragging="true"] iframe {
+    pointer-events: none !important;
+  }
+}

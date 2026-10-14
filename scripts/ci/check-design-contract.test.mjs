@@ -12,6 +12,7 @@ import path from "node:path";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const SCRIPT = path.join(REPO_ROOT, "scripts/ci/check-design-contract.mjs");
+const HOST_CSS_LIB = path.join(REPO_ROOT, "scripts/lib/host-css.mjs");
 
 const VALID_INDEX = '@import "tailwindcss";\n@import "./styles/design-contract.css";\n';
 
@@ -21,9 +22,12 @@ let sandbox;
  * Run the checker against a throwaway repo whose layout mirrors the real one.
  * The script resolves paths from its own location, so it is copied in.
  */
-function runCheck(contractCss, indexCss = VALID_INDEX) {
+function runCheck(contractCss, indexCss = VALID_INDEX, partials = {}) {
   writeFileSync(path.join(sandbox, "src/styles/design-contract.css"), contractCss);
   writeFileSync(path.join(sandbox, "src/index.css"), indexCss);
+  for (const [name, css] of Object.entries(partials)) {
+    writeFileSync(path.join(sandbox, "src/styles/host", name), css);
+  }
   try {
     execFileSync(process.execPath, [path.join(sandbox, "scripts/ci/check-design-contract.mjs")], {
       encoding: "utf-8",
@@ -37,11 +41,16 @@ function runCheck(contractCss, indexCss = VALID_INDEX) {
 
 beforeEach(() => {
   sandbox = mkdtempSync(path.join(tmpdir(), "design-contract-"));
-  mkdirSync(path.join(sandbox, "src/styles"), { recursive: true });
+  mkdirSync(path.join(sandbox, "src/styles/host"), { recursive: true });
   mkdirSync(path.join(sandbox, "scripts/ci"), { recursive: true });
+  mkdirSync(path.join(sandbox, "scripts/lib"), { recursive: true });
   writeFileSync(
     path.join(sandbox, "scripts/ci/check-design-contract.mjs"),
     readFileSync(SCRIPT, "utf-8")
+  );
+  writeFileSync(
+    path.join(sandbox, "scripts/lib/host-css.mjs"),
+    readFileSync(HOST_CSS_LIB, "utf-8")
   );
 });
 
@@ -159,5 +168,71 @@ describe("check-design-contract", () => {
 `);
 
     expect(result.ok, result.output).toBe(true);
+  });
+
+  describe("host partials", () => {
+    const CONTRACT = "@theme {\n  --text-2xs: 0.6875rem;\n}\n";
+    const PARTIAL_INDEX = `${VALID_INDEX}@import "./styles/host/base.css";\n`;
+
+    it("accepts a partial the entry imports", () => {
+      const result = runCheck(CONTRACT, PARTIAL_INDEX, {
+        "base.css": ".rule {\n  color: red;\n}\n",
+      });
+
+      expect(result.ok, result.output).toBe(true);
+    });
+
+    it("fails when a token or variant is left behind in a partial", () => {
+      const result = runCheck(CONTRACT, PARTIAL_INDEX, {
+        "base.css": ".rule {\n  color: red;\n}\n@custom-variant stray (&:hover);\n",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("src/styles/host/base.css:4");
+      expect(result.output).toContain("belongs in src/styles/design-contract.css");
+    });
+
+    it("scans every partial, not just the first", () => {
+      const result = runCheck(CONTRACT, `${PARTIAL_INDEX}@import "./styles/host/late.css";\n`, {
+        "base.css": ".rule {\n  color: red;\n}\n",
+        "late.css": ".late {\n  color: blue;\n}\n@theme {\n  --color-stray: red;\n}\n",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("src/styles/host/late.css:4");
+    });
+
+    it("fails on a subdirectory of host partials", () => {
+      mkdirSync(path.join(sandbox, "src/styles/host/nested"));
+      const result = runCheck(CONTRACT, PARTIAL_INDEX, { "base.css": ".rule {\n}\n" });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("one flat directory");
+    });
+
+    it("fails when the entry imports a partial that does not exist", () => {
+      const result = runCheck(CONTRACT, PARTIAL_INDEX);
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("./styles/host/base.css, which does not exist");
+    });
+
+    it("fails when a partial is never imported", () => {
+      const result = runCheck(CONTRACT, VALID_INDEX, {
+        "orphan.css": ".rule {\n  color: red;\n}\n",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("src/styles/host/orphan.css is not imported");
+    });
+
+    it("fails when a partial is imported twice", () => {
+      const result = runCheck(CONTRACT, `${PARTIAL_INDEX}@import "./styles/host/base.css";\n`, {
+        "base.css": ".rule {\n  color: red;\n}\n",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("more than once");
+    });
   });
 });

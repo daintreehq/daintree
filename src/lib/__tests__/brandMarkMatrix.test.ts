@@ -12,6 +12,7 @@ import {
 import type { AppColorScheme, AppThemeTokenKey } from "@shared/theme";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { BRAND_MARK_SURFACES, resolveBrandMarkInk } from "../brandIcon";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 registerMode(modeRgb);
 registerMode(modeOklab);
@@ -278,7 +279,7 @@ describe("brand marks across the whole registry", () => {
     // CLAUDE.md forbids widening to `transition`/`transition-all`; this reads the
     // shipped rule rather than the constant, so retuning the duration token does
     // not drag the test with it.
-    const css = readFileSync(fileURLToPath(new URL("../../index.css", import.meta.url)), "utf8");
+    const css = readIndexCss();
     const rule = /\.brand-mark\s*\{([^}]*)\}/.exec(css);
     expect(rule).not.toBeNull();
 

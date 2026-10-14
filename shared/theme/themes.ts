@@ -509,7 +509,8 @@ const GRAIN_CHARACTER_IMAGES = {
  * extension value. Unset/"fine" returns undefined so NO var is emitted and the
  * CSS fallback keeps the bundled noise.png — a relative url() inside a :root
  * custom property resolves against the document, not the stylesheet, so the
- * asset reference must stay in src/index.css. "none" disables the layer.
+ * asset reference must stay in src/styles/host/base.css. "none" disables the
+ * layer.
  */
 export function resolveGrainImage(
   grainCharacter: ThemeStrategy["grainCharacter"]

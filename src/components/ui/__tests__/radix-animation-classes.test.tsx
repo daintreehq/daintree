@@ -20,6 +20,7 @@ import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
 } from "@/lib/animationUtils";
+import { readIndexCss } from "@/__tests__/support/hostCss";
 
 beforeAll(async () => {
   await primeRadix();
@@ -228,7 +229,7 @@ describe("lists that drop from a trigger their own width", () => {
   });
 
   it("time the drop on the shared entry/exit tier", () => {
-    const css = readFileSync(path.join(SRC_ROOT, "index.css"), "utf8");
+    const css = readIndexCss();
     const rule = (state: string) =>
       new RegExp(
         `\\.${OVERLAY_DROP_MOTION_CLASS}\\[data-state="${state}"\\]\\s*\\{[^}]*var\\(--duration-(\\d+)\\)`
