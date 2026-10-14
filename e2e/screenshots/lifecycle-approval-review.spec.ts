@@ -224,9 +224,13 @@ const STATES: State[] = [
 ];
 
 test.describe("lifecycle command approval review", () => {
-  test.skip(!ENABLED, "set DAINTREE_SHOT_LIFECYCLE_APPROVAL=1 to capture");
-
   test("captures every state", async ({ context }) => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description:
+        "DAINTREE_SHOT_LIFECYCLE_APPROVAL is required for the lifecycle approval capture",
+    });
+    test.skip(!ENABLED, "set DAINTREE_SHOT_LIFECYCLE_APPROVAL=1 to capture");
     await settleDevServer(context);
     const selected = STATES.filter((s) => ONLY.length === 0 || ONLY.includes(s.name));
     const expected: string[] = [];

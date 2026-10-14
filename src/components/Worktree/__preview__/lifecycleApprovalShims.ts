@@ -133,8 +133,8 @@ const REVIEWS: Record<string, LifecycleCommandReview | null> = {
   },
   nothing: null,
 };
-REVIEWS["later"] = REVIEWS.mixed;
-REVIEWS["approve-error"] = REVIEWS.mixed;
+REVIEWS["later"] = REVIEWS.mixed ?? null;
+REVIEWS["approve-error"] = REVIEWS.mixed ?? null;
 
 const never = <T>() => new Promise<T>(() => {});
 const later = <T>(value: T, ms = 30) =>
