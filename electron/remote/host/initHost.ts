@@ -1,16 +1,36 @@
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
+import { helpSessionService } from "../../services/HelpSessionService.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import type { PtyClient } from "../../services/PtyClient.js";
 import { scratchStore } from "../../services/ScratchStore.js";
 import { setAttachedFrontendCount } from "../../services/PowerSaveBlockerService.js";
+import { getPtyClient } from "../../window/serviceRefs.js";
 import { registerRemoteService } from "../runtime.js";
 import { MAX_PROJECT_EMOJI_LENGTH } from "./linkMethods.js";
+import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 import { SessionHost, type SessionHostOptions, type SessionHostServer } from "./SessionHost.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
     sessionHost: SessionHost;
   }
+}
+
+/**
+ * The same conditions a local view's eviction floor checks (#11157, #12108),
+ * read here where the assistant runs: an unrevoked help session pinned to this
+ * endpoint's handle, whose PTY is still alive, both for the same lane.
+ */
+function assistantLiveFor(endpoint: RemoteViewEndpoint): boolean {
+  if (endpoint.projectId === null) return false;
+  const pty = getPtyClient();
+  if (!pty) return false;
+  return helpSessionService
+    .getAssistantBackends(endpoint.projectId)
+    .some(
+      (backend) => backend.webContentsId === endpoint.handle && pty.hasTerminal(backend.terminalId)
+    );
 }
 
 /**
@@ -42,12 +62,32 @@ export function initRemoteHostsHost(
         path,
         ...(emoji && emoji.length <= MAX_PROJECT_EMOJI_LENGTH ? { emoji } : {}),
       })),
+    assistantLive: assistantLiveFor,
     ...overrides,
   });
   const unregister = registerRemoteService("sessionHost", sessionHost);
+  // An assistant's help binding is made before its PTY spawns, and every
+  // revoke or displacement kills the PTY, so its spawn and its exit are the
+  // moments its view's protection changes. The client may not exist yet when
+  // this runs, and no view can launch an assistant without it, so each
+  // endpoint that opens tries again.
+  const refresh = () => sessionHost.refreshAssistants();
+  let watched: PtyClient | null = null;
+  const watchPty = () => {
+    if (watched) return;
+    watched = getPtyClient();
+    watched?.on("spawn-result", refresh);
+    watched?.on("exit", refresh);
+  };
+  watchPty();
+  const offOpened = sessionHost.onEndpointOpened(watchPty);
   return {
     sessionHost,
     dispose() {
+      offOpened();
+      watched?.off("spawn-result", refresh);
+      watched?.off("exit", refresh);
+      watched = null;
       unregister();
       sessionHost.dispose();
     },

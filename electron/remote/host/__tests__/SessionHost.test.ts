@@ -491,3 +491,130 @@ describe("SessionHost: the project a Shell last showed here", () => {
     sessions.dispose();
   });
 });
+
+describe("SessionHost assistant liveness (#13349)", () => {
+  /** Endpoint handle → the project its live assistant was launched for. */
+  let liveAssistants: Map<number, string>;
+  let sessions: SessionHost;
+  let fake: ReturnType<typeof fakeServer>;
+  let endpoints: EndpointRegistryImpl;
+
+  beforeEach(() => {
+    liveAssistants = new Map();
+    fake = fakeServer();
+    endpoints = new EndpointRegistryImpl();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: endpoints,
+      assistantLive: (endpoint) => liveAssistants.get(endpoint.handle) === endpoint.projectId,
+    });
+  });
+
+  afterEach(() => sessions.dispose());
+
+  const assistantCalls = (link: ReturnType<typeof fakeLink>) =>
+    link.calls.filter(({ method }) => method === LinkMethod.ENDPOINT_ASSISTANT);
+  const handleOf = (projectId: string) => endpoints.getForProject(projectId)[0]!.handle;
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  it("tells the Shell when a view's assistant starts and stops, and nothing in between", () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    sessions.refreshAssistants();
+    // A new endpoint has no assistant, which the Shell already assumes.
+    expect(assistantCalls(link)).toEqual([]);
+
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+    sessions.refreshAssistants();
+    expect(assistantCalls(link)).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_ASSISTANT,
+        payload: { endpoints: [{ endpointId: "view-1", projectId: "p1", live: true }] },
+      },
+    ]);
+
+    liveAssistants.clear();
+    sessions.refreshAssistants();
+    expect(assistantCalls(link).at(-1)!.payload).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", live: false }],
+    });
+    expect(assistantCalls(link)).toHaveLength(2);
+  });
+
+  it("tells a resumed Shell every view's answer, including what changed while it was away", () => {
+    const first = fakeLink();
+    fake.attach("s1", first);
+    open(first, "view-1", "p1");
+    open(first, "view-2", "p2");
+    liveAssistants.set(handleOf("p1"), "p1");
+    liveAssistants.set(handleOf("p2"), "p2");
+    sessions.refreshAssistants();
+    first.drop();
+
+    // The p1 assistant quit while nobody was attached to hear it.
+    liveAssistants.delete(handleOf("p1"));
+    sessions.refreshAssistants();
+
+    const second = fakeLink();
+    fake.attach("s1", second, true);
+    expect(assistantCalls(second)).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_ASSISTANT,
+        payload: {
+          endpoints: [
+            { endpointId: "view-1", projectId: "p1", live: false },
+            { endpointId: "view-2", projectId: "p2", live: true },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("answers again for a view that moved to another project", () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, { endpointId: "view-1", projectId: "p2" });
+
+    expect(assistantCalls(link).at(-1)!.payload).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p2", live: false }],
+    });
+  });
+
+  it("owes the Shell an answer whose delivery failed", async () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.call.mockRejectedValueOnce(new Error("UNSUPPORTED"));
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+    await flush();
+
+    sessions.refreshAssistants();
+    const sent = link.call.mock.calls.filter(([method]) => method === LinkMethod.ENDPOINT_ASSISTANT);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]![1]).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", live: true }],
+    });
+  });
+
+  it("says nothing more about a view whose endpoint closed", () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    liveAssistants.set(handleOf("p1"), "p1");
+    sessions.refreshAssistants();
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+
+    sessions.refreshAssistants();
+    expect(assistantCalls(link)).toHaveLength(1);
+  });
+});

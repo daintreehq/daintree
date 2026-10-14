@@ -632,6 +632,10 @@ if (!gotTheLock) {
       // async, and a shard that times out comes back as an empty list, which
       // would read as "the assistant is gone" and unprotect a live one.
       isTerminalLive: (terminalId) => getPtyClient()?.hasTerminal(terminalId) === true,
+      // A host project's assistant runs on the host and dies there when its
+      // view's endpoint closes (#13349); the host says which views have one.
+      remoteAssistantLive: (webContentsId) =>
+        getRemoteService("windowHosts")?.viewHasLiveAssistant?.(webContentsId) === true,
       // Keeps a workspace an MCP session is bound to out of the freeze sweep,
       // and out of eviction entirely while a dispatch is in flight (#11790).
       // A bound session drives a *background* workspace by design, and a frozen

@@ -18,6 +18,7 @@ import {
 } from "../link/messages.js";
 import type { LinkSession, LinkSessionOptions } from "../link/session.js";
 import {
+  EndpointAssistantPayloadSchema,
   EndpointResyncPayloadSchema,
   HostInfoSchema,
   HostProjectListSchema,
@@ -150,6 +151,14 @@ export class HostConnection {
    * behind and wear down the host's per-session endpoint allowance.
    */
   private readonly pendingCloses = new Set<string>();
+  /**
+   * Views the host says have a live Daintree Assistant pinned to their
+   * endpoint (#13349). Closing such a view's endpoint revokes the assistant
+   * there, so eviction leaves them be. Kept through a dropped link: the host
+   * keeps the endpoint for a resume, and still revokes on the close that
+   * would follow.
+   */
+  private readonly liveAssistants = new Set<number>();
   private readonly readyWaiters = new Set<() => void>();
   private info: HostInfo | null = null;
   private started = false;
@@ -511,6 +520,11 @@ export class HostConnection {
     return [...this.endpoints.keys()];
   }
 
+  /** Whether the host last said a live Daintree Assistant is pinned to this view's endpoint. */
+  hasLiveAssistant(webContentsId: number): boolean {
+    return this.liveAssistants.has(webContentsId) && this.endpoints.has(webContentsId);
+  }
+
   /** The view now belongs to another host (or this machine): close its endpoint here. */
   retireView(webContentsId: number): void {
     this.closeEndpoint(webContentsId);
@@ -548,6 +562,21 @@ export class HostConnection {
         for (const endpointId of endpointIds) {
           const webContentsId = this.viewsByEndpoint.get(endpointId);
           if (webContentsId !== undefined) this.views.resync(webContentsId, this.hostId, reason);
+        }
+        return null;
+      }
+    );
+    session.registerCallHandler(
+      LinkMethod.ENDPOINT_ASSISTANT,
+      EndpointAssistantPayloadSchema,
+      ({ endpoints }) => {
+        for (const { endpointId, projectId, live } of endpoints) {
+          const webContentsId = this.viewsByEndpoint.get(endpointId);
+          if (webContentsId === undefined) continue;
+          // Said about a binding the view has since left.
+          if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
+          if (live) this.liveAssistants.add(webContentsId);
+          else this.liveAssistants.delete(webContentsId);
         }
         return null;
       }
@@ -612,6 +641,8 @@ export class HostConnection {
         });
         if (result === "refused") return null;
         open.projectId = projectId;
+        // The host revokes the old project's assistant when the endpoint moves.
+        this.liveAssistants.delete(webContentsId);
       }
       return open.endpointId;
     }
@@ -641,6 +672,7 @@ export class HostConnection {
     if (!open) return;
     this.endpoints.delete(webContentsId);
     this.viewsByEndpoint.delete(open.endpointId);
+    this.liveAssistants.delete(webContentsId);
     if (!this.postClose(this.session, open.endpointId)) this.pendingCloses.add(open.endpointId);
     this.notifyClosed({ webContentsId, endpointId: open.endpointId });
   }
@@ -700,6 +732,7 @@ export class HostConnection {
   private forgetEndpoints(): void {
     this.endpoints.clear();
     this.viewsByEndpoint.clear();
+    this.liveAssistants.clear();
   }
 
   /**

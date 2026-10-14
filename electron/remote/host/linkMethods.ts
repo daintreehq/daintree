@@ -20,6 +20,8 @@ export const LinkMethod = {
   LAST_ACTIVE_PROJECT: "host.last-active-project",
   /** Host → Shell: these endpoints missed events; repaint them from a fresh snapshot. */
   ENDPOINT_RESYNC: "endpoint.resync",
+  /** Host → Shell: whether a live Daintree Assistant is pinned to each of these endpoints. */
+  ENDPOINT_ASSISTANT: "endpoint.assistant",
 } as const;
 
 export interface HostInfo {
@@ -42,6 +44,21 @@ export type EndpointResyncReason = "overflow" | "reattached";
 export interface EndpointResyncPayload {
   endpointIds: string[];
   reason: EndpointResyncReason;
+}
+
+/**
+ * One endpoint's assistant, as the host sees it. `projectId` is the binding the
+ * answer was computed for, so a Shell that has since moved the view to another
+ * project ignores it rather than pinning the new binding.
+ */
+export interface EndpointAssistantState {
+  endpointId: string;
+  projectId: string | null;
+  live: boolean;
+}
+
+export interface EndpointAssistantPayload {
+  endpoints: EndpointAssistantState[];
 }
 
 const endpointId = z.string().min(1).max(256);
@@ -85,4 +102,16 @@ export const HostProjectListSchema = z
 export const EndpointResyncPayloadSchema = z.object({
   endpointIds: z.array(endpointId).max(4096),
   reason: z.enum(["overflow", "reattached"]),
+});
+
+export const EndpointAssistantPayloadSchema = z.object({
+  endpoints: z
+    .array(
+      z.object({
+        endpointId,
+        projectId: z.string().min(1).max(256).nullable(),
+        live: z.boolean(),
+      })
+    )
+    .max(4096),
 });

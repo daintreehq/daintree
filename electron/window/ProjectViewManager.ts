@@ -233,6 +233,13 @@ export interface ProjectViewManagerOptions {
    */
   isTerminalLive?: (terminalId: string) => boolean;
   /**
+   * The assistant floor for a view of a host's project (#13349). That
+   * assistant runs on the host and is revoked there when the view closes, so
+   * neither of the two readers above can see it: the host computes the same
+   * conditions and tells the Shell. Absent, no remote view is protected.
+   */
+  remoteAssistantLive?: (webContentsId: number) => boolean;
+  /**
    * Why MCP needs this view kept running right now (#11790) — a live session
    * binding, an in-flight dispatch, or neither. Injected from the composition
    * root for the same reason as `assistantBackendsForProject`: electron/window/
@@ -372,6 +379,7 @@ export class ProjectViewManager {
     webContentsId: number;
   }>;
   isTerminalLive?: (terminalId: string) => boolean;
+  remoteAssistantLive?: (webContentsId: number) => boolean;
   mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
@@ -459,6 +467,7 @@ export class ProjectViewManager {
     this.onViewRendererGone = opts.onViewRendererGone;
     this.assistantBackendsForProject = opts.assistantBackendsForProject;
     this.isTerminalLive = opts.isTerminalLive;
+    this.remoteAssistantLive = opts.remoteAssistantLive;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {

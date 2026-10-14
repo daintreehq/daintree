@@ -21,6 +21,7 @@ import {
   EmptyPayloadSchema,
   LinkMethod,
   MAX_LISTED_PROJECTS,
+  type EndpointAssistantPayload,
   type EndpointResyncPayload,
   type EndpointResyncReason,
   type HostInfo,
@@ -75,6 +76,13 @@ export interface SessionHostOptions {
   /** How long one use keeps the host awake; renewed by the next. */
   activityWindowMs?: number;
   hostInfo?: () => HostInfo;
+  /**
+   * Whether a live Daintree Assistant is pinned to this endpoint. The assistant
+   * runs here, and closing its view's endpoint revokes it, so the Shell can
+   * only keep that view out of its eviction pass if this host tells it (#13349).
+   * Read synchronously on every refresh; absent, every endpoint reads as having none.
+   */
+  assistantLive?: (endpoint: RemoteViewEndpoint) => boolean;
   describeProject?: (projectId: string) => ProjectDescription | null;
   listProjects?: () => HostProjectList;
   eventsHighWaterBytes?: number;
@@ -120,6 +128,12 @@ interface SessionState {
   /** Client endpoint ids that missed events and must be told to resync. */
   stale: Set<string>;
   staleReason: EndpointResyncReason;
+  /**
+   * What the Shell was last told about each endpoint's assistant, by client
+   * endpoint id. An endpoint missing here is owed an answer: cleared when the
+   * link drops, so a resumed Shell hears every endpoint again.
+   */
+  assistantTold: Map<string, boolean>;
   overHighWaterTimer: ReturnType<typeof setTimeout> | null;
   handle: EndpointSessionHandle;
   /** When the Shell last used this host through a view; null until it does. */
@@ -273,6 +287,15 @@ export class SessionHost {
     return this.states.get(sessionId)?.endpoints.get(clientEndpointId);
   }
 
+  /**
+   * An assistant may have started or stopped: tell each attached Shell about
+   * every endpoint whose answer changed since it was last told.
+   */
+  refreshAssistants(): void {
+    if (this.disposed) return;
+    for (const state of this.states.values()) this.announceAssistants(state);
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -308,6 +331,7 @@ export class SessionHost {
         resyncing: false,
         stale: new Set(),
         staleReason: "reattached",
+        assistantTold: new Map(),
         overHighWaterTimer: null,
         handle: undefined as unknown as EndpointSessionHandle,
         lastActiveAt: null,
@@ -385,6 +409,7 @@ export class SessionHost {
         // Whatever is pushed while the Shell is away is lost to it.
         for (const id of s.endpoints.keys()) s.stale.add(id);
         s.staleReason = "reattached";
+        s.assistantTold.clear();
         this.notifyTransport(s, false);
         this.publishFrontendCount();
       })
@@ -410,6 +435,7 @@ export class SessionHost {
       );
     });
     if (s.stale.size > 0 && !s.resyncing) this.announceResync(s);
+    this.announceAssistants(s);
   }
 
   private unbindLink(state: SessionState): void {
@@ -446,10 +472,13 @@ export class SessionHost {
       this.transportFor(state)
     );
     state.endpoints.set(clientEndpointId, endpoint);
+    // A new endpoint has no assistant yet, which is what the Shell assumes.
+    state.assistantTold.set(clientEndpointId, false);
     endpoint.onClose(() => {
       if (state.endpoints.get(clientEndpointId) === endpoint) {
         state.endpoints.delete(clientEndpointId);
         state.stale.delete(clientEndpointId);
+        state.assistantTold.delete(clientEndpointId);
         this.publishFrontendCount();
       }
     });
@@ -474,6 +503,8 @@ export class SessionHost {
     // Switching project in a view is using the host.
     state.lastActiveAt = Date.now();
     this.publishFrontendCount();
+    // The assistant was the old project's, and the move revokes it.
+    this.announceAssistants(state);
   }
 
   private transportFor(state: SessionState): RemoteEndpointTransport {
@@ -590,6 +621,34 @@ export class SessionHost {
       if (state.link !== link && state.link !== null) return;
       for (const id of payload.endpointIds) if (state.endpoints.has(id)) state.stale.add(id);
       state.staleReason = payload.reason;
+    });
+  }
+
+  private announceAssistants(state: SessionState): void {
+    const read = this.options.assistantLive;
+    const link = state.link;
+    if (!read || !link || !link.isOpen) return;
+    const payload: EndpointAssistantPayload = { endpoints: [] };
+    for (const [id, endpoint] of state.endpoints) {
+      if (endpoint.isClosed()) continue;
+      let live: boolean;
+      try {
+        live = read(endpoint);
+      } catch (error) {
+        console.error("[SessionHost] assistant liveness read failed:", error);
+        continue;
+      }
+      if (state.assistantTold.get(id) === live) continue;
+      state.assistantTold.set(id, live);
+      payload.endpoints.push({ endpointId: id, projectId: endpoint.projectId, live });
+    }
+    if (payload.endpoints.length === 0) return;
+    void link.call(LinkMethod.ENDPOINT_ASSISTANT, payload).catch(() => {
+      // The Shell may not have heard: owe it these answers again, for the next
+      // refresh while this link lives or the full announcement on reattach.
+      for (const { endpointId, live } of payload.endpoints) {
+        if (state.assistantTold.get(endpointId) === live) state.assistantTold.delete(endpointId);
+      }
     });
   }
 

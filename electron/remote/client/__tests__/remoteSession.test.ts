@@ -70,7 +70,7 @@ import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { HostServer } from "../../host/HostServer.js";
 import { hostSocketLocation } from "../../host/hostSocketPath.js";
-import { SessionHost } from "../../host/SessionHost.js";
+import { SessionHost, type SessionHostOptions } from "../../host/SessionHost.js";
 import { Lane } from "../../link/frames.js";
 import { DEFAULT_LANE_LIMITS } from "../../link/scheduler.js";
 import {
@@ -170,6 +170,7 @@ async function startHarness(
     eventsLimits?: { high: number; cap: number };
     maxEndpoints?: number;
     reverseRequests?: ReverseRequestAnswerer;
+    assistantLive?: SessionHostOptions["assistantLive"];
   } = {}
 ) {
   const dir = await makeTempDir();
@@ -206,6 +207,7 @@ async function startHarness(
     ],
     eventsHighWaterBytes: options.eventsLimits?.high,
     maxEndpointsPerSession: options.maxEndpoints,
+    assistantLive: options.assistantLive,
   });
 
   const registry = new HostRegistry(memoryStore());
@@ -752,6 +754,85 @@ describe("remote session wiring", () => {
     });
     await h.manager.disconnect(HOST_ID);
     expect(closed).toHaveLength(2);
+  });
+
+  describe("assistant liveness (#13349)", () => {
+    /** Endpoint handle → the project its live assistant was launched for. */
+    const live = new Map<number, string>();
+    const startWithAssistants = () =>
+      startHarness({
+        assistantLive: (endpoint) => live.get(endpoint.handle) === endpoint.projectId,
+      });
+    const handleOf = (projectId: string) => getEndpointRegistry().getForProject(projectId)[0]!.handle;
+
+    beforeEach(() => live.clear());
+
+    it("tells the Shell which view has a live assistant on the host, through a dropped link", async () => {
+      await startWithAssistants();
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      expect(connection.hasLiveAssistant(VIEW_A)).toBe(false);
+
+      live.set(handleOf("proj-1"), "proj-1");
+      h.sessionHost.refreshAssistants();
+      await waitFor(() => connection.hasLiveAssistant(VIEW_A));
+      expect(connection.hasLiveAssistant(VIEW_B)).toBe(false);
+
+      // Down but resumable: the host keeps the endpoint, and would still revoke
+      // the assistant on the close an eviction sends once the link is back.
+      h.allowConnect.value = false;
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+      await waitFor(() => h.frontendCounts.at(-1) === 0);
+      expect(connection.hasLiveAssistant(VIEW_A)).toBe(true);
+
+      // It quits while nobody is attached to hear; the resumed session says so.
+      live.clear();
+      h.sessionHost.refreshAssistants();
+      h.allowConnect.value = true;
+      await waitFor(() => connection.unavailableEnvelope() === null);
+      await waitFor(() => !connection.hasLiveAssistant(VIEW_A));
+    });
+
+    it("forgets a view's assistant when the view goes or moves to another project", async () => {
+      await startWithAssistants();
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      live.set(handleOf("proj-1"), "proj-1");
+      live.set(handleOf("proj-2"), "proj-2");
+      h.sessionHost.refreshAssistants();
+      await waitFor(() => connection.hasLiveAssistant(VIEW_A) && connection.hasLiveAssistant(VIEW_B));
+
+      h.sink.gone(VIEW_A);
+      expect(connection.hasLiveAssistant(VIEW_A)).toBe(false);
+
+      // The host revokes an assistant whose view moves project.
+      projectKeys.set(VIEW_B, `${HOST_ID}:proj-1`);
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      expect(connection.hasLiveAssistant(VIEW_B)).toBe(false);
+    });
+
+    it("starts over with no assistants on a fresh session", async () => {
+      await startWithAssistants();
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      const connection = h.manager.get(HOST_ID)!;
+      live.set(handleOf("proj-1"), "proj-1");
+      h.sessionHost.refreshAssistants();
+      await waitFor(() => connection.hasLiveAssistant(VIEW_A));
+
+      // Past the resume grace: the host closed the endpoint, and its assistant with it.
+      h.allowConnect.value = false;
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+      await waitFor(() => getEndpointRegistry().getRemote().length === 0, 2_000);
+      h.allowConnect.value = true;
+      await waitFor(() => getEndpointRegistry().getRemote().length === 1);
+
+      expect(connection.hasLiveAssistant(VIEW_A)).toBe(false);
+    });
   });
 
   it("carries host summaries and session calls on a link no view is bound to", async () => {

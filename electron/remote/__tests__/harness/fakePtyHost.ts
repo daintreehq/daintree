@@ -60,6 +60,11 @@ export class FakePtyHost {
       connection.port.close();
     },
     getTerminalProjectId: (id: string) => this.terminals.get(id)?.projectId ?? null,
+    // The host's assistant liveness push follows spawns and exits; this fake
+    // emits neither, so only the reads have to answer.
+    hasTerminal: (id: string) => this.terminals.has(id),
+    on: () => undefined,
+    off: () => undefined,
     onProjectSwitch: (windowId: number, projectId: string, projectPath: string) => {
       this.projectSwitches.push({ windowId, projectId, projectPath });
     },
