@@ -71,6 +71,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     helpSessionRefsForWebContentsId: () => [],
     revokeByWebContentsId: async () => undefined,
     revokeSession: async () => undefined,
+    setMessagingReach: () => {},
   },
 }));
 

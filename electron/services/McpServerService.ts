@@ -45,7 +45,12 @@ import {
   isAgentPaneInWorkspace,
 } from "./mcp-server/terminalStatus.js";
 import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
-import { TerminalNotifyService, paneNotifyKey } from "./mcp-server/terminalNotify.js";
+import {
+  TerminalNotifyService,
+  helpNotifyKey,
+  paneNotifyKey,
+  type LaneWake,
+} from "./mcp-server/terminalNotify.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
 import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
@@ -672,6 +677,18 @@ export class McpServerService {
     return this.terminalNotify.getPaneState(terminalId);
   }
 
+  /** Tell an assistant lane a message is waiting, on the same line its notices use (#13333). */
+  queueLaneWake(
+    lane: { helpSessionId: string; terminalId: string; projectId: string },
+    wake: LaneWake
+  ): void {
+    this.terminalNotify.enqueueWake(
+      { key: helpNotifyKey(lane.helpSessionId), terminalId: lane.terminalId },
+      lane.projectId,
+      wake
+    );
+  }
+
   /** The pane's own "stop": every notice it has pending goes, and nothing more is typed. */
   stopPaneNotices(terminalId: string): void {
     this.terminalNotify.stopPane(terminalId);
@@ -764,7 +781,11 @@ export class McpServerService {
       // leaving it listening after the user turned it off.
       await this.httpLifecycle.stop();
     } else if (wasEnabled !== enabled) {
-      if (!enabled) this.httpLifecycle.setLastError(null);
+      if (!enabled) {
+        // Lane wakes can be queued while the server isn't listening.
+        this.terminalNotify.disposeAll();
+        this.httpLifecycle.setLastError(null);
+      }
       this.emitRuntimeStateChange();
     }
   }
@@ -1117,6 +1138,8 @@ export class McpServerService {
   disconnectHelpBearer(rawToken: string, helpSessionId: string): void {
     try {
       this.revokeOwnershipPrincipal(helpOwnershipPrincipal(helpSessionId));
+      // The lane's own notices and wakes are held under its session id.
+      this.terminalNotify.revokeOwner(helpNotifyKey(helpSessionId));
     } finally {
       const tokenHash = this.httpLifecycle.findHelpBearerHash(rawToken);
       if (tokenHash !== null) this.disconnectBearer(tokenHash);

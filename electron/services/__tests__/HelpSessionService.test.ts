@@ -4599,6 +4599,62 @@ describe("HelpSessionService", () => {
     });
   });
 
+  describe("messaging note (#13333)", () => {
+    const START = "<!-- DAINTREE_MESSAGING_START -->";
+
+    afterEach(() => {
+      service.setMessagingReach(null);
+    });
+
+    it("explains the wake line where messaging can reach the lane", async () => {
+      service.setMessagingReach(() => true);
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(result.sessionPath, file), "utf-8");
+        expect(content.match(new RegExp(START, "g")) ?? []).toHaveLength(1);
+      }
+    });
+
+    it.each([
+      ["messaging never can", null],
+      ["messaging can't right now", () => false],
+    ] as const)("writes no note where %s", async (_label, reach) => {
+      service.setMessagingReach(reach);
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8");
+      expect(content).not.toContain(START);
+    });
+
+    it("writes no note while Daintree control is off", async () => {
+      service.setMessagingReach(() => true);
+      mockStoreGet.mockImplementation((key: string) =>
+        key === "agentSettings" ? {} : { daintreeControl: false }
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      const content = await fs.readFile(path.join(result.sessionPath, "AGENTS.md"), "utf-8");
+      expect(content).not.toContain(START);
+    });
+
+    it("removes the note on re-provision once messaging can't reach the lane", async () => {
+      service.setMessagingReach(() => true);
+      await service.provisionSession(provisionInput());
+      service.setMessagingReach(null);
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected result");
+
+      for (const file of ["CLAUDE.md", "AGENTS.md"]) {
+        const content = await fs.readFile(path.join(second.sessionPath, file), "utf-8");
+        expect(content).not.toContain(START);
+      }
+    });
+  });
+
   describe("runbook rule", () => {
     const START = "<!-- DAINTREE_RUNBOOKS_START -->";
 

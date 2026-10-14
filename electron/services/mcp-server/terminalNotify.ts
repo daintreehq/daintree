@@ -27,6 +27,7 @@ import {
 } from "../../../shared/types/terminalNotify.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { detectHandback } from "../pty/HandbackDetector.js";
+import { LANE_INBOX_TOOL, LANE_WAKE_LINE_PREFIX } from "../helpSessionRunbooks.js";
 import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 import { fenceFor } from "../../../shared/utils/quoteFence.js";
 
@@ -583,6 +584,57 @@ function isAgentRecord(info: NotifyTerminalInfo): boolean {
   );
 }
 
+/** What became of a lane wake. `held` may come first; exactly one other outcome ends it. */
+export type LaneWakeOutcome =
+  | { kind: "delivered" }
+  | { kind: "held"; reason: string }
+  | { kind: "unavailable"; reason: string }
+  | { kind: "ambiguous"; reason: string };
+
+export type LaneWakeCheck = { kind: "ready" } | { kind: "held" | "unavailable"; reason: string };
+
+/**
+ * A message waiting for an enrolled assistant lane (#13333). It rides its
+ * pane's notice line, so one writer types into that prompt. The line carries
+ * `id` and fixed wording, never anything the sender wrote.
+ */
+export interface LaneWake {
+  /** The exchange's opaque handle; see {@link LANE_WAKE_ID_PATTERN}. */
+  id: string;
+  /** Asked synchronously immediately before the line is typed, and while it waits. */
+  recheck(): LaneWakeCheck;
+  /**
+   * Reserves the attempt durably, synchronously and with nothing awaited
+   * before the submit. False keeps the wake off the line for good, with no
+   * report: the exchange already holds what became of it.
+   */
+  beforeType(): boolean;
+  report(outcome: LaneWakeOutcome): void;
+}
+
+export const LANE_WAKE_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
+/** How long a wake may wait for its pane, from admission; it holds hibernation off until then. */
+export const LANE_WAKE_MAX_PENDING_MS = 10 * 60_000;
+/** How often a waiting wake is rechecked: a pause or lease ending raises no event. */
+export const LANE_WAKE_RECHECK_MS = 5_000;
+export const MAX_QUEUED_WAKES_PER_PANE = 32;
+
+/** The fixed line a wake types: Daintree's own wording and the exchange handles, nothing else. */
+export function formatLaneWakeLine(ids: readonly string[]): string {
+  const handles = ids.join(", ");
+  return ids.length === 1
+    ? `${LANE_WAKE_LINE_PREFIX} has a new message (exchange ${handles}). Read it with ${LANE_INBOX_TOOL}.`
+    : `${LANE_WAKE_LINE_PREFIX} has ${ids.length} new messages (exchanges ${handles}). Read them with ${LANE_INBOX_TOOL}.`;
+}
+
+interface WakeEntry {
+  wake: LaneWake;
+  deadline: number;
+  /** The line carrying it, once reserved; it is never typed again after this. */
+  token?: string;
+  heldReported: boolean;
+}
+
 type NoticeSource = "send" | "launch" | "when-idle" | "keys";
 
 type TargetEvent =
@@ -684,6 +736,9 @@ interface PaneOwner {
   /** Launches with `notify` whose result has not come back. */
   pendingLaunches: number;
   fired: FiredEntry[];
+  /** Lane wakes by exchange handle, until typed, finished or expired. */
+  wakes: Map<string, WakeEntry>;
+  wakeTimer?: ReturnType<typeof setTimeout>;
   droppedCount: number;
   delivery: DeliveryState;
   /** The line the host may still hold, until its outcome is known. */
@@ -986,6 +1041,49 @@ export class TerminalNotifyService {
   }
 
   /** The chrome state for a pane, or null when it has nothing pending. */
+  /**
+   * Queue a lane wake on `pane`'s notice line. The caller has just checked the
+   * lane is enrolled and running as `pane`; every outcome reaches `wake.report`.
+   */
+  enqueueWake(pane: OwnPane, projectId: string, wake: LaneWake): void {
+    if (!LANE_WAKE_ID_PATTERN.test(wake.id)) {
+      reportWake(wake, { kind: "unavailable", reason: "invalid-id" });
+      return;
+    }
+    if (this.disposed || !this.deps.isEnabled()) {
+      reportWake(wake, { kind: "unavailable", reason: "notices-off" });
+      return;
+    }
+    const client = this.deps.getPtyClient();
+    if (client === null) {
+      reportWake(wake, { kind: "unavailable", reason: "unreadable" });
+      return;
+    }
+    const check = recheckWake(wake);
+    if (check.kind === "unavailable") {
+      reportWake(wake, check);
+      return;
+    }
+    const existing = this.existingOwner(pane);
+    if (existing?.wakes.has(wake.id) === true) return;
+    if ((existing?.wakes.size ?? 0) >= MAX_QUEUED_WAKES_PER_PANE) {
+      reportWake(wake, { kind: "unavailable", reason: "capacity" });
+      return;
+    }
+    this.ensureSubscribed(client);
+    const owner = this.ownerFor(pane, projectId);
+    const entry: WakeEntry = {
+      wake,
+      deadline: this.now() + LANE_WAKE_MAX_PENDING_MS,
+      heldReported: false,
+    };
+    owner.wakes.set(wake.id, entry);
+    if (check.kind === "held") this.holdWake(entry, check.reason);
+    this.armWakeTimer(owner);
+    this.schedule(owner);
+    this.publish(owner);
+  }
+
   getPaneState(terminalId: string): PaneNotifyState | null {
     const owner = this.ownersByTerminal.get(terminalId);
     return owner === undefined ? null : this.paneState(owner);
@@ -1159,6 +1257,7 @@ export class TerminalNotifyService {
       notices: new Map(),
       pendingLaunches: 0,
       fired: [],
+      wakes: new Map(),
       droppedCount: 0,
       delivery: { status: "idle" },
       attempting: false,
@@ -1184,6 +1283,7 @@ export class TerminalNotifyService {
       owner.notices.size === 0 &&
       owner.pendingLaunches === 0 &&
       owner.fired.length === 0 &&
+      owner.wakes.size === 0 &&
       owner.inHost === undefined &&
       owner.delivery.status !== "outstanding"
     ) {
@@ -1199,8 +1299,20 @@ export class TerminalNotifyService {
     this.withdraw(owner);
     if (owner.timer !== undefined) clearTimeout(owner.timer);
     if (owner.releaseTimer !== undefined) clearTimeout(owner.releaseTimer);
+    if (owner.wakeTimer !== undefined) clearTimeout(owner.wakeTimer);
     owner.timer = undefined;
     owner.releaseTimer = undefined;
+    owner.wakeTimer = undefined;
+    const wakes = [...owner.wakes.values()];
+    owner.wakes.clear();
+    for (const entry of wakes) {
+      reportWake(
+        entry.wake,
+        entry.token === undefined
+          ? { kind: "unavailable", reason: "stopped" }
+          : { kind: "ambiguous", reason: "stopped" }
+      );
+    }
     for (const notice of owner.notices.values()) clearSettling(notice);
     if (this.ownersByKey.get(owner.key) === owner) this.ownersByKey.delete(owner.key);
     if (this.ownersByTerminal.get(owner.terminalId) === owner) {
@@ -1286,6 +1398,71 @@ export class TerminalNotifyService {
       (entry) => entry.wakeToken !== token || entry.superseded !== true
     );
     for (const entry of owner.fired) if (entry.wakeToken === token) entry.wakeToken = undefined;
+    // A wake is never typed twice: part of its line may have landed.
+    this.finishWakes(owner, token, { kind: "ambiguous", reason: "unconfirmed" });
+  }
+
+  /** End the wakes a line carried with `outcome`. */
+  private finishWakes(owner: PaneOwner, token: string, outcome: LaneWakeOutcome): void {
+    for (const [id, entry] of owner.wakes) {
+      if (entry.token !== token) continue;
+      owner.wakes.delete(id);
+      reportWake(entry.wake, outcome);
+    }
+  }
+
+  private holdWake(entry: WakeEntry, reason: string): void {
+    if (entry.heldReported) return;
+    entry.heldReported = true;
+    reportWake(entry.wake, { kind: "held", reason });
+  }
+
+  /** Hold every waiting wake for `reason`, reporting each the first time. */
+  private holdWakes(owner: PaneOwner, reason: string): void {
+    for (const entry of owner.wakes.values()) {
+      if (entry.token === undefined) this.holdWake(entry, reason);
+    }
+  }
+
+  /**
+   * Recheck the waiting wakes, dropping those that can no longer go out, and
+   * return the ones ready to be typed now.
+   */
+  private sweepWakes(owner: PaneOwner): WakeEntry[] {
+    const now = this.now();
+    const ready: WakeEntry[] = [];
+    for (const [id, entry] of owner.wakes) {
+      if (entry.token !== undefined) continue;
+      if (now >= entry.deadline) {
+        owner.wakes.delete(id);
+        reportWake(entry.wake, { kind: "held", reason: "expired" });
+        continue;
+      }
+      const check = recheckWake(entry.wake);
+      if (check.kind === "unavailable") {
+        owner.wakes.delete(id);
+        reportWake(entry.wake, check);
+      } else if (check.kind === "held") {
+        this.holdWake(entry, check.reason);
+      } else {
+        ready.push(entry);
+      }
+    }
+    return ready;
+  }
+
+  private armWakeTimer(owner: PaneOwner): void {
+    if (owner.disposed || owner.wakeTimer !== undefined || owner.wakes.size === 0) return;
+    owner.wakeTimer = setTimeout(() => {
+      owner.wakeTimer = undefined;
+      if (owner.disposed) return;
+      const before = owner.wakes.size;
+      this.sweepWakes(owner);
+      if (owner.wakes.size !== before) this.publish(owner);
+      this.schedule(owner);
+      this.armWakeTimer(owner);
+      this.maybeDispose(owner);
+    }, LANE_WAKE_RECHECK_MS);
   }
 
   private removeNotice(owner: PaneOwner, notice: Notice): void {
@@ -1814,7 +1991,9 @@ export class TerminalNotifyService {
   }
 
   private hasUndelivered(owner: PaneOwner): boolean {
-    return owner.fired.some((entry) => isDeliverable(entry));
+    if (owner.fired.some((entry) => isDeliverable(entry))) return true;
+    for (const entry of owner.wakes.values()) if (entry.token === undefined) return true;
+    return false;
   }
 
   /**
@@ -1908,10 +2087,12 @@ export class TerminalNotifyService {
     // hears as soon as the target stops instead of after its own turn.
     const verdict = evaluateWakeGate(info, wakeGateOptionsFor(info.detectedAgentId));
     if (verdict.kind === "hold") {
+      this.holdWakes(owner, verdict.reason);
       this.setDelivery(owner, { status: "held", reason: verdict.reason });
       return;
     }
     if (verdict.kind === "blocked") {
+      this.holdWakes(owner, verdict.reason);
       this.setDelivery(owner, { status: "blocked", reason: verdict.reason });
       return;
     }
@@ -1929,11 +2110,32 @@ export class TerminalNotifyService {
     // An earlier line the host never finished with would land beside this one;
     // taking it back returns its notices to this line.
     this.withdraw(owner);
-    const token = randomUUID();
+    // The last word on each wake: nothing is awaited between this and the submit.
+    const wakes = this.sweepWakes(owner).filter((entry) => this.reserveWake(owner, entry));
     const entries = owner.fired.filter((entry) => isDeliverable(entry));
+    if (entries.length === 0 && wakes.length === 0) {
+      // Only wakes, all waiting on the lane: the wake timer comes back for them.
+      this.setDelivery(owner, { status: owner.wakes.size > 0 ? "scheduled" : "idle" });
+      this.publish(owner);
+      this.maybeDispose(owner);
+      return;
+    }
+    const token = randomUUID();
     for (const entry of entries) entry.wakeToken = token;
-    const dropped = owner.droppedCount;
-    owner.droppedCount = 0;
+    for (const entry of wakes) entry.token = token;
+    const dropped = entries.length > 0 ? owner.droppedCount : 0;
+    owner.droppedCount -= dropped;
+    const lines = [
+      ...(wakes.length > 0 ? [formatLaneWakeLine(wakes.map((entry) => entry.wake.id))] : []),
+      ...(entries.length > 0
+        ? [
+            formatNoticeLine(
+              entries.map((entry) => entry.notice),
+              dropped
+            ),
+          ]
+        : []),
+    ];
     const deliveredAt = this.now();
     owner.inHost = { token };
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
@@ -1941,16 +2143,7 @@ export class TerminalNotifyService {
     // The host re-checks the gate when the line reaches the lane, and drops
     // its Enter if anyone types before it lands.
     try {
-      client.submit(
-        owner.terminalId,
-        formatNoticeLine(
-          entries.map((entry) => entry.notice),
-          dropped
-        ),
-        token,
-        undefined,
-        "settled-prompt"
-      );
+      client.submit(owner.terminalId, lines.join("\n\n"), token, undefined, "settled-prompt");
     } catch (err) {
       // Whether any of it reached the host is unknown, so this is a failed
       // line like any other: its notices wait for the pane's next turn.
@@ -1994,6 +2187,7 @@ export class TerminalNotifyService {
       if (phase === "pty_written") {
         owner.inHost = undefined;
         owner.fired = owner.fired.filter((entry) => entry.wakeToken !== token);
+        this.finishWakes(owner, token, { kind: "delivered" });
         if (owner.delivery.token === token) {
           owner.delivery.confirmed = true;
           if (owner.delivery.settledSinceDelivery === true) {
@@ -2029,6 +2223,21 @@ export class TerminalNotifyService {
     this.withdraw(owner);
     owner.droppedCount += dropped;
     if (owner.delivery.token === token) this.failDelivery(owner, lastSeen);
+  }
+
+  /** Reserve a wake's one attempt; a refusal or failure takes it off the line for good. */
+  private reserveWake(owner: PaneOwner, entry: WakeEntry): boolean {
+    let reserved: boolean;
+    try {
+      reserved = entry.wake.beforeType();
+    } catch (err) {
+      console.error("[MCP] terminal notify: reserving a lane wake failed:", err);
+      owner.wakes.delete(entry.wake.id);
+      reportWake(entry.wake, { kind: "unavailable", reason: "reserve-failed" });
+      return false;
+    }
+    if (!reserved) owner.wakes.delete(entry.wake.id);
+    return reserved;
   }
 
   private armRelease(owner: PaneOwner, token: string): void {
@@ -2074,7 +2283,7 @@ export class TerminalNotifyService {
     return {
       terminalId: owner.terminalId,
       pendingCount: owner.notices.size + owner.pendingLaunches + held,
-      readyCount: owner.fired.length - held,
+      readyCount: owner.fired.length - held + owner.wakes.size,
       delivery: publicDelivery(owner.delivery),
       revision: this.revision,
     };
@@ -2093,6 +2302,24 @@ export class TerminalNotifyService {
     } catch (err) {
       console.error("[MCP] terminal notify: publishing pane state failed:", err);
     }
+  }
+}
+
+function recheckWake(wake: LaneWake): LaneWakeCheck {
+  try {
+    return wake.recheck();
+  } catch (err) {
+    console.error("[MCP] terminal notify: rechecking a lane wake failed:", err);
+    return { kind: "unavailable", reason: "recheck-failed" };
+  }
+}
+
+/** Recording an outcome must never unwind the line or the pane's state. */
+function reportWake(wake: LaneWake, outcome: LaneWakeOutcome): void {
+  try {
+    wake.report(outcome);
+  } catch (err) {
+    console.error("[MCP] terminal notify: recording a lane wake outcome failed:", err);
   }
 }
 

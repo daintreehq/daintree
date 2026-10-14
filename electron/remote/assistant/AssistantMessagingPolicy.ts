@@ -166,6 +166,11 @@ export class AssistantMessagingPolicy {
     return this.platform !== "win32";
   }
 
+  /** Whether messaging can reach a lane on this machine at all. */
+  isSupported(): boolean {
+    return this.supported;
+  }
+
   enroll(lane: LaneRef, shell: MessagingShell): EnrollmentResult {
     if (!this.supported) return { ok: false, reason: "unsupported-platform" };
     const key = laneKey(lane);
