@@ -137,6 +137,7 @@ function sanitize(raw: unknown): HostDescriptor[] {
       lastSeenAt: typeof host.lastSeenAt === "number" ? host.lastSeenAt : null,
       addedAt: typeof host.addedAt === "number" ? host.addedAt : 0,
       notificationsEnabled: host.notificationsEnabled === true,
+      assistantMessagingEnabled: host.assistantMessagingEnabled === true,
     });
   }
   return out;
@@ -195,6 +196,7 @@ export class HostRegistry {
       lastSeenAt: null,
       addedAt: this.now(),
       notificationsEnabled: false,
+      assistantMessagingEnabled: false,
     };
     this.write([...hosts, descriptor]);
     return descriptor;
@@ -223,6 +225,8 @@ export class HostRegistry {
         next.arch = null;
         next.lastHandshake = null;
         next.lastSeenAt = null;
+        // Consent was given to the machine that answered before, not this one.
+        next.assistantMessagingEnabled = false;
       }
     }
     if (payload.notificationsEnabled !== undefined) {
@@ -230,6 +234,12 @@ export class HostRegistry {
         throw invalid("notificationsEnabled must be true or false.");
       }
       next.notificationsEnabled = payload.notificationsEnabled;
+    }
+    if (payload.assistantMessagingEnabled !== undefined) {
+      if (typeof payload.assistantMessagingEnabled !== "boolean") {
+        throw invalid("assistantMessagingEnabled must be true or false.");
+      }
+      next.assistantMessagingEnabled = payload.assistantMessagingEnabled;
     }
     return next;
   }

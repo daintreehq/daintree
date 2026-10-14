@@ -67,6 +67,12 @@ const m = vi.hoisted(() => {
       hold: vi.fn((_hostId: string) => () => {}),
       addUseCheck: vi.fn((_check: unknown) => () => {}),
     },
+    registry: {
+      get: vi.fn(
+        (hostId: string) =>
+          ({ "messaging-on": { assistantMessagingEnabled: true } })[hostId] ?? null
+      ),
+    },
     router: { name: "router" },
     dispose: vi.fn(async () => record("client.dispose")),
   };
@@ -385,6 +391,13 @@ vi.mock("../metrics/clientInstall.js", () => ({
 vi.mock("../metrics/hostMetricsHost.js", () => ({
   installHostMetricsHost: metrics.installHostMetricsHost,
 }));
+const messaging = vi.hoisted(() => ({
+  uninstall: vi.fn(),
+  installAssistantMessagingPolicy: vi.fn(),
+}));
+vi.mock("../assistant/install.js", () => ({
+  installAssistantMessagingPolicy: messaging.installAssistantMessagingPolicy,
+}));
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));
@@ -491,6 +504,19 @@ describe("startRemoteHosts", () => {
     expect(m.clientOpenedListeners.size).toBe(0);
     // Both boot paths already started the workspace client; boot never starts one.
     expect(m.ensureWorkspaceClient).not.toHaveBeenCalled();
+  });
+
+  it("holds the assistant messaging policy from start, reading each host's opt-in live", async () => {
+    messaging.installAssistantMessagingPolicy.mockReturnValue(messaging.uninstall);
+    await startRemoteHosts({ hostMode: false });
+    expect(messaging.installAssistantMessagingPolicy).toHaveBeenCalledTimes(1);
+    const [deps] = messaging.installAssistantMessagingPolicy.mock.calls[0] as [
+      { isHostMessagingEnabled(hostId: string): boolean },
+    ];
+    expect(deps.isHostMessagingEnabled("messaging-on")).toBe(true);
+    expect(deps.isHostMessagingEnabled("unknown-host")).toBe(false);
+    await stopRemoteHosts();
+    expect(messaging.uninstall).toHaveBeenCalledTimes(1);
   });
 
   it("answers hosts' view requests from start, and releases them on stop", async () => {

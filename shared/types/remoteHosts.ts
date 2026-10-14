@@ -240,6 +240,8 @@ export interface HostDescriptor {
   addedAt: number;
   /** Cross-host notifications are opt-in per host. */
   notificationsEnabled: boolean;
+  /** Whether this Shell's assistant may message assistants on the host. Opt-in per host. */
+  assistantMessagingEnabled: boolean;
 }
 
 export type HostConnectionState =

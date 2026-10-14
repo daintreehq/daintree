@@ -95,6 +95,7 @@ function host(id: string): HostListEntry {
       lastSeenAt: null,
       addedAt: 1,
       notificationsEnabled: false,
+      assistantMessagingEnabled: false,
     },
     connection: { status: "disconnected" },
     summary: null,

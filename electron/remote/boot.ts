@@ -16,6 +16,7 @@ import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
+import { installAssistantMessagingPolicy } from "./assistant/install.js";
 import { followAppImageMoves } from "./host/appImageRelocation.js";
 import { createHostModeService } from "./host/hostModeDefaults.js";
 import {
@@ -236,6 +237,13 @@ function startClient(options: StartRemoteHostsOptions): void {
       manager: client.manager,
       registry: client.registry,
       hostForView: client.hostForView,
+    })
+  );
+  // Holds consent only; nothing reaches an assistant through it until a person enrolls a lane.
+  teardowns.push(
+    installAssistantMessagingPolicy({
+      isHostMessagingEnabled: (hostId) =>
+        client.registry.get(hostId)?.assistantMessagingEnabled === true,
     })
   );
   // Answered only once a session exists, so registering costs nothing until then.

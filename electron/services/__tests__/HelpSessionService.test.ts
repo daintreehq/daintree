@@ -1739,6 +1739,131 @@ describe("HelpSessionService", () => {
   // must track the PTY's whole lifetime — not just its spawn — and must carry
   // the pinned WebContents so only the view that would do the killing is
   // protected.
+  describe("session-ended listeners (#13332)", () => {
+    function listen() {
+      const events: Array<{ projectId: string; slot: number; sessionId: string; reason: string }> =
+        [];
+      const unsubscribe = service.addSessionEndedListener((event) => events.push(event));
+      return { events, unsubscribe };
+    }
+
+    it("reports the running lane session only once a PTY is bound to it", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.getRunningLaneSession("proj-1", 0)).toBeNull();
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      expect(service.getRunningLaneSession("proj-1", 0)).toEqual({
+        sessionId: result.sessionId,
+        terminalId: "term-1",
+        projectViewWebContentsId: 42,
+      });
+      expect(service.getRunningLaneSession("proj-1", 1)).toBeNull();
+    });
+
+    it("ends a revoked session before its capture finishes, keeping its bearer for the capture", async () => {
+      const store = {
+        get: vi.fn().mockReturnValue(null),
+        set: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn().mockResolvedValue(undefined),
+      };
+      service.setPendingHibernationStore(store as never);
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      const { events } = listen();
+
+      const revoke = service.revokeSession(result.sessionId, { captureHibernation: true });
+      expect(events).toEqual([
+        { projectId: "proj-1", slot: 0, sessionId: result.sessionId, reason: "revoked" },
+      ]);
+      expect(service.getRunningLaneSession("proj-1", 0)).toBeNull();
+      expect(service.validateToken(result.token)).toBe("core");
+
+      // A second revoke racing the capture doesn't report the end twice.
+      const again = service.revokeSession(result.sessionId);
+      resolveKill(null);
+      await Promise.all([revoke, again]);
+      expect(events).toHaveLength(1);
+    });
+
+    it("ends the displaced session when its lane is re-provisioned, and only that lane", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected first provision");
+      const sibling = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!sibling) throw new Error("expected sibling provision");
+      const { events } = listen();
+
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected second provision");
+
+      expect(events).toEqual([
+        { projectId: "proj-1", slot: 0, sessionId: first.sessionId, reason: "displaced" },
+      ]);
+    });
+
+    it("ends a session whose probe failed", async () => {
+      const { events } = listen();
+      mockProbeMcpSseServer.mockRejectedValueOnce(new Error("SSE returned status 401"));
+      await expect(service.provisionSession(provisionInput())).rejects.toMatchObject({
+        code: "MCP_PROBE_FAILED",
+      });
+      expect(events).toEqual([expect.objectContaining({ slot: 0, reason: "probe-failed" })]);
+    });
+
+    it("ends the run when the same session is bound to a new PTY, not when it is re-bound to its own", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      const { events } = listen();
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      expect(events).toEqual([]);
+      expect(service.markTerminalForToken(result.token, "term-2")).toBe(true);
+      expect(events).toEqual([
+        { projectId: "proj-1", slot: 0, sessionId: result.sessionId, reason: "relaunched" },
+      ]);
+    });
+
+    it("ends the lane's session when its conversation is discarded, with or without a resume store", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      const { events } = listen();
+      await service.discardConversation("proj-1", 1);
+      expect(events).toEqual([]);
+      await service.discardConversation("proj-1", 0);
+      expect(events).toEqual([
+        { projectId: "proj-1", slot: 0, sessionId: result.sessionId, reason: "discarded" },
+      ]);
+    });
+
+    it("keeps the single MCP revoke callback and the other listeners running when one listener throws", async () => {
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      mockMcpServerService.disconnectHelpBearer.mockClear();
+      service.addSessionEndedListener(() => {
+        throw new Error("listener blew up");
+      });
+      const { events, unsubscribe } = listen();
+      const dropped = listen();
+      dropped.unsubscribe();
+
+      await service.revokeSession(result.sessionId);
+
+      expect(events).toHaveLength(1);
+      expect(dropped.events).toEqual([]);
+      expect(mockMcpServerService.disconnectHelpBearer).toHaveBeenCalledWith(
+        result.token,
+        result.sessionId
+      );
+      expect(service.validateToken(result.token)).toBe(false);
+      unsubscribe();
+    });
+  });
+
   describe("getAssistantBackend (#11157)", () => {
     // These cases predate lanes (#12108) and all describe a project running a
     // single assistant, so they read the first (only) backend. The multi-lane

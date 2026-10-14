@@ -45,6 +45,7 @@ function descriptor(id: string, notificationsEnabled = false): HostDescriptor {
     lastSeenAt: null,
     addedAt: 0,
     notificationsEnabled,
+    assistantMessagingEnabled: false,
   };
 }
 
