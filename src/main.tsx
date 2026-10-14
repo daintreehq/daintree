@@ -15,7 +15,6 @@ initBuiltInPanelKinds();
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import latin400Woff2Url from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url";
-import "@fontsource/jetbrains-mono/latin-700.css";
 import "./index.css";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
 import { publishScrollbarGutter, watchScrollbarGutter } from "./lib/scrollbarGutter";

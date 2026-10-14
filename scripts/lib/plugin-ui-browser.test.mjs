@@ -139,6 +139,12 @@ describe("rewriteLocalUrls", () => {
     expect(new Set(assets.map((asset) => asset.target)).size).toBe(2);
   });
 
+  it("keeps a url's query and fragment on the copy", () => {
+    const { css, assets } = rewriteLocalUrls("a{b:url(./icons.svg#close)}", "/r", exists);
+    expect(css).toBe("a{b:url(./assets/icons.svg#close)}");
+    expect(assets).toEqual([{ source: "/r/icons.svg", target: "assets/icons.svg" }]);
+  });
+
   it("leaves data, remote and fragment urls alone", () => {
     const css = 'a{b:url(data:image/png;base64,AA)}c{d:url("https://x/y.png")}e{f:url(#g)}';
     expect(rewriteLocalUrls(css, "/r", exists)).toEqual({ css, assets: [] });

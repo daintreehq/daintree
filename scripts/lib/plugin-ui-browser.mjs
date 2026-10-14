@@ -112,7 +112,8 @@ export function rewriteLocalUrls(css, resolveFrom, exists, assetDir = "assets") 
   const taken = new Map();
   const rewritten = css.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/g, (whole, quote, url) => {
     if (/^(data:|https?:|#|\/\/)/.test(url)) return whole;
-    const source = path.resolve(resolveFrom, url.replace(/[?#].*$/, ""));
+    const suffix = /[?#].*$/.exec(url)?.[0] ?? "";
+    const source = path.resolve(resolveFrom, url.slice(0, url.length - suffix.length));
     if (!exists(source))
       throw new Error(`preview.css references ${url}, which is not at ${source}`);
     let target = assets.get(source);
@@ -124,7 +125,7 @@ export function rewriteLocalUrls(css, resolveFrom, exists, assetDir = "assets") 
       target = `${assetDir}/${name}`;
       assets.set(source, target);
     }
-    return `url(${quote}./${target}${quote})`;
+    return `url(${quote}./${target}${suffix}${quote})`;
   });
   return { css: rewritten, assets: [...assets].map(([source, target]) => ({ source, target })) };
 }
