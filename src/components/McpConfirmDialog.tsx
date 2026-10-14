@@ -933,8 +933,11 @@ function TargetChecklist({
                     long worktree name gives way instead. */}
                 <span className="flex min-w-0 items-baseline gap-1 text-2xs text-text-secondary">
                   {target.worktree && <span className="min-w-0 truncate">{target.worktree}</span>}
+                  {/* A bare text node, not inside either span: the name computation
+                      trims each element's text, so a separator inside one would
+                      fuse the worktree onto the kind in the checkbox's name. */}
+                  {target.worktree && " · "}
                   <span className="shrink-0">
-                    {target.worktree ? "· " : ""}
                     {target.kindLabel} ·{" "}
                     <span className="font-mono">{displayIds.get(target.id) ?? target.id}</span>
                   </span>
