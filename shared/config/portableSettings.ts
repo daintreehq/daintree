@@ -17,8 +17,6 @@ import type { ConfigBundleSectionId } from "../types/configBundle.js";
  * - Per-project and run state (project env, the worktree issue map, parked and
  *   snoozed runs, run history, audit records, `appState`).
  * - Plugin installs, which Settings → Hosts → Plugins handles one at a time.
- * - The assistant's agent and the default agent, until #13345 makes the
- *   assistant's agent a host setting rather than a window one.
  * - Behavioural terminal settings: several are hydrated once per window at
  *   boot, so a copy couldn't refresh the windows already open on the host.
  */
@@ -27,6 +25,7 @@ export type PortableSettingsCategoryId =
   | "customAgents"
   | "agentSettings"
   | "assistantModels"
+  | "agentDefaults"
   | "notifications"
   | "worktreePath"
   | "globalRecipes"
@@ -81,6 +80,15 @@ export const PORTABLE_SETTINGS_CATEGORIES: readonly PortableSettingsCategory[] =
     label: "Assistant models",
     description: "The model each agent uses when it runs the assistant",
     sections: ["assistantModels"],
+    selectedByDefault: true,
+    device: false,
+    inFile: true,
+  },
+  {
+    id: "agentDefaults",
+    label: "Default agents",
+    description: "The agent new terminals start with, and the one the assistant runs",
+    sections: ["agentDefaults"],
     selectedByDefault: true,
     device: false,
     inFile: true,

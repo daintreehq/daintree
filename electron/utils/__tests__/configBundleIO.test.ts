@@ -98,6 +98,13 @@ describe("buildConfigBundle", () => {
     expect(parsed.sections).toEqual(payload);
     expect(parsed.exportedAt).toBe(EXPORTED_AT);
   });
+
+  it("carries the default agents in the file", () => {
+    const payload = { agentDefaults: { assistantAgentId: "claude", defaultAgent: "codex" } };
+    const parsed = parseConfigBundle(buildConfigBundle(payload, EXPORTED_AT).json);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.sections).toEqual(payload);
+  });
 });
 
 describe("parseConfigBundle", () => {
