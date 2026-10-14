@@ -95,7 +95,7 @@ export interface AssistantMessagingPolicyDeps {
 
 const PAUSE_EXEMPT: ReadonlySet<MessagingRequestKind> = new Set(["reply", "inspect"]);
 
-export function sameShell(a: MessagingShell, b: MessagingShell): boolean {
+function sameShell(a: MessagingShell, b: MessagingShell): boolean {
   if (a.kind === "local" || b.kind === "local") return a.kind === b.kind;
   return a.linkSessionId === b.linkSessionId;
 }
@@ -251,6 +251,15 @@ export class AssistantMessagingPolicy {
       return hub ? copyEnrollment(hub) : null;
     }
     return null;
+  }
+
+  /**
+   * Ends every enrollment whose run was replaced. A relaunch in place keeps
+   * its session and terminal ids and emits no session event, so without this
+   * it would only be noticed by the next read.
+   */
+  reconcile(): void {
+    for (const key of [...this.enrollments.keys()]) this.current(key);
   }
 
   /** How the lane's last enrollment ended, while it hasn't been enrolled again. */

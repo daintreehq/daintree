@@ -462,6 +462,23 @@ describe("AssistantMessagingPolicy", () => {
       expect(h.policy.getHub()).toBeNull();
     });
 
+    it("reconcile ends a run replaced in place and tells listeners, without anyone reading", () => {
+      const h = harness();
+      let heard = 0;
+      h.run("proj", 0, "s1", "term");
+      h.run("proj", 1, "s2");
+      h.policy.enroll(lane("proj", 0), SHELL_A);
+      h.policy.enroll(lane("proj", 1), SHELL_A);
+      h.policy.onChange(() => heard++);
+      h.policy.reconcile();
+      expect(heard).toBe(0);
+      h.run("proj", 0, "s1", "term");
+      h.policy.reconcile();
+      expect(heard).toBe(1);
+      expect(h.policy.getEnded(lane("proj", 0))?.reason).toBe("relaunched");
+      expect(h.policy.getEnrollment(lane("proj", 1))).not.toBeNull();
+    });
+
     it("records a remote Shell that is gone for good, and leaves the hub alone", () => {
       const h = harness();
       h.run("proj", 0, "s1");

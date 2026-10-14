@@ -334,7 +334,7 @@ export function HostDetail({
         <SettingsGroup>
           <SettingsRow
             label="Notify me about this host"
-            description="Agents observed waiting on it notify you here, even while your windows show another machine. Off by default"
+            description="Agents observed waiting on it notify you here, even while your windows show another machine. Off by default."
             error={notifyError ?? undefined}
             control={({ labelId, descriptionId, disabled }) => (
               <SettingsSwitch
@@ -350,7 +350,7 @@ export function HostDetail({
           {!isWindows() && (
             <SettingsRow
               label="Allow assistant messaging with this host"
-              description="The assistant you let accept messages from other machines can message assistants on this host too. Off by default"
+              description="The assistant you let accept messages from other machines can message assistants on this host too. Off by default."
               error={messagingError ?? undefined}
               control={({ labelId, descriptionId, disabled }) => (
                 <SettingsSwitch

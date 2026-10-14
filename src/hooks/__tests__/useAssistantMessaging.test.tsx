@@ -16,6 +16,7 @@ const { clientMock } = vi.hoisted(() => ({
 vi.mock("@/clients/assistantMessagingClient", () => ({ assistantMessagingClient: clientMock }));
 
 import { useAssistantMessaging } from "../useAssistantMessaging";
+import { notifyHostResync } from "@/store/hostResyncSignal";
 
 function makeState(revision: number, enrolled = false): AssistantMessagingState {
   return {
@@ -116,11 +117,59 @@ describe("useAssistantMessaging", () => {
     expect(result.current.refusal).toBeNull();
   });
 
-  it("takes the pause main reports back, not the one it asked for", async () => {
-    clientMock.setPaused.mockResolvedValueOnce(false);
+  it("asks main to pause, then shows the versioned state rather than the bare reply", async () => {
+    clientMock.setPaused.mockResolvedValueOnce(true);
     const { result } = renderHook(() => useAssistantMessaging("proj", 0, null));
     await act(async () => reads[0]!(makeState(1)));
     await act(async () => result.current.setPaused(true));
+    expect(clientMock.setPaused).toHaveBeenCalledWith(true);
     expect(result.current.state?.paused).toBe(false);
+    expect(reads).toHaveLength(2);
+    await act(async () => reads[1]!({ ...makeState(2), paused: true }));
+    expect(result.current.state?.paused).toBe(true);
+  });
+
+  it("a pause reply never overwrites a newer push", async () => {
+    let answerPause: (paused: boolean) => void = () => {};
+    clientMock.setPaused.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => (answerPause = resolve))
+    );
+    const { result } = renderHook(() => useAssistantMessaging("proj", 0, null));
+    await act(async () => reads[0]!(makeState(1)));
+    act(() => result.current.setPaused(true));
+    act(() => {
+      for (const listener of [...listeners]) listener();
+    });
+    await act(async () => reads[1]!({ ...makeState(5), paused: false }));
+    await act(async () => answerPause(true));
+    await act(async () => reads[2]!({ ...makeState(4), paused: true }));
+    expect(result.current.state?.paused).toBe(false);
+    expect(result.current.state?.revision).toBe(5);
+  });
+
+  it("never shows one lane's state or refusal on another", async () => {
+    let answerEnroll: (value: unknown) => void = () => {};
+    clientMock.setLaneEnrolled.mockImplementationOnce(
+      () => new Promise((resolve) => (answerEnroll = resolve))
+    );
+    const { result, rerender } = renderHook(
+      ({ slot }) => useAssistantMessaging("proj", slot, null),
+      { initialProps: { slot: 0 } }
+    );
+    await act(async () => reads[0]!(makeState(1, true)));
+    act(() => result.current.setLaneEnrolled(true));
+    rerender({ slot: 1 });
+    expect(result.current.state).toBeNull();
+    await act(async () => answerEnroll({ state: makeState(9, true), refusal: "hub-taken" }));
+    expect(result.current.state).toBeNull();
+    expect(result.current.refusal).toBeNull();
+    await act(async () => reads[1]!(makeState(2)));
+    expect(result.current.state?.lane.enrolled).toBe(false);
+  });
+
+  it("reads again when a remote link resyncs, since pushes may have been lost", () => {
+    renderHook(() => useAssistantMessaging("proj", 0, null));
+    act(() => notifyHostResync());
+    expect(clientMock.getState).toHaveBeenCalledTimes(2);
   });
 });

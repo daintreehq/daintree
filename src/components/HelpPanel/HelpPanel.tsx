@@ -339,8 +339,14 @@ export function HelpPanel({
           // Turning it on needs a running assistant; turning it off never does.
           canChangeEnrollment:
             !messagingLane.enrolledElsewhere && (messagingLane.enrolled || Boolean(terminalId)),
+          enrollmentHint: messagingLane.enrolledElsewhere
+            ? "Turned on from another machine"
+            : !messagingLane.enrolled && !terminalId
+              ? "Start this assistant first"
+              : null,
           paused: messaging.state.paused,
           canPause: messaging.state.canPause,
+          pauseHint: messaging.state.canPause ? null : "Change this on the machine running it",
           onEnrolledChange: messaging.setLaneEnrolled,
           onPausedChange: messaging.setPaused,
         }
@@ -1640,6 +1646,7 @@ export function HelpPanel({
         <AssistantMessagingNotice
           state={messaging.state}
           refusal={messaging.refusal}
+          laneKey={messaging.laneKey}
           onDismissRefusal={messaging.dismissRefusal}
         />
         {showTerminal ? (

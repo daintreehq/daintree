@@ -2,6 +2,7 @@ import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
+import type { PtyClient } from "../../services/PtyClient.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { registerRemoteService } from "../runtime.js";
 import { AssistantMessagingPolicy } from "./AssistantMessagingPolicy.js";
@@ -45,7 +46,21 @@ export function installAssistantMessagingPolicy(
     revision += 1;
     broadcastToRenderer(CHANNELS.ASSISTANT_MESSAGING_CHANGED, { revision });
   };
-  const offPolicy = policy.onChange(push);
+  // A spawn is when a run can be replaced in place. The client may not exist
+  // yet, but nothing can be enrolled without a running PTY, so every change
+  // tries again.
+  const reconcile = () => policy.reconcile();
+  let watched: PtyClient | null = null;
+  const watchPty = () => {
+    if (watched) return;
+    watched = getPtyClient();
+    watched?.on("spawn-result", reconcile);
+  };
+  watchPty();
+  const offPolicy = policy.onChange(() => {
+    watchPty();
+    push();
+  });
   // Only the first host arriving or the last one going changes what views show.
   const offHosts = deps.onHostsChanged(() => {
     const hasHosts = deps.hasHosts();
@@ -65,6 +80,8 @@ export function installAssistantMessagingPolicy(
     unregister();
     offHosts();
     offPolicy();
+    watched?.off("spawn-result", reconcile);
+    watched = null;
     policy.dispose();
   };
 }

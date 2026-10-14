@@ -2,6 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const broadcastToRenderer = vi.hoisted(() => vi.fn());
 const running = vi.hoisted(() => new Map<string, { sessionId: string; terminalId: string }>());
+const pty = vi.hoisted(() => {
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  const generations = new Map<string, number>();
+  return {
+    generations,
+    listeners,
+    client: {
+      getLiveGeneration: (id: string) => generations.get(id) ?? null,
+      on: (event: string, fn: (...args: unknown[]) => void) => {
+        if (!listeners.has(event)) listeners.set(event, new Set());
+        listeners.get(event)!.add(fn);
+      },
+      off: (event: string, fn: (...args: unknown[]) => void) => listeners.get(event)?.delete(fn),
+    },
+    emit: (event: string, ...args: unknown[]) => {
+      for (const fn of [...(listeners.get(event) ?? [])]) fn(...args);
+    },
+  };
+});
 
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToRenderer }));
 vi.mock("../../../services/HelpSessionService.js", () => ({
@@ -11,9 +30,7 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     addSessionEndedListener: () => () => {},
   },
 }));
-vi.mock("../../../window/serviceRefs.js", () => ({
-  getPtyClient: () => ({ getLiveGeneration: () => 1 }),
-}));
+vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty.client }));
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import { getRemoteService } from "../../runtime.js";
@@ -46,6 +63,8 @@ describe("installAssistantMessagingPolicy", () => {
     running.clear();
     hosts = [];
     hostListeners = new Set();
+    pty.listeners.clear();
+    pty.generations.clear();
   });
 
   afterEach(() => {
@@ -63,6 +82,7 @@ describe("installAssistantMessagingPolicy", () => {
     install();
     getRemoteService("assistantMessagingPolicy")!.setPaused(true);
     running.set("proj:0", { sessionId: "s1", terminalId: "t1" });
+    pty.generations.set("t1", 1);
     getRemoteService("assistantMessagingPolicy")!.enroll(
       { projectId: "proj", slot: 0 },
       { kind: "local" }
@@ -82,6 +102,19 @@ describe("installAssistantMessagingPolicy", () => {
     expect(pushes()).toEqual([1, 2, 3]);
   });
 
+  it("ends an enrollment whose PTY was relaunched in place as soon as it spawns", () => {
+    install();
+    running.set("proj:0", { sessionId: "s1", terminalId: "t1" });
+    pty.generations.set("t1", 1);
+    const policy = getRemoteService("assistantMessagingPolicy")!;
+    policy.enroll({ projectId: "proj", slot: 0 }, { kind: "remote", linkSessionId: "link" });
+    expect(pushes()).toEqual([1, 2]);
+    pty.generations.set("t1", 2);
+    pty.emit("spawn-result", "t1", { success: true, id: "t1" });
+    expect(pushes()).toEqual([1, 2, 3]);
+    expect(policy.getEnded({ projectId: "proj", slot: 0 })?.reason).toBe("relaunched");
+  });
+
   it("unregisters both services and stops listening on teardown", () => {
     install();
     uninstall!();
@@ -89,6 +122,7 @@ describe("installAssistantMessagingPolicy", () => {
     expect(getRemoteService("assistantMessagingPolicy")).toBeUndefined();
     expect(getRemoteService("assistantMessagingSurface")).toBeUndefined();
     expect(hostListeners.size).toBe(0);
+    expect(pty.listeners.get("spawn-result")?.size ?? 0).toBe(0);
     hosts = ["a"];
     hostsChanged();
     expect(pushes()).toEqual([1]);

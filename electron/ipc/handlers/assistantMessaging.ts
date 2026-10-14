@@ -5,11 +5,10 @@ import type {
   AssistantMessagingLaneRef,
   AssistantMessagingState,
 } from "../../../shared/types/ipc/assistantMessaging.js";
-import {
-  sameShell,
-  type LaneRef,
-  type MessagingDenial,
-  type MessagingShell,
+import type {
+  LaneRef,
+  MessagingDenial,
+  MessagingShell,
 } from "../../remote/assistant/AssistantMessagingPolicy.js";
 import { getRemoteService } from "../../remote/runtime.js";
 import { defineIpcNamespace, op } from "../define.js";
@@ -27,6 +26,13 @@ function shellFor(ctx: IpcContext): MessagingShell | null {
     return linkSessionId ? { kind: "remote", linkSessionId } : null;
   }
   return ctx.senderWindow ? { kind: "local" } : null;
+}
+
+// Kept here rather than imported: core may only reach the gated remote modules
+// through `remote/runtime`, so a build without Remote Hosts carries none of them.
+function sameShell(a: MessagingShell, b: MessagingShell): boolean {
+  if (a.kind === "local" || b.kind === "local") return a.kind === b.kind;
+  return a.linkSessionId === b.linkSessionId;
 }
 
 /** A lane of the project this view shows; any other lane isn't the caller's to see or change. */

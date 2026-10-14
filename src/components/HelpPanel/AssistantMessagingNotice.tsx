@@ -22,39 +22,56 @@ const REFUSAL_TITLE: Record<AssistantMessagingEnrollDenial, string> = {
   unavailable: "Couldn't change whether this assistant accepts messages",
 };
 
+const ENDED_TITLE = "Stopped accepting messages from other machines";
+
 interface AssistantMessagingNoticeProps {
   state: AssistantMessagingState | null;
   refusal: AssistantMessagingEnrollDenial | null;
+  /** The lane `state` was read for; a dismissal holds for that lane's ending only. */
+  laneKey: string | null;
   onDismissRefusal: () => void;
 }
 
 /**
  * Says when a lane stopped accepting messages from other machines without the
- * person turning it off, so nobody is left thinking it's still reachable. The
- * live region is mounted from the start, so the notice is announced when it
- * appears rather than only when something inside it takes focus.
+ * person turning it off, so nobody is left thinking it's still reachable.
+ *
+ * The words are spoken from a polite live region that is mounted from the
+ * start and holds nothing but the text; the banners are drawn outside it,
+ * silent, so the notice is announced once when it appears, wherever focus is.
  */
 export function AssistantMessagingNotice({
   state,
   refusal,
+  laneKey,
   onDismissRefusal,
 }: AssistantMessagingNoticeProps) {
-  const [dismissedEndedAt, setDismissedEndedAt] = useState<number | null>(null);
+  const [dismissedEnding, setDismissedEnding] = useState<string | null>(null);
   const ended = state?.available ? state.lane.ended : null;
-  const showEnded = ended !== null && ended.at !== dismissedEndedAt;
+  const endingKey = ended ? `${laneKey ?? ""}\u0000${ended.at}\u0000${ended.reason}` : null;
+  const showEnded = ended !== null && endingKey !== dismissedEnding;
   const showRefusal = refusal !== null && !showEnded;
+  const announcement = showEnded
+    ? `${ENDED_TITLE}. ${ENDED_DESCRIPTION[ended.reason]}`
+    : showRefusal
+      ? REFUSAL_TITLE[refusal]
+      : "";
 
   return (
-    <div role="status" aria-live="polite" data-testid="assistant-messaging-notice">
+    <div data-testid="assistant-messaging-notice">
+      <span role="status" aria-live="polite" className="sr-only">
+        {announcement}
+      </span>
       {showEnded && (
         <InlineStatusBanner
           severity="warning"
           layout="inline"
           animated={false}
+          role="status"
           ariaLive="off"
-          title="Stopped accepting messages from other machines"
+          title={ENDED_TITLE}
           description={ENDED_DESCRIPTION[ended.reason]}
-          onClose={() => setDismissedEndedAt(ended.at)}
+          onClose={() => setDismissedEnding(endingKey)}
           closeAriaLabel="Dismiss messaging notice"
         />
       )}
@@ -63,6 +80,7 @@ export function AssistantMessagingNotice({
           severity="neutral"
           layout="inline"
           animated={false}
+          role="status"
           ariaLive="off"
           title={REFUSAL_TITLE[refusal]}
           onClose={onDismissRefusal}

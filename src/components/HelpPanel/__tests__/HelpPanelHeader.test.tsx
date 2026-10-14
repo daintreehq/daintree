@@ -58,14 +58,17 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     checked,
     disabled,
     onCheckedChange,
+    "aria-describedby": describedBy,
   }: {
     children: ReactNode;
     checked?: boolean;
     disabled?: boolean;
     onCheckedChange?: (checked: boolean) => void;
+    "aria-describedby"?: string;
   }) => (
     <button
       role="menuitemcheckbox"
+      aria-describedby={describedBy}
       aria-checked={checked ? "true" : "false"}
       disabled={disabled}
       onClick={() => onCheckedChange?.(!checked)}
@@ -204,8 +207,10 @@ describe("HelpPanelHeader", () => {
     ) => ({
       enrolled: false,
       canChangeEnrollment: true,
+      enrollmentHint: null,
       paused: false,
       canPause: true,
+      pauseHint: null,
       onEnrolledChange: vi.fn(),
       onPausedChange: vi.fn(),
       ...overrides,
@@ -242,11 +247,25 @@ describe("HelpPanelHeader", () => {
       expect(messaging.onPausedChange).toHaveBeenCalledWith(false);
     });
 
-    it("disables what this window can't change", () => {
+    it("disables what this window can't change, and says why under the unchanged label", () => {
       const { container } = renderHeader({
-        messaging: controls({ canChangeEnrollment: false, canPause: false }),
+        messaging: controls({
+          canChangeEnrollment: false,
+          enrollmentHint: "Start this assistant first",
+          canPause: false,
+          pauseHint: "Change this on the machine running it",
+        }),
       });
-      expect(items(container).map((item) => item.disabled)).toEqual([true, true]);
+      const toggles = items(container);
+      expect(toggles.map((item) => item.disabled)).toEqual([true, true]);
+      for (const [item, hint] of [
+        [toggles[0]!, "Start this assistant first"],
+        [toggles[1]!, "Change this on the machine running it"],
+      ] as const) {
+        const describedBy = item.getAttribute("aria-describedby");
+        expect(describedBy).toBeTruthy();
+        expect(container.querySelector(`[id="${describedBy}"]`)?.textContent).toBe(hint);
+      }
     });
   });
 });
