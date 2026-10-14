@@ -33,7 +33,8 @@ export interface SenderActor {
 export interface ExchangeReceiver {
   hostId: string;
   laneId: string;
-  enrollmentGeneration: number;
+  /** The policy's generation for the enrollment the exchange was admitted under. */
+  enrollmentGeneration: string;
 }
 
 /** The receiving lane, as enrolled. A later enrollment generation is a different participant. */

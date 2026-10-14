@@ -202,6 +202,19 @@ export class AssistantMessagingPolicy {
     return enrollment ? copyEnrollment(enrollment) : null;
   }
 
+  /** Every lane `shell` enrolled whose run hasn't been replaced, running or not. */
+  listEnrollments(shell: MessagingShell): LaneEnrollment[] {
+    if (!isValidShell(shell)) return [];
+    const listed: LaneEnrollment[] = [];
+    for (const key of [...this.enrollments.keys()]) {
+      const enrollment = this.current(key);
+      if (enrollment && sameShell(enrollment.enrolledBy, shell)) {
+        listed.push(copyEnrollment(enrollment));
+      }
+    }
+    return listed;
+  }
+
   /** The lane enrolled on this Shell itself, if any. */
   getHub(): LaneEnrollment | null {
     for (const [key, enrollment] of this.enrollments) {

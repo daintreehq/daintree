@@ -393,6 +393,33 @@ describe("AssistantMessagingPolicy", () => {
     ).toEqual({ ok: false, reason: "stale-generation" });
   });
 
+  it("lists only the lanes a Shell enrolled, dropping one whose run was replaced", () => {
+    const h = harness();
+    h.run("proj", 0, "s1");
+    h.run("proj", 1, "s2");
+    h.run("other", 0, "s3");
+    h.policy.enroll(lane("proj", 0), SHELL_A);
+    h.policy.enroll(lane("proj", 1), SHELL_B);
+    h.policy.enroll(lane("other", 0), SHELL_A);
+
+    const listed = (shell: MessagingShell) =>
+      h.policy.listEnrollments(shell).map((e) => [e.projectId, e.slot, e.generation]);
+    expect(listed(SHELL_A)).toEqual([
+      ["proj", 0, "gen-1"],
+      ["other", 0, "gen-3"],
+    ]);
+    expect(listed(SHELL_B)).toEqual([["proj", 1, "gen-2"]]);
+    expect(listed(LOCAL)).toEqual([]);
+
+    // Relaunched in place: consent given to the old run is not listed.
+    h.run("other", 0, "s4");
+    expect(listed(SHELL_A)).toEqual([["proj", 0, "gen-1"]]);
+
+    // Copies: rewriting one changes nothing the policy holds.
+    h.policy.listEnrollments(SHELL_A)[0]!.enrolledBy = SHELL_B;
+    expect(listed(SHELL_B)).toEqual([["proj", 1, "gen-2"]]);
+  });
+
   it("hands out copies, so a caller can't rewrite who a lane answers to", () => {
     const h = harness();
     h.run("proj", 0, "s1");

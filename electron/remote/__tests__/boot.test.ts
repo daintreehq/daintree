@@ -394,10 +394,23 @@ vi.mock("../metrics/hostMetricsHost.js", () => ({
 }));
 const messaging = vi.hoisted(() => {
   const uninstall = vi.fn();
-  return { uninstall, installAssistantMessagingPolicy: vi.fn((_deps: unknown) => uninstall) };
+  const uninstallExchanges = vi.fn();
+  const uninstallExchangeHost = vi.fn();
+  return {
+    uninstall,
+    uninstallExchanges,
+    uninstallExchangeHost,
+    installAssistantMessagingPolicy: vi.fn((_deps: unknown) => uninstall),
+    installAssistantExchangeClient: vi.fn((_deps: unknown) => uninstallExchanges),
+    installAssistantExchangeHost: vi.fn(async (_server: unknown) => uninstallExchangeHost),
+  };
 });
 vi.mock("../assistant/install.js", () => ({
   installAssistantMessagingPolicy: messaging.installAssistantMessagingPolicy,
+  installAssistantExchangeClient: messaging.installAssistantExchangeClient,
+}));
+vi.mock("../assistant/hostExchanges.js", () => ({
+  installAssistantExchangeHost: messaging.installAssistantExchangeHost,
 }));
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
@@ -522,6 +535,19 @@ describe("startRemoteHosts", () => {
     expect(deps.isHostMessagingEnabled("unknown-host")).toBe(false);
     await stopRemoteHosts();
     expect(messaging.uninstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("journals assistant exchanges from start, and reaches only hosts the Shell still knows", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(messaging.installAssistantExchangeClient).toHaveBeenCalledTimes(1);
+    const [deps] = messaging.installAssistantExchangeClient.mock.calls[0] as [
+      { session(hostId: string): Promise<unknown> },
+    ];
+    // A host removed from the list is never dialled for an exchange.
+    await expect(deps.session("unknown-host")).resolves.toBeNull();
+    expect(m.client.manager.touch).not.toHaveBeenCalledWith("unknown-host");
+    await stopRemoteHosts();
+    expect(messaging.uninstallExchanges).toHaveBeenCalledTimes(1);
   });
 
   it("answers hosts' view requests from start, and releases them on stop", async () => {
