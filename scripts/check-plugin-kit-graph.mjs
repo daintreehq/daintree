@@ -19,14 +19,47 @@ const ASSET_LOADERS = Object.fromEntries(
   )
 );
 
-// Vite query imports (`?url`, `?raw`, `?worker`) are assets, not modules.
+// Mirrors vite.config.ts: every alias into repo source, so a route back into
+// the app through a workspace package is walked rather than left external.
+const ALIASES = {
+  "@": "./src",
+  "@shared": "./shared",
+  "@daintreehq/tour/react": "./packages/tour/src/react.ts",
+  "@daintreehq/tour/kit": "./packages/tour/src/kit.ts",
+  "@daintreehq/tour/mock-app": "./packages/tour/src/mock-app.ts",
+  "@daintreehq/tour": "./packages/tour/src/index.ts",
+  "@daintreehq/plugin-ui": "./src/pluginUi/index.ts",
+  "@daintreehq/plugin-sdk/react": "./packages/plugin-sdk/src/react.ts",
+};
+
+// `build.resolve` skips aliases, which a worker import still needs.
+function unalias(spec) {
+  for (const [from, to] of Object.entries(ALIASES)) {
+    if (spec === from) return to;
+    if (spec.startsWith(`${from}/`)) return `${to}${spec.slice(from.length)}`;
+  }
+  return spec;
+}
+
+// Vite query imports: `?url`, `?raw` and `?inline` are assets, not modules,
+// but a `?worker` is code the kit would run, so it is walked like any import.
 const viteQueryImports = {
   name: "vite-query-imports",
   setup(b) {
-    b.onResolve({ filter: /\?(?:url|raw|worker|inline)$/ }, (args) => ({
+    b.onResolve({ filter: /\?(?:url|raw|inline)$/ }, (args) => ({
       path: args.path,
       external: true,
     }));
+    b.onResolve({ filter: /\?worker$/ }, (args) => {
+      const raw = args.path.replace(/\?worker$/, "");
+      const spec = unalias(raw);
+      return b.resolve(spec, {
+        kind: args.kind,
+        // An aliased path is relative to the repository root, as in `alias`.
+        resolveDir: spec === raw ? args.resolveDir : ROOT,
+        importer: args.importer,
+      });
+    });
   },
 };
 
@@ -42,8 +75,8 @@ const result = await build({
   logLevel: "silent",
   jsx: "automatic",
   packages: "external",
-  // Mirrors the `@` and `@shared` aliases in vite.config.ts and tsconfig.json.
-  alias: { "@": "./src", "@shared": "./shared" },
+  alias: ALIASES,
+
   loader: ASSET_LOADERS,
   plugins: [viteQueryImports],
 }).catch((err) => {

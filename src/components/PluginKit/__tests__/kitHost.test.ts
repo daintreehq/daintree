@@ -31,6 +31,11 @@ describe("kitHost", () => {
     disposeFirst();
   });
 
+  it("treats an undefined capability as left out", () => {
+    dispose = setPluginKitHost({ showToast: undefined, DiffViewer: null });
+    expect(getPluginKitHost().showToast({ type: "info", message: "x" })).toBeNull();
+  });
+
   it("lets only the current host's disposer clear it", () => {
     const disposeOld = setPluginKitHost({ pluginDisplayName: () => "Old" });
     dispose = setPluginKitHost({ pluginDisplayName: () => "New" });

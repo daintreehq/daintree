@@ -1253,6 +1253,22 @@ export default tseslint.config(
           "DropdownMenuShortcut",
         ],
       ],
+      // The same primitives, where the kit itself imports them from.
+      [
+        "@/components/ui/dropdown-menu-base",
+        [
+          "DropdownMenu",
+          "DropdownMenuTrigger",
+          "DropdownMenuContent",
+          "DropdownMenuItem",
+          "DropdownMenuCheckboxItem",
+          "DropdownMenuRadioGroup",
+          "DropdownMenuRadioItem",
+          "DropdownMenuLabel",
+          "DropdownMenuSeparator",
+          "DropdownMenuShortcut",
+        ],
+      ],
       ["@/components/ui/EmptyState", ["EmptyState"]],
       ["@/components/ui/input", ["Input"]],
       ["@/components/ui/Kbd", ["Kbd", "KbdChord", "KBD_CLASS", "KBD_COMPACT_CLASS"]],

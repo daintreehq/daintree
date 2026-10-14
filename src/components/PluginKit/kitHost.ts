@@ -77,13 +77,14 @@ const inertHost: PluginKitHost = {
 let host: PluginKitHost = inertHost;
 
 /**
- * Installs a host; capabilities left out stay inert rather than carrying over
+ * Installs a host; capabilities left out (or undefined) stay inert rather than carrying over
  * from an earlier one. Install before any kit view mounts: mounted views do
  * not re-render for a new host. The returned disposer clears this host only,
  * so a stale cleanup cannot remove a newer one.
  */
 export function setPluginKitHost(capabilities: Partial<PluginKitHost>): () => void {
-  const installed: PluginKitHost = { ...inertHost, ...capabilities };
+  const given = Object.entries(capabilities).filter(([, value]) => value !== undefined);
+  const installed: PluginKitHost = { ...inertHost, ...Object.fromEntries(given) };
   host = installed;
   return () => {
     if (host === installed) host = inertHost;
