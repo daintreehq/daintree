@@ -7,6 +7,11 @@ interface HostSparklineProps {
   className?: string;
   /** Samples the width spans; defaults to the full ~15 minute history. */
   windowSize?: number;
+  /**
+   * Drawn into whatever box the class gives it, strokes kept at their pixel
+   * width: a row-sized chart scaled down from the default box draws a hairline.
+   */
+  fit?: boolean;
 }
 
 const WIDTH = 120;
@@ -47,14 +52,16 @@ export function sparklineRuns(
  * One metric on a fixed 0–100 scale across a fixed time window, so a gap or a
  * short history is drawn as what it is; the caller names the window.
  */
-export function HostSparkline({ values, label, className, windowSize }: HostSparklineProps) {
+export function HostSparkline({ values, label, className, windowSize, fit }: HostSparklineProps) {
   const runs = sparklineRuns(values, windowSize);
+  const stroke = fit ? { vectorEffect: "non-scaling-stroke" as const } : {};
   return (
     <svg
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       width={WIDTH}
       height={HEIGHT}
       className={className}
+      preserveAspectRatio={fit ? "none" : undefined}
       role="img"
       aria-label={label}
       data-testid="host-sparkline"
@@ -67,6 +74,7 @@ export function HostSparkline({ values, label, className, windowSize }: HostSpar
         stroke="currentColor"
         strokeOpacity="0.25"
         strokeWidth="1"
+        {...stroke}
       />
       {runs.map((points, i) =>
         points.length === 1 ? (
@@ -80,6 +88,7 @@ export function HostSparkline({ values, label, className, windowSize }: HostSpar
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
+            {...stroke}
           />
         )
       )}

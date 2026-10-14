@@ -6,6 +6,7 @@ import {
   type HostListEntry,
   type HostMetricsSummary,
   type HostPlatform,
+  type HostRecentUse,
 } from "@shared/types/remoteHosts";
 import { getAgentConfig } from "@shared/config/agentRegistry";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
@@ -100,6 +101,61 @@ export function buildHostMenuRows(
     }))
     .sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.hostId, b.hostId));
   return [local, ...remote];
+}
+
+/**
+ * The switcher's order: the window's own host first, then every other host by
+ * when a window here last landed on it. Hosts never switched to follow, this
+ * machine first (it needs no link), then by name. Nothing in it changes while
+ * the switcher is open, so no row moves under the cursor.
+ */
+export function orderHostRowsByRecency(
+  rows: readonly HostMenuRow[],
+  recents: readonly HostRecentUse[]
+): HostMenuRow[] {
+  const usedAt = new Map(recents.map((entry) => [entry.hostId, entry.lastUsedAt]));
+  return [...rows].sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+    const aUsed = usedAt.get(a.hostId);
+    const bUsed = usedAt.get(b.hostId);
+    if (aUsed !== undefined || bUsed !== undefined) {
+      if (aUsed === undefined) return 1;
+      if (bUsed === undefined) return -1;
+      if (aUsed !== bUsed) return bUsed - aUsed;
+    }
+    if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1;
+    return collator.compare(a.name, b.name) || collator.compare(a.hostId, b.hostId);
+  });
+}
+
+/**
+ * The row's link at a glance: live (its numbers are current), connecting,
+ * attention (linked but silent, or a link that can't work as things stand),
+ * or offline: nothing flowing, and nothing to do but connect.
+ */
+export type HostLinkTone = "live" | "connecting" | "attention" | "offline";
+
+export function hostLinkTone(row: HostMenuRow): HostLinkTone {
+  if (row.isLocal) return "live";
+  const connection = row.connection;
+  if (!connection) return "connecting";
+  switch (connection.status) {
+    case "connected":
+      // Silent: what it last reported is no longer the host now.
+      return connection.quietSince !== undefined ? "attention" : "live";
+    case "local":
+    case "driven-elsewhere":
+      return "live";
+    case "connecting":
+      return "connecting";
+    case "version-mismatch":
+      return "attention";
+    case "unreachable":
+      // Tried and stopped: ssh couldn't log in, or Host mode is off there.
+      return connection.stoppedRetrying ? "attention" : "offline";
+    case "disconnected":
+      return "offline";
+  }
 }
 
 function lastSeenOf(entry: HostListEntry): number | null {

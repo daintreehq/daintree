@@ -10,6 +10,8 @@ import {
   type HostConnection,
   type HostDescriptor,
   type HostId,
+  type HostRecentUse,
+  LOCAL_HOST_ID,
 } from "../../../shared/types/remoteHosts.js";
 import type { AddHostPayload, UpdateHostPayload } from "../../../shared/types/ipc/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -28,6 +30,8 @@ import { parseHostConnection } from "./connection.js";
 export interface RemoteHostsValue {
   hosts: HostDescriptor[];
   retiredIds?: string[];
+  /** Host id → when a window last landed there; "local" is this machine. */
+  lastUsed?: Record<string, number>;
 }
 
 export interface RemoteHostsStore {
@@ -109,6 +113,21 @@ function readRetiredIds(raw: unknown): Set<string> {
   if (!Array.isArray(ids)) return retired;
   for (const id of ids) if (typeof id === "string" && isValidRemoteHostId(id)) retired.add(id);
   return retired;
+}
+
+/** Use stamps for this machine and the hosts still listed; anything else is dropped. */
+function readLastUsed(raw: unknown, hosts: HostDescriptor[]): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!raw || typeof raw !== "object") return out;
+  const stamps = (raw as { lastUsed?: unknown }).lastUsed;
+  if (!stamps || typeof stamps !== "object" || Array.isArray(stamps)) return out;
+  const listed = new Set(hosts.map((host) => host.id));
+  // Own keys only: host ids are user-chosen, and a plain object inherits names.
+  for (const [hostId, at] of Object.entries(stamps as Record<string, unknown>)) {
+    if (typeof at !== "number" || !Number.isFinite(at)) continue;
+    if (hostId === LOCAL_HOST_ID || listed.has(hostId)) out.set(hostId, at);
+  }
+  return out;
 }
 
 /** Drop anything a hand-edited or older settings file put there that isn't a usable host. */
@@ -254,6 +273,27 @@ export class HostRegistry {
     return this.replace({ ...current, ...observed });
   }
 
+  /** Most recent first. */
+  recentUses(): HostRecentUse[] {
+    const raw = this.store.get("remoteHosts");
+    return [...readLastUsed(raw, sanitize(raw))]
+      .map(([hostId, lastUsedAt]) => ({ hostId, lastUsedAt }))
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+  }
+
+  /**
+   * A window landed on this host. Not an edit to the host, so nothing that
+   * follows the list hears about it: the switcher reads it as it opens.
+   */
+  recordUse(hostId: HostId): void {
+    const raw = this.store.get("remoteHosts");
+    const hosts = sanitize(raw);
+    if (hostId !== LOCAL_HOST_ID && !hosts.some((host) => host.id === hostId)) return;
+    const stamps = readLastUsed(raw, hosts);
+    stamps.set(hostId, this.now());
+    this.store.set("remoteHosts", this.value(hosts, this.retiredIds(), stamps));
+  }
+
   forget(hostId: HostId): boolean {
     const hosts = this.list();
     const next = hosts.filter((host) => host.id !== hostId);
@@ -277,13 +317,23 @@ export class HostRegistry {
     return descriptor;
   }
 
+  private value(
+    hosts: HostDescriptor[],
+    retired: Set<string>,
+    stamps: Map<string, number>
+  ): RemoteHostsValue {
+    const value: RemoteHostsValue = { hosts };
+    if (retired.size > 0) value.retiredIds = [...retired];
+    if (stamps.size > 0) value.lastUsed = Object.fromEntries(stamps);
+    return value;
+  }
+
   private write(hosts: HostDescriptor[], retire?: HostId): void {
     const retired = this.retiredIds();
     if (retire !== undefined) retired.add(retire);
-    this.store.set(
-      "remoteHosts",
-      retired.size > 0 ? { hosts, retiredIds: [...retired] } : { hosts }
-    );
+    // A removed host's stamp goes with it; readLastUsed drops unlisted ids.
+    const stamps = readLastUsed(this.store.get("remoteHosts"), hosts);
+    this.store.set("remoteHosts", this.value(hosts, retired, stamps));
     for (const listener of [...this.listeners]) {
       try {
         listener();

@@ -1145,6 +1145,9 @@ export interface GeneratedElectronAPI {
     listPluginViewConsents(
       ...args: IpcInvokeMap["remote-hosts:list-plugin-view-consents"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list-plugin-view-consents"]["result"]>;
+    listRecent(
+      ...args: IpcInvokeMap["remote-hosts:list-recent"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:list-recent"]["result"]>;
     planInstall(
       ...args: IpcInvokeMap["remote-hosts:plan-install"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:plan-install"]["result"]>;

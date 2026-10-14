@@ -722,7 +722,12 @@ export interface StoreSchema {
    * Hosts this client can attach to, and the ids of hosts removed from this
    * device (never reused). Device-owned: never synced between machines.
    */
-  remoteHosts?: { hosts: HostDescriptor[]; retiredIds?: string[] };
+  remoteHosts?: {
+    hosts: HostDescriptor[];
+    retiredIds?: string[];
+    /** Host id → when a window last landed there; "local" is this machine. */
+    lastUsed?: Record<string, number>;
+  };
   /** This machine as a host: whether it listens for Shells and starts at login. */
   hostMode?: { enabled: boolean; startAtLogin: boolean; advertise?: boolean };
   /** Client-side behaviour while a window is attached to a remote host. */

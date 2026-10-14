@@ -2038,6 +2038,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];
     result: import("./remoteHosts.js").PluginViewConsentEntry[];
   };
+  "remote-hosts:list-recent": {
+    args: [];
+    result: import("../remoteHosts.js").HostRecentUse[];
+  };
   "remote-hosts:plan-install": {
     args: [payload: import("./remoteHosts.js").PlanInstallPayload];
     result: import("./remoteHosts.js").HostInstallPlan;

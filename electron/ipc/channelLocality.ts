@@ -790,6 +790,7 @@ export const CHANNEL_LOCALITY = {
   "remote-hosts:take-project-offer": "shell",
   "remote-hosts:is-in-use": "shell",
   "remote-hosts:list": "shell",
+  "remote-hosts:list-recent": "shell",
   "remote-hosts:probe": "shell",
   "remote-hosts:switch-window-host": "shell",
   "remote-hosts:get-pending-switch": "shell",

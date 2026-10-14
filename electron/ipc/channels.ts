@@ -1291,6 +1291,7 @@ export const CHANNELS = {
 
   // Remote Hosts: remoteHosts (shell).
   REMOTE_HOSTS_LIST: "remote-hosts:list",
+  REMOTE_HOSTS_LIST_RECENT: "remote-hosts:list-recent",
   REMOTE_HOSTS_ADD: "remote-hosts:add",
   REMOTE_HOSTS_UPDATE: "remote-hosts:update",
   REMOTE_HOSTS_FORGET: "remote-hosts:forget",
