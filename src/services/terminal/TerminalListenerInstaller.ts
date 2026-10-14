@@ -15,6 +15,7 @@ import {
 } from "./TerminalResizeController";
 import { installViewportAnchorController } from "./TerminalViewportAnchorController";
 import { MouseWheelClassifier } from "./mouseWheelClassifier";
+import { isHostSwitchPending } from "./inputGate";
 import { getTerminalMetrics } from "@/config/xtermConfig";
 import { hashPerfLine, PERF_MARKS } from "@shared/perf/marks";
 import { isRendererPerfCaptureActive, markRendererPerformance } from "@/utils/performance";
@@ -964,6 +965,8 @@ export function installTerminalBoundListeners(
 
   const inputDisposable = terminal.onData((data) => {
     if (managed.isInputLocked) return;
+    // Dropped before it counts as typing: the window is leaving this terminal.
+    if (isHostSwitchPending()) return;
     if (!isTerminalReply(data) && !isMouseReport(data)) deps.noteUserInput(id);
     const nonKeyboard = isNonKeyboardInput(data);
     if (nonKeyboard) {
@@ -993,6 +996,7 @@ export function installTerminalBoundListeners(
     const keyDisposable = terminal.onKey(({ domEvent }) => {
       if (
         !managed.isInputLocked &&
+        !isHostSwitchPending() &&
         domEvent.key === "Enter" &&
         !domEvent.isComposing &&
         !domEvent.shiftKey &&

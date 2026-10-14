@@ -133,7 +133,14 @@ export const useHostConnectionStore = create<HostConnectionStoreState>((set, get
 }));
 
 export type HostBannerVariant =
-  "reconnecting" | "connecting" | "unreachable" | "version-mismatch" | "disconnected" | "checking";
+  | "reconnecting"
+  | "connecting"
+  | "unreachable"
+  | "host-mode-off"
+  | "access-denied"
+  | "version-mismatch"
+  | "disconnected"
+  | "checking";
 
 type BannerInputs = Pick<
   HostConnectionStoreState,
@@ -152,6 +159,10 @@ export function selectHostBannerVariant(state: BannerInputs): HostBannerVariant 
     case "connecting":
       return state.everConnected ? "reconnecting" : "connecting";
     case "unreachable":
+      // The machine answered in both: Daintree there isn't hosting, or ssh
+      // couldn't log in. Neither is a host that can't be reached.
+      if (state.connection.hostModeOff) return "host-mode-off";
+      if (state.connection.stoppedRetrying) return "access-denied";
       return "unreachable";
     case "version-mismatch":
       return "version-mismatch";

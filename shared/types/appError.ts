@@ -69,6 +69,9 @@ export type AppErrorCode =
   | "HOST_VERSION_MISMATCH"
   // ssh reached the host, but Daintree there isn't running in Host mode.
   | "HOST_MODE_OFF"
+  // ssh reached the host and couldn't log in: authentication or the host key
+  // failed. Trying again finds the same until it is fixed outside Daintree.
+  | "HOST_SSH_ACCESS_DENIED"
   // An action that is inherently UI (focus a panel, open a dialog) was
   // dispatched with no frontend attached to the host.
   | "NO_FRONTEND_ATTACHED"

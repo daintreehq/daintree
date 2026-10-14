@@ -18,7 +18,7 @@ import type { WebContents } from "electron";
 import type { MainProcessToastPayload } from "../../shared/types/ipc/maps.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getRemoteService } from "../remote/runtime.js";
-import { getUserMessage } from "../utils/errorTypes.js";
+import { getUserMessage, isAppError } from "../utils/errorTypes.js";
 import {
   clearPendingRemoteRestore,
   getPendingRemoteRestore,
@@ -126,6 +126,9 @@ async function restoreOne(deps: RemoteWindowRestoreDeps, windowId: number): Prom
         ipcChannel: REMOTE_RESTORE_RETRY_CHANNEL,
         data: JSON.stringify({ hostId, projectId }),
       },
+      // Read by the host-switch failure presenter, which offers what gets this
+      // host back (Set up…, Settings…) where Retry alone would fail the same way.
+      hostSwitchFailure: { hostId, projectId, code: isAppError(error) ? error.code : null },
     };
     view.send(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
   }

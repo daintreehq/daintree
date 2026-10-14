@@ -5,6 +5,7 @@ import {
   resetFleetInputBroadcastHandlerForTests,
   writeTerminalInputOrFleet,
 } from "../fleetInputRouter";
+import { _resetTerminalInputGateForTesting, setSwitchInputBlock } from "../inputGate";
 
 const writeMock = vi.hoisted(() => vi.fn<(id: string, data: string) => void>());
 
@@ -23,6 +24,18 @@ describe("writeTerminalInputOrFleet", () => {
   beforeEach(() => {
     writeMock.mockReset();
     resetFleetInputBroadcastHandlerForTests();
+    _resetTerminalInputGateForTesting();
+  });
+
+  it("hands nothing to the fleet or the terminal while the window switches hosts", () => {
+    const handler = vi.fn(() => true);
+    registerFleetInputBroadcastHandler(handler);
+    setSwitchInputBlock({ kind: "switching", hostName: "studio-02" });
+
+    writeTerminalInputOrFleet("t1", "y\r");
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(writeMock).not.toHaveBeenCalled();
   });
 
   it("writes to the origin terminal when no fleet handler is registered", () => {

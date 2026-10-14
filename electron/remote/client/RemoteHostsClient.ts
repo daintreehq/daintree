@@ -26,6 +26,7 @@ import type {
 import type { IpcContext } from "../../ipc/types.js";
 import type { RemoteRouter } from "../../ipc/endpoint.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { sshAccessDenied } from "./sshAccessError.js";
 import { rememberRemoteWorkspaceTitle } from "../../window/windowTitle.js";
 import { discardFromAllProjectHistories } from "../../services/ProjectHistoryService.js";
 import { getRemoteService } from "../runtime.js";
@@ -703,6 +704,15 @@ export class RemoteHostsClient {
       if (readiness === "version-mismatch") throw versionMismatch(hostId);
       if (readiness === "host-mode-off")
         throw hostModeOff(this.options.registry.get(hostId)?.name ?? hostId);
+      if (readiness === "stopped-retrying") {
+        // ssh couldn't log in (Host mode off is ruled out above). It won't
+        // change by waiting, and a new window could never show the host either.
+        const link = hostConnection.linkState;
+        throw sshAccessDenied(
+          this.options.registry.get(hostId)?.name ?? hostId,
+          link.status === "unreachable" ? link.detail : null
+        );
+      }
       if (readiness !== "ready") {
         // A new window can show the host's project list while it connects;
         // anything that has to find a project there needs the host's answer.

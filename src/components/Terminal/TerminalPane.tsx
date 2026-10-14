@@ -581,6 +581,9 @@ function TerminalPaneComponent({
   const inputBlock = useTerminalInputBlock();
   // Another screen drives: the composer shows its draft as it types, read-only.
   const followsDriver = inputBlock?.kind === "driven-elsewhere";
+  // A pending host switch is the window's to explain (its progress notice);
+  // a strip here would flash on every pane for a switch that lands at once.
+  const paneInputBlock = inputBlock?.kind === "switching" ? null : inputBlock;
   const isHybridInputDisabled =
     isBackendDisconnected || isBackendRecovering || isInputLocked || isRestarting || followsDriver;
 
@@ -1444,9 +1447,9 @@ function TerminalPaneComponent({
       {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
           terminal rather than over it. Nothing for a plain terminal. */}
       {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
-      <BannerSlot visible={inputBlock !== null || controlConfirmed}>
-        {inputBlock ? (
-          <TerminalInputBlockBanner block={inputBlock} panelId={id} />
+      <BannerSlot visible={paneInputBlock !== null || controlConfirmed}>
+        {paneInputBlock ? (
+          <TerminalInputBlockBanner block={paneInputBlock} panelId={id} />
         ) : (
           controlConfirmed && <ControlConfirmedBanner />
         )}

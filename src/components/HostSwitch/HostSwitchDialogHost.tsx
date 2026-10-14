@@ -13,7 +13,6 @@ import {
 } from "./hostProjectPickerRequests";
 import { HostSetupRecipeConfirm } from "./HostSetupRecipeConfirm";
 import { runPendingHostSetup } from "./pendingHostSetup";
-import { watchPendingHostSwitch } from "./pendingHostSwitchFeedback";
 import {
   completeHostSwitchRequest,
   currentHostSwitchRequest,
@@ -47,8 +46,6 @@ export function HostSwitchDialogHost() {
 
   useEffect(() => registerHostSwitchDialogHost(), []);
   useEffect(() => registerHostProjectPickerHost(), []);
-  // A switch to another host that is taking a while says so, and can be cancelled.
-  useEffect(() => watchPendingHostSwitch(window.electron?.remoteHosts ?? {}), []);
 
   // A new window opened onto a host with nothing to show there offers that
   // host's project list. Asked on mount, since a send before this view

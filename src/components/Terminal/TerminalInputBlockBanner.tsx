@@ -42,9 +42,10 @@ export function TerminalInputBlockBanner({
       layout="inline"
       title={getTerminalInputBlockMessage(block)}
       role="status"
-      // A change of control is announced once for the window (driveLeaseState);
-      // every pane repeating it would read the same sentence once per pane.
-      ariaLive={block.kind === "driven-elsewhere" ? "off" : "polite"}
+      // Said once for the window (a change of control by driveLeaseState, a
+      // lost link by hostConnectionAnnouncements): every pane repeating it
+      // would read the same sentence once per pane.
+      ariaLive="off"
       {...(actions.length > 0 && { actions })}
     />
   );

@@ -5,6 +5,10 @@ import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { requestHostProjectPicker } from "@/components/HostSwitch/hostProjectPickerRequests";
+import {
+  openHostsSettingsTab,
+  requestHostSettings,
+} from "@/components/Settings/Hosts/hostSettingsRequests";
 import { getHostListSnapshot } from "./hostList";
 import { clientPlatform, localHostLabel } from "./hostModel";
 import { hostUpdateOffer, runHostUpdate } from "./hostUpdate";
@@ -41,10 +45,15 @@ export function followSwitchResult(result: SwitchWindowHostResult | null | undef
  * The one way a failed switch to another host reads, whichever control started
  * it: the host's own words for what went wrong (never the IPC wire prefix), and
  * the one recovery that gets that host back — an update for a host on another
- * build, setting up Host mode where it's off, otherwise trying the same switch
- * again.
+ * build, setting up Host mode where it's off, the host's details where ssh
+ * couldn't log in, otherwise trying the same switch again.
  */
-export function notifyHostSwitchFailure(hostId: HostId, error: unknown, retry: () => void): void {
+export function notifyHostSwitchFailure(
+  hostId: HostId,
+  error: unknown,
+  retry: () => void,
+  options?: { title?: string }
+): void {
   // Refused for its build: the update is what gets this host back, so it is
   // offered right here as well as in the host menu.
   const entry =
@@ -59,15 +68,19 @@ export function notifyHostSwitchFailure(hostId: HostId, error: unknown, retry: (
       : null;
   // The host said the project is gone: trying again can't help, picking another
   // can. A host that is itself gone from the list is a different miss.
+  // ssh couldn't log in: fixed outside Daintree, and the host's details show
+  // everything ssh said. Retrying first would only fail the same way.
+  const accessDenied = isClientAppError(error) && error.code === "HOST_SSH_ACCESS_DENIED";
   const missing =
     !update &&
+    !accessDenied &&
     isClientAppError(error) &&
     error.code === "NOT_FOUND" &&
     getHostListSnapshot().hosts.some((candidate) => candidate.descriptor.id === hostId);
   notify({
     type: "error",
     context: { eventKind: "connectivity" },
-    title: `Couldn't switch to ${hostName(hostId)}`,
+    title: options?.title ?? `Couldn't switch to ${hostName(hostId)}`,
     message: clientErrorText(error, "The window stayed on its current host."),
     actions: update
       ? [
@@ -77,15 +90,26 @@ export function notifyHostSwitchFailure(hostId: HostId, error: unknown, retry: (
             onClick: () => runHostUpdate(update.target, update.hostId),
           },
         ]
-      : missing
+      : accessDenied
         ? [
             {
-              label: "Choose project…",
+              label: "Settings…",
               variant: "primary",
-              onClick: () => void requestHostProjectPicker(hostId),
+              onClick: () => {
+                requestHostSettings({ kind: "detail", hostId });
+                openHostsSettingsTab();
+              },
             },
           ]
-        : [{ label: "Retry", variant: "primary", onClick: retry }],
+        : missing
+          ? [
+              {
+                label: "Choose project…",
+                variant: "primary",
+                onClick: () => void requestHostProjectPicker(hostId),
+              },
+            ]
+          : [{ label: "Retry", variant: "primary", onClick: retry }],
   });
 }
 

@@ -8,6 +8,7 @@ import {
   type TerminalListenerInstallDeps,
 } from "../TerminalListenerInstaller";
 import { hashPerfLine, PERF_MARKS } from "../../../../shared/perf/marks";
+import { _resetTerminalInputGateForTesting, setSwitchInputBlock } from "../inputGate";
 
 const writeTerminalInputOrFleetMock = vi.hoisted(() => vi.fn());
 const isRendererPerfCaptureActiveMock = vi.hoisted(() => vi.fn(() => false));
@@ -478,6 +479,39 @@ describe("installTerminalBoundListeners", () => {
     expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
     expect(deps.onUserInput).not.toHaveBeenCalled();
     expect(deps.clearDirectingState).not.toHaveBeenCalled();
+  });
+
+  it("drops input before it counts as typing while the window switches hosts", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged();
+    const deps = makeDeps();
+
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(
+      terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+      managed,
+      "t1",
+      deps
+    );
+
+    setSwitchInputBlock({ kind: "switching", hostName: "studio-02" });
+    try {
+      captured.onData!("ls\r");
+      captured.onData!("\x1b");
+      captured.onKey!({ domEvent: { key: "Enter" } as Partial<KeyboardEvent> });
+
+      expect(writeTerminalInputOrFleetMock).not.toHaveBeenCalled();
+      expect(deps.noteUserInput).not.toHaveBeenCalled();
+      expect(deps.onUserInput).not.toHaveBeenCalled();
+      expect(deps.clearDirectingState).not.toHaveBeenCalled();
+      expect(deps.onEnterPressed).not.toHaveBeenCalled();
+    } finally {
+      _resetTerminalInputGateForTesting();
+    }
+
+    captured.onData!("z");
+    expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith("t1", "z");
   });
 
   it("clears directing state on escape but not on regular input", () => {

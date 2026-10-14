@@ -211,7 +211,11 @@ export function HostChip() {
   // A link that has gone quiet, can't be reached or refused the build is a problem
   // the person must see in the chip; connecting and a deliberate disconnect are not.
   const linkTrouble =
-    status === "quiet" || status === "unreachable" || status === "version-mismatch";
+    status === "quiet" ||
+    status === "unreachable" ||
+    status === "host-mode-off" ||
+    status === "access-denied" ||
+    status === "version-mismatch";
   const TroubleGlyph = SEVERITY_GLYPH.warning;
   // Down, deliberately or not: the same machine, crossed out, and the words in
   // full ink. Calm, since the window's banner already offers to connect.

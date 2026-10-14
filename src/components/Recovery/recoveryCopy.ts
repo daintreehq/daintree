@@ -3,6 +3,7 @@ import type { PanelSuspectReason } from "@shared/types/ipc/crashRecovery";
 import { pluralize } from "@/lib/pluralize";
 import type { HostBannerVariant } from "@/store/hostConnectionStore";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
+import { sshRefusalLine } from "@shared/utils/sshRefusal";
 
 export interface RecoveryBannerCopy {
   title: string;
@@ -99,7 +100,9 @@ export function getHostConnectionBannerCopy(
   variant: HostBannerVariant,
   hostName: string,
   lastSeenAt: number | null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  /** What ssh said when it couldn't log in, for `access-denied`. */
+  detail: string | null = null
 ): RecoveryBannerCopy {
   switch (variant) {
     case "reconnecting":
@@ -117,6 +120,20 @@ export function getHostConnectionBannerCopy(
             : `${hostName} is unreachable · last seen ${formatRelativeTime(lastSeenAt, now)}`,
         description: HOST_READ_ONLY_DESCRIPTION,
       };
+    case "host-mode-off":
+      return {
+        title: `Daintree isn't running in Host mode on ${hostName}`,
+        description: "Terminals are read-only until it is set up there.",
+      };
+    case "access-denied": {
+      const said = sshRefusalLine(detail);
+      return {
+        title: `ssh couldn't log in to ${hostName}`,
+        description: said
+          ? `ssh said: ${said}. Not retrying until you connect again.`
+          : "Not retrying until you connect again.",
+      };
+    }
     case "version-mismatch":
       return {
         title: `${hostName} runs a different build`,

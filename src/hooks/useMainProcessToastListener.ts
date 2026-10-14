@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { notify } from "@/lib/notify";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { ClientAppError } from "@/utils/clientAppError";
 import type { MainProcessToastPayload } from "@shared/types/ipc/maps";
 import { useDistributionStore } from "@/store/distributionStore";
 
@@ -49,11 +50,39 @@ function parseHostProjectTarget(
   }
 }
 
+/**
+ * A switch main ran (a window put back on its host at launch) that failed,
+ * shown by the same presenter as every other entry point so the same failure
+ * offers the same recovery.
+ */
+function presentHostSwitchFailure(
+  payload: MainProcessToastPayload,
+  failure: NonNullable<MainProcessToastPayload["hostSwitchFailure"]>
+): void {
+  const { hostId, projectId, code } = failure;
+  const error = new ClientAppError(code ?? "HOST_DISCONNECTED", payload.message, payload.message);
+  safeFireAndForget(
+    import("@/components/Hosts/hostSwitching").then(({ notifyHostSwitchFailure, switchToHost }) =>
+      notifyHostSwitchFailure(
+        hostId,
+        error,
+        () => void switchToHost(hostId, false, projectId),
+        payload.title ? { title: payload.title } : undefined
+      )
+    ),
+    { context: "Showing a failed host switch from main" }
+  );
+}
+
 export function useMainProcessToastListener(): void {
   useEffect(() => {
     if (!window.electron?.notification?.onShowToast) return;
 
     const cleanup = window.electron.notification.onShowToast((payload: MainProcessToastPayload) => {
+      if (payload.hostSwitchFailure) {
+        presentHostSwitchFailure(payload, payload.hostSwitchFailure);
+        return;
+      }
       const action = payload.action
         ? {
             label: payload.action.label,

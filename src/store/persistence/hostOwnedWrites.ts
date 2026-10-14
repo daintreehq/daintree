@@ -52,7 +52,10 @@ type Verdict = "send" | "defer" | "skip";
 
 function verdict(): Verdict {
   if (getLeaseInputBlock()?.kind === "driven-elsewhere") return "skip";
-  return getTerminalInputBlock() === null ? "send" : "defer";
+  const block = getTerminalInputBlock();
+  // A pending switch holds back only what the user types: the view's own
+  // saves still belong to the host it is on.
+  return block === null || block.kind === "switching" ? "send" : "defer";
 }
 
 function refusalCode(error: unknown): "driven-elsewhere" | "unreached" | null {

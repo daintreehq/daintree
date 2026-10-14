@@ -537,6 +537,27 @@ describe("RemoteHostsClient", () => {
       expect(bindings.get(1)).toBe("local");
     });
 
+    it("says at once, in ssh's words, when ssh couldn't log in", async () => {
+      manager.readiness = "stopped-retrying";
+      const link = manager.connect("studio-01");
+      link.linkState = {
+        status: "unreachable",
+        detail: "greg@studio-01: Permission denied (publickey).",
+      } as typeof link.linkState;
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).rejects.toMatchObject({
+        code: "HOST_SSH_ACCESS_DENIED",
+        userMessage: expect.stringContaining("greg@studio-01: Permission denied (publickey)"),
+      });
+      expect(bindings.get(1)).toBe("local");
+
+      // Not a new window either: it could never show the host.
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true })
+      ).rejects.toMatchObject({ code: "HOST_SSH_ACCESS_DENIED" });
+    });
+
     it("refuses when the host never answers, rather than moving the window blind", async () => {
       manager.readiness = "unreachable";
       await expect(

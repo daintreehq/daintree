@@ -249,6 +249,17 @@ export interface MainProcessToastPayload {
      *  (e.g. the text to copy for a "clipboard:write-text" action). */
     data?: string;
   };
+  /**
+   * A switch to another host that failed, for the renderer's one host-switch
+   * failure presenter: it picks the recovery from the code (Set up…, Update…,
+   * Settings…, Retry), so a launch restore reads like every other entry point.
+   * `action` stays as the Retry for a renderer that doesn't know this field.
+   */
+  hostSwitchFailure?: {
+    hostId: string;
+    projectId: string;
+    code: import("../appError.js").AppErrorCode | null;
+  };
 }
 
 // IPC Contract Maps
