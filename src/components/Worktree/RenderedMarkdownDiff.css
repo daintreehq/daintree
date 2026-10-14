@@ -10,7 +10,7 @@
    other.
 
    High-contrast support follows the same dual-block discipline as
-   DiffViewer.css: forced-colors = Windows system palette; prefers-contrast =
+   DiffViewer.contrast.css: forced-colors = Windows system palette; prefers-contrast =
    macOS Increase Contrast, keeping theme colors. The two blocks must stay
    separate. */
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import { readToolbarCss } from "@/__tests__/support/cssManifest";
 import { extractAtRuleBlocks } from "./cssBlocks";
 
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
@@ -15,7 +16,6 @@ const COPY_TREE_ACTION_PATH = path.resolve(
   __dirname,
   "../../../services/actions/definitions/worktreeContextActions.ts"
 );
-const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 const INDEX_CSS_PATH = path.resolve(__dirname, "../../../index.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
@@ -379,7 +379,7 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("carves both sidebar toggles out of the armed rules in toolbar.css (#8357, #11328)", async () => {
-      const css = await fs.readFile(TOOLBAR_CSS_PATH, "utf-8");
+      const css = readToolbarCss();
       // The app sidebar toggle uses aria-pressed; the file-browser tree toggle
       // uses aria-expanded (a disclosure). Both carry data-sidebar-toggle and
       // must be excluded so neither shows a persistent armed chip.

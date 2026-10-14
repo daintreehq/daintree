@@ -2461,7 +2461,7 @@ export function Toolbar({
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
             // A window working on another machine shows it as light behind the
-            // project pill and host chip (toolbar.css), so the difference reads
+            // project pill and host chip (toolbar/surface.css), so the difference reads
             // before anything is read.
             data-remote-window={remoteWindow ? "" : undefined}
             className={cn(

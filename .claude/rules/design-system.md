@@ -39,7 +39,7 @@ Shared tiers unless the duration itself encodes meaning: state changes 150ms `ea
 
 Semantic exceptions where decay, width, or sequencing *is* the signal (`ActivityLight`, `FileChangeList` recency) are exempt from tier-fixing.
 
-Use the narrowest transition property set — never widen to bare `transition` or `transition-all`. Keep `transform` out of press snaps (copy `src/styles/components/toolbar.css` or `button.tsx`'s `active:scale-[0.98] active:duration-[1ms]`). Box-shadow either interpolates in its own named 150ms slot **or** snaps with `active:shadow-none`, never both.
+Use the narrowest transition property set — never widen to bare `transition` or `transition-all`. Keep `transform` out of press snaps (copy `src/styles/components/toolbar/controls.css` or `button.tsx`'s `active:scale-[0.98] active:duration-[1ms]`). Box-shadow either interpolates in its own named 150ms slot **or** snaps with `active:shadow-none`, never both.
 
 Focus-ring transitions are wired once globally in `src/index.css` `*:focus-visible` — never restate them, and never add a per-element `outline-*` transition. The ring's colour and width are component-owned. Never suppress a ring without a replacement, and use `outline-hidden`, never `outline-none`.
 

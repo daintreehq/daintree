@@ -1,0 +1,220 @@
+@property --host-chip-lift {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: transparent;
+}
+
+.surface-toolbar {
+  background-color: var(--toolbar-bg, var(--theme-surface-toolbar));
+  background-image: var(--toolbar-noise, var(--chrome-noise-texture));
+  background-blend-mode: soft-light;
+  box-shadow: var(--toolbar-shadow, none);
+  -webkit-backdrop-filter: blur(var(--theme-material-blur))
+    saturate(var(--theme-material-saturation));
+  backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
+}
+
+/* ── Remote window ──
+ * A window working on another machine keeps the theme's own strip and shows
+ * the host as light: a soft pool behind the project pill and host chip, which
+ * stand in front of it, so it reads peripherally without repainting the
+ * toolbar. Repainting it did not work: a flat wash across the strip read as a
+ * cheaper theme and dragged the branch name under 4.5:1, and a thin edge line
+ * read as a stalled progress bar. The light is indigo, a category hue (an
+ * identity, never a status or the accent), held at one lightness and chroma
+ * per polarity so every theme gets the same strength of light in its own
+ * indigo. It follows where the window is, never the link's health, so the
+ * toolbar never flickers on reconnect; the chip carries link state. */
+.surface-toolbar[data-remote-window] {
+  --remote-light: oklch(from var(--color-category-indigo) 0.74 0.11 h);
+  /* What the light marks on the chip: its rim, edge and server glyph. */
+  --remote-ink: var(--remote-light);
+  --remote-light-0: 20%;
+  --remote-light-1: 19%;
+  --remote-light-2: 13%;
+  --remote-light-3: 5%;
+  --remote-light-4: 1.5%;
+  --remote-occluder: var(--toolbar-bg, var(--theme-surface-toolbar));
+  /* The chip's quieter words (round trip, state, domain): secondary ink alone
+   * sits close to 4.5:1 on the chip's lift in the dimmest themes. */
+  --remote-chip-quiet-ink: color-mix(
+    in oklab,
+    var(--theme-text-secondary) 70%,
+    var(--theme-text-primary)
+  );
+  anchor-scope: --remote-host-chip, --remote-project-pill;
+}
+
+/* Light can't be added to a near-white strip, so light themes take a cool
+ * haze: a pale, saturated indigo, since a deeper one dirtied cream strips to
+ * grey, held further out so it still shows on an already-cool strip
+ * (svalbard, hokkaido). The marks on the chip stay deep enough to read on a
+ * light surface. */
+:where(.light, [data-color-mode="light"]) .surface-toolbar[data-remote-window] {
+  --remote-light: oklch(from var(--color-category-indigo) 0.68 0.16 h);
+  --remote-ink: oklch(from var(--color-category-indigo) 0.52 0.15 h);
+  --remote-light-0: 26%;
+  --remote-light-1: 25%;
+  --remote-light-2: 16%;
+  --remote-light-3: 7%;
+  --remote-light-4: 2%;
+}
+
+/* The pool: centred on the pair, so it frames both rather than trailing off
+ * the chip; wide and flat to suit a 48px strip, falling off in oklab so it
+ * never bands or swings hue. Level across the middle, which the pair hides,
+ * so the gap between them shows no more light than their edges do. Its reach
+ * shrinks with a narrow window rather than washing every control in it. Under
+ * every control, so no glyph or word is ever drawn over. Past the window's
+ * edge it is clipped by the root, which hides overflow. */
+.surface-toolbar[data-remote-window]::before {
+  --_pair-start: anchor(--remote-project-pill left, anchor(--remote-host-chip left, 50%));
+  --_pair-end: anchor(--remote-host-chip right, 50%);
+  --_reach: min(500px, 35%);
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  bottom: 0;
+  left: calc((var(--_pair-start) + var(--_pair-end)) / 2 - var(--_reach));
+  width: calc(var(--_reach) * 2);
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 50% 90% at 50% 50% in oklab,
+    color-mix(in oklab, var(--remote-light) var(--remote-light-0), transparent),
+    color-mix(in oklab, var(--remote-light) var(--remote-light-1), transparent) 40%,
+    color-mix(in oklab, var(--remote-light) var(--remote-light-2), transparent) 55%,
+    color-mix(in oklab, var(--remote-light) var(--remote-light-3), transparent) 75%,
+    color-mix(in oklab, var(--remote-light) var(--remote-light-4), transparent) 90%,
+    transparent
+  );
+}
+
+/* The project pill stands in front of the light rather than taking it: its
+ * fill is translucent, and lit from behind its branch name lost contrast. An
+ * unlit patch of strip sits exactly under it, so it renders as it does in a
+ * local window. */
+.surface-toolbar[data-remote-window] .toolbar-project-pill {
+  anchor-name: --remote-project-pill;
+}
+
+.surface-toolbar[data-remote-window]::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: anchor(--remote-project-pill top);
+  right: anchor(--remote-project-pill right);
+  bottom: anchor(--remote-project-pill bottom);
+  left: anchor(--remote-project-pill left);
+  border-radius: var(--toolbar-pill-radius, var(--radius-md));
+  pointer-events: none;
+  background-color: var(--remote-occluder);
+}
+
+/* The host chip: the project pill's material, a size down, lit at its top rim
+ * and its server glyph by the light behind it. It stands in front of the light
+ * too, so its words sit on the same surface as the project's. */
+.host-chip-remote {
+  --_bg: var(
+    --toolbar-project-bg,
+    linear-gradient(180deg, var(--theme-wash-subtle), var(--theme-wash-medium))
+  );
+  anchor-name: --remote-host-chip;
+  /* The pill's hover and press lift, layered over its material rather than
+   * replacing it, on the toolbar's one press timing. */
+  background: linear-gradient(var(--host-chip-lift), var(--host-chip-lift)), var(--_bg);
+  transition:
+    color 150ms ease-out,
+    --host-chip-lift var(--_fill-duration) ease-out;
+  border-color: color-mix(
+    in oklab,
+    var(--remote-ink) 30%,
+    var(--toolbar-project-border, var(--theme-border-subtle))
+  );
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--remote-ink) 40%, transparent);
+}
+
+.host-chip-remote::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background-color: var(--remote-occluder);
+}
+
+.host-chip-remote:hover {
+  --host-chip-lift: var(--toolbar-control-hover-bg, var(--theme-overlay-elevated));
+}
+
+.host-chip-remote[aria-expanded="true"] {
+  --host-chip-lift: var(--toolbar-control-armed-bg, var(--theme-overlay-emphasis));
+}
+
+.host-chip-remote:active {
+  --host-chip-lift: var(--toolbar-control-active-bg, var(--theme-overlay-emphasis));
+}
+
+.host-chip-source {
+  color: var(--remote-ink);
+}
+
+.host-chip-quiet-ink {
+  color: var(--remote-chip-quiet-ink, var(--theme-text-secondary));
+}
+
+/* ── backdrop-filter fallbacks ──
+ * The translucent material relies on GPU compositing and ignores the OS
+ * "reduce transparency" accessibility preference. Engines without
+ * backdrop-filter would render the toolbar over a near-transparent base;
+ * users who set Reduce Transparency (macOS) / Transparency effects off
+ * (Windows) explicitly want solid chrome. Both fall back to the opaque
+ * surface token already used by the data-performance-mode override. The
+ * two gates are independent — a GPU-capable machine can still have
+ * Reduce Transparency enabled — so they are separate at-rules, not nested.
+ */
+@supports not (backdrop-filter: blur(1px)) {
+  .surface-toolbar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: var(--theme-surface-toolbar);
+  }
+
+  /* A remote window's unlit patches follow the strip onto the solid surface. */
+  .surface-toolbar[data-remote-window] {
+    --remote-occluder: var(--theme-surface-toolbar);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .surface-toolbar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: var(--theme-surface-toolbar);
+  }
+
+  .surface-toolbar[data-remote-window] {
+    --remote-occluder: var(--theme-surface-toolbar);
+  }
+}
+
+@media (prefers-contrast: more) {
+  .surface-toolbar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: var(--theme-surface-toolbar);
+  }
+}
+
+/* Increased contrast wants solid chrome, not light: the pool and its patches
+ * go, and the chip keeps its lit edge, which the global rule widens to 2px
+ * like every other button's. Kept apart from the forced-colours rules in
+ * forced-colors.css on purpose (macOS fires only this one). */
+@media (prefers-contrast: more) {
+  .surface-toolbar[data-remote-window]::before,
+  .surface-toolbar[data-remote-window]::after,
+  .host-chip-remote::before {
+    display: none;
+  }
+}

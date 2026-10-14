@@ -268,7 +268,7 @@ export function HostChip() {
           isLocalWindow
             ? "h-7 max-w-56 gap-1.5 px-2 text-text-secondary hover:bg-overlay-subtle hover:text-text-primary aria-expanded:bg-overlay-subtle aria-expanded:text-text-primary"
             : // A different place, not a problem, and not a second accent: the
-              // window's light (toolbar.css) says where it is, never a status
+              // window's light (toolbar/surface.css) says where it is, never a status
               // fill, which read as a warning beside the project pill. The
               // border also carries the shape under forced colours.
               "host-chip-remote relative h-8 max-w-72 gap-1.5 border px-2.5 text-text-primary"

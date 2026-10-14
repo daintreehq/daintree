@@ -93,7 +93,7 @@ describe("pane toolbar icon button contract", () => {
   });
 
   it("no toolbar icon button anywhere restates the disabled dim", () => {
-    // toolbar.css owns it at 50% for `disabled` and `aria-disabled` alike, so a
+    // toolbar/controls.css owns it at 50% for `disabled` and `aria-disabled` alike, so a
     // per-site utility can only ever disagree with it.
     const offenders = tsxFiles(SRC).flatMap((file) =>
       classStrings(file)

@@ -820,7 +820,7 @@ describe("bondi", () => {
     "text-primary",
   ] as const satisfies readonly AppThemeTokenKey[];
 
-  // DiffViewer.css paints the word-level edit span inside a line cell that
+  // DiffViewer.lines.css paints the word-level edit span inside a line cell that
   // already carries the line wash, so an alpha edit wash stacks on the line
   // wash. The changed characters are the ones a review is about; they must be
   // at least as legible as the code around them.

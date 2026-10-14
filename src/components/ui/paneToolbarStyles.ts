@@ -5,7 +5,7 @@
  * depending on which pane it sits in.
  *
  * Hover, keyboard focus, the armed chip and the 50% disabled treatment all come
- * from `.toolbar-icon-button` in `src/styles/components/toolbar.css`; this
+ * from `.toolbar-icon-button` in `src/styles/components/toolbar/controls.css`; this
  * string only fixes the box, the corner and the ink. The radius is Button's
  * `--radius-md` so a toolbar icon button and a `Button` beside it share a
  * corner. Pressed and expanded controls step up to primary ink on top of the
