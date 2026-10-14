@@ -56,10 +56,7 @@ describe("readHostStylesheet", () => {
 
   it("is not misled by comment openers or @import inside strings", () => {
     write("styles/host/a.css", '.a::before {\n  content: "@import";\n}\n');
-    write(
-      "index.css",
-      '@source not "../*.md";\n@import "./styles/host/a.css";\n/* note */\n'
-    );
+    write("index.css", '@source not "../*.md";\n@import "./styles/host/a.css";\n/* note */\n');
 
     const { css, files } = readHostStylesheet(entry);
 
