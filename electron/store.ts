@@ -395,6 +395,12 @@ export interface StoreSchema {
     modelIds?: Record<string, string>;
     /** Absent in stores written before #12874; read as `"inherit"`. */
     daintreeConfirmations?: "inherit" | "always-ask" | "never-ask";
+    /**
+     * The agent the assistant runs on (#13345). Absent means never set on this
+     * host; `null` is an explicit clear. Written only through
+     * `electron/services/agentDefaults.ts`, never by `helpAssistant.setSettings`.
+     */
+    agentId?: string | null;
   };
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;

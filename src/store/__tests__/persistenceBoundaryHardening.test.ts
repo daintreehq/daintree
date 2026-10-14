@@ -115,18 +115,6 @@ describe("persistence boundary hardening", () => {
     expect(usePreferencesStore.getState().showDeveloperTools).toBe(true);
   });
 
-  it("agentPreferencesStore survives migration reads when localStorage access throws", async () => {
-    installThrowingLocalStorageGetter(new Error("blocked"));
-
-    const { useAgentPreferencesStore } = await import("../agentPreferencesStore");
-
-    expect(() => {
-      useAgentPreferencesStore.getState().setDefaultAgent("codex");
-    }).not.toThrow();
-
-    expect(useAgentPreferencesStore.getState().defaultAgent).toBe("codex");
-  });
-
   it("toolbarPreferencesStore updates state when storage writes fail", async () => {
     installLocalStorage(
       createStorageMock({
@@ -589,23 +577,6 @@ describe("persistence boundary hardening", () => {
     expect(JSON.parse(backing.get(KEY)!).state.order).toBe("old");
     view.setItem(KEY, { state: { order: "mine" }, version: 2 });
     expect(JSON.parse(backing.get(KEY)!).state.order).toBe("mine");
-  });
-
-  it("agentPreferencesStore boots cleanly when the legacy toolbar blob is corrupt JSON", async () => {
-    // Realistic first-run upgrade scenario: primary key absent, legacy toolbar
-    // key holds corrupt JSON. Zustand's persist skips merge() when the primary
-    // key is null, so the migration parse-guard inside merge is not exercised
-    // here — what matters for issue #5218 is that module import and store boot
-    // succeed without throwing.
-    installLocalStorage(
-      createStorageMock({
-        getItem: (key) => (key === "daintree-toolbar-preferences" ? "{not-json" : null),
-      })
-    );
-
-    const { useAgentPreferencesStore } = await import("../agentPreferencesStore");
-
-    expect(useAgentPreferencesStore.getState().defaultAgent).toBeUndefined();
   });
 
   it("cliAvailabilityStore loadCache discards corrupt persisted cache without throwing", async () => {

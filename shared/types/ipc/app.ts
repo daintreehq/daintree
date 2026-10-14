@@ -173,6 +173,11 @@ export interface HydrateResult {
    */
   workspaceId?: string | null;
   agentSettings: import("../agentSettings.js").AgentSettings;
+  /**
+   * The host's assistant agent and default terminal agent (#13345). Optional
+   * because a remote host on an older build doesn't send it.
+   */
+  agentDefaults?: import("./agentDefaults.js").AgentDefaultsSnapshot;
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
   /**

@@ -4,6 +4,7 @@ import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
 import { readCanopyMode } from "../../../services/canopy/canopyMode.js";
+import { readAgentDefaults } from "../../../services/agentDefaults.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import {
   mayWriteProjectState,
@@ -751,6 +752,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       project: currentProject,
       workspaceId,
       agentSettings: store.get("agentSettings"),
+      agentDefaults: readAgentDefaults(),
       canopyMode: readCanopyMode(),
       skippedPanelCount,
       quarantinedPanels,

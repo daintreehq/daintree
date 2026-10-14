@@ -29,6 +29,7 @@ const { controllerSpies, handleAgentExitedMock, helpPanelState, panelStoreState 
       terminalId: null as string | null,
       agentId: null as string | null,
       preferredAgentId: null as string | null,
+      agentSwitchRequest: null as { id: number; agentId: string } | null,
       sessionId: null as string | null,
       introDismissed: true,
       conversationTouched: false,
@@ -40,6 +41,7 @@ const { controllerSpies, handleAgentExitedMock, helpPanelState, panelStoreState 
       setOpen: vi.fn(),
       clearTerminal: vi.fn(),
       setPreferredAgent: vi.fn(),
+      clearAgentSwitchRequest: vi.fn(),
       setTerminal: vi.fn(),
       dismissIntro: vi.fn(),
       setHibernateSession: vi.fn(),
@@ -295,6 +297,7 @@ function resetState() {
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
   helpPanelState.preferredAgentId = null;
+  helpPanelState.agentSwitchRequest = null;
   helpPanelState.sessionId = null;
   helpPanelState.introDismissed = true;
   helpPanelState.conversationTouched = false;
@@ -329,8 +332,39 @@ function bindTerminal(agentId: string, agentState = "idle") {
   panelStoreState.panelsById = { "t-1": { agentState, cwd: "/repo" } };
 }
 
-describe("HelpPanel agent switch (#8353)", () => {
+let requestSeq = 0;
+
+// What a Settings pick in this view does: queue a request for the live session.
+function pickInSettings(agentId: string) {
+  helpPanelState.preferredAgentId = agentId;
+  helpPanelState.agentSwitchRequest = { id: ++requestSeq, agentId };
+}
+
+describe("HelpPanel agent switch (#8353, #13345)", () => {
+  beforeEach(() => {
+    helpPanelState.clearAgentSwitchRequest.mockImplementation((id: number) => {
+      if (helpPanelState.agentSwitchRequest?.id === id) helpPanelState.agentSwitchRequest = null;
+    });
+  });
+
   it("switches immediately when the session is untouched and idle", async () => {
+    bindTerminal("codex", "idle");
+    helpPanelState.preferredAgentId = "codex";
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    await act(async () => {
+      pickInSettings("claude-code");
+      rerender(<HelpPanel width={380} />);
+    });
+
+    expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
+    expect(helpPanelState.agentSwitchRequest).toBeNull();
+    expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+  });
+
+  it("leaves the live session alone when the host's default changes without a pick here", async () => {
+    // An import, or a pick in another window, moves the host's default under
+    // every window at once — none of them may replace a session for it.
     bindTerminal("codex", "idle");
     helpPanelState.preferredAgentId = "codex";
     const { rerender } = render(<HelpPanel width={380} />);
@@ -340,7 +374,7 @@ describe("HelpPanel agent switch (#8353)", () => {
       rerender(<HelpPanel width={380} />);
     });
 
-    expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
+    expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
     expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
   });
 
@@ -351,7 +385,7 @@ describe("HelpPanel agent switch (#8353)", () => {
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -366,6 +400,31 @@ describe("HelpPanel agent switch (#8353)", () => {
       fireEvent.click(document.querySelector('[data-testid="dialog-confirm"]')!);
     });
     expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
+    expect(helpPanelState.agentSwitchRequest).toBeNull();
+  });
+
+  it("names the picked agent in the confirm even after the host's default moves on", async () => {
+    bindTerminal("codex", "working");
+    helpPanelState.preferredAgentId = "codex";
+    const { rerender } = render(<HelpPanel width={380} />);
+
+    await act(async () => {
+      pickInSettings("claude-code");
+      rerender(<HelpPanel width={380} />);
+    });
+    await act(async () => {
+      // A push from another window changes the default while the dialog is up.
+      helpPanelState.preferredAgentId = "claude";
+      rerender(<HelpPanel width={380} />);
+    });
+
+    expect(document.querySelector('[data-testid="dialog-title"]')?.textContent).toBe(
+      "Switch to Claude Code?"
+    );
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-testid="dialog-confirm"]')!);
+    });
+    expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
   });
 
   it("confirms before switching when the agent is in a close-confirm state", async () => {
@@ -374,7 +433,7 @@ describe("HelpPanel agent switch (#8353)", () => {
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -388,7 +447,7 @@ describe("HelpPanel agent switch (#8353)", () => {
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -398,27 +457,29 @@ describe("HelpPanel agent switch (#8353)", () => {
 
     expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
     expect(helpPanelState.preferredAgentId).toBe("claude-code");
+    expect(helpPanelState.agentSwitchRequest).toBeNull();
     expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
   });
 
-  it("is a no-op when the preferred agent already matches the bound agent", async () => {
+  it("is a no-op when the picked agent already matches the bound agent", async () => {
     bindTerminal("codex", "idle");
-    helpPanelState.preferredAgentId = "codex";
+    pickInSettings("codex");
 
     await act(async () => {
       render(<HelpPanel width={380} />);
     });
 
     expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
+    expect(helpPanelState.agentSwitchRequest).toBeNull();
     expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
   });
 
-  it("switches when the preference was chosen before the terminal bound", async () => {
-    // Preference chosen while no terminal is bound, then auto-launch binds a
-    // different agent — the change must not be silently consumed (#8353).
+  it("switches when the pick was made before the terminal bound", async () => {
+    // Pick made while no terminal is bound, then auto-launch binds a
+    // different agent — the pick must not be silently consumed (#8353).
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
-    helpPanelState.preferredAgentId = "claude-code";
+    pickInSettings("claude-code");
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
@@ -429,19 +490,19 @@ describe("HelpPanel agent switch (#8353)", () => {
     expect(controllerSpies.selectAgent).toHaveBeenCalledWith("claude-code");
   });
 
-  it("closes a stale confirm when the preference reverts to the live agent", async () => {
+  it("closes a stale confirm when the pick reverts to the live agent", async () => {
     bindTerminal("codex", "working");
     helpPanelState.preferredAgentId = "codex";
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
     expect(document.querySelector('[data-testid="confirm-dialog"]')).not.toBeNull();
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "codex";
+      pickInSettings("codex");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -449,17 +510,17 @@ describe("HelpPanel agent switch (#8353)", () => {
     expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
   });
 
-  it("retargets the confirm when the preference moves to a third agent", async () => {
+  it("retargets the confirm when the pick moves to a third agent", async () => {
     bindTerminal("codex", "working");
     helpPanelState.preferredAgentId = "codex";
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude";
+      pickInSettings("claude");
       rerender(<HelpPanel width={380} />);
     });
 
@@ -473,18 +534,19 @@ describe("HelpPanel agent switch (#8353)", () => {
     expect(controllerSpies.selectAgent).not.toHaveBeenCalledWith("claude-code");
   });
 
-  it("does not switch when no terminal is bound", async () => {
+  it("does not switch when no terminal is bound, and keeps the pick for one", async () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
     helpPanelState.preferredAgentId = "codex";
     const { rerender } = render(<HelpPanel width={380} />);
 
     await act(async () => {
-      helpPanelState.preferredAgentId = "claude-code";
+      pickInSettings("claude-code");
       rerender(<HelpPanel width={380} />);
     });
 
     expect(controllerSpies.selectAgent).not.toHaveBeenCalled();
+    expect(helpPanelState.agentSwitchRequest).toMatchObject({ agentId: "claude-code" });
     expect(document.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
   });
 });

@@ -12,6 +12,7 @@ import { UserAgentRegistryService } from "../../services/UserAgentRegistryServic
 import type { AgentHelpRequest, AgentHelpResult } from "../../../shared/types/ipc/agent.js";
 import { broadcastToRenderer, typedHandle } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
+import { isStorableDefaultAgent } from "../../../shared/types/ipc/agentDefaults.js";
 import { createApplicationMenu } from "../../menu.js";
 
 const RESERVED_AGENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -198,9 +199,22 @@ export function registerAiHandlers(deps: HandlerDependencies): () => void {
         agents: updatedAgents,
       };
     } else {
-      // Full reset: replace the whole slice with defaults intentionally.
-      store.set("agentSettings", DEFAULT_AGENT_SETTINGS);
-      return DEFAULT_AGENT_SETTINGS;
+      // Full reset: replace the whole slice with defaults intentionally, except
+      // the default agent. It has its own control, and before #13345 it lived
+      // outside this slice, so a reset never touched it. Presence is kept too:
+      // an unset default must stay unset, not become a clear.
+      const current = store.get("agentSettings");
+      const reset: AgentSettings =
+        isPlainRecord(current) && Object.hasOwn(current, "defaultAgent")
+          ? {
+              ...DEFAULT_AGENT_SETTINGS,
+              defaultAgent: isStorableDefaultAgent(current.defaultAgent)
+                ? current.defaultAgent
+                : null,
+            }
+          : DEFAULT_AGENT_SETTINGS;
+      store.set("agentSettings", reset);
+      return reset;
     }
   };
   handlers.push(typedHandle(CHANNELS.AGENT_SETTINGS_RESET, handleAgentSettingsReset));

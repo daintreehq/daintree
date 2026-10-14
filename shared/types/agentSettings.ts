@@ -186,6 +186,14 @@ export interface AgentSettings {
    * (see {@link resolveEffectiveInlineMode}), never mutating per-agent state.
    */
   globalUseAltScreen?: boolean;
+  /**
+   * The agent new terminals and automated workflows launch when none is named
+   * (#13345). Absent means never set on this host, which is what lets the
+   * one-time move from a machine's localStorage happen; `null` is an explicit
+   * "no default". Written only through `electron/services/agentDefaults.ts`,
+   * and kept across a full agent-settings reset.
+   */
+  defaultAgent?: BuiltInAgentId | null;
 }
 
 export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {

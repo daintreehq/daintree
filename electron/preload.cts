@@ -109,6 +109,7 @@ import { buildWorkspaceResidencyPreloadBindings } from "./ipc/handlers/workspace
 import { buildProcessesPreloadBindings } from "./ipc/handlers/processes.preload.js";
 import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMcp.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
+import { buildAgentDefaultsPreloadBindings } from "./ipc/handlers/agentDefaults.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
@@ -154,6 +155,7 @@ import type {
   IssueDetectedPayload,
   IssueNotFoundPayload,
   ServiceConnectivityPayload,
+  AgentDefaultsSnapshot,
   GitStatus,
   KeyAction,
   TerminalRecipe,
@@ -2383,6 +2385,14 @@ function buildElectronApi(): ElectronAPI {
     agentHelp: {
       get: (request: import("../shared/types/ipc/agent.js").AgentHelpRequest) =>
         _unwrappingInvoke(CHANNELS.AGENT_HELP_GET, request),
+    },
+
+    // Host-owned agent defaults (#13345)
+    agentDefaults: {
+      ...buildAgentDefaultsPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: AgentDefaultsSnapshot) => void) =>
+        _typedOn(CHANNELS.AGENT_DEFAULTS_CHANGED, callback),
     },
 
     // Per-service connectivity API

@@ -33,6 +33,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["agent-capabilities:is-agent-enabled"]["args"]
     ): Promise<IpcInvokeMap["agent-capabilities:is-agent-enabled"]["result"]>;
   };
+  agentDefaults: {
+    get(
+      ...args: IpcInvokeMap["agent-defaults:get"]["args"]
+    ): Promise<IpcInvokeMap["agent-defaults:get"]["result"]>;
+    migrateLegacy(
+      ...args: IpcInvokeMap["agent-defaults:migrate-legacy"]["args"]
+    ): Promise<IpcInvokeMap["agent-defaults:migrate-legacy"]["result"]>;
+    set(
+      ...args: IpcInvokeMap["agent-defaults:set"]["args"]
+    ): Promise<IpcInvokeMap["agent-defaults:set"]["result"]>;
+  };
   app: {
     getVersionInfo(
       ...args: IpcInvokeMap["app:get-version-info"]["args"]

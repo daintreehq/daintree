@@ -100,6 +100,7 @@ import type {
 } from "./files.js";
 import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from "./devPreview.js";
 import type { ServiceConnectivityPayload } from "./connectivity.js";
+import type { AgentDefaultsSnapshot } from "./agentDefaults.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
@@ -1995,6 +1996,9 @@ export interface IpcEventMap {
 
   // Agent preset events
   "agent-presets:updated": { agentId: string; presets: AgentPreset[] };
+
+  // Host-owned agent defaults changed (#13345)
+  "agent-defaults:changed": AgentDefaultsSnapshot;
 
   // Plugin action registry events
   "plugin:actions-changed": {

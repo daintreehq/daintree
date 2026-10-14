@@ -1,0 +1,187 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentDefaultsSnapshot } from "@shared/types";
+
+const bootMock = vi.hoisted(() => ({
+  getSafeBootPromise: vi.fn(),
+}));
+vi.mock("@/lib/bootPromise", () => bootMock);
+
+const hostMock = vi.hoisted(() => ({ isRemoteWindow: vi.fn(() => false) }));
+vi.mock("@/hooks/useHostPlatform", () => hostMock);
+
+vi.mock("@/utils/logger", () => ({ logWarn: vi.fn(), logError: vi.fn() }));
+
+const clientMock = vi.hoisted(() => {
+  let listener: ((snapshot: AgentDefaultsSnapshot) => void) | null = null;
+  return {
+    get: vi.fn<() => Promise<AgentDefaultsSnapshot>>(),
+    set: vi.fn<() => Promise<AgentDefaultsSnapshot>>(),
+    migrateLegacy: vi.fn<(c: AgentDefaultsSnapshot) => Promise<AgentDefaultsSnapshot>>(),
+    onChanged: vi.fn((cb: (snapshot: AgentDefaultsSnapshot) => void) => {
+      listener = cb;
+      return () => {
+        listener = null;
+      };
+    }),
+    push: (snapshot: AgentDefaultsSnapshot) => listener?.(snapshot),
+  };
+});
+vi.mock("@/clients/agentDefaultsClient", () => ({ agentDefaultsClient: clientMock }));
+
+import { initAgentDefaultsSync } from "../agentDefaultsSync";
+import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+
+function boot(agentDefaults?: AgentDefaultsSnapshot) {
+  bootMock.getSafeBootPromise.mockResolvedValue({ ok: true, result: { agentDefaults } });
+}
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) await Promise.resolve();
+}
+
+function putLegacy(key: string, state: unknown): void {
+  localStorage.setItem(key, JSON.stringify({ state, version: 6 }));
+}
+
+function stored(key: string): unknown {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return null;
+  const parsed: unknown = JSON.parse(raw);
+  return parsed;
+}
+
+describe("initAgentDefaultsSync (#13345)", () => {
+  let dispose: () => void = () => {};
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    hostMock.isRemoteWindow.mockReturnValue(false);
+    clientMock.migrateLegacy.mockImplementation(async (candidates) => candidates);
+    Object.defineProperty(window, "electron", {
+      value: { agentDefaults: {} },
+      configurable: true,
+      writable: true,
+    });
+    useAgentPreferencesStore.setState({ defaultAgent: undefined });
+    useHelpPanelStore.setState({
+      preferredAgentId: null,
+      hostAssistantAgentId: null,
+      droppedPreferredAgentId: null,
+      dismissedDroppedAgentId: null,
+      agentSwitchRequest: null,
+    });
+    useCliAvailabilityStore.setState({ hasRealData: false });
+  });
+
+  afterEach(() => {
+    dispose();
+    localStorage.clear();
+  });
+
+  it("seeds both mirrors from the host's boot payload", async () => {
+    boot({ assistantAgentId: "claude", defaultAgent: "codex" });
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("claude");
+    expect(useAgentPreferencesStore.getState().defaultAgent).toBe("codex");
+  });
+
+  it("lets a push that beat the boot payload stand", async () => {
+    let resolveBoot: (value: unknown) => void = () => {};
+    bootMock.getSafeBootPromise.mockReturnValue(new Promise((resolve) => (resolveBoot = resolve)));
+    dispose = initAgentDefaultsSync();
+
+    clientMock.push({ assistantAgentId: "codex" });
+    resolveBoot({ ok: true, result: { agentDefaults: { assistantAgentId: "claude" } } });
+    await settle();
+
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("codex");
+  });
+
+  it("applies a push without writing back or queuing a session switch", async () => {
+    boot({});
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    clientMock.push({ assistantAgentId: "codex", defaultAgent: "claude" });
+
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("codex");
+    expect(useHelpPanelStore.getState().agentSwitchRequest).toBeNull();
+    expect(useAgentPreferencesStore.getState().defaultAgent).toBe("claude");
+    expect(clientMock.set).not.toHaveBeenCalled();
+  });
+
+  it("moves this machine's values to the host once, then deletes them", async () => {
+    putLegacy("help-panel-storage", { width: 400, preferredAgentId: "claude" });
+    putLegacy("daintree-agent-preferences", { defaultAgent: "codex" });
+    boot({});
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    expect(clientMock.migrateLegacy).toHaveBeenCalledWith({
+      assistantAgentId: "claude",
+      defaultAgent: "codex",
+    });
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("claude");
+    expect(localStorage.getItem("daintree-agent-preferences")).toBeNull();
+    expect(stored("help-panel-storage")).toEqual({ state: { width: 400 }, version: 6 });
+  });
+
+  it("takes the host's answer when it already had a value", async () => {
+    putLegacy("help-panel-storage", { preferredAgentId: "claude" });
+    clientMock.migrateLegacy.mockResolvedValue({ assistantAgentId: "codex" });
+    boot({ assistantAgentId: "codex" });
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("codex");
+    expect(stored("help-panel-storage")).toEqual({ state: {}, version: 6 });
+  });
+
+  it("never sends or deletes this Shell's values from a remote window", async () => {
+    hostMock.isRemoteWindow.mockReturnValue(true);
+    putLegacy("help-panel-storage", { preferredAgentId: "claude" });
+    boot({ assistantAgentId: "codex" });
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    expect(clientMock.migrateLegacy).not.toHaveBeenCalled();
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("codex");
+    expect(stored("help-panel-storage")).toEqual({
+      state: { preferredAgentId: "claude" },
+      version: 6,
+    });
+  });
+
+  it("keeps the legacy values for the next boot when the move fails", async () => {
+    putLegacy("daintree-agent-preferences", { defaultAgent: "codex" });
+    clientMock.migrateLegacy.mockRejectedValue(new Error("link down"));
+    boot({});
+    dispose = initAgentDefaultsSync();
+    await settle();
+
+    expect(localStorage.getItem("daintree-agent-preferences")).not.toBeNull();
+  });
+
+  it("re-resolves the assistant agent when the host's CLI availability lands", async () => {
+    boot({ assistantAgentId: "claude" });
+    dispose = initAgentDefaultsSync();
+    await settle();
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("claude");
+
+    useCliAvailabilityStore.setState((state) => ({
+      hasRealData: true,
+      availability: { ...state.availability, claude: "missing" },
+    }));
+
+    expect(useHelpPanelStore.getState().preferredAgentId).toBeNull();
+    expect(useHelpPanelStore.getState().droppedPreferredAgentId).toBe("claude");
+    expect(useHelpPanelStore.getState().hostAssistantAgentId).toBe("claude");
+    expect(clientMock.set).not.toHaveBeenCalled();
+  });
+});

@@ -729,7 +729,10 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       fireEvent.click(screen.getByTestId("help-choose-agent-codex"));
     });
 
-    expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("codex");
+    // Launched directly, so it saves the default without queuing a session switch.
+    expect(helpPanelState.setPreferredAgent).toHaveBeenCalledWith("codex", {
+      switchSession: false,
+    });
     expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenCalledWith(true);
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "codex" })

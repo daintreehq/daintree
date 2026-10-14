@@ -3,6 +3,7 @@ import os from "os";
 import { app } from "electron";
 import { store } from "../store.js";
 import { readCanopyMode } from "./canopy/canopyMode.js";
+import { readAgentDefaults } from "./agentDefaults.js";
 import { projectStore } from "./ProjectStore.js";
 import { filterRestorableTerminalSnapshots } from "./projectStateRestore.js";
 import {
@@ -139,6 +140,7 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     terminalConfig: readHydrateTerminalConfig(),
     project: currentProject ?? null,
     agentSettings: store.get("agentSettings"),
+    agentDefaults: readAgentDefaults(),
     gpuWebGLHardware,
     gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
     gpuDisabledReason: readGpuDisabledFlagData(app.getPath("userData"))?.reason ?? null,
