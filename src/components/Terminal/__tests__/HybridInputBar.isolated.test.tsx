@@ -152,6 +152,12 @@ describe("HybridInputBar isolated", () => {
   });
 
   describe("as the terminal's partner in the pane's drops", () => {
+    // A bar in the focused pane claims the keyboard a frame after mounting; these
+    // tests start with nothing holding it, so that frame can't race their checks.
+    beforeEach(() => {
+      usePanelStore.setState({ focusedId: null });
+    });
+
     afterEach(() => {
       act(() => _resetPaneDropRoutingForTests());
     });
