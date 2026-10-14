@@ -65,7 +65,10 @@ export function RadioChoiceGroup({
   className,
 }: RadioChoiceGroupProps) {
   return (
-    <fieldset className={cn("space-y-2", className)}>
+    // `min-w-0` because a fieldset's default `min-inline-size: min-content`
+    // grows it to its longest unbreakable token, pushing long paths and URLs
+    // out past the dialog instead of wrapping them.
+    <fieldset className={cn("min-w-0 space-y-2", className)}>
       <legend
         className={cn(legendHidden ? "sr-only" : "text-sm font-medium text-text-primary mb-2")}
       >
@@ -87,8 +90,18 @@ interface RadioChoiceRowProps {
   checked: boolean;
   onChange: () => void;
   label: string;
-  /** What the user ends up with. Announced as a description, not part of the name. */
-  description?: string;
+  /**
+   * What the user ends up with. Announced as a description, not part of the
+   * name, so it should stay short: a screen reader reads it unbroken on every
+   * arrow press.
+   */
+  description?: React.ReactNode;
+  /**
+   * Supporting detail under the description, visible but left out of the
+   * announcement, so comparing options doesn't mean hearing all of it each time.
+   * Phrasing content only: it sits inside the row's `<label>`.
+   */
+  details?: React.ReactNode;
   disabled?: boolean;
   /** Native `required`, so an empty group fails form validation. */
   required?: boolean;
@@ -110,6 +123,7 @@ export function RadioChoiceRow({
   onChange,
   label,
   description,
+  details,
   disabled,
   required,
   testId,
@@ -154,7 +168,7 @@ export function RadioChoiceRow({
         // mt-1 centres the ~13px control in the label's 20px line box.
         className="mt-1 shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-transparent"
       />
-      <span className="min-w-0">
+      <span className="min-w-0 flex-1">
         <span id={labelId} className="block text-sm font-medium text-text-primary">
           {label}
         </span>
@@ -162,6 +176,9 @@ export function RadioChoiceRow({
           <span id={descriptionId} className="block text-xs text-text-secondary select-text">
             {description}
           </span>
+        )}
+        {details && (
+          <span className="block text-xs text-text-secondary select-text">{details}</span>
         )}
       </span>
     </label>
