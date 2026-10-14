@@ -249,6 +249,7 @@ const hostEntry = (id: string, name: string): HostListEntry => ({
     lastSeenAt: Date.now(),
     addedAt: 0,
     notificationsEnabled: false,
+    assistantMessagingEnabled: false,
   },
   connection: { status: "connected", rttMs: 38, handshake: PREVIEW_HANDSHAKE },
   summary: null,
