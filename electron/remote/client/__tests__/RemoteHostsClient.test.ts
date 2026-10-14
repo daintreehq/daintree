@@ -398,6 +398,45 @@ describe("RemoteHostsClient", () => {
       expect(pendingEvents().at(-1)).toBeNull();
     });
 
+    it("keeps typing held for a committed switch when a newer one is cancelled first", async () => {
+      let releaseOpen!: () => void;
+      vi.mocked(windows.openRemoteProject).mockImplementationOnce(
+        () => new Promise<void>((resolve) => (releaseOpen = resolve))
+      );
+      const first = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+      });
+      await vi.waitFor(() => expect(windows.openRemoteProject).toHaveBeenCalled());
+      const committed = client.getPendingSwitch(ctxFor(5, 1))!;
+      expect(committed.committed).toBe(true);
+
+      manager
+        .connect("studio-01")
+        .whenReady.mockImplementationOnce(() => new Promise<string>(() => {}));
+      const second = client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-2",
+      });
+      await vi.waitFor(() =>
+        expect(client.getPendingSwitch(ctxFor(5, 1))?.switchId).not.toBe(committed.switchId)
+      );
+      const newer = client.getPendingSwitch(ctxFor(5, 1))!;
+      expect(client.cancelPendingSwitch(ctxFor(5, 1), { switchId: newer.switchId })).toBe(true);
+      await expect(second).resolves.toMatchObject({ outcome: "superseded" });
+
+      // The first is still moving the window: its views hear about it again.
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toEqual(committed);
+      expect(pendingEvents().at(-1)).toEqual(committed);
+
+      releaseOpen();
+      await expect(first).resolves.toMatchObject({ outcome: "switched" });
+      expect(client.getPendingSwitch(ctxFor(5, 1))).toBeNull();
+      expect(pendingEvents().at(-1)).toBeNull();
+    });
+
     it("settles a first switch whose window closes before it ever bound", async () => {
       manager
         .connect("studio-01")

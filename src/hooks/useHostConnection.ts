@@ -683,7 +683,7 @@ function beginSync(): () => void {
   // Fetched up front so the first preview this view builds already carries it.
   if (hostId !== null) void primeHostPreviewCapability();
   // Each change of the link is said once for the window, never by its banner or panes.
-  if (hostId !== null) disposers.push(watchHostConnectionAnnouncements());
+  if (hostId !== null) disposers.push(watchHostConnectionAnnouncements(hostId));
 
   // Saves held while the link was down go out only after the lease is re-read
   // and any resync in flight (a fresh session's rehydrate) has finished.

@@ -88,13 +88,17 @@ let said: { hostId: string | null; episode: HostLinkEpisode; lostFromUp: boolean
  * banner remounts across back-off cycles and every pane would repeat it. A
  * change that undoes itself inside the 400ms gate is never said.
  */
-export function watchHostConnectionAnnouncements(): () => void {
+export function watchHostConnectionAnnouncements(hostId: string): () => void {
   const store = useHostConnectionStore;
-  const hostId = store.getState().hostId;
   // A view that opens onto a link already down says so, once the gate passes.
   if (said.hostId !== hostId) said = { hostId, episode: "up", lostFromUp: false };
-  let current: HostLinkEpisode =
-    hostLinkEpisode(selectHostBannerVariant(store.getState()), said.episode) ?? said.episode;
+  // Before the store is bound to this host, or has heard the link's state,
+  // nothing is known: that is no news, not a link that came back.
+  const episodeOf = (state: ReturnType<typeof store.getState>, from: HostLinkEpisode) =>
+    state.hostId !== hostId || state.connection === null
+      ? null
+      : hostLinkEpisode(selectHostBannerVariant(state), from);
+  let current: HostLinkEpisode = episodeOf(store.getState(), said.episode) ?? said.episode;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
   const settle = () => {
@@ -125,7 +129,7 @@ export function watchHostConnectionAnnouncements(): () => void {
 
   settle();
   const unsubscribe = store.subscribe((state) => {
-    const next = hostLinkEpisode(selectHostBannerVariant(state), current);
+    const next = episodeOf(state, current);
     if (next === null || next === current) return;
     current = next;
     settle();

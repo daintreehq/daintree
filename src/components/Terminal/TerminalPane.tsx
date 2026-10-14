@@ -594,6 +594,10 @@ function TerminalPaneComponent({
     isRestarting ||
     followsDriver ||
     hostSwitchPending;
+  // Focus routing ignores a pending switch: moving focus to xterm for it would
+  // flip the pane's stored preference, so a switch that fails or comes back
+  // would leave the keyboard off the composer the user was in.
+  const isHybridInputDisabledForFocus = isHybridInputDisabled && !hostSwitchPending;
 
   const isHibernated = useIsHibernated(id);
 
@@ -1108,7 +1112,7 @@ function TerminalPaneComponent({
       focusTarget: getTerminalFocusTarget({
         preferredTarget: preferredTerminalFocusTarget,
         hasHybridInputSurface: showHybridInputBar,
-        isInputDisabled: isHybridInputDisabled,
+        isInputDisabled: isHybridInputDisabledForFocus,
         hybridInputEnabled,
       }),
       ...readXtermSelectionState(id),
@@ -1141,7 +1145,7 @@ function TerminalPaneComponent({
     showHybridInputBar,
     hybridInputEnabled,
     preferredTerminalFocusTarget,
-    isHybridInputDisabled,
+    isHybridInputDisabledForFocus,
   ]);
 
   useEffect(() => {
@@ -1161,7 +1165,7 @@ function TerminalPaneComponent({
         focusTarget: getTerminalFocusTarget({
           preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
           hasHybridInputSurface: showHybridInputBar,
-          isInputDisabled: isHybridInputDisabled,
+          isInputDisabled: isHybridInputDisabledForFocus,
           hybridInputEnabled,
         }),
         ...readXtermSelectionState(id),
@@ -1183,7 +1187,13 @@ function TerminalPaneComponent({
       terminalInstanceService.focus(id);
       return containerRef.current?.contains(document.activeElement) ?? false;
     });
-  }, [id, isHeldForRecovery, showHybridInputBar, isHybridInputDisabled, hybridInputEnabled]);
+  }, [
+    id,
+    isHeldForRecovery,
+    showHybridInputBar,
+    isHybridInputDisabledForFocus,
+    hybridInputEnabled,
+  ]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {

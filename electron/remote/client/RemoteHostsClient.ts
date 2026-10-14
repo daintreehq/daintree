@@ -212,8 +212,14 @@ export class RemoteHostsClient {
   private readonly projectOffers = new Map<number, HostId>();
   /** Each window's newest switch request; abandoning it settles the wait it is in. */
   private readonly switchTickets = new Map<number, { seq: number; abandon: () => void }>();
-  /** A window's switch to a host that hasn't committed yet, as its views are told. */
+  /** A window's switch to a host that hasn't landed yet, as its views are told. */
   private readonly pendingSwitches = new Map<number, PendingHostSwitch>();
+  /**
+   * A window's committed switch whose view isn't showing yet. A newer request
+   * can take over what the views are told; if that one gives up first, they
+   * are told about this one again, since it is still moving the window.
+   */
+  private readonly committedSwitches = new Map<number, PendingHostSwitch>();
   private readonly switchChains = new Map<number, Promise<void>>();
   /**
    * Hosts being removed or re-pointed, with the target they had: from the
@@ -644,8 +650,15 @@ export class RemoteHostsClient {
     };
     const settlePending = (): void => {
       if (pendingWindowId === null || ticket === null) return;
+      if (this.committedSwitches.get(pendingWindowId)?.switchId === ticket.id) {
+        this.committedSwitches.delete(pendingWindowId);
+      }
       if (this.pendingSwitches.get(pendingWindowId)?.switchId === ticket.id) {
-        this.publishPendingSwitch(pendingWindowId, null);
+        // An earlier switch still opening keeps typing held until it lands.
+        this.publishPendingSwitch(
+          pendingWindowId,
+          this.committedSwitches.get(pendingWindowId) ?? null
+        );
       }
     };
     // No longer on offer to cancel, but still pending until the window's new
@@ -655,7 +668,9 @@ export class RemoteHostsClient {
       if (pendingWindowId === null || ticket === null) return;
       const current = this.pendingSwitches.get(pendingWindowId);
       if (current?.switchId !== ticket.id || current.committed) return;
-      this.publishPendingSwitch(pendingWindowId, { ...current, committed: true });
+      const committed: PendingHostSwitch = { ...current, committed: true };
+      this.committedSwitches.set(pendingWindowId, committed);
+      this.publishPendingSwitch(pendingWindowId, committed);
     };
     try {
       return await this.runSwitch(
@@ -1049,6 +1064,7 @@ export class RemoteHostsClient {
       this.switchTickets.get(windowId)?.abandon();
       this.switchTickets.delete(windowId);
       this.pendingSwitches.delete(windowId);
+      this.committedSwitches.delete(windowId);
       this.options.bindings.release(windowId);
     });
   }

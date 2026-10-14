@@ -59,7 +59,7 @@ afterEach(() => {
 
 describe("watchHostConnectionAnnouncements", () => {
   it("says a lost link once, however many back-off cycles it goes through", () => {
-    stop = watchHostConnectionAnnouncements();
+    stop = watchHostConnectionAnnouncements("studio-01");
     for (let cycle = 0; cycle < 4; cycle += 1) {
       link(RECONNECTING);
       vi.advanceTimersByTime(1_000);
@@ -78,7 +78,7 @@ describe("watchHostConnectionAnnouncements", () => {
   });
 
   it("says nothing for a blip that recovers inside the gate", () => {
-    stop = watchHostConnectionAnnouncements();
+    stop = watchHostConnectionAnnouncements("studio-01");
     link(RECONNECTING);
     vi.advanceTimersByTime(200);
     link(CONNECTED);
@@ -88,7 +88,7 @@ describe("watchHostConnectionAnnouncements", () => {
 
   it("says nothing while the first connect is still trying", () => {
     useHostConnectionStore.setState({ connection: null, everConnected: false });
-    stop = watchHostConnectionAnnouncements();
+    stop = watchHostConnectionAnnouncements("studio-01");
     useHostConnectionStore.setState({ connection: { status: "connecting", attempt: 1 } });
     vi.advanceTimersByTime(1_000);
     useHostConnectionStore.setState({ connection: CONNECTED, everConnected: true });
@@ -97,7 +97,7 @@ describe("watchHostConnectionAnnouncements", () => {
   });
 
   it("says what the host answered when it isn't a lost link", () => {
-    stop = watchHostConnectionAnnouncements();
+    stop = watchHostConnectionAnnouncements("studio-01");
     link({ status: "unreachable", lastSeenAt: null, detail: null, hostModeOff: true });
     vi.advanceTimersByTime(400);
     expect(spoken()).toEqual(["Daintree isn't running in Host mode on studio-01."]);
@@ -111,7 +111,7 @@ describe("watchHostConnectionAnnouncements", () => {
   });
 
   it("says nothing new while connecting again after a deliberate disconnect, then that it connected", () => {
-    stop = watchHostConnectionAnnouncements();
+    stop = watchHostConnectionAnnouncements("studio-01");
     link({ status: "disconnected" });
     vi.advanceTimersByTime(400);
     link(RECONNECTING);
@@ -122,7 +122,7 @@ describe("watchHostConnectionAnnouncements", () => {
   });
 
   it("calls a failed retry after an ssh refusal unreachable, not a lost connection", () => {
-    stop = watchHostConnectionAnnouncements();
+    stop = watchHostConnectionAnnouncements("studio-01");
     link({ status: "unreachable", lastSeenAt: null, detail: null, stoppedRetrying: true });
     vi.advanceTimersByTime(400);
     link(RECONNECTING);
@@ -137,7 +137,7 @@ describe("watchHostConnectionAnnouncements", () => {
 
   it("says connected, not reconnected, when a host first reached after failing comes up", () => {
     useHostConnectionStore.setState({ connection: null, everConnected: false });
-    stop = watchHostConnectionAnnouncements();
+    stop = watchHostConnectionAnnouncements("studio-01");
     link(UNREACHABLE);
     vi.advanceTimersByTime(400);
     useHostConnectionStore.setState({ connection: CONNECTED, everConnected: true });
@@ -149,11 +149,20 @@ describe("watchHostConnectionAnnouncements", () => {
   });
 
   it("doesn't say an outage again when the layout running it is replaced", () => {
-    stop = watchHostConnectionAnnouncements();
+    stop = watchHostConnectionAnnouncements("studio-01");
     link(UNREACHABLE);
     vi.advanceTimersByTime(400);
     stop();
-    stop = watchHostConnectionAnnouncements();
+    // Teardown resets the store; the next layout binds it again and re-reads the link.
+    useHostConnectionStore.getState().reset();
+    stop = watchHostConnectionAnnouncements("studio-01");
+    vi.advanceTimersByTime(1_000);
+    useHostConnectionStore.setState({
+      hostId: "studio-01",
+      hostName: "studio-01",
+      connection: UNREACHABLE,
+      everConnected: true,
+    });
     vi.advanceTimersByTime(1_000);
     expect(spoken()).toHaveLength(1);
     link(CONNECTED);
@@ -162,7 +171,7 @@ describe("watchHostConnectionAnnouncements", () => {
   });
 
   it("stops listening and drops a pending announcement when torn down", () => {
-    stop = watchHostConnectionAnnouncements();
+    stop = watchHostConnectionAnnouncements("studio-01");
     link(UNREACHABLE);
     stop();
     stop = null;
