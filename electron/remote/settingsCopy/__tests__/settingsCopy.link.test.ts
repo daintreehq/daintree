@@ -178,6 +178,39 @@ describe("settings copy over a link", () => {
     });
   });
 
+  it("never writes what the preview skipped, and reports it with the result", async () => {
+    hostSide.service.preview.mockImplementationOnce(async (incoming: Sections) => [
+      {
+        section: "agentSettings" as ConfigBundleSectionId,
+        add: 0,
+        update: 1,
+        unchanged: 0,
+        changes: [{ key: "claude", label: "Claude", kind: "update" as const }],
+        skipped: [{ key: "codex", label: "Codex", reason: "Its CLI isn't installed" }],
+      },
+      ...Object.keys(incoming)
+        .filter((id) => id !== "agentSettings")
+        .map((id) => ({
+          section: id as ConfigBundleSectionId,
+          add: 0,
+          update: 0,
+          unchanged: 0,
+          changes: [],
+        })),
+    ]);
+    local.agentSettings = { claude: { customFlags: "--a" }, codex: { customFlags: "--b" } };
+    const preview = await client.preview({ hostId: HOST, categories: ["agentSettings"] });
+    const report = await client.apply({ hostId: HOST, ticket: preview.ticket });
+    expect(hostSide.applied[0]).toEqual({ agentSettings: { claude: { customFlags: "--a" } } });
+    const section = report.sections.find((s) => s.section === "agentSettings");
+    expect(section?.skipped).toBe(1);
+    expect(section?.leaves).toContainEqual({
+      key: "codex",
+      status: "skipped",
+      reason: "Its CLI isn't installed",
+    });
+  });
+
   it("reports sections the host's build doesn't know instead of failing", async () => {
     const raw = (await sessions.client.call(SettingsCopyLinkMethod.PREVIEW, {
       sections: { worktreeConfig: { pathPattern: "x/{branch-slug}" }, fromTheFuture: { a: 1 } },

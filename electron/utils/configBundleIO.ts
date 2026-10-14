@@ -34,16 +34,19 @@ function childPath(parent: string, key: string): string {
 /** `scheme://user:password@host`: credentials inside a connection string, whatever the scheme. */
 const URI_USERINFO = /[a-z][a-z0-9+.-]*:\/\/[^\s/?#@:]+:[^\s/?#@]+@/i;
 
-const CREDENTIAL_WORD = "(?:token|secret|password|passwd|passphrase|api-?key|credentials?)";
+/**
+ * A flag whose name ENDS in a credential word: `--token`, `--github-token`,
+ * `--api-key`. Anchored at the end so a setting that merely mentions one
+ * (`--max-tokens`, `--token-file`, `--password-store`) is not mistaken for it.
+ */
+const CREDENTIAL_FLAG_NAME =
+  "--?(?:[a-z0-9]+-)*(?:token|secret|password|passwd|passphrase|api-?key|access-key|credentials?)";
 
-/** A flag named for a credential on its own (`--token`): the next argument is the secret. */
-const CREDENTIAL_FLAG = new RegExp(`^--?[a-z0-9-]*${CREDENTIAL_WORD}[a-z0-9-]*$`, "i");
+/** A credential flag on its own (`--token`): the next argument is the secret. */
+const CREDENTIAL_FLAG = new RegExp(`^${CREDENTIAL_FLAG_NAME}$`, "i");
 
 /** A credential flag with its value in the same string (`--api-key=…`, `--token abc`). */
-const CREDENTIAL_FLAG_WITH_VALUE = new RegExp(
-  `(?:^|\\s)--?[a-z0-9-]*${CREDENTIAL_WORD}[a-z0-9-]*(?:=|\\s+)\\S`,
-  "i"
-);
+const CREDENTIAL_FLAG_WITH_VALUE = new RegExp(`(?:^|\\s)${CREDENTIAL_FLAG_NAME}(?:=|\\s+)\\S`, "i");
 
 function looksSecret(value: string): boolean {
   return (

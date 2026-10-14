@@ -331,6 +331,16 @@ describe("credentials that no value pattern names (#13346)", () => {
     expect(sections.agentSettings).toEqual({ claude: {} });
   });
 
+  it("keeps settings that only mention a credential word, like a token budget", () => {
+    const payload = {
+      userAgentRegistry: {
+        mine: { id: "mine", args: ["--max-tokens", "4096", "--token-file", "/tmp/t"] },
+      },
+      agentSettings: { claude: { customFlags: "--max-tokens 4096 --password-store=basic" } },
+    };
+    expect(omitSectionSecrets(payload)).toEqual({ sections: payload, omittedSecretPaths: [] });
+  });
+
   it("keeps ordinary flags and URLs without credentials", () => {
     const payload = {
       agentSettings: {

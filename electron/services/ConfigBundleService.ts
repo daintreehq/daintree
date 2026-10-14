@@ -1325,9 +1325,10 @@ export class ConfigBundleService {
 
     /**
      * An existing recipe as the update leaves it. Terminals have no ids, so
-     * their env maps merge per name with the target's terminal at the same
-     * position: an env entry withheld as a secret at the source is absent,
-     * and the target's own value for that name is kept rather than erased.
+     * each merges with the target's terminal at the same position: a field
+     * the incoming one carries wins, its env merges per name, and a field it
+     * lacks (withheld at the source as a secret, a command holding a token)
+     * keeps the target's own value rather than being erased.
      */
     const merged = (
       recipe: Record<string, unknown>,
@@ -1339,8 +1340,10 @@ export class ConfigBundleService {
         const before = existing.terminals as unknown[];
         next.terminals = recipe.terminals.map((terminal, index) => {
           const prior = before[index];
-          if (!isRecord(terminal) || !isRecord(prior) || !isRecord(prior.env)) return terminal;
-          return { ...terminal, env: mergeEnv(prior.env, terminal.env) };
+          if (!isRecord(terminal) || !isRecord(prior)) return terminal;
+          const next: Record<string, unknown> = { ...prior, ...terminal };
+          if (isRecord(prior.env)) next.env = mergeEnv(prior.env, terminal.env);
+          return next;
         });
       }
       return next;

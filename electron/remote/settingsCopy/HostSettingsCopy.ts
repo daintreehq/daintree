@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
 import {
   isConfigBundleSectionId,
+  type ConfigBundlePreviewSection,
   type ConfigBundleSectionId,
+  type ConfigImportLeafResult,
   type ConfigImportReport,
 } from "../../../shared/types/configBundle.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -31,6 +33,63 @@ interface Ticket {
   ids: ConfigBundleSectionId[];
   revision: string;
   expiresAt: number;
+  /** Leaves the preview refused and the payload no longer carries, reported with the result. */
+  refused: Map<ConfigBundleSectionId, ConfigImportLeafResult[]>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The payload minus every keyed entry the preview said it would skip. Some
+ * verdicts rest on things outside the sections' own revision (whether an
+ * agent is installed, or can run the assistant), so they are decided once,
+ * here, and an apply can never write what its preview refused.
+ */
+function withoutRefused(
+  sections: Partial<Record<ConfigBundleSectionId, unknown>>,
+  previews: ConfigBundlePreviewSection[]
+): {
+  sections: Partial<Record<ConfigBundleSectionId, unknown>>;
+  refused: Map<ConfigBundleSectionId, ConfigImportLeafResult[]>;
+} {
+  const kept = { ...sections };
+  const refused = new Map<ConfigBundleSectionId, ConfigImportLeafResult[]>();
+  for (const preview of previews) {
+    const payload = kept[preview.section];
+    if (!isRecord(payload) || !preview.skipped?.length) continue;
+    const next = { ...payload };
+    const leaves: ConfigImportLeafResult[] = [];
+    for (const skip of preview.skipped) {
+      if (!Object.prototype.hasOwnProperty.call(next, skip.key)) continue;
+      delete next[skip.key];
+      leaves.push({ key: skip.key, status: "skipped", reason: skip.reason });
+    }
+    kept[preview.section] = next;
+    if (leaves.length > 0) refused.set(preview.section, leaves);
+  }
+  return { sections: kept, refused };
+}
+
+/** Put the refused leaves back into the report, so it lists everything the preview did. */
+function withRefused(
+  report: ConfigImportReport,
+  refused: Map<ConfigBundleSectionId, ConfigImportLeafResult[]>
+): ConfigImportReport {
+  if (refused.size === 0 || report.outcome !== "applied") return report;
+  return {
+    ...report,
+    sections: report.sections.map((section) => {
+      const leaves = refused.get(section.section);
+      if (!leaves) return section;
+      return {
+        ...section,
+        skipped: section.skipped + leaves.length,
+        leaves: [...section.leaves, ...leaves],
+      };
+    }),
+  };
 }
 
 /** Long enough to read a long preview; a person who leaves it longer previews again. */
@@ -113,11 +172,13 @@ export class HostSettingsCopy {
       tickets.delete(oldest);
     }
     const ticket = randomBytes(16).toString("hex");
+    const { sections: accepted, refused } = withoutRefused(sections, previews);
     tickets.set(ticket, {
-      sections,
+      sections: accepted,
       ids,
       revision,
       expiresAt: now + (this.deps.ticketTtlMs ?? TICKET_TTL_MS),
+      refused,
     });
     return {
       ticket,
@@ -133,10 +194,13 @@ export class HostSettingsCopy {
     tickets.delete(ticket);
     if (!entry || entry.expiresAt <= this.now()) throw stale();
     const service = await this.deps.service();
-    const report = await this.deps.runWrite(async () => {
-      if ((await service.revision(entry.ids)) !== entry.revision) throw stale();
-      return service.apply(entry.sections);
-    });
+    const report = withRefused(
+      await this.deps.runWrite(async () => {
+        if ((await service.revision(entry.ids)) !== entry.revision) throw stale();
+        return service.apply(entry.sections);
+      }),
+      entry.refused
+    );
     if (report.outcome === "applied") {
       try {
         await this.deps.reconcile();

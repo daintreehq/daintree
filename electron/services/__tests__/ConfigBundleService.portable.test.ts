@@ -292,6 +292,20 @@ describe("permission bypass", () => {
     expect(bypass.update).toBe(1);
   });
 
+  it("names a change confined to one preset, with its real before and after", async () => {
+    const [preview] = await makeService().preview({
+      permissionBypass: { agents: { claude: { presets: { fast: { dangerousMode: "off" } } } } },
+    });
+    expect(preview.changes).toEqual([
+      expect.objectContaining({
+        key: "agents.claude",
+        label: "Claude",
+        from: "Fast: Always skip",
+        to: "Fast: Never skip",
+      }),
+    ]);
+  });
+
   it("reads a legacy enabled flag as the mode it means, so it can't sit under a host veto", async () => {
     await makeService().apply({
       permissionBypass: { agents: { claude: { dangerousEnabled: true } } },
@@ -460,6 +474,13 @@ describe("withheld values leave the host's own in place", () => {
     // A second copy of the same thing changes nothing.
     const [again] = await service.preview(incoming);
     expect(again).toMatchObject({ update: 0, unchanged: 1 });
+
+    // A command withheld at the source (it held a token) keeps the host's.
+    await service.apply({
+      globalRecipes: [{ id: "r1", name: "Dev renamed", terminals: [{ type: "terminal" }] }],
+    });
+    expect(recipes[0]).toMatchObject({ name: "Dev renamed" });
+    expect(recipes[0].terminals[0]).toMatchObject({ command: "npm run dev", env: { PORT: "2" } });
   });
 });
 

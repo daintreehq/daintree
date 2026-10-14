@@ -357,8 +357,44 @@ const MODE_LABELS: Record<string, string> = {
 function bypassModeLabel(payload: unknown): string | undefined {
   if (!isRecord(payload)) return undefined;
   if (typeof payload.dangerousMode === "string") return MODE_LABELS[payload.dangerousMode];
-  if (payload.dangerousEnabled === true) return MODE_LABELS.on;
+  if (typeof payload.dangerousEnabled === "boolean") {
+    return payload.dangerousEnabled ? MODE_LABELS.on : MODE_LABELS.inherit;
+  }
   return undefined;
+}
+
+/**
+ * "Never skip; Fast: Always skip" — an agent's own bypass and each preset
+ * override `like` names, so a change confined to one preset is shown as one.
+ */
+function bypassSummary(
+  payload: unknown,
+  like: BypassAgentPayload,
+  presetNames: Map<string, string>
+): string | undefined {
+  if (!isRecord(payload)) return undefined;
+  const parts: string[] = [];
+  const ownIntent = like.dangerousMode !== undefined || like.dangerousEnabled !== undefined;
+  if (ownIntent) parts.push(bypassModeLabel(payload) ?? MODE_LABELS.inherit);
+  const presets = isRecord(payload.presets) ? payload.presets : {};
+  for (const id of Object.keys(like.presets ?? {})) {
+    const mode = bypassModeLabel(presets[id]) ?? MODE_LABELS.inherit;
+    parts.push(`${presetNames.get(id) ?? id}: ${mode}`);
+  }
+  return parts.length > 0 ? parts.join("; ") : undefined;
+}
+
+function presetNamesOf(...entries: unknown[]): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const entry of entries) {
+    if (!isRecord(entry) || !Array.isArray(entry.customPresets)) continue;
+    for (const preset of entry.customPresets) {
+      if (isRecord(preset) && typeof preset.id === "string" && typeof preset.name === "string") {
+        names.set(preset.id, preset.name);
+      }
+    }
+  }
+  return names;
 }
 
 /**
@@ -472,7 +508,7 @@ export function permissionBypassSection(): SectionHandler {
       }
       return check;
     },
-    describe: (key, kind, incoming, current) => {
+    describe: (key, kind, incoming, current, ctx) => {
       const payload = asPayload(incoming);
       const snapshot = asSnapshot(current);
       const onOff = (value: unknown) =>
@@ -496,15 +532,21 @@ export function permissionBypassSection(): SectionHandler {
         };
       }
       const agentId = key.slice("agents.".length);
+      const raw = payload.agents?.[agentId];
+      const asked: BypassAgentPayload = isRecord(raw) ? (raw as BypassAgentPayload) : {};
+      const arriving = isRecord(ctx.incoming.agentSettings)
+        ? ctx.incoming.agentSettings[agentId]
+        : undefined;
+      const names = presetNamesOf(snapshot.agents[agentId], arriving);
       return {
         key,
         kind,
         label: agentName(agentId),
         from:
           kind === "update"
-            ? bypassModeLabel(projectBypassAgent(snapshot.agents[agentId]))
+            ? bypassSummary(projectBypassAgent(snapshot.agents[agentId]) ?? {}, asked, names)
             : undefined,
-        to: bypassModeLabel(payload.agents?.[agentId]),
+        to: bypassSummary(asked, asked, names),
       };
     },
     apply: async (incoming, current) => {
