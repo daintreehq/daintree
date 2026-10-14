@@ -7,10 +7,13 @@ import { TERMINAL_EXCHANGE_STATES, type ExchangeActor, type ExchangeKey } from "
 const NOT_SENDABLE = new Set(["NOT_FOUND", "VALIDATION", "OUTCOME_UNKNOWN"]);
 
 /**
- * Records a lane wake's outcome on its exchange (#13333). Delivered and
- * ambiguous are delivery facts; held and unavailable go in the outcome code
- * beside the current state, which they never change. A typed wake is read
- * from `wakeTypedAt`, so a held code left from before it is history.
+ * Records a lane wake's outcome on its exchange (#13333). The wake reserves
+ * the exchange's one delivery attempt, so the receiving side must record
+ * nothing that counts as one (`accepted` included) before it is queued.
+ * Delivered and ambiguous are delivery facts; held and unavailable go in the
+ * outcome code beside the current state, which they never change. A typed
+ * wake is read from `wakeTypedAt`, so a held code left from before it is
+ * history.
  */
 export function exchangeWakeSink(
   store: AssistantExchangeStore,

@@ -605,7 +605,8 @@ export interface LaneWake {
   recheck(): LaneWakeCheck;
   /**
    * Reserves the attempt durably, synchronously and with nothing awaited
-   * before the submit. False keeps the wake off the line for good.
+   * before the submit. False keeps the wake off the line for good, with no
+   * report: the exchange already holds what became of it.
    */
   beforeType(): boolean;
   report(outcome: LaneWakeOutcome): void;
@@ -1066,7 +1067,7 @@ export class TerminalNotifyService {
     const existing = this.existingOwner(pane);
     if (existing?.wakes.has(wake.id) === true) return;
     if ((existing?.wakes.size ?? 0) >= MAX_QUEUED_WAKES_PER_PANE) {
-      reportWake(wake, { kind: "held", reason: "capacity" });
+      reportWake(wake, { kind: "unavailable", reason: "capacity" });
       return;
     }
     this.ensureSubscribed(client);

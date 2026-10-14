@@ -16,6 +16,7 @@ import {
   formatNoticeLine,
   LANE_WAKE_MAX_PENDING_MS,
   LANE_WAKE_RECHECK_MS,
+  MAX_QUEUED_WAKES_PER_PANE,
   runNotifyWhenIdleTool,
   type FiredNotice,
   type LaneWake,
@@ -1988,14 +1989,82 @@ describe("lane wakes (#13333)", () => {
     expect(w.outcomes).toEqual([{ kind: "held", reason: "typing" }, { kind: "delivered" }]);
   });
 
-  it("waits while the lane is mid-turn", async () => {
+  it("waits out a mid-turn lane whose CLI can't queue input", async () => {
     const h = setup();
-    h.client.terminals.set(OWN, working());
+    h.client.terminals.set(OWN, {
+      ...working(),
+      detectedAgentId: "gemini",
+      lastStateChange: Date.now() - 60_000,
+    });
     const w = fakeWake();
     h.service.enqueueWake(PANE, PROJECT, w.wake);
     await flushWake();
     expect(h.client.submitted).toEqual([]);
     expect(w.outcomes).toEqual([{ kind: "held", reason: "working" }]);
+  });
+
+  it("queues behind a mid-turn lane whose CLI takes input, unless the person typed since", async () => {
+    const h = setup();
+    const turnStartedAt = Date.now() - 60_000;
+    h.client.terminals.set(OWN, {
+      ...working(),
+      lastStateChange: turnStartedAt,
+      lastTypedInputAt: turnStartedAt + 1,
+    });
+    const w = fakeWake();
+    h.service.enqueueWake(PANE, PROJECT, w.wake);
+    await flushWake();
+    expect(h.client.submitted).toEqual([]);
+    expect(w.outcomes).toEqual([{ kind: "held", reason: "typing" }]);
+
+    h.client.terminals.set(OWN, { ...working(), lastStateChange: turnStartedAt });
+    await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS + NOTIFY_COALESCE_MS + 600);
+    expect(h.client.submitted).toHaveLength(1);
+    expect(w.outcomes.at(-1)).toEqual({ kind: "delivered" });
+  });
+
+  it("drops a waiting wake once the lane moves on, with no pane event to prompt it", async () => {
+    const h = setup();
+    h.client.terminals.set(OWN, working());
+    const w = fakeWake();
+    h.service.enqueueWake(PANE, PROJECT, w.wake);
+    await flushWake();
+    w.setCheck({ kind: "unavailable", reason: "not-enrolled" });
+    await vi.advanceTimersByTimeAsync(LANE_WAKE_RECHECK_MS);
+
+    expect(w.outcomes).toEqual([
+      { kind: "held", reason: "working" },
+      { kind: "unavailable", reason: "not-enrolled" },
+    ]);
+    expect(h.service.getPaneState(OWN)).toBeNull();
+  });
+
+  it("refuses a wake past the pane's capacity rather than holding it unseen", () => {
+    const h = setup();
+    h.client.terminals.set(OWN, working());
+    for (let i = 0; i < MAX_QUEUED_WAKES_PER_PANE; i++) {
+      h.service.enqueueWake(PANE, PROJECT, fakeWake(`task-${i}`).wake);
+    }
+    const over = fakeWake("task-over");
+    h.service.enqueueWake(PANE, PROJECT, over.wake);
+    expect(over.outcomes).toEqual([{ kind: "unavailable", reason: "capacity" }]);
+    expect(h.service.getPaneState(OWN)?.readyCount).toBe(MAX_QUEUED_WAKES_PER_PANE);
+  });
+
+  it("records a wake still in the host when its pane stops as ambiguous, and takes the line back", async () => {
+    const h = setup();
+    const w = fakeWake();
+    h.service.enqueueWake(PANE, PROJECT, w.wake);
+    await vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 100);
+    const token = h.client.submitted[0].token!;
+    h.client.records.set(token, { phase: "queued", at: Date.now() });
+
+    h.service.stopPane(OWN);
+    expect(h.client.withdrawn).toEqual([{ id: OWN, token }]);
+    expect(w.outcomes).toEqual([{ kind: "ambiguous", reason: "unconfirmed" }]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.client.submitted).toHaveLength(1);
+    expect(w.outcomes).toHaveLength(1);
   });
 
   it("rechecks the lane immediately before typing and drops one that moved on", async () => {
