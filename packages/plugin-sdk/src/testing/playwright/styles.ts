@@ -42,9 +42,8 @@ export function collectCandidates(sources: Iterable<string>): string[] {
 }
 
 /**
- * The plugin's own stylesheet: utilities for exactly the classes its sources
- * use, compiled once instead of by the host's DOM observer. A class built from
- * fragments is unstyled here as it is in Daintree.
+ * The plugin's stylesheet: utilities for exactly `candidates`, scoped to the
+ * view's style root as the host scopes them.
  */
 export async function compilePanelCss(candidates: readonly string[]): Promise<string> {
   const { compile } = await loadOptionalPeer<typeof import("tailwindcss")>(
@@ -63,4 +62,27 @@ export async function compilePanelCss(candidates: readonly string[]): Promise<st
     },
   });
   return compiler.build([...candidates]);
+}
+
+/**
+ * The CSS a rendered page needs beyond what the build compiled: all of it again
+ * whenever the page uses a class the build's sources did not spell out (the
+ * sheet lives on the page, and each `open()` is a new one), `null` when it
+ * uses none. Compiles only when the set of classes grows.
+ */
+export function createPanelRestyle(
+  fromBuild: readonly string[],
+  compile: (candidates: readonly string[]) => Promise<string> = compilePanelCss
+): (classes: string[]) => Promise<string | null> {
+  const known = new Set(fromBuild);
+  const extra = new Set<string>();
+  let compiled: string | null = null;
+  return async (classes) => {
+    const fresh = classes.filter((name) => !known.has(name));
+    if (fresh.length === 0) return null;
+    const grew = fresh.some((name) => !extra.has(name));
+    for (const name of fresh) extra.add(name);
+    if (grew || compiled === null) compiled = await compile([...known, ...extra]);
+    return compiled;
+  };
 }

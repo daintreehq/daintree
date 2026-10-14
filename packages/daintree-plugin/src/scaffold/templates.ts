@@ -493,9 +493,6 @@ export default {
 
 /** The panel as it first opens. */
 export const Default: PanelStory = {};
-
-// Declaration order, which a native module namespace does not keep.
-export const __namedExportsOrder = ["Default"];
 `;
 }
 

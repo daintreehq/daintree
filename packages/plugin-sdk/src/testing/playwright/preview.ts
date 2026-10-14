@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page, TestInfo } from "@playwright/test";
+import { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "../../../../../shared/types/plugin.js";
 import { PREVIEW_FAILURE_ATTRIBUTE, PREVIEW_READY_ATTRIBUTE } from "../preview/attributes.js";
 import { PREVIEW_THEMES } from "../preview/themes.js";
 import {
@@ -108,13 +109,74 @@ export function validateStories(
   return [...new Set(declared)];
 }
 
+/**
+ * CSS for every class seen so far, or `null` when `classes` adds none. The
+ * build compiles the classes its sources spell out; this covers the ones a
+ * panel assembles at runtime, as the host's DOM observer does.
+ */
+export type RestylePanel = (classes: string[]) => Promise<string | null>;
+
+const RUNTIME_STYLE_ID = "daintree-panel-preview-runtime-styles";
+
+/** Compile what the rendered panel uses beyond the build's classes, and install it. */
+async function restyleFromDom(page: Page, restyle: RestylePanel): Promise<void> {
+  const classes = await page.evaluate((attribute) => {
+    const found = new Set<string>();
+    for (const root of document.querySelectorAll(`[${attribute}]`)) {
+      for (const element of [root, ...root.querySelectorAll("[class]")]) {
+        element.classList.forEach((name) => found.add(name));
+      }
+    }
+    return [...found];
+  }, PLUGIN_STYLE_ROOT_ATTRIBUTE);
+  const css = await restyle(classes);
+  if (css === null) return;
+  await page.evaluate(
+    ([id, text]) => {
+      let style = document.getElementById(id);
+      if (!style) {
+        style = document.createElement("style");
+        style.id = id;
+        document.head.append(style);
+      }
+      style.textContent = text;
+    },
+    [RUNTIME_STYLE_ID, css] as const
+  );
+}
+
+export interface TeardownState {
+  status?: string;
+  expectedStatus: string;
+}
+
+/**
+ * What a passing test still owes at teardown: no browser problem after its last
+ * capture, and a `finish()` if it opened a story. A failed, skipped or
+ * expected-to-fail test is left with the outcome it already has.
+ */
+export function checkTeardown(
+  state: TeardownState,
+  unfinished: boolean,
+  problems: BrowserProblems
+): void {
+  if (state.status !== "passed" || state.expectedStatus !== "passed") return;
+  problems.throwIfAny("after the last capture");
+  if (unfinished) {
+    throw new Error(
+      "The test opened a story but never called preview.finish(), so nothing checked that every declared story and theme was captured"
+    );
+  }
+}
+
 export function createPreview(
   page: Page,
   pageUrl: string,
   testInfo: TestInfo,
   stories: string[],
   themes: readonly string[],
-  problems: BrowserProblems
+  problems: BrowserProblems,
+  restyle?: RestylePanel
 ) {
   const coverage = new PreviewCoverage(stories, themes);
   const names = new Set<string>();
@@ -167,6 +229,7 @@ export function createPreview(
         problems.throwIfAny(what);
       };
       await assertReady();
+      if (restyle) await restyleFromDom(page, restyle);
       // Again here, for a face something after the mount brought into use.
       const failedFont = await page.evaluate(async () => {
         await document.fonts.ready;
@@ -195,6 +258,7 @@ export function createPreview(
     },
     async finish() {
       finished = true;
+      problems.throwIfAny("after the last capture");
       const missing = coverage.missing();
       if (missing.length > 0) {
         throw new Error(`No verified capture of:\n  ${missing.join("\n  ")}`);
@@ -214,13 +278,20 @@ export async function discoverStories(
   pageUrl: string,
   problems: BrowserProblems
 ): Promise<string[]> {
-  await page.goto(pageUrl);
-  const handle = await page
-    .waitForFunction((key) => {
-      const value = (window as unknown as Record<string, PageHandle | undefined>)[key];
-      return value && (value.stories || value.error) ? value : null;
-    }, PREVIEW_HANDLE)
-    .then((result) => result.jsonValue() as Promise<PageHandle>);
+  let handle: PageHandle;
+  try {
+    await page.goto(pageUrl);
+    handle = await page
+      .waitForFunction((key) => {
+        const value = (window as unknown as Record<string, PageHandle | undefined>)[key];
+        return value && (value.stories || value.error) ? value : null;
+      }, PREVIEW_HANDLE)
+      .then((result) => result.jsonValue() as Promise<PageHandle>);
+  } catch (error) {
+    // A script that never ran says why in the console, not on the page.
+    problems.throwIfAny("while loading the stories");
+    throw error;
+  }
   if (handle.error) throw new Error(`The panel preview did not start: ${handle.error}`);
   problems.throwIfAny("while loading the stories");
   return handle.stories ?? [];

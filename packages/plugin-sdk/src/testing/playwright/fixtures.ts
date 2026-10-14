@@ -4,21 +4,27 @@ import { DEFAULT_PREVIEW_THEME_ID } from "../preview/themes.js";
 import { buildPanelPreview } from "./build.js";
 import { BrowserProblems } from "./capture.js";
 import {
+  checkTeardown,
   createPreview,
   discoverStories,
   validateStories,
   validateThemes,
   type PanelPreviewFixtures,
   type PanelPreviewOptions,
+  type RestylePanel,
 } from "./preview.js";
 import { startPanelPreviewServer, type PanelPreviewServer } from "./server.js";
+import { createPanelRestyle } from "./styles.js";
 
 export type { PanelPreview, PanelPreviewFixtures, PanelPreviewOptions } from "./preview.js";
 
 export interface PanelPreviewWorkerFixtures {
   previewOptions: PanelPreviewOptions;
   /** The built preview, served for the worker's tests. */
-  previewServer: PanelPreviewServer;
+  previewServer: PanelPreviewServer & {
+    /** Compile classes the rendered panel uses beyond the build's. */
+    restyle: RestylePanel;
+  };
 }
 
 const DEFAULT_STORIES_PATH = "review/panel.stories.tsx";
@@ -51,9 +57,11 @@ export const test = base.extend<PanelPreviewFixtures, PanelPreviewWorkerFixtures
         pluginDir,
         storiesPath: previewOptions.storiesPath ?? DEFAULT_STORIES_PATH,
       });
-      const server = await startPanelPreviewServer({ title: path.basename(pluginDir), ...built });
+      const { candidates, ...served } = built;
+      const server = await startPanelPreviewServer({ title: path.basename(pluginDir), ...served });
+      const restyle = createPanelRestyle(candidates);
       try {
-        await provide(server);
+        await provide({ ...server, restyle });
       } finally {
         await server.close();
       }
@@ -83,14 +91,11 @@ export const test = base.extend<PanelPreviewFixtures, PanelPreviewWorkerFixtures
         testInfo,
         stories,
         themes,
-        problems
+        problems,
+        previewServer.restyle
       );
       await provide(preview);
-      if (testInfo.status === testInfo.expectedStatus && unfinished()) {
-        throw new Error(
-          "The test opened a story but never called preview.finish(), so nothing checked that every declared story and theme was captured"
-        );
-      }
+      checkTeardown(testInfo, unfinished(), problems);
     } finally {
       page.off("console", onConsole);
       page.off("pageerror", onPageError);

@@ -14,9 +14,19 @@ import {
   captureStableFrame,
 } from "../testing/playwright/capture.js";
 import { renderShell } from "../testing/playwright/page.js";
-import { createPreview, validateStories, validateThemes } from "../testing/playwright/preview.js";
+import {
+  checkTeardown,
+  createPreview,
+  discoverStories,
+  validateStories,
+  validateThemes,
+} from "../testing/playwright/preview.js";
 import { startPanelPreviewServer, type PanelPreviewServer } from "../testing/playwright/server.js";
-import { collectCandidates, compilePanelCss } from "../testing/playwright/styles.js";
+import {
+  collectCandidates,
+  compilePanelCss,
+  createPanelRestyle,
+} from "../testing/playwright/styles.js";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = path.resolve(here, "../../../..");
@@ -113,6 +123,20 @@ describe("compilePanelCss", () => {
     expect(css).toContain(".bg-surface-panel");
     // The contract deletes Tailwind's stock palette, as it does for the host.
     expect(css).not.toContain(".bg-red-500");
+  });
+});
+
+describe("createPanelRestyle", () => {
+  it("compiles classes the build missed, and hands every later page the same sheet", async () => {
+    const compile = vi.fn(async (candidates: readonly string[]) => candidates.join(" "));
+    const restyle = createPanelRestyle(["flex"], compile);
+    expect(await restyle(["flex"])).toBeNull();
+    expect(await restyle(["flex", "w-[327px]"])).toBe("flex w-[327px]");
+    // A fresh page carrying the same class needs the sheet again, uncompiled.
+    expect(await restyle(["w-[327px]"])).toBe("flex w-[327px]");
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(await restyle(["gap-2"])).toBe("flex w-[327px] gap-2");
+    expect(compile).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -303,6 +327,8 @@ function fakePage(state: {
     }),
     evaluate: vi.fn(async (fn: (...args: unknown[]) => unknown, arg?: unknown) => {
       if (Array.isArray(arg)) return state.readiness;
+      // The classes under the style root.
+      if (typeof arg === "string") return [];
       if (fn.toString().includes("fonts")) return state.font ?? null;
       return undefined;
     }),
@@ -316,6 +342,74 @@ function fakeTestInfo() {
   const info = { outputPath: (file: string) => path.join(tmpDir, "out", file), attach };
   return { testInfo: info as unknown as TestInfo, attach };
 }
+
+describe("checkTeardown", () => {
+  const passed = { status: "passed", expectedStatus: "passed" };
+
+  it("fails a passing test that opened a story without calling finish()", () => {
+    expect(() => checkTeardown(passed, true, new BrowserProblems())).toThrow(
+      /never called preview.finish\(\)/
+    );
+    expect(() => checkTeardown(passed, false, new BrowserProblems())).not.toThrow();
+  });
+
+  it("fails a passing test on a browser problem after its last capture", () => {
+    const problems = new BrowserProblems();
+    problems.add("page error: late");
+    expect(() => checkTeardown(passed, false, problems)).toThrow(/after the last capture/);
+  });
+
+  it("leaves failed, skipped and expected-to-fail tests as they are", () => {
+    const problems = new BrowserProblems();
+    problems.add("console error: x");
+    for (const state of [
+      { status: "failed", expectedStatus: "passed" },
+      { status: "skipped", expectedStatus: "skipped" },
+      { status: "failed", expectedStatus: "failed" },
+    ]) {
+      expect(() => checkTeardown(state, true, problems)).not.toThrow();
+    }
+  });
+});
+
+describe("discoverStories", () => {
+  it("reads the stories the page published", async () => {
+    const page = {
+      goto: vi.fn(async () => {}),
+      waitForFunction: vi.fn(async () => ({ jsonValue: async () => ({ stories: ["Empty"] }) })),
+    } as unknown as Page;
+    await expect(discoverStories(page, "http://x/", new BrowserProblems())).resolves.toEqual([
+      "Empty",
+    ]);
+  });
+
+  it("reports why the page did not start", async () => {
+    const page = {
+      goto: vi.fn(async () => {}),
+      waitForFunction: vi.fn(async () => ({
+        jsonValue: async () => ({ error: "the stories module threw: boom" }),
+      })),
+    } as unknown as Page;
+    await expect(discoverStories(page, "http://x/", new BrowserProblems())).rejects.toThrow(
+      /did not start: the stories module threw: boom/
+    );
+  });
+
+  it("names the browser problem behind a page that never published", async () => {
+    const problems = new BrowserProblems();
+    const page = {
+      goto: vi.fn(async () => {
+        problems.add("request failed: http://x/_preview/panel.js (net::ERR_ABORTED)");
+      }),
+      waitForFunction: vi.fn(async () => {
+        throw new Error("Timeout 30000ms exceeded");
+      }),
+    } as unknown as Page;
+    await expect(discoverStories(page, "http://x/", problems)).rejects.toThrow(
+      /while loading the stories:\n {2}request failed/
+    );
+  });
+});
 
 describe("createPreview", () => {
   const ready = { status: "ready", reason: null };
@@ -405,6 +499,41 @@ describe("createPreview", () => {
     );
     await preview.open("Empty");
     await expect(preview.snap("Empty")).rejects.toThrow(/font did not load: Inter/);
+  });
+
+  it("installs CSS for classes the rendered panel uses beyond the build's", async () => {
+    const { page } = fakePage({ readiness: ready });
+    const { testInfo } = fakeTestInfo();
+    const restyle = vi.fn(async () => ".w-\\[327px\\]{}");
+    const { preview } = createPreview(
+      page,
+      "http://127.0.0.1:1/",
+      testInfo,
+      ["Empty"],
+      ["daintree"],
+      new BrowserProblems(),
+      restyle
+    );
+    await preview.open("Empty");
+    await preview.snap("Empty");
+    expect(restyle).toHaveBeenCalledTimes(1);
+    const installs = vi
+      .mocked(page.evaluate)
+      .mock.calls.filter(([, arg]) => Array.isArray(arg) && arg[1] === ".w-\\[327px\\]{}");
+    expect(installs).toHaveLength(1);
+  });
+
+  it("fails finish() on a browser problem after the last capture", async () => {
+    const problems = new BrowserProblems();
+    const { preview } = setup(ready, problems);
+    for (const story of ["Empty", "Populated"]) {
+      for (const theme of ["daintree", "bondi"]) {
+        await preview.open(story, theme);
+        await preview.snap(`${story}-${theme}`);
+      }
+    }
+    problems.add("page error: late");
+    await expect(preview.finish()).rejects.toThrow(/after the last capture:\n {2}page error: late/);
   });
 
   it("finishes only once every declared pair has a verified capture", async () => {

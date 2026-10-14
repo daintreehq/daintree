@@ -42,6 +42,12 @@ interface PanelPreview {
 interface PanelPreviewFixtures {
     preview: PanelPreview;
 }
+/**
+ * CSS for every class seen so far, or `null` when `classes` adds none. The
+ * build compiles the classes its sources spell out; this covers the ones a
+ * panel assembles at runtime, as the host's DOM observer does.
+ */
+type RestylePanel = (classes: string[]) => Promise<string | null>;
 
 interface PanelPreviewServer {
     /** The page, ending in `/`. */
@@ -52,7 +58,10 @@ interface PanelPreviewServer {
 interface PanelPreviewWorkerFixtures {
     previewOptions: PanelPreviewOptions;
     /** The built preview, served for the worker's tests. */
-    previewServer: PanelPreviewServer;
+    previewServer: PanelPreviewServer & {
+        /** Compile classes the rendered panel uses beyond the build's. */
+        restyle: RestylePanel;
+    };
 }
 /**
  * `@playwright/test`'s `test`, extended with a plugin panel preview: the

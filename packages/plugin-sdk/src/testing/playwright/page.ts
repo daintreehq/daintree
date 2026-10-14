@@ -52,8 +52,7 @@ export function renderShell(title: string): string {
  * story under `theme` and the page reports readiness on its root.
  */
 export function renderHarness(storiesFile: string): string {
-  return `import * as stories from ${JSON.stringify(storiesFile)};
-import { listPanelStories, mountPanelStory } from "@daintreehq/plugin-sdk/testing/preview";
+  return `import { listPanelStories, mountPanelStory } from "@daintreehq/plugin-sdk/testing/preview";
 import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 
 const root = document.documentElement;
@@ -93,7 +92,10 @@ function stylesheets() {
 }
 
 try {
-  if (!stories.default || typeof stories.default.component !== "function") {
+  // Imported here rather than at the top, so a stories module that throws as it
+  // loads is a failure the page reports, not a script that never ran.
+  const stories = await import(${JSON.stringify(storiesFile)});
+  if (!stories.default || stories.default.component == null) {
     throw new Error("the stories file has no default export with a \`component\`");
   }
   const listed = listPanelStories(stories);

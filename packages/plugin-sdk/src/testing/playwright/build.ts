@@ -20,6 +20,8 @@ export interface PanelPreviewBuild {
   css: string;
   /** The SDK's `browser/` directory, served for `preview.css` and its assets. */
   kitDir: string;
+  /** The class candidates `css` was compiled for. */
+  candidates: string[];
 }
 
 const REACT_SPECIFIER = /^react(-dom)?(\/.*)?$/;
@@ -149,6 +151,7 @@ export async function buildPanelPreview(
     if (!isInside(pluginDir, file) || file.split(path.sep).includes("node_modules")) continue;
     sources.push(await fs.readFile(file, "utf8"));
   }
-  const css = [await compilePanelCss(collectCandidates(sources)), ...importedCss].join("\n");
-  return { script, css, kitDir: path.dirname(kitStylesheet) };
+  const candidates = collectCandidates(sources);
+  const css = [await compilePanelCss(candidates), ...importedCss].join("\n");
+  return { script, css, kitDir: path.dirname(kitStylesheet), candidates };
 }
