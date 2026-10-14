@@ -172,7 +172,7 @@ describe("AssistantMessagingRuntime", () => {
     expect(runtime.isAvailable("s1")).toBe(false);
 
     const second = enroll();
-    expect(second.exchangeGeneration).toBeGreaterThan(first.exchangeGeneration);
+    expect(second.generation).not.toBe(first.generation);
     const result = runtime.getInbox("s1", {});
     expect(result.ok && result.value.messages).toEqual([]);
   });
@@ -284,7 +284,7 @@ describe("AssistantMessagingRuntime", () => {
       messageId: "stale",
       contextId: "ctx",
       referenceTaskIds: [],
-      receiver: { ...exchangeReceiverFor(enrollment), enrollmentGeneration: 1 },
+      receiver: { ...exchangeReceiverFor(enrollment), enrollmentGeneration: "gen-earlier" },
       body: "old",
     });
     expect(() => runtime.admit(record, { body: "old", provenance: PROVENANCE })).toThrow();

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { assistantSlotKey } from "../../../shared/config/assistantSlots.js";
 import {
   ASSISTANT_INBOX_PAGE_MAX,
@@ -35,19 +34,16 @@ import type {
   MessagingDenial,
 } from "./AssistantMessagingPolicy.js";
 
-/** The store's name for a lane: fixed length, and free of the NUL in the slot key. */
-export function exchangeLaneId(lane: LaneRef): string {
-  const digest = createHash("sha256")
-    .update(assistantSlotKey(lane.projectId, lane.slot), "utf8")
-    .digest("hex");
-  return `lane-${digest.slice(0, 32)}`;
-}
-
+/**
+ * The receiver the host's link calls file a lane's exchanges under: the slot
+ * key and the enrollment's own generation, so a record addressed to an
+ * earlier enrollment never matches this one.
+ */
 export function exchangeReceiverFor(enrollment: LaneEnrollment): ExchangeReceiver {
   return {
     hostId: LOCAL_HOST_ID,
-    laneId: exchangeLaneId(enrollment),
-    enrollmentGeneration: enrollment.exchangeGeneration,
+    laneId: assistantSlotKey(enrollment.projectId, enrollment.slot),
+    enrollmentGeneration: enrollment.generation,
   };
 }
 

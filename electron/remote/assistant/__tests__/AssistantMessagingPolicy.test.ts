@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type {
   HelpSessionEndedEvent,
   RunningLaneSession,
@@ -7,7 +7,6 @@ import {
   AssistantMessagingPolicy,
   type AssistantMessagingPolicyDeps,
   type MessagingShell,
-  createExchangeGenerationIssuer,
 } from "../AssistantMessagingPolicy.js";
 
 const LOCAL: MessagingShell = { kind: "local" };
@@ -439,46 +438,6 @@ describe("AssistantMessagingPolicy", () => {
       generation: enrolled.enrollment.generation,
       enrolledBy: SHELL_A,
     });
-  });
-
-  it("gives each enrollment an exchange generation above every earlier one (#13335)", () => {
-    const h = harness();
-    h.run("proj", 0, "s1");
-    const first = h.policy.enroll(lane(), SHELL_A);
-    if (!first.ok) throw new Error("expected enrollment");
-    expect(h.policy.unenroll(lane(), SHELL_A, first.enrollment.generation)).toBe(true);
-    const second = h.policy.enroll(lane(), SHELL_A);
-    if (!second.ok) throw new Error("expected enrollment");
-    // The harness clock never moves, so only the bump keeps them apart.
-    expect(second.enrollment.exchangeGeneration).toBeGreaterThan(
-      first.enrollment.exchangeGeneration
-    );
-  });
-
-  it("refuses to enroll when no exchange generation can be vouched for", () => {
-    const h = harness({
-      newExchangeGeneration: () => {
-        throw new Error("store unreadable");
-      },
-    });
-    h.run("proj", 0, "s1");
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(h.policy.enroll(lane(), SHELL_A)).toEqual({ ok: false, reason: "unavailable" });
-    spy.mockRestore();
-    expect(h.policy.getEnrollment(lane())).toBeNull();
-  });
-
-  it("issues exchange generations above its floor even when the clock steps back", () => {
-    let clock = 5_000;
-    const issue = createExchangeGenerationIssuer(9_000, () => clock);
-    const a = issue();
-    clock = 20_000;
-    const b = issue();
-    clock = 1_000;
-    const c = issue();
-    expect(a).toBeGreaterThan(9_000);
-    expect(b).toBe(20_000);
-    expect(c).toBeGreaterThan(b);
   });
 
   it("tells change listeners when an enrollment begins or ends, however it ends (#13335)", () => {

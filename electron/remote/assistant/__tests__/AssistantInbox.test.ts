@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { ExchangeReceiver, ExchangeRecord } from "../../exchange/types.js";
 import { AssistantInbox, cleanProvenanceLabel } from "../AssistantInbox.js";
 
-const RECEIVER: ExchangeReceiver = { hostId: "local", laneId: "lane-a", enrollmentGeneration: 7 };
+const RECEIVER: ExchangeReceiver = {
+  hostId: "local",
+  laneId: "lane-a",
+  enrollmentGeneration: "gen-7",
+};
 const PROVENANCE = { sendingHost: "studio", sendingLane: "hub", hopCount: 1 };
 
 let taskCounter = 0;
@@ -115,7 +119,7 @@ describe("AssistantInbox", () => {
     const inbox = new AssistantInbox({ now: () => 0 });
     const entry = inbox.admit(record("a"), { body: "a", provenance: PROVENANCE });
     expect(inbox.find(RECEIVER, entry.taskId)?.body).toBe("a");
-    expect(inbox.find({ ...RECEIVER, enrollmentGeneration: 8 }, entry.taskId)).toBeNull();
+    expect(inbox.find({ ...RECEIVER, enrollmentGeneration: "gen-8" }, entry.taskId)).toBeNull();
   });
 
   it("caps the answers one exchange holds", () => {

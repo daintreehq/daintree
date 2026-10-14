@@ -348,22 +348,6 @@ describe("AssistantExchangeStore", () => {
       expect(store.create(shellA, input()).disposition).toBe("existing");
     });
 
-    it("reports the highest retained receiver generation, tombstones included", () => {
-      expect(store.maxReceiverGeneration()).toBe(0);
-      store.create(shellA, input());
-      store.create(
-        shellA,
-        input({
-          messageId: "msg-2",
-          receiver: { hostId: lane.hostId, laneId: lane.laneId, enrollmentGeneration: 9 },
-        })
-      );
-      expect(store.maxReceiverGeneration()).toBe(9);
-      clock += 25 * HOUR;
-      store.sweep();
-      expect(store.maxReceiverGeneration()).toBe(9);
-    });
-
     it("lists each changed record once, at its latest state, from a cursor", () => {
       store.create(shellA, input());
       const { cursor } = store.listChangesSince(shellA, 0);

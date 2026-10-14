@@ -25,12 +25,6 @@ export interface LaneEnrollment {
   slot: number;
   /** Fresh on every enrollment, so anything addressed to an earlier one is refused. */
   generation: string;
-  /**
-   * The same enrollment as the exchange store names its receiver: strictly
-   * greater than any generation issued before, across restarts too, so a
-   * record addressed to an earlier enrollment never matches this one.
-   */
-  exchangeGeneration: number;
   /** The help session and PTY run the consent was given to. */
   sessionId: string;
   terminalId: string;
@@ -97,11 +91,6 @@ export interface AssistantMessagingPolicyDeps {
   platform?: NodeJS.Platform;
   now?: () => number;
   newGeneration?: () => string;
-  /**
-   * Issues {@link LaneEnrollment.exchangeGeneration}; must never repeat or go
-   * backwards. Throws when it can't vouch for that, and the enrollment is refused.
-   */
-  newExchangeGeneration?: () => number;
 }
 
 const PAUSE_EXEMPT: ReadonlySet<MessagingRequestKind> = new Set(["reply", "inspect"]);
@@ -144,23 +133,6 @@ function laneKey(lane: LaneRef): string | null {
 }
 
 /**
- * A numeric generation issuer that never repeats or goes backwards: the clock
- * in milliseconds, bumped past the last value issued (or `floor`) whenever the
- * clock stalls or steps back. Seeded from the exchange store's highest
- * retained generation, it stays ahead of every record across restarts.
- */
-export function createExchangeGenerationIssuer(
-  floor = 0,
-  now: () => number = Date.now
-): () => number {
-  let last = floor;
-  return () => {
-    last = Math.max(Math.floor(now()), last + 1);
-    return last;
-  };
-}
-
-/**
  * The one place cross-host assistant messaging asks before it admits or
  * delivers anything. Holds which lanes a person enrolled, which Shell enrolled
  * each, this Shell's hub, and a machine-wide pause. Everything but the per-host
@@ -181,15 +153,12 @@ export class AssistantMessagingPolicy {
   private readonly platform: NodeJS.Platform;
   private readonly now: () => number;
   private readonly newGeneration: () => string;
-  private readonly newExchangeGeneration: () => number;
   private unsubscribe: (() => void) | null;
 
   constructor(private readonly deps: AssistantMessagingPolicyDeps) {
     this.platform = deps.platform ?? process.platform;
     this.now = deps.now ?? Date.now;
     this.newGeneration = deps.newGeneration ?? randomUUID;
-    this.newExchangeGeneration =
-      deps.newExchangeGeneration ?? createExchangeGenerationIssuer(0, this.now);
     this.unsubscribe = deps.onSessionEnded((event) => this.handleSessionEnded(event));
   }
 
@@ -212,20 +181,10 @@ export class AssistantMessagingPolicy {
     const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
     const launchGeneration = running ? this.deps.getLiveGeneration(running.terminalId) : null;
     if (!running || launchGeneration === null) return { ok: false, reason: "unavailable" };
-    let exchangeGeneration: number;
-    try {
-      exchangeGeneration = this.newExchangeGeneration();
-    } catch (err) {
-      // No generation known to be above every stored record: enrolling now
-      // could match one addressed to an earlier enrollment.
-      console.error("[AssistantMessaging] Couldn't issue an exchange generation:", err);
-      return { ok: false, reason: "unavailable" };
-    }
     const enrollment: LaneEnrollment = {
       projectId: lane.projectId,
       slot: lane.slot,
       generation: this.newGeneration(),
-      exchangeGeneration,
       sessionId: running.sessionId,
       terminalId: running.terminalId,
       launchGeneration,

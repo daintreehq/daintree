@@ -13,10 +13,7 @@ import type { LinkSession } from "../link/session.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { AssistantExchangeClient } from "./AssistantExchangeClient.js";
 import { AssistantInbox } from "./AssistantInbox.js";
-import {
-  AssistantMessagingPolicy,
-  createExchangeGenerationIssuer,
-} from "./AssistantMessagingPolicy.js";
+import { AssistantMessagingPolicy } from "./AssistantMessagingPolicy.js";
 import { AssistantMessagingRuntime } from "./AssistantMessagingRuntime.js";
 
 /** What the messaging controls need beyond the policy itself. */
@@ -54,20 +51,6 @@ function openExchangeDatabase(): Database.Database | null {
 }
 
 /**
- * Issues exchange generations above the highest one any kept record names, so
- * a new enrollment never matches a record addressed to an earlier one. Until
- * the store has answered that, it refuses rather than guess: an unreadable
- * store is not an empty one. Asks again at the next enrollment.
- */
-function seededGenerationIssuer(store: AssistantExchangeStore): () => number {
-  let issue: (() => number) | null = null;
-  return () => {
-    issue ??= createExchangeGenerationIssuer(store.maxReceiverGeneration());
-    return issue();
-  };
-}
-
-/**
  * Registers the process's one messaging policy, and the runtime an enrolled
  * lane's own tools run against; the returned teardown disposes both.
  */
@@ -81,7 +64,6 @@ export function installAssistantMessagingPolicy(
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     isHostMessagingEnabled: deps.isHostMessagingEnabled,
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
-    newExchangeGeneration: seededGenerationIssuer(store),
   });
   let revision = 0;
   let hadHosts = deps.hasHosts();

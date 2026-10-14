@@ -501,22 +501,6 @@ export class AssistantExchangeStore {
   }
 
   /**
-   * The highest receiver enrollment generation any retained record names,
-   * tombstones included, or 0 with none. A generation issuer seeds above it so
-   * a lane enrolled after a restart never matches records addressed to an
-   * earlier enrollment.
-   */
-  maxReceiverGeneration(): number {
-    return this.read((sqlite) => {
-      const row = this.statement(
-        sqlite,
-        "SELECT MAX(enrollment_generation) AS generation FROM assistant_exchanges"
-      ).get() as { generation: number | null } | undefined;
-      return row?.generation ?? 0;
-    });
-  }
-
-  /**
    * Expires live records past their TTL into tombstones (a live exchange
    * fails with outcome `expired`), purges tombstones past their retention and
    * drops old audit rows. Bounded per call; `hasMore` asks for another.
