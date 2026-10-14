@@ -106,6 +106,8 @@ const FS: Record<string, HostDirectoryEntry[]> = {
   }
 }
 
+// A short, real delay so the loading states get a frame to show.
+const LIST_LATENCY_MS = 30;
 const SLOW = new Set([`${HOME}/Projects/pagesugar`]);
 const DENIED = new Set(["/root"]);
 
@@ -136,7 +138,7 @@ function list(path: string, showHidden: boolean): Promise<HostDirectoryListing> 
           return ad - bd || a.name.localeCompare(b.name);
         });
       resolve({ path, parent: parentOf(path), entries: sorted, truncated: false });
-    }, 30);
+    }, LIST_LATENCY_MS);
   });
 }
 
@@ -228,22 +230,29 @@ const requested = SCENARIOS[scenarioName];
 if (!requested) throw new Error(`unknown scenario "${scenarioName}"`);
 const scenario: Scenario = requested;
 
-const hostEntry = (id: string, name: string): HostListEntry =>
-  ({
-    descriptor: {
-      id,
-      name,
-      connection: { kind: "ssh", target: name },
-      platform: "linux",
-      arch: "x64",
-      lastHandshake: null,
-      lastSeenAt: Date.now(),
-      addedAt: 0,
-      notificationsEnabled: false,
-    },
-    connection: { status: "connected", rttMs: 38 },
-    summary: null,
-  }) as unknown as HostListEntry;
+const PREVIEW_HANDSHAKE = {
+  version: "0.0.0-preview",
+  commit: "preview",
+  protocolVersion: 1,
+  platform: "linux",
+  arch: "x64",
+} as const;
+
+const hostEntry = (id: string, name: string): HostListEntry => ({
+  descriptor: {
+    id,
+    name,
+    connection: { kind: "ssh", target: name },
+    platform: "linux",
+    arch: "x64",
+    lastHandshake: null,
+    lastSeenAt: Date.now(),
+    addedAt: 0,
+    notificationsEnabled: false,
+  },
+  connection: { status: "connected", rttMs: 38, handshake: PREVIEW_HANDSHAKE },
+  summary: null,
+});
 
 installPreviewShims({
   hostFiles: {

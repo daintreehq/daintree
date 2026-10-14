@@ -362,6 +362,12 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
   }, [pathInput]);
 
   const hostId = request.hostId;
+  // Read inside the listing effect so a re-rendered request object does not
+  // refetch the folder.
+  const requestRef = useRef(request);
+  useEffect(() => {
+    requestRef.current = request;
+  }, [request]);
 
   useEffect(() => {
     let cancelled = false;
@@ -398,7 +404,9 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
         setSelectedNames((current) =>
           sameFolder
             ? current.filter((name) =>
-                result.entries.some((entry) => entry.name === name && isSelectable(entry, request))
+                result.entries.some(
+                  (entry) => entry.name === name && isSelectable(entry, requestRef.current)
+                )
               )
             : []
         );
@@ -733,7 +741,7 @@ export function HostFilePickerDialog({ request, onResolve }: HostFilePickerDialo
               // list rings itself.
               ready && entries.length > 0
                 ? "focus-visible:outline-hidden"
-                : "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                : "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             )}
           >
             {listing === null && loadError === null && (
