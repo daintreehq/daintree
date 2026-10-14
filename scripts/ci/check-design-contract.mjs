@@ -147,9 +147,11 @@ if (!indexSource.includes(`@import "./styles/design-contract.css"`)) {
 // split into — is not shared with plugins, which is the drift this split exists
 // to prevent.
 let hostFiles = [];
+let hostReadFailed = false;
 try {
   hostFiles = readHostStylesheet(path.join(root, INDEX)).files;
 } catch (error) {
+  hostReadFailed = true;
   fail(error.message);
 }
 for (const file of hostFiles) {
@@ -173,9 +175,12 @@ if (imported.size !== hostFiles.length) {
     `${INDEX} imports a host partial more than once, which duplicates its rules in the cascade.`
   );
 }
-if (existsSync(partialDir)) {
-  for (const name of readdirSync(partialDir).filter((entry) => entry.endsWith(".css"))) {
-    if (!imported.has(path.join(partialDir, name))) {
+if (!hostReadFailed && existsSync(partialDir)) {
+  for (const entry of readdirSync(partialDir, { withFileTypes: true })) {
+    const name = entry.name;
+    if (entry.isDirectory()) {
+      fail(`src/${HOST_PARTIAL_DIR}/${name}/ — host partials are one flat directory.`);
+    } else if (name.endsWith(".css") && !imported.has(path.join(partialDir, name))) {
       fail(
         `src/${HOST_PARTIAL_DIR}/${name} is not imported by ${INDEX}, so none of its rules ship.`
       );

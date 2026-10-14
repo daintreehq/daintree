@@ -13,11 +13,28 @@ export const HOST_CSS_ENTRY = path.join(REPO_ROOT, "src/index.css");
  */
 export const HOST_PARTIAL_DIR = "styles/host";
 
-const PLAIN_IMPORT = /^@import "(\.\/styles\/host\/[^"]+\.css)";[ \t]*$/gm;
+const PLAIN_IMPORT = /^@import "(\.\/styles\/host\/[^"/]+\.css)";[ \t]*$/gm;
 
-/** Blank out comments, preserving length, so a commented-out import never matches. */
-function blankComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "));
+const COMMENT_OR_STRING = /\/\*[\s\S]*?\*\/|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g;
+
+const blank = (text) => text.replace(/[^\n]/g, " ");
+
+/**
+ * Blank out comments, preserving length, so a commented-out import never
+ * matches. Strings are skipped rather than scanned: the entry's `@source` globs
+ * end in a slash-star, which would otherwise open a comment that swallows real
+ * imports.
+ * With `strings`, quoted text is blanked too, so only real at-rules remain.
+ */
+function blankComments(source, { strings = false } = {}) {
+  return source.replace(COMMENT_OR_STRING, (match) =>
+    match.startsWith("/*") || strings ? blank(match) : match
+  );
+}
+
+/** Offsets of every real `@import` at-rule, outside comments and strings. */
+function importOffsets(source) {
+  return [...blankComments(source, { strings: true }).matchAll(/@import\b/g)].map((m) => m.index);
 }
 
 /**
@@ -42,9 +59,11 @@ export function readHostStylesheet(entry = HOST_CSS_ENTRY, { onFile } = {}) {
   const files = [{ path: entry, source }];
   const scanned = blankComments(source);
 
+  const expanded = new Set();
   let css = "";
   let cursor = 0;
   for (const match of scanned.matchAll(PLAIN_IMPORT)) {
+    expanded.add(match.index);
     const partial = path.resolve(path.dirname(entry), match[1]);
     let text;
     try {
@@ -54,7 +73,7 @@ export function readHostStylesheet(entry = HOST_CSS_ENTRY, { onFile } = {}) {
         `[host-css] ${path.relative(REPO_ROOT, entry)} imports ${match[1]}, which does not exist`
       );
     }
-    if (/@import\b/.test(blankComments(text))) {
+    if (importOffsets(text).length > 0) {
       throw new Error(
         `[host-css] ${path.relative(REPO_ROOT, partial)} has an @import; host partials must not nest`
       );
@@ -66,11 +85,14 @@ export function readHostStylesheet(entry = HOST_CSS_ENTRY, { onFile } = {}) {
   }
   css += source.slice(cursor);
 
-  if (new RegExp(`@import[^;]*${HOST_PARTIAL_DIR}/`).test(blankComments(css))) {
-    throw new Error(
-      `[host-css] ${path.relative(REPO_ROOT, entry)} imports a host partial in a form other than ` +
-        `@import "./${HOST_PARTIAL_DIR}/<name>.css"; on its own line`
-    );
+  for (const offset of importOffsets(source)) {
+    const statement = scanned.slice(offset, scanned.indexOf(";", offset) + 1 || undefined);
+    if (!expanded.has(offset) && statement.includes(`${HOST_PARTIAL_DIR}/`)) {
+      throw new Error(
+        `[host-css] ${path.relative(REPO_ROOT, entry)} imports a host partial in a form other than ` +
+          `@import "./${HOST_PARTIAL_DIR}/<name>.css"; on its own line`
+      );
+    }
   }
   return { css, files };
 }

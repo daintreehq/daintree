@@ -192,6 +192,24 @@ describe("check-design-contract", () => {
       expect(result.output).toContain("belongs in src/styles/design-contract.css");
     });
 
+    it("scans every partial, not just the first", () => {
+      const result = runCheck(CONTRACT, `${PARTIAL_INDEX}@import "./styles/host/late.css";\n`, {
+        "base.css": ".rule {\n  color: red;\n}\n",
+        "late.css": ".late {\n  color: blue;\n}\n@theme {\n  --color-stray: red;\n}\n",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("src/styles/host/late.css:4");
+    });
+
+    it("fails on a subdirectory of host partials", () => {
+      mkdirSync(path.join(sandbox, "src/styles/host/nested"));
+      const result = runCheck(CONTRACT, PARTIAL_INDEX, { "base.css": ".rule {\n}\n" });
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("one flat directory");
+    });
+
     it("fails when the entry imports a partial that does not exist", () => {
       const result = runCheck(CONTRACT, PARTIAL_INDEX);
 

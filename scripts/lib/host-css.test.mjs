@@ -54,6 +54,33 @@ describe("readHostStylesheet", () => {
     expect(files).toHaveLength(1);
   });
 
+  it("is not misled by comment openers or @import inside strings", () => {
+    write("styles/host/a.css", '.a::before {\n  content: "@import";\n}\n');
+    write(
+      "index.css",
+      '@source not "../*.md";\n@import "./styles/host/a.css";\n/* note */\n'
+    );
+
+    const { css, files } = readHostStylesheet(entry);
+
+    expect(files).toHaveLength(2);
+    expect(css).not.toContain("styles/host/a.css");
+  });
+
+  it("does not hide a missing partial behind a slash-star in a string", () => {
+    write("index.css", '@source not "../*.md";\n@import "./styles/host/missing.css";\n/* x */\n');
+
+    expect(() => readHostStylesheet(entry)).toThrow("which does not exist");
+  });
+
+  it("refuses a partial in a subdirectory", () => {
+    mkdirSync(path.join(dir, "styles/host/nested"));
+    write("styles/host/nested/a.css", ".a {\n}\n");
+    write("index.css", '@import "./styles/host/nested/a.css";\n');
+
+    expect(() => readHostStylesheet(entry)).toThrow("in a form other than");
+  });
+
   it("reports every file it reads", () => {
     write("styles/host/a.css", ".a {\n}\n");
     write("index.css", '@import "./styles/host/a.css";\n');
@@ -89,7 +116,19 @@ describe("readHostStylesheet", () => {
   it("expands the real entry fully", () => {
     const { css, files } = readHostStylesheet(HOST_CSS_ENTRY);
 
-    expect(files.length).toBeGreaterThan(1);
+    // Import order is cascade order; a reshuffle changes which rules win.
+    expect(files.slice(1).map((file) => path.basename(file.path))).toEqual([
+      "root.css",
+      "base.css",
+      "animations.css",
+      "reduced-motion.css",
+      "panel-states.css",
+      "window-modes.css",
+      "forced-colors.css",
+      "prefers-contrast.css",
+      "utilities.css",
+      "theme-transitions.css",
+    ]);
     expect(css).not.toMatch(/@import "\.\/styles\/host\//);
     expect(css).toMatch(/^:root \{/m);
     expect(css).toMatch(/^@media \(forced-colors: active\) \{/m);
