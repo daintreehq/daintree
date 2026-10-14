@@ -1184,10 +1184,11 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   }) => void;
   /**
    * Record where this session's `tools/list` is about to be answered from, so
-   * a later route change can tell the client its list moved (#13350). Only a
-   * workspace-bound session's route can move; absent for every other session.
+   * a later route change can tell the client its list moved (#13350). Returns
+   * what to call once the listing is answered. Wired for workspace-bound
+   * sessions only.
    */
-  noteToolListRoute?: () => void;
+  noteToolListRoute?: () => () => void;
 }
 
 /**
@@ -1384,10 +1385,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // legitimately empty surface and carrying no hint that reconnecting is the
     // fix.
     if (tier === null) throw sessionGoneError();
-    // Before the fetch: a route that moves while it is in flight then reads as
-    // moved, and the client is told to list again.
-    deps.noteToolListRoute?.();
-    const manifest = await resolveManifest("tools/list");
+    // Read before the fetch and settled after it: a route that moves while the
+    // fetch is out reads as moved, and the client is told to list again.
+    const settleToolListRoute = deps.noteToolListRoute?.();
+    let manifest: Awaited<ReturnType<typeof resolveManifest>>;
+    try {
+      manifest = await resolveManifest("tools/list");
+    } finally {
+      settleToolListRoute?.();
+    }
     // Origin read once for the whole listing, and the same way the dispatch
     // gate reads it, so a tool withheld here is refused there (#12407).
     const listSurface: SessionSurfacePolicy = {

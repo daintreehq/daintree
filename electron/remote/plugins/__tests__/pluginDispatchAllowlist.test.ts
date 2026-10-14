@@ -40,6 +40,7 @@ describe("HOST_PLUGIN_DISPATCHABLE_ACTION_IDS", () => {
     for (const id of [
       "actions.search",
       "actions.list",
+      "actions.getSchema",
       "mcp.surface",
       "help.displayImage",
       "skills.search",

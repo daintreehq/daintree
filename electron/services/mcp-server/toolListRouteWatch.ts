@@ -21,9 +21,22 @@ export class ToolListRouteWatch {
 
   constructor(private readonly notify: (sessionId: string) => void) {}
 
-  /** Record the route a listing is answered from, read before it is fetched. */
-  noteListed(sessionId: string, describe: () => string): void {
-    this.listed.set(sessionId, { route: describe(), describe });
+  /**
+   * Record the route a listing is answered from, read before it is fetched.
+   * Returns what to call once it is answered: a route that moved while the
+   * fetch was out means the client was just handed the old route's list, which
+   * can land after the re-list a notification already asked for.
+   */
+  noteListed(sessionId: string, describe: () => string): () => void {
+    const entry = { route: describe(), describe };
+    this.listed.set(sessionId, entry);
+    return () => {
+      const now = readRoute(sessionId, entry);
+      if (now === undefined || now === entry.route) return;
+      if (this.listed.get(sessionId) === entry) this.listed.delete(sessionId);
+      // After the answer is on its way, so the re-list cannot be overtaken by it.
+      setTimeout(() => this.notify(sessionId), 0);
+    };
   }
 
   forget(sessionId: string): void {
@@ -41,17 +54,20 @@ export class ToolListRouteWatch {
     queueMicrotask(() => {
       this.checkQueued = false;
       for (const [sessionId, entry] of [...this.listed]) {
-        let route: string;
-        try {
-          route = entry.describe();
-        } catch (err) {
-          console.warn(`[MCP] Could not read session ${sessionId}'s route:`, err);
-          continue;
-        }
-        if (route === entry.route) continue;
+        const route = readRoute(sessionId, entry);
+        if (route === undefined || route === entry.route) continue;
         this.listed.delete(sessionId);
         this.notify(sessionId);
       }
     });
+  }
+}
+
+function readRoute(sessionId: string, entry: { describe: () => string }): string | undefined {
+  try {
+    return entry.describe();
+  } catch (err) {
+    console.warn(`[MCP] Could not read session ${sessionId}'s route:`, err);
+    return undefined;
   }
 }

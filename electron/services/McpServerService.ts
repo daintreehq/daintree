@@ -35,7 +35,6 @@ import { AuditService, type McpAuditDiagnosticsSnapshot } from "./mcp-server/aud
 import { TurnOutcomeService } from "./mcp-server/turnOutcomeLog.js";
 import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { onMcpDriveTargetChange } from "./mcp-server/driveTarget.js";
-import { ToolListRouteWatch } from "./mcp-server/toolListRouteWatch.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { onRendererScopeChanged } from "../window/webContentsRegistry.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
@@ -117,14 +116,6 @@ export class McpServerService {
   private readonly pendingManifests = new Map<string, PendingRequest<ActionManifestEntry[]>>();
   private readonly pendingDispatches = new Map<string, PendingRequest<DispatchEnvelope>>();
   private readonly cleanupListeners: Array<() => void> = [];
-  /** Tells a bound session its tool list moved with its route (#13350). */
-  private readonly toolListRouteWatch = new ToolListRouteWatch((sessionId) => {
-    const session =
-      this.sessionStore.httpSessions.get(sessionId) ?? this.sessionStore.sessions.get(sessionId);
-    session?.server.sendToolListChanged().catch(() => {
-      // Transport already closing; its next list reads the new route anyway.
-    });
-  });
   /**
    * Long-lived event subscriptions (agent state, agent output, terminal
    * lifecycle) that must survive `HttpLifecycle.stop()` / restart. Kept
@@ -162,7 +153,6 @@ export class McpServerService {
     this.sessionStore = new SessionStore(
       (sessionId) => {
         cleanupResourceSubscriptions(sessionId, this.sessionStore);
-        this.toolListRouteWatch.forget(sessionId);
       },
       {
         emitGrantLifecycle: (sessionId, payload) => this.emitGrantLifecycle(sessionId, payload),
@@ -331,7 +321,7 @@ export class McpServerService {
       requestManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
         this.bridge.requestManifestForWorkspace(workspaceId, preferredWebContentsId),
       noteToolListRoute: (sessionId, workspaceId, preferredWebContentsId) =>
-        this.toolListRouteWatch.noteListed(sessionId, () =>
+        this.sessionStore.toolListRouteWatch.noteListed(sessionId, () =>
           this.bridge.describeWorkspaceRoute(workspaceId, preferredWebContentsId)
         ),
       dispatchActionForWorkspace: (
@@ -417,12 +407,11 @@ export class McpServerService {
         this.bridge.setupListeners(this.cleanupListeners);
         // Everything a bound session's route is read from: the drive lease,
         // the endpoints that can hold it, and this machine's own views.
-        const recheckRoutes = () => this.toolListRouteWatch.check();
+        const recheckRoutes = () => this.sessionStore.toolListRouteWatch.check();
         this.cleanupListeners.push(
           onMcpDriveTargetChange(recheckRoutes),
           getEndpointRegistry().onChange(recheckRoutes),
-          onRendererScopeChanged(recheckRoutes),
-          () => this.toolListRouteWatch.clear()
+          onRendererScopeChanged(recheckRoutes)
         );
       },
       emitStatusChange: () => this.emitStatusChange(),

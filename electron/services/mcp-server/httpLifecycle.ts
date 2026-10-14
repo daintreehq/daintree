@@ -168,7 +168,7 @@ export interface HttpLifecycleDeps {
     sessionId: string,
     workspaceId: string,
     preferredWebContentsId?: number
-  ) => void;
+  ) => () => void;
   dispatchActionForWorkspace?: (
     workspaceId: string,
     actionId: string,

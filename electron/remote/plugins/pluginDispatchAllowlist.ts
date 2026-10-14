@@ -13,11 +13,12 @@ const BEYOND_THE_VIEW = new Set(["browser.captureScreenshot", "host.switch", "pr
 
 /**
  * Listed for the host's MCP sessions and meaningless to a plugin. The
- * registry searches would read this view's whole catalog, past the filtered
- * one a host's plugin is given; the rest are answered by the host's MCP server
- * for the session that asked, and only throw in a view.
+ * registry reads would read this view's whole catalog, past the filtered one a
+ * host's plugin is given through `host.actions`; the rest are answered by the
+ * host's MCP server for the session that asked, and only throw in a view.
  */
 const MCP_SESSION_ONLY = new Set([
+  "actions.getSchema",
   "actions.list",
   "actions.search",
   "help.displayImage",
