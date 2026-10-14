@@ -32,7 +32,12 @@ vi.mock("../fileAttachments", async (importOriginal) => {
 });
 
 import { HybridInputBar } from "../HybridInputBar";
-import { routeDropToComposer } from "../uploads/composerRouting";
+import {
+  _resetPaneDropRoutingForTests,
+  registerPaneDropTarget,
+  resolvePaneDropTarget,
+  routePaneDrop,
+} from "../uploads/paneDropRouting";
 
 /**
  * The canopy panel mounts a second composer for a terminal that may also be
@@ -115,24 +120,24 @@ describe("HybridInputBar isolated", () => {
       const canopy = mount(true);
       await act(async () => {});
       canopy.unmount();
-      expect(routeDropToComposer("term-1", DROPPED)).toBe(true);
+      expect(routePaneDrop("term-1", "hybridInput", DROPPED)).toBe(true);
       expect(insertFileAttachments).toHaveBeenCalledTimes(1);
       pane.unmount();
-      expect(routeDropToComposer("term-1", DROPPED)).toBe(false);
+      expect(routePaneDrop("term-1", "hybridInput", DROPPED)).toBe(false);
     }
   );
 
   it("declines a drop it has nothing to insert for", async () => {
     mount(false);
     await act(async () => {});
-    expect(routeDropToComposer("term-1", [])).toBe(false);
+    expect(routePaneDrop("term-1", "hybridInput", [])).toBe(false);
     expect(insertFileAttachments).not.toHaveBeenCalled();
   });
 
   it("declines a drop while disabled, so the terminal takes it", async () => {
     const view = mount(false, true);
     await act(async () => {});
-    expect(routeDropToComposer("term-1", DROPPED)).toBe(false);
+    expect(routePaneDrop("term-1", "hybridInput", DROPPED)).toBe(false);
     expect(insertFileAttachments).not.toHaveBeenCalled();
 
     view.rerender(
@@ -143,7 +148,51 @@ describe("HybridInputBar isolated", () => {
       </TooltipProvider>
     );
     await act(async () => {});
-    expect(routeDropToComposer("term-1", DROPPED)).toBe(true);
+    expect(routePaneDrop("term-1", "hybridInput", DROPPED)).toBe(true);
+  });
+
+  describe("as the terminal's partner in the pane's drops", () => {
+    afterEach(() => {
+      act(() => _resetPaneDropRoutingForTests());
+    });
+
+    function registerTerminal() {
+      registerPaneDropTarget("term-1", "xterm", {
+        ownsFocus: () => false,
+        canTake: () => true,
+        take: () => true,
+      });
+    }
+
+    it("claims the drop while its editor holds the keyboard, even with the window blurred", async () => {
+      const view = mount(false);
+      await act(async () => {});
+      registerTerminal();
+      expect(resolvePaneDropTarget("term-1", "xterm")).toBe("xterm");
+
+      const editor = view.container.querySelector<HTMLElement>(".cm-content");
+      editor!.focus();
+      expect(document.activeElement).toBe(editor);
+      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+      try {
+        expect(resolvePaneDropTarget("term-1", "xterm")).toBe("hybridInput");
+      } finally {
+        hasFocus.mockRestore();
+      }
+      view.unmount();
+    });
+
+    it("takes a click's drop only while it can take one", async () => {
+      registerTerminal();
+      const enabled = mount(false);
+      await act(async () => {});
+      expect(resolvePaneDropTarget("term-1", "xterm", "hybridInput")).toBe("hybridInput");
+      enabled.unmount();
+
+      mount(false, true);
+      await act(async () => {});
+      expect(resolvePaneDropTarget("term-1", "xterm", "hybridInput")).toBe("xterm");
+    });
   });
 
   it("leaves the pane's controller alone from the canopy panel", async () => {

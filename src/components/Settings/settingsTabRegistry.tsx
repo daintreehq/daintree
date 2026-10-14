@@ -873,7 +873,7 @@ export const SETTINGS_REGISTRY = [
         section: "Hybrid input bar",
         title: "Auto-focus input",
         description:
-          "Selecting a pane focuses the input bar or the terminal (xterm), and decides where files dropped on the terminal go",
+          "Selecting a pane focuses the input bar or the terminal (xterm); dropped files follow whichever you're using",
         keywords: ["focus", "autofocus", "input", "pane", "select", "drop", "file"],
       },
       {

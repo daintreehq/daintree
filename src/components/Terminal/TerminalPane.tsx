@@ -103,12 +103,14 @@ const LazyHybridInputBar = lazy(() =>
   import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
 );
 import {
+  getTerminalClickTarget,
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolvePaneFocusAction,
   shouldRecordXtermFocusPreference,
   shouldShowHybridInputBar,
   shouldSuppressUnfocusedClick,
+  type TerminalFocusTarget,
 } from "./terminalFocus";
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
@@ -1049,6 +1051,18 @@ function TerminalPaneComponent({
     setFocused(id);
   };
 
+  // A file drop that finds neither the terminal nor the input bar holding the
+  // keyboard lands where a click on the terminal would have put it.
+  const getDropClickTarget = (): TerminalFocusTarget =>
+    getTerminalClickTarget({
+      location,
+      isFocused,
+      preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+      hasHybridInputSurface: showHybridInputBar,
+      isInputDisabled: isHybridInputDisabledForFocus,
+      hybridInputEnabled,
+    });
+
   const handleXtermPointerNoop = () => {};
 
   const handleRestart = () => {
@@ -1687,6 +1701,7 @@ function TerminalPaneComponent({
                       // gestures behind, since those only fire for a real click
                       // that landed in pane chrome (#11809).
                       onDropSelect={handleClick}
+                      dropClickTarget={getDropClickTarget}
                       onAttached={handleAttached}
                       className="absolute inset-0"
                       getRefreshTier={getRefreshTierCallback}

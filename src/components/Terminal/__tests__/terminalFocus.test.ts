@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  getTerminalClickTarget,
   getTerminalFocusTarget,
   isLikelyAtSynthesizedPointer,
   resolvePaneFocusAction,
@@ -224,6 +225,55 @@ describe("shouldSuppressUnfocusedClick", () => {
         isShiftKey: true,
       })
     ).toBe(false);
+  });
+});
+
+describe("getTerminalClickTarget", () => {
+  const remembersBar = {
+    preferredTarget: "hybridInput",
+    hasHybridInputSurface: true,
+    isInputDisabled: false,
+    hybridInputEnabled: true,
+  } as const;
+
+  it("sends the activation click on an unfocused grid pane to the target it remembers", () => {
+    expect(getTerminalClickTarget({ location: "grid", isFocused: false, ...remembersBar })).toBe(
+      "hybridInput"
+    );
+    expect(
+      getTerminalClickTarget({
+        location: "grid",
+        isFocused: false,
+        ...remembersBar,
+        preferredTarget: "xterm",
+      })
+    ).toBe("xterm");
+  });
+
+  it("sends that click to xterm when the remembered bar can't take the keyboard", () => {
+    expect(
+      getTerminalClickTarget({
+        location: "grid",
+        isFocused: false,
+        ...remembersBar,
+        isInputDisabled: true,
+      })
+    ).toBe("xterm");
+    expect(
+      getTerminalClickTarget({
+        location: "grid",
+        isFocused: false,
+        ...remembersBar,
+        hasHybridInputSurface: false,
+      })
+    ).toBe("xterm");
+  });
+
+  it.each([
+    ["an already focused grid pane", "grid", true],
+    ["a docked pane", "dock", false],
+  ])("lets a click on %s reach xterm whatever it remembers", (_, location, isFocused) => {
+    expect(getTerminalClickTarget({ location, isFocused, ...remembersBar })).toBe("xterm");
   });
 });
 

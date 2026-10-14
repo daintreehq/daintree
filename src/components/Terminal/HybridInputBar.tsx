@@ -74,7 +74,7 @@ import {
 import { tryComposerFleetBroadcast } from "./composerFleetBroadcast";
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
-import { registerComposerDropTarget } from "./uploads/composerRouting";
+import { registerPaneDropTarget } from "./uploads/paneDropRouting";
 import { isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
 import { isMac } from "@/lib/platform";
 import {
@@ -436,6 +436,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       () => panelWorktreePath ?? (cwd || null),
       [panelWorktreePath, cwd]
     );
+    // Layout phase: a native drop can arrive after a commit that disabled the
+    // bar but before passive effects run, and must not be taken then.
+    const disabledRef = useRef(disabled);
+    useLayoutEffect(() => {
+      disabledRef.current = disabled;
+    }, [disabled]);
+    // A bar that can't take the user's own typing (disabled, or read-only
+    // while a voice submission settles) takes no dropped files either.
+    const canTakeDrop = useCallback(() => {
+      const view = editorViewRef.current;
+      return !!view && !disabledRef.current && view.state.facet(EditorView.editable);
+    }, []);
     const {
       handleDragEnter,
       handleDragOver,
@@ -447,6 +459,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       uploadSurface,
       addToProjectDirectory,
       ...(isRemote ? { cwdProvider: readCwd } : {}),
+      sharesPaneDrops: !isolated,
+      canInsert: canTakeDrop,
     });
 
     // The dialog unmounts its body once its exit animation ends, and can close
@@ -463,34 +477,34 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
     const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd);
 
-    // Layout phase: a native drop can arrive after a commit that disabled the
-    // bar but before passive effects run, and must not be taken then.
-    const disabledRef = useRef(disabled);
-    useLayoutEffect(() => {
-      disabledRef.current = disabled;
-    }, [disabled]);
-
-    // A drop on this pane's agent terminal lands here when "Focus the input bar
-    // first" is on — in the pane's own composer, never Canopy's reply box for
-    // the same terminal. A bar that can't take the user's own typing (disabled,
-    // or read-only while a voice submission settles) declines, and the drop
-    // falls through to the terminal instead of vanishing.
+    // A drop on this pane's agent terminal lands here while this bar holds the
+    // keyboard, or while nothing in the pane does and a click on the terminal
+    // would focus the bar — in the pane's own composer, never Canopy's reply
+    // box for the same terminal. A bar that can't take the drop declines, and
+    // it falls through to the terminal instead of vanishing.
     useEffect(() => {
       if (isolated) return;
-      return registerComposerDropTarget(terminalId, (sources) => {
-        const view = editorViewRef.current;
-        if (!view || disabledRef.current || !view.state.facet(EditorView.editable)) return false;
-        const entries = sources.map(fileAttachmentEntryFromSource);
-        if (entries.length === 0) return false;
-        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
-        view.focus();
-        void insertFileAttachments(editorViewRef, view, entries, cwd, {
-          uploadSurface,
-          cwdProvider: readCwd,
-        });
-        return true;
+      return registerPaneDropTarget(terminalId, "hybridInput", {
+        ownsFocus: () => {
+          const view = editorViewRef.current;
+          return !!view && editorOwnsDomFocus(view);
+        },
+        canTake: canTakeDrop,
+        take: (sources) => {
+          const view = editorViewRef.current;
+          if (!view || !canTakeDrop()) return false;
+          const entries = sources.map(fileAttachmentEntryFromSource);
+          if (entries.length === 0) return false;
+          usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+          view.focus();
+          void insertFileAttachments(editorViewRef, view, entries, cwd, {
+            uploadSurface,
+            cwdProvider: readCwd,
+          });
+          return true;
+        },
       });
-    }, [isolated, terminalId, cwd, uploadSurface, readCwd]);
+    }, [isolated, terminalId, cwd, uploadSurface, readCwd, canTakeDrop]);
 
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(
       cwd,

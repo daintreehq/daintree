@@ -4,6 +4,7 @@ import { act, renderHook } from "@testing-library/react";
 import type { EditorView } from "@codemirror/view";
 import type { MaterializeSource } from "@shared/types/remoteHosts";
 import type { PluginSendToAgentRefusalReason } from "@shared/types/plugin";
+import type { PaneDropTarget } from "../../uploads/paneDropRouting";
 
 // The hook reaches `useTerminalFileTransfer` for one regex, but that module
 // constructs the `terminalInstanceService` singleton at import time — real
@@ -33,6 +34,8 @@ const { useDragDrop } = await import("../useDragDrop");
 const { FILE_DRAG_MIME, encodeFileDragPaths } = await import("@/lib/fileDragPayload");
 const { getAllAtFileTokens } = await import("../../hybridInputParsing");
 const { setRemoteMaterializer } = await import("@/services/materialize");
+const { _resetPaneDropRoutingForTests, registerPaneDropTarget, usePaneDropHighlight } =
+  await import("../../uploads/paneDropRouting");
 const { AGENT_CONTEXT_DRAG_MIME, encodeAgentContextDragPayload } =
   await import("@shared/utils/agentContextDrag");
 
@@ -1011,5 +1014,148 @@ describe("useDragDrop — agent context", () => {
 
     expect(draftAgentContext).not.toHaveBeenCalled();
     expect(onDropSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDragDrop — drops shared with the pane's terminal", () => {
+  const TERMINAL_ID = "term-1";
+  const DROPPED = `${CWD}/src/App.tsx`;
+
+  afterEach(() => {
+    act(() => _resetPaneDropRoutingForTests());
+  });
+
+  function registerTerminal(overrides: Partial<PaneDropTarget> = {}) {
+    const take = vi.fn<PaneDropTarget["take"]>(() => true);
+    registerPaneDropTarget(TERMINAL_ID, "xterm", {
+      ownsFocus: () => true,
+      canTake: () => true,
+      take,
+      ...overrides,
+    });
+    return overrides.take ? vi.mocked(overrides.take) : take;
+  }
+
+  /** The bar's own registration, as HybridInputBar makes it alongside the hook. */
+  function renderPaneBar(sharesPaneDrops = true, canInsert?: () => boolean) {
+    const view = fakeView();
+    const onDropSelect = vi.fn();
+    if (sharesPaneDrops) {
+      registerPaneDropTarget(TERMINAL_ID, "hybridInput", {
+        ownsFocus: () => false,
+        canTake: canInsert ?? (() => true),
+        take: () => true,
+      });
+    }
+    const { result } = renderHook(() =>
+      useDragDrop(view.ref, CWD, onDropSelect, TERMINAL_ID, {
+        sharesPaneDrops,
+        ...(canInsert ? { canInsert } : {}),
+      })
+    );
+    return { ...view, onDropSelect, result };
+  }
+
+  async function drop(result: { current: ReturnType<typeof useDragDrop> }) {
+    await act(async () => {
+      await result.current.handleDrop(internalDrop([DROPPED]));
+    });
+  }
+
+  it("hands a drop to the terminal while xterm holds the keyboard", async () => {
+    const take = registerTerminal();
+    const { result, dispatch, focus, onDropSelect } = renderPaneBar();
+    await drop(result);
+
+    expect(take).toHaveBeenCalledWith([expect.objectContaining({ path: DROPPED })]);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+    // The terminal selects the pane and keeps the keyboard once it lands.
+    expect(onDropSelect).not.toHaveBeenCalled();
+    expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+  });
+
+  it("keeps the drop when the terminal declines it", async () => {
+    const take = registerTerminal({ take: vi.fn(() => false) });
+    const { result, dispatch } = renderPaneBar();
+    await drop(result);
+
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the drop when the terminal holding the keyboard can't take one", async () => {
+    const take = registerTerminal({ canTake: () => false });
+    const { result, dispatch } = renderPaneBar();
+    await drop(result);
+
+    expect(take).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the drop while nothing in the pane holds the keyboard", async () => {
+    const take = registerTerminal({ ownsFocus: () => false });
+    const { result, dispatch, onDropSelect } = renderPaneBar();
+    await drop(result);
+
+    expect(take).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(onDropSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps every drop on a composer that only borrows the terminal id", async () => {
+    const take = registerTerminal();
+    const { result, dispatch } = renderPaneBar(false);
+    await drop(result);
+
+    expect(take).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands a drop to the focused terminal while its own editor is still loading", async () => {
+    const take = registerTerminal();
+    const ref: React.RefObject<EditorView | null> = { current: null };
+    const { result } = renderHook(() =>
+      useDragDrop(ref, CWD, undefined, TERMINAL_ID, { sharesPaneDrops: true })
+    );
+    await drop(result);
+
+    expect(take).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands a drop it can't take to a terminal that can, even one without the keyboard", async () => {
+    const take = registerTerminal({ ownsFocus: () => false });
+    const { result, dispatch } = renderPaneBar(true, () => false);
+    await drop(result);
+
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a drop, unlit, while neither it nor the terminal can take one", async () => {
+    const take = registerTerminal({ canTake: () => false });
+    const { result, dispatch } = renderPaneBar(true, () => false);
+    const over = dragEvent(["Files"]);
+    act(() => result.current.handleDragEnter(dragEvent(["Files"])));
+    act(() => result.current.handleDragOver(over));
+    expect(result.current.isDragOverFiles).toBe(false);
+    expect(over.dataTransfer.dropEffect).toBe("none");
+
+    await drop(result);
+    expect(take).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("lights the terminal rather than itself for a drag the terminal would take", () => {
+    registerTerminal();
+    const { result } = renderPaneBar();
+    const terminal = renderHook(() => usePaneDropHighlight(TERMINAL_ID, "xterm"));
+
+    act(() => result.current.handleDragEnter(dragEvent(["Files"])));
+    expect(result.current.isDragOverFiles).toBe(false);
+    expect(terminal.result.current).toBe(true);
+
+    act(() => result.current.handleDragLeave(dragEvent(["Files"])));
+    expect(terminal.result.current).toBe(false);
   });
 });

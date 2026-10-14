@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { AgentState } from "@shared/types/agent";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -10,14 +10,17 @@ import {
   neutralizeControlCharacters,
 } from "@shared/utils/terminalInputProtocol.js";
 import { hasFileDrag } from "@/lib/fileDragPayload";
-import { materializeTransferSources, resolveTransferSources } from "@/lib/transferSources";
+import {
+  materializeTransferSources,
+  resolveTransferSources,
+  type TransferSource,
+} from "@/lib/transferSources";
 import { materialize } from "@/services/materialize";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { basename } from "@shared/utils/path";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
-import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { isTerminalInputBlocked } from "@/services/terminal/inputGate";
 import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
@@ -32,7 +35,15 @@ import {
   type ImageInputSegment,
 } from "@shared/utils/imageAttachmentInput";
 import { terminalUploadSurface, trackUpload } from "./uploads/pendingUploads";
-import { routeDropToComposer } from "./uploads/composerRouting";
+import {
+  clearPaneDragOver,
+  notePaneDragOver,
+  registerPaneDropTarget,
+  resolvePaneDropTarget,
+  routePaneDrop,
+  usePaneDropHighlight,
+} from "./uploads/paneDropRouting";
+import type { TerminalFocusTarget } from "./terminalFocus";
 import { registerClipboardImagePaster } from "./uploads/ctrlVImagePaste";
 
 export { IMAGE_EXTENSIONS };
@@ -235,6 +246,14 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
    * `formatAtFileTokenForCwd` already does for an out-of-tree file.
    */
   cwdProvider?: () => string;
+  /**
+   * Where a click on the terminal would put the keyboard right now — the
+   * input bar for an activation click on a pane that remembers it. A file
+   * drop that finds neither the terminal nor its input bar holding the
+   * keyboard lands there. Omitted means xterm, which is where a click goes
+   * wherever there is no pane to activate.
+   */
+  dropClickTarget?: () => TerminalFocusTarget;
 }
 
 /**
@@ -245,6 +264,9 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  * - **Text paste:** Passes through to xterm's native handler (bracketed paste, etc.).
  * - **File drop:** Resolves the dropped paths, runs each through `materialize`, and
  *   writes the results into the terminal as text. Works for image and non-image files.
+ *   An agent pane's drop goes to whichever of the terminal and its input bar holds
+ *   the keyboard (`paneDropRouting`), so this also takes drops let go over the bar
+ *   while xterm holds it, and hands the bar the ones it should get.
  * - **Images to an agent that attaches them** (#12792): when the agent declares
  *   `imageInput: "bracketed-path"` and xterm reports bracketed-paste mode, each
  *   image is pasted on its own as its raw absolute path — the only form the
@@ -271,9 +293,11 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
  *
  * Never appends a carriage return — a drop inserts text, it does not submit.
  *
- * @returns Whether files are currently dragged over the container, so the pane
- *   can render drop feedback. Always `false` while input is locked: advertising
- *   a drop target for a gesture that will be discarded is false feedback.
+ * @returns Whether a drag over the pane would drop here, so the terminal can
+ *   render drop feedback — false over the terminal when the input bar would
+ *   take the drop, true over the bar when the terminal would. Always `false`
+ *   while input is locked: advertising a drop target for a gesture that will be
+ *   discarded is false feedback.
  */
 export function useTerminalFileTransfer(
   containerRef: React.RefObject<HTMLDivElement | null>,
@@ -286,13 +310,14 @@ export function useTerminalFileTransfer(
     launchAgentId,
     detectedAgentId,
     agentState,
+    dropClickTarget,
   }: UseTerminalFileTransferOptions
 ): boolean {
   const dragDepthRef = useRef(0);
-  // Physical presence of a file drag, independent of whether we would accept a
-  // drop. Masking happens on the way out, so unlocking mid-drag restores the
-  // affordance without waiting for the pointer to leave and re-enter.
-  const [isDragOverFiles, setIsDragOverFiles] = useState(false);
+  // A drag headed here, independent of whether we would accept a drop. Masking
+  // happens on the way out, so unlocking mid-drag restores the affordance
+  // without waiting for the pointer to leave and re-enter.
+  const isDropTarget = usePaneDropHighlight(terminalId, "xterm");
 
   // Runtime identity and lock state are read at gesture time, not captured in
   // the listener closure: a detected-agent flip must change the next drop's
@@ -314,6 +339,7 @@ export function useTerminalFileTransfer(
   // every render, and putting it in the listener effect's deps would tear down
   // and re-register all five DOM listeners that often.
   const onDropSelectRef = useRef(onDropSelect);
+  const dropClickTargetRef = useRef(dropClickTarget);
 
   // Bumped each time input locks, so paced writes queued before a lock stay
   // cancelled even if the lock lifts again before their next timer fires.
@@ -325,6 +351,7 @@ export function useTerminalFileTransfer(
     isInputLockedRef.current = isInputLocked;
     cwdProviderRef.current = cwdProvider;
     onDropSelectRef.current = onDropSelect;
+    dropClickTargetRef.current = dropClickTarget;
   });
 
   useLayoutEffect(() => {
@@ -339,6 +366,9 @@ export function useTerminalFileTransfer(
     if (!container) return;
 
     let cancelled = false;
+    // This mount's claim on the pane's drag feedback; a second mount of the
+    // same terminal can't clear it.
+    const hoverOwner = {};
 
     const isAgentTerminal = (): boolean => deriveTerminalChrome(identityRef.current).isAgent;
 
@@ -650,6 +680,16 @@ export function useTerminalFileTransfer(
     // moves with the pane's state mid-drag.
     const acceptsAgentContext = (): boolean => getDraftRefusal(terminalId) === null;
 
+    // Where a drag let go over this terminal lands. An agent pane's files go
+    // to whichever of the terminal and its input bar holds the keyboard, as a
+    // paste would; with neither holding it, to wherever a click here would
+    // have put it. A shell's drop and an agent-context handoff keep their own
+    // routes: a shell takes no `@` tokens, and the handoff drafts on its own.
+    const dropTarget = (types: readonly string[]): TerminalFocusTarget => {
+      if (hasAgentContextDrag(types) || !isAgentTerminal()) return "xterm";
+      return resolvePaneDropTarget(terminalId, "xterm", dropClickTargetRef.current?.() ?? "xterm");
+    };
+
     const handleDragEnter = (e: DragEvent) => {
       if (!e.dataTransfer) return;
       const types = e.dataTransfer.types;
@@ -660,7 +700,7 @@ export function useTerminalFileTransfer(
       e.preventDefault();
       e.stopPropagation();
       dragDepthRef.current++;
-      if (dragDepthRef.current === 1) setIsDragOverFiles(true);
+      notePaneDragOver(terminalId, hoverOwner, dropTarget(types));
     };
 
     const handleDragOver = (e: DragEvent) => {
@@ -679,6 +719,9 @@ export function useTerminalFileTransfer(
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = isInputLockedRef.current ? "none" : "copy";
+      // Re-asked as the drag moves: the bar can lock or unlock under it, and
+      // feedback on a surface that will refuse the drop is false feedback.
+      notePaneDragOver(terminalId, hoverOwner, dropTarget(types));
     };
 
     const handleDragLeave = (e: DragEvent) => {
@@ -686,7 +729,7 @@ export function useTerminalFileTransfer(
       dragDepthRef.current--;
       if (dragDepthRef.current <= 0) {
         dragDepthRef.current = 0;
-        setIsDragOverFiles(false);
+        clearPaneDragOver(terminalId, hoverOwner);
       }
     };
 
@@ -694,7 +737,7 @@ export function useTerminalFileTransfer(
       e.preventDefault();
       e.stopPropagation();
       dragDepthRef.current = 0;
-      setIsDragOverFiles(false);
+      clearPaneDragOver(terminalId, hoverOwner);
 
       if (isInputLockedRef.current) return;
       const transfer = e.dataTransfer;
@@ -730,21 +773,22 @@ export function useTerminalFileTransfer(
       const sources = resolveTransferSources(transfer);
       if (sources.length === 0) return;
 
-      // An agent pane whose input bar comes first takes the drop there, as it
-      // would the keyboard: the upload shows its progress on the bar, and the
-      // path can't collide with typing. The setting decides, never the live
-      // focus preference — that one is session-wide and flips on any click.
-      // A bar that is missing, disabled or can't insert declines, and the
-      // drop lands on the terminal it was dropped on.
+      // Decided at the drop rather than trusted from the drag, since the bar
+      // can lock in between. One that declines leaves the drop on the terminal
+      // it was let go over, not lost.
       if (
-        isAgentTerminal() &&
-        useTerminalInputStore.getState().hybridInputAutoFocus &&
-        routeDropToComposer(terminalId, sources)
+        dropTarget(transfer.types) === "hybridInput" &&
+        routePaneDrop(terminalId, "hybridInput", sources)
       ) {
         onDropSelectRef.current?.();
         return;
       }
 
+      await landOnTerminal(sources);
+    };
+
+    /** Resolves a drop's paths and types them in, after any drop still landing here. */
+    const landOnTerminal = (sources: readonly TransferSource[]): Promise<void> => {
       const remote = isRemoteWindow();
       // What held the keyboard when the pointer let go. A remote host can take
       // a while to resolve the paths; if the user has moved on to another
@@ -758,7 +802,7 @@ export function useTerminalFileTransfer(
       // Resolution starts now so drops still resolve concurrently, but each
       // one writes only after the one before it on this terminal has: a small
       // drop made second must not insert ahead of a large one made first.
-      // A plain shell has no composer, so a slow upload shows on the terminal itself.
+      // A drop typed into the terminal shows a slow upload on the terminal itself.
       const materializing = materializeTransferSources(
         sources,
         remote
@@ -813,8 +857,24 @@ export function useTerminalFileTransfer(
       void settled.then(() => {
         if (pendingDropWrites.get(terminalId) === settled) pendingDropWrites.delete(terminalId);
       });
-      await settled;
+      return settled;
     };
+
+    // The terminal's half of the pane's drop routing: the input bar hands it a
+    // drop let go over the bar while xterm holds the keyboard. Measured against
+    // xterm's host rather than this wrapper, which also holds the upload chips:
+    // a focused Cancel button there is not the terminal taking the keyboard.
+    const unregisterPaneDropTarget = registerPaneDropTarget(terminalId, "xterm", {
+      ownsFocus: () =>
+        terminalInstanceService.get(terminalId)?.hostElement.contains(document.activeElement) ??
+        false,
+      canTake: canInsert,
+      take: (sources) => {
+        if (sources.length === 0 || !canInsert()) return false;
+        void landOnTerminal(sources);
+        return true;
+      },
+    });
 
     // Use capture phase for paste so we intercept before xterm's own handler
     container.addEventListener("paste", handlePaste, true);
@@ -827,6 +887,8 @@ export function useTerminalFileTransfer(
       cancelled = true;
       unregisterImagePaster();
       unregisterDropInserter();
+      unregisterPaneDropTarget();
+      clearPaneDragOver(terminalId, hoverOwner);
       container.removeEventListener("paste", handlePaste, true);
       container.removeEventListener("dragenter", handleDragEnter);
       container.removeEventListener("dragover", handleDragOver);
@@ -835,5 +897,5 @@ export function useTerminalFileTransfer(
     };
   }, [containerRef, terminalId, onInput]);
 
-  return isDragOverFiles && !isInputLocked;
+  return isDropTarget && !isInputLocked;
 }
