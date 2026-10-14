@@ -615,6 +615,81 @@ describe("mountPanelStory", () => {
     expect(preview.panel.menuItems).toHaveLength(1);
   });
 
+  it("clears what the outgoing view published, even from its cleanup, on a reload", async () => {
+    let mounts = 0;
+    let reload: (() => void) | undefined;
+    function PublishesOnce({ requestReload, setMenuItems }: PanelViewProps) {
+      useEffect(() => {
+        mounts += 1;
+        reload = requestReload;
+        if (mounts > 1) return;
+        setMenuItems?.([{ actionId: "preview.plugin.run" }]);
+        return () => setMenuItems?.([{ actionId: "preview.plugin.stop" }]);
+      }, [requestReload, setMenuItems]);
+      return null;
+    }
+    const preview = await mount({ component: PublishesOnce }, undefined, {
+      container: container(),
+      strictMode: false,
+    });
+    await act(async () => {
+      await preview.ready;
+    });
+    expect(preview.panel.menuItems).toHaveLength(1);
+    const first = reload;
+    await act(async () => {
+      first?.();
+      first?.();
+      await Promise.resolve();
+    });
+    expect(mounts).toBe(2);
+    expect(preview.panel.menuItems).toBe(null);
+  });
+
+  it("drops a queued reload whose attempt was already replaced", async () => {
+    let mounts = 0;
+    let reload: (() => void) | undefined;
+    function Counts({ requestReload }: PanelViewProps) {
+      useEffect(() => {
+        mounts += 1;
+        reload = requestReload;
+      }, [requestReload]);
+      return null;
+    }
+    const preview = await mount({ component: Counts }, undefined, {
+      container: container(),
+      strictMode: false,
+    });
+    await act(async () => {
+      await preview.ready;
+    });
+    await act(async () => {
+      reload?.();
+      void preview.remount();
+      await Promise.resolve();
+    });
+    expect(mounts).toBe(2);
+  });
+
+  it("settles the first readiness when a remount supersedes it before it committed", async () => {
+    let preview!: MountedPanelPreview;
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
+    void act(() => {
+      preview = mountPanelStory(counterMeta, undefined, { container: container() });
+      first = preview.ready;
+      second = preview.remount();
+    });
+    mounted.push(preview);
+    await act(async () => {
+      expect(await first).toMatchObject({
+        status: "failed",
+        reason: expect.stringMatching(/superseded/),
+      });
+      expect(await second).toEqual({ status: "ready" });
+    });
+  });
+
   it("fails a mount the host would refuse, and keeps failing across a theme switch", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const preview = await mount(

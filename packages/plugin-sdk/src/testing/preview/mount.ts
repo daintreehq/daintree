@@ -137,17 +137,20 @@ export function mountComposedPanelStory(
   let theme = applyPreviewTheme(themeRoot, options.theme ?? DEFAULT_PREVIEW_THEME_ID);
 
   let disposed = false;
-  let reloadQueued = false;
+  /** The attempt a reload is queued for, if one is. */
+  let reloadQueuedFor: number | null = null;
   const panel = createPreviewPanelController(composed.args, {
-    // Calls in one tick coalesce into one reload, as the host's do.
+    // Calls in one tick coalesce into one reload, as the host's do. Only a
+    // live attempt can ask, and the reload is for that attempt: one replaced
+    // in the meantime has nothing left to reload.
     onReloadRequested: () => {
-      if (reloadQueued) return;
-      reloadQueued = true;
+      if (reloadQueuedFor === attemptKey) return;
+      const requestedBy = attemptKey;
+      reloadQueuedFor = requestedBy;
       queueMicrotask(() => {
-        reloadQueued = false;
-        if (disposed) return;
-        panel.clearViewState();
-        void remount();
+        if (reloadQueuedFor === requestedBy) reloadQueuedFor = null;
+        if (disposed || attemptKey !== requestedBy) return;
+        void replaceAttempt(true);
       });
     },
   });
@@ -222,6 +225,7 @@ export function mountComposedPanelStory(
   /** Render a fresh attempt. Never throws: a refusal is a failed mount. */
   function render(): Promise<void> {
     attemptKey += 1;
+    cancelPending("superseded by a new attempt");
     const mount = pendingMount();
     pending = mount;
     crashed = null;
@@ -305,12 +309,22 @@ export function mountComposedPanelStory(
     });
   }
 
-  function remount(): Promise<PreviewReadiness> {
+  /** Settle a mount that will never commit, so its readiness does not hang. */
+  function cancelPending(reason: string): void {
+    const cancelled = pending;
+    pending = null;
+    cancelled?.reject(new Error(reason));
+  }
+
+  function replaceAttempt(reload: boolean): Promise<PreviewReadiness> {
     // The outgoing view unmounts first, its cleanups run, and only then is its
     // signal aborted and the record read for the next attempt — the host's
     // order, so state persisted from a cleanup comes back.
     flushSync(() => root.render(null));
     panel.disposeAttempt();
+    // After the cleanups, so nothing the outgoing view published on its way
+    // out survives a reload.
+    if (reload) panel.clearViewState();
     content = mountContent(render(), false);
     return track(content);
   }
@@ -368,11 +382,12 @@ export function mountComposedPanelStory(
       // mid-`play`, or after a failed mount, is not a ready page.
       return track(content);
     },
-    remount,
+    remount: () => replaceAttempt(false),
     unmount() {
       if (disposed) return;
       disposed = true;
       generation += 1;
+      cancelPending("unmounted");
       runCleanups();
       // After React's cleanups, as the host aborts it.
       panel.disposeAttempt();
