@@ -263,30 +263,48 @@ describe("useMcpBridge", () => {
     });
   });
 
-  it("holds an action until the worktree snapshot in flight has landed (#13348)", async () => {
+  it("reads the worktree store only once the snapshot in flight has landed (#13348)", async () => {
     // A background view's port is restored and confirmed before its snapshot
-    // fetch answers; running now would read the map from when it was cached.
+    // fetch answers. The pane's id-only worktree was created while the view
+    // was cached, so only the landed snapshot can describe it.
     mocks.get.mockReturnValue(safeManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
     let landSnapshot: () => void = () => {};
     trackWorktreeSnapshot(
       new Promise<void>((resolve) => {
-        landSnapshot = resolve;
+        landSnapshot = () => {
+          mocks.worktrees.set("wt-new", { id: "wt-new", name: "new", path: "/repo/new" });
+          resolve();
+        };
       })
     );
 
     renderHook(() => useMcpBridge());
 
-    const dispatched = dispatchHandler?.({ requestId: "req-sync", actionId: "actions.list" });
+    const dispatched = dispatchHandler?.({
+      requestId: "req-sync",
+      actionId: "files.search",
+      args: { query: "x" },
+      context: { projectId: "p1", activeWorktreeId: "wt-new" },
+      sessionOrigin: "external",
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mocks.dispatch).not.toHaveBeenCalled();
 
     landSnapshot();
     await dispatched;
 
-    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
-    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ requestId: "req-sync", result: { ok: true, result: { ok: true } } })
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "files.search",
+      { query: "x" },
+      {
+        source: "agent",
+        confirmed: undefined,
+        contextOverride: expect.objectContaining({
+          activeWorktreeId: "wt-new",
+          activeWorktreePath: "/repo/new",
+        }),
+      }
     );
   });
 
@@ -307,6 +325,29 @@ describe("useMcpBridge", () => {
 
     expect(mocks.dispatch).not.toHaveBeenCalled();
     expect(sendDispatchActionResponse).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting on a snapshot that never lands, and still runs the action", async () => {
+    // Its associations read has no deadline; running on the map the view has
+    // beats running after main has already reported the call as timed out.
+    vi.useFakeTimers();
+    try {
+      mocks.get.mockReturnValue(safeManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      trackWorktreeSnapshot(new Promise<void>(() => {}));
+
+      renderHook(() => useMcpBridge());
+      const dispatched = dispatchHandler?.({ requestId: "req-stuck", actionId: "actions.list" });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await dispatched;
+      expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("forwards the bound provision-time context as contextOverride (#8317)", async () => {
@@ -1661,6 +1702,72 @@ describe("useMcpBridge", () => {
         },
         confirmationDecision: "approved",
       });
+    } finally {
+      vi.mocked(Date.now).mockRestore();
+    }
+  });
+
+  it("counts the snapshot wait against main's dispatch deadline (#13348)", async () => {
+    // Main's clock started when it sent the request, so time spent waiting for
+    // the worktree snapshot is time the approval no longer has.
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-1", {
+      id: "wt-1",
+      path: "/repo/wt-1",
+      name: "wt-1",
+      branch: "feature/x",
+      isCurrent: false,
+      isMainWorktree: false,
+    });
+    mocks.buildPreview.mockResolvedValue({
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    });
+    let landSnapshot: () => void = () => {};
+    trackWorktreeSnapshot(
+      new Promise<void>((resolve) => {
+        landSnapshot = resolve;
+      })
+    );
+    const start = Date.now();
+    let elapsed = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => start + elapsed);
+
+    try {
+      renderHook(() => useMcpBridge());
+      const dispatched = dispatchHandler?.({
+        requestId: "req-late-sync",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-1", force: true },
+      });
+
+      elapsed = 9_000;
+      landSnapshot();
+      await vi.waitFor(() => {
+        expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+      });
+      // Well inside the deadline measured from the end of the wait, past it
+      // measured from when main sent the request.
+      elapsed = 26_000;
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await dispatched;
+
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestId: "req-late-sync",
+          result: expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({ code: "CONFIRMATION_TIMEOUT" }),
+          }),
+        })
+      );
     } finally {
       vi.mocked(Date.now).mockRestore();
     }

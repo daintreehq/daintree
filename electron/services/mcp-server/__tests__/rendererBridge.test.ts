@@ -77,7 +77,7 @@ import { registerRemoteService } from "../../../remote/runtime.js";
 import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
-import { buildMcpErrorPayload, RETRIABLE_ERROR_CODES } from "../shared.js";
+import { buildMcpErrorPayload, MCP_DISPATCH_TIMEOUT_MS, RETRIABLE_ERROR_CODES } from "../shared.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
 /**
@@ -2204,7 +2204,13 @@ describe("rendererBridge — worktree port for a cached routed view (#13348)", (
 
   it.each([
     ["could not be restored", () => Promise.resolve(false)],
-    ["threw", () => Promise.reject(new Error("broker gone"))],
+    ["rejected", () => Promise.reject(new Error("broker gone"))],
+    [
+      "threw synchronously",
+      () => {
+        throw new Error("broker gone");
+      },
+    ],
   ])("still dispatches when the port %s", async (_label, outcome) => {
     // Most actions never read the worktree store; refusing them over a port
     // they do not need would turn a degraded view into a dead one.
@@ -2234,6 +2240,72 @@ describe("rendererBridge — worktree port for a cached routed view (#13348)", (
     ready.resolve(true);
     await flushThaw();
     expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("releases the port, and never sends, when the deadline passes while it is restored", async () => {
+    vi.useFakeTimers();
+    try {
+      const wc = registerView("ws-a", 101);
+      const ready = deferred<boolean>();
+      worktreePort.prepare.mockReturnValue(ready.promise);
+
+      const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+      const outcome = promise.catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worktreePort.prepare).toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(MCP_DISPATCH_TIMEOUT_MS);
+      expect(await outcome).toBeInstanceOf(Error);
+      expect(pendingDispatches.size).toBe(0);
+      expect(leases.has(101)).toBe(false);
+      expect(worktreePort.release).toHaveBeenCalledWith(101);
+
+      ready.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(wc.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers the caller even when closing the port throws", async () => {
+    registerView("ws-a", 101);
+    worktreePort.release.mockImplementation(() => {
+      throw new Error("broker gone");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+      await flushThaw();
+      settleDispatch(101, [...pendingDispatches.keys()][0]);
+
+      await expect(promise).resolves.toMatchObject({ result: { ok: true } });
+      expect(leases.has(101)).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("manages no port without a lease registry to say when the view is idle", async () => {
+    const wc = registerView("ws-a", 101);
+    const unleased = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () => null,
+      undefined,
+      worktreePort
+    );
+    unleased.setupListeners([]);
+
+    const promise = unleased.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+    expect(wc.send).toHaveBeenCalledTimes(1);
+    settleDispatch(101, [...pendingDispatches.keys()][0]);
+    await promise;
+
+    expect(worktreePort.prepare).not.toHaveBeenCalled();
+    expect(worktreePort.release).not.toHaveBeenCalled();
   });
 
   it("closes the port only when the view's last routed request settles", async () => {

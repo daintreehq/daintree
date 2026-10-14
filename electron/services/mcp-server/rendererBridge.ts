@@ -310,10 +310,13 @@ export function createRendererBridge(
   /**
    * Restores a cached view's worktree port for routed dispatch (#13348).
    * Optional for the same reason as `viewLeases`: without it a routed dispatch
-   * reaches the view with whatever port it has, the pre-#13348 behavior.
+   * reaches the view with whatever port it has, the pre-#13348 behavior. Used
+   * only alongside `viewLeases`, whose count is what says a cached view is idle
+   * again — without it there is no safe moment to close a restored port.
    */
   worktreePort?: RoutedViewWorktreePort
 ) {
+  const routedWorktreePort = viewLeases ? worktreePort : undefined;
   let cachedManifest: ActionManifestEntry[] | null = null;
 
   // Per-WebContents manifest cache for pinned help sessions (#9887). The shared
@@ -672,9 +675,9 @@ export function createRendererBridge(
    * be the last request out after a dispatch restored the port.
    */
   function releaseWorktreePort(webContentsId: number): void {
-    if (!worktreePort || viewLeases?.has(webContentsId)) return;
+    if (!routedWorktreePort || viewLeases?.has(webContentsId)) return;
     try {
-      worktreePort.release(webContentsId);
+      routedWorktreePort.release(webContentsId);
     } catch (err) {
       console.warn("[MCP] Failed to close a cached view's worktree port:", err);
     }
@@ -884,7 +887,7 @@ export function createRendererBridge(
       if (route) {
         const isPending = () => pendingDispatches.has(requestId);
         thawThenSend(webContents, isPending, () => {
-          if (!worktreePort) {
+          if (!routedWorktreePort) {
             send();
             return;
           }
@@ -892,8 +895,10 @@ export function createRendererBridge(
           // an action reading it would miss every worktree made since (#13348).
           // Sent whatever the outcome: most actions never read that store, and
           // refusing would fail them over a port they do not need.
-          void worktreePort
-            .prepare(webContents, resolveDispatchedWorkspace(webContentsId))
+          void Promise.resolve()
+            .then(() =>
+              routedWorktreePort.prepare(webContents, resolveDispatchedWorkspace(webContentsId))
+            )
             .catch(() => false)
             .then(() => {
               if (!isPending() || webContents.isDestroyed()) return;

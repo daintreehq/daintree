@@ -5,8 +5,8 @@ import { useContext } from "react";
 
 import { useProjectStore } from "@/store/projectStore";
 import {
-  pendingWorktreeSnapshot,
   resetWorktreeSnapshotSyncForTesting,
+  waitForWorktreeSnapshot,
 } from "@/store/worktreeSnapshotSync";
 import type { WorktreeSnapshot } from "@shared/types";
 import type { Project } from "@shared/types/project";
@@ -16,13 +16,15 @@ import type { Project } from "@shared/types/project";
  *
  * Main confirms a background view's restored port and dispatches straight
  * away, while the snapshot that port triggered is still in flight. The
- * dispatch handler waits on `pendingWorktreeSnapshot`, so it has to cover the
+ * dispatch handler waits on `waitForWorktreeSnapshot`, so it has to cover the
  * fetch right up to the snapshot being in the store — including the
  * associations wait that sits between the response and `applySnapshot`.
  */
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn(() => "notif-id") }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
+
+const WAIT_MS = 10_000;
 
 let portReady = false;
 let readyCallbacks: Array<() => void> = [];
@@ -99,17 +101,22 @@ async function renderProvider() {
   return { store: result.current, unmount };
 }
 
+/** Deliver the port, as the preload does just before it confirms the port to main. */
+function deliverPort(): void {
+  act(() => {
+    portReady = true;
+    readyCallbacks.forEach((cb) => cb());
+  });
+}
+
 describe("WorktreeStoreProvider — snapshot wait for MCP dispatch (#13348)", () => {
   it("is only done waiting once the restored port's snapshot is in the store", async () => {
     const { store, unmount } = await renderProvider();
-    expect(pendingWorktreeSnapshot()).toBeNull();
+    expect(waitForWorktreeSnapshot(WAIT_MS)).toBeNull();
 
     // The port arrives: the fetch starts in the same turn the receipt is sent.
-    act(() => {
-      portReady = true;
-      readyCallbacks.forEach((cb) => cb());
-    });
-    const waiting = pendingWorktreeSnapshot();
+    deliverPort();
+    const waiting = waitForWorktreeSnapshot(WAIT_MS);
     expect(waiting).not.toBeNull();
 
     let done = false;
@@ -131,7 +138,32 @@ describe("WorktreeStoreProvider — snapshot wait for MCP dispatch (#13348)", ()
     });
     expect(done).toBe(true);
     expect(store.getState().worktrees.has("wt-new")).toBe(true);
-    expect(pendingWorktreeSnapshot()).toBeNull();
+    expect(waitForWorktreeSnapshot(WAIT_MS)).toBeNull();
+
+    unmount();
+  });
+
+  it("still waits for the states when the associations answer first", async () => {
+    const { store, unmount } = await renderProvider();
+    deliverPort();
+    const waiting = waitForWorktreeSnapshot(WAIT_MS)!;
+
+    let done = false;
+    void waiting.then(() => {
+      done = true;
+    });
+
+    await act(async () => {
+      answerAssociations();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(done).toBe(false);
+
+    await act(async () => {
+      answerStates([worktree("wt-new")]);
+      await waiting;
+    });
+    expect(store.getState().worktrees.has("wt-new")).toBe(true);
 
     unmount();
   });

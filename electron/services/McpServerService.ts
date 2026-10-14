@@ -840,6 +840,14 @@ export class McpServerService {
    * the workspace id outlives the view, the WebContents id is what identifies
    * the exact renderer a request is waiting on.
    */
+  /**
+   * Whether a routed MCP request is awaiting this exact view (#13348). Caching
+   * then leaves its worktree port to the request, whose settle closes it.
+   */
+  hasDispatchLease(webContentsId: number): boolean {
+    return this.viewLeases.has(webContentsId);
+  }
+
   getWorkspaceViewActivity(
     workspaceId: string,
     webContentsId: number

@@ -10,6 +10,7 @@
  * Leaf module: one per view, like the worktree store it describes.
  */
 let inFlight: Promise<void> | null = null;
+let idle: { promise: Promise<void>; resolve: () => void } | null = null;
 
 /** Record a snapshot fetch. A newer fetch replaces the one being waited on. */
 export function trackWorktreeSnapshot(fetch: Promise<unknown>): void {
@@ -19,23 +20,44 @@ export function trackWorktreeSnapshot(fetch: Promise<unknown>): void {
   );
   inFlight = settled;
   void settled.then(() => {
-    if (inFlight === settled) inFlight = null;
+    // A superseded fetch settling says nothing about the store: only the
+    // newest one ends the wait, and it does so even if an older one is stuck.
+    if (inFlight !== settled) return;
+    inFlight = null;
+    idle?.resolve();
+    idle = null;
   });
 }
 
 /**
- * Resolves once no snapshot fetch is outstanding, following any fetch that
- * supersedes the one it started on. Never rejects: a failed fetch leaves the
- * store as it was, and the action reports what it finds there. Null when
- * nothing is in flight, so a caller can stay synchronous.
+ * Resolves once the newest snapshot fetch settles, or after `timeoutMs` — the
+ * associations read inside a fetch has no deadline of its own, and an action
+ * that runs after main gave up on it is worse than one that reads a stale map.
+ * Never rejects: a failed fetch leaves the store as it was, and the action
+ * reports what it finds there. Null when nothing is in flight, so a caller can
+ * stay synchronous.
  */
-export function pendingWorktreeSnapshot(): Promise<void> | null {
+export function waitForWorktreeSnapshot(timeoutMs: number): Promise<void> | null {
   if (!inFlight) return null;
-  return (async () => {
-    while (inFlight) await inFlight;
-  })();
+  if (!idle) {
+    let resolve: () => void = () => {};
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    idle = { promise, resolve };
+  }
+  const settled = idle.promise;
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    void settled.then(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 export function resetWorktreeSnapshotSyncForTesting(): void {
   inFlight = null;
+  idle?.resolve();
+  idle = null;
 }
