@@ -22,6 +22,18 @@ interface Tagged<T> {
   value: T;
 }
 
+interface LaneReader {
+  laneKey: string | null;
+  revision: number;
+  attempts: number;
+  accept: (next: AssistantMessagingState) => boolean;
+  read: () => void;
+}
+
+function idleReader(laneKey: string | null): LaneReader {
+  return { laneKey, revision: -1, attempts: 0, accept: () => false, read: () => {} };
+}
+
 /**
  * The messaging controls for one assistant lane of this view's project. The
  * policy lives in main (the host's, for a remote window), so this reads it on
@@ -39,61 +51,65 @@ export function useAssistantMessaging(
   const laneKey = projectId === null ? null : `${projectId}\u0000${slot}`;
   const [state, setState] = useState<Tagged<AssistantMessagingState> | null>(null);
   const [refusal, setRefusal] = useState<Tagged<AssistantMessagingEnrollDenial> | null>(null);
-  const current = useRef<{ laneKey: string | null; revision: number; read: () => void }>({
-    laneKey: null,
-    revision: -1,
-    read: () => {},
-  });
-
-  const accept = useCallback((key: string, next: AssistantMessagingState): void => {
-    const lane = current.current;
-    if (lane.laneKey !== key || next.revision < lane.revision) return;
-    lane.revision = next.revision;
-    setState({ laneKey: key, value: next });
-  }, []);
+  // One per effect run, so a reply from an earlier visit to the same lane, or
+  // an earlier session on it, is told apart from this one's by identity.
+  const current = useRef<LaneReader>(idleReader(null));
 
   useEffect(() => {
-    const lane = { laneKey, revision: -1, read: () => {} };
+    const lane = idleReader(laneKey);
     current.current = lane;
     if (projectId === null || laneKey === null || !assistantMessagingClient.isAvailable()) {
       return undefined;
     }
+    lane.accept = (next) => {
+      if (current.current !== lane || next.revision < lane.revision) return false;
+      lane.revision = next.revision;
+      setState({ laneKey, value: next });
+      return true;
+    };
     lane.read = () => {
       assistantMessagingClient.getState({ projectId, slot }).then(
-        (next) => accept(laneKey, next),
+        (next) => lane.accept(next),
         () => {}
       );
     };
     const offChanged = assistantMessagingClient.onChanged(lane.read);
-    const offResync = onHostResync(lane.read);
+    // A host that restarted counts its revisions from zero again.
+    const offResync = onHostResync(() => {
+      lane.revision = -1;
+      lane.read();
+    });
     lane.read();
     return () => {
-      lane.laneKey = null;
+      lane.accept = () => false;
       offChanged();
       offResync();
     };
-  }, [projectId, slot, laneKey, sessionId, accept]);
+  }, [projectId, slot, laneKey, sessionId]);
 
   const setLaneEnrolled = useCallback(
     (enrolled: boolean) => {
+      const lane = current.current;
       if (projectId === null || laneKey === null || !assistantMessagingClient.isAvailable()) {
         return;
       }
+      // Only the latest attempt on this lane speaks: an earlier one's reply,
+      // refusal or failure is stale by the time a newer one is in flight.
+      const attempt = ++lane.attempts;
+      const latest = () => current.current === lane && lane.attempts === attempt;
       setRefusal(null);
       assistantMessagingClient.setLaneEnrolled({ projectId, slot, enrolled }).then(
         (result) => {
-          if (current.current.laneKey !== laneKey) return;
-          accept(laneKey, result.state);
+          if (!latest()) return;
+          lane.accept(result.state);
           setRefusal(result.refusal ? { laneKey, value: result.refusal } : null);
         },
         () => {
-          if (current.current.laneKey === laneKey) {
-            setRefusal({ laneKey, value: "unavailable" });
-          }
+          if (latest()) setRefusal({ laneKey, value: "unavailable" });
         }
       );
     },
-    [projectId, slot, laneKey, accept]
+    [projectId, slot, laneKey]
   );
 
   // The reply is a bare flag with no revision, so read the versioned state

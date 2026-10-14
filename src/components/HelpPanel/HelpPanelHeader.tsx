@@ -73,16 +73,18 @@ export interface HelpPanelMessagingControls {
 /** A toggle's fixed label, with why it can't be changed right now under it. */
 function MenuToggleLabel({
   label,
+  labelId,
   hint,
   hintId,
 }: {
   label: string;
+  labelId: string;
   hint: string | null;
   hintId: string;
 }) {
   return (
     <span className="flex min-w-0 flex-col">
-      <span>{label}</span>
+      <span id={labelId}>{label}</span>
       {hint && (
         <span id={hintId} className="text-text-secondary">
           {hint}
@@ -206,11 +208,13 @@ export function HelpPanelHeader({
                 checked={messaging.enrolled}
                 disabled={!messaging.canChangeEnrollment}
                 onCheckedChange={(checked) => messaging.onEnrolledChange(checked === true)}
+                aria-labelledby={`${hintId}-accept-label`}
                 aria-describedby={messaging.enrollmentHint ? `${hintId}-accept` : undefined}
                 data-testid="assistant-header-accept-messages"
               >
                 <MenuToggleLabel
                   label="Accept messages from other machines"
+                  labelId={`${hintId}-accept-label`}
                   hint={messaging.enrollmentHint}
                   hintId={`${hintId}-accept`}
                 />
@@ -219,11 +223,13 @@ export function HelpPanelHeader({
                 checked={messaging.paused}
                 disabled={!messaging.canPause}
                 onCheckedChange={(checked) => messaging.onPausedChange(checked === true)}
+                aria-labelledby={`${hintId}-pause-label`}
                 aria-describedby={messaging.pauseHint ? `${hintId}-pause` : undefined}
                 data-testid="assistant-header-pause-messages"
               >
                 <MenuToggleLabel
                   label="Pause messages between machines"
+                  labelId={`${hintId}-pause-label`}
                   hint={messaging.pauseHint}
                   hintId={`${hintId}-pause`}
                 />

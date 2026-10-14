@@ -46,10 +46,12 @@ export function AssistantMessagingNotice({
   laneKey,
   onDismissRefusal,
 }: AssistantMessagingNoticeProps) {
-  const [dismissedEnding, setDismissedEnding] = useState<string | null>(null);
+  // Per lane, so dismissing one lane's ending never brings back another's.
+  const [dismissed, setDismissed] = useState<Record<string, string>>({});
   const ended = state?.available ? state.lane.ended : null;
-  const endingKey = ended ? `${laneKey ?? ""}\u0000${ended.at}\u0000${ended.reason}` : null;
-  const showEnded = ended !== null && endingKey !== dismissedEnding;
+  const lane = laneKey ?? "";
+  const endingKey = ended ? `${ended.at}\u0000${ended.reason}` : null;
+  const showEnded = ended !== null && endingKey !== dismissed[lane];
   const showRefusal = refusal !== null && !showEnded;
   const announcement = showEnded
     ? `${ENDED_TITLE}. ${ENDED_DESCRIPTION[ended.reason]}`
@@ -71,7 +73,7 @@ export function AssistantMessagingNotice({
           ariaLive="off"
           title={ENDED_TITLE}
           description={ENDED_DESCRIPTION[ended.reason]}
-          onClose={() => setDismissedEnding(endingKey)}
+          onClose={() => setDismissed((prev) => ({ ...prev, [lane]: endingKey ?? "" }))}
           closeAriaLabel="Dismiss messaging notice"
         />
       )}

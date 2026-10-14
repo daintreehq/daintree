@@ -167,6 +167,42 @@ describe("useAssistantMessaging", () => {
     expect(result.current.state?.lane.enrolled).toBe(false);
   });
 
+  it("ignores a reply from an earlier visit to the same lane", async () => {
+    const { result, rerender } = renderHook(
+      ({ slot }) => useAssistantMessaging("proj", slot, null),
+      { initialProps: { slot: 0 } }
+    );
+    rerender({ slot: 1 });
+    rerender({ slot: 0 });
+    await act(async () => reads[0]!(makeState(7, true)));
+    expect(result.current.state).toBeNull();
+    await act(async () => reads[2]!(makeState(3)));
+    expect(result.current.state?.lane.enrolled).toBe(false);
+  });
+
+  it("lets only the latest attempt's reply speak, refusals included", async () => {
+    const answers: Array<(value: unknown) => void> = [];
+    clientMock.setLaneEnrolled.mockImplementation(
+      () => new Promise((resolve) => answers.push(resolve))
+    );
+    const { result } = renderHook(() => useAssistantMessaging("proj", 0, null));
+    act(() => result.current.setLaneEnrolled(true));
+    act(() => result.current.setLaneEnrolled(true));
+    await act(async () => answers[1]!({ state: makeState(4, true), refusal: null }));
+    await act(async () => answers[0]!({ state: makeState(2), refusal: "not-running" }));
+    expect(result.current.refusal).toBeNull();
+    expect(result.current.state?.lane.enrolled).toBe(true);
+  });
+
+  it("takes a restarted host's state after a resync even though its revision starts over", async () => {
+    const { result } = renderHook(() => useAssistantMessaging("proj", 0, null));
+    await act(async () => reads[0]!(makeState(10, true)));
+    act(() => notifyHostResync());
+    await act(async () => reads[1]!(makeState(1)));
+    expect(result.current.state?.revision).toBe(1);
+    expect(result.current.state?.lane.enrolled).toBe(false);
+  });
+
   it("reads again when a remote link resyncs, since pushes may have been lost", () => {
     renderHook(() => useAssistantMessaging("proj", 0, null));
     act(() => notifyHostResync());

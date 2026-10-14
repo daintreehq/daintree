@@ -59,16 +59,19 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     disabled,
     onCheckedChange,
     "aria-describedby": describedBy,
+    "aria-labelledby": labelledBy,
   }: {
     children: ReactNode;
     checked?: boolean;
     disabled?: boolean;
     onCheckedChange?: (checked: boolean) => void;
     "aria-describedby"?: string;
+    "aria-labelledby"?: string;
   }) => (
     <button
       role="menuitemcheckbox"
       aria-describedby={describedBy}
+      aria-labelledby={labelledBy}
       aria-checked={checked ? "true" : "false"}
       disabled={disabled}
       onClick={() => onCheckedChange?.(!checked)}
@@ -265,6 +268,9 @@ describe("HelpPanelHeader", () => {
         const describedBy = item.getAttribute("aria-describedby");
         expect(describedBy).toBeTruthy();
         expect(container.querySelector(`[id="${describedBy}"]`)?.textContent).toBe(hint);
+        // The hint describes the toggle; its name stays the fixed label.
+        const labelledBy = item.getAttribute("aria-labelledby");
+        expect(container.querySelector(`[id="${labelledBy}"]`)?.textContent).not.toContain(hint);
       }
     });
   });

@@ -143,4 +143,24 @@ describe("AssistantMessagingNotice", () => {
     );
     expect(region(container).textContent).toContain("Stopped accepting messages");
   });
+
+  it("remembers each lane's dismissal on its own", () => {
+    const ending = state({ reason: "revoked", at: 5 });
+    const view = (laneKey: string) => (
+      <AssistantMessagingNotice
+        state={ending}
+        refusal={null}
+        laneKey={laneKey}
+        onDismissRefusal={vi.fn()}
+      />
+    );
+    const dismiss = () =>
+      fireEvent.click(container.querySelector('[aria-label="Dismiss messaging notice"]')!);
+    const { container, rerender } = render(view("a"));
+    dismiss();
+    rerender(view("b"));
+    dismiss();
+    rerender(view("a"));
+    expect(region(container).textContent).toBe("");
+  });
 });
