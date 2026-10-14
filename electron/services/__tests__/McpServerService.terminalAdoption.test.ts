@@ -408,15 +408,18 @@ describe("McpServerService help-bearer revocation (#12993)", () => {
     const teardown = vi
       .spyOn(service, "disconnectBearer")
       .mockReturnValue({ tokenHash: "hash-help-4", disconnected: true });
+    const revoke = vi.spyOn(service, "revokeOwnershipPrincipal");
     try {
       service.resetHelpTransports("help-token-4");
 
       expect(lookup).toHaveBeenCalledWith("help-token-4");
       expect(teardown).toHaveBeenCalledWith("hash-help-4");
+      expect(revoke).not.toHaveBeenCalled();
       // Unlike a revoke, the principal survives: the worktree it made is still its own.
       expect(ledger.creatorOf("worktree", "/repo/wt-4")).toBe(principalOwnerKey(principal));
     } finally {
       teardown.mockRestore();
+      revoke.mockRestore();
       lookup.mockRestore();
       ledger.revokePrincipal(principal);
     }

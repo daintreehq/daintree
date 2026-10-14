@@ -43,7 +43,7 @@ import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { MCP_SSE_HEARTBEAT_INTERVAL_MS, minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { ResourceOwnershipLedger, helpOwnershipPrincipal } from "../resourceOwnership.js";
-import { WorkspaceBindingError } from "../rendererBridge.js";
+import { SessionBindingError, WorkspaceBindingError } from "../rendererBridge.js";
 import { AuditService, type McpAuditLogStore } from "../auditLog.js";
 
 type BearerTestHandle = {
@@ -1669,7 +1669,7 @@ describe("HttpLifecycle", () => {
       }
     );
 
-    it("keeps the build-time origin after the session's binding is torn down", async () => {
+    it("fails a pinned session's call closed once its binding is torn down mid-flight", async () => {
       const deps = pinnedOriginDeps();
       const lc = new HttpLifecycle(deps);
       deps.sessionStore.sessionOriginMap.set("sess-teardown", "assistant-pane");
@@ -1677,22 +1677,20 @@ describe("HttpLifecycle", () => {
 
       const sessionDeps = (lc as unknown as OriginHandle).buildSessionServerDeps("sess-teardown");
 
-      // `clearSessionBinding` runs on teardown while a dispatch can still be in
-      // flight, and `getOrigin` fails closed to "external" once the entry is
-      // gone. Reading origin inside the closure would therefore relabel the
-      // assistant's own spawn as an external client's the moment its session
-      // ended — the build-time snapshot is what stops that. The pin is cleared
-      // by the same call, so this asserts through the unpinned route.
+      // `clearSessionBinding` runs on teardown — an idle reap, a revoke, or a
+      // take-over retiring the assistant's transports (#13360) — while a call
+      // can still be in flight. With the pin gone, falling through to the
+      // unpinned route would run the assistant's action in whatever window has
+      // focus; a session pinned at build stays pinned, and fails closed.
       deps.sessionStore.clearSessionBinding("sess-teardown");
-      await sessionDeps.dispatchAction("agent.launch", {}, false);
 
-      expect(deps.dispatchAction).toHaveBeenCalledWith(
-        "agent.launch",
-        {},
-        false,
-        undefined,
-        "assistant-pane"
+      await expect(sessionDeps.dispatchAction("agent.launch", {}, false)).rejects.toBeInstanceOf(
+        SessionBindingError
       );
+      await expect(sessionDeps.requestManifest()).rejects.toBeInstanceOf(SessionBindingError);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(deps.dispatchActionForWebContents).not.toHaveBeenCalled();
+      expect(deps.requestManifest).not.toHaveBeenCalled();
     });
 
     it("falls back to external for a session that never recorded an origin", async () => {

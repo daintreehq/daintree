@@ -152,8 +152,12 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 vi.mock("@/utils/safeFireAndForget", () => ({
   safeFireAndForget: (p: Promise<unknown>) => p,
 }));
+vi.mock("@/services/TerminalInstanceService", () => ({
+  terminalInstanceService: { fetchAndRestore: vi.fn().mockResolvedValue(true) },
+}));
 
 import { HelpSessionController } from "../HelpSessionController";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { assistantSlotKey as slotKey } from "@shared/config/assistantSlots";
@@ -1135,14 +1139,7 @@ describe("HelpSessionController — MCP tool activity strip (#9759)", () => {
 });
 
 describe("HelpSessionController — taking over a running host assistant (#13360)", () => {
-  const help = () =>
-    window.electron.help as unknown as {
-      adoptDetachedSession?: ReturnType<typeof vi.fn>;
-      getFolderPath: ReturnType<typeof vi.fn>;
-      provisionSession: ReturnType<typeof vi.fn>;
-      takePendingHibernation: ReturnType<typeof vi.fn>;
-      markTerminal: ReturnType<typeof vi.fn>;
-    };
+  const help = () => window.electron.help;
   const lane = {
     sessionId: "sess-live",
     terminalId: "terminal-live",
@@ -1156,8 +1153,9 @@ describe("HelpSessionController — taking over a running host assistant (#13360
     rows: 40,
   };
 
-  afterEach(() => {
-    delete help().adoptDetachedSession;
+  const commitPane = vi.fn(async (args: { existingId: string }) => {
+    panelStoreState.panelsById[args.existingId] = { id: args.existingId };
+    return args.existingId;
   });
 
   it("shows the running assistant instead of launching, before the version probe or any claim", async () => {
@@ -1165,7 +1163,7 @@ describe("HelpSessionController — taking over a running host assistant (#13360
     ctrl.start();
     ctrl["_launchGen"] = 7;
     help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "adopted", lane });
-    panelStoreState.addPanel = vi.fn().mockResolvedValue("terminal-live");
+    panelStoreState.addPanel = commitPane;
 
     await ctrl["_executeLaunch"](
       7,
@@ -1189,10 +1187,7 @@ describe("HelpSessionController — taking over a running host assistant (#13360
         initialTerminalGeometry: { cols: 120, rows: 40 },
       })
     );
-    expect(
-      (window.electron as unknown as { system: { getAgentVersion: ReturnType<typeof vi.fn> } })
-        .system.getAgentVersion
-    ).not.toHaveBeenCalled();
+    expect(window.electron.system.getAgentVersion).not.toHaveBeenCalled();
     expect(help().takePendingHibernation).not.toHaveBeenCalled();
     expect(help().provisionSession).not.toHaveBeenCalled();
     expect(actionService.dispatch).not.toHaveBeenCalled();
@@ -1203,9 +1198,99 @@ describe("HelpSessionController — taking over a running host assistant (#13360
       "sess-live"
     );
     expect(help().markTerminal).toHaveBeenCalledWith("terminal-live");
+    // History to lose: a differing preferred agent asks before replacing it.
+    expect(helpPanelState.markConversationStarted).toHaveBeenCalledWith(0);
+    // The screen it already drew comes from the host's snapshot.
+    await vi.waitFor(() =>
+      expect(terminalInstanceService.fetchAndRestore).toHaveBeenCalledWith("terminal-live")
+    );
     expect(ctrl.getSnapshot().phase).toBe("live");
     // The conversation never stopped, so there is no resume to announce.
     expect(ctrl.getSnapshot().showResumeBanner).toBe(false);
+    ctrl.stop();
+  });
+
+  it("stands down an auto-launch on a lane another view holds, without re-arming it", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    ctrl["_hasAutoLaunched"] = true;
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "occupied" });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    // Auto-launch never displaces another view's running assistant (#10699).
+    expect(help().provisionSession).not.toHaveBeenCalled();
+    expect(ctrl["_hasAutoLaunched"]).toBe(true);
+    expect(ctrl.getSnapshot().phase).toBe("idle");
+    ctrl.stop();
+  });
+
+  it("an explicit launch still replaces a lane another view holds", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "occupied" });
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", replaceExisting: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    expect(help().provisionSession).toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("leaves a pane a newer take-over is committing when a superseded one unwinds", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    help().adoptDetachedSession = vi.fn().mockResolvedValue({ status: "adopted", lane });
+    let releaseFirst!: () => void;
+    const firstCommitted = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    panelStoreState.addPanel = vi.fn(async (args: { existingId: string }) => {
+      calls++;
+      if (calls === 1) await firstCommitted;
+      panelStoreState.panelsById[args.existingId] = { id: args.existingId };
+      return args.existingId;
+    });
+
+    const first = ctrl["_executeLaunch"](
+      7,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+    await vi.waitFor(() => expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1));
+    // A newer launch takes the same PTY over while the first is still committing.
+    ctrl["_launchGen"] = 8;
+    const second = ctrl["_executeLaunch"](
+      8,
+      { agentId: "claude", isAutoLaunch: true, preferredAgentLaunch: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+    await vi.waitFor(() => expect(panelStoreState.addPanel).toHaveBeenCalledTimes(2));
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(panelStoreState.removePanel).not.toHaveBeenCalled();
+    expect(helpPanelState.setTerminal).toHaveBeenCalledWith(
+      0,
+      "terminal-live",
+      "claude",
+      "sess-live"
+    );
     ctrl.stop();
   });
 

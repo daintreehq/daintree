@@ -255,7 +255,8 @@ async function probeAssistantTerminal(
   const ptyClient = getPtyClient();
   if (!ptyClient?.hasTerminal(terminalId)) return null;
   const info = await ptyClient.getTerminalAsync(terminalId);
-  if (info?.hasPty === false) return null;
+  // It can exit while the record is fetched; main's registry is the answer.
+  if (info?.hasPty === false || !ptyClient.hasTerminal(terminalId)) return null;
   return {
     cwd: info?.cwd,
     title: info?.title,

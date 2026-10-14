@@ -34,7 +34,7 @@ import type {
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
 import { projectAuditResult } from "./auditResultProjection.js";
 import { helpOwnershipPrincipal } from "./resourceOwnership.js";
-import { WorkspaceBindingError } from "./rendererBridge.js";
+import { SessionBindingError, WorkspaceBindingError } from "./rendererBridge.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import type {
@@ -1986,6 +1986,9 @@ export class HttpLifecycle {
         if (id !== undefined && pinnedManifest) {
           return pinnedManifest(id);
         }
+        if (id === undefined && pinnedWebContentsId !== null) {
+          return Promise.reject(new SessionBindingError(pinnedWebContentsId));
+        }
         return this.deps.requestManifest();
       };
 
@@ -2063,6 +2066,13 @@ export class HttpLifecycle {
               authorization,
             })
           : pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
+      }
+      // Pinned at handshake and torn down since — a take-over retiring the
+      // assistant's transports (#13360), a revoke, an idle reap — while this
+      // call was still on its way. It fails closed, as a gone pin does, rather
+      // than falling through to the unpinned route that follows focus.
+      if (id === undefined && pinnedWebContentsId !== null) {
+        return Promise.reject(new SessionBindingError(pinnedWebContentsId));
       }
       // Unpinned external/api-key dispatch — surface the requesting bearer's
       // identity so the confirm dialog can name the client (#9157). Returns

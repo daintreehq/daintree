@@ -2179,9 +2179,9 @@ export class HelpSessionService {
     const isTerminalLive = options?.isTerminalLive;
     return ASSISTANT_SLOTS.filter(
       (slot) =>
-        Boolean(this.pendingHibernationStore?.get(assistantSlotKey(projectId, slot))) ||
         (isTerminalLive !== undefined &&
-          this.findDetachedLane(projectId, slot, isTerminalLive) !== null)
+          this.findDetachedLane(projectId, slot, isTerminalLive) !== null) ||
+        Boolean(this.pendingHibernationStore?.get(assistantSlotKey(projectId, slot)))
     );
   }
 
@@ -2408,6 +2408,11 @@ export class HelpSessionService {
       const current = this.findLaneBackend(projectId, slot);
       if (!current) return { status: "absent" };
       if (current !== record || !claimableBy(record)) return { status: "occupied" };
+      // Rebound to another PTY while the probe was out: what it answered was
+      // about a terminal the session no longer runs.
+      if (this.terminalBySessionId.get(record.sessionId) !== terminalId) {
+        return { status: "occupied" };
+      }
       if (!probed) {
         await this.revokeSession(record.sessionId);
         return { status: "absent" };
@@ -2438,6 +2443,26 @@ export class HelpSessionService {
         },
       };
     });
+  }
+
+  /**
+   * A PTY exited (#13360). A detached assistant has no view to notice that,
+   * so its session goes here, as the view's own exit handling would have
+   * ended it — otherwise its bearer would stay valid and its lane look taken
+   * for as long as nobody asks after the project. The conversation pointer
+   * written at spawn stays, so the next view resumes it. An attached session
+   * is left to its view, as before.
+   */
+  handleTerminalExit(terminalId: string): void {
+    if (!terminalId) return;
+    for (const [sessionId, boundId] of [...this.terminalBySessionId]) {
+      if (boundId !== terminalId) continue;
+      const record = this.sessionsById.get(sessionId);
+      if (!record || record.revoked || record.detachedAt === undefined) continue;
+      void this.revokeSession(sessionId).catch((err: unknown) => {
+        console.warn("[HelpSessionService] Revoking an exited detached assistant failed:", err);
+      });
+    }
   }
 
   async revokeByWindowId(windowId: number): Promise<void> {

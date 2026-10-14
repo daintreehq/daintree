@@ -360,6 +360,8 @@ export class HelpSessionController {
   // auto-launch path bumping the gen) still lets the owner release.
   private _isLaunchingGen = -1;
   private _hasAutoLaunched = false;
+  // Host terminal id → the generation of the latest launch taking it over (#13360).
+  private readonly _adoptingTerminals = new Map<string, number>();
   private _pendingSessionId: string | null = null;
   private _pendingNewTerminalId: string | null = null;
   /**
@@ -1293,6 +1295,9 @@ export class HelpSessionController {
     const agentState = coerceAgentState(lane.agentState);
     const geometry =
       lane.cols !== null && lane.rows !== null ? { cols: lane.cols, rows: lane.rows } : undefined;
+    // The latest launch taking this PTY over owns its pane: a superseded one
+    // must not remove a pane a newer one is still committing.
+    this._adoptingTerminals.set(lane.terminalId, gen);
     const panelId = await usePanelStore.getState().addPanel({
       kind: "terminal",
       existingId: lane.terminalId,
@@ -1309,23 +1314,35 @@ export class HelpSessionController {
       lastStateChange: lane.lastStateChange ?? undefined,
       ...(geometry ? { initialTerminalGeometry: geometry } : {}),
     });
+    const ownsPane = this._adoptingTerminals.get(lane.terminalId) === gen;
+    if (ownsPane) this._adoptingTerminals.delete(lane.terminalId);
     if (gen !== this._launchGen) {
-      // Only this view's pane goes, and only if no newer launch bound it: the
+      // Only this view's pane goes, and only while no newer launch has it: the
       // process is the host's, and still the lane's.
       const boundNow = useHelpPanelStore.getState().sessions[this.slot]?.terminalId;
-      if (panelId && boundNow !== panelId) {
+      if (panelId && ownsPane && boundNow !== panelId) {
         usePanelStore.getState().removePanel(panelId, { backendAlreadyClosed: true });
       }
       return "stale";
     }
-    if (!panelId) return "stale";
+    if (!panelId || !usePanelStore.getState().panelsById[panelId]) return "stale";
 
-    useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
-    useHelpPanelStore.getState().setTerminal(this.slot, panelId, lane.agentId, lane.sessionId);
+    const store = useHelpPanelStore.getState();
+    store.clearHibernateSession(launchProject.id, this.slot);
+    store.setTerminal(this.slot, panelId, lane.agentId, lane.sessionId);
+    // A running conversation has history to lose: marked as such, a preferred
+    // agent that differs from the one taken over asks before replacing it
+    // rather than switching on its own.
+    store.markConversationStarted(this.slot);
     this._patch({ phase: "live" });
     window.electron.help.markTerminal(panelId).catch((err) => {
       logError("Failed to mark help terminal", err);
     });
+    // A pane on a running PTY starts with only what it prints next; the screen
+    // it already drew comes from the host's snapshot, as for any restored pane.
+    void import("@/services/TerminalInstanceService")
+      .then(({ terminalInstanceService }) => terminalInstanceService.fetchAndRestore(panelId))
+      .catch((err: unknown) => logError("Failed to restore the taken-over assistant", err));
     return "bound";
   }
 
@@ -1390,10 +1407,16 @@ export class HelpSessionController {
           reached = true;
           return;
         }
-        // A restore-only launch never displaces a running assistant, which is
-        // what provisioning over an occupied lane would do (#10819).
-        if (adoption === "stale" || (adoption === "occupied" && options.resumeOnly)) {
+        if (adoption === "stale") {
           this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch });
+          return;
+        }
+        // Provisioning over an occupied lane displaces the running assistant
+        // (#7509). Only a launch the user asked for may do that; one that only
+        // restores (#10819), or starts itself (#10699), stands down. A spent
+        // auto-launch stays spent, or every input sync would ask again.
+        if (adoption === "occupied" && (options.resumeOnly || options.isAutoLaunch)) {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch: false });
           return;
         }
       }

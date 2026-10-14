@@ -474,6 +474,36 @@ describe("HelpSessionService", () => {
         expect(service.validateToken(result.token)).toBe(false);
       });
 
+      it("ends a detached assistant whose PTY exits, and leaves an attached one to its view", async () => {
+        const detached = await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        const attached = await service.provisionSession({
+          ...provisionInput(),
+          slot: 1,
+          windowId: NEXT_HANDLE,
+          projectViewWebContentsId: NEXT_HANDLE,
+        });
+        if (!attached) throw new Error("expected result");
+        expect(service.markTerminalForToken(attached.token, "term-attached")).toBe(true);
+
+        service.handleTerminalExit("term-remote");
+        service.handleTerminalExit("term-attached");
+
+        await vi.waitFor(() => expect(service.validateToken(detached.token)).toBe(false));
+        expect(service.validateToken(attached.token)).toBe("core");
+      });
+
+      it("refuses to hand over a terminal the session was rebound away from mid-probe", async () => {
+        const result = await launchRemote();
+
+        const adopted = await service.adoptDetachedSession("proj-1", 0, HANDLE, async () => {
+          expect(service.markTerminalForToken(result.token, "term-respawned")).toBe(true);
+          return {};
+        });
+
+        expect(adopted).toEqual({ status: "occupied" });
+      });
+
       it("leaves the assistant running when its liveness can't be told", async () => {
         const result = await launchRemote();
         await service.detachByWebContentsId(HANDLE);
