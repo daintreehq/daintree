@@ -54,8 +54,12 @@ export interface WindowControl {
    * most recently opened here. Null when there is none.
    */
   lastLocalProjectId(windowId: number | null): string | null;
-  /** This window's own most recent project on a host, which a plain switch there returns to. */
-  lastProjectOnHost?(windowId: number | null, hostId: HostId): string | null;
+  /**
+   * This window's own projects on a host, most recent first, which a plain
+   * switch there returns to: the first the host still has. Empty for a window
+   * with no history there, and for a new one.
+   */
+  recentProjectsOnHost?(windowId: number | null, hostId: HostId): string[];
   /**
    * A window other than `exceptWindowId` with a view of a project, a host's or
    * this machine's: `showing` when it is on screen there or being switched to,
@@ -74,12 +78,26 @@ export interface WindowControl {
    */
   claimProject?(hostId: HostId, projectId: string, windowId: number): () => void;
   /**
-   * Hand a request for one of this machine's projects to the window that has
-   * it, as a local open does: brought forward, or shown again by that window's
-   * own renderer when it holds the project in its cache. Answers that window,
-   * or null when no other window has it.
+   * Hand a request for one of this machine's projects to the window showing
+   * it, as a local open does: brought forward with the project focused.
+   * Answers that window, or null when no other window is showing it. One
+   * holding it only in its cache is never switched to it.
    */
   redirectToLocalOwner?(projectId: string, exceptWindowId: number | null): number | null;
+  /**
+   * Make way for a project to open in `windowId`: a window other than it
+   * holding the project only in its cache lets that view go, and nothing it
+   * shows changes (#13291). Synchronous, so it runs in the same tick as
+   * {@link claimProject}. Answers a window that keeps the project because it is
+   * on its way to showing it, else null. Throws when the cached view can't be
+   * let go yet; `projectName` names the project in that error.
+   */
+  releaseCachedProject?(
+    hostId: HostId,
+    projectId: string,
+    windowId: number,
+    projectName: string | null
+  ): number | null;
   /** Bring a window forward with its project view focused. */
   revealWindow?(windowId: number): void;
   /** Call `onClosed` once when the window closes. */
@@ -562,9 +580,7 @@ export class RemoteHostsClient {
   private async switchWindow(
     askingWindowId: number | null,
     payload: SwitchWindowHostPayload,
-    stillWanted?: () => boolean,
-    /** Set when this window was chosen as the project's owner: it takes the project without looking for another. */
-    asOwner = false
+    stillWanted?: () => boolean
   ): Promise<SwitchWindowHostResult> {
     const hostId = hostIdOf(payload);
     const newWindow = payload.newWindow === true;
@@ -640,8 +656,7 @@ export class RemoteHostsClient {
         superseded,
         announce,
         settlePending,
-        (name) => void (pendingProjectName = name),
-        asOwner
+        (name) => void (pendingProjectName = name)
       );
     } finally {
       settlePending();
@@ -658,8 +673,7 @@ export class RemoteHostsClient {
     announce: (phase: PendingHostSwitch["phase"]) => void,
     /** Called once the switch commits: past here it can't be cancelled. */
     commit: () => void,
-    nameProject: (name: string | null) => void,
-    asOwner: boolean
+    nameProject: (name: string | null) => void
   ): Promise<SwitchWindowHostResult> {
     let projectId = requestedProjectId;
     const remote = !isLocalHostId(hostId);
@@ -700,20 +714,46 @@ export class RemoteHostsClient {
           });
         }
       } else if (projectId === undefined) {
-        // Where this window last was on the host first; the host's memory of
-        // this machine is the fallback, then its project picker.
+        // Where this window last was on the host first, newest first and past
+        // any the host no longer has; the host's memory of this machine is the
+        // fallback, then its project picker. Never a project another window is
+        // showing: the host's memory is shared by every window (#13291).
         announce("opening");
-        const windowLast = this.options.windows.lastProjectOnHost?.(sourceWindowId, hostId) ?? null;
-        // Best effort: a host that can't say where to return offers its
-        // project list instead.
-        const remembered = windowLast
-          ? await untilAbandoned(hostConnection.describeProject(windowLast).catch(() => null))
-          : null;
-        if (remembered === ABANDONED) return { outcome: "superseded", hostId };
-        const last = remembered?.path
-          ? { projectId: windowLast!, path: remembered.path, name: remembered.name }
-          : await untilAbandoned(hostConnection.lastActiveProject().catch(() => null));
-        if (last === ABANDONED) return { outcome: "superseded", hostId };
+        const recent = this.options.windows.recentProjectsOnHost?.(sourceWindowId, hostId) ?? [];
+        let remembered: { projectId: string; path: string; name: string } | null = null;
+        for (const candidate of recent) {
+          // Asked per candidate, after every wait: another window may have
+          // started showing one while the host was answering about another.
+          if (this.shownElsewhere(hostId, candidate, sourceWindowId)) continue;
+          // Best effort: a host that can't say where to return offers its
+          // project list instead.
+          const answer = await untilAbandoned(
+            hostConnection.describeProject(candidate).then(
+              (description) => description ?? "gone",
+              () => null
+            )
+          );
+          if (answer === ABANDONED) return { outcome: "superseded", hostId };
+          const staleAnswer = superseded();
+          if (staleAnswer) return staleAnswer;
+          if (answer === null) break;
+          if (answer === "gone") {
+            // It won't come back on a later press, so the toggle stops offering it.
+            const key = toHostScopedKey(hostId, candidate);
+            discardFromAllProjectHistories((workspaceId) => workspaceId === key);
+          } else if (answer.path && !this.shownElsewhere(hostId, candidate, sourceWindowId)) {
+            remembered = { projectId: candidate, path: answer.path, name: answer.name };
+            break;
+          }
+        }
+        const hostLast =
+          remembered ??
+          (await untilAbandoned(hostConnection.lastActiveProject().catch(() => null)));
+        if (hostLast === ABANDONED) return { outcome: "superseded", hostId };
+        const last =
+          hostLast && !this.shownElsewhere(hostId, hostLast.projectId, sourceWindowId)
+            ? hostLast
+            : null;
         const staleLast = superseded();
         if (staleLast) return staleLast;
         if (last?.path) {
@@ -765,15 +805,11 @@ export class RemoteHostsClient {
 
     // A project has one view in this app, a host's as much as this machine's:
     // a second would be a second view on the same terminals (for a host's, a
-    // second endpoint, the two claiming the lease from each other). The window
-    // that has it comes forward instead.
-    if (projectId !== undefined && !asOwner) {
-      // Raced like every other wait: an owner holding the project only in its
-      // cache is switched to it first, and Cancel here doesn't wait for that.
-      const redirected = await untilAbandoned(
-        this.redirectToOwner(hostId, projectId, sourceWindowId, superseded)
-      );
-      if (redirected === ABANDONED) return { outcome: "superseded", hostId };
+    // second endpoint, the two claiming the lease from each other). A window
+    // showing it comes forward instead; one only holding it in its cache lets
+    // it go once this switch has its turn, and is otherwise left as it is.
+    if (projectId !== undefined) {
+      const redirected = this.redirectToOwner(hostId, projectId, sourceWindowId);
       if (redirected) return redirected;
     }
 
@@ -796,31 +832,49 @@ export class RemoteHostsClient {
       // machine and offers the host's project list: binding it with no view of
       // the host's behind it made a window whose calls went to the host while
       // its chip, copy and pickers all said This Mac.
-      if (targetProjectId === undefined) {
+      const offerProjects = (): SwitchWindowHostResult => {
         this.projectOffers.set(windowId, hostId);
         this.options.windows.watchWindow(windowId, () => this.projectOffers.delete(windowId));
         this.options.windows.offerHostProjects?.(windowId);
         return { outcome: "window-opened", hostId };
-      }
+      };
+      if (targetProjectId === undefined) return offerProjects();
       // Asked again here, and the project claimed for this window in the same
       // tick: another request may have taken it while this one waited, and
       // one arriving now finds this window instead of building a second view.
       // Claimed only now, past the last cancellation check, since a window's
-      // own claim reads as an open of the person's in flight there.
-      if (!asOwner) {
-        const owner = isLocalHostId(hostId)
-          ? (this.options.windows.redirectToLocalOwner?.(targetProjectId, windowId) ?? null)
-          : (this.options.windows.projectOwner?.(hostId, targetProjectId, windowId)?.windowId ??
-            null);
-        if (owner !== null) {
-          if (remote) this.options.windows.revealWindow?.(owner);
-          return {
-            outcome: "focused-elsewhere",
-            hostId,
-            projectId: targetProjectId,
-            targetWindowId: owner,
-          };
-        }
+      // own claim reads as an open of the person's in flight there. A window
+      // holding the project only in its cache lets its view go in that tick
+      // too (#13291): what it shows, and the host it is on, never change.
+      const holder =
+        this.options.windows.releaseCachedProject?.(
+          hostId,
+          targetProjectId,
+          windowId,
+          projectName
+        ) ?? null;
+      // A project this switch picked itself, which another window started
+      // showing while it waited for its turn: nothing was asked of that window,
+      // so it isn't brought forward. This one offers the host's list instead.
+      if (
+        requestedProjectId === undefined &&
+        (holder !== null || this.shownElsewhere(hostId, targetProjectId, windowId))
+      ) {
+        return newWindow ? offerProjects() : { outcome: "choose-project", hostId };
+      }
+      const shower = isLocalHostId(hostId)
+        ? (this.options.windows.redirectToLocalOwner?.(targetProjectId, windowId) ?? null)
+        : (this.options.windows.projectOwner?.(hostId, targetProjectId, windowId)?.windowId ??
+          null);
+      const owner = shower ?? holder;
+      if (owner !== null) {
+        if (remote || shower === null) this.options.windows.revealWindow?.(owner);
+        return {
+          outcome: "focused-elsewhere",
+          hostId,
+          projectId: targetProjectId,
+          targetWindowId: owner,
+        };
       }
       releaseClaim =
         this.options.windows.claimProject?.(hostId, targetProjectId, windowId) ?? releaseClaim;
@@ -866,40 +920,30 @@ export class RemoteHostsClient {
     return switching.finally(() => releaseClaim());
   }
 
+  /** Whether a window other than `windowId` is showing the project, or on its way to it. */
+  private shownElsewhere(hostId: HostId, projectId: string, windowId: number | null): boolean {
+    return this.options.windows.projectOwner?.(hostId, projectId, windowId)?.showing === true;
+  }
+
   /**
-   * Another window has the project: it comes forward instead of this one
-   * opening a second view. One holding it only in its cache shows it again
-   * first, a host's through a switch of that window (which doesn't look for
-   * another owner, so two cached copies can't pass the request back and
-   * forth), this machine's through that window's own renderer, as a local open
-   * does. Null when no other window has it.
+   * Another window is showing the project: it comes forward instead of this
+   * one opening a second view. One holding it only in its cache is no owner
+   * here: the switch takes the project from it in turn, and never switches
+   * that window to it (#13291). Null when no other window is showing it.
    */
-  private async redirectToOwner(
+  private redirectToOwner(
     hostId: HostId,
     projectId: string,
-    sourceWindowId: number | null,
-    superseded: () => SwitchWindowHostResult | null
-  ): Promise<SwitchWindowHostResult | null> {
+    sourceWindowId: number | null
+  ): SwitchWindowHostResult | null {
+    const owner = this.options.windows.projectOwner?.(hostId, projectId, sourceWindowId);
+    if (!owner?.showing) return null;
     if (isLocalHostId(hostId)) {
       const target = this.options.windows.redirectToLocalOwner?.(projectId, sourceWindowId) ?? null;
       return target === null
         ? null
         : { outcome: "focused-elsewhere", hostId, projectId, targetWindowId: target };
     }
-    const owner = this.options.windows.projectOwner?.(hostId, projectId, sourceWindowId);
-    if (!owner) return null;
-    if (!owner.showing) {
-      const shown = await this.switchWindow(
-        owner.windowId,
-        { hostId, newWindow: false, projectId },
-        undefined,
-        true
-      );
-      if (shown.outcome !== "switched") return shown;
-    }
-    // The person may have asked this window for something else meanwhile.
-    const stale = superseded();
-    if (stale) return stale;
     this.options.windows.revealWindow?.(owner.windowId);
     return { outcome: "focused-elsewhere", hostId, projectId, targetWindowId: owner.windowId };
   }

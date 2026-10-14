@@ -12,6 +12,7 @@ import {
   findOtherProjectOwner,
   hasLiveProjectView,
   redirectToProjectOwner,
+  releaseCachedOwner,
   type ProjectOwner,
 } from "../../../window/projectOwnership.js";
 import { projectStore } from "../../../services/ProjectStore.js";
@@ -96,7 +97,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     markMainReceived(trace, operation);
     supersedePendingHostSwitch(operation.windowId);
 
-    const owner = findOwnerElsewhere(deps, operation);
+    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name);
     if (owner) return redirectToProjectOwner(owner, project, options?.focusIntent);
 
     const releaseClaim = claimProjectActivation(projectId, operation.windowId);
@@ -216,7 +217,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     markMainReceived(trace, operation);
     supersedePendingHostSwitch(operation.windowId);
 
-    const owner = findOwnerElsewhere(deps, operation);
+    const owner = releaseCachedOwner(findOwnerElsewhere(deps, operation), projectId, project.name);
     if (owner) return redirectToProjectOwner(owner, project);
 
     const releaseClaim = claimProjectActivation(projectId, operation.windowId);

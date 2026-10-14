@@ -517,7 +517,7 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     expect(deps.openDirectory).not.toHaveBeenCalled();
   });
 
-  it("lets the owner's own renderer switch to a cached view it can't release", async () => {
+  it("fails rather than switching another window to a cached view it can't release (#13291)", async () => {
     const world = makeWorld();
     const owner = world.add({ active: "front" });
     owner.views.push(idFor("/work/known"));
@@ -525,11 +525,14 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     const asking = world.add({ active: "other" });
     const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
 
-    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+    await expect(
+      routeProjectOpen("/work/known", newWindowFrom(asking.id), deps)
+    ).rejects.toMatchObject({ code: "PROJECT_OPEN_FAILED" });
 
-    expect(outcome).toEqual({ kind: "activated", windowId: owner.id });
     expect(deps.releaseCachedView).not.toHaveBeenCalled();
+    expect(deps.redirectToOwner).not.toHaveBeenCalled();
     expect(deps.openDirectory).not.toHaveBeenCalled();
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
     expect(owner.active).toBe("front");
   });
 
@@ -574,7 +577,7 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     expect(asking.views).toEqual(["front"]);
   });
 
-  it("switches to the cached view where it is when the release is refused at the last moment", async () => {
+  it("fails, switching neither window, when the release is refused at the last moment (#13291)", async () => {
     const world = makeWorld();
     const holder = world.add({ active: "front" });
     holder.views.push(idFor("/work/known"));
@@ -582,11 +585,13 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
     deps.releaseCachedView.mockReturnValueOnce(false);
 
-    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+    await expect(
+      routeProjectOpen("/work/known", newWindowFrom(asking.id), deps)
+    ).rejects.toMatchObject({ code: "PROJECT_OPEN_FAILED" });
 
-    expect(outcome).toEqual({ kind: "activated", windowId: holder.id });
-    expect(deps.redirectToOwner).toHaveBeenCalledOnce();
+    expect(deps.redirectToOwner).not.toHaveBeenCalled();
     expect(deps.createWindowForPath).not.toHaveBeenCalled();
+    expect(holder.active).toBe("front");
     expect(holder.views).toContain(idFor("/work/known"));
   });
 

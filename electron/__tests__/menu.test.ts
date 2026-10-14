@@ -1349,6 +1349,7 @@ describe("handleDirectoryOpen window targeting", () => {
       getAllViews: vi.fn<() => unknown[]>(() => []),
       getActiveView: vi.fn<() => unknown>(() => null),
       setPendingFocusIntent: vi.fn(),
+      releaseCachedView: vi.fn<(projectId: string) => boolean>(() => true),
     };
   }
 
@@ -1464,7 +1465,7 @@ describe("handleDirectoryOpen window targeting", () => {
     expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
   });
 
-  it("has the owning window switch to a project it only holds cached", async () => {
+  it("opens a project another window only holds cached here, leaving that window alone (#13291)", async () => {
     const targetManager = createManager();
     const ownerManager = createManager();
     ownerManager.getActiveProjectId.mockReturnValue("project-other");
@@ -1498,13 +1499,11 @@ describe("handleDirectoryOpen window targeting", () => {
     const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
     await handleDirectoryOpen(PROJECT.path, targetWindow);
 
-    expect(ownerAppWebContents.send).toHaveBeenCalledWith("menu-action", {
-      actionId: "project.switch",
-      args: { projectId: PROJECT.id },
-    });
-    expect(ownerWindow.focus).toHaveBeenCalled();
-    expect(targetManager.switchTo).not.toHaveBeenCalled();
+    expect(ownerManager.releaseCachedView).toHaveBeenCalledWith(PROJECT.id);
+    expect(ownerAppWebContents.send).not.toHaveBeenCalled();
+    expect(ownerWindow.focus).not.toHaveBeenCalled();
     expect(ownerManager.switchTo).not.toHaveBeenCalled();
+    expect(targetManager.switchTo).toHaveBeenCalled();
   });
 });
 

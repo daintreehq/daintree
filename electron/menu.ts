@@ -38,6 +38,7 @@ import {
   findOtherProjectOwner,
   hasLiveProjectView,
   redirectToProjectOwner,
+  releaseCachedOwner,
 } from "./window/projectOwnership.js";
 import {
   CLOSE_WINDOW_MENU_ITEM_ID,
@@ -1054,7 +1055,9 @@ async function openLocalFolderInHostWindow(
         windowId: targetWindow.id,
         projectViewManager: pvm,
       });
-      if (owner) {
+      // One only keeping it cached lets it go once the switch home has its
+      // turn, in the same tick as this window's claim (#13291).
+      if (owner && owner.state !== "cached") {
         redirectToProjectOwner(owner, project);
         return;
       }
@@ -1111,10 +1114,14 @@ export async function handleDirectoryOpen(
     // Same one-live-view rule as the switch handler (#12596): a folder another
     // window already has open goes to that window, and this one stays put.
     if (!hasLiveProjectView(pvm, project.id)) {
-      const owner = findOtherProjectOwner(registry ?? undefined, project.id, {
-        windowId: targetWindow.id,
-        projectViewManager: pvm,
-      });
+      const owner = releaseCachedOwner(
+        findOtherProjectOwner(registry ?? undefined, project.id, {
+          windowId: targetWindow.id,
+          projectViewManager: pvm,
+        }),
+        project.id,
+        project.name
+      );
       if (owner) {
         redirectToProjectOwner(owner, project);
         return;

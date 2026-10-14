@@ -36,8 +36,11 @@ import {
   claimProjectActivation,
   findOtherProjectOwner,
   redirectToProjectOwner,
+  releaseCachedOwner,
   revealWindow,
+  type ProjectOwner,
 } from "../../window/projectOwnership.js";
+import { hasPendingActivation } from "../../window/projectActivationClaims.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
 import {
   getPtyClient,
@@ -234,8 +237,11 @@ function otherOwnerOf(key: string, windowId: number | null) {
 
 /**
  * Where a window coming back to this machine lands: its own most recent local
- * workspace, else the most recently opened project. One another window already
- * has is passed over, since a project has one view in the app.
+ * workspace, else the most recently opened project. One another window is
+ * showing is passed over, since a project has one view in the app. One of this
+ * window's own that another window only keeps cached is let go by that window
+ * when this one opens it; the fallback never takes one, so windows returning
+ * home together don't take each other's projects.
  */
 function lastLocalProjectId(windowId: number | null): string | null {
   if (windowId !== null) {
@@ -243,7 +249,7 @@ function lastLocalProjectId(windowId: number | null): string | null {
       if (
         isLocalHostId(parseHostScopedKey(key).hostId) &&
         isOpenLocalWorkspace(key) &&
-        !otherOwnerOf(key, windowId)
+        !shownElsewhere(key, windowId)
       ) {
         return key;
       }
@@ -266,14 +272,30 @@ function refreshWindowTitles(): void {
   );
 }
 
-/** This window's most recent project on `hostId`, from its own history; null when it has none there. */
-function lastProjectOnHost(windowId: number | null, hostId: HostId): string | null {
-  if (windowId === null) return null;
+/** This window's projects on `hostId`, most recent first, from its own history. */
+function recentProjectsOnHost(windowId: number | null, hostId: HostId): string[] {
+  if (windowId === null) return [];
+  const projectIds: string[] = [];
   for (const key of getProjectHistory(windowId).snapshot().entries) {
     const parsed = parseHostScopedKey(key);
-    if (parsed.hostId === hostId) return parsed.projectId;
+    if (parsed.hostId === hostId && !projectIds.includes(parsed.projectId)) {
+      projectIds.push(parsed.projectId);
+    }
   }
-  return null;
+  return projectIds;
+}
+
+/**
+ * Whether a window other than `windowId` is showing a workspace, or on its way
+ * to it: a cached view its own window has claimed is being brought to the front.
+ */
+function shownElsewhere(key: string, windowId: number | null): boolean {
+  const owner = otherOwnerOf(key, windowId);
+  return owner !== null && isShowing(owner, key);
+}
+
+function isShowing(owner: ProjectOwner, key: string): boolean {
+  return owner.state !== "cached" || hasPendingActivation(key, owner.context.windowId);
 }
 
 function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
@@ -364,19 +386,29 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       });
     },
     lastLocalProjectId,
-    lastProjectOnHost,
+    recentProjectsOnHost,
     projectOwner(hostId, projectId, exceptWindowId) {
       const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
       const owner = otherOwnerOf(key, exceptWindowId);
-      return owner ? { windowId: owner.context.windowId, showing: owner.state !== "cached" } : null;
+      return owner ? { windowId: owner.context.windowId, showing: isShowing(owner, key) } : null;
     },
     claimProject(hostId, projectId, windowId) {
       const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
       return claimProjectActivation(key, windowId);
     },
+    releaseCachedProject(hostId, projectId, windowId, projectName) {
+      const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
+      const name =
+        projectName ??
+        projectStore.getProjectById(projectId)?.name ??
+        scratchStore.getScratchById(projectId)?.name ??
+        projectId;
+      return releaseCachedOwner(otherOwnerOf(key, windowId), key, name)?.context.windowId ?? null;
+    },
     redirectToLocalOwner(projectId, exceptWindowId) {
       const owner = otherOwnerOf(projectId, exceptWindowId);
-      if (!owner) return null;
+      // One holding the project only in its cache is never switched to it.
+      if (!owner || owner.state === "cached") return null;
       const project = projectStore.getProjectById(projectId);
       if (project) {
         const result = redirectToProjectOwner(owner, project);
