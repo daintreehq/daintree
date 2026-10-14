@@ -13,7 +13,12 @@ import { Markdown } from "@daintreehq/plugin-ui";
 import { resolvePluginMarkdownPaths } from "@/components/Markdown/PluginMarkdown";
 import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
 
-beforeEach(() => {
+beforeEach(async () => {
+  // The app's own kit host, so the kit reaches the app services mocked here.
+  // Imported per test: after the `resetModules` below, the renderer chunk
+  // loads into a fresh graph, with a fresh registry to install into.
+  const { installAppPluginKitHost } = await import("@/services/plugin/appPluginKitHost");
+  installAppPluginKitHost();
   dispatchMock.mockClear();
   Reflect.deleteProperty(window, "__pluginUiPwned");
 });

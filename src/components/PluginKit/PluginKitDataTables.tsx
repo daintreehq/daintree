@@ -30,14 +30,14 @@ import {
   ContextMenuContent,
   ContextMenuTrigger,
   stopContextMenuPropagation,
-} from "@/components/ui/context-menu";
+} from "@/components/ui/context-menu-base";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/ui/dropdown-menu-base";
 import { Input } from "@/components/ui/input";
 import { ResizeHandle } from "@/components/ui/ResizeHandle";
 import { useSplitterKeys } from "@/hooks/useSplitterKeys";

@@ -27,6 +27,10 @@ import { refractor } from "refractor/core";
 import { MarkdownDocument, MARKDOWN_FONT_SIZE_TOKEN } from "../MarkdownDocument";
 import { _clearHighlightCacheForTests } from "../markdownRenderPolicy";
 import { MARKDOWN_FONT_SIZE_STEPS } from "@/store/preferencesStore";
+import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+
+// The app's own kit host, so the kit reaches the app services mocked here.
+installAppPluginKitHost();
 
 const FIXTURE_PROPS = {
   filePath: "/repo/docs/spec.md",

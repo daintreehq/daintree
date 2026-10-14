@@ -14,6 +14,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { findLanguage } from "@/components/PluginKit/kitCodeEditor";
 import { normalizePatch } from "@/components/PluginKit/kitDiffView";
 import { applyMarkdownEdit, formatMarkdown } from "@/components/PluginKit/kitMarkdownFormat";
+import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+
+// The app's own kit host, so the kit reaches the app services mocked here.
+installAppPluginKitHost();
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();

@@ -17,7 +17,8 @@ import { cn } from "@/lib/utils";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { useOverlayState, useEscapeStack } from "@/hooks";
+import { useOverlayState } from "@/hooks/useOverlayState";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import {
   registerDialogEscapeBackstop,
   isTopmostDialogBackstop,
@@ -29,7 +30,7 @@ import {
 import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
 import { publishScrollbarGutter } from "@/lib/scrollbarGutter";
 import { useDockPopoverOpen } from "@/lib/dockPopoverLayer";
-import { usePortalStore } from "@/store";
+import { usePortalStore } from "@/store/portalStore";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";

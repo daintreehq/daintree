@@ -53,7 +53,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/ui/dropdown-menu-base";
 import { FieldBoundary, InlineError } from "@/components/ui/field";
 import { inputVariants } from "@/components/ui/input";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";

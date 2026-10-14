@@ -11,6 +11,10 @@ import * as kit from "@daintreehq/plugin-ui";
 import { PluginKitOwnerContext } from "@/components/PluginKit/kitScope";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
+
+// The app's own kit host, so the kit reaches the app services mocked here.
+installAppPluginKitHost();
 
 beforeAll(async () => {
   await kit.whenPluginUiReady();

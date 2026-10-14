@@ -40,12 +40,14 @@ import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRuntime";
 import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
 import { installRunningPluginActions } from "./services/plugin/runningPluginActions";
+import { installAppPluginKitHost } from "./services/plugin/appPluginKitHost";
 import { getSafeBootPromise } from "./lib/bootPromise";
 import { isRemoteShellSupported } from "./lib/remoteHosts";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
 let cleanupOrchestrator: (() => void) | undefined;
+let cleanupPluginKitHost: (() => void) | undefined;
 
 ensureLatin400Preload(latin400Woff2Url);
 
@@ -104,6 +106,8 @@ async function bootstrap() {
   // Same reason: main replays the running plugin actions at `did-finish-load`,
   // and its events reach only a listener that already exists.
   installRunningPluginActions();
+  // Before the first render: a kit view reads its host as it draws.
+  cleanupPluginKitHost = installAppPluginKitHost();
 
   // Off the entry chunk, and never loaded where remote hosts can't exist.
   if (isRemoteShellSupported()) {
@@ -186,5 +190,6 @@ if (import.meta.hot) {
     cleanupGlobalErrorHandlers?.();
     cleanupScrollbarGutterWatch?.();
     cleanupOrchestrator?.();
+    cleanupPluginKitHost?.();
   });
 }

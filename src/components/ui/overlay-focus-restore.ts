@@ -45,7 +45,7 @@ import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
  * close that skips `onCloseAutoFocus` entirely would otherwise leak its flags
  * into the next opening.
  *
- * Canonical consumers: `dropdown-menu.tsx`, `popover.tsx`, `context-menu.tsx`.
+ * Canonical consumers: `dropdown-menu-base.tsx`, `popover.tsx`, `context-menu-base.tsx`.
  * Nothing outside those three should need to reimplement this.
  */
 export interface OverlayFocusRestore {

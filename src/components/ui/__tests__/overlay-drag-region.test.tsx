@@ -160,8 +160,8 @@ describe("no ui/ surface portals over the toolbar without opting out", () => {
   // Named, not counted, so extending one of these files is a deliberate edit
   // here rather than a number that silently still matches.
   const STAMPED: Record<string, string[]> = {
-    "context-menu.tsx": ["ContextMenuContent", "ContextMenuSubContent"],
-    "dropdown-menu.tsx": ["DropdownMenuContent", "DropdownMenuSubContent"],
+    "context-menu-base.tsx": ["ContextMenuContent", "ContextMenuSubContent"],
+    "dropdown-menu-base.tsx": ["DropdownMenuContent", "DropdownMenuSubContent"],
     "popover.tsx": ["PopoverContent"],
     "select.tsx": ["SelectContent"],
     "fixed-dropdown.tsx": ["FixedDropdown panel"],

@@ -810,8 +810,10 @@ export default tseslint.config(
     files: [
       "src/components/ui/button.tsx",
       "src/components/ui/context-menu.tsx",
+      "src/components/ui/context-menu-base.tsx",
       "src/components/ui/DialogDismissSurface.tsx",
       "src/components/ui/dropdown-menu.tsx",
+      "src/components/ui/dropdown-menu-base.tsx",
       "src/components/ui/popover.tsx",
       "src/components/ui/select.tsx",
       "src/components/ui/tooltip.tsx",
