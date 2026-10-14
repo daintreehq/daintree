@@ -110,7 +110,7 @@ describe("view reverse requests", () => {
 
     const answer = await ask("mcp:dispatch-action", {
       actionId: "worktree.createWithRecipe",
-      args: { branchName: "work", recipeId: "inrepo-work" },
+      args: { source: { kind: "newBranch", branchName: "work" }, recipeId: "inrepo-work" },
       confirmed: true,
       sessionOrigin: "help",
       authorization: "skip-preference",
@@ -119,7 +119,7 @@ describe("view reverse requests", () => {
     expect(m.dispatchActionForHost).toHaveBeenCalledWith(
       11,
       "worktree.createWithRecipe",
-      { branchName: "work", recipeId: "inrepo-work" },
+      { source: { kind: "newBranch", branchName: "work" }, recipeId: "inrepo-work" },
       true,
       undefined,
       "external",
