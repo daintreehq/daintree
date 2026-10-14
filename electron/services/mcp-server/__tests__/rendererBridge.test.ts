@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 
 const { mockIpcMain, mockWebContentsRegistry, mockProjectViews, mockWindowForWebContents } =
@@ -76,6 +76,7 @@ import {
 import { registerRemoteService } from "../../../remote/runtime.js";
 import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
+import type { RoutedViewWorktreePort } from "../worktreeViewPort.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
 import { buildMcpErrorPayload, MCP_DISPATCH_TIMEOUT_MS, RETRIABLE_ERROR_CODES } from "../shared.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
@@ -2121,8 +2122,8 @@ describe("rendererBridge — worktree port for a cached routed view (#13348)", (
   let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
   let leases: WorkspaceViewLeaseRegistry;
   let worktreePort: {
-    prepare: ReturnType<typeof vi.fn>;
-    release: ReturnType<typeof vi.fn>;
+    prepare: Mock<RoutedViewWorktreePort["prepare"]>;
+    release: Mock<RoutedViewWorktreePort["release"]>;
   };
   let bridge: ReturnType<typeof createRendererBridge>;
 
@@ -2136,8 +2137,8 @@ describe("rendererBridge — worktree port for a cached routed view (#13348)", (
     pendingDispatches = new Map();
     leases = new WorkspaceViewLeaseRegistry();
     worktreePort = {
-      prepare: vi.fn().mockResolvedValue(true),
-      release: vi.fn(),
+      prepare: vi.fn<RoutedViewWorktreePort["prepare"]>().mockResolvedValue(true),
+      release: vi.fn<RoutedViewWorktreePort["release"]>(),
     };
     bridge = createRendererBridge(
       pendingManifests,
