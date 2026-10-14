@@ -5,8 +5,9 @@
  * every size they ship at and magnified over their geometry, then the REAL
  * surfaces that draw them: the pane title bar, the sidebar session list and its
  * collapsed summary, the quick-state bar, Pilot's row glyphs and filter bar,
- * and the dock strip. Hand-backs go through the fleet snapshot store, so
- * unread and finished are reached the way the app reaches them.
+ * the dock strip and its plain-terminal cue. Hand-backs go through the fleet
+ * snapshot store, so unread and finished are reached the way the app reaches
+ * them.
  *
  *   DAINTREE_SHOT_AGENT_GLYPHS=1 DESIGN_CAPTURE_DIR=/tmp/shots \
  *     npx playwright test --project=screenshots agent-state-glyphs-review
@@ -33,10 +34,19 @@ const THEMES = (process.env.DAINTREE_SHOT_THEMES ?? "daintree,bondi,svalbard")
   .map((t) => t.trim())
   .filter(Boolean);
 
-const SECTIONS = ["family", "geometry", "title-bar", "sidebar", "quick-state", "pilot", "dock"];
+const SECTIONS = [
+  "family",
+  "geometry",
+  "title-bar",
+  "sidebar",
+  "quick-state",
+  "pilot",
+  "dock",
+  "dock-cue",
+];
 /** Forced colours and 1x are judged on the default theme only. */
-const FORCED_SECTIONS = ["family", "title-bar", "sidebar", "dock"];
-const ONE_X_SECTIONS = ["family", "title-bar", "sidebar"];
+const FORCED_SECTIONS = ["family", "title-bar", "sidebar", "dock", "dock-cue"];
+const ONE_X_SECTIONS = ["family", "title-bar", "sidebar", "dock-cue"];
 
 const STATE_GLYPHS = '[data-agent-state-glyph], [data-glyph-box="spinner"]';
 
@@ -149,6 +159,10 @@ async function onePass(
 }
 
 test("capture the agent-state glyph family across surfaces and themes", async ({ browser }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_AGENT_GLYPHS is required for the glyph capture",
+  });
   test.skip(!ENABLED, "visual-review harness — set DAINTREE_SHOT_AGENT_GLYPHS=1");
   test.setTimeout(300_000);
   const written: string[] = [];

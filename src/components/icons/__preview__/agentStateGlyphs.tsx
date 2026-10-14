@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { DndContext } from "@dnd-kit/core";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
-import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
@@ -32,6 +32,7 @@ import {
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { ContentDock } from "@/components/Layout/ContentDock";
 import { DockPanelOffscreenContainer } from "@/components/Layout/DockPanelOffscreenContainer";
+import { DockActivityCue } from "@/components/Layout/DockActivityCue";
 import { WorktreeTerminalSection } from "@/components/Worktree/WorktreeCard/WorktreeTerminalSection";
 import { QuickStateFilterBar } from "@/components/Worktree/QuickStateFilterBar";
 import { QuickStateArmButton } from "@/components/Worktree/QuickStateArmButton";
@@ -53,7 +54,8 @@ const { LazyMotion, domAnimation } = await import("framer-motion");
  * surface that draws it: the glyphs alone at each size they ship at and
  * magnified over their geometry, the REAL pane header (`ContentPanel`), the
  * REAL sidebar session list and its collapsed summary, the REAL quick-state
- * bar, Pilot's REAL row glyphs and filter bar, and the REAL dock strip.
+ * bar, Pilot's REAL row glyphs and filter bar, the REAL dock strip, and the
+ * REAL plain-terminal dock cue.
  *
  * Hand-backs reach the glyphs the way they do in the app: through the fleet
  * snapshot store, which is what turns a prompt wait into unread or finished.
@@ -180,7 +182,6 @@ const HAND_BACKS: Record<string, "unseen" | "seen"> = {
 };
 
 function toPanel(spec: PaneSpec): PanelInstance {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- inert fixture: only the fields the chrome reads
   return {
     id: spec.id,
     kind: "terminal",
@@ -261,7 +262,11 @@ function Section({ shot, title, children }: { shot: string; title: string; child
 
 type Glyph = ComponentType<{ className?: string }>;
 
-/** The family as every surface draws it; blocked to idle are Pilot's band marks, cmd done the dock's plain-terminal cue. */
+/**
+ * The family as every surface draws it; blocked to idle are Pilot's band marks.
+ * The dock's plain-terminal cue reuses the finished ring, so it is shown through
+ * the real `DockActivityCue` in its own section rather than restyled here.
+ */
 const FAMILY: { label: string; Icon: Glyph; tone: string; spin?: boolean }[] = [
   { label: "working", Icon: SpinnerCircle, tone: "text-state-working", spin: true },
   { label: "waiting", Icon: HollowCircle, tone: "text-state-waiting" },
@@ -274,7 +279,6 @@ const FAMILY: { label: string; Icon: Glyph; tone: string; spin?: boolean }[] = [
   { label: "parked", Icon: ParkedCircle, tone: "text-text-secondary" },
   { label: "snoozed", Icon: SnoozedCircle, tone: "text-text-secondary" },
   { label: "idle", Icon: IdleCircle, tone: "text-text-secondary" },
-  { label: "cmd done", Icon: DoneCircle, tone: "text-status-success" },
 ];
 
 function FamilyRow({ size }: { size: string }) {
@@ -285,7 +289,7 @@ function FamilyRow({ size }: { size: string }) {
           <span className={tone}>
             <Icon className={`${size} ${spin ? "animate-spin-slow" : ""}`} />
           </span>
-          <span className="text-[10px] text-text-muted">{label}</span>
+          <span className="text-3xs text-text-muted">{label}</span>
         </div>
       ))}
     </div>
@@ -334,9 +338,29 @@ function Geometry() {
               <Icon className="h-24 w-24" />
             </span>
           </div>
-          <span className="text-[10px] text-text-muted">{label}</span>
+          <span className="text-3xs text-text-muted">{label}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * The real plain-terminal cue. Its finished check fades out on a delayed
+ * animation timed to the dock's 1s dwell, which a capture fast-forwards to the
+ * end, so the harness holds that check at its rest frame.
+ */
+function PlainTerminalCue() {
+  return (
+    <div className="flex items-center gap-3 bg-surface-panel px-3 py-2">
+      <div className="flex items-center gap-1.5">
+        <DockActivityCue state="working" />
+        <span className="text-xs text-text-secondary">running</span>
+      </div>
+      <div className="flex items-center gap-1.5 [&_svg]:animate-none!">
+        <DockActivityCue state="finished" />
+        <span className="text-xs text-text-secondary">cmd done</span>
+      </div>
     </div>
   );
 }
@@ -368,7 +392,7 @@ function HeaderRow({ spec }: { spec: PaneSpec }) {
   );
 }
 
-const sessionTerminals = DOCK_PANES.map(toPanel) as PtyPanelData[];
+const sessionTerminals = DOCK_PANES.map(toPanel).filter(isPtyPanel);
 // Counted the way the sidebar counts them, hand-backs included, so the collapsed
 // summary shows what the app would and not what a fixture claims.
 const { byState, unread } = aggregateAgentStates(sessionTerminals, (id) =>
@@ -512,6 +536,9 @@ function Sheet() {
             <ContentDock density="normal" />
           </DockPanelOffscreenContainer>
         </aside>
+      </Section>
+      <Section shot="dock-cue" title="dock plain-terminal cue — running, cmd done">
+        <PlainTerminalCue />
       </Section>
     </div>
   );
