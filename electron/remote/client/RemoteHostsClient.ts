@@ -180,8 +180,6 @@ const MAX_PROJECT_ID_LENGTH = 256;
 
 /** What a wait resolves to once its switch was abandoned for a newer navigation or Cancel. */
 const ABANDONED = Symbol("abandoned");
-/** How many of a window's past projects on a host a plain switch asks after before giving up on them. */
-const MAX_RESUME_LOOKUPS = 5;
 
 interface SwitchTicket {
   /** Names this request to the window's views, and to the Cancel that answers it. */
@@ -721,11 +719,12 @@ export class RemoteHostsClient {
         // fallback, then its project picker. Never a project another window is
         // showing: the host's memory is shared by every window (#13291).
         announce("opening");
-        const recent = (this.options.windows.recentProjectsOnHost?.(sourceWindowId, hostId) ?? [])
-          .filter((candidate) => !this.shownElsewhere(hostId, candidate, sourceWindowId))
-          .slice(0, MAX_RESUME_LOOKUPS);
+        const recent = this.options.windows.recentProjectsOnHost?.(sourceWindowId, hostId) ?? [];
         let remembered: { projectId: string; path: string; name: string } | null = null;
         for (const candidate of recent) {
+          // Asked per candidate, after every wait: another window may have
+          // started showing one while the host was answering about another.
+          if (this.shownElsewhere(hostId, candidate, sourceWindowId)) continue;
           // Best effort: a host that can't say where to return offers its
           // project list instead.
           const answer = await untilAbandoned(
@@ -735,12 +734,14 @@ export class RemoteHostsClient {
             )
           );
           if (answer === ABANDONED) return { outcome: "superseded", hostId };
+          const staleAnswer = superseded();
+          if (staleAnswer) return staleAnswer;
           if (answer === null) break;
           if (answer === "gone") {
             // It won't come back on a later press, so the toggle stops offering it.
             const key = toHostScopedKey(hostId, candidate);
             discardFromAllProjectHistories((workspaceId) => workspaceId === key);
-          } else if (answer.path) {
+          } else if (answer.path && !this.shownElsewhere(hostId, candidate, sourceWindowId)) {
             remembered = { projectId: candidate, path: answer.path, name: answer.name };
             break;
           }

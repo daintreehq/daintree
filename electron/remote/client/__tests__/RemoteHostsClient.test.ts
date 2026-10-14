@@ -610,6 +610,38 @@ describe("RemoteHostsClient", () => {
       );
     });
 
+    it("walks on past a project another window started showing while the host was answering", async () => {
+      manager.last = null;
+      windows.recentProjectsOnHost = vi.fn(() => ["proj-9", "proj-8"]);
+      let shownIn2 = false;
+      windows.projectOwner = vi.fn((_host: string, projectId: string) =>
+        projectId === "proj-9" && shownIn2 ? { windowId: 2, showing: true } : null
+      );
+      manager.connect("studio-01").describeProject.mockImplementation(async (projectId: string) => {
+        if (projectId === "proj-9") shownIn2 = true;
+        return { projectId, path: `/srv/${projectId}`, name: projectId };
+      });
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-8" });
+    });
+
+    it("walks the whole of this window's history on the host before the host's memory", async () => {
+      manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
+      const gone = ["g1", "g2", "g3", "g4", "g5", "g6"];
+      windows.recentProjectsOnHost = vi.fn(() => [...gone, "proj-7"]);
+      manager
+        .connect("studio-01")
+        .describeProject.mockImplementation(async (projectId: string) =>
+          gone.includes(projectId)
+            ? null
+            : { projectId, path: `/srv/${projectId}`, name: projectId }
+        );
+      await expect(
+        client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+      ).resolves.toEqual({ outcome: "switched", hostId: "studio-01", projectId: "proj-7" });
+    });
+
     it("never resumes a project another window is showing, the host's memory included", async () => {
       manager.last = { projectId: "proj-2", path: "/srv/proj-2", name: "proj-2" };
       windows.recentProjectsOnHost = vi.fn(() => ["proj-9"]);
@@ -857,14 +889,17 @@ describe("RemoteHostsClient", () => {
   });
 
   it("lets go of the cached view in the same tick the project is claimed here", async () => {
-    const order: string[] = [];
+    let claimed = false;
+    let claimedByNextMicrotask: boolean | null = null;
     windows.projectOwner = vi.fn(() => null);
     windows.releaseCachedProject = vi.fn(() => {
-      order.push("release");
+      expect(claimed).toBe(false);
+      // Nothing may run between the release and the claim.
+      queueMicrotask(() => void (claimedByNextMicrotask = claimed));
       return null;
     });
     windows.claimProject = vi.fn(() => {
-      order.push("claim");
+      claimed = true;
       return () => {};
     });
     await client.switchWindowHost(ctxFor(5, 1), {
@@ -872,7 +907,8 @@ describe("RemoteHostsClient", () => {
       newWindow: false,
       projectId: "proj-1",
     });
-    expect(order).toEqual(["release", "claim"]);
+    expect(windows.releaseCachedProject).toHaveBeenCalledOnce();
+    expect(claimedByNextMicrotask).toBe(true);
   });
 
   it("brings forward, without opening a second view, a window already switching to its cached copy", async () => {

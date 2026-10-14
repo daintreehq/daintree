@@ -38,7 +38,9 @@ import {
   redirectToProjectOwner,
   releaseCachedOwner,
   revealWindow,
+  type ProjectOwner,
 } from "../../window/projectOwnership.js";
+import { hasPendingActivation } from "../../window/projectActivationClaims.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
 import {
   getPtyClient,
@@ -236,8 +238,10 @@ function otherOwnerOf(key: string, windowId: number | null) {
 /**
  * Where a window coming back to this machine lands: its own most recent local
  * workspace, else the most recently opened project. One another window is
- * showing is passed over, since a project has one view in the app; one another
- * window only holds in its cache is let go by that window when this one opens it.
+ * showing is passed over, since a project has one view in the app. One of this
+ * window's own that another window only keeps cached is let go by that window
+ * when this one opens it; the fallback never takes one, so windows returning
+ * home together don't take each other's projects.
  */
 function lastLocalProjectId(windowId: number | null): string | null {
   if (windowId !== null) {
@@ -253,7 +257,7 @@ function lastLocalProjectId(windowId: number | null): string | null {
   }
   let latest: { id: string; lastOpened: number } | null = null;
   for (const project of projectStore.getAllProjects()) {
-    if (project.status === "closed" || shownElsewhere(project.id, windowId)) continue;
+    if (project.status === "closed" || otherOwnerOf(project.id, windowId)) continue;
     const lastOpened = typeof project.lastOpened === "number" ? project.lastOpened : 0;
     if (!latest || lastOpened > latest.lastOpened) latest = { id: project.id, lastOpened };
   }
@@ -281,10 +285,17 @@ function recentProjectsOnHost(windowId: number | null, hostId: HostId): string[]
   return projectIds;
 }
 
-/** Whether a window other than `windowId` is showing a workspace, or on its way to it. */
+/**
+ * Whether a window other than `windowId` is showing a workspace, or on its way
+ * to it: a cached view its own window has claimed is being brought to the front.
+ */
 function shownElsewhere(key: string, windowId: number | null): boolean {
   const owner = otherOwnerOf(key, windowId);
-  return owner !== null && owner.state !== "cached";
+  return owner !== null && isShowing(owner, key);
+}
+
+function isShowing(owner: ProjectOwner, key: string): boolean {
+  return owner.state !== "cached" || hasPendingActivation(key, owner.context.windowId);
 }
 
 function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
@@ -379,7 +390,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
     projectOwner(hostId, projectId, exceptWindowId) {
       const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
       const owner = otherOwnerOf(key, exceptWindowId);
-      return owner ? { windowId: owner.context.windowId, showing: owner.state !== "cached" } : null;
+      return owner ? { windowId: owner.context.windowId, showing: isShowing(owner, key) } : null;
     },
     claimProject(hostId, projectId, windowId) {
       const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);

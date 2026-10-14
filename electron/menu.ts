@@ -1051,15 +1051,13 @@ async function openLocalFolderInHostWindow(
     const registry = getWindowRegistry();
     const pvm = registry?.getByWindowId(targetWindow.id)?.services.projectViewManager;
     if (!hasLiveProjectView(pvm, project.id)) {
-      const owner = releaseCachedOwner(
-        findOtherProjectOwner(registry ?? undefined, project.id, {
-          windowId: targetWindow.id,
-          projectViewManager: pvm,
-        }),
-        project.id,
-        project.name
-      );
-      if (owner) {
+      const owner = findOtherProjectOwner(registry ?? undefined, project.id, {
+        windowId: targetWindow.id,
+        projectViewManager: pvm,
+      });
+      // One only keeping it cached lets it go once the switch home has its
+      // turn, in the same tick as this window's claim (#13291).
+      if (owner && owner.state !== "cached") {
         redirectToProjectOwner(owner, project);
         return;
       }
