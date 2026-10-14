@@ -37,6 +37,7 @@ import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
 import { installHostMetricsHost } from "../metrics/hostMetricsHost.js";
+import { installAssistantExchangeHost } from "../assistant/hostExchanges.js";
 import { observeAgents } from "../metrics/hostSources.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 import { createRemoteScopeGate } from "../../ipc/channelRemoteScope.js";
@@ -167,6 +168,8 @@ async function buildHostListener(
 
   // Summaries to every attached Shell, and the overview's and fleet's session methods.
   teardowns.push(await installHostMetricsHost(server));
+  // Assistant exchanges a Shell sends to this host's enrolled lanes, view or not.
+  teardowns.push(await installAssistantExchangeHost(server));
 
   // Previews, downloads and host pickers for remote views; revoked with the listener.
   const files = installHostFileService();

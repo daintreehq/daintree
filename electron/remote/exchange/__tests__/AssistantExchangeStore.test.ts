@@ -30,7 +30,7 @@ const lane: ReceiverActor = {
   kind: "receiver",
   hostId: "host-1",
   laneId: "lane-assistant",
-  enrollmentGeneration: 3,
+  enrollmentGeneration: "gen-3",
 };
 
 function input(overrides: Partial<CreateExchangeInput> = {}): CreateExchangeInput {
@@ -38,7 +38,7 @@ function input(overrides: Partial<CreateExchangeInput> = {}): CreateExchangeInpu
     messageId: "msg-1",
     contextId: "ctx-1",
     referenceTaskIds: [],
-    receiver: { hostId: lane.hostId, laneId: lane.laneId, enrollmentGeneration: 3 },
+    receiver: { hostId: lane.hostId, laneId: lane.laneId, enrollmentGeneration: "gen-3" },
     body: SECRET_BODY,
     ...overrides,
   };
@@ -119,10 +119,13 @@ describe("AssistantExchangeStore", () => {
       ["body", { body: "something else" }],
       ["context", { contextId: "ctx-2" }],
       ["references", { referenceTaskIds: ["t-9"] }],
-      ["lane", { receiver: { hostId: "host-1", laneId: "lane-other", enrollmentGeneration: 3 } }],
+      [
+        "lane",
+        { receiver: { hostId: "host-1", laneId: "lane-other", enrollmentGeneration: "gen-3" } },
+      ],
       [
         "generation",
-        { receiver: { hostId: "host-1", laneId: "lane-assistant", enrollmentGeneration: 4 } },
+        { receiver: { hostId: "host-1", laneId: "lane-assistant", enrollmentGeneration: "gen-4" } },
       ],
     ] as const)("refuses a reused message id with a different %s", (_label, change) => {
       store.create(shellA, input());
@@ -171,7 +174,7 @@ describe("AssistantExchangeStore", () => {
       store.create(shellA, input());
 
       expect(store.get(lane, keyA)?.messageId).toBe("msg-1");
-      const reEnrolled: ReceiverActor = { ...lane, enrollmentGeneration: 4 };
+      const reEnrolled: ReceiverActor = { ...lane, enrollmentGeneration: "gen-4" };
       expect(store.get(reEnrolled, keyA)).toBeNull();
       expect(() => store.recordDelivery(reEnrolled, keyA, "accepted")).toThrow(
         expect.objectContaining({ code: "NOT_FOUND" })

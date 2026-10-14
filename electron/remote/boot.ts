@@ -16,7 +16,10 @@ import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
-import { installAssistantMessagingPolicy } from "./assistant/install.js";
+import {
+  installAssistantExchangeClient,
+  installAssistantMessagingPolicy,
+} from "./assistant/install.js";
 import { followAppImageMoves } from "./host/appImageRelocation.js";
 import { createHostModeService } from "./host/hostModeDefaults.js";
 import {
@@ -82,6 +85,8 @@ let started = false;
 
 /** Each ssh master may take this long to answer `-O exit` at quit; they are asked together. */
 const MASTER_EXIT_TIMEOUT_MS = 1_000;
+/** Long enough for a sleeping host's link to come back; a send that can't wait reports it unreachable. */
+const ASSISTANT_EXCHANGE_CONNECT_MS = 10_000;
 
 function startClient(options: StartRemoteHostsOptions): void {
   // First in, so it runs last: port forwards and links are cancelled on the
@@ -244,6 +249,23 @@ function startClient(options: StartRemoteHostsOptions): void {
     installAssistantMessagingPolicy({
       isHostMessagingEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantMessagingEnabled === true,
+    })
+  );
+  // Exchanges this Shell sends to hosts' assistants: reconciled whenever a session to one opens.
+  teardowns.push(
+    installAssistantExchangeClient({
+      async session(hostId) {
+        if (!client.registry.get(hostId)) return null;
+        client.manager.touch(hostId);
+        if (client.manager.connectionState(hostId).status !== "connected") {
+          await client.client.connectAndWait(hostId, ASSISTANT_EXCHANGE_CONNECT_MS);
+        }
+        const session = client.sessionFor(hostId);
+        return session?.isOpen ? session : null;
+      },
+      onSessionOpened: (listener) => client.manager.onSessionOpened(listener),
+      knownHosts: () => client.registry.list().map((host) => host.id),
+      onHostsChanged: (listener) => client.registry.onChange(listener),
     })
   );
   // Answered only once a session exists, so registering costs nothing until then.

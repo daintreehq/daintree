@@ -46,7 +46,7 @@ interface ExchangeRow {
   reference_task_ids: string;
   receiver_host_id: string;
   receiver_lane_id: string;
-  enrollment_generation: number;
+  enrollment_generation: string;
   state: ExchangeState;
   outcome: string | null;
   payload_digest: string;
@@ -135,13 +135,6 @@ function refuse(code: "NOT_FOUND" | "VALIDATION" | "OUTCOME_UNKNOWN", message: s
 function requireId(value: unknown, field: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_ID_LENGTH) {
     throw refuse("VALIDATION", `Exchange ${field} must be 1-${MAX_ID_LENGTH} characters`);
-  }
-  return value;
-}
-
-function requireGeneration(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw refuse("VALIDATION", "Exchange enrollment generation must be a non-negative integer");
   }
   return value;
 }
@@ -260,7 +253,7 @@ export class AssistantExchangeStore {
     const contextId = requireId(input.contextId, "context id");
     const hostId = requireId(input.receiver.hostId, "receiver host id");
     const laneId = requireId(input.receiver.laneId, "receiver lane id");
-    const generation = requireGeneration(input.receiver.enrollmentGeneration);
+    const generation = requireId(input.receiver.enrollmentGeneration, "enrollment generation");
     if (
       !Array.isArray(input.referenceTaskIds) ||
       input.referenceTaskIds.length > MAX_REFERENCE_TASK_IDS
