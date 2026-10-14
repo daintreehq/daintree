@@ -1,4 +1,5 @@
 import type { HostDirectoryEntry, HostPickRequest } from "@shared/types/ipc/hostFiles";
+import { pluralize } from "@/lib/pluralize";
 
 /** Host paths are POSIX: remote hosts are macOS or Linux. */
 export function joinHostPath(directory: string, name: string): string {
@@ -56,9 +57,89 @@ export function resolveChoice(
   return picked.map((entry) => joinHostPath(directory, entry.name));
 }
 
-export function defaultButtonLabel(request: HostPickRequest): string {
-  if (request.buttonLabel) return request.buttonLabel;
-  return request.mode === "directory" ? "Choose folder" : "Choose";
+/**
+ * The confirm button's words for what it would pick. A caller's label is kept
+ * as written, except that a multi-file picker's label is a verb the count
+ * follows ("Attach 3 files"), so the button always says how many it takes.
+ */
+export function confirmButtonLabel(request: HostPickRequest, choiceCount: number): string {
+  if (request.mode === "directory") return request.buttonLabel ?? "Select folder";
+  if (!request.multiple) return request.buttonLabel ?? "Select file";
+  const verb = request.buttonLabel ?? "Select";
+  return choiceCount > 0 ? `${verb} ${pluralize(choiceCount, "file")}` : `${verb} files`;
+}
+
+/** The last segment of an absolute host path; "/" for the root. */
+export function hostPathLeaf(path: string): string {
+  const trimmed = path.length > 1 ? path.replace(/\/+$/, "") : path;
+  if (trimmed === "/") return "/";
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1);
+}
+
+/** The folder holding an absolute host path; null at the root. */
+export function hostPathParent(path: string): string | null {
+  const trimmed = path.length > 1 ? path.replace(/\/+$/, "") : path;
+  if (trimmed === "/") return null;
+  const cut = trimmed.lastIndexOf("/");
+  return cut <= 0 ? "/" : trimmed.slice(0, cut);
+}
+
+/** Each folder on the way to `path`, root first: `{ name, path }`. */
+export function hostPathCrumbs(path: string): Array<{ name: string; path: string }> {
+  const crumbs = [{ name: "/", path: "/" }];
+  let at = "";
+  for (const part of path.split("/").filter(Boolean)) {
+    at = `${at}/${part}`;
+    crumbs.push({ name: part, path: at });
+  }
+  return crumbs;
+}
+
+const NAME_TAIL_CHARS = 8;
+const NAME_TAIL_MAX_CHARS = 14;
+const COMPOUND_EXTENSIONS = ["tar.gz", "tar.bz2", "tar.xz", "tar.zst", "d.ts"];
+
+/**
+ * A name as the part that may give way, and the end and extension that never
+ * do, so a long name ellipses in its middle and still says what it is.
+ * Folders, dotfiles and names whose "extension" is really part of the name
+ * (longer than a dozen characters) have no extension.
+ */
+export function splitFileName(
+  name: string,
+  kind: HostDirectoryEntry["kind"]
+): { head: string; tail: string; extension: string } {
+  let stem = name;
+  let extension = "";
+  if (kind !== "directory") {
+    const lower = name.toLowerCase();
+    const compound = COMPOUND_EXTENSIONS.find(
+      (ext) => lower.endsWith(`.${ext}`) && name.length > ext.length + 1
+    );
+    const dot = compound ? name.length - compound.length - 1 : name.lastIndexOf(".");
+    if (dot > 0 && name.length - dot <= 12) {
+      stem = name.slice(0, dot);
+      extension = name.slice(dot);
+    }
+  }
+  // The end of a long name is where versions and dates live ("…final v3"),
+  // so its last few characters stay beside the extension.
+  const chars = Array.from(stem);
+  let keep = chars.length > 24 ? NAME_TAIL_CHARS : 0;
+  // Start the kept end on a word where one begins close by, so it reads as
+  // "copy v3", not "py v3".
+  if (keep > 0) {
+    const end = chars.slice(chars.length - NAME_TAIL_MAX_CHARS);
+    const boundary = end.findIndex(
+      (ch, i) => i > 0 && /[\s_.-]/.test(end[i - 1]!) && !/[\s_.-]/.test(ch)
+    );
+    if (boundary !== -1) keep = end.length - boundary;
+  }
+  return {
+    head: chars.slice(0, chars.length - keep).join(""),
+    tail: chars.slice(chars.length - keep).join(""),
+    extension,
+  };
 }
 
 export function formatEntrySize(size: number | null): string {

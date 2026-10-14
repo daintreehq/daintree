@@ -232,19 +232,19 @@ describe("HostFilePickerHost", () => {
     const picked = openPick({ mode: "file", title: "Attach files", multiple: true });
     await screen.findByText("notes.md");
     fireEvent.click(screen.getByText("notes.md"));
-    expect(confirmButton("Choose").getAttribute("aria-disabled")).toBeNull();
+    expect(confirmButton("Select file").getAttribute("aria-disabled")).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Folder path"), { target: { value: "/nope" } });
     fireEvent.keyDown(screen.getByLabelText("Folder path"), { key: "Enter" });
     await screen.findByText(/doesn't exist/);
-    expect(confirmButton("Choose").getAttribute("aria-disabled")).toBe("true");
+    expect(confirmButton("Select file").getAttribute("aria-disabled")).toBe("true");
     expect(screen.queryByText("notes.md")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Home" }));
     await screen.findByText("notes.md");
-    expect(confirmButton("Choose").getAttribute("aria-disabled")).toBe("true");
+    expect(confirmButton("Select file").getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(screen.getByText("notes.md"));
-    fireEvent.click(confirmButton("Choose"));
+    fireEvent.click(confirmButton("Select file"));
     await expect(picked).resolves.toEqual(["/home/greg/notes.md"]);
   });
 
@@ -284,7 +284,7 @@ describe("HostFilePickerHost", () => {
     listDirectory.mockRejectedValueOnce(new Error("The host isn't connected."));
     void openPick({ mode: "file", title: "Choose file" });
     await screen.findByText(/isn't connected/);
-    expect(confirmButton("Choose").getAttribute("aria-disabled")).toBe("true");
+    expect(confirmButton("Select file").getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("notes.md");
     expect(screen.queryByText(/isn't connected/)).toBeNull();
