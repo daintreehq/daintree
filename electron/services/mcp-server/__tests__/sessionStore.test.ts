@@ -1732,3 +1732,38 @@ describe("SessionStore session credential binding", () => {
     expect(store.sessionCredentialMap.has("idle")).toBe(false);
   });
 });
+
+describe("SessionStore tool-list route watch (#13350)", () => {
+  const flush = () => new Promise<void>((resolve) => queueMicrotask(resolve));
+
+  it("tells the session's own server its route moved, and forgets it on teardown and drain", async () => {
+    const store = new SessionStore(() => {});
+    const sent = vi.fn().mockResolvedValue(undefined);
+    const session: McpHttpSession = {
+      ...fakeHttpSession(),
+      server: { sendToolListChanged: sent } as unknown as McpHttpSession["server"],
+    };
+    store.httpSessions.set("s1", session);
+    let route = "none";
+    const moveRoute = async (to: string) => {
+      route = to;
+      store.toolListRouteWatch.check();
+      await flush();
+    };
+
+    store.toolListRouteWatch.noteListed("s1", () => route);
+    await moveRoute("local:7");
+    expect(sent).toHaveBeenCalledTimes(1);
+
+    // The binding cleared, the session itself still filed: nothing more.
+    store.toolListRouteWatch.noteListed("s1", () => route);
+    store.clearSessionBinding("s1");
+    await moveRoute("remote:shell-1");
+
+    store.toolListRouteWatch.noteListed("s1", () => route);
+    store.drain();
+    store.httpSessions.set("s1", session);
+    await moveRoute("none");
+    expect(sent).toHaveBeenCalledTimes(1);
+  });
+});

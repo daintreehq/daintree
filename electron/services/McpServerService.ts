@@ -34,6 +34,9 @@ import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
 import { AuditService, type McpAuditDiagnosticsSnapshot } from "./mcp-server/auditLog.js";
 import { TurnOutcomeService } from "./mcp-server/turnOutcomeLog.js";
 import { createRendererBridge } from "./mcp-server/rendererBridge.js";
+import { onMcpDriveTargetChange } from "./mcp-server/driveTarget.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
+import { onRendererScopeChanged } from "../window/webContentsRegistry.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
@@ -319,6 +322,10 @@ export class McpServerService {
         ),
       requestManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
         this.bridge.requestManifestForWorkspace(workspaceId, preferredWebContentsId),
+      noteToolListRoute: (sessionId, workspaceId, preferredWebContentsId) =>
+        this.sessionStore.toolListRouteWatch.noteListed(sessionId, () =>
+          this.bridge.describeWorkspaceRoute(workspaceId, preferredWebContentsId)
+        ),
       dispatchActionForWorkspace: (
         workspaceId,
         actionId,
@@ -398,7 +405,17 @@ export class McpServerService {
       cleanupListeners: this.cleanupListeners,
       pendingManifests: this.pendingManifests,
       pendingDispatches: this.pendingDispatches,
-      setupIpcListeners: () => this.bridge.setupListeners(this.cleanupListeners),
+      setupIpcListeners: () => {
+        this.bridge.setupListeners(this.cleanupListeners);
+        // Everything a bound session's route is read from: the drive lease,
+        // the endpoints that can hold it, and this machine's own views.
+        const recheckRoutes = () => this.sessionStore.toolListRouteWatch.check();
+        this.cleanupListeners.push(
+          onMcpDriveTargetChange(recheckRoutes),
+          getEndpointRegistry().onChange(recheckRoutes),
+          onRendererScopeChanged(recheckRoutes)
+        );
+      },
       emitStatusChange: () => this.emitStatusChange(),
       emitRuntimeStateChange: () => this.emitRuntimeStateChange(),
       setConfig: (patch) => this.persistConfig(patch),

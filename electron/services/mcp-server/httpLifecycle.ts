@@ -162,6 +162,13 @@ export interface HttpLifecycleDeps {
     workspaceId: string,
     preferredWebContentsId?: number
   ) => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
+  // Records the route a bound session's `tools/list` is answered from, so a
+  // move tells its client (#13350). Optional like the routes it watches.
+  noteToolListRoute?: (
+    sessionId: string,
+    workspaceId: string,
+    preferredWebContentsId?: number
+  ) => () => boolean;
   dispatchActionForWorkspace?: (
     workspaceId: string,
     actionId: string,
@@ -1867,6 +1874,7 @@ export class HttpLifecycle {
     const pinnedManifest = this.deps.requestManifestForWebContents;
     const workspaceDispatch = this.deps.dispatchActionForWorkspace;
     const workspaceManifest = this.deps.requestManifestForWorkspace;
+    const noteToolListRoute = this.deps.noteToolListRoute;
     // Snapshotted for the same reason as the pin below: a session torn down
     // mid-call must keep failing closed to its own workspace rather than
     // silently reverting to the focused-window path.
@@ -2386,6 +2394,12 @@ export class HttpLifecycle {
       notifyToolCallStarted,
       notifyToolCallSettled,
       notifyDisplayImage,
+      ...(boundWorkspaceId !== null && noteToolListRoute
+        ? {
+            noteToolListRoute: () =>
+              noteToolListRoute(sessionId, boundWorkspaceId, preferredWebContentsId),
+          }
+        : {}),
     };
   }
 

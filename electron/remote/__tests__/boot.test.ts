@@ -288,6 +288,7 @@ vi.mock("../../services/mcp-server/driveTarget.js", () => ({
       m.mcpResolver.current = null;
     };
   }),
+  notifyMcpDriveTargetChange: vi.fn(),
 }));
 vi.mock("../hybrid/index.js", () => ({
   installHybridSplits: m.installHybridSplits,
@@ -433,6 +434,7 @@ vi.mock("../host/hostModeDefaults.js", async () => {
 });
 
 import { startRemoteHosts, stopRemoteHosts } from "../boot.js";
+import { notifyMcpDriveTargetChange } from "../../services/mcp-server/driveTarget.js";
 import {
   _resetRemoteServicesForTest,
   getRemoteService,
@@ -1126,10 +1128,18 @@ describe("startRemoteHosts", () => {
 
   it("tells the lease when a Shell's link drops and resumes", async () => {
     await startRemoteHosts({ hostMode: true });
+    const routeChanges = vi.mocked(notifyMcpDriveTargetChange);
+    routeChanges.mockClear();
     for (const l of m.transportListeners) l(["remote:s1:view-11"], false);
     expect(m.lease.noteEndpointTransport).toHaveBeenCalledWith(["remote:s1:view-11"], false);
     for (const l of m.transportListeners) l(["remote:s1:view-11"], true);
     expect(m.lease.noteEndpointTransport).toHaveBeenLastCalledWith(["remote:s1:view-11"], true);
+    // The holder goes from live to reserved and back without a lease change,
+    // so MCP routing hears of it after the lease has (#13350).
+    expect(routeChanges).toHaveBeenCalledTimes(2);
+    expect(routeChanges.mock.invocationCallOrder[1]).toBeGreaterThan(
+      Math.max(...m.lease.noteEndpointTransport.mock.invocationCallOrder)
+    );
 
     await stopRemoteHosts();
     expect(m.transportListeners.size).toBe(0);

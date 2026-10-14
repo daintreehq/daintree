@@ -510,6 +510,65 @@ describe("sessionServer tools/list handler", () => {
     expect(result.tools.map((t) => t.name)).toEqual(["actions.list"]);
   });
 
+  /** A route that moves while each listing's fetch is out, per `moves`. */
+  function movingRoute(moves: boolean[]) {
+    const order: string[] = [];
+    const noteToolListRoute = vi.fn(() => {
+      order.push("route");
+      const moved = moves.shift() ?? false;
+      return () => moved;
+    });
+    return { order, noteToolListRoute };
+  }
+
+  it("records the session's route before the listing's fetch (#13350)", async () => {
+    const { order, noteToolListRoute } = movingRoute([false]);
+    const deps = externalDeps({
+      noteToolListRoute,
+      requestManifest: vi.fn(async () => {
+        order.push("fetch");
+        return [makeManifestEntry("actions.list")];
+      }),
+    });
+    const server = createSessionServer("tools-list-route", deps);
+    await server.connect(makeMockTransport());
+
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["actions.list"]);
+    expect(order).toEqual(["route", "fetch"]);
+  });
+
+  it("never serves the answer of a route that moved while the fetch was out (#13350)", async () => {
+    // The old route's answer could land after the re-list the move's notice
+    // asks for, and the client keeps whichever list came last.
+    const { noteToolListRoute } = movingRoute([true, false]);
+    const requestManifest = vi
+      .fn()
+      .mockResolvedValueOnce([makeManifestEntry("terminal.list")])
+      .mockResolvedValueOnce([makeManifestEntry("actions.list")]);
+    const deps = externalDeps({ noteToolListRoute, requestManifest });
+    const server = createSessionServer("tools-list-moved", deps);
+    await server.connect(makeMockTransport());
+
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["actions.list"]);
+    expect(requestManifest).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetches a failed listing once when its route moved, and stops there", async () => {
+    const { noteToolListRoute } = movingRoute([true, true]);
+    const requestManifest = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Manifest request timed out"))
+      .mockResolvedValueOnce([makeManifestEntry("actions.list")]);
+    const deps = externalDeps({ noteToolListRoute, requestManifest });
+    const server = createSessionServer("tools-list-moved-failed", deps);
+    await server.connect(makeMockTransport());
+
+    // Still moving after the second fetch: that answer is served, and the
+    // route's notice is left to tell the client.
+    expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["actions.list"]);
+    expect(requestManifest).toHaveBeenCalledTimes(2);
+  });
+
   it("falls back to the cached manifest, warning with the error, when requestManifest rejects", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const rejection = new Error("Manifest request timed out");
@@ -5211,6 +5270,30 @@ describe("sessionServer introspection tier filtering", () => {
       expect(call[1]).toMatchObject({ category: "git", limit: 100 });
     }
     expect(calls.map((c) => (c[1] as { offset: number }).offset)).toEqual([0, 100]);
+  });
+
+  it("walks past an empty actions.list page while the view reports more (#13350)", async () => {
+    // A Shell answering for a host narrows each page to what a host may run,
+    // so the first page can come back empty with a permitted action behind it.
+    const pages = [[], [entry("terminal.list")]];
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("full"),
+      dispatchAction: vi.fn((_id: string, callArgs: unknown) => {
+        const { offset = 0 } = callArgs as { offset?: number };
+        const page = offset / 100;
+        return Promise.resolve({
+          result: {
+            ok: true as const,
+            result: { actions: pages[page] ?? [], hasMore: page < pages.length - 1 },
+          },
+        });
+      }),
+    });
+    const server = createSessionServer("s1", deps);
+    const res = await callTool(server, { name: "actions.list" });
+    expect(payload<{ actions: ActionManifestEntry[] }>(res).actions.map((a) => a.id)).toEqual([
+      "terminal.list",
+    ]);
   });
 
   /**

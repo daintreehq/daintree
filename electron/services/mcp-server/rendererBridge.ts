@@ -1401,6 +1401,32 @@ export function createRendererBridge(
   }
 
   /**
+   * Where {@link requestManifestForWorkspace} would answer from right now, as a
+   * key that changes exactly when that answer's source does (#13350): a remote
+   * driver, a local view, or nowhere, which is the base surface. Read
+   * synchronously and without a fetch, so it can be re-read on every routing
+   * event without waking a view.
+   */
+  function describeWorkspaceRoute(workspaceId: string, preferredWebContentsId?: number): string {
+    let driver: ReturnType<typeof resolveDriver>;
+    try {
+      driver = resolveDriver(workspaceId);
+    } catch {
+      return "unavailable";
+    }
+    if (driver?.remote) return `remote:${driver.remote.endpointId}`;
+    try {
+      const wc = getWorkspaceWebContents(
+        workspaceId,
+        driver?.localWebContentsId ?? preferredWebContentsId
+      );
+      return `local:${wc.id}`;
+    } catch {
+      return "none";
+    }
+  }
+
+  /**
    * Action dispatch for a workspace-bound session (#11789). An external
    * session passes no `contextOverride`: it has no launch moment to replay, and
    * the bound view's own live context already describes the right workspace.
@@ -1555,6 +1581,7 @@ export function createRendererBridge(
     requestManifestForWebContents,
     dispatchActionForWebContents,
     requestManifestForWorkspace,
+    describeWorkspaceRoute,
     dispatchActionForWorkspace,
     revealOwnedRun,
     /**

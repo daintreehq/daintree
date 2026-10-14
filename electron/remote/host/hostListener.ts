@@ -9,7 +9,10 @@ import {
   describeTerminalForScope,
 } from "../../services/driveLeaseTargetResolvers.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
-import { setMcpDriveTargetResolver } from "../../services/mcp-server/driveTarget.js";
+import {
+  notifyMcpDriveTargetChange,
+  setMcpDriveTargetResolver,
+} from "../../services/mcp-server/driveTarget.js";
 import type { AttachedClientInfo } from "../../../shared/types/ipc/hostMode.js";
 import { attachHostFiles, installHostFileService } from "../files/hostInstall.js";
 import { attachHostUploads, installHostUploadService } from "../files/uploadHostInstall.js";
@@ -208,9 +211,12 @@ async function buildHostListener(
   // The lease's release grace starts when a holder's link drops, not when its
   // session finally expires, and a resume inside it keeps the lease.
   teardowns.push(
-    host.sessionHost.onTransportChange((endpointIds, attached) =>
-      lease.noteEndpointTransport(endpointIds, attached)
-    )
+    host.sessionHost.onTransportChange((endpointIds, attached) => {
+      lease.noteEndpointTransport(endpointIds, attached);
+      // The holder can stay the same while it goes from live to reserved and
+      // back, which the lease does not announce.
+      notifyMcpDriveTargetChange();
+    })
   );
 
   const endpointsBySession = new Map<string, Map<string, RemoteViewEndpoint>>();
@@ -299,6 +305,7 @@ async function buildHostListener(
           // A closing link; its Shell resyncs on the way back.
         }
       }
+      notifyMcpDriveTargetChange();
       notify();
     })
   );

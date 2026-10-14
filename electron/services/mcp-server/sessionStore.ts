@@ -8,6 +8,7 @@ import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
 import { ResourceOwnershipLedger } from "./resourceOwnership.js";
 import { TerminalAdoptionLedger } from "./terminalAdoption.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
+import { ToolListRouteWatch } from "./toolListRouteWatch.js";
 
 export interface SessionStoreOptions {
   /**
@@ -56,6 +57,17 @@ export interface SessionStoreOptions {
 export class SessionStore {
   readonly sessions = new Map<string, McpSseSession>();
   readonly httpSessions = new Map<string, McpHttpSession>();
+  /**
+   * Tells a bound session its tool list moved with its route (#13350). Kept
+   * here so every teardown path, each of which clears the session's binding,
+   * forgets it too.
+   */
+  readonly toolListRouteWatch = new ToolListRouteWatch((sessionId) => {
+    const session = this.httpSessions.get(sessionId) ?? this.sessions.get(sessionId);
+    session?.server.sendToolListChanged().catch(() => {
+      // Transport already closing; its next list reads the new route anyway.
+    });
+  });
   readonly sessionTierMap = new Map<string, McpTier>();
   // sessionId → renderer WebContents id pinned at handshake. Only populated
   // for help-session bearers; api-key / pane-token sessions stay absent and
@@ -285,6 +297,7 @@ export class SessionStore {
     this.sessionWorkspaceMap.delete(sessionId);
     this.sessionCredentialMap.delete(sessionId);
     this.resourceOwnership.clearSession(sessionId);
+    this.toolListRouteWatch.forget(sessionId);
   }
 
   /**
@@ -894,6 +907,7 @@ export class SessionStore {
     this.sessionOriginMap.clear();
     this.sessionWorkspaceMap.clear();
     this.sessionCredentialMap.clear();
+    this.toolListRouteWatch.clear();
     // Authority only — the terminals and worktrees these records named are
     // deliberately left alone (#11909). See `clearSessionBinding`, which drops
     // the same ledger per session; `drain` clears the session-scoped maps

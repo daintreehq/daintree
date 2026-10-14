@@ -1182,6 +1182,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     caption?: string;
     altText?: string;
   }) => void;
+  /**
+   * Record where this session's `tools/list` is about to be answered from, so
+   * a later route change can tell the client its list moved (#13350). Returns
+   * whether the route has moved since. Wired for workspace-bound sessions only.
+   */
+  noteToolListRoute?: () => () => boolean;
 }
 
 /**
@@ -1378,7 +1384,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // legitimately empty surface and carrying no hint that reconnecting is the
     // fix.
     if (tier === null) throw sessionGoneError();
-    const manifest = await resolveManifest("tools/list");
+    // A route that moved while the fetch was out is fetched again from where it
+    // went (#13350): the old route's answer could land after the re-list the
+    // move's notice asks for, and the client keeps whichever list came last.
+    // Once only; a route still moving is left to the notice.
+    let manifest!: Awaited<ReturnType<typeof resolveManifest>>;
+    for (let attempt = 1; ; attempt++) {
+      const routeMoved = deps.noteToolListRoute?.();
+      try {
+        manifest = await resolveManifest("tools/list");
+      } catch (err) {
+        if (attempt === 1 && routeMoved?.()) continue;
+        throw err;
+      }
+      if (attempt === 1 && routeMoved?.()) continue;
+      break;
+    }
     // Origin read once for the whole listing, and the same way the dispatch
     // gate reads it, so a tool withheld here is refused there (#12407).
     const listSurface: SessionSurfacePolicy = {
@@ -3569,7 +3590,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               { actions?: unknown; hasMore?: unknown } | null | undefined;
             if (!payload || !Array.isArray(payload.actions)) break;
             collected.push(...payload.actions);
-            if (payload.hasMore !== true || payload.actions.length === 0) break;
+            // Not stopped by an empty page: a Shell answering for this host
+            // narrows each page to what a host may run (#13350), so one can
+            // come back empty with more behind it.
+            if (payload.hasMore !== true) break;
             offset += ACTIONS_LIST_MAX_LIMIT;
           }
           return {
