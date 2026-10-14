@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import fs from "fs";
-import path from "path";
+import { readToolbarCss } from "@/__tests__/support/cssManifest";
 import { render } from "@testing-library/react";
 import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
 import { ToolbarProjectPill } from "../ToolbarProjectPill";
@@ -111,10 +110,7 @@ describe("ToolbarProjectPill", () => {
 // theme's own variables, the way the browser does, and holds the branch to
 // WCAG 1.4.3's 4.5:1 in every state the pill can be in, in every theme.
 
-const CSS = fs.readFileSync(
-  path.resolve(__dirname, "../../../styles/components/toolbar.css"),
-  "utf-8"
-);
+const CSS = readToolbarCss();
 
 type Vars = Record<string, string>;
 

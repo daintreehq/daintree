@@ -1212,7 +1212,7 @@ export function DiffPane({
             }}
           />
         )}
-        {/* `DiffViewer.css` reads `--diff-font-size`; declaring it here is what
+        {/* `DiffViewer.lines.css` reads `--diff-font-size`; declaring it here is what
             makes the size preference reach the rendered diff. */}
         <div
           className="relative flex-1 min-w-0 min-h-0 flex flex-col"

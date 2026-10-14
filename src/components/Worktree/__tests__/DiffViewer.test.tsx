@@ -2,6 +2,7 @@
 import React from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readDiffViewerCss } from "@/__tests__/support/cssManifest";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import type { ChangeData, HunkData, RenderGutter, RenderToken, ViewType } from "react-diff-view";
@@ -893,7 +894,7 @@ describe("DiffViewer real gutter rows (#12255)", () => {
 // per-element fallback against accidental removal.
 describe("DiffViewer gutter CSS contract (#10422)", () => {
   it("declares white-space: nowrap on the gutter cell and on .diff-line-number", () => {
-    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    const cssText = readDiffViewerCss();
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-gutter\s*\{[^}]*white-space:\s*nowrap/);
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-line-number\s*\{[^}]*white-space:\s*nowrap/);
   });
@@ -906,14 +907,14 @@ describe("DiffViewer gutter CSS contract (#10422)", () => {
 // (the original #10623 bug). Same readFileSync pattern as the #10422 guard.
 describe("DiffViewer wrap CSS contract (#10623)", () => {
   it("resets the vendor wrap defaults on the base .diff-code rule", () => {
-    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    const cssText = readDiffViewerCss();
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*white-space:\s*pre[;\s}]/);
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*word-break:\s*normal/);
     expect(cssText).toMatch(/\.diff-viewer\s+\.diff-code\s*\{[^}]*overflow-wrap:\s*normal/);
   });
 
   it("breaks at word boundaries (not mid-token) in wrap-on mode", () => {
-    const cssText = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8");
+    const cssText = readDiffViewerCss();
     // Strip comments so the negative break-all assertion checks declarations
     // only — the rule's own comment explains why break-all was dropped.
     const declarations = cssText
@@ -935,10 +936,7 @@ describe("DiffViewer wrap CSS contract (#10623)", () => {
     // (white-space: pre-wrap) under the fixed-width wrap table must also let an
     // unbreakable run break, or it reopens #10623. Guards future rules too, not
     // just today's [data-wrap] one.
-    const withoutComments = readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8").replace(
-      /\/\*[\s\S]*?\*\//g,
-      ""
-    );
+    const withoutComments = readDiffViewerCss().replace(/\/\*[\s\S]*?\*\//g, "");
     // Match innermost declaration blocks ({ ... } with no nested braces) so the
     // invariant still holds for a soft-wrap rule nested inside an @media block.
     const softWrapRules = (withoutComments.match(/\{[^{}]*\}/g) ?? []).filter((rule) =>
@@ -1375,8 +1373,7 @@ describe("DiffViewer native scroll proxy", () => {
 // properties. Everything that turns those into a usable scrollbar lives in the
 // stylesheet, and deleting any of it would leave them all green.
 describe("DiffViewer native scroll proxy CSS contract (#12103)", () => {
-  const declarations = () =>
-    readFileSync(join(__dirname, "..", "DiffViewer.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const declarations = () => readDiffViewerCss().replace(/\/\*[\s\S]*?\*\//g, "");
 
   it("sizes the native strip's spacer from the measured content width", () => {
     expect(declarations()).toMatch(

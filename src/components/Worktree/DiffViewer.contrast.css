@@ -1,0 +1,99 @@
+@media (forced-colors: active) {
+  /* Diff viewer: author backgrounds are stripped to Canvas, so insert/delete
+     state rides on the gutter's textual +/- markers plus a system-color edge
+     on the code cells. Highlight/LinkText only mark which side changed — the
+     marker glyphs carry the add/remove meaning. */
+  .diff-viewer .diff-code-insert {
+    border-left: 3px solid Highlight;
+  }
+  .diff-viewer .diff-code-delete {
+    border-left: 3px solid LinkText;
+  }
+  .diff-viewer .diff-gutter {
+    border-right: 1px solid CanvasText;
+  }
+  /* Split-view void cells: the hatch background is stripped to Canvas, so the
+     "nothing exists on this side" cue rides a dotted system-color edge. */
+  .diff-viewer .diff-code-omit {
+    background-image: none;
+    border-left: 1px dotted GrayText;
+  }
+  /* Moved lines: the tinted fill and inset bar are stripped, so the cue rides
+     a pattern change — dash the side edge DiffViewer.lines.css draws solid. */
+  .diff-viewer tr.diff-line-moved-old td.diff-code-delete,
+  .diff-viewer tr.diff-line-moved-new td.diff-code-insert {
+    border-left-style: dashed;
+    box-shadow: none;
+  }
+  /* Search/whitespace marks lose their backgrounds; system outlines and a
+     dotted underline (text-decoration survives forced colors) stand in. */
+  .diff-viewer .diff-search-match {
+    outline: 1px solid Highlight;
+  }
+  .diff-viewer .diff-ws-trailing {
+    outline: 1px dashed LinkText;
+  }
+  .diff-viewer .diff-ws-space {
+    text-decoration: underline dotted;
+  }
+}
+
+@media (prefers-contrast: more) {
+  /* Edit pills stay canvas-anchored so the intensity boost never lifts the
+     pill's luminance past the theme text. */
+  .diff-viewer {
+    --diff-code-insert-edit-background-color: color-mix(
+      in oklch,
+      var(--color-status-success) 50%,
+      var(--color-surface-canvas)
+    );
+    --diff-code-delete-edit-background-color: color-mix(
+      in oklch,
+      var(--color-status-danger) 50%,
+      var(--color-surface-canvas)
+    );
+  }
+  /* Diff viewer fills are low-alpha tints by default; raise the mixes and add
+   * a status-colored edge so insert/delete bands stay legible when the user
+   * has explicitly asked for more contrast (keeps theme colors per the
+   * block's intent — no system-color repaint). */
+  .diff-viewer .diff-code-insert {
+    background: color-mix(in oklab, var(--color-status-success) 25%, transparent);
+    border-left: 2px solid var(--color-status-success);
+  }
+  .diff-viewer .diff-code-delete {
+    background: color-mix(in oklab, var(--color-status-danger) 25%, transparent);
+    border-left: 2px solid var(--color-status-danger);
+  }
+  .diff-viewer .diff-gutter-insert {
+    background-image: linear-gradient(
+      color-mix(in oklab, var(--color-status-success) 40%, transparent),
+      color-mix(in oklab, var(--color-status-success) 40%, transparent)
+    );
+  }
+  .diff-viewer .diff-gutter-delete {
+    background-image: linear-gradient(
+      color-mix(in oklab, var(--color-status-danger) 40%, transparent),
+      color-mix(in oklab, var(--color-status-danger) 40%, transparent)
+    );
+  }
+  /* Moved lines: raise the fill and let the edge bar take over the
+     status-colored border the rules above add to insert/delete cells. */
+  .diff-viewer tr.diff-line-moved-old td.diff-code-delete,
+  .diff-viewer tr.diff-line-moved-new td.diff-code-insert {
+    background: color-mix(in oklch, var(--color-status-info) 24%, var(--color-surface-canvas));
+    border-left-color: var(--color-status-info);
+    box-shadow: none;
+  }
+  /* Whitespace overlays at full text color when contrast is requested. */
+  .diff-viewer .diff-ws-space {
+    background-image: radial-gradient(
+      circle at 0.5ch 50%,
+      var(--color-text-primary) 1px,
+      transparent 1.5px
+    );
+  }
+  .diff-viewer .diff-ws-tab::before {
+    color: var(--color-text-primary);
+  }
+}

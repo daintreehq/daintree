@@ -1425,7 +1425,7 @@ describe("AgentButton preset UX", () => {
 
   describe("split-button structure", () => {
     // The split draws as one control at rest; its partition and shared wash
-    // only appear on a split the chevron can actually open (toolbar.css gates
+    // only appear on a split the chevron can actually open (toolbar/controls.css gates
     // them on data-split-live). A gated chevron blocks clicks (#8131), so a
     // split drawn as two halves there would advertise a control that isn't.
     function splitWrapper(chevronIcon: HTMLElement): HTMLElement {

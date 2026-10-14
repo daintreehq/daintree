@@ -210,14 +210,14 @@ const EXCEPTIONS: {
     reason: "File-change recency rail is 2px wide; 1px is its half-width cap",
   },
   {
-    file: "src/components/Worktree/DiffViewer.css",
+    file: "src/components/Worktree/DiffViewer.scroll.css",
     match: "border-radius: 6px",
     count: 1,
     reason:
       "Diff horizontal scrollbar thumb — scrollbar geometry, same rationale as the global one",
   },
   {
-    file: "src/styles/components/toolbar.css",
+    file: "src/styles/components/toolbar/pips.css",
     match: "border-radius: 2px",
     count: 1,
     reason:

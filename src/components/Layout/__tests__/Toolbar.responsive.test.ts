@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import { readToolbarCss } from "@/__tests__/support/cssManifest";
 import { extractAtRuleBlocks } from "./cssBlocks";
 
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
@@ -8,17 +9,13 @@ const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
 const PILL_PATH = path.resolve(__dirname, "../ToolbarProjectPill.tsx");
 const readToolbarSource = async () =>
   (await fs.readFile(TOOLBAR_PATH, "utf-8")) + (await fs.readFile(PILL_PATH, "utf-8"));
-const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 
 describe("Toolbar responsive design — issue #4133", () => {
   let source: string;
   let css: string;
 
   beforeEach(async () => {
-    [source, css] = await Promise.all([
-      readToolbarSource(),
-      fs.readFile(TOOLBAR_CSS_PATH, "utf-8"),
-    ]);
+    [source, css] = await Promise.all([readToolbarSource(), Promise.resolve(readToolbarCss())]);
   });
 
   describe("overflow hook integration", () => {
@@ -413,7 +410,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
   beforeEach(async () => {
     [source, css] = await Promise.all([
       fs.readFile(TOOLBAR_PATH, "utf-8"),
-      fs.readFile(TOOLBAR_CSS_PATH, "utf-8"),
+      Promise.resolve(readToolbarCss()),
     ]);
   });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import fs from "fs/promises";
 import path from "path";
+import { readToolbarCss } from "@/__tests__/support/cssManifest";
 
 /**
  * Structural rules for the toolbar forge stats strip. The strip is one
@@ -25,7 +26,7 @@ beforeAll(async () => {
     read("PRDetectionPausedIndicator.tsx"),
     read("ForgeStatusIndicator.tsx"),
     read("Toolbar.tsx"),
-    fs.readFile(path.resolve(__dirname, "../../../styles/components/toolbar.css"), "utf-8"),
+    Promise.resolve(readToolbarCss()),
   ]);
 });
 

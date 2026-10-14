@@ -1,0 +1,289 @@
+/* Persistent always-visible scrollbar for the external container that owns
+   DiffViewer's scroll. The .diff-viewer root is content-sized (no overflow) so
+   its host scroll container — AppDialog.BodyScroll in FileViewerModal, the
+   flex-1 wrapper in CrossWorktreeDiff — renders the only vertical scrollbar,
+   avoiding the nested double-scrollbar. The global `* { scrollbar-width: thin }`
+   in index.css opts everything into standard (overlay, auto-hiding on macOS)
+   scrollbars, which also disables ::-webkit-scrollbar in Chromium 121+. Resetting
+   scrollbar-width/color to auto re-enables the webkit pseudo-elements, and a
+   non-zero ::-webkit-scrollbar width forces a classic always-visible bar. Mirrors
+   the .diff-hscrollbar pattern used for the horizontal axis. */
+.diff-scroll-root {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+.diff-scroll-root::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.diff-scroll-root::-webkit-scrollbar-track {
+  background: var(--color-surface-canvas);
+}
+
+.diff-scroll-root::-webkit-scrollbar-thumb {
+  background: var(--color-state-idle);
+  border-radius: var(--radius-sm);
+}
+
+.diff-scroll-root::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
+}
+
+/* Grabbed: one step further along the hover ramp, as the grid scrollbar and
+ * xterm's slider do, so a pressed thumb does not read as merely hovered. */
+.diff-scroll-root::-webkit-scrollbar-thumb:active {
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary)) 70%,
+    var(--color-text-primary)
+  );
+}
+
+/* D1a (light) — diff scrollbars consume the shared --scrollbar-* tokens so
+ * per-theme scrollbar tuning applies. Dark keeps the original hardcoded values
+ * above (byte-for-byte unchanged). */
+.light .diff-scroll-root::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.light .diff-scroll-root::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.light .diff-scroll-root::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.light .diff-scroll-root::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+}
+
+/* border-collapse: collapse breaks position: sticky cells in Chromium (cell
+   borders detach during horizontal scroll); separate + zero spacing keeps the
+   1px gutter border traveling with the pinned cells. */
+.diff-viewer table.diff {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* Non-scrolling per-file shell whose only job is to be the sticky proxy
+   strip's containing block. The strip cannot live inside .diff-file-scroll:
+   `overflow-x: auto` with overflow-y at its initial `visible` computes to
+   `auto` (CSS Overflow 3 §3.3), making that div a scroll container on both
+   axes, so a sticky child would resolve against a scrollport the full height
+   of the file and pin exactly where the native bar already sits. From out here
+   the strip resolves against .diff-scroll-root instead, while still clamping
+   to this shell's box — which is also why two stacked files can never pin
+   their strips to the same viewport row. Must never gain overflow, contain,
+   transform, filter or perspective; any of those would become the sticky
+   containing block and silently re-pin the strip to the bottom of the file. */
+.diff-viewer .diff-file-shell {
+  position: relative;
+}
+
+/* Per-file horizontal scroll wrapper — gives each file its own scrollbar
+   so all rows scroll together instead of each <td> scrolling independently.
+   Used by unified view and single-side (add/delete) split tables; two-column
+   split tables use the centered-split system below instead. Stays a real
+   native scroller so find-in-page reveal, scrollIntoView, drag-select
+   autoscroll and native panning keep working — the sticky strip above is a
+   second control for the same offset, not a replacement. */
+.diff-viewer .diff-file-scroll {
+  overflow-x: auto;
+  /* Re-enable the ::-webkit-scrollbar styling below for a classic always-visible
+     bar; the global `* { scrollbar-width: thin }` otherwise renders this as a
+     macOS overlay that auto-hides (Chromium 121+). Same reset as .diff-hscrollbar
+     and .diff-scroll-root. */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+/* Centered split view: each pane gets a fixed half of the viewport instead of
+   the old-side column growing to its longest line and shoving the new side
+   off-screen. The table itself never scrolls — code cells clip their overflow
+   and shift content via text-indent driven by --diff-hscroll, which FileDiff
+   mirrors from the scrollbar strip's scrollLeft. Because both panes consume
+   the same offset, their scroll positions are locked by construction, and the
+   pane with shorter lines simply shows blank space past its end. */
+.diff-viewer .diff-file-centered table.diff {
+  table-layout: fixed;
+  width: 100%;
+}
+
+/* Under fixed layout the <col> widths govern: gutters fixed, the two code
+   columns split the remainder equally — the center divider. */
+.diff-viewer .diff-file-centered col.diff-gutter-col {
+  width: var(--diff-gutter-width, 50px);
+}
+
+/* `clip`, not `hidden`: a hidden box is still a programmatic scroll container,
+   so scrollIntoView (search-match reveal) or selection auto-scroll can scroll
+   one cell internally and desync it from the shared offset — rows then scroll
+   at different rates. clip clips visually but is unscrollable, so the shared
+   text-indent stays the only thing that can move a row. */
+.diff-viewer .diff-file-centered td.diff-code {
+  overflow: clip;
+  text-indent: calc(-1 * var(--diff-hscroll, 0px));
+}
+
+/* Mark the center divider on the new-side gutter. */
+.diff-viewer .diff-file-centered td.diff-gutter:nth-child(3) {
+  border-left: 1px solid var(--color-border-default);
+}
+
+/* The single horizontal scrollbar driving both panes. Sticky against the
+   vertical scroller so it stays reachable mid-file. Height is explicit:
+   FileDiff measures real overflow (spacer vs strip width) and sets
+   data-active; without it the strip takes no space at all. */
+.diff-viewer .diff-hscrollbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  overflow-x: auto;
+  /* Explicit, not incidental: left at its initial `visible` this would compute
+     to `auto` (CSS Overflow 3 §3.3) and the 1px spacer would overflow the
+     strip's 12px box — which the 12px horizontal bar already fills — reserving
+     width for a vertical scrollbar. That shrinks the strip's clientWidth below
+     the scroller's, so the proxy's scroll range runs past the content's and its
+     last few pixels of travel would have nothing to scroll to. */
+  overflow-y: hidden;
+  height: 0;
+  background: var(--color-surface-canvas);
+  /* The global `* { scrollbar-width: thin; scrollbar-color: … }` opts every
+     element into STANDARD scrollbars, which disqualifies ::-webkit-scrollbar
+     styling (Chromium 121+) and renders as a macOS overlay — invisible unless
+     already scrolling. This strip IS the scroll control, so it must be a
+     classic always-visible bar: reset the standard properties to auto to
+     re-enable the webkit pseudo styling below. */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+  /* Don't let edge overscroll chain into ancestor scrollers or gestures. */
+  overscroll-behavior-x: contain;
+}
+
+.diff-viewer .diff-hscrollbar[data-active] {
+  height: 12px;
+}
+
+.diff-viewer .diff-hscroll-spacer {
+  height: 1px;
+  /* viewport + max(0, longest line - pane content width); pane content is
+     (100% - both gutters) / 2 minus the 24px cell padding. */
+  width: calc(
+    100% +
+      max(0px, var(--diff-max-line, 0px) - ((100% - 2 * var(--diff-gutter-width, 50px)) / 2 - 24px))
+  );
+}
+
+/* The native path's strip stands in for a real scroller, so its spacer takes
+   that scroller's measured scrollWidth instead of the centered path's
+   longest-line estimate — the two ranges then match exactly, which is what
+   keeps the two-way scrollLeft mirroring from fighting over a clamp. */
+.diff-viewer .diff-hscrollbar[data-scroll-mode="native"] .diff-hscroll-spacer {
+  width: var(--diff-native-scroll-width, 100%);
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar {
+  height: 12px;
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-track {
+  background: var(--color-surface-canvas);
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-state-idle);
+  border-radius: 6px;
+  border: 3px solid var(--color-surface-canvas);
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
+}
+
+.diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:active {
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary)) 70%,
+    var(--color-text-primary)
+  );
+}
+
+/* D1a (light) — see the .diff-viewer scrollbar note above. */
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.light .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+}
+
+.diff-viewer .diff-file-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+/* Exactly one horizontal control per file: once the proxy strip has measured
+   real overflow and taken height, the scroller's own bar goes away. Both
+   attributes are written from the same `hasHOverflow` in one render, so the
+   handoff is atomic — and before the first measurement the strip is 0px tall
+   and this rule is off, so there is never a moment with no bar at all. */
+.diff-viewer .diff-file-scroll[data-proxy-active] {
+  scrollbar-width: none;
+}
+
+.diff-viewer .diff-file-scroll[data-proxy-active]::-webkit-scrollbar {
+  height: 0;
+}
+
+.diff-viewer .diff-file-scroll::-webkit-scrollbar-track {
+  background: var(--color-surface-canvas);
+}
+
+.diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-state-idle);
+  border-radius: var(--radius-sm);
+}
+
+.diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary));
+}
+
+.diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:active {
+  background: color-mix(
+    in oklab,
+    color-mix(in oklab, var(--color-state-idle) 70%, var(--color-text-primary)) 70%,
+    var(--color-text-primary)
+  );
+}
+
+/* D1a (light) — see the .diff-viewer scrollbar note above. */
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.light .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-thumb-active);
+}
+
+.diff-viewer table.diff td {
+  vertical-align: top;
+}

@@ -1,0 +1,273 @@
+@property --overflow-badge-color {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: transparent;
+}
+
+@property --problems-dot-color {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: transparent;
+}
+
+/* ── Pip conventions ──
+ * The rules below describe what gets rendered and how the pip floats above
+ * its icon. They are NOT enforced by CSS cascade — precedence is component
+ * rendering logic. Reordering rules here will not change which pip wins.
+ *
+ * 1. Precedence ladder. Each toolbar button renders at most one pip; the
+ *    "ladder" is the conceptual ordering across surfaces, not a single
+ *    arbitration site. Within ToolbarAssistantButton.tsx (describePip /
+ *    describeAgentPip), the MCP health pip wins over the
+ *    agent activity pip — `failed` and `starting` come from
+ *    McpRuntimeSnapshot.state and surface as MCP health; `working`,
+ *    `directing`, `waiting` come from AgentStateMachine and surface as the
+ *    agent activity pip, which is suppressed when the panel is open or the
+ *    state has been acknowledged. MCP audit anomalies deliberately get no pip:
+ *    they are process-global diagnostics with nothing to act on, so they stay
+ *    in Settings → MCP Server (#12509).
+ *    NotificationCenterToolbarButton owns the `unread` dot on its own surface —
+ *    it doesn't compete with the assistant pips, so the ordering reads:
+ *
+ *      MCP failed > MCP starting > agent working / directing / waiting
+ *      notification unread (independent surface)
+ *
+ *    DND dimming (.toolbar-badge[data-dnd-active]) is a cross-tier overlay
+ *    that drops opacity to 0.3; it only applies to the notification dot
+ *    today.
+ *
+ * 2. Per-surface ring rule. The ring (box-shadow / Tailwind ring-1) creates
+ *    a cut-out gap so the pip floats visually above the icon:
+ *
+ *      - ring-surface-sidebar — semantic-status pips on a colored dot
+ *        (AssistantButton MCP/agent pips, AgentButton, LauncherMenuButton
+ *        running-state pip, plus LauncherMenuButton's separate discovery
+ *        badge — see `showDiscoveryBadge` in LauncherMenuButton.tsx), and
+ *        the NotificationCenter unread dot, which takes the same ring on a
+ *        neutral text-secondary fill. Ring color matches the toolbar /
+ *        sidebar surface (they share a token across themes) so the gap reads
+ *        as a clean cut-out.
+ *      - No ring — .toolbar-problems-badge (size is the differentiator, see
+ *        rule 3) and VoiceRecordingToolbarButton (inline live-audio dot, not
+ *        a .toolbar-badge and out of scope here). .toolbar-overflow-badge
+ *        is severity-dependent: no ring on `critical`, a 1px box-shadow ring
+ *        on `warning` and `info` (see the severity blocks below).
+ *
+ * 3. Problems-pip size. .toolbar-problems-badge is 8px (w-2 h-2); every other
+ *    pip is 6px (w-1.5 h-1.5). The larger geometry is intentional — a
+ *    non-color severity differentiator parallel to the .toolbar-overflow-badge
+ *    shape tiers below (WCAG 1.4.1). The pip is always error-colored, so size
+ *    reinforces a high-signal indicator instead of adding ring noise.
+ */
+
+/* ── Shared pip geometry ──
+ * The semantic-status pips (AssistantButton MCP/agent pips, AgentButton and
+ * LauncherMenuButton running-state pips) all float at the same corner offset with
+ * the same 6px circle and sidebar-colored ring cut-out. This class owns that
+ * geometry so render sites stop re-typing the literals; it carries no color and
+ * no visibility — color comes from a per-surface class, visibility/motion from
+ * .toolbar-badge. No forced-colors entry is needed here (no background-color of
+ * its own); the composed .toolbar-badge already covers that. The ring matches
+ * `ring-1 ring-surface-sidebar`. */
+.toolbar-pip {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  height: 6px;
+  width: 6px;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1px var(--color-surface-sidebar);
+}
+
+/* A pip that carries a count (Canopy's "needs you"). Same corner and cut-out
+ * ring as .toolbar-pip, grown to a 12px pill. The digits are black or white,
+ * whichever the fill is lighter or darker than: the surface colour read as
+ * a cut-out but fell to 3.2:1 on the light themes' darker ambers, and 9px
+ * digits need 4.5. The 0.56 OKLCH split sits between the lightest fill that
+ * wants white (bali, 0.54) and the darkest that wants black (table-mountain,
+ * 0.57), so every built-in theme clears 4.5:1. */
+.toolbar-count {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  height: 12px;
+  min-width: 12px;
+  padding: 0 3px;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1px var(--color-surface-sidebar);
+  color: oklch(from var(--color-state-waiting) clamp(0, (0.56 - l) * 1000, 1) 0 0);
+  font-size: var(--text-4xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 12px;
+  letter-spacing: -0.02em;
+  text-align: center;
+}
+
+/* ── Badge entrance / exit ──
+ * Tier 2 timing from animationUtils.ts: 200ms enter (UI_ENTER_DURATION),
+ * 120ms exit (UI_EXIT_DURATION). @starting-style + allow-discrete handle
+ * entry and exit in pure CSS — no AnimatePresence or key remount needed.
+ * The element must stay in the DOM; visibility is gated by data-visible.
+ */
+.toolbar-badge {
+  display: none;
+  opacity: 0;
+  transform: scale(0);
+  transition:
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    transform var(--duration-120) var(--ease-exit);
+}
+
+.toolbar-badge[data-visible="true"] {
+  display: block;
+  opacity: 1;
+  transform: scale(1);
+  transition-duration: var(--duration-200);
+  transition-timing-function: var(--ease-spring-critical);
+
+  @starting-style {
+    opacity: 0;
+    transform: scale(0);
+  }
+}
+
+/* GitHub activity corner chips use clipPath for the triangle shape so scale
+ * would distort. Opacity-only entrance / exit keeps the chip crisp. */
+.toolbar-badge-chip {
+  display: none;
+  opacity: 0;
+  transition:
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit);
+}
+
+.toolbar-badge-chip[data-visible="true"] {
+  display: block;
+  opacity: 1;
+  transition-duration: var(--duration-200);
+  transition-timing-function: var(--ease-spring-critical);
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+/* ── Overflow `…` trigger entry / exit ──
+ * The trigger appears only while items are evicted into it. Without an
+ * animation it pops in/out instantly, unlike every other toolbar badge
+ * (issue #9821). Opacity-only (no scale) — the trigger is a full-size button,
+ * not a pip, so scaling would read as a glitch. @starting-style + allow-discrete
+ * drive entry/exit in pure CSS; the button stays mounted and toggles
+ * data-visible (going display:none when empty so it reclaims its layout slot
+ * and drops out of roving focus). The fill keeps the toolbar press timing
+ * (`--_fill-duration`) and color stays at 150ms, so hover and press read as on
+ * every other toolbar button.
+ */
+[data-toolbar-overflow-trigger] {
+  display: none;
+  opacity: 0;
+  transition:
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    color var(--duration-150) ease-out,
+    background-color var(--_fill-duration) ease-out;
+}
+
+[data-toolbar-overflow-trigger][data-visible="true"] {
+  display: inline-flex;
+  opacity: 1;
+  transition:
+    display var(--duration-200) allow-discrete,
+    opacity var(--duration-200) var(--ease-spring-critical),
+    color var(--duration-150) ease-out,
+    background-color var(--_fill-duration) ease-out;
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+/* ── Overflow severity dot ──
+ * @property --overflow-badge-color (registered above) interpolates in OKLab
+ * so severity class-swaps produce a smooth hue transition instead of a snap.
+ */
+.toolbar-overflow-badge {
+  background-color: var(--overflow-badge-color);
+  transition:
+    --overflow-badge-color 150ms ease-out,
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    transform var(--duration-120) var(--ease-exit);
+}
+
+/* WCAG 1.4.1: non-color shape differentiator per tier. Critical reads as a
+ * square (border-radius: 0), warning as a slightly rounded square, info as a
+ * pill — color still carries primary semantic weight but is no longer the sole
+ * cue. The ring (box-shadow) lives here too so shape and ring always match —
+ * a round ring on a square dot would look like a bug. */
+.toolbar-overflow-badge[data-severity="critical"] {
+  --overflow-badge-color: var(--color-status-error);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.toolbar-overflow-badge[data-severity="warning"] {
+  --overflow-badge-color: var(--color-state-waiting);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgb(from var(--color-surface-canvas) r g b / 0.6);
+}
+
+.toolbar-overflow-badge[data-severity="info"] {
+  --overflow-badge-color: var(--color-text-primary, #94a3b8);
+  opacity: 0.5;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 1px rgb(from var(--color-surface-canvas) r g b / 0.6);
+}
+
+/* ── Problems dot ──
+ * @property --problems-dot-color gives the dot a smooth color transition so
+ * future color changes (e.g., severity tiers) animate instead of snapping.
+ * Currently always error-colored; the custom property just programs for
+ * smooth future changes.
+ */
+.toolbar-problems-badge {
+  background-color: var(--problems-dot-color);
+  transition:
+    --problems-dot-color 150ms ease-out,
+    display var(--duration-120) allow-discrete,
+    opacity var(--duration-120) var(--ease-exit),
+    transform var(--duration-120) var(--ease-exit);
+}
+
+.toolbar-problems-badge[data-visible="true"] {
+  --problems-dot-color: var(--color-status-error);
+}
+
+/* DND dims the notification dot so muted and active unread states are
+ * visually distinct. The data-dnd-active attribute is set on the badge
+ * span itself, mirroring the button's attribute. */
+.toolbar-badge[data-dnd-active="true"] {
+  opacity: 0.3;
+}
+
+/* ── Reduced motion ──
+ * WCAG 2.3.3: remove spatial motion (scale/transform), keep opacity.
+ * `@variant reduce-motion` emits both the OS media query and the Daintree
+ * "Reduce UI animations" toggle (`body[data-reduce-animations="true"]`).
+ */
+@variant reduce-motion {
+  /* The pips scale in and out; the chips and the overflow trigger already
+   * only fade, so they keep their timing untouched. Only the scale goes. The
+   * display swap keeps its timed exit so the fade-out still paints before
+   * `display: none` lands (lesson #6182). */
+  .toolbar-badge[data-visible="true"],
+  .toolbar-badge {
+    transform: none;
+
+    @starting-style {
+      transform: none;
+    }
+  }
+}
