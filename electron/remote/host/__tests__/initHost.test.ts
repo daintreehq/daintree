@@ -7,7 +7,9 @@ const { backends, ptyRef } = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../services/HelpSessionService.js", () => ({
-  helpSessionService: { getAssistantBackends: (projectId: string) => backends.get(projectId) ?? [] },
+  helpSessionService: {
+    getAssistantBackends: (projectId: string) => backends.get(projectId) ?? [],
+  },
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyRef.current }));
 vi.mock("../../../ipc/dispatcher.js", () => ({ getIpcDispatcher: () => ({}) }));
@@ -181,7 +183,9 @@ describe("initRemoteHostsHost assistant liveness (#13349)", () => {
     const link = fakeLink();
     server.attach(link);
     link.open("view-1", "p1");
-    backends.set("p1", [{ terminalId: "t-help", webContentsId: registry.getRemote()[0]!.handle, slot: 0 }]);
+    backends.set("p1", [
+      { terminalId: "t-help", webContentsId: registry.getRemote()[0]!.handle, slot: 0 },
+    ]);
     pty.live.add("t-help");
     pty.emit("spawn-result", "t-help", { success: true });
 

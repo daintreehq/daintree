@@ -767,7 +767,8 @@ describe("remote session wiring", () => {
         ...options,
         assistantLive: (endpoint) => live.get(endpoint.handle) === endpoint.projectId,
       });
-    const handleOf = (projectId: string) => getEndpointRegistry().getForProject(projectId)[0]!.handle;
+    const handleOf = (projectId: string) =>
+      getEndpointRegistry().getForProject(projectId)[0]!.handle;
 
     /** The host's side of each link, to say things its SessionHost wouldn't. */
     function captureHostSessions(): LinkSession[] {
