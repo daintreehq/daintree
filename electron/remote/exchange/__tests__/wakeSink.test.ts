@@ -26,7 +26,7 @@ const lane: ReceiverActor = {
   kind: "receiver",
   hostId: "host-1",
   laneId: "lane-assistant",
-  enrollmentGeneration: 1,
+  enrollmentGeneration: "gen-1",
 };
 const key: ExchangeKey = { senderId: "shell-a", messageId: "msg-1" };
 
@@ -45,7 +45,7 @@ describe("exchangeWakeSink", () => {
       messageId: "msg-1",
       contextId: "ctx-1",
       referenceTaskIds: [],
-      receiver: { hostId: lane.hostId, laneId: lane.laneId, enrollmentGeneration: 1 },
+      receiver: { hostId: lane.hostId, laneId: lane.laneId, enrollmentGeneration: "gen-1" },
       body: "hello",
     });
   });
@@ -63,7 +63,7 @@ describe("exchangeWakeSink", () => {
   });
 
   it("refuses to reserve an exchange this lane can't see", () => {
-    const other: ReceiverActor = { ...lane, enrollmentGeneration: 2 };
+    const other: ReceiverActor = { ...lane, enrollmentGeneration: "gen-2" };
     expect(exchangeWakeSink(store, other, key).beforeType()).toBe(false);
   });
 

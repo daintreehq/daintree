@@ -28,8 +28,11 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     getRunningLaneSession: (projectId: string, slot: number) =>
       running.get(`${projectId}:${slot}`) ?? null,
     addSessionEndedListener: () => () => {},
+    setMessagingReach: () => {},
   },
 }));
+vi.mock("../../../services/DriveLeaseService.js", () => ({ peekDriveLeaseService: () => null }));
+vi.mock("../../metrics/hostOps.js", () => ({ callerDrives: () => false }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty.client }));
 
 import { CHANNELS } from "../../../ipc/channels.js";
