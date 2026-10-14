@@ -34,10 +34,13 @@ import {
   CONFIRMATIONS_BLOCK_END,
   CONFIRMATIONS_BLOCK_START,
   DAINTREE_DOCS_MCP_URL,
+  MESSAGING_BLOCK_END,
+  MESSAGING_BLOCK_START,
   RUNBOOKS_BLOCK_END,
   RUNBOOKS_BLOCK_START,
   RUNBOOKS_MCP_SERVER_NAME,
   buildConfirmationsAddendum,
+  buildMessagingAddendum,
   buildRunbooksAddendum,
   resolveRunbooksMcpUrl,
 } from "./helpSessionRunbooks.js";
@@ -680,6 +683,7 @@ export class HelpSessionService {
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
+  private messagingReach: (() => boolean) | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
@@ -692,6 +696,11 @@ export class HelpSessionService {
 
   setProjectMetadataReader(reader: ProjectMetadataReader | null): void {
     this.projectMetadataReader = reader;
+  }
+
+  /** Whether cross-host messaging can reach a lane on this machine; null where it never can. */
+  setMessagingReach(reach: (() => boolean) | null): void {
+    this.messagingReach = reach;
   }
 
   /**
@@ -1408,6 +1417,10 @@ export class HelpSessionService {
               settings.daintreeConfirmations,
               store.get("agentSettings")?.globalSkipPermissions
             )
+        );
+        await this.writeMessagingAddendum(
+          sessionPath,
+          settings.daintreeControl && this.messagingReach?.() === true
         );
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so
@@ -3307,6 +3320,17 @@ export class HelpSessionService {
   private async writeConfirmationsAddendum(sessionPath: string, skipped: boolean): Promise<void> {
     const markers = { start: CONFIRMATIONS_BLOCK_START, end: CONFIRMATIONS_BLOCK_END };
     const body = skipped ? buildConfirmationsAddendum() : null;
+    await Promise.all(
+      ["CLAUDE.md", "AGENTS.md"].map((name) =>
+        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
+      )
+    );
+  }
+
+  /** The wake line's meaning (#13333), only where a wake can reach this lane. */
+  private async writeMessagingAddendum(sessionPath: string, reachable: boolean): Promise<void> {
+    const markers = { start: MESSAGING_BLOCK_START, end: MESSAGING_BLOCK_END };
+    const body = reachable ? buildMessagingAddendum() : null;
     await Promise.all(
       ["CLAUDE.md", "AGENTS.md"].map((name) =>
         this.writeManagedBlock(path.join(sessionPath, name), markers, body)

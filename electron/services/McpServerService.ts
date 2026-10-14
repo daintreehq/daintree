@@ -45,7 +45,12 @@ import {
   isAgentPaneInWorkspace,
 } from "./mcp-server/terminalStatus.js";
 import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
-import { TerminalNotifyService, paneNotifyKey } from "./mcp-server/terminalNotify.js";
+import {
+  TerminalNotifyService,
+  helpNotifyKey,
+  paneNotifyKey,
+  type LaneWake,
+} from "./mcp-server/terminalNotify.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
 import type { PaneNotifyState } from "../../shared/types/terminalNotify.js";
 import { broadcastToProjectRenderers } from "../ipc/utils.js";
@@ -670,6 +675,18 @@ export class McpServerService {
 
   getPaneNotifyState(terminalId: string): PaneNotifyState | null {
     return this.terminalNotify.getPaneState(terminalId);
+  }
+
+  /** Tell an assistant lane a message is waiting, on the same line its notices use (#13333). */
+  queueLaneWake(
+    lane: { helpSessionId: string; terminalId: string; projectId: string },
+    wake: LaneWake
+  ): void {
+    this.terminalNotify.enqueueWake(
+      { key: helpNotifyKey(lane.helpSessionId), terminalId: lane.terminalId },
+      lane.projectId,
+      wake
+    );
   }
 
   /** The pane's own "stop": every notice it has pending goes, and nothing more is typed. */

@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import { setAssistantMessagingRuntime } from "../../services/mcp-server/assistantMessagingTools.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
@@ -10,10 +11,12 @@ import { getPtyClient } from "../../window/serviceRefs.js";
 import { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
 import { AssistantExchangeStore } from "../exchange/AssistantExchangeStore.js";
 import type { LinkSession } from "../link/session.js";
+import { callerDrives, type FleetCaller } from "../metrics/hostOps.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { AssistantExchangeClient } from "./AssistantExchangeClient.js";
 import { AssistantInbox } from "./AssistantInbox.js";
-import { AssistantMessagingPolicy } from "./AssistantMessagingPolicy.js";
+import { AssistantLaneWaker } from "./AssistantLaneWaker.js";
+import { AssistantMessagingPolicy, type MessagingShell } from "./AssistantMessagingPolicy.js";
 import { AssistantMessagingRuntime } from "./AssistantMessagingRuntime.js";
 
 /** What the messaging controls need beyond the policy itself. */
@@ -28,6 +31,7 @@ declare module "../runtime.js" {
   interface RemoteServices {
     assistantMessagingPolicy: AssistantMessagingPolicy;
     assistantMessagingSurface: AssistantMessagingSurface;
+    assistantLaneWaker: AssistantLaneWaker;
   }
 }
 
@@ -50,9 +54,16 @@ function openExchangeDatabase(): Database.Database | null {
   }
 }
 
+function fleetCallerFor(shell: MessagingShell): FleetCaller {
+  return shell.kind === "local"
+    ? { kind: "local" }
+    : { kind: "remote", sessionId: shell.linkSessionId };
+}
+
 /**
- * Registers the process's one messaging policy, and the runtime an enrolled
- * lane's own tools run against; the returned teardown disposes both.
+ * Registers the process's one messaging policy, its lane waker, and the
+ * runtime an enrolled lane's own tools run against; the returned teardown
+ * disposes them all.
  */
 export function installAssistantMessagingPolicy(
   deps: AssistantMessagingPolicyInstallDeps
@@ -93,7 +104,27 @@ export function installAssistantMessagingPolicy(
     hadHosts = hasHosts;
     push();
   });
-  const unregister = registerRemoteService("assistantMessagingPolicy", policy);
+  const waker = new AssistantLaneWaker({
+    policy,
+    shellDrives: (projectId, shell) =>
+      callerDrives(peekDriveLeaseService()?.getHolder(projectId) ?? null, fleetCallerFor(shell)),
+    // Loaded on use, as elsewhere in remote code; enqueueing rechecks the lane itself.
+    queue: (lane, wake) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) => mcpServerService.queueLaneWake(lane, wake))
+        .catch((err: unknown) => {
+          console.error("[AssistantLaneWaker] queueing a wake failed:", err);
+          try {
+            wake.report({ kind: "unavailable", reason: "notices-off" });
+          } catch (reportErr) {
+            console.error("[AssistantLaneWaker] recording a wake outcome failed:", reportErr);
+          }
+        });
+    },
+  });
+  const unregisterPolicy = registerRemoteService("assistantMessagingPolicy", policy);
+  const unregisterWaker = registerRemoteService("assistantLaneWaker", waker);
+  helpSessionService.setMessagingReach(() => policy.isSupported());
   const unregisterSurface = registerRemoteService("assistantMessagingSurface", {
     hasHosts: deps.hasHosts,
     revision: () => revision,
@@ -115,7 +146,9 @@ export function installAssistantMessagingPolicy(
     stopListening();
     unregisterRuntime();
     unregisterSurface();
-    unregister();
+    helpSessionService.setMessagingReach(null);
+    unregisterWaker();
+    unregisterPolicy();
     offHosts();
     offPolicy();
     watched?.off("spawn-result", reconcile);
