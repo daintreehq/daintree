@@ -452,9 +452,13 @@ function ManageGroupsDialog({
   // Back from Rename or Delete, focus returns to that group's row — or, when it
   // was deleted, to the row now in its place — instead of the top of the list.
   // Placed before the dialog's own first-field pass, which yields to it.
+  // Read once, on mount: they describe where this opening should land, and a
+  // later change to either is not a reason to move focus again.
   const focusTarget = useRef(focusGroupId);
+  const focusTargetIndex = useRef(focusIndex);
   useEffect(() => {
     const groupId = focusTarget.current;
+    const index = focusTargetIndex.current;
     focusTarget.current = undefined;
     if (!groupId) return;
     const list = listRef.current;
@@ -462,8 +466,7 @@ function ManageGroupsDialog({
     const rows = [...list.querySelectorAll<HTMLElement>("[data-group-row]")];
     // A deleted group's slot now holds the group after it; deleting the last
     // one leaves the one before it.
-    const fallback =
-      focusIndex !== undefined ? rows[Math.min(focusIndex, rows.length - 1)] : rows[0];
+    const fallback = index !== undefined ? rows[Math.min(index, rows.length - 1)] : rows[0];
     const row =
       rows.find((candidate) => candidate.dataset.groupRow === groupId) ?? fallback ?? null;
     row?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();

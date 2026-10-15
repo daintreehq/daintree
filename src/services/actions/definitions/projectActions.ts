@@ -684,7 +684,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           await projectGroupsClient.setMembership(projectId, group.id);
         } catch (error) {
           throw new Error(
-            `Created group "${group.name}" (${group.id}), but couldn't move the project into it: ${formatErrorMessage(error, "unknown error")}. Use project.setGroup to retry.`
+            `Created group "${group.name}" (${group.id}), but couldn't move the project into it: ${formatErrorMessage(error, "unknown error")}. Use project.setGroup to retry.`,
+            { cause: error }
           );
         }
       }
