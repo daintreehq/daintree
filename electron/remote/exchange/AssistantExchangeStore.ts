@@ -27,6 +27,7 @@ export const EXCHANGE_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const MAX_ID_LENGTH = 256;
 const MAX_REFERENCE_TASK_IDS = 64;
 const MAX_LIST_LIMIT = 500;
+const TERMINAL_STATES_SQL = [...TERMINAL_EXCHANGE_STATES].map((state) => `'${state}'`).join(", ");
 const OUTCOME_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/;
 
 /** One record's change, as committed: who sent it and the revision it now holds. */
@@ -42,6 +43,27 @@ const changeListeners = new Set<(change: ExchangeChange) => void>();
  * whichever store wrote it: the host's link handlers, the receiving lane's
  * own tools and the sweep each hold their own store over the one database.
  */
+let recoveredThisProcess = false;
+
+/**
+ * Closes what an earlier run of this process left open (`failOrphaned`), once
+ * per process. Every caller opening a store runs it before wiring anything
+ * that admits, so the first one does it while no exchange of this run exists.
+ * A failure leaves those records open until their TTL, as before, and is
+ * never retried: by then this run may have admitted exchanges of its own.
+ */
+export function closeExchangesLeftOpen(store: AssistantExchangeStore): void {
+  if (recoveredThisProcess) return;
+  recoveredThisProcess = true;
+  try {
+    while (store.failOrphaned().hasMore) {
+      // Each batch fails what it read, so the next reads past it.
+    }
+  } catch (error) {
+    console.warn("[AssistantExchanges] Couldn't close exchanges left open by a restart:", error);
+  }
+}
+
 export function onExchangeChanged(listener: (change: ExchangeChange) => void): () => void {
   changeListeners.add(listener);
   return () => {
@@ -156,6 +178,7 @@ type ExchangeEvent =
   | "cancel-requested"
   | "canceled"
   | "expired"
+  | "orphaned"
   | "purged";
 
 const sha256 = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
@@ -547,6 +570,36 @@ export class AssistantExchangeStore {
         reset,
       };
     }, true);
+  }
+
+  /**
+   * Fails every exchange still open, with outcome `host_restarted`. Only for
+   * a store just opened, before this process admits anything: a record
+   * outlives the process that admitted it, but its enrollment, its body and
+   * any wake owed lived only in that process's memory, so nothing can answer
+   * it now, and without this it reads as under way until its TTL. Bounded per
+   * call; `hasMore` asks for another.
+   */
+  failOrphaned(limit = MAX_LIST_LIMIT): { failed: number; hasMore: boolean } {
+    const batch = requireLimit(limit);
+    return this.write((sqlite) => {
+      const now = this.now();
+      const open = this.statement(
+        sqlite,
+        `SELECT * FROM assistant_exchanges WHERE tombstoned_at IS NULL AND state NOT IN (${TERMINAL_STATES_SQL}) ORDER BY revision LIMIT ?`
+      ).all(batch + 1) as ExchangeRow[];
+      const failing = open.slice(0, batch);
+      for (const row of failing) {
+        this.apply(
+          sqlite,
+          row,
+          "orphaned",
+          { state: "failed", outcome: "host_restarted", terminal_at: now },
+          now
+        );
+      }
+      return { failed: failing.length, hasMore: open.length > batch };
+    });
   }
 
   /**

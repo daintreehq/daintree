@@ -14,6 +14,7 @@ import { getPtyClient } from "../../window/serviceRefs.js";
 import { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
 import {
   AssistantExchangeStore,
+  closeExchangesLeftOpen,
   EXCHANGE_RETRY_WINDOW_MS,
 } from "../exchange/AssistantExchangeStore.js";
 import type { LinkSession } from "../link/session.js";
@@ -108,6 +109,7 @@ export function installAssistantMessagingPolicy(
   deps: AssistantMessagingPolicyInstallDeps
 ): () => void {
   const store = new AssistantExchangeStore(openExchangeDatabase());
+  closeExchangesLeftOpen(store);
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),

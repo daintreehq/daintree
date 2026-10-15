@@ -431,6 +431,41 @@ describe("AssistantExchangeStore", () => {
       expect(record.tombstonedAt).toBe(clock);
     });
 
+    it("fails what an earlier run of the process left open, in batches, and nothing settled (#13392)", () => {
+      const keyOf = (messageId: string) => ({ senderId: "shell-a", messageId });
+      const create = (messageId: string) =>
+        store.create(shellA, input({ messageId, contextId: `ctx-${messageId}` }));
+      create("old");
+      store.setState(lane, keyOf("old"), "working");
+      clock += 24 * HOUR;
+      store.sweep();
+      create("working");
+      store.setState(lane, keyOf("working"), "working");
+      create("asking");
+      store.setState(lane, keyOf("asking"), "input-required");
+      create("cancelling");
+      store.recordDelivery(lane, keyOf("cancelling"), "accepted");
+      store.requestCancel(shellA, keyOf("cancelling"));
+      create("refused");
+      store.setState(lane, keyOf("refused"), "rejected");
+      const cursor = store.listChangesSince(shellA, 0).cursor;
+
+      expect(store.failOrphaned(2)).toEqual({ failed: 2, hasMore: true });
+      expect(store.failOrphaned(2)).toEqual({ failed: 1, hasMore: false });
+      expect(store.failOrphaned(2)).toEqual({ failed: 0, hasMore: false });
+
+      // A Shell reading on from its cursor sees exactly what changed, and why.
+      const changed = store.listChangesSince(shellA, cursor).records;
+      expect(changed.map((record) => [record.messageId, record.state, record.outcome])).toEqual([
+        ["working", "failed", "host_restarted"],
+        ["asking", "failed", "host_restarted"],
+        ["cancelling", "failed", "host_restarted"],
+      ]);
+      expect(store.get(shellA, keyOf("cancelling"))?.cancelRequestedAt).not.toBeNull();
+      expect(store.get(shellA, keyOf("refused"))?.state).toBe("rejected");
+      expect(store.get(shellA, keyOf("old"))?.outcome).toBe("expired");
+    });
+
     it("keeps a terminal state when it expires", () => {
       store.create(shellA, input());
       store.setState(lane, keyA, "rejected");

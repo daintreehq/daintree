@@ -445,7 +445,7 @@ export async function installAssistantExchangeHost(
 ): Promise<() => void> {
   const [
     { getSharedSqlite },
-    { AssistantExchangeStore, onExchangeChanged },
+    { AssistantExchangeStore, closeExchangesLeftOpen, onExchangeChanged },
     { getRemoteService, registerRemoteService },
     { exchangeWakeSink },
     { AssistantHostOutbox },
@@ -462,6 +462,7 @@ export async function installAssistantExchangeHost(
     return () => {};
   }
   const store = new AssistantExchangeStore(sqlite);
+  closeExchangesLeftOpen(store);
   const sweep = (): void => {
     try {
       for (let batch = 0; batch < MAX_SWEEP_BATCHES && store.sweep().hasMore; batch++) {
