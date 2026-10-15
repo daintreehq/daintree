@@ -155,6 +155,10 @@ async function observeVanishedTerminals(
     return (
       panel !== undefined &&
       isPtyPanel(panel) &&
+      // The assistant's own pane: the host keeps it off the project's list and
+      // its reconnect probe answers "gone" for a live one, so neither can say
+      // it went. Its lane checks for itself (HelpSessionController).
+      panel.location !== "overlay" &&
       // Following, this screen's own panes (the assistant) are never on the
       // host's project list, and say nothing about the driver.
       (!options.follow || followsHostLayout(panel)) &&

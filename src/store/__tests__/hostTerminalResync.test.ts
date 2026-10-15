@@ -149,6 +149,18 @@ describe("resyncHostTerminals", () => {
     expect(store.removePanel).toHaveBeenCalledWith("t-trashed", { backendAlreadyClosed: true });
   });
 
+  it("never calls the assistant's own pane gone: its probe says so even while it runs (#13392)", async () => {
+    panel("t-assistant", { location: "overlay", removeOnExit: true });
+    getForProject.mockResolvedValue([]);
+    reconnectBulk.mockResolvedValue({ "t-assistant": { exists: false } });
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(reconnectBulk).not.toHaveBeenCalled();
+    expect(store.setRuntimeStatus).not.toHaveBeenCalled();
+    expect(store.removePanel).not.toHaveBeenCalled();
+  });
+
   it("ignores an answer about a terminal that restarted or exited while it was being asked", async () => {
     panel("t-restarted", { restartKey: 0 });
     panel("t-exited-meanwhile");
