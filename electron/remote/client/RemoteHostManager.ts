@@ -308,7 +308,10 @@ export class HostConnection {
     if (!this.started) return "stopped";
     const link = this.link.getState();
     if (link.status === "version-mismatch") return "version-mismatch";
-    if (link.status === "unreachable" && link.hostModeOff) return "host-mode-off";
+    // Still retrying, it's a host restarting rather than one switched off.
+    if (link.status === "unreachable" && link.hostModeOff && link.retryAt === null) {
+      return "host-mode-off";
+    }
     if (link.status === "unreachable" && link.retryAt === null) return "stopped-retrying";
     return this.unavailableEnvelope() === null ? "ready" : null;
   }
@@ -403,7 +406,7 @@ export class HostConnection {
           status: "unreachable",
           lastSeenAt: state.lastSeenAt ?? this.descriptor()?.lastSeenAt ?? null,
           detail: state.detail,
-          ...(state.hostModeOff ? { hostModeOff: true as const } : {}),
+          ...(state.hostModeOff && state.retryAt === null ? { hostModeOff: true as const } : {}),
           ...(state.retryAt === null ? { stoppedRetrying: true as const } : {}),
         };
       case "version-mismatch":

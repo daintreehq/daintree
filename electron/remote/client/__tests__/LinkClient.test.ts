@@ -432,3 +432,81 @@ describe("LinkClient session loss", () => {
     }
   });
 });
+
+describe("LinkClient host restart (#13392)", () => {
+  it("keeps dialling a host it was just connected to while it restarts, and only parks once it's been gone a while", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "r.sock");
+    let peer: net.Socket | null = null;
+    const server = net.createServer((socket) => {
+      peer = socket;
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const welcome: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+          };
+          socket.write(Buffer.from(encodeFrame(messageToFrame(welcome))));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    // The link's own timestamps are wall clock, so the test moves time by an offset.
+    let offset = 0;
+    let hostModeOff = false;
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    const transport: LinkTransport & { opens: number } = {
+      opens: 0,
+      async open(signal) {
+        transport.opens++;
+        // A restarting host removes host.json on the way down and writes it on the way up.
+        if (hostModeOff) {
+          throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+        }
+        return direct.open(signal);
+      },
+    };
+    try {
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+        random: () => 0,
+        now: () => Date.now() + offset,
+      });
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+
+      hostModeOff = true;
+      peer!.destroy();
+      const opensAtDrop = transport.opens;
+      await waitFor(() => transport.opens >= opensAtDrop + 3);
+      expect(client.getState()).toMatchObject({
+        status: "unreachable",
+        hostModeOff: true,
+        retryAt: expect.any(Number),
+      });
+      hostModeOff = false;
+      await waitFor(() => client!.getState().status === "connected");
+
+      // Down again, and still not in Host mode long after it was last heard from.
+      hostModeOff = true;
+      offset = 3 * 60_000;
+      peer!.destroy();
+      await waitFor(() => client!.getState().status === "unreachable");
+      expect(client.getState()).toMatchObject({ hostModeOff: true, retryAt: null });
+      const parkedAt = transport.opens;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(transport.opens).toBe(parkedAt);
+    } finally {
+      await client?.stop();
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+});
