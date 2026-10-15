@@ -219,20 +219,24 @@ describe("BrowserToolbar favicon and delete", () => {
     expect(img).toBeTruthy();
   });
 
-  it("delete button calls removeUrl on mousedown", () => {
+  it("remove control calls removeUrl on click, not on press", () => {
     const { container } = renderToolbar();
     openDropdown(container.querySelector("[data-testid='browser-address-bar']")! as HTMLElement);
-    const deleteButtons = container.querySelectorAll("[aria-label^='Remove']");
-    expect(deleteButtons.length).toBeGreaterThan(0);
-    fireEvent.mouseDown(deleteButtons[0]!);
+    const removeControls = container.querySelectorAll("[data-testid='browser-history-remove']");
+    expect(removeControls.length).toBeGreaterThan(0);
+    // A press dragged off the control takes nothing out.
+    fireEvent.mouseDown(removeControls[0]!);
+    expect(mockRemoveUrl).not.toHaveBeenCalled();
+    fireEvent.click(removeControls[0]!);
     expect(mockRemoveUrl).toHaveBeenCalledWith("proj1", "http://localhost:3000/");
   });
 
-  it("delete button does not navigate on click", () => {
+  it("remove control does not navigate", () => {
     const { container } = renderToolbar();
     openDropdown(container.querySelector("[data-testid='browser-address-bar']")! as HTMLElement);
-    const deleteButtons = container.querySelectorAll("[aria-label^='Remove']");
-    fireEvent.mouseDown(deleteButtons[0]!);
+    const removeControls = container.querySelectorAll("[data-testid='browser-history-remove']");
+    fireEvent.mouseDown(removeControls[0]!);
+    fireEvent.click(removeControls[0]!);
     expect(defaultProps.onNavigate).not.toHaveBeenCalled();
   });
 });
@@ -493,15 +497,18 @@ describe("BrowserToolbar ARIA semantics", () => {
     });
   });
 
-  it("X removal button is hidden from the accessibility tree", () => {
+  it("remove control is hidden from the accessibility tree and never a tab stop", () => {
     const { container } = renderToolbar();
     openDropdown(container.querySelector("[data-testid='browser-address-bar']")! as HTMLElement);
 
-    const removeButtons = container.querySelectorAll("[aria-label^='Remove']");
-    expect(removeButtons.length).toBeGreaterThan(0);
-    removeButtons.forEach((button) => {
-      expect(button.getAttribute("aria-hidden")).toBe("true");
-      expect(button.getAttribute("tabindex")).toBe("-1");
+    const removeControls = container.querySelectorAll<HTMLElement>(
+      "[data-testid='browser-history-remove']"
+    );
+    expect(removeControls.length).toBeGreaterThan(0);
+    removeControls.forEach((control) => {
+      expect(control.getAttribute("aria-hidden")).toBe("true");
+      expect(control.closest("button")).toBeNull();
+      expect(control.tabIndex).toBe(-1);
     });
   });
 
@@ -545,15 +552,19 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(defaultProps.onNavigate).toHaveBeenCalledWith("http://localhost:3000/");
   });
 
-  it("X removal label uses display URL not the raw URL", () => {
+  it("pointer removal announces the display URL, not the raw URL", () => {
     const { container } = renderToolbar();
     openDropdown(container.querySelector("[data-testid='browser-address-bar']")! as HTMLElement);
 
-    const removeButton = container.querySelector("[aria-label^='Remove']");
-    expect(removeButton).toBeTruthy();
-    const label = removeButton!.getAttribute("aria-label")!;
-    expect(label).not.toContain("http://");
-    expect(label).toMatch(/^Remove .+ from history$/);
+    act(() => {
+      fireEvent.click(container.querySelector("[data-testid='browser-history-remove']")!);
+    });
+    const texts = Array.from(container.querySelectorAll('[role="status"]')).map(
+      (node) => node.textContent ?? ""
+    );
+    const announcement = texts.find((text) => text.startsWith("Removed "));
+    expect(announcement).toMatch(/^Removed .+ from history$/);
+    expect(announcement).not.toContain("http://");
   });
 });
 
