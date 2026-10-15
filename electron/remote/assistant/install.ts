@@ -5,6 +5,7 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import { setAssistantMessagingRuntime } from "../../services/mcp-server/assistantMessagingTools.js";
+import { setHostMessagingRuntime } from "../../services/mcp-server/hostMessagingTools.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
@@ -21,6 +22,7 @@ import { AssistantInbox } from "./AssistantInbox.js";
 import { AssistantLaneWaker } from "./AssistantLaneWaker.js";
 import { AssistantMessagingPolicy, type MessagingShell } from "./AssistantMessagingPolicy.js";
 import { AssistantMessagingRuntime } from "./AssistantMessagingRuntime.js";
+import { HubMessagingRuntime, type ObservedHost } from "./HubMessagingRuntime.js";
 
 /** What the messaging controls need beyond the policy itself. */
 export interface AssistantMessagingSurface {
@@ -35,6 +37,7 @@ declare module "../runtime.js" {
     assistantMessagingPolicy: AssistantMessagingPolicy;
     assistantMessagingSurface: AssistantMessagingSurface;
     assistantLaneWaker: AssistantLaneWaker;
+    assistantMessagingRuntime: AssistantMessagingRuntime;
   }
 }
 
@@ -43,8 +46,10 @@ export interface AssistantMessagingPolicyInstallDeps {
   isHostMessagingEnabled(hostId: HostId): boolean;
   hasHosts(): boolean;
   onHostsChanged(listener: () => void): () => void;
-  /** Told whenever a lane may have gained or lost its inbox tools. */
+  /** Told whenever a lane may have gained or lost its inbox or hub tools. */
   onAvailabilityChanged?(): void;
+  /** Every host this Shell knows, as last observed; what the hub's `host.list` reads. */
+  observeHosts?(): ObservedHost[];
 }
 
 function openExchangeDatabase(): Database.Database | null {
@@ -100,12 +105,14 @@ export function installAssistantMessagingPolicy(
     watchPty();
     push();
   });
-  // Only the first host arriving or the last one going changes what views show.
+  // Only the first host arriving or the last one going changes what views
+  // show, and whether the hub is offered its host tools.
   const offHosts = deps.onHostsChanged(() => {
     const hasHosts = deps.hasHosts();
     if (hasHosts === hadHosts) return;
     hadHosts = hasHosts;
     push();
+    deps.onAvailabilityChanged?.();
   });
   const waker = new AssistantLaneWaker({
     policy,
@@ -143,10 +150,22 @@ export function installAssistantMessagingPolicy(
     ? runtime.onAvailabilityChanged(onAvailabilityChanged)
     : () => {};
   const unregisterRuntime = setAssistantMessagingRuntime(runtime);
+  const hub = new HubMessagingRuntime({
+    policy,
+    getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
+    client: () => getRemoteService("assistantExchangeClient") ?? null,
+    hosts: () => deps.observeHosts?.() ?? [],
+  });
+  const unregisterHub = setHostMessagingRuntime(hub);
+  // The host's link calls hand accepted exchanges to the inbox through it.
+  const unregisterRuntimeService = registerRemoteService("assistantMessagingRuntime", runtime);
   // A view that mounted before the policy existed read it as unavailable.
   push();
   return () => {
     stopListening();
+    unregisterHub();
+    hub.dispose();
+    unregisterRuntimeService();
     unregisterRuntime();
     unregisterSurface();
     helpSessionService.setMessagingReach(null);

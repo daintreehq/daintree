@@ -67,6 +67,14 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     addSessionEndedListener: () => () => {},
     getRunningLaneSession: (projectId: string, slot: number) =>
       lanes.get(`${projectId}#${slot}`) ?? null,
+    getSessionLane: (sessionId: string) => {
+      for (const [key, lane] of lanes) {
+        if (lane.sessionId !== sessionId) continue;
+        const [projectId, slot] = key.split("#");
+        return { projectId: projectId!, slot: Number(slot) };
+      }
+      return null;
+    },
     getAssistantBackends: () => [],
     helpSessionRefsForWebContentsId: () => [],
     revokeByWebContentsId: async () => undefined,
@@ -304,6 +312,46 @@ function shellA(): AssistantExchangeClient {
 }
 
 describe("assistant exchanges over the real link", () => {
+  it(
+    "hands a message to the lane's inbox and the lane's reply back to the Shell (#13336)",
+    async () => {
+      db.sqlite = openFile("app.db");
+      const r = await harness();
+      prepare(r);
+      const generation = enrollOnHost(hostSessionOf(r, null), 0);
+      const sent = await shellA().send(HOST_ID, message({ generation }));
+      if (sent.status !== "accepted") throw new Error("not accepted");
+
+      const lane = requireRemoteService("assistantMessagingRuntime");
+      const inbox = lane.getInbox("help-proj-2-0", {});
+      if (!inbox.ok) throw new Error(`inbox refused: ${inbox.code}`);
+      expect(inbox.value.messages).toHaveLength(1);
+      expect(inbox.value.messages[0]).toMatchObject({
+        taskId: sent.record.taskId,
+        messageId: "m-1",
+        provenance: { sendingLane: "hub", hopCount: 1 },
+      });
+      expect(inbox.value.messages[0]!.untrustedBody).toContain("please rebase the release branch");
+      // Only the lane it was addressed to reads it.
+      expect(lane.getInbox("help-proj-2-1", {}).ok).toBe(false);
+
+      expect(
+        lane.reply("help-proj-2-0", {
+          taskId: sent.record.taskId,
+          state: "completed",
+          text: "rebased onto develop",
+        }).ok
+      ).toBe(true);
+      expect(await shellA().getResponses(HOST_ID, "m-1")).toEqual([
+        { state: "completed", text: "rebased onto develop", at: expect.any(Number) },
+      ]);
+      expect((await shellA().get(HOST_ID, "m-1"))?.state).toBe("completed");
+      // Another sender's exchange reads as having no replies at all.
+      expect(await shellA().getResponses(HOST_ID, "m-unknown")).toEqual([]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
   it(
     "lists, sends, reads, lists changes and cancels with no window bound to the host",
     async () => {

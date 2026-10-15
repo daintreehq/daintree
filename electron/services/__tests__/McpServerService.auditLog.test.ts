@@ -594,6 +594,35 @@ describe("McpServerService", () => {
       });
     });
 
+    it("keeps a hub message's text out of the audit even when the call is refused (#13336)", async () => {
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      await client
+        .callTool({
+          name: "host.sendMessage",
+          arguments: {
+            hostId: "studio",
+            projectId: "BODY-SENTINEL",
+            slot: 0,
+            generation: "BODY-SENTINEL",
+            text: "BODY-SENTINEL ok",
+          },
+        })
+        .catch(() => {});
+
+      const records = getAuditRecords(service);
+      expect(records).toHaveLength(1);
+      expect(records[0].toolId).toBe("host.sendMessage");
+      expect(records[0].argsSummary).not.toContain("BODY-SENTINEL");
+      expect(JSON.parse(records[0].argsSummary)).toMatchObject({
+        hostId: "studio",
+        textChars: "BODY-SENTINEL ok".length,
+      });
+    });
+
     it("records error and confirmation-pending dispatches separately", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
         if (payload.actionId === "recipe.run" && !payload.confirmed) {

@@ -260,7 +260,16 @@ function startClient(options: StartRemoteHostsOptions): void {
         client.registry.get(hostId)?.assistantMessagingEnabled === true,
       hasHosts: () => client.registry.list().length > 0,
       onHostsChanged: (listener) => client.registry.onChange(listener),
-      // An enrolled lane's own inbox tools come and go with its enrollment.
+      observeHosts: () =>
+        client.client.list().map(({ descriptor, connection, summary }) => ({
+          hostId: descriptor.id,
+          name: descriptor.name,
+          assistantMessagingEnabled: descriptor.assistantMessagingEnabled,
+          connection,
+          lastSeenAt: descriptor.lastSeenAt,
+          summary,
+        })),
+      // An enrolled lane's inbox tools, and the hub's host tools, come and go with its enrollment.
       onAvailabilityChanged: () => {
         void import("../services/McpServerService.js")
           .then(({ mcpServerService }) => mcpServerService.notifyAssistantMessagingChanged())

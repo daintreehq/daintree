@@ -1,3 +1,4 @@
+import { HOST_MESSAGING_OUTCOMES } from "../../../shared/types/hostMessaging.js";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
@@ -146,6 +147,71 @@ function projectReply(result: unknown): Record<string, unknown> {
   };
 }
 
+const HOST_ID_PATTERN = /^[\w.-]{1,64}$/;
+const HOST_OUTCOMES: ReadonlySet<string> = new Set(HOST_MESSAGING_OUTCOMES);
+const TASK_STATES: ReadonlySet<string> = new Set([
+  "submitted",
+  "working",
+  "input-required",
+  "completed",
+  "canceled",
+  "failed",
+  "rejected",
+]);
+
+function auditHostId(value: unknown): string | null {
+  return typeof value === "string" && HOST_ID_PATTERN.test(value) ? value : null;
+}
+
+function fromSet(value: unknown, allowed: ReadonlySet<string>): string | null {
+  return typeof value === "string" && allowed.has(value) ? value : null;
+}
+
+/** A hub tool's result as named outcome, host and task, never a message or reply (#13336). */
+function projectHostOutcome(
+  record: Record<string, unknown>,
+  extra: Record<string, unknown> = {}
+): Record<string, unknown> {
+  const task = asRecord(record.task);
+  return {
+    outcome: fromSet(record.outcome, HOST_OUTCOMES),
+    taskId: auditId(record.taskId ?? task?.taskId),
+    state: fromSet(task?.state, TASK_STATES),
+    ...extra,
+  };
+}
+
+function hostResultProjection(
+  extra: (record: Record<string, unknown>) => Record<string, unknown> = () => ({})
+): (result: unknown) => unknown {
+  return (result) => {
+    const record = asRecord(result);
+    return record === null ? { status: "unrecognized" } : projectHostOutcome(record, extra(record));
+  };
+}
+
+function projectHostList(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  if (record === null || !Array.isArray(record.hosts)) return { status: "unrecognized" };
+  return {
+    hostCount: record.hosts.length,
+    hostIds: record.hosts.map((host) => auditHostId(asRecord(host)?.hostId)),
+  };
+}
+
+function projectHostReplies(record: Record<string, unknown>): Record<string, unknown> {
+  const replies = Array.isArray(record.replies) ? record.replies : null;
+  return {
+    replyCount: replies?.length ?? null,
+    replyChars:
+      replies?.reduce<number>((sum, reply) => {
+        const text = asRecord(reply)?.untrustedText;
+        return sum + (typeof text === "string" ? text.length : 0);
+      }, 0) ?? null,
+    repliesOmitted: finiteNumber(record.repliesOmitted),
+  };
+}
+
 const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown> = new Map<
   string,
   (result: unknown) => unknown
@@ -156,6 +222,30 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
   ["terminal.waitUntilIdleBatch", projectHandbackCarrier],
   ["assistant.getInbox", projectInbox],
   ["assistant.reply", projectReply],
+  ["host.list", projectHostList],
+  [
+    "host.listAssistants",
+    hostResultProjection((record) => ({
+      laneCount: Array.isArray(record.lanes) ? record.lanes.length : null,
+    })),
+  ],
+  [
+    "host.sendMessage",
+    hostResultProjection((record) => ({
+      wait: typeof record.wait === "string" ? record.wait : null,
+    })),
+  ],
+  ["host.getTask", hostResultProjection(projectHostReplies)],
+  [
+    "host.listTasks",
+    hostResultProjection((record) => ({
+      taskCount: Array.isArray(record.tasks) ? record.tasks.length : null,
+      cursor: finiteNumber(record.cursor),
+      hasMore: record.hasMore === true,
+      reset: record.reset === true,
+    })),
+  ],
+  ["host.cancelTask", hostResultProjection()],
 ]);
 
 /** The value to summarize for `toolId`'s audit record: its projection when it has one, else the result as is. */
@@ -181,6 +271,53 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
       const record = asRecord(args);
       return { cursor: finiteNumber(record?.cursor), limit: finiteNumber(record?.limit) };
     },
+  ],
+  ["host.list", () => ({})],
+  ["host.listAssistants", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
+  [
+    "host.sendMessage",
+    (args) => {
+      const record = asRecord(args);
+      return {
+        hostId: auditHostId(record?.hostId),
+        slot: finiteNumber(record?.slot),
+        taskId: auditId(record?.taskId),
+        contextId: auditId(record?.contextId),
+        referenceTaskIds: Array.isArray(record?.referenceTaskIds)
+          ? record.referenceTaskIds.length
+          : null,
+        waitMs: finiteNumber(record?.waitMs),
+        textChars: typeof record?.text === "string" ? record.text.length : null,
+      };
+    },
+  ],
+  [
+    "host.getTask",
+    (args) => ({
+      hostId: auditHostId(asRecord(args)?.hostId),
+      taskId: auditId(asRecord(args)?.taskId),
+    }),
+  ],
+  [
+    "host.listTasks",
+    (args) => {
+      const record = asRecord(args);
+      return {
+        hostId: auditHostId(record?.hostId),
+        cursor: finiteNumber(record?.cursor),
+        limit: finiteNumber(record?.limit),
+        states: Array.isArray(record?.states)
+          ? record.states.map((state) => fromSet(state, TASK_STATES))
+          : null,
+      };
+    },
+  ],
+  [
+    "host.cancelTask",
+    (args) => ({
+      hostId: auditHostId(asRecord(args)?.hostId),
+      taskId: auditId(asRecord(args)?.taskId),
+    }),
   ],
   [
     "assistant.reply",

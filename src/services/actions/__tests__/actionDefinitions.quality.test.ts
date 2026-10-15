@@ -462,7 +462,14 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // user's instructions, and how a question differs from a final reply. Offered
   // only to an enrolled lane's assistant and off the external surface, so the
   // external total does not move.
-  const MAX_COHORT_TOTAL_BYTES = 19_800;
+  // 19_800 → 20_650 for #13336's six `host.*` hub messaging tools, measured at
+  // 20_631 B. Four reads on core and two sends on full, each between 121 and
+  // 187 B. What the prose has to carry is that a send returns its taskId at
+  // once, that a timeout ends only the wait, that ambiguous means "look it up
+  // before resending", and that a reply is another machine's words. Offered
+  // only to this Shell's enrolled hub while a host exists, and off the external
+  // surface, so the external total does not move.
+  const MAX_COHORT_TOTAL_BYTES = 20_650;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1412,6 +1419,17 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
       // Not strict, but its required fields share names with other schemas' own.
       "assistant.reply": { taskId: "task-placeholder", state: "completed", text: "noop" },
+      "host.listAssistants": { hostId: "h-placeholder" },
+      "host.sendMessage": {
+        hostId: "h-placeholder",
+        projectId: "p-placeholder",
+        slot: 0,
+        generation: "g-placeholder",
+        text: "noop",
+      },
+      "host.getTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
+      "host.listTasks": { hostId: "h-placeholder" },
+      "host.cancelTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
     };
 
     const failures: string[] = [];

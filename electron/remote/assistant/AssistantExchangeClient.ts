@@ -1,7 +1,10 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { EXCHANGE_RETRY_WINDOW_MS, EXCHANGE_TTL_MS } from "../exchange/AssistantExchangeStore.js";
-import type { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
+import type {
+  AssistantExchangeJournal,
+  JournalEntry,
+} from "../exchange/AssistantExchangeJournal.js";
 import type { CreateDisposition, ExchangeChanges, ExchangeRecord } from "../exchange/types.js";
 import type { LinkSession } from "../link/session.js";
 import type { AssistantMessagingPolicy, MessagingRequestKind } from "./AssistantMessagingPolicy.js";
@@ -10,11 +13,13 @@ import {
   ExchangeChangedPayloadSchema,
   ExchangeChangesSchema,
   ExchangeRecordSchema,
+  ExchangeResponsesSchema,
   LaneListSchema,
   MAX_EXCHANGE_PAGE,
   SendResultSchema,
   type AssistantSendPayload,
   type EnrolledLane,
+  type ExchangeResponse,
 } from "./linkMethods.js";
 
 export interface AssistantExchangeClientDeps {
@@ -224,6 +229,25 @@ export class AssistantExchangeClient {
     const session = await this.open(hostId);
     await this.authenticate(hostId, session);
     return this.listPage(hostId, session, cursor, limit);
+  }
+
+  /**
+   * The answers the receiving lane gave one of this Shell's exchanges, while
+   * the host still holds them. A host from before the call throws UNSUPPORTED.
+   */
+  async getResponses(hostId: HostId, messageId: string): Promise<ExchangeResponse[]> {
+    const session = await this.open(hostId);
+    await this.authenticate(hostId, session);
+    const parsed = ExchangeResponsesSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.GET_RESPONSES, { messageId })
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.GET_RESPONSES);
+    return parsed.data.responses;
+  }
+
+  /** What this Shell's journal last knew of an exchange, without asking the host. */
+  known(hostId: HostId, messageId: string): JournalEntry | null {
+    return this.deps.journal.get(hostId, messageId);
   }
 
   /** Ask the host to cancel. Once delivery may have happened this is only a recorded request. */

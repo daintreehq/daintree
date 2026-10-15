@@ -27,6 +27,7 @@ import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
 import { ASSISTANT_MESSAGING_TOOL_IDS } from "../../../shared/types/assistantMessaging.js";
+import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -148,6 +149,9 @@ export function shouldExposeTool(
   if (ASSISTANT_MESSAGING_TOOL_IDS.has(entry.id) && session.assistantMessaging !== true) {
     return false;
   }
+  if (HOST_MESSAGING_TOOL_IDS.has(entry.id) && session.hubMessaging !== true) {
+    return false;
+  }
   return (
     isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
     isApprovalRequestable(tier, entry.id, session.paneApproval === true)
@@ -188,6 +192,12 @@ export interface SessionSurfacePolicy {
    * read live per listing, and as `=== true`.
    */
   assistantMessaging?: boolean;
+  /**
+   * Whether this session is this Shell's enrolled hub and a host exists
+   * (#13336). Only then are the `host.*` messaging tools offered; read live
+   * per listing, and as `=== true`.
+   */
+  hubMessaging?: boolean;
 }
 
 /**
