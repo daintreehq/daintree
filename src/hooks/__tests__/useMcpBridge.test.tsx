@@ -87,6 +87,7 @@ import {
   resolveMcpConfirmSubject,
   resolveWorktreeDeleteGate,
   tagMcpSpawnSource,
+  unseenTimeoutResult,
   worktreeDeleteGateRefusal,
 } from "../useMcpBridge";
 import type { WorktreeDeletePreviewOutcome } from "@/components/Worktree/worktreeDeletePreview";
@@ -3565,5 +3566,20 @@ describe("forge write previews (#12118)", () => {
     expect(lines).toContain("Issue: #9");
     expect(lines.join("\n")).toContain("still broken");
     expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+  });
+});
+
+describe("unseenTimeoutResult (#13392)", () => {
+  it("tells an agent on a host where the prompt it raised actually was", () => {
+    const message = (result: ReturnType<typeof unseenTimeoutResult>) =>
+      result.ok ? "" : result.error.message;
+    const fromHost = unseenTimeoutResult("studio-03");
+    const fromHere = unseenTimeoutResult(undefined);
+
+    // Same code for every caller: only the account of where differs.
+    expect(fromHost).toMatchObject({ ok: false, error: { code: "CONFIRMATION_TIMEOUT" } });
+    expect(fromHere).toMatchObject({ ok: false, error: { code: "CONFIRMATION_TIMEOUT" } });
+    expect(message(fromHost)).toContain("machine the person works at");
+    expect(message(fromHere)).not.toContain("machine the person works at");
   });
 });

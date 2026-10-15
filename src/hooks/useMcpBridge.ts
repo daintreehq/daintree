@@ -109,15 +109,24 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
   },
 };
 
-/** The same timeout, when the view asking was reported hidden throughout: an observation, not a refusal. */
-const UNSEEN_TIMEOUT_RESULT: ActionDispatchResult = {
-  ok: false,
-  error: {
-    code: "CONFIRMATION_TIMEOUT",
-    message:
-      "Confirmation timed out without a response, and the Daintree view showing it was hidden the whole time, so nobody saw it to answer. Nothing was declined.",
-  },
-};
+/**
+ * The same timeout, when the view asking was reported hidden throughout: an
+ * observation, not a refusal. A view of a host's project is always on the
+ * machine the person works at, never the host, so the agent there is told
+ * where it was rather than left to guess its own screen.
+ */
+export function unseenTimeoutResult(hostId: string | undefined): ActionDispatchResult {
+  const where = hostId
+    ? "It opened on the machine the person works at, in the window showing this host's project, and that view was hidden the whole time"
+    : "The Daintree view showing it was hidden the whole time";
+  return {
+    ok: false,
+    error: {
+      code: "CONFIRMATION_TIMEOUT",
+      message: `Confirmation timed out without a response. ${where}, so nobody saw it to answer. Nothing was declined.`,
+    },
+  };
+}
 
 /**
  * How long a dispatch waits for an in-flight worktree snapshot (#13348): the
@@ -1371,7 +1380,9 @@ export function useMcpBridge(): void {
               if (decision === "timeout") {
                 window.electron.mcpBridge.sendDispatchActionResponse({
                   requestId,
-                  result: resolution.unseen ? UNSEEN_TIMEOUT_RESULT : TIMEOUT_RESULT,
+                  result: resolution.unseen
+                    ? unseenTimeoutResult(window.__DAINTREE_HOST_ID__?.id)
+                    : TIMEOUT_RESULT,
                   confirmationDecision: "timeout",
                 });
                 return;
