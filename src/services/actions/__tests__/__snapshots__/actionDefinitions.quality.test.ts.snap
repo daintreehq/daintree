@@ -2924,7 +2924,6 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
       "limit",
       "headroom",
       "remaining",
-      "codex",
       "host",
     ],
     "kind": "query",

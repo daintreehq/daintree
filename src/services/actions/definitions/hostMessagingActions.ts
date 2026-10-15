@@ -210,7 +210,6 @@ export function registerHostMessagingActions(actions: ActionRegistry): void {
       "limit",
       "headroom",
       "remaining",
-      "codex",
       "host",
     ],
     palette: { mode: "hidden" },
