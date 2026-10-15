@@ -20,8 +20,8 @@ const DELIVERY_LABEL: Record<AssistantExchangeDelivery, string> = {
   unconfirmed: "Couldn't confirm delivery",
   pending: "Not delivered",
   accepted: "Accepted by host",
-  "wake-typed": "Lane woken",
-  "inbox-fetched": "Read by lane",
+  "wake-typed": "Wake typed into lane",
+  "inbox-fetched": "Fetched by lane",
   "reply-received": "Reply received",
 };
 
@@ -41,6 +41,20 @@ export function describeExchangeDelivery(view: AssistantExchangeView): string {
 }
 
 /**
+ * A project id the host's list doesn't name (not listed yet, or since
+ * removed): the last path segment of a path id, or the start of a hash, so
+ * lanes in different projects still read differently.
+ */
+function shortProjectId(projectId: string): string {
+  const printable = Array.from(projectId, (char) => {
+    const code = char.charCodeAt(0);
+    return code < 0x20 || code === 0x7f ? "?" : char;
+  }).join("");
+  const segment = printable.split(/[\\/]/).filter(Boolean).at(-1) ?? printable;
+  return segment.length > 12 ? `${segment.slice(0, 12)}…` : segment;
+}
+
+/**
  * "Session 2 · web-app": the receiving lane, with its project named from the
  * host's current project list when it is there. Null until the host answered.
  */
@@ -48,10 +62,11 @@ export function describeExchangeReceiver(
   view: AssistantExchangeView,
   projects: readonly HostProjectRef[] | null | undefined
 ): string | null {
-  if (!view.receiver) return null;
-  const session = view.receiver.slot === null ? "Assistant" : `Session ${view.receiver.slot + 1}`;
-  const project = projects?.find((candidate) => candidate.id === view.receiver?.projectId);
-  return project ? `${session} · ${project.name}` : session;
+  const receiver = view.receiver;
+  if (!receiver) return null;
+  const session = receiver.slot === null ? "Assistant" : `Session ${receiver.slot + 1}`;
+  const project = projects?.find((candidate) => candidate.id === receiver.projectId);
+  return `${session} · ${project ? project.name : shortProjectId(receiver.projectId)}`;
 }
 
 /** Enough of a conversation id to tell conversations apart; the full id is a hover away. */

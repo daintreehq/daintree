@@ -64,6 +64,7 @@ function view(overrides: Partial<AssistantExchangeView> = {}): AssistantExchange
     contextId: "ctx-1234567890",
     cancelRequestedAt: null,
     terminalAt: null,
+    expiresAt: null,
     cancel: "cancel",
     ...overrides,
   };
@@ -129,7 +130,7 @@ describe("HostExchanges", () => {
     await flush();
     const rows = screen.getAllByTestId("host-exchange-row");
     expect(rows).toHaveLength(3);
-    expect(rows[0]!.textContent).toContain("Working · Read by lane");
+    expect(rows[0]!.textContent).toContain("Working · Fetched by lane");
     expect(rows[0]!.textContent).toContain("Hub → Session 2 · api · 1 hop");
     expect(rows[0]!.textContent).toContain("conversation ctx-1234…");
     // Expiry is never shown as a failure, and an unanswered send never as anything but unknown.
@@ -173,7 +174,7 @@ describe("HostExchanges", () => {
     await flush();
     fireEvent.click(screen.getByRole("button", { name: /Cancel exchange/ }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog.textContent).toContain("Cancel the exchange with Session 2?");
+    expect(dialog.textContent).toContain("Cancel the exchange with Session 2 · p1?");
     expect(dialog.textContent).toContain("ctx-1234567890");
     expect(dialog.textContent).toContain("m-1");
     expect(h.cancel).not.toHaveBeenCalled();
@@ -192,7 +193,7 @@ describe("HostExchanges", () => {
     await flush();
     fireEvent.click(screen.getByRole("button", { name: /Request cancel/ }));
     const dialog = screen.getByRole("dialog");
-    expect(dialog.textContent).toContain("Request cancel of the exchange with Session 2?");
+    expect(dialog.textContent).toContain("Request cancel of the exchange with Session 2 · p1?");
     expect(dialog.textContent).toContain("may have acted on it");
     fireEvent.click(screen.getByText("Keep exchange"));
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -239,5 +240,69 @@ describe("HostExchanges", () => {
     await flush();
     unmount();
     expect(h.listeners.size).toBe(0);
+  });
+  it("follows a live update while confirming: a delivery turns it into a request, an end closes it", async () => {
+    h.list.mockResolvedValueOnce([view()]);
+    render(<HostExchanges hostId="studio-01" hostName="studio-01" />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Cancel exchange/ }));
+    expect(screen.getByText("confirm: Cancel exchange")).toBeTruthy();
+
+    h.list.mockResolvedValueOnce([view({ delivery: "wake-typed", cancel: "request" })]);
+    await act(async () => {
+      emit({ type: "exchanges-changed", hostId: "studio-01" });
+    });
+    await flush();
+    expect(screen.getByText("confirm: Request cancel")).toBeTruthy();
+
+    h.list.mockResolvedValueOnce([
+      view({ state: "completed", delivery: "reply-received", cancel: null }),
+    ]);
+    await act(async () => {
+      emit({ type: "exchanges-changed", hostId: "studio-01" });
+    });
+    await flush();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("reads again at the next expiry even when the host never announces it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      vi.setSystemTime(10_000);
+      h.list.mockResolvedValueOnce([view({ expiresAt: 70_000 })]);
+      h.list.mockResolvedValueOnce([
+        view({ state: "failed", outcome: "expired", delivery: "unconfirmed", cancel: null }),
+      ]);
+      render(<HostExchanges hostId="studio-01" hostName="studio-01" />);
+      await flush();
+      expect(h.list).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(h.list).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        vi.advanceTimersByTime(1_000);
+      });
+      await flush();
+      expect(h.list).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("host-exchange-row").textContent).toContain(
+        "Expired · Couldn't confirm delivery"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tells cancel buttons for the same lane apart by message", async () => {
+    h.list.mockResolvedValue([
+      view({ messageId: "msg-aaaaaaaa-1" }),
+      view({ messageId: "msg-bbbbbbbb-2" }),
+    ]);
+    render(<HostExchanges hostId="studio-01" hostName="studio-01" />);
+    await flush();
+    const names = screen
+      .getAllByRole("button", { name: /Cancel exchange/ })
+      .map((button) => button.getAttribute("aria-label"));
+    expect(new Set(names).size).toBe(2);
   });
 });

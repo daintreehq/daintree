@@ -112,8 +112,30 @@ describe("toExchangeView delivery", () => {
     expect(view).toMatchObject({ state: "completed", delivery: "reply-received", cancel: null });
   });
 
+  it("reads an attempt with nothing after it as unconfirmed, since it may have landed", () => {
+    expect(
+      toExchangeView(entry(delivered({ acceptedAt: 1_100, attemptedAt: 1_150 })), NOW)
+    ).toMatchObject({ delivery: "unconfirmed", deliveryAt: 1_150 });
+  });
+
+  it("lets expiry outweigh a fetch that no reply followed", () => {
+    const view = toExchangeView(
+      entry(
+        delivered(
+          { acceptedAt: 1_100, inboxFetchedAt: 1_400 },
+          { state: "failed", outcome: "expired", terminalAt: 7_000 }
+        )
+      ),
+      NOW
+    );
+    expect(view).toMatchObject({ delivery: "unconfirmed", deliveryAt: 7_000, expiresAt: null });
+  });
+
   it("names the furthest fact short of reading, or pending when there is none", () => {
-    expect(toExchangeView(entry(record()), NOW).delivery).toBe("pending");
+    expect(toExchangeView(entry(record()), NOW)).toMatchObject({
+      delivery: "pending",
+      expiresAt: NOW + 10_000,
+    });
     expect(toExchangeView(entry(delivered({ acceptedAt: 1_100 })), NOW).delivery).toBe("accepted");
     expect(
       toExchangeView(entry(delivered({ acceptedAt: 1_100, wakeTypedAt: 1_200 })), NOW)

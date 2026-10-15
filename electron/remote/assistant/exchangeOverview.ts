@@ -10,28 +10,6 @@ import { TERMINAL_EXCHANGE_STATES, type ExchangeRecord } from "../exchange/types
 /** The host's outcome code for a live exchange its sweep expired. */
 const EXPIRED_OUTCOME = "expired";
 
-/** Facts that show the receiving lane read the message, furthest first. */
-const CONFIRMED: ReadonlyArray<[AssistantExchangeDelivery, keyof ExchangeRecord["delivery"]]> = [
-  ["reply-received", "replyReceivedAt"],
-  ["inbox-fetched", "inboxFetchedAt"],
-];
-/** Facts short of the lane reading it: the host took it, or typed a wake into the lane. */
-const UNCONFIRMED: ReadonlyArray<[AssistantExchangeDelivery, keyof ExchangeRecord["delivery"]]> = [
-  ["wake-typed", "wakeTypedAt"],
-  ["accepted", "acceptedAt"],
-];
-
-function furthest(
-  record: ExchangeRecord,
-  facts: ReadonlyArray<[AssistantExchangeDelivery, keyof ExchangeRecord["delivery"]]>
-): { delivery: AssistantExchangeDelivery; at: number } | null {
-  for (const [delivery, key] of facts) {
-    const at = record.delivery[key];
-    if (at !== null) return { delivery, at };
-  }
-  return null;
-}
-
 function isLive(record: ExchangeRecord, now: number): boolean {
   return (
     !TERMINAL_EXCHANGE_STATES.has(record.state) &&
@@ -61,19 +39,28 @@ function describeDelivery(
   if (record === null) {
     return { delivery: "unconfirmed", at: entry.lapsedAt ?? entry.unresolvedAt };
   }
-  // The lane reading it settles delivery, whatever was uncertain on the way.
-  const confirmed = furthest(record, CONFIRMED);
-  if (confirmed) return confirmed;
-  const expired =
-    record.outcome === EXPIRED_OUTCOME ||
-    (!TERMINAL_EXCHANGE_STATES.has(record.state) && record.expiresAt <= now);
-  if (record.delivery.ambiguousAt !== null || expired) {
-    return {
-      delivery: "unconfirmed",
-      at: record.delivery.ambiguousAt ?? record.terminalAt ?? record.expiresAt,
-    };
+  const { delivery } = record;
+  // A reply settles delivery, and outlives the record's later expiry into a tombstone.
+  if (delivery.replyReceivedAt !== null) {
+    return { delivery: "reply-received", at: delivery.replyReceivedAt };
   }
-  return furthest(record, UNCONFIRMED) ?? { delivery: "pending", at: null };
+  // Expired without a reply: whatever was seen before, the exchange never landed.
+  if (
+    record.outcome === EXPIRED_OUTCOME ||
+    (!TERMINAL_EXCHANGE_STATES.has(record.state) && record.expiresAt <= now)
+  ) {
+    return { delivery: "unconfirmed", at: record.terminalAt ?? record.expiresAt };
+  }
+  // The lane fetching it answers an earlier attempt left ambiguous.
+  if (delivery.inboxFetchedAt !== null) {
+    return { delivery: "inbox-fetched", at: delivery.inboxFetchedAt };
+  }
+  if (delivery.ambiguousAt !== null) return { delivery: "unconfirmed", at: delivery.ambiguousAt };
+  if (delivery.wakeTypedAt !== null) return { delivery: "wake-typed", at: delivery.wakeTypedAt };
+  // An attempt with nothing after it may or may not have reached the lane.
+  if (delivery.attemptedAt !== null) return { delivery: "unconfirmed", at: delivery.attemptedAt };
+  if (delivery.acceptedAt !== null) return { delivery: "accepted", at: delivery.acceptedAt };
+  return { delivery: "pending", at: null };
 }
 
 function cancelKind(
@@ -123,6 +110,7 @@ export function toExchangeView(entry: JournalEntry, now: number): AssistantExcha
     contextId: record?.contextId ?? null,
     cancelRequestedAt: record?.cancelRequestedAt ?? null,
     terminalAt: record?.terminalAt ?? null,
+    expiresAt: record && isLive(record, now) ? record.expiresAt : null,
     cancel: cancelKind(record, now),
   };
 }

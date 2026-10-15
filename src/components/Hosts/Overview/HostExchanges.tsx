@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AssistantExchangeView } from "@shared/types/ipc/remoteHosts";
 import type { HostId } from "@shared/types/remoteHosts";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,11 @@ interface HostExchangesProps {
 
 /** A card lists this many exchanges; the rest are counted. */
 export const HOST_EXCHANGE_LIMIT = 5;
+
+/** Past an expiry, long enough for a connected host's sweep to have landed first. */
+const EXPIRY_SLACK_MS = 1_000;
+/** setTimeout's ceiling; a later deadline is reached by reading again on the way. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 type LoadState =
   | { kind: "loading" }
@@ -72,7 +77,7 @@ function ExchangeRow({
             className="ml-auto shrink-0"
             disabled={busy}
             aria-busy={busy || undefined}
-            aria-label={`${exchange.cancel === "cancel" ? "Cancel exchange" : "Request cancel"} to ${receiver} on ${hostName}`}
+            aria-label={`${exchange.cancel === "cancel" ? "Cancel exchange" : "Request cancel"} ${shortConversationId(exchange.messageId)} to ${receiver} on ${hostName}`}
             onClick={() => onCancel(exchange)}
           >
             {exchange.cancel === "cancel" ? "Cancel exchange" : "Request cancel"}
@@ -103,23 +108,26 @@ function ExchangeRow({
 export function HostExchanges({ hostId, hostName, projects }: HostExchangesProps) {
   const [load, setLoad] = useState<LoadState>({ kind: "loading" });
   const [showAll, setShowAll] = useState(false);
-  const [confirming, setConfirming] = useState<AssistantExchangeView | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
-  /** Bumped to read again on demand (Retry, after a cancel). */
+  /** Bumped to read again on demand (Retry, after a cancel, at an expiry). */
   const [readNonce, setReadNonce] = useState(0);
+  const sectionRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    let seq = 0;
-    let live = true;
+    // Only the newest read lands, and none once this run is torn down.
+    const reads = { latest: 0, live: true };
     const read = () => {
-      const mine = ++seq;
+      reads.latest += 1;
+      const mine = reads.latest;
+      const current = () => reads.live && mine === reads.latest;
       remoteHostsClient.listAssistantExchanges(hostId).then(
         (exchanges) => {
-          if (live && mine === seq) setLoad({ kind: "loaded", exchanges });
+          if (current()) setLoad({ kind: "loaded", exchanges });
         },
         (error: unknown) => {
-          if (!live || mine !== seq) return;
+          if (!current()) return;
           setLoad((previous) => ({
             kind: "failed",
             message: clientErrorText(error, "Couldn't load assistant exchanges"),
@@ -134,36 +142,60 @@ export function HostExchanges({ hostId, hostName, projects }: HostExchangesProps
     });
     read();
     return () => {
-      live = false;
+      reads.live = false;
       off();
     };
   }, [hostId, readNonce]);
 
+  const exchanges = load.kind === "loading" ? null : load.exchanges;
+  const list = exchanges ?? [];
+  // A host that is away never announces its own sweep, so the view reads again at the deadline.
+  const nextExpiry = list.reduce<number | null>(
+    (soonest, exchange) =>
+      exchange.expiresAt !== null && (soonest === null || exchange.expiresAt < soonest)
+        ? exchange.expiresAt
+        : soonest,
+    null
+  );
+  useEffect(() => {
+    if (nextExpiry === null) return;
+    const delay = Math.min(Math.max(0, nextExpiry - Date.now()) + EXPIRY_SLACK_MS, MAX_TIMER_MS);
+    const timer = setTimeout(() => setReadNonce((n) => n + 1), delay);
+    return () => clearTimeout(timer);
+  }, [nextExpiry]);
+
   const refresh = () => setReadNonce((n) => n + 1);
 
-  const confirmCancel = async () => {
-    const exchange = confirming;
-    if (!exchange) return;
-    setConfirming(null);
-    setCancelling(exchange.messageId);
+  // Resolved against the latest read: a row that moved on meanwhile changes the dialog or closes it.
+  const confirming =
+    list.find(
+      (exchange) =>
+        exchange.messageId === confirmingId &&
+        (exchange.cancel === "cancel" || exchange.cancel === "request")
+    ) ?? null;
+
+  const confirmCancel = () => {
+    if (!confirming) return;
+    const { messageId } = confirming;
+    setConfirmingId(null);
+    setCancelling(messageId);
     setCancelError(null);
-    try {
-      await remoteHostsClient.cancelAssistantExchange(hostId, exchange.messageId);
-    } catch (error) {
-      setCancelError(clientErrorText(error, "Couldn't cancel the exchange"));
-    } finally {
+    const settle = (message: string | null) => {
+      setCancelError(message);
       setCancelling(null);
       // The host's answer decides what happened; show what the journal now holds.
       refresh();
-    }
+    };
+    remoteHostsClient.cancelAssistantExchange(hostId, messageId).then(
+      () => settle(null),
+      (error: unknown) => settle(clientErrorText(error, "Couldn't cancel the exchange"))
+    );
   };
 
-  const exchanges = load.kind === "loading" ? null : load.exchanges;
-  if (load.kind === "loading" || (load.kind === "loaded" && load.exchanges.length === 0)) {
+  if (load.kind === "loading" || (load.kind === "loaded" && list.length === 0)) {
     return null;
   }
 
-  const list = exchanges ?? [];
   const shown = showAll ? list : list.slice(0, HOST_EXCHANGE_LIMIT);
   const more = list.length - shown.length;
   const confirmingReceiver = confirming
@@ -172,7 +204,14 @@ export function HostExchanges({ hostId, hostName, projects }: HostExchangesProps
   const isRequest = confirming?.cancel === "request";
 
   return (
-    <section aria-label={`Assistant exchanges with ${hostName}`} data-testid="host-exchanges">
+    <section
+      ref={sectionRef}
+      // Where focus returns when a cancel's own button is gone or busy.
+      tabIndex={-1}
+      className="rounded-[var(--radius-sm)] focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline"
+      aria-label={`Assistant exchanges with ${hostName}`}
+      data-testid="host-exchanges"
+    >
       <h4 className="mb-1 text-2xs font-medium text-text-secondary">Assistant exchanges</h4>
       {load.kind === "failed" && (
         <div className="flex items-center gap-2 text-xs">
@@ -198,7 +237,7 @@ export function HostExchanges({ hostId, hostName, projects }: HostExchangesProps
               projects={projects}
               hostName={hostName}
               busy={cancelling === exchange.messageId}
-              onCancel={setConfirming}
+              onCancel={(target) => setConfirmingId(target.messageId)}
             />
           ))}
         </ul>
@@ -210,7 +249,8 @@ export function HostExchanges({ hostId, hostName, projects }: HostExchangesProps
       )}
       <ConfirmDialog
         isOpen={confirming !== null}
-        onClose={() => setConfirming(null)}
+        onClose={() => setConfirmingId(null)}
+        restoreFocusTo={sectionRef}
         variant="destructive"
         title={
           isRequest
@@ -226,6 +266,11 @@ export function HostExchanges({ hostId, hostName, projects }: HostExchangesProps
         cancelLabel="Keep exchange"
         onConfirm={confirmCancel}
       >
+        {confirming && (
+          <p className="mb-2 text-xs text-text-secondary">
+            Only who, where and when is kept here; the message text isn't.
+          </p>
+        )}
         {confirming && (
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
             <dt className="text-text-secondary">From</dt>
@@ -248,6 +293,10 @@ export function HostExchanges({ hostId, hostName, projects }: HostExchangesProps
             )}
             <dt className="text-text-secondary">Message</dt>
             <dd className="min-w-0 truncate text-text-primary">{confirming.messageId}</dd>
+            <dt className="text-text-secondary">Sent</dt>
+            <dd className="text-text-primary">
+              <TimeAgo timestamp={confirming.sentAt} verbose />
+            </dd>
           </dl>
         )}
       </ConfirmDialog>

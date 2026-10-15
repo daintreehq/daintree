@@ -158,6 +158,8 @@ export interface AssistantExchangeView {
   contextId: string | null;
   cancelRequestedAt: number | null;
   terminalAt: number | null;
+  /** When the host expires a still-live exchange; null once it ended. */
+  expiresAt: number | null;
   cancel: AssistantExchangeCancelKind | null;
 }
 
