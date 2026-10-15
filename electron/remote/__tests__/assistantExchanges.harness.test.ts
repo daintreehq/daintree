@@ -90,6 +90,12 @@ vi.mock("../../services/HelpSessionService.js", () => ({
   },
 }));
 
+/** The host's own Codex reading; nothing here spawns a Codex app server. */
+const codexQuota = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("../../services/codex/CodexQuotaService.js", () => ({
+  readCodexQuota: codexQuota.read,
+}));
+
 /**
  * The app database both the host's exchange store and this Shell's journal
  * use. Host and Shell share one process here, as they share one file; their
@@ -319,6 +325,28 @@ function shellA(): AssistantExchangeClient {
 }
 
 describe("assistant exchanges over the real link", () => {
+  it("hands the hub the host's Codex quota as the host read it (#13392)", async () => {
+    db.sqlite = openFile("app.db");
+    const r = await harness();
+    prepare(r);
+    const reading = {
+      status: "ok",
+      planType: "pro",
+      windows: [
+        { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_700_000_000_000 },
+        { usedPercent: 7.5, windowDurationMins: 10_080, resetsAt: null },
+      ],
+      fetchedAt: 1_699_999_000_000,
+    };
+    codexQuota.read.mockResolvedValueOnce(reading);
+    await expect(shellA().readQuota(HOST_ID)).resolves.toEqual(reading);
+
+    const unavailable = { status: "unavailable", reason: "read-failed", fetchedAt: 1 };
+    codexQuota.read.mockResolvedValueOnce(unavailable);
+    await expect(shellA().readQuota(HOST_ID)).resolves.toEqual(unavailable);
+    expect(codexQuota.read).toHaveBeenCalledTimes(2);
+  }, 30_000);
+
   it("enrolls nothing it can't show it started, and never a lane another Shell holds (#13392)", async () => {
     db.sqlite = openFile("app.db");
     const r = await harness();

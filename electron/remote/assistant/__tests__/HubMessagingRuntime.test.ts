@@ -13,6 +13,7 @@ import {
   HOST_LIST_PROJECTS_MAX,
   HostListAssistantsResultSchema,
   HostListResultSchema,
+  HostReadQuotaResultSchema,
   HostStartAssistantResultSchema,
 } from "../../../../shared/types/hostMessaging.js";
 import {
@@ -95,6 +96,7 @@ describe("HubMessagingRuntime (#13336)", () => {
   let checks: HostCheck[];
   let client: {
     listLanes: ReturnType<typeof vi.fn>;
+    readQuota: ReturnType<typeof vi.fn>;
     send: ReturnType<typeof vi.fn>;
     get: ReturnType<typeof vi.fn>;
     getResponses: ReturnType<typeof vi.fn>;
@@ -123,6 +125,15 @@ describe("HubMessagingRuntime (#13336)", () => {
       listLanes: vi.fn(async () => ({
         lanes: [{ projectId: "proj-2", slot: 0, generation: "gen-2", available: true }],
         assistants: [{ projectId: "proj-2", slot: 0, agentId: "codex" }],
+      })),
+      readQuota: vi.fn(async () => ({
+        status: "ok",
+        planType: "pro",
+        windows: [
+          { usedPercent: 42, windowDurationMins: 300, resetsAt: 990_000 },
+          { usedPercent: 7.5, windowDurationMins: 10_080, resetsAt: null },
+        ],
+        fetchedAt: 980_000,
       })),
       send: vi.fn(async (_hostId: string, payload: { messageId: string; contextId: string }) => ({
         status: "accepted",
@@ -304,6 +315,102 @@ describe("HubMessagingRuntime (#13336)", () => {
         outcome: "disconnected",
         projects: null,
         projectsOmitted: 0,
+      });
+    });
+  });
+
+  describe("host.readQuota", () => {
+    it("passes the host's reading through, stamped with when this Shell received it", async () => {
+      const read = await runtime.readQuota("hub", { hostId: "studio" });
+      if (!read.ok) throw new Error("refused");
+      expect(HostReadQuotaResultSchema.parse(read.value)).toEqual({
+        outcome: "ok",
+        detail: null,
+        retryAfterMs: null,
+        codex: {
+          status: "ok",
+          planType: "pro",
+          windows: [
+            { usedPercent: 42, windowDurationMins: 300, resetsAt: 990_000 },
+            { usedPercent: 7.5, windowDurationMins: 10_080, resetsAt: null },
+          ],
+          fetchedAt: 980_000,
+        },
+        observedAt: clock,
+      });
+      expect(client.readQuota).toHaveBeenCalledWith("studio");
+
+      client.readQuota.mockResolvedValueOnce({
+        status: "unavailable",
+        reason: "read-failed",
+        fetchedAt: 980_000,
+      });
+      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+        value: {
+          outcome: "ok",
+          codex: { status: "unavailable", reason: "read-failed" },
+          observedAt: clock,
+        },
+      });
+    });
+
+    it("is the hub's alone, on an opted-in host it knows, and reads through a pause", async () => {
+      await expect(runtime.readQuota("other-lane", { hostId: "studio" })).resolves.toMatchObject({
+        ok: false,
+        code: "NOT_ELIGIBLE",
+      });
+      await expect(runtime.readQuota("hub", { hostId: "elsewhere" })).resolves.toMatchObject({
+        value: { outcome: "not_found", codex: null, observedAt: null },
+      });
+      denial = "host-disabled";
+      const off = await runtime.readQuota("hub", { hostId: "studio" });
+      if (!off.ok) throw new Error("refused outright");
+      expect(HostReadQuotaResultSchema.parse(off.value)).toMatchObject({
+        outcome: "opted_out",
+        codex: null,
+        observedAt: null,
+      });
+      expect(client.readQuota).not.toHaveBeenCalled();
+
+      denial = "paused";
+      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+        value: { outcome: "ok", codex: { status: "ok" } },
+      });
+    });
+
+    it("names a host it couldn't ask, and one too old to answer, in the advertised shape", async () => {
+      client.readQuota.mockRejectedValueOnce(
+        new AppError({ code: "HOST_DISCONNECTED", message: "link dropped" })
+      );
+      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+        value: { outcome: "disconnected", codex: null, observedAt: null },
+      });
+
+      client.readQuota.mockRejectedValueOnce(
+        new AppError({ code: "OUTCOME_UNKNOWN", message: "no answer within 30000 ms" })
+      );
+      // A read that went unanswered sent nothing, so it's never reported as an ambiguous message.
+      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+        value: { outcome: "disconnected", codex: null },
+      });
+
+      client.readQuota.mockRejectedValueOnce(
+        new AppError({ code: "UNSUPPORTED", message: "unknown method" })
+      );
+      const old = await runtime.readQuota("hub", { hostId: "studio" });
+      if (!old.ok) throw new Error("refused outright");
+      expect(HostReadQuotaResultSchema.parse(old.value)).toMatchObject({
+        outcome: "unsupported",
+        detail: expect.stringContaining("Codex quota"),
+        codex: null,
+      });
+
+      client.readQuota.mockRejectedValueOnce(
+        new AppError({ code: "INTERNAL", message: "invalid answer" })
+      );
+      await expect(runtime.readQuota("hub", { hostId: "studio" })).resolves.toMatchObject({
+        ok: false,
+        code: "UNAVAILABLE",
       });
     });
   });

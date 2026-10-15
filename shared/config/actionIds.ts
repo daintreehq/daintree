@@ -556,6 +556,7 @@ export const BUILT_IN_ACTION_IDS = [
   "host.listTasks",
   "host.cancelTask",
   "host.startAssistant",
+  "host.readQuota",
 
   // -- uiActions --
   "ui.sidebar.resetWidth",
@@ -656,4 +657,5 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "host.listTasks",
   "host.cancelTask",
   "host.startAssistant",
+  "host.readQuota",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

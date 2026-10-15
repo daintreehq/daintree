@@ -480,7 +480,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // measured at 21_144 B. What the prose has to carry is that it reuses an
   // assistant already there before opening one, what it returns, and that the
   // person allows it per host. Full tier only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 21_150;
+  // 21_150 → 21_400 for `host.readQuota` (#13392), measured at 21_368 B. What
+  // the prose has to carry is that it reads Codex's own report of a host's
+  // quota, and that Claude Code's usage isn't readable by other apps, so the
+  // hub asks that host's assistant for /usage instead. Off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_400;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1443,6 +1447,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.listTasks": { hostId: "h-placeholder" },
       "host.cancelTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
       "host.startAssistant": { hostId: "h-placeholder", projectId: "p-placeholder" },
+      "host.readQuota": { hostId: "h-placeholder" },
     };
 
     const failures: string[] = [];

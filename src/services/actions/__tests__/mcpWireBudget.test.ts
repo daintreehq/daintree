@@ -726,7 +726,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // its description, the project, agent and startNew arguments, and an output
   // schema of the shared outcome fields beside the enrolled assistant's slot,
   // agent, generation, availability and whether it was opened. Hub only.
-  const MAX_COHORT_PAYLOAD_BYTES = 134_700;
+  // 134_700 → 136_850 for `host.readQuota` (#13392), measured at 136_786 B:
+  // its description, the hostId argument, and an output schema of the shared
+  // outcome fields beside the host's Codex reading as Codex reports it (each
+  // window's percent used, length and reset, or why there is none) and when
+  // this Shell received it. Hub only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 136_850;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

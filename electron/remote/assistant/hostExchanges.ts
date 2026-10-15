@@ -30,6 +30,7 @@ import {
   MAX_LISTED_LANES,
   MessageIdPayloadSchema,
   SendPayloadSchema,
+  type CodexQuotaReading,
   type EnrolledLane,
   type EnrollStartedResult,
   type ExchangeResponse,
@@ -273,6 +274,13 @@ export function installAssistantExchangeHostWith(
           };
         });
       return { lanes, assistants } satisfies LaneList;
+    });
+
+    session.registerCallHandler(AssistantLinkMethod.READ_QUOTA, EmptyPayloadSchema, async () => {
+      requirePolicy();
+      // This host's own Codex profile, as Settings reads it; never Claude's (#12797).
+      const { readCodexQuota } = await import("../../services/codex/CodexQuotaService.js");
+      return (await readCodexQuota()) satisfies CodexQuotaReading;
     });
 
     session.registerCallHandler(

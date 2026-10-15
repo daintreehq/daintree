@@ -190,6 +190,7 @@ function projectReply(result: unknown): Record<string, unknown> {
 
 const HOST_ID_PATTERN = /^[\w.-]{1,64}$/;
 const HOST_OUTCOMES: ReadonlySet<string> = new Set(HOST_MESSAGING_OUTCOMES);
+const CODEX_QUOTA_STATUSES: ReadonlySet<string> = new Set(["ok", "unavailable"]);
 const TASK_STATES: ReadonlySet<string> = new Set([
   "submitted",
   "working",
@@ -308,6 +309,17 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     }),
   ],
+  [
+    "host.readQuota",
+    // Whether Codex answered and how many windows, never what it said of them.
+    hostResultProjection((record) => {
+      const codex = asRecord(record.codex);
+      return {
+        codexStatus: fromSet(codex?.status, CODEX_QUOTA_STATUSES),
+        windowCount: Array.isArray(codex?.windows) ? codex.windows.length : null,
+      };
+    }),
+  ],
 ]);
 
 /** The value to summarize for `toolId`'s audit record: its projection when it has one, else the result as is. */
@@ -410,6 +422,7 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
       };
     },
   ],
+  ["host.readQuota", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
   [
     "assistant.reply",
     (args) => {

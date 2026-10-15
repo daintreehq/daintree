@@ -11,6 +11,7 @@ import type { AssistantHubReceiver } from "./AssistantHubReceiver.js";
 import type { AssistantMessagingPolicy, MessagingRequestKind } from "./AssistantMessagingPolicy.js";
 import {
   AssistantLinkMethod,
+  CodexQuotaReadingSchema,
   ExchangeChangedPayloadSchema,
   ExchangeChangesSchema,
   ExchangeRecordSchema,
@@ -22,6 +23,7 @@ import {
   SendResultSchema,
   SendToHubPayloadSchema,
   type AssistantSendPayload,
+  type CodexQuotaReading,
   type EnrollStartedPayload,
   type EnrollStartedResult,
   type ExchangeResponse,
@@ -62,6 +64,11 @@ export interface MovedExchange {
 }
 
 const CALL_TIMEOUT_MS = 15_000;
+/**
+ * The host gives up on Codex after 15 s and answers that it timed out; this
+ * outlasts it, so that answer arrives rather than an unknown outcome.
+ */
+const QUOTA_CALL_TIMEOUT_MS = 30_000;
 
 /**
  * This Shell's own refusal to resend a message whose outcome stayed unknown
@@ -268,6 +275,18 @@ export class AssistantExchangeClient {
       await this.call(hostId, session, AssistantLinkMethod.LIST_LANES, null)
     );
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.LIST_LANES);
+    return parsed.data;
+  }
+
+  /** The host's Codex account quota, as Codex reports it there. */
+  async readQuota(hostId: HostId): Promise<CodexQuotaReading> {
+    this.checkHost(hostId, "inspect");
+    const session = await this.open(hostId);
+    await this.authenticate(hostId, session);
+    const parsed = CodexQuotaReadingSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.READ_QUOTA, null, QUOTA_CALL_TIMEOUT_MS)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.READ_QUOTA);
     return parsed.data;
   }
 
@@ -583,10 +602,11 @@ export class AssistantExchangeClient {
     hostId: HostId,
     session: LinkSession,
     method: string,
-    payload: unknown
+    payload: unknown,
+    timeoutMs = this.timeoutMs
   ): Promise<unknown> {
     try {
-      return await session.call(method, payload, { timeoutMs: this.timeoutMs });
+      return await session.call(method, payload, { timeoutMs });
     } catch (error) {
       if (codeOf(error) === "UNSUPPORTED") throw unsupported(hostId, error);
       throw error;

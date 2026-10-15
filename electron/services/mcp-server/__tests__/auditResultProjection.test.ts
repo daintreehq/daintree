@@ -402,4 +402,37 @@ describe("hub messaging audit entries carry no message or reply text (#13336)", 
     });
     expect(JSON.stringify(projected)).not.toMatch(/acquisition|notes|someone|p-secret/);
   });
+
+  it("records whether a host's Codex quota came back and how many windows, never their values", () => {
+    expect(projectAuditArgs("host.readQuota", { hostId: "studio", extra: TEXT })).toEqual({
+      hostId: "studio",
+    });
+    const projected = projectAuditResult("host.readQuota", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      codex: {
+        status: "ok",
+        planType: "enterprise-secret-plan",
+        windows: [
+          { usedPercent: 83.25, windowDurationMins: 300, resetsAt: 1_712_345_678_901 },
+          { usedPercent: 12, windowDurationMins: 10_080, resetsAt: null },
+        ],
+        fetchedAt: 1_712_000_000_000,
+      },
+      observedAt: 1_712_000_000_500,
+    });
+    expect(projected).toMatchObject({ outcome: "ok", codexStatus: "ok", windowCount: 2 });
+    expect(JSON.stringify(projected)).not.toMatch(/secret|83\.25|1712/);
+
+    expect(
+      projectAuditResult("host.readQuota", {
+        outcome: "disconnected",
+        detail: "The host can't be reached right now.",
+        retryAfterMs: null,
+        codex: null,
+        observedAt: null,
+      })
+    ).toMatchObject({ outcome: "disconnected", codexStatus: null, windowCount: null });
+  });
 });

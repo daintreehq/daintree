@@ -166,6 +166,7 @@ A Shell sends messages to assistants on a host, and reads what became of them, o
 | `assistant.authenticate` | the Shell's sender credential for this host | null |
 | `assistant.list-lanes` | none | the lanes this session enrolled, with their generation, their agent and whether each would take a message now; and every assistant running on the host, enrolled or not, with its project, slot and agent. The hub joins these with `host.list-projects` so `host.listAssistants` shows a host's projects and the assistants in each |
 | `assistant.enroll-started` | `{projectId, slot, sessionId}` | `{status: enrolled, occupied, not-running, wrong-session or refused, lane}`: enrolls for this session's Shell a lane its hub just started, under the rules in "Starting an assistant for the hub" below |
+| `assistant.read-quota` | none | the host's Codex account quota as Codex reports it there (`readCodexQuota`: plan, and percent used and reset time for each window, or why there is none); `host.readQuota` returns it to the hub with when the Shell received it. Claude Code's usage is never read |
 | `assistant.send` | `messageId`, `contextId`, `referenceTaskIds`, `projectId`, `slot`, `generation`, `body` | `{ disposition: created \| existing \| tombstoned, record }` |
 | `assistant.get-exchange` | `messageId` | the record, or null when the host has none |
 | `assistant.list-exchanges` | `cursor`, optional `limit` (at most 500) | `{ records, cursor, hasMore, reset }` |

@@ -5,6 +5,7 @@ import {
   HOST_LIST_ASSISTANTS_TOOL,
   HOST_LIST_TASKS_TOOL,
   HOST_LIST_TOOL,
+  HOST_READ_QUOTA_TOOL,
   HOST_SEND_MESSAGE_TOOL,
   HOST_START_ASSISTANT_TOOL,
   HostCancelTaskArgsSchema,
@@ -12,6 +13,7 @@ import {
   HostListArgsSchema,
   HostListAssistantsArgsSchema,
   HostListTasksArgsSchema,
+  HostReadQuotaArgsSchema,
   HostSendMessageArgsSchema,
   HostStartAssistantArgsSchema,
   type HostCancelTaskArgs,
@@ -26,6 +28,8 @@ import {
   type HostMessagingOutcome,
   type HostMessagingRefusalCode,
   type HostMessagingToolResult,
+  type HostReadQuotaArgs,
+  type HostReadQuotaResult,
   type HostSendMessageArgs,
   type HostSendMessageResult,
   type HostStartAssistantArgs,
@@ -68,6 +72,10 @@ export interface HostMessagingRuntimeHandle {
     helpSessionId: string,
     args: HostStartAssistantArgs
   ): Promise<HostMessagingOutcome<HostStartAssistantResult>>;
+  readQuota(
+    helpSessionId: string,
+    args: HostReadQuotaArgs
+  ): Promise<HostMessagingOutcome<HostReadQuotaResult>>;
 }
 
 let installedRuntime: HostMessagingRuntimeHandle | null = null;
@@ -141,6 +149,10 @@ async function dispatch(
     case HOST_START_ASSISTANT_TOOL: {
       const parsed = HostStartAssistantArgsSchema.safeParse(raw);
       return parsed.success ? runtime.startAssistant(helpSessionId, parsed.data) : invalidArgs();
+    }
+    case HOST_READ_QUOTA_TOOL: {
+      const parsed = HostReadQuotaArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.readQuota(helpSessionId, parsed.data) : invalidArgs();
     }
     default:
       return invalidArgs();

@@ -493,6 +493,7 @@ describe("shouldExposeTool", () => {
     ["host.listAssistants", "core"],
     ["host.getTask", "core"],
     ["host.listTasks", "core"],
+    ["host.readQuota", "core"],
     ["host.sendMessage", "full"],
     ["host.cancelTask", "full"],
   ] as const)("offers %s only to the hub, from the %s tier", (id, minimum) => {

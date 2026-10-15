@@ -138,6 +138,7 @@ export const CORE_TIER_TOOLS = [
   "host.listAssistants",
   "host.getTask",
   "host.listTasks",
+  "host.readQuota",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -285,6 +286,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.listTasks",
   "host.cancelTask",
   "host.startAssistant",
+  "host.readQuota",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

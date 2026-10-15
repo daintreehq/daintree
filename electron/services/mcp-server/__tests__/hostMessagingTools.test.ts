@@ -29,6 +29,7 @@ function fakeRuntime() {
     listTasks: vi.fn(),
     cancelTask: vi.fn(),
     startAssistant: vi.fn(),
+    readQuota: vi.fn(),
   } satisfies HostMessagingRuntimeHandle;
 }
 
@@ -109,6 +110,18 @@ describe("runHostMessagingTool (#13336)", () => {
       agentId: "codex",
       startNew: true,
     });
+    expect(missing).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
+  it("hands a quota read to the runtime only for one named host", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostMessagingRuntime(runtime);
+    const access = bindHostMessaging(() => "hub");
+    await runHostMessagingTool("host.readQuota", { hostId: "h" }, access);
+    const missing = await runHostMessagingTool("host.readQuota", {}, access);
+    uninstall();
+    expect(runtime.readQuota).toHaveBeenCalledTimes(1);
+    expect(runtime.readQuota).toHaveBeenCalledWith("hub", { hostId: "h" });
     expect(missing).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { MAX_ASSISTANT_SLOTS } from "../config/assistantSlots.js";
 import { ASSISTANT_MESSAGE_MAX_CHARS } from "./assistantMessaging.js";
+import { CODEX_QUOTA_UNAVAILABLE_REASONS } from "./ipc/agentQuota.js";
 
 /**
  * Cross-host assistant messaging, as this Shell's hub sees it (#13336): the
@@ -23,6 +24,7 @@ export const HOST_GET_TASK_TOOL = "host.getTask";
 export const HOST_LIST_TASKS_TOOL = "host.listTasks";
 export const HOST_CANCEL_TASK_TOOL = "host.cancelTask";
 export const HOST_START_ASSISTANT_TOOL = "host.startAssistant";
+export const HOST_READ_QUOTA_TOOL = "host.readQuota";
 
 export const HOST_MESSAGING_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
@@ -32,6 +34,7 @@ export const HOST_MESSAGING_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TASKS_TOOL,
   HOST_CANCEL_TASK_TOOL,
   HOST_START_ASSISTANT_TOOL,
+  HOST_READ_QUOTA_TOOL,
 ]);
 
 /** Longest bounded wait `host.sendMessage` takes, in milliseconds. */
@@ -313,6 +316,39 @@ export const HostStartAssistantResultSchema = z.object({
 });
 export type HostStartAssistantResult = z.infer<typeof HostStartAssistantResultSchema>;
 
+export const HostReadQuotaArgsSchema = z.object({ hostId: hostIdSchema });
+export type HostReadQuotaArgs = z.infer<typeof HostReadQuotaArgsSchema>;
+
+const codexQuotaWindowSchema = z.object({
+  usedPercent: z.number().describe("Percent of this window's limit used, 0-100."),
+  windowDurationMins: z.number().describe("The window's length in minutes; 300 is 5 hours."),
+  resetsAt: z.number().nullable().describe("When it resets, epoch ms; null when Codex didn't say."),
+});
+
+/** A host's Codex account quota, as `readCodexQuota` read it there. */
+const hostCodexQuotaSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ok"),
+    planType: z.string().nullable(),
+    windows: z.array(codexQuotaWindowSchema).describe("Shortest window first."),
+    fetchedAt: z
+      .number()
+      .describe("When the host read it from Codex, epoch ms; cached up to 30 s."),
+  }),
+  z.object({
+    status: z.literal("unavailable"),
+    reason: z.enum(CODEX_QUOTA_UNAVAILABLE_REASONS),
+    fetchedAt: z.number(),
+  }),
+]);
+
+export const HostReadQuotaResultSchema = z.object({
+  ...outcomeFields,
+  codex: hostCodexQuotaSchema.nullable(),
+  observedAt: z.number().nullable().describe("When this Shell received the reading, epoch ms."),
+});
+export type HostReadQuotaResult = z.infer<typeof HostReadQuotaResultSchema>;
+
 /** Why a hub tool refused outright: the caller isn't the hub, or its arguments don't parse. */
 export type HostMessagingRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
@@ -323,7 +359,8 @@ export type HostMessagingToolResult =
   | HostGetTaskResult
   | HostListTasksResult
   | HostCancelTaskResult
-  | HostStartAssistantResult;
+  | HostStartAssistantResult
+  | HostReadQuotaResult;
 
 export type HostMessagingOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostMessagingRefusalCode; message: string };

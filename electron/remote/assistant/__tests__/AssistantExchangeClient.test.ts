@@ -68,6 +68,7 @@ class FakeHost {
   failNextList = false;
   authCalls = 0;
   laneAnswer: unknown = { lanes: [] };
+  quotaAnswer: unknown = null;
 
   put(messageId: string, state: ExchangeState, replied = false): ExchangeRecord {
     const next = record(messageId, ++this.revision, state);
@@ -92,6 +93,8 @@ class FakeHost {
             return this.records.get((payload as { messageId: string }).messageId) ?? null;
           case AssistantLinkMethod.LIST_LANES:
             return this.laneAnswer;
+          case AssistantLinkMethod.READ_QUOTA:
+            return this.quotaAnswer;
           case AssistantLinkMethod.LIST_EXCHANGES: {
             this.listCalls++;
             const gate = this.gate;
@@ -242,6 +245,83 @@ describe("AssistantExchangeClient listing a host's lanes", () => {
       lanes: [{ ...lane, agentId: "codex" }],
       assistants: [{ projectId: "proj-1", slot: 0, agentId: "codex" }],
     });
+  });
+});
+
+describe("AssistantExchangeClient reading a host's Codex quota", () => {
+  let dir: string;
+  let sqlite: Database.Database;
+  let client: AssistantExchangeClient;
+  let host: FakeHost;
+  const WINDOW = { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_700_000_000_000 };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-exchange-quota-"));
+    sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    host = new FakeHost();
+    const session = host.session();
+    client = new AssistantExchangeClient({
+      journal: new AssistantExchangeJournal(sqlite),
+      session: async () => session,
+      onSessionOpened: () => () => {},
+      messagingEnabled: () => true,
+    });
+  });
+
+  afterEach(() => {
+    client.dispose();
+    sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("proves its sender, then takes the host's reading, without what this build doesn't know", async () => {
+    host.quotaAnswer = {
+      status: "ok",
+      planType: "pro",
+      windows: [{ ...WINDOW, later: true }],
+      fetchedAt: 5,
+      later: true,
+    };
+    await expect(client.readQuota(HOST)).resolves.toEqual({
+      status: "ok",
+      planType: "pro",
+      windows: [WINDOW],
+      fetchedAt: 5,
+    });
+    expect(host.authCalls).toBe(1);
+
+    host.quotaAnswer = { status: "unavailable", reason: "cli-missing", fetchedAt: 5 };
+    await expect(client.readQuota(HOST)).resolves.toEqual(host.quotaAnswer);
+
+    // A newer host's reason this build doesn't know still means no quota there.
+    host.quotaAnswer = { status: "unavailable", reason: "asleep", fetchedAt: 5 };
+    await expect(client.readQuota(HOST)).resolves.toEqual({
+      status: "unavailable",
+      reason: "read-failed",
+      fetchedAt: 5,
+    });
+  });
+
+  it.each([
+    [
+      "a percent past the whole limit",
+      { status: "ok", planType: null, windows: [{ ...WINDOW, usedPercent: 140 }], fetchedAt: 5 },
+    ],
+    [
+      "more windows than any reading has",
+      { status: "ok", planType: null, windows: Array(9).fill(WINDOW), fetchedAt: 5 },
+    ],
+    [
+      "a plan name no plan has",
+      { status: "ok", planType: "p".repeat(65), windows: [WINDOW], fetchedAt: 5 },
+    ],
+    ["no reading at all", null],
+    ["an unavailable reading with no reason", { status: "unavailable", fetchedAt: 5 }],
+    ["a reason that isn't text", { status: "unavailable", reason: 7, fetchedAt: 5 }],
+    ["a quota with no window", { status: "ok", planType: null, windows: [], fetchedAt: 5 }],
+  ])("refuses %s", async (_label, answer) => {
+    host.quotaAnswer = answer;
+    await expect(client.readQuota(HOST)).rejects.toMatchObject({ code: "INTERNAL" });
   });
 });
 

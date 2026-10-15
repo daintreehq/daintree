@@ -4,6 +4,7 @@ import {
   ASSISTANT_MAX_HOP_COUNT,
   ASSISTANT_SEND_REFUSALS,
 } from "../../../shared/types/assistantMessaging.js";
+import { CODEX_QUOTA_UNAVAILABLE_REASONS } from "../../../shared/types/ipc/agentQuota.js";
 import { EXCHANGE_STATES } from "../exchange/types.js";
 
 /**
@@ -28,6 +29,11 @@ export const AssistantLinkMethod = {
    * and only while no other Shell holds the lane.
    */
   ENROLL_STARTED: "assistant.enroll-started",
+  /**
+   * Shell → Host: the host's Codex account quota, as Codex reports it there
+   * (#13392), so the hub can tell which host has allowance left.
+   */
+  READ_QUOTA: "assistant.read-quota",
   /** Shell → Host: send a message to an enrolled lane; a resend of its messageId never sends twice. */
   SEND: "assistant.send",
   /** Shell → Host: one of this sender's exchanges by messageId, or null when the host has none. */
@@ -152,6 +158,47 @@ export const LaneListSchema = z
   })
   .strip();
 export type LaneList = z.infer<typeof LaneListSchema>;
+
+/** Codex reports two windows today; anything past this isn't a reading this build understands. */
+const MAX_QUOTA_WINDOWS = 8;
+const MAX_PLAN_TYPE_CHARS = 64;
+
+export const CodexQuotaReadingSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("ok"),
+      planType: z.string().max(MAX_PLAN_TYPE_CHARS).nullable(),
+      windows: z
+        .array(
+          z
+            .object({
+              usedPercent: z.number().min(0).max(100),
+              windowDurationMins: z.number().int().min(1),
+              resetsAt: nullableTimestamp,
+            })
+            .strip()
+        )
+        .min(1)
+        .max(MAX_QUOTA_WINDOWS),
+      fetchedAt: timestamp,
+    })
+    .strip(),
+  z
+    .object({
+      status: z.literal("unavailable"),
+      // A newer host may name a reason this Shell doesn't know: still no quota, so a failed read.
+      reason: z.union([
+        z.enum(CODEX_QUOTA_UNAVAILABLE_REASONS),
+        z
+          .string()
+          .max(64)
+          .transform(() => "read-failed" as const),
+      ]),
+      fetchedAt: timestamp,
+    })
+    .strip(),
+]);
+export type CodexQuotaReading = z.infer<typeof CodexQuotaReadingSchema>;
 
 export const ExchangeRecordSchema = z
   .object({

@@ -10,6 +10,8 @@ import {
   HostListResultSchema,
   HostListTasksArgsSchema,
   HostListTasksResultSchema,
+  HostReadQuotaArgsSchema,
+  HostReadQuotaResultSchema,
   HostSendMessageArgsSchema,
   HostSendMessageResultSchema,
   HostStartAssistantArgsSchema,
@@ -188,5 +190,34 @@ export function registerHostMessagingActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.startAssistant"),
+  }));
+
+  actions.set("host.readQuota", () => ({
+    id: "host.readQuota",
+    title: "Read a host's agent quota",
+    description:
+      "Read a host's Codex account quota as Codex reports it there: percent used and reset time for each limit window. Claude Code doesn't share its usage with other apps; for it, ask that host's assistant to read /usage in a pane.",
+    category: "help",
+    kind: "query",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: [
+      "quota",
+      "usage",
+      "allocation",
+      "allowance",
+      "limit",
+      "headroom",
+      "remaining",
+      "codex",
+      "host",
+    ],
+    palette: { mode: "hidden" },
+    argsSchema: HostReadQuotaArgsSchema,
+    resultSchema: HostReadQuotaResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: READ_ANNOTATIONS,
+    run: mainProcessOnly("host.readQuota"),
   }));
 }

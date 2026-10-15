@@ -19,6 +19,8 @@ import {
   type HostMessagingOutcome,
   type HostMessagingOutcomeCode,
   type HostProjectEntry,
+  type HostReadQuotaArgs,
+  type HostReadQuotaResult,
   type HostSendMessageArgs,
   type HostSendMessageResult,
   type HostStartAssistantArgs,
@@ -66,7 +68,7 @@ export interface HubMessagingRuntimeDeps {
   /** Read at each call: the client is installed with the database and may come later. */
   client(): Pick<
     AssistantExchangeClient,
-    "listLanes" | "send" | "get" | "getResponses" | "listChanges" | "cancel" | "known"
+    "listLanes" | "readQuota" | "send" | "get" | "getResponses" | "listChanges" | "cancel" | "known"
   > | null;
   hosts(): ObservedHost[];
   /** A connected host's projects, most used first; names what its assistants work in. */
@@ -150,6 +152,10 @@ const START_REFUSALS: Record<
       "The assistant runs, but couldn't be enrolled for this Shell. List the host's assistants to see it.",
   },
 };
+const QUOTA_UNSUPPORTED_DETAIL =
+  "This host can't report its Codex quota. It may need a newer Daintree.";
+const QUOTA_NO_ANSWER_DETAIL = "The host didn't answer in time. Try again shortly.";
+
 const NOT_ELIGIBLE_MESSAGE =
   "Only this Shell's hub assistant, in the session it was enrolled with, can reach assistants on other hosts.";
 
@@ -524,6 +530,35 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         return { ...this.ok(), projects, projectsOmitted: omitted };
       } catch (error) {
         return { ...this.failed(error), ...base };
+      }
+    });
+  }
+
+  /**
+   * The host's Codex account quota as Codex reported it there, on demand. A
+   * read: the hub, an opted-in host and the read budget, and passes the pause.
+   */
+  readQuota(
+    helpSessionId: string,
+    args: HostReadQuotaArgs
+  ): Promise<HostMessagingOutcome<HostReadQuotaResult>> {
+    return this.settle(helpSessionId, async () => {
+      const base = { codex: null, observedAt: null };
+      const refused = this.refuse(args.hostId, "inspect") ?? this.limitRead();
+      if (refused) return { ...refused, ...base };
+      try {
+        const codex = await this.requireClient().readQuota(args.hostId);
+        return { ...this.ok(), codex, observedAt: this.now() };
+      } catch (error) {
+        // A read sends nothing, so a call the host never answered is a timeout, not an ambiguous message.
+        if (codeOf(error) === "OUTCOME_UNKNOWN") {
+          return { ...this.outcomeWith("disconnected", QUOTA_NO_ANSWER_DETAIL), ...base };
+        }
+        const failure = this.failed(error);
+        if (failure.outcome === "unsupported") {
+          return { ...this.outcomeWith("unsupported", QUOTA_UNSUPPORTED_DETAIL), ...base };
+        }
+        return { ...failure, ...base };
       }
     });
   }

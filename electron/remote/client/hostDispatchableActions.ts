@@ -70,6 +70,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "host.list",
   "host.listAssistants",
   "host.listTasks",
+  "host.readQuota",
   "host.sendMessage",
   "host.startAssistant",
   "host.switch",
