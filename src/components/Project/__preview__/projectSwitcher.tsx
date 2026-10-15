@@ -1,5 +1,5 @@
 import "@/components/Layout/__preview__/launcherShims";
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
@@ -21,6 +21,12 @@ import {
   type ProjectSwitcherScratchRow,
   type SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
+import {
+  installOtherHosts,
+  isHostsFixture,
+  settleOtherHosts,
+  useOtherHostsReader,
+} from "./otherHostsFixtures";
 import "@/index.css";
 
 /**
@@ -32,11 +38,16 @@ import "@/index.css";
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?state=browse|dropdown|dropdown-menu|search|nomatch|empty|collapsed
  *          |groups|groups-search|new-group|manage-groups|delete-group|archived-open
+ *          |hosts-search|hosts-search-host
+ *   ?hosts=offline|mixed|rich|search   other hosts for the band below Scratch
  */
 
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
 const state = params.get("state") ?? "browse";
+const hostsParam = params.get("hosts");
+const hostsFixture = isHostsFixture(hostsParam) ? hostsParam : null;
+if (hostsFixture) installOtherHosts(hostsFixture);
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
@@ -384,6 +395,12 @@ function fixture(): Fixture {
         scratches: SCRATCHES,
         ranked: true,
       };
+    // Nothing here matches; another host's project does, and takes Enter.
+    case "hosts-search":
+      return { query: "hub", results: [], scratches: SCRATCHES, ranked: true };
+    // The query names a host that isn't connected, and nothing else.
+    case "hosts-search-host":
+      return { query: "studio-02", results: [], scratches: SCRATCHES, ranked: true };
     case "collapsed": {
       const collapsedKeys: ProjectBandKey[] = ["other", "pinned"];
       return {
@@ -462,11 +479,36 @@ function Surface() {
   );
 }
 
+function OtherHostsReader() {
+  useOtherHostsReader();
+  return null;
+}
+
+/** With other hosts, the palette mounts once their listings have settled. */
+function Root() {
+  const [ready, setReady] = useState(hostsFixture === null);
+  useEffect(() => {
+    if (!hostsFixture) return;
+    settleOtherHosts().then(
+      () => setReady(true),
+      (error: unknown) => {
+        document.body.dataset.hostsError = String(error);
+      }
+    );
+  }, []);
+  return (
+    <>
+      {hostsFixture && <OtherHostsReader />}
+      {ready && <Surface />}
+    </>
+  );
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <TooltipProvider>
       <div data-preview-frame className="h-screen w-screen">
-        <Surface />
+        <Root />
         {isGroupsState && <ProjectGroupDialogs />}
       </div>
     </TooltipProvider>

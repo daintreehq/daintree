@@ -172,9 +172,10 @@ describe("Other hosts band", () => {
     render(<Band query="" onChosen={() => {}} />);
     const band = await screen.findByTestId("project-switcher-other-hosts");
     await screen.findByRole("option", { name: /^web on studio-02/ });
-    // This machine lists nothing here (the loader knows no "local"), so it drops
-    // out; a host never listed this run still shows, offering to connect.
-    expect(groupNames(band)).toEqual(["studio-01", "studio-02", "studio-03· Not connected"]);
+    // A host with projects is a group named by its header, which says its link;
+    // a host never listed this run is one row of its own, offering to connect.
+    expect(groupNames(band)).toEqual(["studio-01, Connected", "studio-02, Connected"]);
+    expect(screen.getByRole("option", { name: "Connect to studio-03, Unreachable" })).toBeTruthy();
     expect(loader.mock.calls.map(([id]) => id)).not.toContain("studio-03");
     // The header names its group, so it can't be hidden from the reader it names it for.
     for (const group of band.querySelectorAll('[role="group"]')) {
@@ -211,7 +212,10 @@ describe("Other hosts band", () => {
     );
     render(<Band query="" onChosen={() => {}} />);
     expect(await screen.findByRole("option", { name: /^api on studio-01/ })).toBeTruthy();
-    expect(screen.queryByText(/studio-02/)).toBeNull();
+    // The host still answering is there, saying so, with nothing to pick yet.
+    const listing = screen.getByRole("option", { name: "studio-02, Connected · Listing…" });
+    expect(listing.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.queryByRole("option", { name: /on studio-02/ })).toBeNull();
   });
 
   it("says a listing failed and offers Retry rather than showing no projects", async () => {
@@ -268,15 +272,22 @@ describe("Other hosts band", () => {
     expect(screen.queryByRole("option", { name: /^web on studio-02/ })).toBeNull();
   });
 
-  it("names the host and the folder on every row", async () => {
+  it("names the host and the folder on every row, and draws them only where they earn it", async () => {
     list.mockResolvedValue([host("studio-01")]);
     setHostProjectsLoader(loader);
-    render(<Band query="" onChosen={() => {}} />);
+    const { rerender } = render(<Band query="" onChosen={() => {}} />);
     const row = await screen.findByRole("option", {
       name: /^api on studio-01, \/home\/greg\/api$/,
     });
-    expect(row.textContent).toContain("studio-01");
-    expect(row.textContent).toContain("/home/greg/api");
+    // The header above already names the host; the name already says the folder.
+    expect(row.textContent).not.toContain("studio-01");
+    expect(row.textContent).not.toContain("/home/greg/api");
+
+    // A query the path answers rather than the name shows the path it matched.
+    rerender(<Band query="greg" onChosen={() => {}} />);
+    expect(
+      (await screen.findByRole("option", { name: /^api on studio-01/ })).textContent
+    ).toContain("/home/greg/api");
   });
 
   it("switches host and project together, in a new window on Cmd-click", async () => {

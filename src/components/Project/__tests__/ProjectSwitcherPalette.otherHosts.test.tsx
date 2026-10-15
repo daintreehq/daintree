@@ -276,7 +276,9 @@ function band(options: OtherHostOption[], remoteNames: string[] = []) {
         hostId: option.hostId,
         hostName: option.hostName,
         platform: option.platform,
-        note: null,
+        link: { tone: "live", state: "Connected" },
+        listing: null,
+        note: "Connected",
         options: [option],
       });
     }

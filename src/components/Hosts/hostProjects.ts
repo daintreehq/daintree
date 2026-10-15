@@ -5,7 +5,13 @@ import type { HostProjectSummary } from "@shared/types/ipc/remoteHosts";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { logWarn } from "@/utils/logger";
 import { hasRemoteHosts, useHostList } from "./hostList";
-import { buildHostMenuRows, type ClientPlatform } from "./hostModel";
+import {
+  buildHostMenuRows,
+  describeHostMenuState,
+  hostLinkTone,
+  type ClientPlatform,
+  type HostLinkTone,
+} from "./hostModel";
 
 /** A project as another host lists it. Its id means something only on that host. */
 export type HostProjectRef = HostProjectSummary;
@@ -24,7 +30,8 @@ export interface HostListing {
  * what it had; it is never presented as live.
  */
 export type HostListingState =
-  | { status: "loading"; lastGood: HostListing | null }
+  /** `afterFailure`: asked again after a failed listing, so its Retry keeps its place. */
+  | { status: "loading"; lastGood: HostListing | null; afterFailure?: boolean }
   | { status: "loaded"; list: HostListing }
   | { status: "failed"; lastGood: HostListing | null }
   | { status: "not-connected"; lastGood: HostListing | null };
@@ -62,6 +69,8 @@ interface HostRequest {
   generation: number;
   outcome: "pending" | "ok" | "failed";
   settledAt: number;
+  /** This request follows a failed one. */
+  afterFailure?: boolean;
 }
 
 interface CatalogueEntry {
@@ -97,7 +106,11 @@ function setEntry(hostId: HostId, entry: CatalogueEntry | null): void {
 }
 
 /** Ask a host for its projects unless an answer is on its way or still fresh. */
-function requestHostProjects(hostId: HostId, now: number = Date.now()): void {
+function requestHostProjects(
+  hostId: HostId,
+  now: number = Date.now(),
+  afterFailure: boolean = entries.get(hostId)?.request?.outcome === "failed"
+): void {
   const entry = entries.get(hostId);
   const request = entry?.request;
   if (request?.outcome === "pending") return;
@@ -106,7 +119,7 @@ function requestHostProjects(hostId: HostId, now: number = Date.now()): void {
   const generation = nextGeneration++;
   setEntry(hostId, {
     lastGood: entry?.lastGood ?? null,
-    request: { generation, outcome: "pending", settledAt: 0 },
+    request: { generation, outcome: "pending", settledAt: 0, afterFailure },
   });
   // Each host settles on its own: one slow host never holds back another's rows.
   load(hostId).then(
@@ -132,8 +145,10 @@ function settle(hostId: HostId, generation: number, projects: HostProjectRef[] |
 /** Ask a host again now, whatever was cached. Its last list stays until the answer. */
 export function retryHostProjects(hostId: HostId): void {
   const entry = entries.get(hostId);
+  const afterFailure =
+    entry?.request?.outcome === "failed" || entry?.request?.afterFailure === true;
   if (entry?.request) setEntry(hostId, { lastGood: entry.lastGood, request: null });
-  requestHostProjects(hostId);
+  requestHostProjects(hostId, Date.now(), afterFailure);
 }
 
 /**
@@ -154,7 +169,7 @@ function listingStateOf(entry: CatalogueEntry | undefined, reachable: boolean): 
     case "failed":
       return { status: "failed", lastGood };
     default:
-      return { status: "loading", lastGood };
+      return { status: "loading", lastGood, afterFailure: entry?.request?.afterFailure === true };
   }
 }
 
@@ -168,6 +183,12 @@ export interface OtherHost {
   platform: HostPlatform | null;
   /** The link is up (always true for this machine), so the host can be switched to. */
   reachable: boolean;
+  /**
+   * The link as the host menu draws it: its mark, and its words ("Connected",
+   * "Connecting…", "Unreachable", …). No words for this machine, which is
+   * always there.
+   */
+  link: { tone: HostLinkTone; state: string | null };
 }
 
 export interface OtherHostTarget extends OtherHost {
@@ -193,6 +214,10 @@ export function useOtherHosts(localPlatform: ClientPlatform): OtherHost[] {
       name: row.name,
       platform: row.platform,
       reachable: row.isLocal || row.connection?.status === "connected",
+      link: {
+        tone: hostLinkTone(row),
+        state: row.isLocal ? null : describeHostMenuState(row).state,
+      },
     }));
 }
 

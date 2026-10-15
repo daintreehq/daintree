@@ -25,7 +25,6 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { FolderClosed, FolderDown, Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { getProjectGradient } from "@/lib/colorUtils";
 import { isMac } from "@/lib/platform";
 import { describeKeyCap, formatChordText } from "@/lib/kbdShortcut";
 import { AppPaletteDialog, KBD_CLASS, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
@@ -124,6 +123,8 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { keyBelongsToField } from "@/hooks/useListboxCursor";
 import { OpenOnHostSubmenu } from "@/components/Hosts/OpenOnHostSubmenu";
+import { HostNameText } from "@/components/Hosts/HostNameText";
+import { CommandTile, ProjectTile, StatusSlotSpacer } from "./paletteTiles";
 import {
   OTHER_HOSTS_LIST_ID,
   OtherHostsSection,
@@ -807,21 +808,24 @@ export function getProjectSwitcherEnterHint(
 /**
  * The footer's Enter hint for a row of the other-hosts band: Enter opens the
  * project on its host (connecting first when it isn't), ⌘↵ in a new window;
- * Retry asks the host again. Exported for its own test.
+ * a host listing nothing is switched to; Retry asks the host again — and says
+ * nothing while that answer is on its way, since Enter then does nothing.
+ * Exported for its own test.
  */
 export function getOtherHostEnterHint(
   option: OtherHostOption,
   modifierHeld: boolean,
   mac: boolean = isMac()
-): { keys: string; label: string } {
-  if (option.kind === "retry") return { keys: "↵", label: "Retry" };
+): { keys: string; label: string; host?: string } | null {
+  if (option.kind === "retry") return option.busy ? null : { keys: "↵", label: "Retry" };
   if (modifierHeld) {
     return { keys: `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`, label: "New window" };
   }
-  return {
-    keys: "↵",
-    label: option.kind === "connect" ? "Connect" : `Open on ${option.hostName}`,
-  };
+  if (option.kind === "connect") return { keys: "↵", label: "Connect" };
+  if (option.kind === "host") return { keys: "↵", label: "Switch" };
+  // The host apart from the words, so the footer can clip a long name the way
+  // the band does — keeping the part that tells two machines apart.
+  return { keys: "↵", label: "Open on", host: option.hostName };
 }
 
 function ProjectListItem({
@@ -895,23 +899,7 @@ function ProjectListItem({
     >
       <StatusDot status={status} showResumeDot={showResumeDot} />
 
-      <div
-        // Identity colour and emoji are decoration: left in the name, a reader
-        // hears "deciduous tree, daintree" before the name it qualifies.
-        aria-hidden="true"
-        className={cn(
-          // Wash/shadow var fallbacks keep themes without the overrides byte-identical.
-          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0",
-          "h-8 w-8 text-base"
-        )}
-        style={{
-          background: project.color
-            ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(project.color)}`
-            : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-surface-sidebar)",
-        }}
-      >
-        <span className="leading-none select-none filter drop-shadow-sm">{project.emoji}</span>
-      </div>
+      <ProjectTile emoji={project.emoji} color={project.color} />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center min-w-0">
@@ -2556,19 +2544,26 @@ function ProjectSwitcherFooter({
     // menu and from ⌘⌫ itself, and both open the same confirmation.
     <div className="@container/switcher-footer w-full flex items-center justify-between gap-3">
       {hint ? (
-        <span className="shrink-0">
+        <span className="flex min-w-0 items-center">
           <span className="sr-only">{describeKeyCap(hint.keys, isMac())}</span>
-          <kbd aria-hidden="true" className={KBD_CLASS}>
+          <kbd aria-hidden="true" className={cn(KBD_CLASS, "shrink-0")}>
             {hint.keys}
           </kbd>
-          <span className="ml-1.5">{hint.label}</span>
+          {hint.host ? (
+            <span className="ml-1.5 flex min-w-0">
+              <span className="shrink-0 whitespace-pre">{`${hint.label} `}</span>
+              <HostNameText name={hint.host} />
+            </span>
+          ) : (
+            <span className="ml-1.5 whitespace-nowrap">{hint.label}</span>
+          )}
         </span>
       ) : (
         // Holds the rail's left slot so "All agents" stays put rather than
         // sliding across as the last band folds.
         <span className="shrink-0" />
       )}
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="flex shrink-0 items-center gap-3">
         {/*
           The switcher answers "which project", so the fleet-wide view belongs
           beside it rather than inside its list: adding a row would put a
@@ -2612,30 +2607,6 @@ function ProjectSwitcherFooter({
  * out past that same edge.
  */
 /**
- * The 32x32 icon tile every non-workspace row wears.
- *
- * Two treatments, and the split is semantic rather than decorative: `manage`
- * acts on something that already exists, `create` brings something new in and
- * wears the dashed outline that has always marked an add affordance here. Both
- * ride the audited overlay ladder rather than a raw tint/muted alpha, so they
- * hold their separation from the row underneath in every theme.
- */
-function CommandTile({ icon: Icon, tone }: { icon: LucideIcon; tone: "manage" | "create" }) {
-  return (
-    <div
-      className={cn(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-lg)] text-daintree-text/50",
-        tone === "create"
-          ? "border border-dashed border-border-strong bg-overlay-soft"
-          : "bg-overlay-medium"
-      )}
-    >
-      <Icon className="h-4 w-4" aria-hidden="true" />
-    </div>
-  );
-}
-
-/**
  * A palette-level command: the actions under the divider, which act on the
  * project list rather than on a workspace in it.
  *
@@ -2669,18 +2640,6 @@ function ProjectCommandRow({
       <span className="font-medium text-sm leading-tight">{label}</span>
     </button>
   );
-}
-
-/**
- * The empty stand-in for `StatusDot` on a row that has no status to report.
- *
- * Every row in this palette puts its tile on one column, and on a workspace row
- * that column is reached across an 8px status mark. A create/command row has no
- * mark, so without this its tile climbed 16px left and the palette grew a
- * second icon column for its actions (#11947).
- */
-function StatusSlotSpacer() {
-  return <div className="w-2 h-2 shrink-0" aria-hidden="true" />;
 }
 
 const PROJECT_ACTION_ROW_CLASS = cn(
@@ -2810,9 +2769,17 @@ function ProjectPaletteInner({
       ? hostOptions.findIndex((option) => option.key === hostCursorState.key)
       : -1;
   // Nothing here matched: the first project another host offers is what Enter
-  // opens, the way the first result is when there are results.
+  // opens, the way the first result is when there are results. A search that
+  // named only a host lands on that host's own row instead.
+  const firstHostProject = hostOptions.findIndex((option) => option.kind === "project");
   const defaultHostIndex =
-    results.length === 0 ? hostOptions.findIndex((option) => option.kind === "project") : -1;
+    results.length > 0
+      ? -1
+      : firstHostProject >= 0
+        ? firstHostProject
+        : (rankedSearch ?? query.trim().length > 0) && hostOptions.length > 0
+          ? 0
+          : -1;
   const hostIndex = claimedHostIndex >= 0 ? claimedHostIndex : defaultHostIndex;
   const hostCursor = hostIndex >= 0 ? hostIndex : null;
   const activeHostOption: OtherHostOption | undefined =
@@ -2847,10 +2814,23 @@ function ProjectPaletteInner({
   };
 
   const activeHostOptionId = activeHostOption ? otherHostOptionId(activeHostOption) : null;
+  // Rows a host adds above the cursor push it down without changing its id, and
+  // so do a listing host's header and a path line a query earns; the band's
+  // shape is a reason to bring the cursor back into view too.
+  const hostRowsShape = hostGroups
+    .map((group) =>
+      [
+        group.hostId,
+        ...group.options.map((option) =>
+          option.kind === "project" && option.showPath ? `${option.key}+path` : option.key
+        ),
+      ].join(" ")
+    )
+    .join("\n");
   useEffect(() => {
     if (activeHostOptionId === null) return;
     document.getElementById(activeHostOptionId)?.scrollIntoView?.({ block: "nearest" });
-  }, [activeHostOptionId]);
+  }, [activeHostOptionId, hostRowsShape]);
 
   /**
    * Puts the cursor on a position in the whole arrow-key order: `results`,
@@ -3083,7 +3063,16 @@ function ProjectPaletteInner({
     [remoteNamesKey, currentHostName]
   );
   const hostProjectCount = hostOptions.filter((option) => option.kind === "project").length;
-  const resultCount = results.length + hostProjectCount;
+  // While searching, a host row the query named is a match like any other and
+  // counts — except a Retry already under way, which holds its row but does
+  // nothing.
+  const hostMatchCount = isRankedSearch
+    ? hostOptions.filter((option) => !(option.kind === "retry" && option.busy)).length
+    : hostProjectCount;
+  const resultCount = results.length + hostMatchCount;
+  // The band answers the search when it draws anything for it — a host still
+  // listing included, which says more than "nothing matched" would.
+  const bandAnswersSearch = isRankedSearch ? hostGroups.length > 0 : hostProjectCount > 0;
   const resultCountRef = useRef(resultCount);
   useEffect(() => {
     resultCountRef.current = resultCount;
@@ -3123,7 +3112,9 @@ function ProjectPaletteInner({
           aria-haspopup="listbox"
           aria-label="Search workspaces"
           aria-controls={
-            hostOptions.length > 0 ? `project-list ${OTHER_HOSTS_LIST_ID}` : "project-list"
+            // Groups, not options: a band holding only a host still giving its
+            // first list has no options, but it is still this popup's content.
+            hostGroups.length > 0 ? `project-list ${OTHER_HOSTS_LIST_ID}` : "project-list"
           }
           aria-activedescendant={activeDescendant}
         />
@@ -3188,7 +3179,7 @@ function ProjectPaletteInner({
           canAddProject={Boolean(onAddProject)}
           canCreateScratch={Boolean(onCreateScratch)}
           scratchesStandAlone={scratchesStandAlone}
-          hasOtherHostResults={hostProjectCount > 0}
+          hasOtherHostResults={bandAnswersSearch}
           sharedNameHost={sharedNameHost}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
@@ -3234,6 +3225,19 @@ function ProjectPaletteInner({
               onReturnFocus={() => inputRef.current?.focus()}
             />
           </>
+        )}
+        {hostGroups.length > 0 && (
+          // The band's own top edge, drawn like Scratch's: hidden when nothing
+          // sits above it, where it would double the search field's divider.
+          <AppPaletteDialog.Divider
+            hidden={
+              results.length === 0 &&
+              isRankedSearch &&
+              // Nothing local matched and the band answers, so no empty state
+              // is drawn above it either.
+              bandAnswersSearch
+            }
+          />
         )}
         <OtherHostsSection
           groups={hostGroups}
