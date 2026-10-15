@@ -30,7 +30,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { fenceFor } from "../../../shared/utils/quoteFence.js";
 import type { HostMessagingRuntimeHandle } from "../../services/mcp-server/hostMessagingTools.js";
 import { TERMINAL_EXCHANGE_STATES, type ExchangeRecord } from "../exchange/types.js";
-import type { AssistantExchangeClient } from "./AssistantExchangeClient.js";
+import { RetryWindowPassedError, type AssistantExchangeClient } from "./AssistantExchangeClient.js";
 import type {
   AssistantMessagingPolicy,
   LaneRef,
@@ -201,8 +201,6 @@ export const HUB_MAX_CONCURRENT_WAITS = 2;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 /** The least time a wait's last poll gets, so a wait shorter than one interval still looks once. */
 const FINAL_POLL_FLOOR_MS = 1_000;
-/** Words the exchange client's retry-window refusal carries; it never crosses the link. */
-const RETRY_WINDOW_MARKER = "past its retry window";
 const LANE_OBSERVATIONS_MAX = 64;
 
 /** Settles with `work`, or rejects once `ms` pass; the timer never outlives it. */
@@ -405,10 +403,10 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         // The client's own refusal past the retry window, where a lookup is all
         // that's left; the host's VALIDATION is a taskId already used for a
         // different message.
-        if (codeOf(error) === "VALIDATION") {
-          const expired = formatErrorMessage(error, "").includes(RETRY_WINDOW_MARKER);
-          return { ...this.outcome(expired ? "expired" : "conflict"), ...base };
+        if (error instanceof RetryWindowPassedError) {
+          return { ...this.outcome("expired"), ...base };
         }
+        if (codeOf(error) === "VALIDATION") return { ...this.outcome("conflict"), ...base };
         const named = errorOutcome(error);
         if (named !== null) return { ...this.outcome(named), ...base };
         // Not proven undelivered: the journal still holds the attempt for a lookup.

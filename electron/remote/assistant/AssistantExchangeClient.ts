@@ -54,6 +54,21 @@ export interface MovedExchange {
 const CALL_TIMEOUT_MS = 15_000;
 
 /**
+ * This Shell's own refusal to resend a message whose outcome stayed unknown
+ * past its retry window. Its own class, so it is never mistaken for a host's
+ * VALIDATION, which crosses the link as plain text.
+ */
+export class RetryWindowPassedError extends AppError {
+  constructor(messageId: string) {
+    super({
+      code: "VALIDATION",
+      message: `Exchange ${messageId} went unanswered past its retry window; look it up or send a new message`,
+    });
+    this.name = "RetryWindowPassedError";
+  }
+}
+
+/**
  * What the host answers before it records anything: no authenticated sender,
  * no consent for the lane, an earlier generation, no support at all. A
  * resend of a recorded messageId is answered from its record ahead of these.
@@ -187,10 +202,7 @@ export class AssistantExchangeClient {
       (entry?.unresolvedAt != null && Date.now() - entry.sentAt > EXCHANGE_RETRY_WINDOW_MS);
     if (pastWindow) {
       if (entry?.unresolvedAt != null) await this.lookUp(hostId, session, payload.messageId);
-      throw new AppError({
-        code: "VALIDATION",
-        message: `Exchange ${payload.messageId} went unanswered past its retry window; look it up or send a new message`,
-      });
+      throw new RetryWindowPassedError(payload.messageId);
     }
     const attempt = journal.noteSending(hostId, payload.messageId);
     // Only a message new to the journal is this hub's: a resend keeps whose it was, and

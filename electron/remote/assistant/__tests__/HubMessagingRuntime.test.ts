@@ -7,6 +7,7 @@ import type {
   LaneEnrollment,
   MessagingDenial,
 } from "../AssistantMessagingPolicy.js";
+import { RetryWindowPassedError } from "../AssistantExchangeClient.js";
 import { LANE_NOT_RUNNING_MESSAGE } from "../hostExchanges.js";
 import {
   HUB_SENDS_PER_HOST_PER_MINUTE,
@@ -270,11 +271,9 @@ describe("HubMessagingRuntime (#13336)", () => {
       [new AppError({ code: "STALE_GENERATION", message: "x" }), "lane_unavailable"],
       [new AppError({ code: "PERMISSION", message: LANE_NOT_RUNNING_MESSAGE }), "lane_unavailable"],
       [new AppError({ code: "PERMISSION", message: "not enrolled" }), "policy_rejected"],
-      [
-        new AppError({ code: "VALIDATION", message: "went unanswered past its retry window" }),
-        "expired",
-      ],
-      [new AppError({ code: "VALIDATION", message: "reused for another message" }), "conflict"],
+      [new RetryWindowPassedError("task-1"), "expired"],
+      // A host's refusal names the caller's own taskId, whatever words it holds.
+      [new AppError({ code: "VALIDATION", message: "past its retry window reused" }), "conflict"],
     ])("names %s as %s", async (error, outcome) => {
       client.send.mockRejectedValueOnce(error);
       await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
