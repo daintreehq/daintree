@@ -1,6 +1,6 @@
 import { Fragment, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { SEVERITY_GLYPH, SeverityMark } from "@/lib/statusSeverity";
-import { OctagonAlert } from "@/components/icons";
+import { OctagonAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SearchField } from "@/components/ui/SearchField";
 import { TimeAgo } from "@/components/ui/TimeAgo";
