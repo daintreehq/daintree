@@ -7,6 +7,10 @@ import { FAILURE_MESSAGE, FIXTURE_FILES, MANY_FILES, searchFixture } from "./fix
 // user's own persisted state.
 const isHarness = !Reflect.get(window, "electron");
 
+// Long enough to land after the picker's debounce like a real IPC round trip,
+// short enough to keep a capture sweep quick.
+const SEARCH_LATENCY_MS = 20;
+
 const params = new URLSearchParams(window.location.search);
 const failing = params.get("search") === "fail";
 const files = params.get("repo") === "many" ? MANY_FILES : FIXTURE_FILES;
@@ -21,7 +25,7 @@ installPreviewShims({
   files: new Proxy(
     {
       search: async ({ query, limit }: { cwd: string; query: string; limit?: number }) => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await new Promise((resolve) => setTimeout(resolve, SEARCH_LATENCY_MS));
         if (failing) {
           log.calls.push({ query, outcome: "fail", count: 0 });
           throw new Error(FAILURE_MESSAGE);

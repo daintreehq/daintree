@@ -89,7 +89,6 @@ import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
-import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
 import { FilePanePicker } from "./FilePanePicker";
 

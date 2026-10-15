@@ -131,14 +131,15 @@ function useWrapsToSecondLine() {
   const ref = useCallback((el: HTMLElement | null) => {
     if (!el) return;
     const check = () => {
-      const first = el.firstElementChild as HTMLElement | null;
-      const last = el.lastElementChild as HTMLElement | null;
+      const first = el.firstElementChild;
+      const last = el.lastElementChild;
       // Past half the name's height, not merely lower: on one line the smaller
       // folder sits a few pixels down on the name's baseline.
       setWrapped(
-        first !== null &&
+        first instanceof HTMLElement &&
+          last instanceof HTMLElement &&
           last !== first &&
-          last!.offsetTop > first.offsetTop + first.offsetHeight / 2
+          last.offsetTop > first.offsetTop + first.offsetHeight / 2
       );
     };
     check();
