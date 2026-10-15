@@ -68,7 +68,6 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDiffContent } from "@/panels/diff/useDiffContent";
 import type { DiffSubject } from "@/panels/diff/diffContentCache";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { SearchField } from "@/components/ui/SearchField";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
@@ -92,7 +91,7 @@ import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
 import { useFileDocumentDraftText, useFileDocumentFlags } from "@/store/fileDocumentStore";
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
-import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import { FilePanePicker } from "./FilePanePicker";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -237,52 +236,6 @@ function externalTargetCopy(
         dismissAriaLabel: "Dismiss default app error",
       };
   }
-}
-
-const SEARCH_DEBOUNCE_MS = 150;
-
-interface PickerResult {
-  relativePath: string;
-  absolutePath: string;
-}
-
-/** Debounced file search over the panel's root — the empty-state picker. */
-function useFileSearch(rootPath: string, query: string): PickerResult[] {
-  const [results, setResults] = useState<PickerResult[]>([]);
-
-  useEffect(() => {
-    if (!rootPath) {
-      setResults([]);
-      return;
-    }
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      filesClient
-        // The files:search IPC schema caps limit at 100; an empty query
-        // lists the first files alphabetically.
-        .search({ cwd: rootPath, query, limit: 100 })
-        .then(({ files }) => {
-          if (cancelled) return;
-          const root = toForwardSlashes(rootPath).replace(/\/$/, "");
-          setResults(
-            files
-              .filter((f) => !f.endsWith("/"))
-              .slice(0, 50)
-              .map((relativePath) => ({ relativePath, absolutePath: `${root}/${relativePath}` }))
-          );
-        })
-        .catch((err) => {
-          if (!cancelled) setResults([]);
-          logError("[FilePane] file search failed", err);
-        });
-    }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [rootPath, query]);
-
-  return results;
 }
 
 export function FilePane({
@@ -1161,9 +1114,7 @@ export function FilePane({
   // blocks a double submit from the first millisecond.
   const showRetrySpinner = useDohertyGate(isErrorTargetPending);
 
-  const [pickerQuery, setPickerQuery] = useState("");
   const pickerRoot = worktreePath || projectPath;
-  const pickerResults = useFileSearch(filePath ? "" : pickerRoot, pickerQuery);
 
   const fileName = filePath ? filePath.split(/[/\\]/).filter(Boolean).pop() : undefined;
   // A user-locked rename outranks the derived file name (title layering: the
@@ -1494,11 +1445,16 @@ export function FilePane({
           // Auto margins on the end children rather than `justify-center`:
           // `h-full` pins this box to the scrollport, and centred overflow
           // spills at BOTH ends, so the empty state's icon and title become
-          // unreachable in a short pane once the recent-files list fills. Auto
+          // unreachable in a short pane once the result list fills. Auto
           // margins split the free space the same way and collapse to zero when
           // there is none. Same fix as `ContentGridEmptyState`.
-          <div className="flex h-full w-full flex-col items-center gap-4 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
+          //
+          // A size container, because a short pane is the case that matters:
+          // there the introduction gives its height to the results rather than
+          // pushing them below the fold.
+          <div className="flex h-full w-full flex-col items-center gap-4 p-6 [container-type:size] [container-name:file-picker] [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
             <EmptyState
+              className="[@container_file-picker_(max-height:22.5rem)]:hidden"
               variant="zero-data"
               scale="canvas"
               icon={<FileText className="h-6 w-6" />}
@@ -1510,35 +1466,10 @@ export function FilePane({
               }
             />
             {pickerRoot && (
-              <div className="w-full max-w-md flex flex-col gap-1 min-h-0">
-                <SearchField
-                  size="palette"
-                  value={pickerQuery}
-                  onChange={(e) => setPickerQuery(e.target.value)}
-                  onClear={() => setPickerQuery("")}
-                  placeholder="Search files"
-                  aria-label="Search files"
-                  data-testid="file-pane-search"
-                />
-                <div className="max-h-56 overflow-y-auto flex flex-col" role="listbox">
-                  {pickerResults.map((result) => (
-                    <button
-                      key={result.absolutePath}
-                      type="button"
-                      role="option"
-                      aria-selected={false}
-                      onClick={() => setFilePanelPath(id, result.absolutePath)}
-                      className={cn(
-                        "text-left px-2 py-1.5 rounded text-xs font-mono truncate text-muted-foreground transition-colors hover:text-text-primary hover:bg-border-default",
-                        PALETTE_ROW_FOCUS_CLASS
-                      )}
-                      data-testid="file-pane-result"
-                    >
-                      {result.relativePath}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <FilePanePicker
+                rootPath={pickerRoot}
+                onOpen={(absolutePath) => setFilePanelPath(id, absolutePath)}
+              />
             )}
           </div>
         )}

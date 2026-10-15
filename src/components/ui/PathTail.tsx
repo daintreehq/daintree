@@ -15,7 +15,10 @@ export function PathTail({
   children,
   className,
   ...rest
-}: { children: string } & Omit<React.HTMLAttributes<HTMLSpanElement>, "children">) {
+}: { children: string; ref?: React.Ref<HTMLSpanElement> } & Omit<
+  React.HTMLAttributes<HTMLSpanElement>,
+  "children"
+>) {
   return (
     <span {...rest} className={cn("truncate text-left [direction:rtl]", className)}>
       <bdi dir="ltr">{children}</bdi>
