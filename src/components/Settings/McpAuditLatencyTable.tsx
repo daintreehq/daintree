@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SeverityMark } from "@/lib/statusSeverity";
 import { SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
+import { AuditDuration, AuditToolId } from "./auditLogParts";
 import { type McpLogRecord, isAuditRecord } from "@shared/types";
 import { pluralize } from "@/lib/pluralize";
 
@@ -101,7 +102,7 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
   const hasRecords = stats.length > 0;
 
   // Result rows sit under their tool's row, so each cell names both headers
-  // explicitly: a screen reader reads "git.getDiff, Success, p95 (ms), 6120".
+  // explicitly: a screen reader reads "git.getDiff, Success, p95, 6.1s".
   const renderBlock = (block: ToolLatencyBlock, blockLabel: string, toolIndex: number) => {
     if (block.count === 0) return null;
     const band = sloBand(block.p95);
@@ -117,16 +118,20 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
           {block.count}
         </td>
         <td headers={cellHeaders("p50")} className={cn(TD_NUM, "px-2")}>
-          {block.p50}
+          <AuditDuration ms={block.p50} />
         </td>
         <td headers={cellHeaders("p95")} className={cn(TD_NUM, "px-2 text-text-primary")}>
-          {block.p95}
+          <AuditDuration ms={block.p95} />
         </td>
         <td headers={cellHeaders("speed")} className="py-1.5 pl-2">
+          {/* A fixed slot for the one band that carries a mark, so every band's
+              word starts on the same edge. */}
           {band && (
-            <span className="inline-flex items-center gap-1">
-              {band.slow && (
+            <span className="grid grid-cols-[0.75rem_auto] items-center gap-1">
+              {band.slow ? (
                 <SeverityMark severity="warning" label="Slow" className="h-3 w-3" decorative />
+              ) : (
+                <span />
               )}
               {band.label}
             </span>
@@ -164,40 +169,45 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
         {isOpen && hasRecords && (
           <div id={panelId} className="px-4 pb-3 pl-9">
             <table className="w-full table-fixed text-xs">
-              <caption className="sr-only">Latency by tool, in milliseconds</caption>
+              <caption className="sr-only">Latency by tool</caption>
               <thead>
                 <tr className="border-b border-border-subtle">
                   <th scope="col" className={cn(TH, "text-left pr-2")}>
                     Tool
                   </th>
+                  {/* Fixed numeric tracks sized to their widest value ("12.4s",
+                      "999ms"), so the tool column keeps every pixel left over. */}
                   <th
                     id={`${tableId}-calls`}
                     scope="col"
-                    className={cn(TH, "text-right px-2 w-16")}
+                    className={cn(TH, "text-right px-2 w-14")}
                   >
                     Calls
                   </th>
-                  <th id={`${tableId}-p50`} scope="col" className={cn(TH, "text-right px-2 w-20")}>
-                    p50 (ms)
+                  <th id={`${tableId}-p50`} scope="col" className={cn(TH, "text-right px-2 w-16")}>
+                    p50
                   </th>
-                  <th id={`${tableId}-p95`} scope="col" className={cn(TH, "text-right px-2 w-20")}>
-                    p95 (ms)
+                  <th id={`${tableId}-p95`} scope="col" className={cn(TH, "text-right px-2 w-16")}>
+                    p95
                   </th>
-                  <th id={`${tableId}-speed`} scope="col" className={cn(TH, "text-left pl-2 w-24")}>
-                    <span className="sr-only">Speed</span>
+                  {/* The heading starts where the band words do; Slow's mark hangs
+                      in the gutter to their left. */}
+                  <th id={`${tableId}-speed`} scope="col" className={cn(TH, "text-left pl-6 w-20")}>
+                    Speed
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border-subtle">
                 {stats.map((row, i) => (
                   <React.Fragment key={row.toolId}>
-                    <tr>
+                    {/* Top-aligned: a long id wraps, and its count stays on its first line. */}
+                    <tr className="align-top">
                       <th
                         id={`${tableId}-t${i}`}
                         scope="row"
-                        className="py-1.5 pr-2 text-left font-mono font-normal text-text-primary truncate"
+                        className="py-1.5 pr-2 text-left font-mono font-normal text-text-primary"
                       >
-                        {row.toolId}
+                        <AuditToolId id={row.toolId} />
                       </th>
                       <td className={cn(TD_NUM, "px-2 text-text-primary")}>
                         {row.success.count + row.other.count}
