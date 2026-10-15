@@ -277,6 +277,9 @@ function createMockWindow() {
     isDestroyed: vi.fn(() => false),
     on: vi.fn(),
     removeListener: vi.fn(),
+    // The background-resize debounce can fire while a test is still running;
+    // without this it throws outside any test and fails the whole run.
+    isMinimized: vi.fn(() => false),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
     contentView: {
       on: vi.fn(),
