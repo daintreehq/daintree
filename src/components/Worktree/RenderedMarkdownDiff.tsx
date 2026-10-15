@@ -561,10 +561,7 @@ const READER_SCROLL_KEYS = new Set([
 function columnSpans(viewport: HTMLElement): Array<[left: number, width: number]> {
   const row = viewport.querySelector("tr");
   if (!row) return [];
-  return [...row.children].map((cell) => {
-    const box = cell as HTMLElement;
-    return [box.offsetLeft, box.offsetWidth];
-  });
+  return [...row.cells].map((cell) => [cell.offsetLeft, cell.offsetWidth]);
 }
 
 /** The leader's scroll offset, as the same point within the same column of the follower. */

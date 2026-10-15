@@ -1167,10 +1167,15 @@ export function BrowserToolbar({
                             alt=""
                             className="w-4 h-4 rounded-[var(--radius-sm)] object-contain"
                             onError={(e) => {
-                              const img = e.target as HTMLImageElement;
+                              const img = e.currentTarget;
                               img.style.display = "none";
                               const fallback = img.nextElementSibling;
-                              if (fallback) (fallback as HTMLElement).style.display = "";
+                              if (
+                                fallback instanceof HTMLElement ||
+                                fallback instanceof SVGElement
+                              ) {
+                                fallback.style.display = "";
+                              }
                             }}
                           />
                           <Globe

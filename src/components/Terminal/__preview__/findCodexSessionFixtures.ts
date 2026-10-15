@@ -119,7 +119,11 @@ export const FIND_SESSION_FIXTURES = {
 
 export type FindSessionFixtureName = keyof typeof FIND_SESSION_FIXTURES;
 
+function isFindSessionFixtureName(name: string): name is FindSessionFixtureName {
+  return name in FIND_SESSION_FIXTURES;
+}
+
 export function requireFindSessionFixture(name: string): FindSessionFixture {
-  if (!(name in FIND_SESSION_FIXTURES)) throw new Error(`unknown fixture "${name}"`);
-  return FIND_SESSION_FIXTURES[name as FindSessionFixtureName];
+  if (!isFindSessionFixtureName(name)) throw new Error(`unknown fixture "${name}"`);
+  return FIND_SESSION_FIXTURES[name];
 }

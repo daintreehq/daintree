@@ -94,6 +94,13 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
 // than not.
 const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string().optional() });
 
+const setGroupArgs = z.object({
+  projectId: z.string().min(1),
+  groupId: z.string().min(1).nullable(),
+});
+
+const createGroupArgs = z.object({ name: z.string(), projectId: z.string().min(1).optional() });
+
 /**
  * The one thing a row in the agent overview promises, not kept.
  *
@@ -627,9 +634,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ projectId: z.string().min(1), groupId: z.string().min(1).nullable() }),
-    run: async (args: unknown) => {
-      const { projectId, groupId } = args as { projectId: string; groupId: string | null };
+    argsSchema: setGroupArgs,
+    run: async ({ projectId, groupId }: z.infer<typeof setGroupArgs>) => {
       await projectGroupsClient.setMembership(projectId, groupId);
     },
   }));
@@ -666,9 +672,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ name: z.string(), projectId: z.string().min(1).optional() }),
-    run: async (args: unknown) => {
-      const { name, projectId } = args as { name: string; projectId?: string };
+    argsSchema: createGroupArgs,
+    run: async ({ name, projectId }: z.infer<typeof createGroupArgs>) => {
       // Checked before anything is created: refusing an unknown project after
       // the group exists would leave a retry of the same call failing on its
       // own duplicate name.

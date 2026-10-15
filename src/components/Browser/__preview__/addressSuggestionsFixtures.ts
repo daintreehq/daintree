@@ -65,9 +65,9 @@ export const ADDRESS_SUGGESTION_FIXTURES = {
 
 export type AddressSuggestionsFixtureName = keyof typeof ADDRESS_SUGGESTION_FIXTURES;
 
-export const ADDRESS_SUGGESTION_FIXTURE_NAMES = Object.keys(
-  ADDRESS_SUGGESTION_FIXTURES
-) as AddressSuggestionsFixtureName[];
+export const ADDRESS_SUGGESTION_FIXTURE_NAMES = Object.keys(ADDRESS_SUGGESTION_FIXTURES).filter(
+  isAddressSuggestionsFixtureName
+);
 
 export function isAddressSuggestionsFixtureName(
   value: string

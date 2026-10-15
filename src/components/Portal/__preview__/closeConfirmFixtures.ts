@@ -167,9 +167,8 @@ export const CLOSE_CONFIRM_FIXTURES = {
 
 export type CloseConfirmFixtureName = keyof typeof CLOSE_CONFIRM_FIXTURES;
 
-export const CLOSE_CONFIRM_FIXTURE_NAMES = Object.keys(
-  CLOSE_CONFIRM_FIXTURES
-) as CloseConfirmFixtureName[];
+export const CLOSE_CONFIRM_FIXTURE_NAMES =
+  Object.keys(CLOSE_CONFIRM_FIXTURES).filter(isCloseConfirmFixtureName);
 
 export function isCloseConfirmFixtureName(name: string): name is CloseConfirmFixtureName {
   return Object.hasOwn(CLOSE_CONFIRM_FIXTURES, name);
