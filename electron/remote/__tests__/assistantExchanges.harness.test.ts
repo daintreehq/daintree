@@ -346,8 +346,9 @@ describe("assistant exchanges over the real link", () => {
         { state: "completed", text: "rebased onto develop", at: expect.any(Number) },
       ]);
       expect((await shellA().get(HOST_ID, "m-1"))?.state).toBe("completed");
-      // Another sender's exchange reads as having no replies at all.
-      expect(await shellA().getResponses(HOST_ID, "m-unknown")).toEqual([]);
+      // Another Shell, authenticated as another sender, reads none of this exchange's replies.
+      const b = await startShellB(r, openFile("shell-b.db"));
+      expect(await b.client.getResponses(HOST_ID, "m-1")).toEqual([]);
     },
     TEST_TIMEOUT_MS
   );

@@ -1703,6 +1703,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               rendererOwnedOrigin,
               paneApproval: sessionSurface.paneApproval === true,
               paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
+              hubMessaging: hubMessagingAvailable(),
               perToolGrantedActionIds,
               nativeGrantedActionIds,
               confirmationsSkipped,

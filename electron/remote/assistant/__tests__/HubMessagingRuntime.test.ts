@@ -237,7 +237,7 @@ describe("HubMessagingRuntime (#13336)", () => {
         value: {
           outcome: "ok",
           taskId: "id-1",
-          contextId: "id-2",
+          contextId: "id-1",
           wait: "none",
           task: { taskId: "id-1", hostTaskId: "host-task-1", state: "submitted" },
         },
@@ -270,7 +270,11 @@ describe("HubMessagingRuntime (#13336)", () => {
       [new AppError({ code: "STALE_GENERATION", message: "x" }), "lane_unavailable"],
       [new AppError({ code: "PERMISSION", message: LANE_NOT_RUNNING_MESSAGE }), "lane_unavailable"],
       [new AppError({ code: "PERMISSION", message: "not enrolled" }), "policy_rejected"],
-      [new AppError({ code: "VALIDATION", message: "past window" }), "expired"],
+      [
+        new AppError({ code: "VALIDATION", message: "went unanswered past its retry window" }),
+        "expired",
+      ],
+      [new AppError({ code: "VALIDATION", message: "reused for another message" }), "conflict"],
     ])("names %s as %s", async (error, outcome) => {
       client.send.mockRejectedValueOnce(error);
       await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
@@ -296,7 +300,7 @@ describe("HubMessagingRuntime (#13336)", () => {
 
     it("refuses a body the inbox can't hold whole before spending a send", async () => {
       const result = await runtime.sendMessage("hub", { ...SEND, text: "\u0001".repeat(16_000) });
-      expect(result).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+      expect(result).toMatchObject({ ok: true, value: { outcome: "too_large", taskId: null } });
       expect(client.send).not.toHaveBeenCalled();
     });
 
@@ -316,6 +320,31 @@ describe("HubMessagingRuntime (#13336)", () => {
       await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
         value: { outcome: "ok" },
       });
+    });
+
+    it("resends under the same taskId with the same contextId, so the host sees one message", async () => {
+      await runtime.sendMessage("hub", { ...SEND, taskId: "t-9" });
+      await runtime.sendMessage("hub", { ...SEND, taskId: "t-9" });
+      const contexts = client.send.mock.calls.map(([, payload]) => payload.contextId);
+      expect(contexts).toEqual(["t-9", "t-9"]);
+    });
+
+    it("looks at least once on a wait shorter than one poll", async () => {
+      client.get.mockResolvedValueOnce(record({ state: "input-required" }));
+      await expect(runtime.sendMessage("hub", { ...SEND, waitMs: 200 })).resolves.toMatchObject({
+        value: { wait: "settled", task: { state: "input-required" } },
+      });
+      expect(client.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops waiting once the caller is no longer the hub", async () => {
+      client.get.mockImplementation(async () => {
+        hub = { ...HUB, sessionId: "hub-2" };
+        return record({ state: "working" });
+      });
+      const sent = await runtime.sendMessage("hub", { ...SEND, waitMs: 20_000 });
+      expect(sent).toMatchObject({ value: { wait: "timed_out" } });
+      expect(client.get).toHaveBeenCalledTimes(1);
     });
 
     it("waits for a reply when asked, and a timeout ends only the wait", async () => {
@@ -374,7 +403,7 @@ describe("HubMessagingRuntime (#13336)", () => {
         ok: true,
         value: {
           outcome: "disconnected",
-          observedAt: 77,
+          observedAt: null,
           task: { state: "working" },
           replies: null,
         },

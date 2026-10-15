@@ -87,6 +87,10 @@ const DETAILS: Record<Exclude<HostMessagingOutcomeCode, "ok">, string> = {
     "This message went unconfirmed past its retry window, so it can't be resent. Look its taskId up, or send a new message.",
   not_found: "The host has no record of that task for this Shell.",
   rate_limited: "Too many calls in a short time. Retry after retryAfterMs.",
+  too_large:
+    "The message is too large for an assistant to be handed whole. Nothing was sent; shorten it.",
+  conflict:
+    "That taskId was already used for a different message. Look it up, or send under a new taskId.",
 };
 
 const REPLY_HEADER =
@@ -147,7 +151,6 @@ function errorOutcome(error: unknown): HostMessagingOutcomeCode | null {
 const REFUSAL_MESSAGES = {
   NOT_ELIGIBLE: NOT_ELIGIBLE_MESSAGE,
   UNAVAILABLE: ERROR_MESSAGE,
-  INVALID_ARGS: "The message is too long for an assistant to be handed whole.",
 } as const;
 
 class RefusalError extends Error {
@@ -196,7 +199,20 @@ export const HUB_READS_PER_MINUTE = 120;
 /** Sends that may be waiting for a reply at once; another returns without waiting. */
 export const HUB_MAX_CONCURRENT_WAITS = 2;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
+/** The least time a wait's last poll gets, so a wait shorter than one interval still looks once. */
+const FINAL_POLL_FLOOR_MS = 1_000;
+/** Words the exchange client's retry-window refusal carries; it never crosses the link. */
+const RETRY_WINDOW_MARKER = "past its retry window";
 const LANE_OBSERVATIONS_MAX = 64;
+
+/** Settles with `work`, or rejects once `ms` pass; the timer never outlives it. */
+function withinMs<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("poll timed out")), ms);
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
 
 /** A task's state once nothing more will happen to it without the hub, or at all. */
 function settled(record: ExchangeRecord): boolean {
@@ -360,10 +376,15 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   ): Promise<HostMessagingOutcome<HostSendMessageResult>> {
     return this.settle(helpSessionId, async () => {
       const taskId = args.taskId ?? this.newId();
-      const contextId = args.contextId ?? this.newId();
+      // A new conversation is named after its first message, so a resend under
+      // the same taskId carries the same contextId and the host takes it as the
+      // same message rather than a conflicting one.
+      const contextId = args.contextId ?? taskId;
       const base = { taskId, contextId, task: null, wait: "none" as const };
       // Checked here, as the host checks it, so a send is never spent on a body it refuses.
-      if (!inboxBodyFits(args.text)) throw new RefusalError("INVALID_ARGS");
+      if (!inboxBodyFits(args.text)) {
+        return { ...this.outcome("too_large"), ...base, taskId: null, contextId: null };
+      }
       const refused = this.refuse(args.hostId, "admit") ?? this.limitSend(args.hostId);
       if (refused) return { ...refused, ...base, taskId: null, contextId: null };
       const client = this.requireClient();
@@ -381,9 +402,13 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         if (sent.status === "unknown") return { ...this.outcome("ambiguous"), ...base };
         record = sent.record;
       } catch (error) {
-        const code = codeOf(error);
-        // Past the retry window the id can't be sent again; a lookup is all that's left.
-        if (code === "VALIDATION") return { ...this.outcome("expired"), ...base };
+        // The client's own refusal past the retry window, where a lookup is all
+        // that's left; the host's VALIDATION is a taskId already used for a
+        // different message.
+        if (codeOf(error) === "VALIDATION") {
+          const expired = formatErrorMessage(error, "").includes(RETRY_WINDOW_MARKER);
+          return { ...this.outcome(expired ? "expired" : "conflict"), ...base };
+        }
         const named = errorOutcome(error);
         if (named !== null) return { ...this.outcome(named), ...base };
         // Not proven undelivered: the journal still holds the attempt for a lookup.
@@ -409,7 +434,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
           wait: "skipped",
         };
       }
-      const waited = await this.waitForReply(args.hostId, record, waitMs);
+      const waited = await this.waitForReply(helpSessionId, args.hostId, record, waitMs);
       return {
         ...this.ok(),
         ...base,
@@ -442,12 +467,9 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         // The journal's last answer from the host, labelled with when it came.
         const known = client.known(args.hostId, args.taskId);
         if (known?.record) {
-          return {
-            ...failure,
-            ...base,
-            task: toHostTask(known.record),
-            observedAt: known.updatedAt,
-          };
+          // The journal's entry also moves when a send is attempted, so it can't
+          // date the record; observedAt stays null, as unmeasured.
+          return { ...failure, ...base, task: toHostTask(known.record) };
         }
         return { ...failure, ...base };
       }
@@ -522,7 +544,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     });
   }
 
+  /**
+   * Polls the host until the task settles or the wait runs out. Each poll is
+   * bounded by what is left of the wait (the last by a short floor, so even
+   * the shortest wait looks once), and the caller must still be the hub and
+   * the host still reachable for it before each one.
+   */
   private async waitForReply(
+    helpSessionId: string,
     hostId: HostId,
     record: ExchangeRecord,
     waitMs: number
@@ -532,27 +561,23 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     let latest = record;
     try {
       while (!this.disposed) {
-        const remaining = deadline - this.now();
-        if (remaining <= 0) break;
-        await this.sleep(Math.min(this.pollIntervalMs, remaining));
-        if (this.disposed || this.deadlinePassed(deadline)) break;
+        await this.sleep(Math.max(0, Math.min(this.pollIntervalMs, deadline - this.now())));
+        if (this.disposed || !this.isHub(helpSessionId)) break;
         if (!this.deps.policy.checkHost({ hostId, kind: "inspect" }).ok) break;
         try {
-          const found = await this.requireClient().get(hostId, record.messageId);
+          const budget = Math.max(deadline - this.now(), FINAL_POLL_FLOOR_MS);
+          const found = await withinMs(this.requireClient().get(hostId, record.messageId), budget);
           if (found) latest = found;
         } catch {
-          // A dropped link ends nothing but this poll.
+          // A dropped link or a slow answer ends nothing but this poll.
         }
         if (settled(latest)) return { record: latest, settled: true };
+        if (this.now() >= deadline) break;
       }
       return { record: latest, settled: settled(latest) };
     } finally {
       this.waits -= 1;
     }
-  }
-
-  private deadlinePassed(deadline: number): boolean {
-    return this.now() >= deadline;
   }
 
   private observeLanes(hostId: HostId, lanes: HostAssistantLane[]): void {

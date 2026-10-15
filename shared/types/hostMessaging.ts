@@ -53,6 +53,8 @@ export const HOST_MESSAGING_OUTCOMES = [
   "expired",
   "not_found",
   "rate_limited",
+  "too_large",
+  "conflict",
 ] as const;
 
 export type HostMessagingOutcomeCode = (typeof HOST_MESSAGING_OUTCOMES)[number];

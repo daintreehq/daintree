@@ -2235,6 +2235,22 @@ describe("filterIntrospectionResultForSession", () => {
       expect(McpUnavailableActionStubSchema.safeParse(stub).success).toBe(true);
     });
 
+    // #13336: a core session that isn't the hub can't raise its tier into the
+    // hub's send tools, so it is never told it could.
+    it("offers the hub's full-tier tools as a stub to the hub alone", () => {
+      const entry = makeEntry({
+        id: "host.sendMessage",
+        title: "Message an assistant on a host",
+        category: "help",
+        danger: "safe",
+      });
+      expect(buildUnavailableStub(entry, firstParty())).toBeNull();
+      expect(buildUnavailableStub(entry, firstParty({ hubMessaging: true }))).toMatchObject({
+        id: "host.sendMessage",
+        minimumTier: "full",
+      });
+    });
+
     // The stub above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger` into `deriveBand`
     // would still report it correctly. `worktree.resource.teardown` is out of

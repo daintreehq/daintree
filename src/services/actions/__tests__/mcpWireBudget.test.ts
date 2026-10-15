@@ -708,14 +708,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // which are a hard contract for the provenance and fenced body each message
   // carries. Offered only to an enrolled lane's assistant, so the external
   // ceiling above does not move.
-  // 118_600 → 130_400 for #13336's six `host.*` hub messaging tools, measured at
-  // 130_363 B. Most of it is their output schemas, a hard contract: every
+  // 118_600 → 130_500 for #13336's six `host.*` hub messaging tools, measured at
+  // 130_478 B. Most of it is their output schemas, a hard contract: every
   // result names its outcome (opted out, disconnected, too old, ambiguous, ...)
   // beside nullable observations, and four carry the same task view. Trimmed
   // before measuring: no result repeats the hostId it was called with, and the
   // task view drops what its other fields imply. Offered only to this Shell's
   // enrolled hub while a host exists, so the external ceiling above does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 130_400;
+  const MAX_COHORT_PAYLOAD_BYTES = 130_500;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
