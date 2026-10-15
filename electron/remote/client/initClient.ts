@@ -598,6 +598,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   sessionFor(hostId: HostId): LinkSession | null;
   /** Per-host links and the host list, for session-level services such as host summaries. */
   manager: RemoteHostManager;
+  /** Sends a Remote Hosts event to every view on this machine. */
+  emitLocal(event: RemoteHostsEvent): void;
   registry: HostRegistry;
   dispose(): Promise<void>;
 } {
@@ -775,6 +777,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     router: remoteRouter,
     sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
     manager,
+    emitLocal: broadcastLocal,
     registry,
     async dispose() {
       unregister();

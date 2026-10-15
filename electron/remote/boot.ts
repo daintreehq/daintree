@@ -293,6 +293,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       knownHosts: () => client.registry.list().map((host) => host.id),
       onHostsChanged: (listener) => client.registry.onChange(listener),
       addUseCheck: (check) => client.manager.addUseCheck(check),
+      onExchangesChanged: (hostId) => client.emitLocal({ type: "exchanges-changed", hostId }),
     })
   );
   // Answered only once a session exists, so registering costs nothing until then.

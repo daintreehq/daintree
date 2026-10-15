@@ -28,6 +28,8 @@ export const REMOTE_HOSTS_METHOD_CHANNELS = {
   listPluginViewConsents: "remote-hosts:list-plugin-view-consents",
   resetPluginViewConsent: "remote-hosts:reset-plugin-view-consent",
   preparePluginView: "remote-hosts:prepare-plugin-view",
+  listAssistantExchanges: "remote-hosts:list-assistant-exchanges",
+  cancelAssistantExchange: "remote-hosts:cancel-assistant-exchange",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof REMOTE_HOSTS_METHOD_CHANNELS;

@@ -20,6 +20,9 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import type {
   AddHostPayload,
+  AssistantExchangeCancelPayload,
+  AssistantExchangeListPayload,
+  AssistantExchangeView,
   DiscoveredHost,
   HostInstallPlan,
   HostProbeResult,
@@ -49,6 +52,21 @@ function requireHostId(payload: unknown): string {
     throw new AppError({ code: "VALIDATION", message: "hostId is required" });
   }
   return hostId;
+}
+
+/** Longer than any messageId a hub mints; refused before it reaches a lookup. */
+const MAX_MESSAGE_ID_LENGTH = 256;
+
+function requireMessageId(payload: unknown): string {
+  const messageId = (payload as { messageId?: unknown } | null)?.messageId;
+  if (
+    typeof messageId !== "string" ||
+    messageId.length === 0 ||
+    messageId.length > MAX_MESSAGE_ID_LENGTH
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "messageId is required" });
+  }
+  return messageId;
 }
 
 /** This machine as a window's host: what a window that never attached anywhere reports. */
@@ -305,6 +323,46 @@ export const remoteHostsNamespace = defineIpcNamespace({
         return false;
       },
       { withContext: true }
+    ),
+    // This Shell's own journal of the exchanges its hub sent to a host's assistants.
+    listAssistantExchanges: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.listAssistantExchanges,
+      async (payload: AssistantExchangeListPayload): Promise<AssistantExchangeView[]> => {
+        const hostId = requireHostId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const client = getRemoteService("assistantExchangeClient");
+          if (!client) return [];
+          const { toExchangeViews } = await import("../../remote/assistant/exchangeOverview.js");
+          return toExchangeViews(client.listKnown(hostId), Date.now());
+        }
+        return [];
+      }
+    ),
+    cancelAssistantExchange: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.cancelAssistantExchange,
+      async (payload: AssistantExchangeCancelPayload): Promise<AssistantExchangeView> => {
+        const hostId = requireHostId(payload);
+        const messageId = requireMessageId(payload);
+        if (__DAINTREE_REMOTE_HOSTS__) {
+          const client = requireRemoteService("assistantExchangeClient");
+          if (client.known(hostId, messageId)?.record == null) {
+            throw new AppError({
+              code: "VALIDATION",
+              message: `No recorded exchange ${messageId} on host ${hostId}`,
+              userMessage: "This exchange isn't recorded on this machine.",
+            });
+          }
+          await client.cancel(hostId, messageId);
+          const { toExchangeView } = await import("../../remote/assistant/exchangeOverview.js");
+          // The journal, not the answer: a reconcile may already hold a newer revision.
+          const entry = client.known(hostId, messageId);
+          if (entry) return toExchangeView(entry, Date.now());
+        }
+        throw new AppError({
+          code: "UNSUPPORTED",
+          message: "Assistant exchanges are unavailable on this machine",
+        });
+      }
     ),
     isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),
     getLocalHandshake: op(REMOTE_HOSTS_METHOD_CHANNELS.getLocalHandshake, (): HostHandshakeInfo =>

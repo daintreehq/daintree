@@ -252,6 +252,8 @@ export interface AssistantExchangeClientInstallDeps {
   onHostsChanged(listener: () => void): () => void;
   /** Keeps a host's connection open while the check says so; asked on every idle sweep. */
   addUseCheck?(check: (hostId: HostId) => boolean): () => void;
+  /** Told, at most once a tick per host, that the journal's exchanges for it changed. */
+  onExchangesChanged?(hostId: HostId): void;
 }
 
 /**
@@ -289,12 +291,39 @@ export function installAssistantExchangeClient(
         getRemoteService("assistantLaneWaker")
       ),
   });
+  // Subscribed before the first reconcile, so nothing it records goes unannounced.
+  const pending = new Set<HostId>();
+  let flushQueued = false;
+  let disposed = false;
+  const offJournal = deps.onExchangesChanged
+    ? client.onJournalChanged((hostId) => {
+        pending.add(hostId);
+        if (flushQueued) return;
+        flushQueued = true;
+        queueMicrotask(() => {
+          flushQueued = false;
+          const hosts = [...pending];
+          pending.clear();
+          if (disposed) return;
+          for (const hostId of hosts) {
+            try {
+              deps.onExchangesChanged?.(hostId);
+            } catch (error) {
+              console.error("[AssistantExchanges] Announcing a journal change failed:", error);
+            }
+          }
+        });
+      })
+    : () => {};
   client.start();
   // Bounded by each exchange's expiry. Holding the link never keeps the host awake.
   const offUseCheck =
     deps.addUseCheck?.((hostId) => journal.hasOpen(hostId, EXCHANGE_RETRY_WINDOW_MS)) ?? (() => {});
   const unregister = registerRemoteService("assistantExchangeClient", client);
   return () => {
+    disposed = true;
+    pending.clear();
+    offJournal();
     offUseCheck();
     unregister();
     client.dispose();

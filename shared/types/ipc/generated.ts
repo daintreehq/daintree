@@ -2010,6 +2010,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
+  "remote-hosts:cancel-assistant-exchange": {
+    args: [payload: import("./remoteHosts.js").AssistantExchangeCancelPayload];
+    result: import("./remoteHosts.js").AssistantExchangeView;
+  };
   "remote-hosts:cancel-install": {
     args: [payload: { opId: string }];
     result: boolean;
@@ -2061,6 +2065,10 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:list": {
     args: [];
     result: import("../remoteHosts.js").HostListEntry[];
+  };
+  "remote-hosts:list-assistant-exchanges": {
+    args: [payload: import("./remoteHosts.js").AssistantExchangeListPayload];
+    result: import("./remoteHosts.js").AssistantExchangeView[];
   };
   "remote-hosts:list-clipboard-grants": {
     args: [payload: import("./remoteHosts.js").ListHostProjectsPayload];

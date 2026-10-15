@@ -1328,6 +1328,8 @@ export const CHANNELS = {
   REMOTE_HOSTS_LIST_PLUGIN_VIEW_CONSENTS: "remote-hosts:list-plugin-view-consents",
   REMOTE_HOSTS_RESET_PLUGIN_VIEW_CONSENT: "remote-hosts:reset-plugin-view-consent",
   REMOTE_HOSTS_PREPARE_PLUGIN_VIEW: "remote-hosts:prepare-plugin-view",
+  REMOTE_HOSTS_LIST_ASSISTANT_EXCHANGES: "remote-hosts:list-assistant-exchanges",
+  REMOTE_HOSTS_CANCEL_ASSISTANT_EXCHANGE: "remote-hosts:cancel-assistant-exchange",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
 
   // Remote Hosts: hostMode (shell).

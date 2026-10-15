@@ -236,4 +236,56 @@ describe("AssistantExchangeJournal", () => {
     clock = 10_000;
     expect(journal.hasOpen("studio", 1_000)).toBe(false);
   });
+  it("announces each write that changes a host's entries, after it commits", () => {
+    const heard: Array<{ hostId: string; listed: number }> = [];
+    const off = journal.onChange((hostId) =>
+      heard.push({ hostId, listed: journal.list(hostId).length })
+    );
+    const attempt = journal.noteSending("studio", "m-1");
+    expect(heard).toEqual([{ hostId: "studio", listed: 1 }]);
+
+    journal.recordAnswer("studio", record("m-1", 3));
+    // An older revision changes nothing, so it is not announced.
+    journal.recordAnswer("studio", record("m-1", 2));
+    expect(heard).toHaveLength(2);
+
+    // A lookup about an attempt the journal no longer holds settles nothing.
+    journal.resolveMissing("studio", "m-1", attempt, 1_000);
+    expect(heard).toHaveLength(2);
+
+    journal.noteSending("studio", "m-2");
+    const second = journal.get("studio", "m-2")!.unresolvedAt!;
+    journal.abandonAttempt("studio", "m-2", second);
+    expect(heard.at(-1)).toEqual({ hostId: "studio", listed: 1 });
+
+    journal.applyChanges("studio", { records: [], cursor: 4, hasMore: false, reset: false });
+    expect(heard).toHaveLength(4);
+    journal.applyChanges("studio", {
+      records: [record("m-1", 5, "working")],
+      cursor: 5,
+      hasMore: false,
+      reset: false,
+    });
+    expect(heard).toHaveLength(5);
+
+    journal.forgetHost("studio");
+    expect(heard.at(-1)).toEqual({ hostId: "studio", listed: 0 });
+
+    off();
+    journal.noteSending("studio", "m-3");
+    expect(heard).toHaveLength(6);
+  });
+
+  it("keeps a write that a throwing listener heard about", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const heard: string[] = [];
+    journal.onChange(() => {
+      throw new Error("listener broke");
+    });
+    journal.onChange((hostId) => heard.push(hostId));
+    expect(() => journal.noteSending("studio", "m-1")).not.toThrow();
+    expect(journal.get("studio", "m-1")).not.toBeNull();
+    expect(heard).toEqual(["studio"]);
+    error.mockRestore();
+  });
 });

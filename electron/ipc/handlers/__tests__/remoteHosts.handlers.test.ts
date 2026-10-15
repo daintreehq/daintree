@@ -123,3 +123,95 @@ describe("remoteHosts handlers", () => {
     expect(ops.isInUse!.handler()).toBe(true);
   });
 });
+
+describe("remoteHosts assistant exchange handlers", () => {
+  const live = {
+    taskId: "t-1",
+    senderId: "sender",
+    messageId: "m-1",
+    contextId: "ctx-1",
+    referenceTaskIds: [],
+    receiver: { hostId: "local", laneId: "proj\u00000", enrollmentGeneration: "g" },
+    state: "submitted",
+    outcome: null,
+    bodyDigest: "secret-digest",
+    bodyBytes: 4,
+    replyDigest: null,
+    replyBytes: null,
+    delivery: {
+      attemptedAt: null,
+      acceptedAt: null,
+      wakeTypedAt: null,
+      inboxFetchedAt: null,
+      replyReceivedAt: null,
+      ambiguousAt: null,
+    },
+    cancelRequestedAt: null,
+    createdAt: 100,
+    updatedAt: 100,
+    expiresAt: Date.now() + 60_000,
+    terminalAt: null,
+    tombstonedAt: null,
+    revision: 1,
+  };
+  const entry = (record: unknown, messageId = "m-1", sentAt = 100) => ({
+    hostId: "box",
+    messageId,
+    sentAt,
+    unresolvedAt: record ? null : sentAt,
+    lapsedAt: null,
+    record,
+    updatedAt: sentAt,
+  });
+
+  it("lists nothing before the exchange client exists", async () => {
+    await expect(ops.listAssistantExchanges!.handler({ hostId: "box" })).resolves.toEqual([]);
+    await expect(ops.listAssistantExchanges!.handler({})).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
+  });
+
+  it("lists the journal newest first, as views without digests", async () => {
+    const listKnown = vi.fn(() => [entry(live), entry(null, "m-2", 200)]);
+    registerRemoteService("assistantExchangeClient", { listKnown } as never);
+    const views = (await ops.listAssistantExchanges!.handler({ hostId: "box" })) as Array<
+      Record<string, unknown>
+    >;
+    expect(listKnown).toHaveBeenCalledWith("box");
+    expect(views.map((view) => view.messageId)).toEqual(["m-2", "m-1"]);
+    expect(views[0]).toMatchObject({ state: null, delivery: "unconfirmed", cancel: null });
+    expect(views[1]).toMatchObject({
+      hostId: "box",
+      state: "submitted",
+      cancel: "cancel",
+      receiver: { projectId: "proj", slot: 0 },
+    });
+    expect(JSON.stringify(views)).not.toContain("secret-digest");
+  });
+
+  it("cancels a recorded exchange and answers with what the journal then holds", async () => {
+    const canceled = { ...live, state: "canceled", cancelRequestedAt: 300, revision: 3 };
+    const known = vi.fn().mockReturnValueOnce(entry(live)).mockReturnValueOnce(entry(canceled));
+    const cancel = vi.fn(async () => ({ ...live, revision: 2 }));
+    registerRemoteService("assistantExchangeClient", { known, cancel } as never);
+    await expect(
+      ops.cancelAssistantExchange!.handler({ hostId: "box", messageId: "m-1" })
+    ).resolves.toMatchObject({ state: "canceled", cancel: null });
+    expect(cancel).toHaveBeenCalledWith("box", "m-1");
+  });
+
+  it("refuses to cancel what this Shell holds no record of", async () => {
+    const cancel = vi.fn();
+    registerRemoteService("assistantExchangeClient", {
+      known: () => entry(null),
+      cancel,
+    } as never);
+    await expect(
+      ops.cancelAssistantExchange!.handler({ hostId: "box", messageId: "m-1" })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      ops.cancelAssistantExchange!.handler({ hostId: "box", messageId: "" })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(cancel).not.toHaveBeenCalled();
+  });
+});
