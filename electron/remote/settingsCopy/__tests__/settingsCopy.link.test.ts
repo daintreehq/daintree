@@ -453,6 +453,24 @@ describe("what a copy would change, and undoing the last one (#13347)", () => {
     expect(hostSide.service.undo).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the older undo retired when a copy's rollback failed partway", async () => {
+    const first = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: first.ticket });
+    const firstId = records.box.record!.copy.id;
+    hostSide.service.apply.mockResolvedValueOnce({
+      outcome: "rolled-back",
+      sections: [],
+      errors: ["nope"],
+      rolledBack: false,
+      restoreFailed: true,
+    });
+    const second = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: second.ticket });
+    await expect(client.undo({ hostId: HOST, copyId: firstId })).rejects.toMatchObject({
+      code: "SETTINGS_COPY_UNDO_STALE",
+    });
+  });
+
   it("keeps the previous record when a copy rolls back", async () => {
     const first = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
     await client.apply({ hostId: HOST, ticket: first.ticket });

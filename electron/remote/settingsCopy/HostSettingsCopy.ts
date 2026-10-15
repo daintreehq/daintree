@@ -261,9 +261,12 @@ export class HostSettingsCopy {
         entry.refused
       );
       if (applied.outcome === "applied") await this.record(entry, applied, captured, source);
-      // A copy that rolled back changed nothing, so the one before it is
-      // still the last copy, and still undoable.
-      else if (retired) await this.deps.records.write(retired).catch(() => undefined);
+      // A copy that rolled back cleanly changed nothing, so the one before it
+      // is still the last copy, and still undoable. One whose rollback failed
+      // may have left writes behind that the older undo would run over.
+      else if (retired && !applied.restoreFailed) {
+        await this.deps.records.write(retired).catch(() => undefined);
+      }
       return applied;
     });
     if (report.outcome === "applied") {
