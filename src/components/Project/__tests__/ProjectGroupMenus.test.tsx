@@ -47,6 +47,7 @@ vi.mock("@/clients/projectGroupsClient", () => ({ projectGroupsClient: clientMoc
 
 import { ProjectGroupDialogs } from "../ProjectGroupMenus";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
+import { useProjectStore } from "@/store/projectStore";
 import type { ProjectGroup } from "@shared/types/project";
 
 const group = (id: string, position: number): ProjectGroup => ({
@@ -91,9 +92,14 @@ describe("project group dialogs", () => {
       kind: "rename",
       groupId: "a",
       returnTo: "manage",
+      returnIndex: 0,
     });
     act(() => useProjectGroupsStore.getState().closeDialog());
-    expect(useProjectGroupsStore.getState().dialog).toEqual({ kind: "manage" });
+    expect(useProjectGroupsStore.getState().dialog).toEqual({
+      kind: "manage",
+      focusGroupId: "a",
+      focusIndex: 0,
+    });
   });
 
   it("closes outright when a rename wasn't opened from Manage groups", () => {
@@ -162,7 +168,72 @@ describe("project group dialogs", () => {
     render(<ProjectGroupDialogs />);
     act(() => useProjectGroupsStore.setState({ groups: [group("b", 0)] }));
     await waitFor(() =>
-      expect(useProjectGroupsStore.getState().dialog).toEqual({ kind: "manage" })
+      expect(useProjectGroupsStore.getState().dialog).toEqual({
+        kind: "manage",
+        focusGroupId: "a",
+      })
     );
+  });
+
+  it("lands on the row that took a deleted group's place", async () => {
+    useProjectGroupsStore.setState({
+      groups: [group("a", 0), group("c", 1)],
+      dialog: { kind: "manage", focusGroupId: "b", focusIndex: 1 },
+    });
+    render(<ProjectGroupDialogs />);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Rename C" }))
+    );
+  });
+
+  it("returns to the renamed group's own row", async () => {
+    useProjectGroupsStore.setState({
+      groups: [group("a", 0), group("b", 1), group("c", 2)],
+      dialog: { kind: "manage", focusGroupId: "b", focusIndex: 1 },
+    });
+    render(<ProjectGroupDialogs />);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Rename B" }))
+    );
+  });
+
+  it("doesn't submit on the Enter that commits an IME candidate", () => {
+    useProjectGroupsStore.setState({ dialog: { kind: "create" } });
+    render(<ProjectGroupDialogs />);
+    const input = screen.getByTestId("project-group-name-input");
+    fireEvent.change(input, { target: { value: "日本" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(clientMock.create).not.toHaveBeenCalled();
+  });
+
+  it("says the delete leaves projects ungrouped, singular and plural", () => {
+    const member = (id: string) => ({
+      id,
+      name: id,
+      path: `/p/${id}`,
+      emoji: "🌲",
+      lastOpened: 0,
+      groupId: "a",
+    });
+    useProjectGroupsStore.setState({ dialog: { kind: "delete", groupId: "a" } });
+
+    useProjectStore.setState({ projects: [] });
+    const empty = render(<ProjectGroupDialogs />);
+    expect(screen.getByText("It has no projects in it.")).toBeTruthy();
+    empty.unmount();
+
+    useProjectStore.setState({ projects: [member("p1")] });
+    const one = render(<ProjectGroupDialogs />);
+    expect(
+      screen.getByText("Its project becomes ungrouped. Nothing is removed from disk.")
+    ).toBeTruthy();
+    one.unmount();
+
+    useProjectStore.setState({ projects: [member("p1"), member("p2")] });
+    render(<ProjectGroupDialogs />);
+    expect(
+      screen.getByText("Its 2 projects become ungrouped. Nothing is removed from disk.")
+    ).toBeTruthy();
   });
 });

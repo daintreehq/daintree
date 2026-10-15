@@ -14,10 +14,14 @@ import { onHostResync } from "@/store/hostResyncSignal";
  */
 export type ProjectGroupDialog =
   | { kind: "create"; projectId?: string; returnTo?: "manage" }
-  | { kind: "rename"; groupId: string; returnTo?: "manage" }
-  | { kind: "delete"; groupId: string; returnTo?: "manage" }
-  /** Every group in one keyboard-reachable list: rename, reorder, delete. */
-  | { kind: "manage" };
+  | { kind: "rename"; groupId: string; returnTo?: "manage"; returnIndex?: number }
+  | { kind: "delete"; groupId: string; returnTo?: "manage"; returnIndex?: number }
+  /**
+   * Every group in one keyboard-reachable list: rename, reorder, delete.
+   * `focusGroupId` is the group a dialog opened from here was about, so coming
+   * back lands on that row (or, after a delete, on the row that took its place).
+   */
+  | { kind: "manage"; focusGroupId?: string; focusIndex?: number };
 
 interface ProjectGroupsState {
   /** Every group, in render order. Mirrors the host; never persisted here. */
@@ -108,7 +112,11 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => {
       set((state) => ({
         dialog:
           state.dialog && "returnTo" in state.dialog && state.dialog.returnTo === "manage"
-            ? { kind: "manage" }
+            ? {
+                kind: "manage",
+                focusGroupId: "groupId" in state.dialog ? state.dialog.groupId : undefined,
+                focusIndex: "returnIndex" in state.dialog ? state.dialog.returnIndex : undefined,
+              }
             : null,
       })),
 

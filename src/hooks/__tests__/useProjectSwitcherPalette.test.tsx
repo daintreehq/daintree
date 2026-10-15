@@ -4202,6 +4202,28 @@ describe("useProjectSwitcherPalette project groups and archive", () => {
     expect(result.current.browseBands.find((b) => b.key === "group:a")!.liftedCount ?? 0).toBe(0);
   });
 
+  it("counts a working assistant on its group's band apart from agents", async () => {
+    seedGroups([group("a", 0)]);
+    projectStatsState.stats = {
+      quiet: {
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        processCount: 0,
+        assistantState: "working",
+      },
+      busy: { activeAgentCount: 2, waitingAgentCount: 0, processCount: 0 },
+    };
+    const { result } = await openWith([
+      base("quiet", { groupId: "a" }),
+      base("busy", { groupId: "a" }),
+    ]);
+    const band = result.current.browseBands.find((b) => b.key === "group:a")!;
+    expect(band.activeAgentCount).toBe(2);
+    expect(band.workingAssistantCount).toBe(1);
+    // The assistant-only project stays in its group rather than lifting out.
+    expect(sectionOf(result, "quiet")).toBe("group:a");
+  });
+
   it("reorders bands live when the groups are reordered", async () => {
     seedGroups([group("a", 0), group("b", 1)]);
     projectStatsState.stats = {};

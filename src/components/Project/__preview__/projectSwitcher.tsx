@@ -9,6 +9,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { ProjectSwitcherPalette } from "../ProjectSwitcherPalette";
 import { ProjectGroupDialogs } from "../ProjectGroupMenus";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
+import { useProjectStore } from "@/store/projectStore";
 import type { ProjectGroup } from "@shared/types/project";
 import {
   PROJECT_SECTION_LABELS,
@@ -30,7 +31,7 @@ import "@/index.css";
  * Query parameters:
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?state=browse|dropdown|dropdown-menu|search|nomatch|empty|collapsed
- *          |groups|groups-search|new-group
+ *          |groups|groups-search|new-group|manage-groups|delete-group|archived-open
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -217,6 +218,7 @@ const GROUPED_BANDS: ProjectSwitcherBrowseBand[] = [
     collapsed: true,
     group: groupNamed("crisp"),
     activeAgentCount: 1,
+    workingAssistantCount: 1,
   },
   {
     key: "group:games",
@@ -227,7 +229,7 @@ const GROUPED_BANDS: ProjectSwitcherBrowseBand[] = [
     liftedCount: 0,
   },
   { key: "other", label: "Other projects", itemCount: 4, collapsed: false },
-  { key: "archived", label: "Archived", itemCount: 6, collapsed: true },
+  { key: "archived", label: "Archived", itemCount: 3, collapsed: true },
 ];
 
 const GROUP_SEARCH_ROWS: ProjectSwitcherProjectRow[] = [
@@ -240,13 +242,72 @@ const GROUP_SEARCH_ROWS: ProjectSwitcherProjectRow[] = [
     groupName: "Crisp Vector",
     isArchived: true,
   }),
+  // A long name in a long-named group: the group name truncates, "Archived" stays.
+  project(
+    "crisp-vector-marketing-redesign",
+    "crisp-vector-marketing-site-redesign-2026",
+    "🎨",
+    "pink",
+    "archived",
+    { groupId: "crisp", groupName: "Crisp Vector", isArchived: true }
+  ),
 ];
 
-const isGroupsState = state === "groups" || state === "groups-search" || state === "new-group";
+// Archived rows for the open Archived band: one plain, one still filed under a
+// group (it keeps its group for when it comes back), one with a long name.
+const ARCHIVED_ROWS: ProjectSwitcherProjectRow[] = [
+  project("ask-google", "ask-google", "🔎", "sky", "archived", { isArchived: true }),
+  project("crisp-vector-backend", "crisp-vector-backend", "🗄️", "slate", "archived", {
+    isArchived: true,
+    groupId: "crisp",
+    groupName: "Crisp Vector",
+  }),
+  project("greg-priday-writing", "Greg Priday Writing", "📝", "amber", "archived", {
+    isArchived: true,
+  }),
+];
+
+const GROUP_STATES = [
+  "groups",
+  "groups-search",
+  "new-group",
+  "manage-groups",
+  "delete-group",
+  "archived-open",
+];
+const isGroupsState = GROUP_STATES.includes(state);
 if (isGroupsState) {
   useProjectGroupsStore.setState({
     groups: GROUPS,
-    dialog: state === "new-group" ? { kind: "create", projectId: "strongtyped" } : null,
+    dialog:
+      state === "new-group"
+        ? { kind: "create", projectId: "strongtyped" }
+        : state === "manage-groups"
+          ? { kind: "manage" }
+          : state === "delete-group"
+            ? { kind: "delete", groupId: "crisp" }
+            : null,
+  });
+  // The dialogs read membership and names off the project store, as in the app.
+  const member = (id: string, name: string, groupId?: string) =>
+    ({
+      id,
+      name,
+      path: `/Users/dev/Projects/${id}`,
+      emoji: "🌲",
+      lastOpened: NOW,
+      groupId,
+    }) as const;
+  useProjectStore.setState({
+    projects: [
+      member("daintree-app", "Daintree", "daintree"),
+      member("daintree-website", "Daintree Website", "daintree"),
+      member("assistant-backend", "Daintree Assistant Backend", "daintree"),
+      member("canopy-model-backend", "canopy-model-backend", "daintree"),
+      member("crisp-vector-website", "crisp-vector-website", "crisp"),
+      member("crisp-vector-backend", "crisp-vector-backend", "crisp"),
+      member("strongtyped", "StrongTyped"),
+    ],
   });
 }
 
@@ -295,8 +356,20 @@ function fixture(): Fixture {
       };
     case "empty":
       return { query: "", results: [], bands: [], scratches: [], ranked: false };
+    case "archived-open":
+      return {
+        query: "",
+        results: [...GROUPED_PROJECTS, ...ARCHIVED_ROWS],
+        bands: GROUPED_BANDS.map((band) =>
+          band.key === "archived" ? { ...band, collapsed: false, itemCount: 3 } : band
+        ),
+        scratches: SCRATCHES,
+        ranked: false,
+      };
     case "groups":
     case "new-group":
+    case "manage-groups":
+    case "delete-group":
       return {
         query: "",
         results: GROUPED_PROJECTS,

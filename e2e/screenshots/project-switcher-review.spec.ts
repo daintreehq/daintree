@@ -140,7 +140,7 @@ const STATES: State[] = [
     slug: "groups-search",
     fixture: "groups-search",
     enter: async (page) => {
-      await expect(listbox(page).getByRole("option")).toHaveCount(2);
+      await expect(listbox(page).getByRole("option")).toHaveCount(3);
     },
   },
   {
@@ -165,6 +165,34 @@ const STATES: State[] = [
     fixture: "new-group",
     enter: async (page) => {
       await expect(page.getByTestId("project-group-name-input")).toBeFocused();
+    },
+  },
+  {
+    slug: "manage-groups",
+    fixture: "manage-groups",
+    enter: async (page) => {
+      await expect(page.getByTestId("manage-groups-list")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Move Daintree up" })).toBeDisabled();
+    },
+  },
+  {
+    slug: "delete-group",
+    fixture: "delete-group",
+    enter: async (page) => {
+      await expect(page.getByRole("button", { name: "Delete group" })).toBeVisible();
+    },
+  },
+  {
+    slug: "archived-open",
+    fixture: "archived-open",
+    enter: async (page) => {
+      await expect(page.getByTestId("band-collapse-toggle-archived")).toHaveAttribute(
+        "aria-expanded",
+        "true"
+      );
+      // The Archived band is the last one; bring its rows into the viewport.
+      await listbox(page).locator("#project-option-greg-priday-writing").scrollIntoViewIfNeeded();
+      await expect(listbox(page).locator("#project-option-ask-google")).toBeVisible();
     },
   },
   {

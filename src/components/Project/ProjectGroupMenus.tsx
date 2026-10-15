@@ -32,6 +32,16 @@ import { useProjectStore } from "@/store/projectStore";
 const ICON_CLASS = "w-3.5 h-3.5 mr-2";
 
 /**
+ * Where a group dialog hands focus back. These open from menus whose triggers
+ * can't take focus usefully — a row is not focusable, and a header's ⋯ button
+ * would swallow the arrow keys — so the switcher's search box is the successor,
+ * the same place every other switcher menu returns to. Absent when the
+ * switcher has closed, which leaves the dialog's own fallback.
+ */
+const switcherSearchInput = (): HTMLElement | null =>
+  document.querySelector<HTMLElement>('input[aria-controls~="project-list"]');
+
+/**
  * A row's filing actions: which group it is in, and whether it is archived.
  *
  * Membership is a radio group because a project sits in at most one group —
@@ -246,7 +256,15 @@ export function ProjectGroupDialogs() {
   }, [targetMissing, closeDialog]);
 
   if (!dialog) return null;
-  if (dialog.kind === "manage") return <ManageGroupsDialog onClose={closeDialog} />;
+  if (dialog.kind === "manage") {
+    return (
+      <ManageGroupsDialog
+        focusGroupId={dialog.focusGroupId}
+        focusIndex={dialog.focusIndex}
+        onClose={closeDialog}
+      />
+    );
+  }
   if (dialog.kind === "delete") {
     const group = groups.find((g) => g.id === dialog.groupId);
     if (!group) return null;
@@ -319,13 +337,15 @@ function GroupNameDialog({
       isOpen={true}
       onClose={onClose}
       title={isCreate ? "New group" : "Rename group"}
-      description={isCreate && projectName ? `${projectName} moves into it.` : undefined}
+      description={isCreate && projectName ? `${projectName} moves into the new group.` : undefined}
       zIndex="nested"
       confirmLabel={isCreate ? "Create group" : "Rename group"}
       cancelLabel="Cancel"
       onConfirm={submit}
       isConfirmLoading={isSaving}
       confirmDisabled={trimmed.length === 0}
+      restoreFocusTo={switcherSearchInput}
+      preferRestoreFocusTo
       variant="default"
     >
       <div className="space-y-2">
@@ -340,6 +360,10 @@ function GroupNameDialog({
           onChange={(event) => setName(event.target.value)}
           onFocus={(event) => event.currentTarget.select()}
           onKeyDown={(event) => {
+            // Enter that commits an IME candidate belongs to the composition,
+            // not to the dialog — submitting on it would create the group with
+            // half a name.
+            if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
             if (event.key === "Enter") {
               event.preventDefault();
               void submit();
@@ -368,6 +392,8 @@ function DeleteGroupDialog({ group, onClose }: { group: ProjectGroup; onClose: (
       onClose={onClose}
       title={`Delete '${group.name}'?`}
       zIndex="nested"
+      restoreFocusTo={switcherSearchInput}
+      preferRestoreFocusTo
       confirmLabel="Delete group"
       cancelLabel="Cancel"
       isConfirmLoading={isDeleting}
@@ -383,11 +409,17 @@ function DeleteGroupDialog({ group, onClose }: { group: ProjectGroup; onClose: (
       variant="destructive"
     >
       <div className="text-sm text-text-secondary">
+        {/*
+          The one consequence that holds for every member: it leaves the group.
+          Where it then shows depends on what it is doing — archived, pinned or
+          asking for input — so naming a destination would be a promise the
+          switcher doesn't keep for all of them.
+        */}
         {memberCount === 0
           ? "It has no projects in it."
           : memberCount === 1
-            ? "Its project moves to Other projects. Nothing is removed from disk."
-            : `Its ${pluralize(memberCount, "project")} move to Other projects. Nothing is removed from disk.`}
+            ? "Its project becomes ungrouped. Nothing is removed from disk."
+            : `Its ${pluralize(memberCount, "project")} become ungrouped. Nothing is removed from disk.`}
       </div>
     </ConfirmDialog>
   );
@@ -399,13 +431,43 @@ function DeleteGroupDialog({ group, onClose }: { group: ProjectGroup; onClose: (
  * headers can't offer from inside the listbox. Rename and Delete open their
  * own dialog and come back here when it closes.
  */
-function ManageGroupsDialog({ onClose }: { onClose: () => void }) {
+function ManageGroupsDialog({
+  focusGroupId,
+  focusIndex,
+  onClose,
+}: {
+  /** The row to land on when coming back from one of its own dialogs. */
+  focusGroupId?: string;
+  /** Where that row stood, for when it no longer exists (it was deleted). */
+  focusIndex?: number;
+  onClose: () => void;
+}) {
   const groups = useProjectGroupsStore((state) => state.groups);
   const moveGroup = useProjectGroupsStore((state) => state.moveGroup);
   const openDialog = useProjectGroupsStore((state) => state.openDialog);
   const projects = useProjectStore((state) => state.projects);
   const memberCount = (groupId: string) => projects.filter((p) => p.groupId === groupId).length;
   const listRef = useRef<HTMLUListElement>(null);
+
+  // Back from Rename or Delete, focus returns to that group's row — or, when it
+  // was deleted, to the row now in its place — instead of the top of the list.
+  // Placed before the dialog's own first-field pass, which yields to it.
+  const focusTarget = useRef(focusGroupId);
+  useEffect(() => {
+    const groupId = focusTarget.current;
+    focusTarget.current = undefined;
+    if (!groupId) return;
+    const list = listRef.current;
+    if (!list) return;
+    const rows = [...list.querySelectorAll<HTMLElement>("[data-group-row]")];
+    // A deleted group's slot now holds the group after it; deleting the last
+    // one leaves the one before it.
+    const fallback =
+      focusIndex !== undefined ? rows[Math.min(focusIndex, rows.length - 1)] : rows[0];
+    const row =
+      rows.find((candidate) => candidate.dataset.groupRow === groupId) ?? fallback ?? null;
+    row?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, []);
 
   // Moving a group to either end disables the button that moved it, and a
   // disabled button drops focus. Keyboard users then keep their place on the
@@ -434,7 +496,14 @@ function ManageGroupsDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <AppDialog isOpen={true} onClose={onClose} size="sm" zIndex="nested">
+    <AppDialog
+      isOpen={true}
+      onClose={onClose}
+      size="sm"
+      zIndex="nested"
+      restoreFocusTo={switcherSearchInput}
+      preferRestoreFocusTo
+    >
       <AppDialog.Header>
         <AppDialog.Title>Manage groups</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -447,11 +516,7 @@ function ManageGroupsDialog({ onClose }: { onClose: () => void }) {
         ) : (
           <ul ref={listRef} className="space-y-1" data-testid="manage-groups-list">
             {groups.map((group, index) => (
-              <li
-                key={group.id}
-                data-group-row={group.id}
-                className="flex items-center gap-2 rounded-[var(--radius-md)] py-1 pl-2"
-              >
+              <li key={group.id} data-group-row={group.id} className="flex items-center gap-2 py-1">
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-text-primary">{group.name}</div>
                   <div className="text-xs text-text-secondary">
@@ -463,7 +528,12 @@ function ManageGroupsDialog({ onClose }: { onClose: () => void }) {
                   size="icon-sm"
                   aria-label={`Rename ${group.name}`}
                   onClick={() =>
-                    openDialog({ kind: "rename", groupId: group.id, returnTo: "manage" })
+                    openDialog({
+                      kind: "rename",
+                      groupId: group.id,
+                      returnTo: "manage",
+                      returnIndex: index,
+                    })
                   }
                 >
                   <Pencil aria-hidden="true" />
@@ -493,7 +563,12 @@ function ManageGroupsDialog({ onClose }: { onClose: () => void }) {
                   size="icon-sm"
                   aria-label={`Delete ${group.name}`}
                   onClick={() =>
-                    openDialog({ kind: "delete", groupId: group.id, returnTo: "manage" })
+                    openDialog({
+                      kind: "delete",
+                      groupId: group.id,
+                      returnTo: "manage",
+                      returnIndex: index,
+                    })
                   }
                 >
                   <Trash2 aria-hidden="true" />

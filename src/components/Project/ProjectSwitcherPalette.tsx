@@ -23,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { FolderDown, Moon } from "@/components/icons";
+import { FolderClosed, FolderDown, Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { isMac } from "@/lib/platform";
@@ -95,7 +95,7 @@ import {
   PROJECT_SWITCHER_SCRATCH_BAND_KEY,
   OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS,
 } from "@/hooks/useProjectSwitcherPalette";
-import { isGroupBandKey } from "@/lib/projectGroupBands";
+import { groupBandKey, isGroupBandKey } from "@/lib/projectGroupBands";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
 import type { ProjectGroup } from "@shared/types/project";
 import {
@@ -281,6 +281,8 @@ interface ProjectListItemProps {
    * already says it — the ranked search list, which drops the bands.
    */
   showGroupLabel?: boolean;
+  /** Drawn under band headers (browse) rather than in the flat ranked list. */
+  inBands?: boolean;
   onSelect: (row: ProjectSwitcherProjectRow, source?: ProjectSwitchSelectSource) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -613,21 +615,41 @@ function ResumableAgentsLabel({ count }: { count: number }) {
  * and plain like the host label beside it — it is provenance, not status.
  */
 function ProjectFilingLabel({
-  groupName,
+  projectName,
+  groupName: rawGroupName,
   isArchived,
 }: {
+  projectName: string;
   groupName?: string;
   isArchived: boolean;
 }) {
+  // "Daintree · Daintree" says nothing the name didn't: a project filed under a
+  // group of its own name is already in the obvious place.
+  const groupName =
+    rawGroupName && rawGroupName.toLocaleLowerCase() !== projectName.toLocaleLowerCase()
+      ? rawGroupName
+      : undefined;
   if (!groupName && !isArchived) return null;
-  const visible = [groupName, isArchived ? "Archived" : undefined].filter(Boolean).join(" · ");
   const spoken = [groupName ? `in ${groupName}` : undefined, isArchived ? "archived" : undefined]
     .filter(Boolean)
     .join(", ");
+  // Two spans, and only the group name truncates: when space runs out it is
+  // "Archived" that must survive, since that is the fact a row outside the
+  // Archived band exists to say.
   return (
-    <span className="ml-1.5 min-w-0 truncate text-xs text-text-secondary">
+    <span className="ml-1.5 flex min-w-0 items-baseline text-xs text-text-secondary">
       <span className="sr-only">, {spoken}</span>
-      <span aria-hidden="true">· {visible}</span>
+      {groupName && (
+        <span aria-hidden="true" className="min-w-0 truncate">
+          · {groupName}
+        </span>
+      )}
+      {isArchived && (
+        <span aria-hidden="true" className={cn("shrink-0", groupName && "ml-1")}>
+          {/* A real space for copy and text extraction; the margin draws it. */}
+          {groupName && " "}· Archived
+        </span>
+      )}
     </span>
   );
 }
@@ -809,6 +831,7 @@ function ProjectListItem({
   showCurrentLabel,
   hostName,
   showGroupLabel = false,
+  inBands = false,
   onSelect,
   onStopProject,
   onCloseProject,
@@ -912,13 +935,12 @@ function ProjectListItem({
             </span>
           )}
           <ProjectFilingLabel
+            projectName={project.name}
             groupName={showGroupLabel ? project.groupName : undefined}
             // Under the Archived header the band already says it. Anywhere else
             // — the ranked list, which has no headers, or Running, where a live
             // agent lifted it — the row has to.
-            isArchived={
-              project.isArchived === true && (showGroupLabel || project.section !== "archived")
-            }
+            isArchived={project.isArchived === true && (!inBands || project.section !== "archived")}
           />
           {/*
            * Said in the name, not just in `aria-current`. In browse the band
@@ -1199,6 +1221,8 @@ interface ProjectSection {
   liftedCount?: number;
   /** Agents running across the band, for a folded header. */
   activeAgentCount?: number;
+  /** Projects with a working assistant, for a folded header. */
+  workingAssistantCount?: number;
 }
 
 /**
@@ -1243,6 +1267,7 @@ function BandCollapseToggle({
   controlsId,
   testId,
   onToggle,
+  leadingIcon,
 }: {
   collapsed: boolean;
   label: string;
@@ -1250,6 +1275,8 @@ function BandCollapseToggle({
   controlsId: string;
   testId: string;
   onToggle: () => void;
+  /** Drawn between the chevron and the label: a user-made group's folder. */
+  leadingIcon?: React.ReactNode;
 }) {
   return (
     <button
@@ -1270,6 +1297,7 @@ function BandCollapseToggle({
         )}
         aria-hidden="true"
       />
+      {leadingIcon}
       <BandLabel label={label} labelId={labelId} />
     </button>
   );
@@ -1311,6 +1339,22 @@ const OTHER_PROJECTS_SORT_OPTIONS: Record<
 };
 
 /**
+ * What a folded band says is still alive inside it, in the words its rows use:
+ * "2 agents running", "Assistant working", or both.
+ */
+function formatFoldedLiveness(agents: number, assistants: number): string {
+  const parts: string[] = [];
+  if (agents > 0) parts.push(`${pluralize(agents, "agent")} running`);
+  if (assistants > 0) {
+    parts.push(
+      assistants === 1 ? "assistant working" : `${pluralize(assistants, "assistant")} working`
+    );
+  }
+  const text = parts.join(" · ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
  * The header of every band whose order the user picks — Other projects and
  * each user-made group — which doubles as its sort control (#11455). The
  * band is the residual catch-all, so its order is the one thing a reader can't
@@ -1350,6 +1394,7 @@ function SortableBandHeader({
   onSortModeChange,
   group,
   activeAgentCount = 0,
+  workingAssistantCount = 0,
   onToggleCollapsed,
   onReturnFocus,
 }: {
@@ -1365,6 +1410,8 @@ function SortableBandHeader({
   group?: ProjectGroup;
   /** Agents running in the band — said on the header only while it is folded. */
   activeAgentCount?: number;
+  /** Projects whose assistant is working — said beside the agents, same rule. */
+  workingAssistantCount?: number;
   onToggleCollapsed: () => void;
   onReturnFocus?: () => void;
 }) {
@@ -1414,28 +1461,70 @@ function SortableBandHeader({
                 controlsId={bandListId(bandKey)}
                 testId={`band-collapse-toggle-${bandDomKey(bandKey)}`}
                 onToggle={onToggleCollapsed}
+                // A user-made group carries the folder its filing actions use,
+                // so the sections the user made read apart from the ones the
+                // switcher makes — same label, same rule, one quiet glyph.
+                leadingIcon={
+                  group ? (
+                    <FolderClosed className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  ) : undefined
+                }
               />
             ) : (
               <BandLabel label={label} labelId={headerId} />
             )}
-            {collapsed && activeAgentCount > 0 && (
+            {collapsed && (activeAgentCount > 0 || workingAssistantCount > 0) && (
               // A folded group keeps its running projects in place rather than
               // lifting them out, so the header is the only thing left to say
               // they are there. Neutral words beside the run hue's own mark —
-              // the same pairing a running row's status line uses.
+              // the same pairing a running row's status line uses. Assistants
+              // are named apart from agents, as everywhere else: they are live
+              // work, but not runs the user launched.
               <span
-                className="flex shrink-0 items-center gap-1 text-text-secondary"
+                className="flex min-w-0 items-center gap-1 text-text-secondary"
                 data-testid={`band-running-rollup-${bandDomKey(bandKey)}`}
               >
                 <span
-                  className="workspace-mark h-1.5 w-1.5 rounded-full bg-activity-working"
+                  className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
                   aria-hidden="true"
                 />
-                {pluralize(activeAgentCount, "agent")} running
+                <span className="truncate">
+                  {formatFoldedLiveness(activeAgentCount, workingAssistantCount)}
+                </span>
               </span>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            {group && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    data-testid={`band-group-menu-${bandDomKey(bandKey)}`}
+                    aria-label={`${group.name} group actions`}
+                    // Revealed with the header rather than always drawn: one
+                    // control per group header, repeated down the list, would
+                    // be a column of dots competing with the rows. Held, and
+                    // lifted, while its own menu is open so the menu has a
+                    // visible owner. Before the count rather than after it, so
+                    // every header's right-hand count or sort still ends on the
+                    // same edge. 24px square for the pointer target floor,
+                    // pulled into the header's line so it doesn't grow it.
+                    className={cn(
+                      "-my-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-[opacity,background-color,color] duration-150 ease-out hover:text-text-primary",
+                      "opacity-0 group-hover/band-header:opacity-100",
+                      "data-[state=open]:opacity-100 data-[state=open]:bg-overlay-subtle data-[state=open]:text-text-primary"
+                    )}
+                  >
+                    <Ellipsis className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onCloseAutoFocus={returnFocus}>
+                  <ProjectGroupDropdownMenuItems group={group} />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             {collapsed && <BandCollapsedCount count={itemCount} />}
             {!collapsed && itemCount >= OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS && (
               <DropdownMenu>
@@ -1467,31 +1556,6 @@ function SortableBandHeader({
                       );
                     })}
                   </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            {group && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    data-testid={`band-group-menu-${bandDomKey(bandKey)}`}
-                    aria-label={`${group.name} group actions`}
-                    // Revealed with the header rather than always drawn: one
-                    // control per group header, repeated down the list, would
-                    // be a column of dots competing with the rows. Held while
-                    // its own menu is open so it doesn't vanish under the menu.
-                    className={cn(
-                      "flex shrink-0 items-center rounded-[var(--radius-sm)] p-0.5 text-text-secondary transition-opacity duration-150 ease-out hover:text-text-primary",
-                      "opacity-0 group-hover/band-header:opacity-100 data-[state=open]:opacity-100"
-                    )}
-                  >
-                    <Ellipsis className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" onCloseAutoFocus={returnFocus}>
-                  <ProjectGroupDropdownMenuItems group={group} />
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -1532,15 +1596,22 @@ function SortableBandHeader({
  * that may only hold options, and the band's header already names the group.
  */
 function EmptyGroupHint({ liftedCount }: { liftedCount: number }) {
+  // Laid out on a row's own frame — the border, inset, status slot and tile
+  // slot it would have — so the sentence starts on the column the project
+  // names start on and reads as this group's content, not a stray note.
   return (
     <div
       aria-hidden="true"
-      className="px-2 py-1.5 text-xs text-text-secondary"
+      className="flex items-center gap-2 border border-transparent px-2 py-1.5 text-xs text-text-secondary"
       data-testid="empty-group-hint"
     >
-      {liftedCount > 0
-        ? `${pluralize(liftedCount, "project")} shown above`
-        : "Right-click a project to move it here"}
+      <span className="w-2 shrink-0" />
+      <span className="w-8 shrink-0" />
+      <span className="min-w-0 truncate">
+        {liftedCount > 0
+          ? `${pluralize(liftedCount, "project")} shown above`
+          : "Right-click a project and choose Move to group"}
+      </span>
     </div>
   );
 }
@@ -1699,6 +1770,7 @@ function ProjectListContent({
         group: band.group,
         liftedCount: band.liftedCount,
         activeAgentCount: band.activeAgentCount,
+        workingAssistantCount: band.workingAssistantCount,
       };
     });
 
@@ -1756,8 +1828,14 @@ function ProjectListContent({
             // project that became active mid-session can sit under another
             // header; only the "Current project" band makes the label redundant.
             showCurrentLabel={!hasBands || row.section !== "current"}
-            // Bands name the group in their header; the ranked list has none.
-            showGroupLabel={!hasBands}
+            // Said wherever no header already says it: the ranked list has no
+            // headers at all, and a member drawn outside its own group's band —
+            // current, asking, pinned, or archived — would otherwise lose the
+            // one fact that says where it is filed.
+            showGroupLabel={
+              !hasBands || (row.groupId !== undefined && row.section !== groupBandKey(row.groupId))
+            }
+            inBands={hasBands}
             hostName={
               sharedNameHost?.names.has(row.name.toLocaleLowerCase())
                 ? sharedNameHost.hostName
@@ -1826,6 +1904,7 @@ function ProjectListContent({
                       }}
                       group={section.group}
                       activeAgentCount={section.activeAgentCount}
+                      workingAssistantCount={section.workingAssistantCount}
                       onToggleCollapsed={toggle}
                       onReturnFocus={onReturnFocus}
                     />

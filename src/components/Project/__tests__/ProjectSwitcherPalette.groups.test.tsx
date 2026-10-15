@@ -143,6 +143,7 @@ vi.mock("@/utils/timeAgo", () => ({
 }));
 
 import type {
+  ProjectSwitcherBrowseBand,
   ProjectSwitcherProjectRow,
   SearchableProject,
 } from "@/hooks/useProjectSwitcherPalette";
@@ -260,7 +261,7 @@ describe("project group bands", () => {
   it("says why an open group is empty instead of drawing nothing", () => {
     renderGroups({ groupRows: [] });
     expect(screen.getByTestId("empty-group-hint").textContent).toBe(
-      "Right-click a project to move it here"
+      "Right-click a project and choose Move to group"
     );
   });
 
@@ -374,5 +375,118 @@ describe("search result filing labels", () => {
     );
     const row = document.getElementById("project-option-api")!;
     expect(row.textContent).toContain("· Crisp Vector · Archived");
+  });
+});
+
+describe("browse filing labels", () => {
+  beforeEach(() => {
+    useProjectGroupsStore.setState({ groups: [GROUP], dialog: null });
+  });
+
+  function renderBands(rows: ProjectSwitcherProjectRow[], bands: ProjectSwitcherBrowseBand[]) {
+    return render(
+      <ProjectSwitcherPalette
+        isOpen
+        mode="modal"
+        query=""
+        results={rows}
+        browseBands={bands}
+        selectedIndex={0}
+        onQueryChange={vi.fn()}
+        onSelectPrevious={vi.fn()}
+        onSelectNext={vi.fn()}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+  }
+
+  it("names the group on a member drawn outside its own group's band", () => {
+    renderBands(
+      [
+        makeProject({ id: "web", section: "running", groupId: "crisp", groupName: "Crisp Vector" }),
+        makeProject({
+          id: "api",
+          section: "group:crisp",
+          groupId: "crisp",
+          groupName: "Crisp Vector",
+        }),
+      ],
+      [
+        { key: "running", label: "Running", itemCount: 1, collapsed: false },
+        { key: "group:crisp", label: "Crisp Vector", itemCount: 1, collapsed: false, group: GROUP },
+      ]
+    );
+    expect(document.getElementById("project-option-web")!.textContent).toContain("· Crisp Vector");
+    // Under its own group's header, the header already says it.
+    expect(document.getElementById("project-option-api")!.textContent).not.toContain(
+      "Crisp Vector"
+    );
+  });
+
+  it("doesn't repeat a group named like the project itself", () => {
+    renderBands(
+      [
+        makeProject({
+          id: "app",
+          name: "Crisp Vector",
+          section: "current",
+          isActive: true,
+          groupId: "crisp",
+          groupName: "Crisp Vector",
+        }),
+      ],
+      [{ key: "current", label: "Current project", itemCount: 1, collapsed: false }]
+    );
+    expect(document.getElementById("project-option-app")!.textContent).not.toContain("·");
+  });
+
+  it("names the group but not Archived again under the Archived header", () => {
+    renderBands(
+      [
+        makeProject({
+          id: "old",
+          section: "archived",
+          isArchived: true,
+          groupId: "crisp",
+          groupName: "Crisp Vector",
+        }),
+      ],
+      [{ key: "archived", label: "Archived", itemCount: 1, collapsed: false }]
+    );
+    const text = document.getElementById("project-option-old")!.textContent ?? "";
+    expect(text).toContain("· Crisp Vector");
+    expect(text).not.toContain("Archived");
+  });
+
+  it("reports a working assistant on a folded group, alone and beside agents", () => {
+    const folded = (activeAgentCount: number, workingAssistantCount: number) =>
+      renderBands(
+        [makeProject({ id: "loose" })],
+        [
+          {
+            key: "group:crisp",
+            label: "Crisp Vector",
+            itemCount: 2,
+            collapsed: true,
+            group: GROUP,
+            activeAgentCount,
+            workingAssistantCount,
+          },
+          { key: "other", label: "Other projects", itemCount: 1, collapsed: false },
+        ]
+      );
+    const rollup = () => screen.getByTestId("band-running-rollup-group-crisp").textContent;
+
+    const alone = folded(0, 1);
+    expect(rollup()).toBe("Assistant working");
+    alone.unmount();
+
+    const both = folded(2, 1);
+    expect(rollup()).toBe("2 agents running · assistant working");
+    both.unmount();
+
+    folded(0, 3);
+    expect(rollup()).toBe("3 assistants working");
   });
 });

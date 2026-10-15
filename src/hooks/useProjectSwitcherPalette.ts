@@ -380,6 +380,12 @@ export interface ProjectSwitcherBrowseBand {
    * to say they're there. Absent reads as none.
    */
   activeAgentCount?: number;
+  /**
+   * Projects in the band whose assistant is working. Counted apart from
+   * `activeAgentCount` — an assistant is not a run the user launched — but it
+   * is live work all the same, and a folded group must not hide it.
+   */
+  workingAssistantCount?: number;
 }
 
 export interface UseProjectSwitcherPaletteReturn {
@@ -1917,6 +1923,9 @@ export function useProjectSwitcherPalette({
       }
       band.itemCount += 1;
       band.activeAgentCount = (band.activeAgentCount ?? 0) + project.activeAgentCount;
+      if (classifyAssistantActivity(project) === "working") {
+        band.workingAssistantCount = (band.workingAssistantCount ?? 0) + 1;
+      }
     }
     const present = new Set(bands.map((band) => band.key));
     for (const group of sortProjectGroups(projectGroups)) {
