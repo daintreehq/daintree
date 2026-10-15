@@ -49,9 +49,9 @@ interface SuggestionAddressProps {
   wrap?: boolean;
 }
 
-/** How many of a cut route's last characters show beside its `…`, and for which route. */
+/** How many of a cut route's last characters show beside its `…`, and for which address. */
 interface TailFit {
-  route: string;
+  address: string;
   length: number;
 }
 
@@ -80,21 +80,23 @@ export function SuggestionAddress({
   const rest = route.slice(1);
   const restRef = useRef<HTMLSpanElement>(null);
   const [fit, setFit] = useState<TailFit | null>(null);
-  const tailLength = fit?.route === route ? fit.length : null;
+  const tailLength = fit?.address === address ? fit.length : null;
 
+  // Runs again after every step it takes (`fit` changes) until the tail fits or
+  // is down to one character, and again whenever a resize starts it over.
   useLayoutEffect(() => {
     const el = restRef.current;
     if (!el || el.scrollWidth <= el.clientWidth) return;
     setFit((current) => {
-      if (current?.route === route) {
-        return current.length > 1 ? { route, length: current.length - 1 } : current;
+      if (current?.address === address) {
+        return current.length > 1 ? { address, length: current.length - 1 } : current;
       }
       const perChar = el.scrollWidth / Math.max(rest.length, 1);
       // One character of room for the `…`.
       const estimate = Math.floor(el.clientWidth / perChar) - 1;
-      return { route, length: Math.max(1, Math.min(estimate, rest.length - 1)) };
+      return { address, length: Math.max(1, Math.min(estimate, rest.length - 1)) };
     });
-  });
+  }, [address, rest.length, fit]);
 
   // A wider line may hold more of the route again: start over from all of it.
   useEffect(() => {
@@ -108,7 +110,7 @@ export function SuggestionAddress({
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [wrap, route]);
+  }, [wrap, address]);
 
   // An untitled row whose address is a bare host has nothing else to stand on.
   const hostLeads = emphasis === "host" || (standalone && !route);
