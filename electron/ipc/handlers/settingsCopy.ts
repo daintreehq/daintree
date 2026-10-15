@@ -6,6 +6,10 @@ import type {
   SettingsCopyApplyPayload,
   SettingsCopyPreview,
   SettingsCopyPreviewPayload,
+  SettingsCopyStatus,
+  SettingsCopyStatusPayload,
+  SettingsCopyUndoPayload,
+  SettingsCopyUndoResult,
 } from "../../../shared/types/ipc/settingsCopy.js";
 
 /**
@@ -25,6 +29,16 @@ export const settingsCopyNamespace = defineIpcNamespace({
       SETTINGS_COPY_METHOD_CHANNELS.apply,
       async (payload: SettingsCopyApplyPayload): Promise<ConfigImportReport> =>
         requireRemoteService("settingsCopyClient").apply(payload)
+    ),
+    status: op(
+      SETTINGS_COPY_METHOD_CHANNELS.status,
+      async (payload: SettingsCopyStatusPayload): Promise<SettingsCopyStatus> =>
+        requireRemoteService("settingsCopyClient").status(payload)
+    ),
+    undo: op(
+      SETTINGS_COPY_METHOD_CHANNELS.undo,
+      async (payload: SettingsCopyUndoPayload): Promise<SettingsCopyUndoResult> =>
+        requireRemoteService("settingsCopyClient").undo(payload)
     ),
   },
 });

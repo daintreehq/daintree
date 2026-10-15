@@ -1235,6 +1235,12 @@ export interface GeneratedElectronAPI {
     preview(
       ...args: IpcInvokeMap["settings-copy:preview"]["args"]
     ): Promise<IpcInvokeMap["settings-copy:preview"]["result"]>;
+    status(
+      ...args: IpcInvokeMap["settings-copy:status"]["args"]
+    ): Promise<IpcInvokeMap["settings-copy:status"]["result"]>;
+    undo(
+      ...args: IpcInvokeMap["settings-copy:undo"]["args"]
+    ): Promise<IpcInvokeMap["settings-copy:undo"]["result"]>;
   };
   shortcutHints: {
     getCounts(

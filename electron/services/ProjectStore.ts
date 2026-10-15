@@ -2140,6 +2140,12 @@ export class ProjectStore {
   async deleteGlobalRecipe(recipeId: string): Promise<void> {
     return this.globalFileStore.deleteRecipe(recipeId);
   }
+
+  async transformGlobalRecipes(
+    transform: (recipes: TerminalRecipe[]) => TerminalRecipe[] | null
+  ): Promise<void> {
+    return this.globalFileStore.transformRecipes(transform);
+  }
 }
 
 export const projectStore = new ProjectStore();

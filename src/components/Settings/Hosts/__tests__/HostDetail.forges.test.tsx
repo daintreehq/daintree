@@ -17,6 +17,7 @@ vi.mock("@/clients/remoteHostsClient", () => ({
   },
 }));
 vi.mock("../HostPluginsSection", () => ({ HostPluginsSection: () => null }));
+vi.mock("../HostCopySettingsSection", () => ({ HostCopySettingsSection: () => null }));
 
 import { HostDetail } from "../HostDetail";
 

@@ -57,6 +57,111 @@ export interface SectionHandler {
   apply: (incoming: unknown, current: unknown) => Promise<ConfigImportLeafResult[]>;
   /** Put the snapshot back after a failed import. */
   restore: (snapshot: unknown) => Promise<void>;
+  /**
+   * The stored value behind one leaf the apply reported, or undefined when it
+   * isn't there. A plain keyed record by default; a section whose leaves are
+   * array entries or nested names says how to find them.
+   */
+  leafValue?: (value: unknown, key: string) => unknown;
+  /** `value` with one leaf replaced, or removed when `leaf` is undefined. */
+  withLeaf?: (value: unknown, key: string, leaf: unknown) => unknown;
+  /**
+   * Undo a copy's leaves itself, for a section whose `restore` would rewrite
+   * entries the undo has no business touching. Same contract as the generic
+   * undo: restore a leaf only while it still holds what the copy wrote.
+   */
+  undo?: (leaves: UndoLeaf[]) => Promise<UndoLeafResult[]>;
+}
+
+/** One leaf a copy changed: what it held before (absent when undefined) and what the copy wrote. */
+export interface UndoLeaf {
+  key: string;
+  before?: unknown;
+  after?: unknown;
+}
+
+export type UndoLeafStatus = "restored" | "unchanged" | "edited" | "failed";
+
+export interface UndoLeafResult {
+  key: string;
+  status: UndoLeafStatus;
+}
+
+export function recordLeafValue(value: unknown, key: string): unknown {
+  return isRecord(value) && hasOwn(value, key) ? value[key] : undefined;
+}
+
+export function withRecordLeaf(value: unknown, key: string, leaf: unknown): unknown {
+  const next: Record<string, unknown> = isRecord(value) ? { ...value } : {};
+  if (leaf === undefined) delete next[key];
+  else next[key] = leaf;
+  return next;
+}
+
+export interface UndoPlan {
+  /** `current` with every leaf that still holds what the copy wrote put back. */
+  next: unknown;
+  /** The leaves `next` puts back; whether they landed is read back after the write. */
+  pending: UndoLeaf[];
+  statuses: Map<string, UndoLeafStatus>;
+}
+
+/**
+ * The three-way call for each leaf: already as it was is `unchanged`, still
+ * what the copy wrote is put back, anything else was edited since and stays.
+ */
+export function planUndo(
+  leaves: readonly UndoLeaf[],
+  current: unknown,
+  leafOf: (value: unknown, key: string) => unknown = recordLeafValue,
+  put: (value: unknown, key: string, leaf: unknown) => unknown = withRecordLeaf
+): UndoPlan {
+  const statuses = new Map<string, UndoLeafStatus>();
+  const pending: UndoLeaf[] = [];
+  let next = current;
+  for (const leaf of leaves) {
+    const now = leafOf(current, leaf.key);
+    if (sameValue(now, leaf.before)) statuses.set(leaf.key, "unchanged");
+    else if (sameValue(now, leaf.after)) {
+      next = put(next, leaf.key, leaf.before);
+      pending.push(leaf);
+    } else statuses.set(leaf.key, "edited");
+  }
+  return { next, pending, statuses };
+}
+
+/** One result per leaf, a put-back leaf `restored` only if the read-back shows it. */
+export function settleUndo(
+  leaves: readonly UndoLeaf[],
+  plan: UndoPlan,
+  readBack: unknown,
+  leafOf: (value: unknown, key: string) => unknown = recordLeafValue
+): UndoLeafResult[] {
+  for (const leaf of plan.pending) {
+    plan.statuses.set(
+      leaf.key,
+      sameValue(leafOf(readBack, leaf.key), leaf.before) ? "restored" : "failed"
+    );
+  }
+  return leaves.map(({ key }) => ({ key, status: plan.statuses.get(key) ?? "failed" }));
+}
+
+/** A list of records keyed by `id`, as recipes and custom themes are kept. */
+export function listLeafValue(list: unknown, id: string): unknown {
+  return Array.isArray(list)
+    ? list.find((item) => isRecord(item) && String(item.id) === id)
+    : undefined;
+}
+
+/** `list` with the entry for `id` replaced in place, appended, or removed when `leaf` is undefined. */
+export function withListLeaf(list: unknown, id: string, leaf: unknown): unknown[] {
+  const items = Array.isArray(list) ? [...list] : [];
+  const index = items.findIndex((item) => isRecord(item) && String(item.id) === id);
+  if (leaf === undefined) {
+    if (index !== -1) items.splice(index, 1);
+  } else if (index === -1) items.push(leaf);
+  else items[index] = leaf;
+  return items;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

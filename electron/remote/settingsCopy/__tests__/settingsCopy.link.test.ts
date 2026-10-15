@@ -5,7 +5,9 @@ import type {
   ConfigBundleSectionId,
   ConfigImportReport,
 } from "../../../../shared/types/configBundle.js";
+import type { CapturedSection } from "../../../services/ConfigBundleService.js";
 import type { LinkSession } from "../../link/session.js";
+import type { LastCopyRecord } from "../LastCopyStore.js";
 import { makeTempDir, openSessionPair, removeTempDir } from "../../link/__tests__/linkTestUtils.js";
 import { ClientSettingsCopy } from "../ClientSettingsCopy.js";
 import { HostSettingsCopy } from "../HostSettingsCopy.js";
@@ -41,26 +43,61 @@ function fakeHostService() {
       revision: vi.fn(async (ids: readonly string[]) =>
         JSON.stringify(ids.map((id) => [id, settings[id]]))
       ),
-      apply: vi.fn(async (incoming: Sections): Promise<ConfigImportReport> => {
-        applied.push(incoming);
-        for (const [id, payload] of Object.entries(incoming)) settings[id] = payload;
-        return {
-          outcome: "applied",
-          sections: Object.keys(incoming).map((id) => ({
-            section: id as ConfigBundleSectionId,
-            present: true,
-            applied: 1,
-            unchanged: 0,
-            skipped: 0,
-            failed: 0,
-            leaves: [{ key: id, status: "applied" as const }],
+      apply: vi.fn(
+        async (
+          incoming: Sections,
+          options: { capture?: CapturedSection[] } = {}
+        ): Promise<ConfigImportReport> => {
+          applied.push(incoming);
+          for (const [id, payload] of Object.entries(incoming)) {
+            options.capture?.push({
+              section: id as ConfigBundleSectionId,
+              leaves: [{ key: id, before: settings[id], after: payload }],
+            });
+            settings[id] = payload;
+          }
+          return {
+            outcome: "applied",
+            sections: Object.keys(incoming).map((id) => ({
+              section: id as ConfigBundleSectionId,
+              present: true,
+              applied: 1,
+              unchanged: 0,
+              skipped: 0,
+              failed: 0,
+              leaves: [{ key: id, status: "applied" as const }],
+              errors: [],
+            })),
             errors: [],
-          })),
-          errors: [],
-          rolledBack: false,
-        };
-      }),
+            rolledBack: false,
+          };
+        }
+      ),
+      undo: vi.fn(async (sections: readonly CapturedSection[]) =>
+        sections.map(({ section, leaves }) => ({
+          section,
+          leaves: leaves.map((leaf) => {
+            if (JSON.stringify(settings[leaf.key]) !== JSON.stringify(leaf.after)) {
+              return { key: leaf.key, status: "edited" as const };
+            }
+            settings[leaf.key] = leaf.before;
+            return { key: leaf.key, status: "restored" as const };
+          }),
+        }))
+      ),
     },
+  };
+}
+
+function memoryRecords() {
+  const box: { record: LastCopyRecord | null } = { record: null };
+  return {
+    box,
+    read: vi.fn(async () => structuredClone(box.record)),
+    write: vi.fn(async (record: LastCopyRecord) => {
+      box.record = structuredClone(record);
+      return record;
+    }),
   };
 }
 
@@ -68,6 +105,7 @@ let dir: string;
 let sessions: { host: LinkSession; client: LinkSession };
 let hostSide: ReturnType<typeof fakeHostService>;
 let reconcile: ReturnType<typeof vi.fn<() => Promise<void>>>;
+let records: ReturnType<typeof memoryRecords>;
 let host: HostSettingsCopy;
 let client: ClientSettingsCopy;
 let local: Sections;
@@ -78,16 +116,18 @@ beforeEach(async () => {
   sessions = await openSessionPair(dir);
   hostSide = fakeHostService();
   reconcile = vi.fn(async () => {});
+  records = memoryRecords();
   now = 1_000;
   host = new HostSettingsCopy({
     service: async () => hostSide.service,
     runWrite: (write) => write(),
     reconcile,
+    records,
     platform: "linux",
     now: () => now,
     ticketTtlMs: 60_000,
   });
-  host.attach(sessions.host);
+  host.attach(sessions.host, "Laptop");
   local = {
     agentSettings: {
       claude: {
@@ -286,5 +326,112 @@ describe("an apply whose answer never arrives", () => {
       userMessage: expect.stringContaining("Preview again"),
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("what a copy would change, and undoing the last one (#13347)", () => {
+  it("compares everything copyable, by category, without minting a ticket", async () => {
+    hostSide.service.preview.mockImplementationOnce(async (incoming: Sections) =>
+      Object.keys(incoming).map((id) => ({
+        section: id as ConfigBundleSectionId,
+        add: 0,
+        update: id === "worktreeConfig" ? 1 : 0,
+        unchanged: 1,
+        changes: [],
+      }))
+    );
+    const status = await client.status({ hostId: HOST });
+    expect(Object.keys(hostSide.service.preview.mock.calls[0][0]).sort()).toEqual(
+      ["agentSettings", "globalEnvironment", "worktreeConfig"].sort()
+    );
+    expect(hostSide.service.revision).not.toHaveBeenCalled();
+    expect(status).toEqual({ supported: true, changes: ["worktreePath"], lastCopy: null });
+  });
+
+  it("records who copied, when and what, and shows it without any value", async () => {
+    now = 5_000;
+    const preview = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: preview.ticket });
+
+    const { lastCopy } = await client.status({ hostId: HOST });
+    expect(lastCopy).toMatchObject({
+      source: "Laptop",
+      at: 5_000,
+      sections: [{ section: "worktreeConfig", applied: 1, skipped: 0 }],
+      undo: "available",
+      changed: [{ section: "worktreeConfig", key: "worktreeConfig", label: "worktreeConfig" }],
+    });
+    // The record keeps the earlier value; nothing a Shell sees carries it.
+    expect(JSON.stringify(records.box.record)).toContain("{parent-dir}");
+    expect(JSON.stringify(lastCopy)).not.toContain("{parent-dir}");
+  });
+
+  it("undoes the last copy once, and refuses a copy that has since been replaced", async () => {
+    const first = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: first.ticket });
+    const firstId = (await client.status({ hostId: HOST })).lastCopy!.id;
+
+    local.worktreeConfig = { pathPattern: "~/second/{branch-slug}" };
+    const second = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: second.ticket });
+    await expect(client.undo({ hostId: HOST, copyId: firstId })).rejects.toMatchObject({
+      code: "SETTINGS_COPY_UNDO_STALE",
+    });
+
+    const latest = (await client.status({ hostId: HOST })).lastCopy!;
+    reconcile.mockClear();
+    const result = await client.undo({ hostId: HOST, copyId: latest.id });
+    expect(result.undone.leaves).toEqual([
+      {
+        section: "worktreeConfig",
+        key: "worktreeConfig",
+        label: "worktreeConfig",
+        status: "restored",
+      },
+    ]);
+    expect(result.lastCopy.undo).toBe("done");
+    expect(hostSide.settings.worktreeConfig).toEqual({ pathPattern: "~/wt/{branch-slug}" });
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    // The earlier values went with the undo.
+    expect(records.box.record?.leaves).toBeUndefined();
+    await expect(client.undo({ hostId: HOST, copyId: latest.id })).rejects.toMatchObject({
+      code: "SETTINGS_COPY_UNDO_STALE",
+    });
+  });
+
+  it("keeps the previous record when a copy rolls back", async () => {
+    const first = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: first.ticket });
+    const before = records.box.record;
+    hostSide.service.apply.mockResolvedValueOnce({
+      outcome: "rolled-back",
+      sections: [],
+      errors: ["nope"],
+      rolledBack: true,
+    });
+    const second = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: second.ticket });
+    expect(records.box.record).toEqual(before);
+  });
+
+  it("says nothing is known, rather than failing, on a host too old to answer", async () => {
+    host.dispose();
+    const bare = await openSessionPair(dir);
+    const old = new ClientSettingsCopy({
+      sessionFor: () => bare.client,
+      isKnownHost: () => true,
+      hostLabel: () => HOST,
+      collect: async () => ({}),
+    });
+    try {
+      await expect(old.status({ hostId: HOST })).resolves.toEqual({
+        supported: false,
+        changes: [],
+        lastCopy: null,
+      });
+    } finally {
+      bare.host.close("test");
+      bare.client.close("test");
+    }
   });
 });

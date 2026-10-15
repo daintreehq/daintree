@@ -7,18 +7,31 @@ import {
   type ConfigImportReport,
 } from "../../../shared/types/configBundle.js";
 import { AppError } from "../../utils/errorTypes.js";
-import type { ConfigBundleService } from "../../services/ConfigBundleService.js";
+import type { CapturedSection, ConfigBundleService } from "../../services/ConfigBundleService.js";
+import type {
+  SettingsCopyLastCopy,
+  SettingsCopyUndoLeaf,
+} from "../../../shared/types/ipc/settingsCopy.js";
 import type { LinkSession } from "../link/session.js";
+import type { LastCopyRecord } from "./LastCopyStore.js";
 import {
   SettingsCopyApplySchema,
   SettingsCopyLinkMethod,
   SettingsCopyPreviewSchema,
+  SettingsCopyUndoSchema,
   type SettingsCopyPreviewRequest,
   type SettingsCopyPreviewResult,
+  type SettingsCopyStatusResult,
+  type SettingsCopyUndoLinkResult,
 } from "./linkMethods.js";
 
 export interface HostSettingsCopyDeps {
-  service(): Promise<Pick<ConfigBundleService, "preview" | "apply" | "revision">>;
+  service(): Promise<Pick<ConfigBundleService, "preview" | "apply" | "revision" | "undo">>;
+  /** Where the last copy received is kept, with what an undo needs. */
+  records: {
+    read(): Promise<LastCopyRecord | null>;
+    write(record: LastCopyRecord): Promise<LastCopyRecord>;
+  };
   /** The queue every config write on this machine goes through. */
   runWrite<T>(write: () => Promise<T>): Promise<T>;
   /** Bring this machine's services and every window in line after a write. */
@@ -35,6 +48,21 @@ interface Ticket {
   expiresAt: number;
   /** Leaves the preview refused and the payload no longer carries, reported with the result. */
   refused: Map<ConfigBundleSectionId, ConfigImportLeafResult[]>;
+  /** What the preview called each changed leaf, `section:key`, for the record. */
+  labels: Map<string, string>;
+}
+
+function splitPayload(request: SettingsCopyPreviewRequest): {
+  sections: Partial<Record<ConfigBundleSectionId, unknown>>;
+  unknownSections: string[];
+} {
+  const sections: Partial<Record<ConfigBundleSectionId, unknown>> = {};
+  const unknownSections: string[] = [];
+  for (const [id, payload] of Object.entries(request.sections)) {
+    if (isConfigBundleSectionId(id)) sections[id] = payload;
+    else unknownSections.push(id);
+  }
+  return { sections, unknownSections };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -96,6 +124,23 @@ function withRefused(
 const TICKET_TTL_MS = 15 * 60_000;
 const MAX_TICKETS_PER_SESSION = 4;
 
+/** The record as a Shell may see it: names of what changed, never a value. */
+function publicCopy(record: LastCopyRecord): SettingsCopyLastCopy {
+  if (record.copy.undo !== "available" || !record.leaves) return record.copy;
+  return {
+    ...record.copy,
+    changed: record.leaves.map(({ section, key, label }) => ({ section, key, label })),
+  };
+}
+
+function undoStale(): AppError {
+  return new AppError({
+    code: "SETTINGS_COPY_UNDO_STALE",
+    message: "That copy can no longer be undone",
+    userMessage: "There's a newer copy, or this one was already undone. Refresh to see it.",
+  });
+}
+
 function stale(): AppError {
   return new AppError({
     code: "SETTINGS_PREVIEW_STALE",
@@ -121,7 +166,8 @@ export class HostSettingsCopy {
     return this.deps.now?.() ?? Date.now();
   }
 
-  attach(session: LinkSession): void {
+  /** `source` is the name the Shell gave when it connected, recorded as who copied. */
+  attach(session: LinkSession, source = ""): void {
     if (this.disposed || this.sessions.has(session)) return;
     const tickets = new Map<string, Ticket>();
     this.sessions.set(session, tickets);
@@ -130,7 +176,13 @@ export class HostSettingsCopy {
         this.preview(tickets, p)
       ),
       session.registerCallHandler(SettingsCopyLinkMethod.APPLY, SettingsCopyApplySchema, (p) =>
-        this.apply(tickets, p.ticket)
+        this.apply(tickets, p.ticket, source)
+      ),
+      session.registerCallHandler(SettingsCopyLinkMethod.STATUS, SettingsCopyPreviewSchema, (p) =>
+        this.status(p)
+      ),
+      session.registerCallHandler(SettingsCopyLinkMethod.UNDO, SettingsCopyUndoSchema, (p) =>
+        this.undo(p.copyId)
       ),
     ];
     session.onClose(() => {
@@ -147,12 +199,7 @@ export class HostSettingsCopy {
     tickets: Map<string, Ticket>,
     request: SettingsCopyPreviewRequest
   ): Promise<SettingsCopyPreviewResult> {
-    const sections: Partial<Record<ConfigBundleSectionId, unknown>> = {};
-    const unknownSections: string[] = [];
-    for (const [id, payload] of Object.entries(request.sections)) {
-      if (isConfigBundleSectionId(id)) sections[id] = payload;
-      else unknownSections.push(id);
-    }
+    const { sections, unknownSections } = splitPayload(request);
     const ids = Object.keys(sections) as ConfigBundleSectionId[];
     const service = await this.deps.service();
     // Inside the write queue, so no other write lands between the preview
@@ -173,12 +220,18 @@ export class HostSettingsCopy {
     }
     const ticket = randomBytes(16).toString("hex");
     const { sections: accepted, refused } = withoutRefused(sections, previews);
+    const labels = new Map(
+      previews.flatMap((preview) =>
+        preview.changes.map((change) => [`${preview.section}:${change.key}`, change.label] as const)
+      )
+    );
     tickets.set(ticket, {
       sections: accepted,
       ids,
       revision,
       expiresAt: now + (this.deps.ticketTtlMs ?? TICKET_TTL_MS),
       refused,
+      labels,
     });
     return {
       ticket,
@@ -188,19 +241,28 @@ export class HostSettingsCopy {
     };
   }
 
-  private async apply(tickets: Map<string, Ticket>, ticket: string): Promise<ConfigImportReport> {
+  private async apply(
+    tickets: Map<string, Ticket>,
+    ticket: string,
+    source: string
+  ): Promise<ConfigImportReport> {
     const entry = tickets.get(ticket);
     // One apply per preview: a retry previews again rather than writing twice.
     tickets.delete(ticket);
     if (!entry || entry.expiresAt <= this.now()) throw stale();
     const service = await this.deps.service();
-    const report = withRefused(
-      await this.deps.runWrite(async () => {
-        if ((await service.revision(entry.ids)) !== entry.revision) throw stale();
-        return service.apply(entry.sections);
-      }),
-      entry.refused
-    );
+    const report = await this.deps.runWrite(async () => {
+      if ((await service.revision(entry.ids)) !== entry.revision) throw stale();
+      const captured: CapturedSection[] = [];
+      const applied = withRefused(
+        await service.apply(entry.sections, { capture: captured }),
+        entry.refused
+      );
+      // A copy that rolled back changed nothing, so the copy before it is
+      // still the last one, and still undoable.
+      if (applied.outcome === "applied") await this.record(entry, applied, captured, source);
+      return applied;
+    });
     if (report.outcome === "applied") {
       try {
         await this.deps.reconcile();
@@ -211,5 +273,103 @@ export class HostSettingsCopy {
       }
     }
     return report;
+  }
+
+  private async record(
+    entry: Ticket,
+    report: ConfigImportReport,
+    captured: CapturedSection[],
+    source: string
+  ): Promise<void> {
+    const record: LastCopyRecord = {
+      copy: {
+        id: randomBytes(16).toString("hex"),
+        source: source.slice(0, 256),
+        at: this.now(),
+        sections: report.sections
+          .filter((section) => section.present)
+          .map(({ section, applied, skipped }) => ({ section, applied, skipped })),
+        undo: "available",
+      },
+      leaves: captured.flatMap(({ section, leaves }) =>
+        leaves.map((leaf) => ({
+          section,
+          label: entry.labels.get(`${section}:${leaf.key}`) ?? leaf.key,
+          ...leaf,
+        }))
+      ),
+    };
+    try {
+      await this.deps.records.write(record);
+    } catch (error) {
+      // The settings landed; only the record of them didn't. The copy is
+      // still reported as it landed, and the page offers no undo it can't do.
+      console.error("[HostSettingsCopy] Couldn't record the copy:", error);
+    }
+  }
+
+  private async status(request: SettingsCopyPreviewRequest): Promise<SettingsCopyStatusResult> {
+    const { sections, unknownSections } = splitPayload(request);
+    const service = await this.deps.service();
+    const { previews, record } = await this.deps.runWrite(async () => ({
+      previews: await service.preview(sections),
+      record: await this.deps.records.read(),
+    }));
+    return {
+      // The preview's counts already leave out what this host would refuse,
+      // so a missing sound or an agent it lacks is never counted as a change.
+      sections: previews.map(({ section, add, update }) => ({ section, add, update })),
+      unknownSections,
+      lastCopy: record ? publicCopy(record) : null,
+    };
+  }
+
+  private async undo(copyId: string): Promise<SettingsCopyUndoLinkResult> {
+    const service = await this.deps.service();
+    const result = await this.deps.runWrite(async () => {
+      const record = await this.deps.records.read();
+      if (!record || record.copy.id !== copyId || record.copy.undo !== "available") {
+        throw undoStale();
+      }
+      const leaves = record.leaves ?? [];
+      const bySection = new Map<ConfigBundleSectionId, CapturedSection>();
+      for (const { section, key, before, after } of leaves) {
+        const group = bySection.get(section) ?? { section, leaves: [] };
+        group.leaves.push({
+          key,
+          ...(before !== undefined ? { before } : {}),
+          ...(after !== undefined ? { after } : {}),
+        });
+        bySection.set(section, group);
+      }
+      const outcomes = await service.undo([...bySection.values()]);
+      const label = new Map(leaves.map((leaf) => [`${leaf.section}:${leaf.key}`, leaf.label]));
+      const undoneLeaves: SettingsCopyUndoLeaf[] = outcomes.flatMap(({ section, leaves: done }) =>
+        done.map(({ key, status }) => ({
+          section,
+          key,
+          label: label.get(`${section}:${key}`) ?? key,
+          status,
+        }))
+      );
+      const undone = { at: this.now(), leaves: undoneLeaves };
+      // The earlier values go with the undo: a leaf left because it was
+      // edited since can't come back later by matching again by chance.
+      const lastCopy: SettingsCopyLastCopy = { ...record.copy, undo: "done", undone };
+      try {
+        await this.deps.records.write({ copy: lastCopy });
+      } catch (error) {
+        console.error("[HostSettingsCopy] Couldn't record the undo:", error);
+      }
+      return { undone, lastCopy };
+    });
+    if (result.undone.leaves.some((leaf) => leaf.status === "restored")) {
+      try {
+        await this.deps.reconcile();
+      } catch (error) {
+        console.error("[HostSettingsCopy] Refresh after undo failed:", error);
+      }
+    }
+    return result;
   }
 }

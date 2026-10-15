@@ -3,6 +3,8 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const SETTINGS_COPY_METHOD_CHANNELS = {
   preview: "settings-copy:preview",
   apply: "settings-copy:apply",
+  status: "settings-copy:status",
+  undo: "settings-copy:undo",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof SETTINGS_COPY_METHOD_CHANNELS;
