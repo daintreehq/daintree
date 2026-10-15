@@ -563,8 +563,17 @@ describe("AssistantExchangeStore", () => {
     afterEach(() => off());
 
     it("tells listeners each committed change, from any store over the database", () => {
+      const seen: Array<{ inTransaction: boolean; revision: number | undefined }> = [];
+      const offReader = onExchangeChanged(() =>
+        seen.push({
+          inTransaction: sqlite.inTransaction,
+          revision: store.get(shellA, keyA)?.revision,
+        })
+      );
       const created = store.create(shellA, input()).record;
+      offReader();
       // Told after the commit: a listener reading back sees what was written.
+      expect(seen).toEqual([{ inTransaction: false, revision: created.revision }]);
       expect(heard).toEqual([{ senderId: "shell-a", revision: created.revision }]);
 
       const other = new AssistantExchangeStore(sqlite, { now: () => clock });
@@ -588,12 +597,15 @@ describe("AssistantExchangeStore", () => {
       const offThrowing = onExchangeChanged(() => {
         throw new Error("boom");
       });
+      const after: ExchangeChange[] = [];
+      const offAfter = onExchangeChanged((change) => after.push(change));
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
         store.create(shellA, input());
-        expect(heard).toHaveLength(1);
+        expect(after).toHaveLength(1);
         expect(errors).toHaveBeenCalled();
       } finally {
+        offAfter();
         offThrowing();
         errors.mockRestore();
       }

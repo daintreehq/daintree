@@ -65,9 +65,11 @@ class FakeHost {
   /** Resolves the next LIST_EXCHANGES only when released, to land an event mid-read. */
   gate: Promise<void> | null = null;
   handlers = new Map<string, (payload: unknown) => unknown>();
+  failNextList = false;
 
-  put(messageId: string, state: ExchangeState): ExchangeRecord {
+  put(messageId: string, state: ExchangeState, replied = false): ExchangeRecord {
     const next = record(messageId, ++this.revision, state);
+    if (replied) next.delivery.replyReceivedAt = 1;
     this.records.set(messageId, next);
     return next;
   }
@@ -89,12 +91,16 @@ class FakeHost {
             this.listCalls++;
             const gate = this.gate;
             this.gate = null;
+            const fail = this.failNextList;
+            this.failNextList = false;
             const { cursor } = payload as { cursor: number };
             const records = [...this.records.values()]
               .filter((r) => r.revision > cursor)
               .sort((a, b) => a.revision - b.revision);
             const cursorAfter = this.revision;
+            // Listed before the gate opens: a change made meanwhile isn't in this page.
             if (gate) await gate;
+            if (fail) throw Object.assign(new Error("timed out"), { code: "TIMEOUT" });
             return { records, cursor: cursorAfter, hasMore: false, reset: false };
           }
           default:
@@ -248,6 +254,77 @@ describe("AssistantExchangeClient change events", () => {
     host.announce();
     await settle();
     expect(moved).toEqual([]);
+  });
+
+  it("keeps an exchange with the hub that first sent it, through a resend under another", async () => {
+    await sendOne();
+    hubGeneration = "hub-2";
+    await sendOne();
+    host.put("m-1", "completed", true);
+    host.announce();
+    await settle();
+    expect(moved.map((m) => m.hubGeneration)).toEqual(["hub-1"]);
+  });
+
+  it("binds no hub to a resend of an exchange sent before a restart", async () => {
+    await sendOne();
+    client.dispose();
+    makeClient();
+    await settle();
+    await sendOne();
+    host.put("m-1", "completed", true);
+    host.announce();
+    await settle();
+    expect(moved).toEqual([]);
+  });
+
+  it("tells the hub of a reply that lands after the exchange already failed", async () => {
+    await sendOne();
+    host.put("m-1", "failed");
+    host.announce();
+    await settle();
+    host.put("m-1", "failed", true);
+    host.announce();
+    await settle();
+    expect(moved.map((m) => [m.record.state, m.record.delivery.replyReceivedAt !== null])).toEqual([
+      ["failed", false],
+      ["failed", true],
+    ]);
+  });
+
+  it("reads again later when a read fails with a change announced meanwhile", async () => {
+    await sendOne();
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let release!: () => void;
+      host.gate = new Promise((resolve) => (release = resolve));
+      host.failNextList = true;
+      host.put("m-1", "working");
+      host.announce();
+      await vi.advanceTimersByTimeAsync(0);
+      host.put("m-1", "completed", true);
+      host.announce();
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(journal.get(HOST, "m-1")?.record?.state).toBe("submitted");
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(journal.get(HOST, "m-1")?.record?.state).toBe("completed");
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers an announcement after it was disposed without reading anything", async () => {
+    await sendOne();
+    client.dispose();
+    const reads = host.listCalls;
+    host.put("m-1", "completed", true);
+    host.announce();
+    await settle();
+    expect(host.listCalls).toBe(reads);
   });
 
   it("reads hosts with open exchanges again on start, quietly when one is out of reach", async () => {

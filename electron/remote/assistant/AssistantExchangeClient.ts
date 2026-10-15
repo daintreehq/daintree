@@ -2,12 +2,7 @@ import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { EXCHANGE_RETRY_WINDOW_MS } from "../exchange/AssistantExchangeStore.js";
 import type { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
-import {
-  TERMINAL_EXCHANGE_STATES,
-  type CreateDisposition,
-  type ExchangeChanges,
-  type ExchangeRecord,
-} from "../exchange/types.js";
+import type { CreateDisposition, ExchangeChanges, ExchangeRecord } from "../exchange/types.js";
 import type { LinkSession } from "../link/session.js";
 import type { AssistantMessagingPolicy, MessagingRequestKind } from "./AssistantMessagingPolicy.js";
 import {
@@ -64,6 +59,7 @@ const DEFINITE_REFUSALS: ReadonlySet<string> = new Set([
   "UNSUPPORTED",
 ]);
 const MAX_RECONCILE_PAGES = 200;
+const RECONCILE_RETRY_MS = 30_000;
 
 function sentKey(hostId: HostId, messageId: string): string {
   return `${hostId}\u0000${messageId}`;
@@ -118,6 +114,8 @@ export class AssistantExchangeClient {
   /** Hosts that announced a change while their reconcile was already reading. */
   private readonly again = new Set<HostId>();
   private readonly disposers: Array<() => void> = [];
+  private readonly retries = new Map<HostId, ReturnType<typeof setTimeout>>();
+  private disposed = false;
   private readonly timeoutMs: number;
 
   constructor(private readonly deps: AssistantExchangeClientDeps) {
@@ -132,6 +130,7 @@ export class AssistantExchangeClient {
           AssistantLinkMethod.EXCHANGE_CHANGED,
           ExchangeChangedPayloadSchema,
           ({ revision }) => {
+            if (this.disposed) return null;
             if (revision > this.deps.journal.cursor(hostId)) void this.reconcile(hostId, session);
             return null;
           }
@@ -147,7 +146,10 @@ export class AssistantExchangeClient {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const dispose of this.disposers.splice(0)) dispose();
+    for (const timer of this.retries.values()) clearTimeout(timer);
+    this.retries.clear();
     this.sentBy.clear();
   }
 
@@ -186,7 +188,9 @@ export class AssistantExchangeClient {
       });
     }
     const attempt = journal.noteSending(hostId, payload.messageId);
-    const hub = this.deps.policy?.()?.getHub();
+    // Only a message new to the journal is this hub's: a resend keeps whose it was, and
+    // one sent before a restart stays no hub's.
+    const hub = entry === null ? this.deps.policy?.()?.getHub() : null;
     if (hub) this.sentBy.set(sentKey(hostId, payload.messageId), hub.generation);
     let answer: unknown;
     try {
@@ -252,6 +256,8 @@ export class AssistantExchangeClient {
         // Asleep or out of reach: its exchanges stay where they were until a session opens.
         if (codeOf(error) === "HOST_DISCONNECTED") return;
         console.warn(`[AssistantExchanges] Couldn't reconcile with host ${hostId}:`, error);
+        // A change announced meanwhile would otherwise wait for the next one: read once more, later.
+        if (this.again.has(hostId)) this.retryLater(hostId, session);
       })
       .finally(() => {
         this.reconciling.delete(hostId);
@@ -259,6 +265,16 @@ export class AssistantExchangeClient {
       });
     this.reconciling.set(hostId, run);
     return run;
+  }
+
+  private retryLater(hostId: HostId, session?: LinkSession): void {
+    if (this.disposed || this.retries.has(hostId)) return;
+    const timer = setTimeout(() => {
+      this.retries.delete(hostId);
+      if (!this.disposed) void this.reconcile(hostId, session);
+    }, RECONCILE_RETRY_MS);
+    timer.unref?.();
+    this.retries.set(hostId, timer);
   }
 
   private async reconcileUntilSettled(hostId: HostId, session?: LinkSession): Promise<void> {
@@ -315,9 +331,12 @@ export class AssistantExchangeClient {
       const hubGeneration = this.sentBy.get(key);
       if (hubGeneration === undefined) continue;
       moved.push({ record, hubGeneration });
-      if (TERMINAL_EXCHANGE_STATES.has(record.state)) this.sentBy.delete(key);
+      // A reply may still land after another terminal state, so only a reply or expiry ends it.
+      if (record.delivery.replyReceivedAt !== null || record.tombstonedAt !== null) {
+        this.sentBy.delete(key);
+      }
     }
-    if (moved.length === 0) return;
+    if (moved.length === 0 || this.disposed) return;
     try {
       this.deps.onExchangesMoved?.(hostId, moved);
     } catch (error) {

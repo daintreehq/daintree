@@ -220,6 +220,8 @@ interface ShellB {
   link: LinkClient;
   /** While set, the next SEND reaches the host and its answer is lost on the way back. */
   loseNextSendAnswer: boolean;
+  /** While set, the host's change announcements reach Shell B and are dropped. */
+  deaf: boolean;
 }
 
 /**
@@ -244,11 +246,27 @@ async function startShellB(r: RemoteHarness, journalDb: Database.Database): Prom
     },
   });
   const listeners = new Set<(hostId: string, session: LinkSession) => void>();
+  const deafened = (session: LinkSession): LinkSession =>
+    new Proxy(session, {
+      get(target, key, receiver) {
+        if (key !== "registerCallHandler") return Reflect.get(target, key, receiver) as unknown;
+        return (method: string, schema: never, handler: (payload: unknown) => unknown) =>
+          target.registerCallHandler(method, schema, (payload: unknown) =>
+            method === AssistantLinkMethod.EXCHANGE_CHANGED && shell.deaf ? null : handler(payload)
+          );
+      },
+    });
   link.onSession(({ session }) => {
-    for (const listener of listeners) listener(HOST_ID, session);
+    for (const listener of listeners) listener(HOST_ID, deafened(session));
   });
   const journal = new AssistantExchangeJournal(journalDb);
-  const shell: ShellB = { client: null as never, journal, link, loseNextSendAnswer: false };
+  const shell: ShellB = {
+    client: null as never,
+    journal,
+    link,
+    loseNextSendAnswer: false,
+    deaf: false,
+  };
   const lossy = (session: LinkSession): LinkSession =>
     new Proxy(session, {
       get(target, key, receiver) {
@@ -432,6 +450,8 @@ describe("assistant exchanges over the real link", () => {
       const b = await startShellB(r, openFile("shell-b.db"));
       const generation = enrollOnHost(hostSessionOf(r, SHELL_B), 1);
       const payload = message({ messageId: "lost", slot: 1, generation });
+      // Only a lookup settles a lost answer here, not a change the host announces.
+      b.deaf = true;
 
       b.loseNextSendAnswer = true;
       expect(await b.client.send(HOST_ID, payload)).toEqual({
@@ -489,9 +509,14 @@ describe("assistant exchanges over the real link", () => {
       await shellA().reconcile(HOST_ID);
       const cursorBefore = new AssistantExchangeJournal(db.sqlite).cursor(HOST_ID);
       expect(cursorBefore).toBeGreaterThan(0);
-      // Each lane's wake is typed while neither Shell is reading: changes they
+
+      // Everything stops; only what's on disk survives.
+      for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+      await h?.dispose();
+      h = null;
+      // Each lane's wake is typed while neither Shell is connected: changes they
       // have yet to hear of.
-      const store = requireRemoteService("assistantExchangeStore");
+      const store = new AssistantExchangeStore(db.sqlite);
       for (const { record } of [fromA, fromB]) {
         store.recordDelivery(
           { kind: "receiver", ...record.receiver },
@@ -499,11 +524,6 @@ describe("assistant exchanges over the real link", () => {
           "wake-typed"
         );
       }
-
-      // Everything stops; only what's on disk survives.
-      for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-      await h?.dispose();
-      h = null;
       closeAll();
       db.sqlite = openFile("app.db");
       r = await restartHarness();
