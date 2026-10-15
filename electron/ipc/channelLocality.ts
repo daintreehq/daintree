@@ -818,6 +818,8 @@ export const CHANNEL_LOCALITY = {
   "remote-hosts:list-plugin-view-consents": "shell",
   "remote-hosts:reset-plugin-view-consent": "shell",
   "remote-hosts:prepare-plugin-view": "shell",
+  "remote-hosts:list-assistant-exchanges": "shell",
+  "remote-hosts:cancel-assistant-exchange": "shell",
   "run-history:append": "host",
   "run-history:clear": "host",
   "run-history:get-records": "host",

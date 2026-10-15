@@ -8,6 +8,7 @@ import type {
 } from "@shared/types/remoteHosts";
 import type {
   AddHostPayload,
+  AssistantExchangeView,
   DiscoveredHost,
   HostInstallPlan,
   HostProbeResult,
@@ -107,6 +108,10 @@ export const remoteHostsClient = {
     window.electron.remoteHosts.resetPluginViewConsent(
       pluginId === undefined ? { hostId } : { hostId, pluginId }
     ),
+  listAssistantExchanges: (hostId: string): Promise<AssistantExchangeView[]> =>
+    window.electron.remoteHosts.listAssistantExchanges({ hostId }),
+  cancelAssistantExchange: (hostId: string, messageId: string): Promise<AssistantExchangeView> =>
+    window.electron.remoteHosts.cancelAssistantExchange({ hostId, messageId }),
   onEvent: (callback: (event: RemoteHostsEvent) => void): (() => void) =>
     window.electron.remoteHosts.onEvent(callback),
 };

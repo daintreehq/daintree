@@ -262,6 +262,16 @@ export class AssistantExchangeClient {
     return this.deps.journal.get(hostId, messageId);
   }
 
+  /** Every exchange this Shell's journal holds for the host, without asking it. */
+  listKnown(hostId: HostId): JournalEntry[] {
+    return this.deps.journal.list(hostId);
+  }
+
+  /** Told after each journal write that may change what `listKnown` returns. */
+  onJournalChanged(listener: (hostId: HostId) => void): () => void {
+    return this.deps.journal.onChange(listener);
+  }
+
   /** Ask the host to cancel. Once delivery may have happened this is only a recorded request. */
   async cancel(hostId: HostId, messageId: string): Promise<ExchangeRecord> {
     const session = await this.open(hostId);

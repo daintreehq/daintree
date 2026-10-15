@@ -1122,6 +1122,9 @@ export interface GeneratedElectronAPI {
     add(
       ...args: IpcInvokeMap["remote-hosts:add"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:add"]["result"]>;
+    cancelAssistantExchange(
+      ...args: IpcInvokeMap["remote-hosts:cancel-assistant-exchange"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:cancel-assistant-exchange"]["result"]>;
     cancelInstall(
       ...args: IpcInvokeMap["remote-hosts:cancel-install"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:cancel-install"]["result"]>;
@@ -1161,6 +1164,9 @@ export interface GeneratedElectronAPI {
     list(
       ...args: IpcInvokeMap["remote-hosts:list"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list"]["result"]>;
+    listAssistantExchanges(
+      ...args: IpcInvokeMap["remote-hosts:list-assistant-exchanges"]["args"]
+    ): Promise<IpcInvokeMap["remote-hosts:list-assistant-exchanges"]["result"]>;
     listClipboardGrants(
       ...args: IpcInvokeMap["remote-hosts:list-clipboard-grants"]["args"]
     ): Promise<IpcInvokeMap["remote-hosts:list-clipboard-grants"]["result"]>;

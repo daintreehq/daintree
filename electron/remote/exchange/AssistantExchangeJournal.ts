@@ -64,6 +64,7 @@ export class AssistantExchangeJournal {
   private readonly newCredential: () => string;
   /** The last attempt mark handed out, so marks never repeat even once a row is gone. */
   private lastAttempt = 0;
+  private readonly listeners = new Set<(hostId: string) => void>();
 
   constructor(
     private readonly sqlite: Database.Database,
@@ -71,6 +72,12 @@ export class AssistantExchangeJournal {
   ) {
     this.now = options.now ?? Date.now;
     this.newCredential = options.newCredential ?? (() => randomBytes(32).toString("base64url"));
+  }
+
+  /** Told after any write that may have changed what `list(hostId)` returns. */
+  onChange(listener: (hostId: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   /** The credential this Shell authenticates to `hostId` with, minted and saved on first use. */
@@ -107,7 +114,7 @@ export class AssistantExchangeJournal {
    * an answer about an earlier attempt never settles this one.
    */
   noteSending(hostId: string, messageId: string): number {
-    return this.sqlite.transaction(() => {
+    const attempt = this.sqlite.transaction(() => {
       const now = this.now();
       const previous = this.sqlite
         .prepare(
@@ -125,11 +132,13 @@ export class AssistantExchangeJournal {
         .run(hostId, messageId, now, attempt, now);
       return attempt;
     })();
+    this.changed(hostId);
+    return attempt;
   }
 
   /** The host's answer for one exchange; never replaces a newer revision with an older one. */
   recordAnswer(hostId: string, record: ExchangeRecord): void {
-    this.sqlite.transaction(() => this.upsert(hostId, record))();
+    if (this.sqlite.transaction(() => this.upsert(hostId, record))()) this.changed(hostId);
   }
 
   /**
@@ -163,9 +172,10 @@ export class AssistantExchangeJournal {
    * longer listed were purged there, and go here too.
    */
   applyChanges(hostId: string, changes: ExchangeChanges): void {
-    this.sqlite.transaction(() => {
+    const changed = this.sqlite.transaction((): boolean => {
       const now = this.now();
-      for (const record of changes.records) this.upsert(hostId, record);
+      let changed = false;
+      for (const record of changes.records) changed = this.upsert(hostId, record) || changed;
       if (changes.reset) {
         this.sqlite
           .prepare(
@@ -176,12 +186,12 @@ export class AssistantExchangeJournal {
       this.sqlite
         .prepare("UPDATE assistant_exchange_hosts SET cursor = ? WHERE host_id = ?")
         .run(changes.cursor, hostId);
-      if (changes.hasMore) return;
+      if (changes.hasMore) return changed;
       const open = this.sqlite
         .prepare("SELECT reset_since FROM assistant_exchange_hosts WHERE host_id = ?")
         .get(hostId) as { reset_since: number | null } | undefined;
-      if (open?.reset_since == null) return;
-      this.sqlite
+      if (open?.reset_since == null) return changed;
+      const purged = this.sqlite
         .prepare(
           "DELETE FROM assistant_exchange_journal WHERE host_id = ? AND record IS NOT NULL AND unresolved_at IS NULL AND updated_at < ?"
         )
@@ -189,7 +199,9 @@ export class AssistantExchangeJournal {
       this.sqlite
         .prepare("UPDATE assistant_exchange_hosts SET reset_since = NULL WHERE host_id = ?")
         .run(hostId);
+      return changed || purged.changes > 0;
     })();
+    if (changed) this.changed(hostId);
   }
 
   get(hostId: string, messageId: string): JournalEntry | null {
@@ -252,6 +264,17 @@ export class AssistantExchangeJournal {
       this.sqlite.prepare("DELETE FROM assistant_exchange_journal WHERE host_id = ?").run(hostId);
       this.sqlite.prepare("DELETE FROM assistant_exchange_hosts WHERE host_id = ?").run(hostId);
     })();
+    this.changed(hostId);
+  }
+
+  private changed(hostId: string): void {
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(hostId);
+      } catch (error) {
+        console.error("[AssistantExchangeJournal] A change listener threw:", error);
+      }
+    }
   }
 
   private settle(
@@ -260,36 +283,39 @@ export class AssistantExchangeJournal {
     attempt: number,
     outcome: "forget" | "lapse"
   ): void {
-    this.sqlite.transaction(() => {
+    const changed = this.sqlite.transaction((): boolean => {
       const row = this.sqlite
         .prepare(
           "SELECT unresolved_at, record FROM assistant_exchange_journal WHERE host_id = ? AND message_id = ?"
         )
         .get(hostId, messageId) as
         { unresolved_at: number | null; record: string | null } | undefined;
-      if (!row || row.unresolved_at !== attempt) return;
+      if (!row || row.unresolved_at !== attempt) return false;
       const now = this.now();
       if (row.record === null && outcome === "forget") {
         this.sqlite
           .prepare("DELETE FROM assistant_exchange_journal WHERE host_id = ? AND message_id = ?")
           .run(hostId, messageId);
-        return;
+        return true;
       }
       this.sqlite
         .prepare(
           "UPDATE assistant_exchange_journal SET unresolved_at = NULL, lapsed_at = ?, updated_at = ? WHERE host_id = ? AND message_id = ?"
         )
         .run(row.record === null ? now : null, now, hostId, messageId);
+      return true;
     })();
+    if (changed) this.changed(hostId);
   }
 
-  private upsert(hostId: string, record: ExchangeRecord): void {
+  /** False when the journal already held a newer revision. */
+  private upsert(hostId: string, record: ExchangeRecord): boolean {
     const existing = this.sqlite
       .prepare("SELECT record FROM assistant_exchange_journal WHERE host_id = ? AND message_id = ?")
       .get(hostId, record.messageId) as { record: string | null } | undefined;
     if (existing?.record) {
       const known = JSON.parse(existing.record) as ExchangeRecord;
-      if (known.revision > record.revision) return;
+      if (known.revision > record.revision) return false;
     }
     const now = this.now();
     this.sqlite
@@ -299,5 +325,6 @@ export class AssistantExchangeJournal {
          ON CONFLICT(host_id, message_id) DO UPDATE SET unresolved_at = NULL, lapsed_at = NULL, record = excluded.record, updated_at = excluded.updated_at`
       )
       .run(hostId, record.messageId, record.createdAt, JSON.stringify(record), now);
+    return true;
   }
 }

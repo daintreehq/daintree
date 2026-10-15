@@ -76,6 +76,7 @@ const m = vi.hoisted(() => {
       onChange: vi.fn((_l: unknown) => () => {}),
     },
     router: { name: "router" },
+    emitLocal: vi.fn((_event: unknown) => {}),
     dispose: vi.fn(async () => record("client.dispose")),
   };
   const leaseListeners = new Set<(state: unknown) => void>();
@@ -566,8 +567,15 @@ describe("startRemoteHosts", () => {
       {
         session(hostId: string): Promise<unknown>;
         addUseCheck(check: (hostId: string) => boolean): () => void;
+        onExchangesChanged(hostId: string): void;
       },
     ];
+    // Every view on this machine hears that a host's journal changed, as a hint to read it.
+    deps.onExchangesChanged("studio-01");
+    expect(m.client.emitLocal).toHaveBeenCalledWith({
+      type: "exchanges-changed",
+      hostId: "studio-01",
+    });
     // Open exchanges keep their host's link through the manager's own idle sweep.
     const check = () => true;
     deps.addUseCheck(check);
