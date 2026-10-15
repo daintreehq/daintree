@@ -4512,7 +4512,13 @@ export class WorkspaceService {
         await this.guardNestedWorktreeDelete(monitor);
       }
 
-      const wtChanges = monitor.getWorktreeChanges();
+      let wtChanges = monitor.getWorktreeChanges();
+      // The snapshot can be a poll old: a caller that just cleared the tree
+      // (an assistant removing test output, then deleting) would be refused
+      // for files already gone. A read that fails keeps the refusal.
+      if (!force && (wtChanges?.changedFileCount ?? 0) > 0) {
+        wtChanges = await monitor.getFreshChanges().catch(() => wtChanges);
+      }
       if (!force && (wtChanges?.changedFileCount ?? 0) > 0) {
         const fileChanges = wtChanges?.changes ?? [];
         const hasTracked = fileChanges.some(
