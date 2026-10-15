@@ -952,23 +952,49 @@ describe("remote session wiring", () => {
       await waitFor(() => !connection.hasActiveAgent(VIEW_A) && !connection.hasActiveAgent(VIEW_B));
     });
 
-    it("forgets a view's answer when it closes or moves project, and hears the new project's", async () => {
+    it("forgets a view's answer when it closes", async () => {
       active.add("proj-1");
-      active.add("proj-2");
       await startWithAgents();
       await connect();
       await invoke(HOST_CHANNEL, VIEW_A, {});
-      await invoke(HOST_CHANNEL, VIEW_B, {});
       const connection = h.manager.get(HOST_ID)!;
-      await waitFor(() => connection.hasActiveAgent(VIEW_A) && connection.hasActiveAgent(VIEW_B));
+      await waitFor(() => connection.hasActiveAgent(VIEW_A));
 
       h.sink.gone(VIEW_A);
       expect(connection.hasActiveAgent(VIEW_A)).toBe(false);
+    });
 
+    it("takes the host's word only for the project the view is on now, and only well-formed", async () => {
+      // No reader: every answer here is one this test sends.
+      await startHarness();
+      const hostSessions: LinkSession[] = [];
+      cleanups.push(h.server.onSession((ctx) => hostSessions.push(ctx.session)));
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      const say = (projectId: string, active: unknown) =>
+        hostSessions.at(-1)!.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
+          endpoints: [{ endpointId: "view-12", projectId, active }],
+        });
+
+      await say("proj-2", true);
+      expect(connection.hasActiveAgent(VIEW_B)).toBe(true);
+
+      // The old project's agents say nothing about the new one's.
       projectKeys.set(VIEW_B, `${HOST_ID}:proj-1`);
       await invoke(HOST_CHANNEL, VIEW_B, {});
-      // Active on both sides of the move, and still said again for the new binding.
-      await waitFor(() => connection.hasActiveAgent(VIEW_B));
+      expect(connection.hasActiveAgent(VIEW_B)).toBe(false);
+
+      // Said about the project it left, either way: ignored.
+      await say("proj-2", true);
+      expect(connection.hasActiveAgent(VIEW_B)).toBe(false);
+      await say("proj-1", true);
+      expect(connection.hasActiveAgent(VIEW_B)).toBe(true);
+      await say("proj-2", false);
+      expect(connection.hasActiveAgent(VIEW_B)).toBe(true);
+
+      await expect(say("proj-1", "no")).rejects.toMatchObject({ code: "VALIDATION" });
+      expect(connection.hasActiveAgent(VIEW_B)).toBe(true);
     });
 
     it("hears agents that outlived the session on a fresh one", async () => {

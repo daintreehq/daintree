@@ -97,8 +97,12 @@ export function initRemoteHostsHost(
   // Not every end is an exit: a pty-host that dies mid-capture emits none, and
   // a revoke before the kill client is wired kills nothing. A slow sweep stops
   // the view those leave protected from staying so until something else changes.
+  // The agent cache reads the inventory again on the same beat: a failed or
+  // partial read, or a pty-host that restarted without a crash event, is
+  // repaired there, and any change it finds is announced as it lands.
   const sweep = setInterval(() => {
     refresh();
+    agents.reconcile();
     sessionHost.refreshAgentActivity();
   }, ASSISTANT_SWEEP_MS);
   sweep.unref?.();

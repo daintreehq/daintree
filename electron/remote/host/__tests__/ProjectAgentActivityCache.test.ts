@@ -92,6 +92,7 @@ describe("ProjectAgentActivityCache (#13359)", () => {
 
     pty.answer({ terminals: [{ id: "t1", projectId: "p1", agentState: "idle" }], degraded: false });
     await flush();
+    expect(cache.isProjectActive("p1")).toBe(true);
     // The crash reseed was queued behind the attach seed.
     pty.answer({ terminals: [{ id: "t1", projectId: "p1", agentState: "idle" }], degraded: false });
     await flush();
@@ -103,6 +104,64 @@ describe("ProjectAgentActivityCache (#13359)", () => {
     pty.answer({ terminals: [], degraded: false });
     await flush();
     expect(cache.isProjectActive("p1")).toBe(true);
+  });
+
+  it("learns a terminal's project from an inventory taken before its latest state", async () => {
+    // Main isn't tracking this terminal's spawn, so only the inventory names its project.
+    const { cache, pty } = setup();
+    cache.attach(pty);
+    cache.noteState("t1", "working");
+    pty.answer({ terminals: [{ id: "t1", projectId: "p1", agentState: "idle" }], degraded: false });
+    await flush();
+    expect(cache.isProjectActive("p1")).toBe(true);
+  });
+
+  it("never brings back a terminal that exited while the inventory was read", async () => {
+    const { cache, pty, onChange } = setup();
+    cache.attach(pty);
+    pty.emit("exit", "t1");
+    pty.answer({
+      terminals: [{ id: "t1", projectId: "p1", agentState: "working" }],
+      degraded: false,
+    });
+    await flush();
+    expect(cache.isProjectActive("p1")).toBe(false);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("forgets the agent of a terminal the inventory still has but no longer as an agent", async () => {
+    const { cache, pty } = setup();
+    cache.attach(pty);
+    pty.answer({
+      terminals: [{ id: "t1", projectId: "p1", agentState: "working" }],
+      degraded: false,
+    });
+    await flush();
+
+    cache.reconcile();
+    pty.answer({ terminals: [{ id: "t1", projectId: "p1" }], degraded: false });
+    await flush();
+    expect(cache.isProjectActive("p1")).toBe(false);
+  });
+
+  it("repairs a failed read on the next reconcile", async () => {
+    const { cache, pty } = setup();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    pty.getAllTerminalsWithCompletenessAsync = () => Promise.reject(new Error("shard down"));
+    cache.attach(pty);
+    await flush();
+    expect(cache.isProjectActive("p1")).toBe(false);
+
+    pty.getAllTerminalsWithCompletenessAsync =
+      FakePty.prototype.getAllTerminalsWithCompletenessAsync;
+    cache.reconcile();
+    pty.answer({
+      terminals: [{ id: "t1", projectId: "p1", agentState: "waiting" }],
+      degraded: false,
+    });
+    await flush();
+    expect(cache.isProjectActive("p1")).toBe(true);
+    error.mockRestore();
   });
 
   it("drops terminals a complete inventory no longer has, but not on an incomplete one", async () => {

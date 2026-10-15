@@ -33,6 +33,7 @@ import { events } from "../../../services/events.js";
 class FakePty extends EventEmitter {
   readonly live = new Set<string>();
   readonly owners = new Map<string, string>();
+  inventory: Array<{ id: string; projectId: string; agentState?: "working" | "idle" }> = [];
   hasTerminal(id: string): boolean {
     return this.live.has(id);
   }
@@ -40,7 +41,7 @@ class FakePty extends EventEmitter {
     return this.owners.get(id) ?? null;
   }
   async getAllTerminalsWithCompletenessAsync() {
-    return { terminals: [], degraded: false };
+    return { terminals: [...this.inventory], degraded: false };
   }
 }
 
@@ -264,16 +265,39 @@ describe("initRemoteHostsHost agent activity (#13359)", () => {
     expect(agentAnswers(link)).toHaveLength(3);
   });
 
+  it("reads the inventory again on its sweep, for agents no event told it about", async () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    pty.inventory = [{ id: "t-agent", projectId: "p1", agentState: "working" }];
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS);
+    expect(agentAnswers(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }],
+    });
+  });
+
   it("stops following agent state on dispose", () => {
+    const listeners = () =>
+      (events as unknown as { bus: { listenerCount(e: string): number } }).bus.listenerCount(
+        "agent:state-changed"
+      );
+    const before = listeners();
     const pty = new FakePty();
     ptyRef.current = pty;
     const { dispose } = start();
+    expect(listeners()).toBe(before + 1);
     const link = fakeLink();
     server.attach(link);
     link.open("view-1", "p1");
     dispose();
     host = null;
 
+    expect(listeners()).toBe(before);
     pty.owners.set("t-agent", "p1");
     stateChanged("t-agent", "working");
     expect(agentAnswers(link)).toHaveLength(1);

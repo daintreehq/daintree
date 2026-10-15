@@ -19,16 +19,20 @@ export interface AgentActivityPty {
  * the PTY client's spawn registry, or from the inventory the cache seeds from
  * when main isn't tracking the terminal.
  *
- * Seeded from the pty-host's inventory on attach and after a pty-host crash,
- * so agents already running when the host starts serving count. A seed never
- * overwrites a terminal an event touched while it was in flight, and an
- * incomplete inventory adds what it saw but never takes a terminal away.
+ * Seeded from the pty-host's inventory on attach, after a pty-host crash and
+ * on every {@link reconcile}, so agents already running when the host starts
+ * serving count and a missed event or failed read is repaired. A seed never
+ * overwrites the state of a terminal an event touched while it was in flight,
+ * nor brings back one that exited meanwhile; an incomplete inventory adds what
+ * it saw but never takes a terminal away.
  */
 export class ProjectAgentActivityCache {
   private readonly states = new Map<string, AgentState>();
   private readonly seededProjects = new Map<string, string>();
-  /** Terminals an event touched since the in-flight seed asked for the inventory. */
+  /** Terminals whose state an event changed since the in-flight seed asked for the inventory. */
   private readonly touched = new Set<string>();
+  /** Terminals that exited since the in-flight seed asked for the inventory. */
+  private readonly exited = new Set<string>();
   private pty: AgentActivityPty | null = null;
   private seeding = false;
   private seedAgain = false;
@@ -42,6 +46,11 @@ export class ProjectAgentActivityCache {
     this.pty = pty;
     pty.on("exit", this.onExit);
     pty.on("host-crash", this.onHostCrash);
+    void this.seed();
+  }
+
+  /** Read the inventory again, to repair what events missed. */
+  reconcile(): void {
     void this.seed();
   }
 
@@ -75,7 +84,7 @@ export class ProjectAgentActivityCache {
 
   private readonly onExit = (terminalId: string) => {
     if (this.disposed) return;
-    this.touched.add(terminalId);
+    this.exited.add(terminalId);
     this.seededProjects.delete(terminalId);
     if (this.states.delete(terminalId)) this.onChange();
   };
@@ -91,6 +100,7 @@ export class ProjectAgentActivityCache {
     if (!pty || this.disposed) return;
     this.seeding = true;
     this.touched.clear();
+    this.exited.clear();
     try {
       const { terminals, degraded } = await pty.getAllTerminalsWithCompletenessAsync();
       if (this.disposed || this.pty !== pty) return;
@@ -98,9 +108,15 @@ export class ProjectAgentActivityCache {
       const seen = new Set<string>();
       for (const terminal of terminals) {
         seen.add(terminal.id);
-        if (this.touched.has(terminal.id)) continue;
+        if (this.exited.has(terminal.id)) continue;
+        // Learned even for a terminal whose state moved on: an event carries no
+        // project, and main may not be tracking this one's spawn.
         if (terminal.projectId) this.seededProjects.set(terminal.id, terminal.projectId);
-        if (terminal.agentState && this.states.get(terminal.id) !== terminal.agentState) {
+        if (this.touched.has(terminal.id)) continue;
+        if (terminal.agentState === undefined) {
+          // Still running, but no longer an agent: a shell reusing the id, say.
+          if (this.states.delete(terminal.id)) changed = true;
+        } else if (this.states.get(terminal.id) !== terminal.agentState) {
           this.states.set(terminal.id, terminal.agentState);
           changed = true;
         }
