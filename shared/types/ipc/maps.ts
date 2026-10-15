@@ -2169,6 +2169,10 @@ export interface IpcEventMap {
   // inbox notification. Broadcast only when at least one update is available.
   "plugin:bg-update-available": import("../plugin.js").PluginBackgroundUpdateCheckResult;
 
+  // Project groups changed (main → renderer). The whole ordered list, so every
+  // view redraws its switcher headers after a create, rename, reorder or delete.
+  "project-groups:update": import("../project.js").ProjectGroup[];
+
   // Run history changed (main → renderer, #9949). Carries the full newest-first
   // snapshot so every live window updates without a reload after a recipe/fleet
   // run is recorded or the log is cleared.
@@ -2335,6 +2339,8 @@ export type IpcEventBusMap = Pick<
   | "forge:remote-changed"
   // Background plugin update check found updates (global broadcast)
   | "plugin:bg-update-available"
+  // Project groups changed (global broadcast)
+  | "project-groups:update"
   // Run history changed (global broadcast)
   | "run-history:update"
   // Copy-tree run history changed (project-scoped send)

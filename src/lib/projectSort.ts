@@ -8,9 +8,17 @@
  * Pinned (alphabetical), and Running (most work first) each encode a decision
  * this preference must not override.
  */
-export const OTHER_PROJECTS_SORT_MODES = ["mostUsed", "recent", "alphabetical"] as const;
+import {
+  PROJECT_LIST_SORT_MODES,
+  isProjectListSortMode,
+  type ProjectListSortMode,
+} from "@shared/types/project";
 
-export type OtherProjectsSortMode = (typeof OTHER_PROJECTS_SORT_MODES)[number];
+// The same three modes order every project group (`ProjectGroup.sortMode`);
+// the tuple lives in shared so the host can validate a group's mode too.
+export const OTHER_PROJECTS_SORT_MODES = PROJECT_LIST_SORT_MODES;
+
+export type OtherProjectsSortMode = ProjectListSortMode;
 
 export const DEFAULT_OTHER_PROJECTS_SORT_MODE: OtherProjectsSortMode = "mostUsed";
 
@@ -20,9 +28,7 @@ export const DEFAULT_OTHER_PROJECTS_SORT_MODE: OtherProjectsSortMode = "mostUsed
  * sanitizes to the default, which is that same mode under its new name.
  */
 export function isOtherProjectsSortMode(value: unknown): value is OtherProjectsSortMode {
-  return (
-    typeof value === "string" && (OTHER_PROJECTS_SORT_MODES as readonly string[]).includes(value)
-  );
+  return isProjectListSortMode(value);
 }
 
 /**

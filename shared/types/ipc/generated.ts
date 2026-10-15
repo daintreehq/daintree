@@ -1885,6 +1885,38 @@ export interface GeneratedIpcInvokeMap {
     args: [targets: import("../processes.js").ClosedProcessKillTarget[]];
     result: import("../processes.js").ClosedProcessKillResult;
   };
+  "project-groups:create": {
+    args: [name: string];
+    result: import("../project.js").ProjectGroup;
+  };
+  "project-groups:delete": {
+    args: [groupId: string];
+    result: import("../project.js").ProjectGroup[];
+  };
+  "project-groups:list": {
+    args: [];
+    result: import("../project.js").ProjectGroup[];
+  };
+  "project-groups:rename": {
+    args: [groupId: string, name: string];
+    result: import("../project.js").ProjectGroup[];
+  };
+  "project-groups:reorder": {
+    args: [orderedIds: string[]];
+    result: import("../project.js").ProjectGroup[];
+  };
+  "project-groups:set-archived": {
+    args: [projectId: string, archived: boolean];
+    result: import("../project.js").Project;
+  };
+  "project-groups:set-membership": {
+    args: [projectId: string, groupId: string | null];
+    result: import("../project.js").Project;
+  };
+  "project-groups:set-sort-mode": {
+    args: [groupId: string, sortMode: "mostUsed" | "recent" | "alphabetical"];
+    result: import("../project.js").ProjectGroup[];
+  };
   "project-history:peek": {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;

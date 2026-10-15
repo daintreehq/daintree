@@ -62,6 +62,40 @@ export interface ProjectRepoStats {
   lastUpdated: number | null;
 }
 
+/**
+ * How a list of projects can be ordered: by decayed frecency, by last opened,
+ * or by name. Shared by the switcher's Other band, the Welcome screen and every
+ * project group, each of which picks its own.
+ */
+export const PROJECT_LIST_SORT_MODES = ["mostUsed", "recent", "alphabetical"] as const;
+
+export type ProjectListSortMode = (typeof PROJECT_LIST_SORT_MODES)[number];
+
+export function isProjectListSortMode(value: unknown): value is ProjectListSortMode {
+  return (
+    typeof value === "string" && (PROJECT_LIST_SORT_MODES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * A named, user-made section of the project switcher — related repositories
+ * filed together (an app, its website, its backend). Groups are one level deep
+ * and a project sits in at most one; projects outside every group stay in
+ * "Other projects", which always renders after the groups.
+ */
+export interface ProjectGroup {
+  id: string;
+  name: string;
+  /** Render order among groups, ascending. Dense after every write. */
+  position: number;
+  /** How this group orders its own projects. */
+  sortMode: ProjectListSortMode;
+  createdAt: number;
+}
+
+/** Longest group name the host accepts, after trimming. */
+export const PROJECT_GROUP_NAME_MAX_LENGTH = 40;
+
 /** Workspace managed by Daintree — a git repository, or a plain folder. */
 export interface Project {
   /** Unique identifier (UUID or path hash) */
@@ -84,6 +118,20 @@ export interface Project {
   inRepoSettings?: boolean;
   /** Whether the project is pinned to the top of the project switcher */
   pinned?: boolean;
+  /**
+   * Epoch ms the user filed this project away. Archived projects leave the
+   * switcher's browse bands for a folded "Archived" band, but keep everything
+   * else — settings, worktrees, pin, group — so unarchiving puts them back where
+   * they were. Live work (the current project, an ask, running agents) still
+   * surfaces an archived project. Absent = not archived.
+   */
+  archivedAt?: number;
+  /**
+   * The user-made {@link ProjectGroup} this project is filed under, if any. A
+   * project belongs to at most one group. An id naming a group that no longer
+   * exists reads as ungrouped.
+   */
+  groupId?: string;
   /** Frecency score for sorting (exponential decay, default 3.0) */
   frecencyScore?: number;
   /** Timestamp (ms) of last frecency update */

@@ -155,6 +155,19 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+// The groups store is real; only its IPC is stood in for. `list()` answers
+// with whatever the current case seeded, so the store's one-time pull on
+// first mount can never clobber a case's groups with an empty list.
+const { groupsState } = vi.hoisted(() => ({
+  groupsState: { groups: [] as import("@shared/types/project").ProjectGroup[] },
+}));
+vi.mock("@/clients/projectGroupsClient", () => ({
+  projectGroupsClient: {
+    list: () => Promise.resolve(groupsState.groups),
+    onUpdate: () => () => {},
+  },
+}));
+
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: useProjectStoreMock,
 }));
@@ -183,6 +196,7 @@ vi.mock("@/hooks/useCopyWithFeedback", () => ({
 import { usePaletteStore } from "@/store/paletteStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useProjectGroupsStore } from "@/store/projectGroupsStore";
 import {
   DEFAULT_OTHER_PROJECTS_SORT_MODE,
   OTHER_PROJECTS_SORT_MODES,
@@ -270,6 +284,8 @@ describe("useProjectSwitcherPalette", () => {
     // Persisted and app-global (#11943) — a fold set by one case is otherwise
     // still in force for every case after it.
     usePreferencesStore.setState({ projectSwitcherCollapsedBands: {} });
+    groupsState.groups = [];
+    useProjectGroupsStore.setState({ groups: [], dialog: null });
   });
 
   // The header's "is it safe to look away?" total, tested against raw projects
@@ -3940,5 +3956,265 @@ describe("useProjectSwitcherPalette window presence (#12597)", () => {
       rejectFirst(new Error("late"));
     });
     expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("foreground");
+  });
+});
+
+describe("useProjectSwitcherPalette project groups and archive", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    projectState.currentProject = null;
+    projectStatsState.stats = {};
+    setStatsMock.mockImplementation((stats: typeof projectStatsState.stats) => {
+      projectStatsState.stats = stats;
+    });
+    usePaletteStore.setState({ activePaletteId: null });
+    usePreferencesStore.setState({
+      projectSwitcherCollapsedBands: {},
+      projectSwitcherOtherSortMode: DEFAULT_OTHER_PROJECTS_SORT_MODE,
+    });
+    groupsState.groups = [];
+    useProjectGroupsStore.setState({ groups: [], dialog: null });
+  });
+
+  const base = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    name: id,
+    path: `/repo/${id}`,
+    emoji: "🌲",
+    lastOpened: 100,
+    frecencyScore: 3.0,
+    status: "closed" as ProjectStatus,
+    ...extra,
+  });
+  const group = (id: string, position: number, extra: Record<string, unknown> = {}) => ({
+    id,
+    name: id.toUpperCase(),
+    position,
+    sortMode: "alphabetical" as const,
+    createdAt: position,
+    ...extra,
+  });
+  const seedGroups = (groups: ReturnType<typeof group>[]) => {
+    groupsState.groups = groups;
+    useProjectGroupsStore.setState({ groups });
+  };
+
+  async function openWith(projects: ReturnType<typeof base>[]) {
+    projectState.projects = projects;
+    projectState.currentProject = projects.find((p) => p.status === "active") ?? null;
+    getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+    const rendered = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      rendered.result.current.open("modal");
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.browseBands.length).toBeGreaterThan(0);
+    });
+    return rendered;
+  }
+
+  const bandKeys = (result: { current: ReturnType<typeof useProjectSwitcherPalette> }) =>
+    result.current.browseBands.map((band) => band.key);
+  const sectionOf = (
+    result: { current: ReturnType<typeof useProjectSwitcherPalette> },
+    id: string
+  ) => result.current.results.map(asProject).find((p) => p.id === id)?.section;
+
+  it("bands grouped projects between Snoozed and Other, in the groups' own order", async () => {
+    seedGroups([group("b", 1), group("a", 0)]);
+    projectStatsState.stats = {};
+    const { result } = await openWith([
+      base("loose"),
+      base("a1", { groupId: "a" }),
+      base("b1", { groupId: "b" }),
+    ]);
+    expect(bandKeys(result)).toEqual(["group:a", "group:b", "other"]);
+    expect(result.current.browseBands[0]!.label).toBe("A");
+    expect(result.current.browseBands[0]!.group?.id).toBe("a");
+  });
+
+  it("keeps a running member in its group but lifts one that asks for input", async () => {
+    seedGroups([group("a", 0)]);
+    projectStatsState.stats = {
+      busy: { activeAgentCount: 2, waitingAgentCount: 0, processCount: 0 },
+      asking: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+    };
+    const { result } = await openWith([
+      base("busy", { groupId: "a" }),
+      base("asking", { groupId: "a" }),
+    ]);
+    expect(sectionOf(result, "busy")).toBe("group:a");
+    expect(sectionOf(result, "asking")).toBe("attention");
+    const band = result.current.browseBands.find((b) => b.key === "group:a")!;
+    expect(band.activeAgentCount).toBe(2);
+    expect(band.liftedCount).toBe(1);
+  });
+
+  it("lets archive outrank a pin and a group, but not running agents", async () => {
+    seedGroups([group("a", 0)]);
+    usePreferencesStore.setState({ projectSwitcherCollapsedBands: { archived: false } });
+    projectStatsState.stats = {
+      live: { activeAgentCount: 1, waitingAgentCount: 0, processCount: 0 },
+    };
+    const { result } = await openWith([
+      base("pinnedAway", { pinned: true, archivedAt: 5 }),
+      base("groupedAway", { groupId: "a", archivedAt: 5 }),
+      base("live", { archivedAt: 5 }),
+    ]);
+    expect(sectionOf(result, "pinnedAway")).toBe("archived");
+    expect(sectionOf(result, "groupedAway")).toBe("archived");
+    expect(sectionOf(result, "live")).toBe("running");
+    // Filed away, not lifted: an archived member doesn't count as "shown above".
+    expect(result.current.browseBands.find((b) => b.key === "group:a")!.liftedCount ?? 0).toBe(0);
+  });
+
+  it("folds Archived by default and keeps its header and count", async () => {
+    projectStatsState.stats = {};
+    const { result } = await openWith([base("kept"), base("away", { archivedAt: 5 })]);
+    const archived = result.current.browseBands.find((b) => b.key === "archived")!;
+    expect(archived).toMatchObject({ collapsed: true, itemCount: 1 });
+    expect(result.current.results.map((r) => r.id)).toEqual(["kept"]);
+  });
+
+  it("gives a group with nothing in it a band of its own", async () => {
+    seedGroups([group("empty", 0), group("lifted", 1)]);
+    projectStatsState.stats = {};
+    const { result } = await openWith([
+      base("here", { status: "active", groupId: "lifted" }),
+      base("loose"),
+    ]);
+    expect(bandKeys(result)).toEqual(["current", "group:empty", "group:lifted", "other"]);
+    expect(result.current.browseBands.find((b) => b.key === "group:empty")).toMatchObject({
+      itemCount: 0,
+      liftedCount: 0,
+    });
+    expect(result.current.browseBands.find((b) => b.key === "group:lifted")).toMatchObject({
+      itemCount: 0,
+      liftedCount: 1,
+    });
+  });
+
+  it("reads a project naming a deleted group as ungrouped", async () => {
+    projectStatsState.stats = {};
+    const { result } = await openWith([base("orphan", { groupId: "gone" })]);
+    expect(sectionOf(result, "orphan")).toBe("other");
+    expect(asProject(result.current.results[0]).groupId).toBeUndefined();
+  });
+
+  it("orders a group by its own sort mode, independent of Other's", async () => {
+    seedGroups([group("a", 0, { sortMode: "alphabetical" })]);
+    usePreferencesStore.setState({ projectSwitcherOtherSortMode: "mostUsed" });
+    projectStatsState.stats = {};
+    const { result } = await openWith([
+      base("zeta", { groupId: "a", frecencyScore: 9 }),
+      base("alpha", { groupId: "a", frecencyScore: 1 }),
+      base("loud", { frecencyScore: 9 }),
+      base("quiet", { frecencyScore: 1 }),
+    ]);
+    expect(result.current.results.map((r) => r.id)).toEqual(["alpha", "zeta", "loud", "quiet"]);
+  });
+
+  it("moves a row the user refiles while the palette is open, and nothing else", async () => {
+    seedGroups([group("a", 0)]);
+    projectStatsState.stats = {};
+    const one = base("one", { frecencyScore: 9 });
+    const three = base("three", { frecencyScore: 1 });
+    const { result, rerender } = await openWith([one, base("two", { frecencyScore: 5 }), three]);
+    expect(result.current.results.map((r) => r.id)).toEqual(["one", "two", "three"]);
+
+    act(() => {
+      projectState.projects = [one, base("two", { frecencyScore: 5, groupId: "a" }), three];
+      rerender();
+    });
+    await waitFor(() => {
+      expect(sectionOf(result, "two")).toBe("group:a");
+    });
+    expect(result.current.results.map((r) => r.id)).toEqual(["two", "one", "three"]);
+  });
+
+  it("keeps a refiled row's slot when its band doesn't change", async () => {
+    seedGroups([group("a", 0)]);
+    projectStatsState.stats = {
+      first: { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+      second: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+    };
+    const { result, rerender } = await openWith([base("first"), base("second")]);
+    expect(result.current.results.map((r) => r.id)).toEqual(["first", "second"]);
+
+    // Still asking for input, so still in Needs attention: filing it under a
+    // group must not drop the most urgent row to the bottom of its band.
+    act(() => {
+      projectState.projects = [base("first", { groupId: "a" }), base("second")];
+      rerender();
+    });
+    await waitFor(() => {
+      expect(asProject(result.current.results[0]).groupId).toBe("a");
+    });
+    expect(result.current.results.map((r) => r.id)).toEqual(["first", "second"]);
+    expect(sectionOf(result, "first")).toBe("attention");
+  });
+
+  it("seats an archived running project in Running by its own order", async () => {
+    seedGroups([group("a", 0)]);
+    projectStatsState.stats = {
+      busy: { activeAgentCount: 5, waitingAgentCount: 0, processCount: 0 },
+      light: { activeAgentCount: 1, waitingAgentCount: 0, processCount: 0 },
+    };
+    const { result, rerender } = await openWith([base("busy", { groupId: "a" }), base("light")]);
+    expect(sectionOf(result, "busy")).toBe("group:a");
+    expect(sectionOf(result, "light")).toBe("running");
+
+    act(() => {
+      projectState.projects = [base("busy", { groupId: "a", archivedAt: 5 }), base("light")];
+      rerender();
+    });
+    await waitFor(() => {
+      expect(sectionOf(result, "busy")).toBe("running");
+    });
+    // Most work first, not appended below the lighter row.
+    expect(result.current.results.map((r) => r.id).slice(0, 2)).toEqual(["busy", "light"]);
+  });
+
+  it("re-bands a deleted group's members while the palette is open", async () => {
+    seedGroups([group("a", 0)]);
+    projectStatsState.stats = {};
+    const { result, rerender } = await openWith([base("member", { groupId: "a" }), base("x")]);
+    expect(sectionOf(result, "member")).toBe("group:a");
+
+    act(() => {
+      useProjectGroupsStore.setState({ groups: [] });
+      rerender();
+    });
+    await waitFor(() => {
+      expect(sectionOf(result, "member")).toBe("other");
+    });
+    expect(bandKeys(result)).toEqual(["other"]);
+  });
+
+  it("doesn't count an unavailable member as shown above", async () => {
+    seedGroups([group("a", 0)]);
+    projectStatsState.stats = {};
+    const { result } = await openWith([
+      base("gone", { groupId: "a", status: "missing" }),
+      base("x"),
+    ]);
+    expect(sectionOf(result, "gone")).toBe("unavailable");
+    expect(result.current.browseBands.find((b) => b.key === "group:a")!.liftedCount ?? 0).toBe(0);
+  });
+
+  it("reorders bands live when the groups are reordered", async () => {
+    seedGroups([group("a", 0), group("b", 1)]);
+    projectStatsState.stats = {};
+    const { result, rerender } = await openWith([
+      base("a1", { groupId: "a" }),
+      base("b1", { groupId: "b" }),
+    ]);
+    expect(bandKeys(result)).toEqual(["group:a", "group:b"]);
+    act(() => {
+      useProjectGroupsStore.setState({ groups: [group("b", 0), group("a", 1)] });
+      rerender();
+    });
+    expect(bandKeys(result)).toEqual(["group:b", "group:a"]);
+    expect(result.current.results.map((r) => r.id)).toEqual(["b1", "a1"]);
   });
 });

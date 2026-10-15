@@ -1087,3 +1087,69 @@ describe("rankSwitcherMatches typo tolerance", () => {
     expect(rankSwitcherMatches("webstie", [pathological], [], null)).toEqual([]);
   });
 });
+
+describe("rankSwitcherMatches groups and archive", () => {
+  const ids = (rows: ReturnType<typeof rankSwitcherMatches>) => rows.map((row) => row.id);
+
+  it("lists a group's projects when only the group's name matches", () => {
+    const website = makeProject({
+      id: "web",
+      name: "website",
+      path: "/p/website",
+      groupId: "g",
+      groupName: "Crisp Vector",
+    });
+    const backend = makeProject({
+      id: "api",
+      name: "backend",
+      path: "/p/backend",
+      groupId: "g",
+      groupName: "Crisp Vector",
+    });
+    const other = makeProject({ id: "x", name: "unrelated", path: "/p/x" });
+    expect(ids(rankSwitcherMatches("crisp", [other, website, backend], [], null)).sort()).toEqual([
+      "api",
+      "web",
+    ]);
+  });
+
+  it("ranks a project's own name match above a match on its group's name", () => {
+    const named = makeProject({ id: "named", name: "games-hub", path: "/p/hub" });
+    const filed = makeProject({
+      id: "filed",
+      name: "Townlapse",
+      path: "/p/town",
+      groupId: "g",
+      groupName: "Games",
+    });
+    expect(ids(rankSwitcherMatches("games", [filed, named], [], null))).toEqual(["named", "filed"]);
+  });
+
+  it("does not match a group name on a single character", () => {
+    const filed = makeProject({
+      id: "filed",
+      name: "Townlapse",
+      path: "/p/town",
+      groupId: "g",
+      groupName: "Games",
+    });
+    expect(ids(rankSwitcherMatches("g", [filed], [], null))).toEqual([]);
+  });
+
+  it("puts an archived project below an equally good live match", () => {
+    const archived = makeProject({ id: "old", name: "writer", path: "/p/old", isArchived: true });
+    const live = makeProject({ id: "new", name: "writer", path: "/p/new" });
+    expect(ids(rankSwitcherMatches("writer", [archived, live], [], null))).toEqual(["new", "old"]);
+  });
+
+  it("still finds an archived project by its exact name above a weaker live match", () => {
+    const archived = makeProject({
+      id: "gpw",
+      name: "Writing",
+      path: "/p/gpw",
+      isArchived: true,
+    });
+    const live = makeProject({ id: "scripting", name: "Video Writing Tools", path: "/p/v" });
+    expect(ids(rankSwitcherMatches("writing", [live, archived], [], null))[0]).toBe("gpw");
+  });
+});

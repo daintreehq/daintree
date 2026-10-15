@@ -11,9 +11,12 @@ export * from "./brands";
 export {
   Activity, // project pulse / live activity heartbeat
   AppWindow, // where an opened folder or host lands — a window of its own or the current one
-  ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike
+  Archive, // file a project away — out of the switcher's main list, everything about it kept
+  ArchiveRestore, // bring an archived project back to where it was filed
+  ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike; also moves a project group down the switcher
   ArrowDownAZ, // alphabetical sort order (A to Z)
   ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
+  ArrowUp, // move a project group up the switcher — paired with ArrowDown
   ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
   AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
@@ -34,8 +37,10 @@ export {
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output
   FileText, // view selected file path in the read-only file viewer
+  FolderClosed, // a project group — related repositories filed together in the switcher
   FolderDown, // clone a repository — a folder arriving, beside Open project's FolderOpen and Create project's FolderPlus
   FolderGit2, // git worktree (single), and any count of worktrees
+  FolderMinus, // take a project out of its group, back to Other projects
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
   FolderOutput, // worktree living outside the project directory (external)
   FolderTree, // Daintree's own file browser panel (the worktree file tree)

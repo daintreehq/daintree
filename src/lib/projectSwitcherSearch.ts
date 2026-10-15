@@ -467,6 +467,14 @@ const TEXT_CLASS_NAME_SUBSTRING = 2;
 const TEXT_CLASS_FUZZY_NAME = 3;
 const TEXT_CLASS_PATH_ONLY = 4;
 /**
+ * The project's own name and path missed, but the name of the group it is
+ * filed under contains the query — "crisp" listing every repo in "Crisp
+ * Vector". Below path-only: a path is still the project's own text, while a
+ * group name is a label the user put on several projects at once, so every
+ * member matches it equally and none of them is the answer on its own.
+ */
+const TEXT_CLASS_GROUP_ONLY = 5;
+/**
  * A name within one edit of the query ({@link hasNearMissNameMatch}), and the
  * only tier this function never returns — a row reaches it by having FAILED
  * every strict test, so {@link rankSwitcherMatches} assigns it rather than
@@ -477,7 +485,7 @@ const TEXT_CLASS_PATH_ONLY = 4;
  * something the user typed, and the rule is that a typo never outranks a clean
  * result — not that it outranks the weakest clean result.
  */
-const TEXT_CLASS_TYPO_NAME = 5;
+const TEXT_CLASS_TYPO_NAME = 6;
 
 /**
  * `hasNameMatch` rather than a name score, because the only thing the last two
@@ -579,6 +587,12 @@ export function computeSearchActivityKey(workspace: WorkspaceRowStatusFields): S
 interface RankedEntry {
   row: ProjectSwitcherRow;
   textClass: number;
+  /**
+   * 1 for an archived project, 0 otherwise. Compared right after the text
+   * tier: an archived project never outranks an equally good live match, but
+   * typing its exact name still finds it above a weaker match on anything else.
+   */
+  archived: number;
   activity: SearchActivityKey;
   score: number;
   /** `frecencyScore` for a project, `lastOpened` for a scratch. Only ever compared same-kind. */
@@ -598,8 +612,9 @@ interface RankedEntry {
  * cycles, and `Array.prototype.sort` on an intransitive comparator is
  * implementation-defined.
  *
- * In order: how well the NAME answers the query, then what the workspace is
- * asking of the user, then how loud that ask is, then the raw text score, then
+ * In order: how well the NAME answers the query, then whether the project was
+ * archived, then what the workspace is asking of the user, then how loud that
+ * ask is, then the raw text score, then
  * kind, then per-kind recency, then name, then id. Activity sits below the name
  * tier and can never climb out of it (#11861), but it orders EVERY pair inside
  * one — including a pair the raw scores could have separated, which is the
@@ -659,12 +674,30 @@ export function rankSwitcherMatches(
   const scored: RankedEntry[] = [];
 
   for (const project of projects) {
+    const archived = project.isArchived ? 1 : 0;
     const score = scoreProjectQuery(trimmed, project.name, project.path);
     if (score <= 0) {
+      // A plain substring, and only from two characters: a group name is a
+      // label over several projects, so a fuzzy or one-letter match would pull
+      // whole groups into results the user never asked about.
+      if (lowerQuery.length >= 2 && project.groupName?.toLowerCase().includes(lowerQuery)) {
+        scored.push({
+          row: { kind: "project", ...project },
+          textClass: TEXT_CLASS_GROUP_ONLY,
+          archived,
+          activity: activityFor(project),
+          // Tied for every member, like the typo tier below: the group name is
+          // the only thing that matched, and it is the same for all of them.
+          score: 0,
+          recency: project.frecencyScore,
+        });
+        continue;
+      }
       if (!typoTolerant || !hasNearMissNameMatch(lowerQuery, project.name)) continue;
       scored.push({
         row: { kind: "project", ...project },
         textClass: TEXT_CLASS_TYPO_NAME,
+        archived,
         activity: activityFor(project),
         // Every row in this tier scores 0, so the comparator's score key ties
         // for all of them and falls through to activity, kind, recency, name
@@ -682,6 +715,7 @@ export function rankSwitcherMatches(
       // `score`: how the two fields are weighted stays owned by
       // `scoreProjectQuery`, and names are short.
       textClass: textQualityClass(lowerQuery, project.name, scoreField(trimmed, project.name) > 0),
+      archived,
       activity: activityFor(project),
       score,
       recency: project.frecencyScore,
@@ -694,6 +728,7 @@ export function rankSwitcherMatches(
       scored.push({
         row: { kind: "scratch", ...scratch },
         textClass: TEXT_CLASS_TYPO_NAME,
+        archived: 0,
         activity: activityFor(scratch),
         score: 0,
         recency: scratch.lastOpened,
@@ -703,6 +738,7 @@ export function rankSwitcherMatches(
     scored.push({
       row: { kind: "scratch", ...scratch },
       textClass: textQualityClass(lowerQuery, scratch.name, true),
+      archived: 0,
       activity: activityFor(scratch),
       score,
       recency: scratch.lastOpened,
@@ -711,6 +747,7 @@ export function rankSwitcherMatches(
 
   scored.sort((a, b) => {
     if (a.textClass !== b.textClass) return a.textClass - b.textClass;
+    if (a.archived !== b.archived) return a.archived - b.archived;
     if (a.activity.activityClass !== b.activity.activityClass) {
       return a.activity.activityClass - b.activity.activityClass;
     }

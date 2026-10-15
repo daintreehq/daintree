@@ -1086,6 +1086,32 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["processes:kill-closed-terminal-processes"]["args"]
     ): Promise<IpcInvokeMap["processes:kill-closed-terminal-processes"]["result"]>;
   };
+  projectGroups: {
+    create(
+      ...args: IpcInvokeMap["project-groups:create"]["args"]
+    ): Promise<IpcInvokeMap["project-groups:create"]["result"]>;
+    delete(
+      ...args: IpcInvokeMap["project-groups:delete"]["args"]
+    ): Promise<IpcInvokeMap["project-groups:delete"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["project-groups:list"]["args"]
+    ): Promise<IpcInvokeMap["project-groups:list"]["result"]>;
+    rename(
+      ...args: IpcInvokeMap["project-groups:rename"]["args"]
+    ): Promise<IpcInvokeMap["project-groups:rename"]["result"]>;
+    reorder(
+      ...args: IpcInvokeMap["project-groups:reorder"]["args"]
+    ): Promise<IpcInvokeMap["project-groups:reorder"]["result"]>;
+    setArchived(
+      ...args: IpcInvokeMap["project-groups:set-archived"]["args"]
+    ): Promise<IpcInvokeMap["project-groups:set-archived"]["result"]>;
+    setMembership(
+      ...args: IpcInvokeMap["project-groups:set-membership"]["args"]
+    ): Promise<IpcInvokeMap["project-groups:set-membership"]["result"]>;
+    setSortMode(
+      ...args: IpcInvokeMap["project-groups:set-sort-mode"]["args"]
+    ): Promise<IpcInvokeMap["project-groups:set-sort-mode"]["result"]>;
+  };
   projectHistory: {
     peek(
       ...args: IpcInvokeMap["project-history:peek"]["args"]

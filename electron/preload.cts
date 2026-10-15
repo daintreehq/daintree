@@ -62,6 +62,7 @@ import { buildPluginMetricsPreloadBindings } from "./ipc/handlers/pluginMetrics.
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
+import { buildProjectGroupsPreloadBindings } from "./ipc/handlers/projectGroups.preload.js";
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
@@ -3424,6 +3425,7 @@ function buildElectronApi(): ElectronAPI {
 
     forgeAudit: buildForgeAuditPreloadBindings(_unwrappingInvoke),
 
+    projectGroups: buildProjectGroupsPreloadBindings(_unwrappingInvoke),
     runHistory: buildRunHistoryPreloadBindings(_unwrappingInvoke),
     copyTreeHistory: buildCopyTreeHistoryPreloadBindings(_unwrappingInvoke),
 

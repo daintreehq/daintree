@@ -13,6 +13,15 @@ import { useScratchStore } from "@/store/scratchStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { compareProjectsByMode, type OtherProjectsSortMode } from "@/lib/projectSort";
+import {
+  groupBandKey,
+  groupIdOfBandKey,
+  isGroupBandKey,
+  sortProjectGroups,
+  type ProjectGroupBandKey,
+} from "@/lib/projectGroupBands";
+import { useProjectGroupsStore } from "@/store/projectGroupsStore";
+import type { ProjectGroup } from "@shared/types/project";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { notify } from "@/lib/notify";
 import { copyWithToast } from "@/lib/copyWithToast";
@@ -148,10 +157,60 @@ export const PROJECT_SECTION_ORDER = [
   "running",
   "snoozed",
   "other",
+  "archived",
   "unavailable",
 ] as const;
 
 export type ProjectSectionKey = (typeof PROJECT_SECTION_ORDER)[number];
+
+/**
+ * Every band a project row can render under: the built-in sections plus one
+ * per user-made group. Groups sit between Snoozed and Other projects, in the
+ * user's order — see {@link buildBandRanks}.
+ */
+export type ProjectBandKey = ProjectSectionKey | ProjectGroupBandKey;
+
+/**
+ * Rank of every band for one group list. Groups are filing, not activity: they
+ * sit below every band that reports what is happening (attention, running,
+ * snoozed) and above the residual Other band, which stays the catch-all for
+ * whatever the user hasn't filed.
+ */
+export function buildBandRanks(
+  groups: readonly ProjectGroup[]
+): ReadonlyMap<ProjectBandKey, number> {
+  const ranks = new Map<ProjectBandKey, number>();
+  const otherIndex = PROJECT_SECTION_ORDER.indexOf("other");
+  PROJECT_SECTION_ORDER.slice(0, otherIndex).forEach((key, index) => ranks.set(key, index));
+  sortProjectGroups(groups).forEach((group, index) =>
+    ranks.set(groupBandKey(group.id), otherIndex + index)
+  );
+  const offset = otherIndex + groups.length;
+  PROJECT_SECTION_ORDER.slice(otherIndex).forEach((key, index) => ranks.set(key, offset + index));
+  return ranks;
+}
+
+/** A band absent from the ranks (a group deleted mid-session) sorts with Other. */
+function bandRank(ranks: ReadonlyMap<ProjectBandKey, number>, key: ProjectBandKey): number {
+  return ranks.get(key) ?? ranks.get("other") ?? 0;
+}
+
+/**
+ * Whether a band is folded. Archived starts folded — it holds what the user
+ * filed away, and showing it by default would undo the filing — so only an
+ * explicit unfold opens it. Every other band starts open.
+ */
+export function isBandCollapsed(
+  collapsedBands: Readonly<Record<string, boolean>>,
+  key: ProjectBandKey
+): boolean {
+  return collapsedBands[key] ?? key === "archived";
+}
+
+/** Bands whose order the user picks: Other projects and every group. */
+export function isSortableBand(key: ProjectBandKey): key is "other" | ProjectGroupBandKey {
+  return key === "other" || isGroupBandKey(key);
+}
 
 /**
  * The Scratch band's key in the persisted collapse map. Scratch is not a
@@ -191,6 +250,7 @@ export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string> = {
   // together is what made a project with three snoozed agents read as dormant.
   snoozed: "Snoozed",
   other: "Other projects",
+  archived: "Archived",
   unavailable: "Unavailable",
 };
 
@@ -221,6 +281,19 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   isBackground: boolean;
   isMissing: boolean;
   isPinned: boolean;
+  /**
+   * Filed away by the user. Live work still lifts it out of the Archived band.
+   * Absent reads as not archived.
+   */
+  isArchived?: boolean;
+  /**
+   * The group this project is filed under, resolved against the live group
+   * list — an id naming a deleted group is dropped here, so a row never claims
+   * membership of a band that doesn't exist.
+   */
+  groupId?: string;
+  /** Name of {@link groupId}'s group, for search matching and the result label. */
+  groupName?: string;
   /**
    * Another window owns this project, so picking it goes to that window rather
    * than opening it here (#12597). Absent when no other window holds it, and
@@ -254,7 +327,7 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   latestWorkingSince?: number;
   displayPath: string;
   /** Browse band. Not meaningful while searching, where rank order wins. */
-  section: ProjectSectionKey;
+  section: ProjectBandKey;
 }
 
 /**
@@ -288,11 +361,25 @@ function toProjectRow(project: SearchableProject): ProjectSwitcherProjectRow {
  * bands stay a *view* over `results` rather than a second, wider list (#11071).
  */
 export interface ProjectSwitcherBrowseBand {
-  key: ProjectSectionKey;
+  key: ProjectBandKey;
   label: string;
   /** Projects in the band, collapsed or not — what the header's count reports. */
   itemCount: number;
   collapsed: boolean;
+  /** Set on a user-made group's band; the header's menu acts on it. */
+  group?: ProjectGroup;
+  /**
+   * Group members rendering in a band above this one — current, asking, or
+   * pinned. What an otherwise empty group says instead of looking abandoned.
+   * Absent reads as none.
+   */
+  liftedCount?: number;
+  /**
+   * Agents running across the band's projects. A folded group keeps its
+   * running members in place rather than lifting them out, so its header has
+   * to say they're there. Absent reads as none.
+   */
+  activeAgentCount?: number;
 }
 
 export interface UseProjectSwitcherPaletteReturn {
@@ -545,7 +632,15 @@ function countSearchRowsAwaitingStats(
 
 interface FrozenLayout {
   order: string[];
-  sections: Map<string, ProjectSectionKey>;
+  sections: Map<string, ProjectBandKey>;
+  /**
+   * Each row's filing — group and archive state — when it was frozen. Filing
+   * only changes because the user just asked for it, so a row whose filing
+   * moves is re-banded on the spot instead of held: a project the user just
+   * archived staying where it was would read as the menu doing nothing. See
+   * {@link filingOf}.
+   */
+  filing: Map<string, string>;
   /**
    * True while this freeze is still a guess: it was taken before any stats
    * reached the view, so every band in it is a placeholder. Cleared by the one
@@ -576,8 +671,13 @@ interface FrozenSearchActivity {
   isProvisional: boolean;
 }
 
+/** A row's filing as one comparable value — see {@link FrozenLayout.filing}. */
+function filingOf(project: SearchableProject): string {
+  return `${project.groupId ?? ""}|${project.isArchived === true ? 1 : 0}`;
+}
+
 /**
- * `layout` with its Other rows re-sorted for `mode` IN THEIR EXISTING SLOTS,
+ * `layout` with `band`'s rows re-sorted for `mode` IN THEIR EXISTING SLOTS,
  * plus those rows' new sequence. Null when the band holds fewer than two rows,
  * where no order is observable.
  *
@@ -590,15 +690,16 @@ interface FrozenSearchActivity {
  * Pure, and takes the layout as an argument, so the caller can run it inside a
  * `setFrozenLayout` updater against whatever layout React has actually applied.
  */
-function resortOtherBand(
+function resortBand(
   layout: FrozenLayout,
   live: Map<string, SearchableProject>,
+  band: ProjectBandKey,
   mode: OtherProjectsSortMode
 ): { order: string[]; ids: string[] } | null {
   const slots: number[] = [];
   const ids: string[] = [];
   layout.order.forEach((id, index) => {
-    if (layout.sections.get(id) === "other") {
+    if (layout.sections.get(id) === band) {
       slots.push(index);
       ids.push(id);
     }
@@ -626,6 +727,40 @@ function resortOtherBand(
 }
 
 /**
+ * `order` with `project` inserted into its band at the place that band's own
+ * order gives it, every other row keeping its frozen slot. Used for a row the
+ * user just refiled: re-sorting the whole destination band instead would also
+ * move rows whose live activity changed since the palette opened — exactly the
+ * movement the freeze exists to prevent.
+ *
+ * The band's rows are compared as they are held — under the band the freeze
+ * gave them — so the comparator orders them by the band they are drawn in.
+ */
+function insertIntoBand(
+  order: string[],
+  sections: ReadonlyMap<string, ProjectBandKey>,
+  live: ReadonlyMap<string, SearchableProject>,
+  project: SearchableProject,
+  sortModeFor: (band: "other" | ProjectGroupBandKey) => OtherProjectsSortMode
+): string[] {
+  const band = project.section;
+  let lastSlot = -1;
+  for (let index = 0; index < order.length; index++) {
+    const id = order[index]!;
+    if (sections.get(id) !== band) continue;
+    const row = live.get(id);
+    if (row && compareWithinSection(project, { ...row, section: band }, sortModeFor) < 0) {
+      return [...order.slice(0, index), project.id, ...order.slice(index)];
+    }
+    lastSlot = index;
+  }
+  // Last in its band, or — with the band empty — anywhere: `browseOrdered`'s
+  // regroup carries it to its band's rank.
+  const at = lastSlot === -1 ? order.length : lastSlot + 1;
+  return [...order.slice(0, at), project.id, ...order.slice(at)];
+}
+
+/**
  * Assign a project to its browse band. Actionable work first, then explicit
  * user intent, then non-actionable system activity, then habit:
  *
@@ -644,8 +779,21 @@ function resortOtherBand(
  * the user last looked is someone waiting on nobody, so it earns attention. An
  * assistant merely parked at its prompt earns neither — it still gets a status
  * line where it lands, exactly as a project with only bare processes does.
+ *
+ * Filing comes after all of that, because it is the user organising, not the
+ * user asking for anything:
+ *
+ * - `archived` outranks a pin, a group and a snooze — filing a project away
+ *   that then stayed in Pinned would read as the menu doing nothing. It yields
+ *   only to what is actually happening: the current project, an ask, and live
+ *   agents, which still lift it to Running (the row keeps saying "Archived").
+ * - A group is explicit intent, so it sits beside the pin rather than below
+ *   activity: a running or snoozed project stays in its group, in place, and
+ *   the group's header reports the running ones when it is folded. Moving the
+ *   website out of "Crisp Vector" the moment an agent started would break the
+ *   one promise a group makes — that its projects are found in it.
  */
-function sectionForProject(project: SearchableProject): ProjectSectionKey {
+function sectionForProject(project: SearchableProject): ProjectBandKey {
   if (project.isActive) return "current";
   if (project.isMissing) return "unavailable";
   const assistant = classifyAssistantActivity(project);
@@ -657,8 +805,11 @@ function sectionForProject(project: SearchableProject): ProjectSectionKey {
   ) {
     return "attention";
   }
+  const isRunning = project.activeAgentCount > 0 || assistant === "working";
+  if (project.isArchived) return isRunning ? "running" : "archived";
   if (project.isPinned) return "pinned";
-  if (project.activeAgentCount > 0 || assistant === "working") return "running";
+  if (project.groupId) return groupBandKey(project.groupId);
+  if (isRunning) return "running";
   // Last stop before the residual band. Below `pinned` and `running` for the
   // same reason a pinned running project stays in Pinned: snooze withdraws a
   // demand, it does not override an explicit pin or the fact that something is
@@ -735,18 +886,21 @@ function runningOrderingSince(project: SearchableProject): number {
  * - Pinned/Unavailable: alphabetical. Pinning is user-curated — reordering a
  *   curated set by a hidden score reads as rows moving on their own.
  * - Running: most work first, then freshest working transition.
- * - Other: whichever order the user picked (#11455); effective frecency by
- *   default, which is what this band has always done.
+ * - Other and every group: whichever order the user picked for that band
+ *   (#11455); effective frecency by default, which is what Other has always
+ *   done.
+ * - Archived: alphabetical, like Pinned — it is a filing cabinet, and a
+ *   cabinet ordered by a hidden score is one nobody can find anything in.
  * - Current: effective frecency, though it is a single row either way.
  *
- * Only Other reads the preference. The other bands' orders are decisions in
- * their own right — a user asking for A-Z in the residual band is not asking
- * for their blocked agents to be alphabetised.
+ * Only the sortable bands read a preference. The other bands' orders are
+ * decisions in their own right — a user asking for A-Z in the residual band is
+ * not asking for their blocked agents to be alphabetised.
  */
 function compareWithinSection(
   a: SearchableProject,
   b: SearchableProject,
-  otherProjectsSortMode: OtherProjectsSortMode
+  sortModeFor: (band: "other" | ProjectGroupBandKey) => OtherProjectsSortMode
 ): number {
   const section = a.section;
   if (section === "attention") {
@@ -771,7 +925,7 @@ function compareWithinSection(
         return b.waitingAgentCount - a.waitingAgentCount;
       }
     }
-  } else if (section === "pinned" || section === "unavailable") {
+  } else if (section === "pinned" || section === "unavailable" || section === "archived") {
     // Alphabetical primary AND the only tie-breaks: falling through to
     // lastOpened would quietly reintroduce the adaptive reordering the
     // alphabetical choice exists to avoid.
@@ -785,10 +939,10 @@ function compareWithinSection(
     const aWorking = runningOrderingSince(a);
     const bWorking = runningOrderingSince(b);
     if (aWorking !== bWorking) return bWorking - aWorking;
-  } else if (section === "other") {
+  } else if (isSortableBand(section)) {
     // `frecencyScore` is already read-time decayed here (see `searchableProjects`),
     // so it is safe to hand straight to the shared comparator.
-    return compareProjectsByMode(a, b, otherProjectsSortMode);
+    return compareProjectsByMode(a, b, sortModeFor(section));
   } else if (a.frecencyScore !== b.frecencyScore) {
     return b.frecencyScore - a.frecencyScore;
   }
@@ -898,6 +1052,8 @@ interface SearchableProjectContext {
    * a tick is exact, not an approximation.
    */
   frecencyNow: number;
+  /** Live groups by id, so a row can only claim a group that still exists. */
+  groupsById: ReadonlyMap<string, ProjectGroup>;
 }
 
 function toSearchableProject(
@@ -917,6 +1073,7 @@ function toSearchableProject(
   const isStaleActive = !isActive && p.status === "active";
   const isBackground =
     p.status === "background" || isStaleActive || (!isActive && !isMissing && hasProcesses);
+  const group = p.groupId ? context.groupsById.get(p.groupId) : undefined;
 
   const project: SearchableProject = {
     id: p.id,
@@ -935,6 +1092,9 @@ function toSearchableProject(
     isBackground,
     isMissing,
     isPinned: p.pinned ?? false,
+    isArchived: p.archivedAt !== undefined,
+    groupId: group?.id,
+    groupName: group?.name,
     openInOtherWindow: isActive ? undefined : context.presenceByProjectId.otherWindows.get(p.id),
     isOpenInThisWindow: context.presenceByProjectId.thisWindow.has(p.id),
     isCachedInThisWindow: context.presenceByProjectId.thisWindow.get(p.id) === "cached",
@@ -976,14 +1136,30 @@ function buildSearchableProjects(
 
 function sortBrowseOrder(
   projects: SearchableProject[],
-  sortMode: OtherProjectsSortMode
+  sortModeFor: (band: "other" | ProjectGroupBandKey) => OtherProjectsSortMode,
+  bandRanks: ReadonlyMap<ProjectBandKey, number>
 ): SearchableProject[] {
   return [...projects].sort((a, b) => {
     if (a.section !== b.section) {
-      return PROJECT_SECTION_ORDER.indexOf(a.section) - PROJECT_SECTION_ORDER.indexOf(b.section);
+      return bandRank(bandRanks, a.section) - bandRank(bandRanks, b.section);
     }
-    return compareWithinSection(a, b, sortMode);
+    return compareWithinSection(a, b, sortModeFor);
   });
+}
+
+/**
+ * The order each sortable band asks for: Other reads the preference, a group
+ * its own mode. A group that has gone away falls back to Other's mode — its
+ * rows are about to re-band there anyway.
+ */
+function makeSortModeFor(
+  otherProjectsSortMode: OtherProjectsSortMode,
+  groupsById: ReadonlyMap<string, ProjectGroup>
+): (band: "other" | ProjectGroupBandKey) => OtherProjectsSortMode {
+  return (band) =>
+    band === "other"
+      ? otherProjectsSortMode
+      : (groupsById.get(groupIdOfBandKey(band))?.sortMode ?? otherProjectsSortMode);
 }
 
 function buildScratchResults(
@@ -1264,6 +1440,14 @@ export function useProjectSwitcherPalette({
 
   const displayPathById = useMemo(() => buildDisplayPaths(projects), [projects]);
 
+  const projectGroups = useProjectGroupsStore((state) => state.groups);
+  useEffect(() => useProjectGroupsStore.getState().init(), []);
+  const groupsById = useMemo(
+    () => new Map(projectGroups.map((group) => [group.id, group])),
+    [projectGroups]
+  );
+  const bandRanks = useMemo(() => buildBandRanks(projectGroups), [projectGroups]);
+
   const searchableProjects = useMemo<SearchableProject[]>(
     () =>
       buildSearchableProjects(projects, projectStats, {
@@ -1271,8 +1455,9 @@ export function useProjectSwitcherPalette({
         displayPathById,
         presenceByProjectId,
         frecencyNow: Date.now(),
+        groupsById,
       }),
-    [projects, projectStats, currentProject?.id, displayPathById, presenceByProjectId]
+    [projects, projectStats, currentProject?.id, displayPathById, presenceByProjectId, groupsById]
   );
 
   useEffect(() => {
@@ -1310,9 +1495,14 @@ export function useProjectSwitcherPalette({
   const otherProjectsSortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
   const collapsedBands = usePreferencesStore((state) => state.projectSwitcherCollapsedBands);
 
+  const sortModeFor = useMemo(
+    () => makeSortModeFor(otherProjectsSortMode, groupsById),
+    [otherProjectsSortMode, groupsById]
+  );
+
   const liveBrowseOrder = useMemo<SearchableProject[]>(
-    () => sortBrowseOrder(searchableProjects, otherProjectsSortMode),
-    [searchableProjects, otherProjectsSortMode]
+    () => sortBrowseOrder(searchableProjects, sortModeFor, bandRanks),
+    [searchableProjects, sortModeFor, bandRanks]
   );
 
   // Layout is frozen for the lifetime of an open palette; content stays live.
@@ -1341,6 +1531,7 @@ export function useProjectSwitcherPalette({
     (projects: SearchableProject[], isProvisional = false): FrozenLayout => ({
       order: projects.map((project) => project.id),
       sections: new Map(projects.map((project) => [project.id, project.section])),
+      filing: new Map(projects.map((project) => [project.id, filingOf(project)])),
       isProvisional,
     }),
     []
@@ -1379,10 +1570,27 @@ export function useProjectSwitcherPalette({
   // dependencies because the re-sort must read the freshly ranked projects
   // against the layout it is rewriting, and without the guard every stats push
   // would re-sort and destroy the freeze outright.
-  const previousOtherProjectsSortMode = useRef(otherProjectsSortMode);
+  //
+  // Every sortable band carries its own mode — Other reads the preference, each
+  // group its own — so the guard compares per band and only the bands whose
+  // mode moved are re-sorted. Creating, renaming or deleting a group hands this
+  // a new map without changing any band's mode, and must not re-sort anything.
+  const sortModesByBand = useMemo(() => {
+    const modes = new Map<"other" | ProjectGroupBandKey, OtherProjectsSortMode>([
+      ["other", otherProjectsSortMode],
+    ]);
+    for (const group of projectGroups) modes.set(groupBandKey(group.id), group.sortMode);
+    return modes;
+  }, [otherProjectsSortMode, projectGroups]);
+  const previousSortModes = useRef(sortModesByBand);
   useEffect(() => {
-    if (previousOtherProjectsSortMode.current === otherProjectsSortMode) return;
-    previousOtherProjectsSortMode.current = otherProjectsSortMode;
+    const previous = previousSortModes.current;
+    if (previous === sortModesByBand) return;
+    previousSortModes.current = sortModesByBand;
+    const changed = [...sortModesByBand]
+      .filter(([band, mode]) => previous.has(band) && previous.get(band) !== mode)
+      .map(([band]) => band);
+    if (changed.length === 0) return;
     // A change while closed needs no re-sort: the next `open()` captures the
     // new order anyway, and re-sorting here would queue it against a stale list.
     if (!isOpen || !frozenLayout) return;
@@ -1399,10 +1607,14 @@ export function useProjectSwitcherPalette({
     // Sections and provisionality are untouched: provisionality describes the
     // DATA, so a mode change during a cold open must not cancel the pending
     // one-time regroup (#11452).
-    setFrozenLayout((previous) => {
-      if (!previous) return previous;
-      const resorted = resortOtherBand(previous, live, otherProjectsSortMode);
-      return resorted ? { ...previous, order: resorted.order } : previous;
+    setFrozenLayout((previousLayout) => {
+      if (!previousLayout) return previousLayout;
+      let next = previousLayout;
+      for (const band of changed) {
+        const resorted = resortBand(next, live, band, sortModesByBand.get(band)!);
+        if (resorted) next = { ...next, order: resorted.order };
+      }
+      return next;
     });
 
     // A band the user just re-ordered is read from the top. The highlight
@@ -1424,16 +1636,20 @@ export function useProjectSwitcherPalette({
     // arrival is never the row the user had selected, and can only be the new
     // band top in the same narrow window — so a snapshot costs at most one row
     // of accuracy there, and buys a pure computation of the target.
-    const resorted = resortOtherBand(frozenLayout, live, otherProjectsSortMode);
-    if (!resorted) return;
-    // Same skip as `open()`'s preselect: a project that went missing while the
-    // palette was open keeps its frozen slot, and a reflexive Enter landing on
-    // it opens the relocation dialog rather than switching projects.
-    const target = resorted.ids.find((id) => live.get(id)?.isMissing === false) ?? resorted.ids[0]!;
-    setSelectedRowId((previousId) =>
-      previousId !== null && frozenLayout.sections.get(previousId) === "other" ? target : previousId
-    );
-  }, [otherProjectsSortMode, isOpen, liveBrowseOrder, frozenLayout, isSearching]);
+    setSelectedRowId((previousId) => {
+      if (previousId === null) return previousId;
+      const band = frozenLayout.sections.get(previousId);
+      if (band === undefined || !isSortableBand(band) || !changed.includes(band)) {
+        return previousId;
+      }
+      const resorted = resortBand(frozenLayout, live, band, sortModesByBand.get(band)!);
+      if (!resorted) return previousId;
+      // Same skip as `open()`'s preselect: a project that went missing while the
+      // palette was open keeps its frozen slot, and a reflexive Enter landing on
+      // it opens the relocation dialog rather than switching projects.
+      return resorted.ids.find((id) => live.get(id)?.isMissing === false) ?? resorted.ids[0]!;
+    });
+  }, [sortModesByBand, isOpen, liveBrowseOrder, frozenLayout, isSearching]);
 
   // Fold projects that appeared after the freeze into it, at the position the
   // renderer already gives them (end of their live band). Without this they are
@@ -1473,21 +1689,48 @@ export function useProjectSwitcherPalette({
     }
 
     const arrivals = liveBrowseOrder.filter((project) => !frozenLayout.sections.has(project.id));
-    if (arrivals.length === 0) return;
+    // Refiled rows beat the freeze the way a sort change does: the user just
+    // moved them between groups or in or out of the archive, and a row that
+    // stayed put would read as the menu doing nothing. Only the refiled row
+    // moves — every other row keeps its frozen band and slot.
+    const refiled = liveBrowseOrder.filter((project) => {
+      const frozenFiling = frozenLayout.filing.get(project.id);
+      return frozenFiling !== undefined && frozenFiling !== filingOf(project);
+    });
+    if (arrivals.length === 0 && refiled.length === 0) return;
+    const live = new Map(liveBrowseOrder.map((project) => [project.id, project]));
     setFrozenLayout((previous) => {
       if (!previous) return previous;
-      const order = [...previous.order];
+      let order = [...previous.order];
       const sections = new Map(previous.sections);
+      const filing = new Map(previous.filing);
       for (const project of arrivals) {
         if (sections.has(project.id)) continue;
         order.push(project.id);
         sections.set(project.id, project.section);
+        filing.set(project.id, filingOf(project));
+      }
+      for (const project of refiled) {
+        if (filing.get(project.id) === filingOf(project)) continue;
+        filing.set(project.id, filingOf(project));
+        // A refile that leaves the row in the band it was frozen in — an
+        // asking project changing group still asks — moves nothing at all.
+        if (sections.get(project.id) === project.section) continue;
+        sections.set(project.id, project.section);
+        order = insertIntoBand(
+          order.filter((id) => id !== project.id),
+          sections,
+          live,
+          project,
+          sortModeFor
+        );
       }
       // Spread, so a session still waiting on its first stats stays provisional
       // and folds this arrival into its pending regroup.
-      return { ...previous, order, sections };
+      const next: FrozenLayout = { ...previous, order, sections, filing };
+      return next;
     });
-  }, [liveBrowseOrder, frozenLayout, projectStats, captureLayout, isOpen]);
+  }, [liveBrowseOrder, frozenLayout, projectStats, captureLayout, isOpen, sortModeFor]);
 
   const browseOrdered = useMemo<SearchableProject[]>(() => {
     const frozen = frozenLayout;
@@ -1520,10 +1763,11 @@ export function useProjectSwitcherPalette({
     // rather than trusting the freeze makes contiguity structural: the component
     // cuts headers at every section change, so a band appearing twice would
     // print its header twice, and a late arrival must not be able to cause that.
-    return ordered.sort(
-      (a, b) => PROJECT_SECTION_ORDER.indexOf(a.section) - PROJECT_SECTION_ORDER.indexOf(b.section)
-    );
-  }, [liveBrowseOrder, frozenLayout]);
+    //
+    // Band ranks are read live, not frozen: the only thing that changes them is
+    // the user reordering their groups, which — like a sort change — must show.
+    return ordered.sort((a, b) => bandRank(bandRanks, a.section) - bandRank(bandRanks, b.section));
+  }, [liveBrowseOrder, frozenLayout, bandRanks]);
 
   // Recency order, which is what the pinned browse section renders. Search takes
   // this same list but re-ranks it against the query (#11466), so it has to be
@@ -1646,23 +1890,56 @@ export function useProjectSwitcherPalette({
 
   // Derived from the COMPLETE ordered list, before any collapse filtering — a
   // folded band still has to say it exists and how much it is holding.
+  //
+  // Every group gets a band even when no row lands in it — one just created,
+  // or one whose every project is lifted above by live work — so the header
+  // that names it, folds it and reorders it never disappears out from under
+  // the user. Its rows say why it is empty.
   const browseBands = useMemo<ProjectSwitcherBrowseBand[]>(() => {
     const bands: ProjectSwitcherBrowseBand[] = [];
+    const bandFor = (key: ProjectBandKey): ProjectSwitcherBrowseBand => {
+      const group = isGroupBandKey(key) ? groupsById.get(groupIdOfBandKey(key)) : undefined;
+      return {
+        key,
+        label: group ? group.name : isGroupBandKey(key) ? "" : PROJECT_SECTION_LABELS[key],
+        itemCount: 0,
+        collapsed: isBandCollapsed(collapsedBands, key),
+        group,
+        liftedCount: 0,
+        activeAgentCount: 0,
+      };
+    };
     for (const project of browseOrdered) {
-      const last = bands.at(-1);
-      if (last && last.key === project.section) {
-        last.itemCount += 1;
-        continue;
+      let band = bands.at(-1);
+      if (!band || band.key !== project.section) {
+        band = bandFor(project.section);
+        bands.push(band);
       }
-      bands.push({
-        key: project.section,
-        label: PROJECT_SECTION_LABELS[project.section],
-        itemCount: 1,
-        collapsed: collapsedBands[project.section] === true,
-      });
+      band.itemCount += 1;
+      band.activeAgentCount = (band.activeAgentCount ?? 0) + project.activeAgentCount;
+    }
+    const present = new Set(bands.map((band) => band.key));
+    for (const group of sortProjectGroups(projectGroups)) {
+      const key = groupBandKey(group.id);
+      if (present.has(key)) continue;
+      const rank = bandRank(bandRanks, key);
+      const at = bands.findIndex((band) => bandRank(bandRanks, band.key) > rank);
+      bands.splice(at === -1 ? bands.length : at, 0, bandFor(key));
+    }
+    // Members a group can't show because live work or a pin holds them above.
+    // Archived members are not counted: they were filed away, not lifted. Nor
+    // is anything in a band drawn below the group (Unavailable): the hint
+    // says "shown above", and it must not point the user the wrong way.
+    for (const project of browseOrdered) {
+      if (!project.groupId || project.isArchived) continue;
+      const key = groupBandKey(project.groupId);
+      if (project.section === key) continue;
+      if (bandRank(bandRanks, project.section) > bandRank(bandRanks, key)) continue;
+      const band = bands.find((candidate) => candidate.key === key);
+      if (band) band.liftedCount = (band.liftedCount ?? 0) + 1;
     }
     return bands;
-  }, [browseOrdered, collapsedBands]);
+  }, [browseOrdered, collapsedBands, groupsById, projectGroups, bandRanks]);
 
   // Held apart from `browseRows` so an all-expanded switcher — the default, and
   // the common case — keeps browse's array identity stable rather than minting
@@ -1672,7 +1949,7 @@ export function useProjectSwitcherPalette({
   const visibleBrowseRows = useMemo<ProjectSwitcherRow[]>(() => {
     if (!hasCollapsedBand) return browseRows;
     return browseRows.filter(
-      (row) => row.kind !== "project" || collapsedBands[row.section] !== true
+      (row) => row.kind !== "project" || !isBandCollapsed(collapsedBands, row.section)
     );
   }, [browseRows, hasCollapsedBand, collapsedBands]);
 
@@ -1766,11 +2043,12 @@ export function useProjectSwitcherPalette({
               displayPathById,
               presenceByProjectId,
               frecencyNow: Date.now(),
+              groupsById,
             });
       const liveOrder =
         liveProjects === searchableProjects
           ? liveBrowseOrder
-          : sortBrowseOrder(liveProjects, otherProjectsSortMode);
+          : sortBrowseOrder(liveProjects, sortModeFor, bandRanks);
       const liveScratches =
         stats === projectStats
           ? scratchResults
@@ -1821,7 +2099,9 @@ export function useProjectSwitcherPalette({
       // can see. With every band folded there is nothing to preselect, and
       // `null` is the honest answer — arrows and Enter both no-op on an empty
       // list rather than committing something offscreen.
-      const selectable = liveOrder.filter((project) => collapsedBands[project.section] !== true);
+      const selectable = liveOrder.filter(
+        (project) => !isBandCollapsed(collapsedBands, project.section)
+      );
       const initial =
         selectable.find((project) => !project.isActive && !project.isMissing) ??
         selectable.find((project) => !project.isActive) ??
@@ -1835,8 +2115,10 @@ export function useProjectSwitcherPalette({
       currentProject?.id,
       displayPathById,
       presenceByProjectId,
+      groupsById,
       liveBrowseOrder,
-      otherProjectsSortMode,
+      sortModeFor,
+      bandRanks,
       scratchResults,
       scratches,
       currentScratch?.id,
@@ -2187,6 +2469,7 @@ export function useProjectSwitcherPalette({
         displayPathById,
         presenceByProjectId,
         frecencyNow: Date.now(),
+        groupsById,
       });
     },
     [
@@ -2196,6 +2479,7 @@ export function useProjectSwitcherPalette({
       currentProject?.id,
       displayPathById,
       presenceByProjectId,
+      groupsById,
     ]
   );
 

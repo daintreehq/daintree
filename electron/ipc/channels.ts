@@ -1049,6 +1049,17 @@ export const CHANNELS = {
   FORGE_AUDIT_EXPORT_LOG: "forge-audit:export-log",
   FORGE_AUDIT_SET_ENABLED: "forge-audit:set-enabled",
 
+  // Project groups and archive — user filing in the project switcher. Own
+  // `project-groups:*` prefix so codegen produces a `projectGroups` namespace.
+  PROJECT_GROUPS_LIST: "project-groups:list",
+  PROJECT_GROUPS_CREATE: "project-groups:create",
+  PROJECT_GROUPS_RENAME: "project-groups:rename",
+  PROJECT_GROUPS_DELETE: "project-groups:delete",
+  PROJECT_GROUPS_REORDER: "project-groups:reorder",
+  PROJECT_GROUPS_SET_SORT_MODE: "project-groups:set-sort-mode",
+  PROJECT_GROUPS_SET_MEMBERSHIP: "project-groups:set-membership",
+  PROJECT_GROUPS_SET_ARCHIVED: "project-groups:set-archived",
+
   // Run history channels — durable recipe/fleet automation outcomes (#9949).
   // Dedicated `run-history:*` prefix so codegen produces a `runHistory`
   // renderer namespace.

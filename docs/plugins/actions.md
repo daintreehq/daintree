@@ -327,23 +327,28 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
 | `pilot.toggle` | View all agents | safe | — |
 | `project.add` | Open project | safe | `destination?`, `path?` |
+| `project.archive` | Archive project | safe | `projectId?` |
 | `project.cloneRepo` | Clone repository | safe | — |
 | `project.close` | Close project | safe | `projectId` |
 | `project.closeActive` | Close project | safe | — |
+| `project.createGroup` | Create project group | safe | `name`, `projectId?` |
 | `project.detectRunners` | Detect runners | safe | `projectId?` |
 | `project.getAll` | List projects | safe | — |
 | `project.getCurrent` | Get current project | safe | — |
 | `project.getSettings` | Get project settings | safe | `projectId?` |
 | `project.getStats` | Get project stats | safe | `projectId?` |
+| `project.listGroups` | List project groups | safe | — |
 | `project.muteNotifications` | Mute project notifications | safe | `projectId` |
 | `project.openDialog` | Pick directory | safe | — |
 | `project.openInNewWindow` | Open project in new window | safe | — |
 | `project.openOnHost` | Open project on host… | safe | `hostId`, `projectId`, `navigateOnly?`, `newWindow?`, `worktree?` |
 | `project.remove` | Remove project | confirm | `projectId` |
 | `project.saveSettings` | Save project settings | safe | `projectId`, `settings` |
+| `project.setGroup` | Move project to group | safe | `groupId`, `projectId` |
 | `project.settings.open` | Open project settings | safe | — |
 | `project.silenceNotificationKind` | Silence notification kind | safe | `kind`, `projectId?` |
 | `project.switch` | Switch project | safe | `projectId` |
+| `project.unarchive` | Unarchive project | safe | `projectId?` |
 | `project.update` | Update project | safe | `projectId`, `updates` |
 
 ## recipes

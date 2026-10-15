@@ -126,6 +126,48 @@ const STATES: State[] = [
     },
   },
   {
+    slug: "groups",
+    fixture: "groups",
+    enter: async (page) => {
+      await expect(page.getByTestId("band-collapse-toggle-group-crisp")).toHaveAttribute(
+        "aria-expanded",
+        "false"
+      );
+      await expect(page.getByTestId("empty-group-hint")).toBeVisible();
+    },
+  },
+  {
+    slug: "groups-search",
+    fixture: "groups-search",
+    enter: async (page) => {
+      await expect(listbox(page).getByRole("option")).toHaveCount(2);
+    },
+  },
+  {
+    slug: "group-menu",
+    fixture: "groups",
+    enter: async (page) => {
+      await page.getByTestId("band-group-menu-group-daintree").click();
+      await expect(page.getByRole("menuitem", { name: "Rename group…" })).toBeVisible();
+    },
+  },
+  {
+    slug: "move-to-group",
+    fixture: "groups",
+    enter: async (page) => {
+      await listbox(page).locator("#project-option-strongtyped").click({ button: "right" });
+      await page.getByTestId("project-move-to-group").hover();
+      await expect(page.getByRole("menuitemradio", { name: "Crisp Vector" })).toBeVisible();
+    },
+  },
+  {
+    slug: "new-group",
+    fixture: "new-group",
+    enter: async (page) => {
+      await expect(page.getByTestId("project-group-name-input")).toBeFocused();
+    },
+  },
+  {
     slug: "scratch-rename",
     fixture: "browse",
     enter: async (page) => {
@@ -196,6 +238,8 @@ async function frame(page: Page): Promise<{ x: number; y: number; width: number;
     page.locator(PALETTE),
     page.getByTestId("project-switcher-palette"),
     page.getByRole("menu"),
+    page.getByRole("alertdialog"),
+    page.locator('[role="dialog"]:not([aria-label="Project switcher"])'),
   ];
   const boxes = [];
   for (const target of targets) {

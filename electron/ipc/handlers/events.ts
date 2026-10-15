@@ -116,6 +116,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:project-surface-choices-changed": "external",
   "forge:remote-changed": "external",
   "plugin:bg-update-available": "external",
+  "project-groups:update": "external",
   "run-history:update": "external",
   "copy-tree-history:update": "external",
   "plugin:deep-link": "external",

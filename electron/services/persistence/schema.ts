@@ -37,6 +37,15 @@ export const projects = sqliteTable(
     // legacy row and every repository-backed project — absence means
     // git-backed, so no backfill is needed.
     gitBacked: integer("git_backed", { mode: "boolean" }),
+    // Epoch ms the user filed the project away, null when it isn't. Archiving
+    // is organisation only: nothing else about the project changes, so
+    // clearing this restores it exactly — pin and group included.
+    archivedAt: integer("archived_at"),
+    // The user-made project group this project is filed under. Groups live in
+    // `app_state` (`projectGroups`), so this is not a foreign key: an id naming
+    // a deleted group reads as ungrouped, and deleting a group clears its
+    // members in the same transaction anyway.
+    groupId: text("group_id"),
     // Last-known repository counts (issue #11078), so switch-back can seed the
     // toolbar pills from real numbers instead of em-dashes that resize once a
     // poll lands. All nullable: absent until the project's first clean stats
