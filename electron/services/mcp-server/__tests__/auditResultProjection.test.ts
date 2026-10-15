@@ -247,3 +247,61 @@ describe("assistant messaging audit entries carry no body (#13335)", () => {
     expect(projectAuditArgs("help.displayImage", args)).toBe(args);
   });
 });
+
+describe("hub messaging audit entries carry no message or reply text (#13336)", () => {
+  const TEXT = "rebase it now";
+
+  it("measures, never keeps, what a send says", () => {
+    const projected = projectAuditArgs("host.sendMessage", {
+      hostId: "studio",
+      projectId: "proj-2",
+      slot: 1,
+      generation: "gen",
+      text: TEXT,
+      taskId: "my words here",
+      referenceTaskIds: ["a", "b"],
+      waitMs: 500,
+    });
+    expect(JSON.stringify(projected)).not.toContain("rebase");
+    expect(JSON.stringify(projected)).not.toContain("my words");
+    expect(projected).toMatchObject({
+      hostId: "studio",
+      slot: 1,
+      taskId: null,
+      referenceTaskIds: 2,
+      waitMs: 500,
+      textChars: TEXT.length,
+    });
+  });
+
+  it("reduces a task's replies to their count and size", () => {
+    const taskId = "0b6b7c2e-1d55-4f6f-9a3a-4f3d2b1c0a99";
+    const projected = projectAuditResult("host.getTask", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      task: { taskId, state: "completed" },
+      observedAt: 1,
+      replies: [{ state: "completed", at: 1, untrustedText: TEXT }],
+      repliesOmitted: 0,
+    });
+    expect(JSON.stringify(projected)).not.toContain("rebase");
+    expect(projected).toEqual({
+      outcome: "ok",
+      taskId,
+      state: "completed",
+      replyCount: 1,
+      replyChars: TEXT.length,
+      repliesOmitted: 0,
+    });
+  });
+
+  it("keeps only a known outcome, and summarizes a host list by its ids", () => {
+    expect(projectAuditResult("host.cancelTask", { outcome: TEXT, hostId: "h" })).toMatchObject({
+      outcome: null,
+    });
+    expect(
+      projectAuditResult("host.list", { hosts: [{ hostId: "studio", name: "Greg's studio" }] })
+    ).toEqual({ hostCount: 1, hostIds: ["studio"] });
+  });
+});

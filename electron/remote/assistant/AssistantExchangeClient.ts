@@ -1,7 +1,10 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { EXCHANGE_RETRY_WINDOW_MS, EXCHANGE_TTL_MS } from "../exchange/AssistantExchangeStore.js";
-import type { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
+import type {
+  AssistantExchangeJournal,
+  JournalEntry,
+} from "../exchange/AssistantExchangeJournal.js";
 import type { CreateDisposition, ExchangeChanges, ExchangeRecord } from "../exchange/types.js";
 import type { LinkSession } from "../link/session.js";
 import type { AssistantMessagingPolicy, MessagingRequestKind } from "./AssistantMessagingPolicy.js";
@@ -10,11 +13,13 @@ import {
   ExchangeChangedPayloadSchema,
   ExchangeChangesSchema,
   ExchangeRecordSchema,
+  ExchangeResponsesSchema,
   LaneListSchema,
   MAX_EXCHANGE_PAGE,
   SendResultSchema,
   type AssistantSendPayload,
   type EnrolledLane,
+  type ExchangeResponse,
 } from "./linkMethods.js";
 
 export interface AssistantExchangeClientDeps {
@@ -47,6 +52,21 @@ export interface MovedExchange {
 }
 
 const CALL_TIMEOUT_MS = 15_000;
+
+/**
+ * This Shell's own refusal to resend a message whose outcome stayed unknown
+ * past its retry window. Its own class, so it is never mistaken for a host's
+ * VALIDATION, which crosses the link as plain text.
+ */
+export class RetryWindowPassedError extends AppError {
+  constructor(messageId: string) {
+    super({
+      code: "VALIDATION",
+      message: `Exchange ${messageId} went unanswered past its retry window; look it up or send a new message`,
+    });
+    this.name = "RetryWindowPassedError";
+  }
+}
 
 /**
  * What the host answers before it records anything: no authenticated sender,
@@ -182,10 +202,7 @@ export class AssistantExchangeClient {
       (entry?.unresolvedAt != null && Date.now() - entry.sentAt > EXCHANGE_RETRY_WINDOW_MS);
     if (pastWindow) {
       if (entry?.unresolvedAt != null) await this.lookUp(hostId, session, payload.messageId);
-      throw new AppError({
-        code: "VALIDATION",
-        message: `Exchange ${payload.messageId} went unanswered past its retry window; look it up or send a new message`,
-      });
+      throw new RetryWindowPassedError(payload.messageId);
     }
     const attempt = journal.noteSending(hostId, payload.messageId);
     // Only a message new to the journal is this hub's: a resend keeps whose it was, and
@@ -224,6 +241,25 @@ export class AssistantExchangeClient {
     const session = await this.open(hostId);
     await this.authenticate(hostId, session);
     return this.listPage(hostId, session, cursor, limit);
+  }
+
+  /**
+   * The answers the receiving lane gave one of this Shell's exchanges, while
+   * the host still holds them. A host from before the call throws UNSUPPORTED.
+   */
+  async getResponses(hostId: HostId, messageId: string): Promise<ExchangeResponse[]> {
+    const session = await this.open(hostId);
+    await this.authenticate(hostId, session);
+    const parsed = ExchangeResponsesSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.GET_RESPONSES, { messageId })
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.GET_RESPONSES);
+    return parsed.data.responses;
+  }
+
+  /** What this Shell's journal last knew of an exchange, without asking the host. */
+  known(hostId: HostId, messageId: string): JournalEntry | null {
+    return this.deps.journal.get(hostId, messageId);
   }
 
   /** Ask the host to cancel. Once delivery may have happened this is only a recorded request. */

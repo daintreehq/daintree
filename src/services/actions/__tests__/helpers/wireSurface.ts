@@ -96,14 +96,17 @@ async function registerRemoteShellActions(registry: ActionRegistry): Promise<voi
       { registerHostActions },
       { registerPortActions },
       { registerAssistantMessagingActions },
+      { registerHostMessagingActions },
     ] = await Promise.all([
       import("../../definitions/hostActions"),
       import("../../definitions/portActions"),
       import("../../definitions/assistantMessagingActions"),
+      import("../../definitions/hostMessagingActions"),
     ]);
     registerHostActions(registry, noopCallbacks());
     registerPortActions(registry, noopCallbacks());
     registerAssistantMessagingActions(registry);
+    registerHostMessagingActions(registry);
   });
 }
 

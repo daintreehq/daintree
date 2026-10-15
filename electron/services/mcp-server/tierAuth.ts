@@ -27,6 +27,7 @@ import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
 import { ASSISTANT_MESSAGING_TOOL_IDS } from "../../../shared/types/assistantMessaging.js";
+import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -148,6 +149,9 @@ export function shouldExposeTool(
   if (ASSISTANT_MESSAGING_TOOL_IDS.has(entry.id) && session.assistantMessaging !== true) {
     return false;
   }
+  if (HOST_MESSAGING_TOOL_IDS.has(entry.id) && session.hubMessaging !== true) {
+    return false;
+  }
   return (
     isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
     isApprovalRequestable(tier, entry.id, session.paneApproval === true)
@@ -188,6 +192,12 @@ export interface SessionSurfacePolicy {
    * read live per listing, and as `=== true`.
    */
   assistantMessaging?: boolean;
+  /**
+   * Whether this session is this Shell's enrolled hub and a host exists
+   * (#13336). Only then are the `host.*` messaging tools offered; read live
+   * per listing, and as `=== true`.
+   */
+  hubMessaging?: boolean;
 }
 
 /**
@@ -491,6 +501,12 @@ export interface TargetPolicySessionSnapshot {
    * {@link SessionSurfacePolicy.paneSkipConfirmations}. Read as `=== true`.
    */
   paneSkipConfirmations?: boolean;
+  /**
+   * Whether the session is this Shell's enrolled hub while a host exists
+   * (#13336). The hub's host tools exist for no other session at any tier, so
+   * they are never offered as a stub. Read as `=== true`.
+   */
+  hubMessaging?: boolean;
   /** Live per-tool grants, from the non-evicting snapshot. */
   perToolGrantedActionIds: ReadonlySet<string>;
   /** Live native automation grants' `allowedTools`, unioned. */
@@ -829,6 +845,8 @@ export function buildUnavailableStub(
   if (!isExistenceCatalogVisible(snapshot)) return null;
   const id = readEntryId(entry);
   if (id === null) return null;
+  // No tier makes these exist for anyone but the hub, so "raise your tier" would be wrong.
+  if (HOST_MESSAGING_TOOL_IDS.has(id) && snapshot.hubMessaging !== true) return null;
   const record = entry as Partial<ActionManifestEntry>;
 
   if (record.mcpVisibility === "hidden") return null;

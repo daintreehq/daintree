@@ -462,6 +462,34 @@ describe("shouldExposeTool", () => {
       ).toBe(false);
     }
   );
+  // #13336: the hub's host tools are offered only to this Shell's enrolled hub,
+  // reads on core and sends and cancels on full, and never to a pane or key.
+  it.each([
+    ["host.list", "core"],
+    ["host.listAssistants", "core"],
+    ["host.getTask", "core"],
+    ["host.listTasks", "core"],
+    ["host.sendMessage", "full"],
+    ["host.cancelTask", "full"],
+  ] as const)("offers %s only to the hub, from the %s tier", (id, minimum) => {
+    const entry = makeEntry({ id });
+    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
+    const hub = { ...assistant, hubMessaging: true };
+    expect(shouldExposeTool(entry, "full", assistant)).toBe(false);
+    expect(shouldExposeTool(entry, "full", { ...assistant, assistantMessaging: true })).toBe(false);
+    expect(shouldExposeTool(entry, "full", hub)).toBe(true);
+    expect(shouldExposeTool(entry, "core", hub)).toBe(minimum === "core");
+    expect(
+      shouldExposeTool(entry, "full", {
+        workspaceBound: false,
+        paneApproval: true,
+        hubMessaging: true,
+      })
+    ).toBe(false);
+    expect(shouldExposeTool(entry, "external", { workspaceBound: false, hubMessaging: true })).toBe(
+      false
+    );
+  });
 });
 
 // #10701 / #11537: the curated `MCP_TOOL_ALLOWLIST` is the ONLY tool surface an
@@ -2207,6 +2235,22 @@ describe("filterIntrospectionResultForSession", () => {
       expect(McpUnavailableActionStubSchema.safeParse(stub).success).toBe(true);
     });
 
+    // #13336: a core session that isn't the hub can't raise its tier into the
+    // hub's send tools, so it is never told it could.
+    it("offers the hub's full-tier tools as a stub to the hub alone", () => {
+      const entry = makeEntry({
+        id: "host.sendMessage",
+        title: "Message an assistant on a host",
+        category: "help",
+        danger: "safe",
+      });
+      expect(buildUnavailableStub(entry, firstParty())).toBeNull();
+      expect(buildUnavailableStub(entry, firstParty({ hubMessaging: true }))).toMatchObject({
+        id: "host.sendMessage",
+        minimumTier: "full",
+      });
+    });
+
     // The stub above proves nothing about the derivation: BAND_OVERRIDES pins
     // it, so a builder that passed a hard-coded `danger` into `deriveBand`
     // would still report it correctly. `worktree.resource.teardown` is out of
@@ -2602,9 +2646,15 @@ describe("isWithheldFromBoundSession (#11789)", () => {
 // decides whether a panel tool could be reached, the origin decides whether the
 // unscoped form or the owned twin is.
 describe("unscoped panel tools are reserved for renderer-owned origins (#12407)", () => {
-  // An assistant whose lane is enrolled for messaging, so its own inbox tools
-  // (#13335), reserved here too, are on its surface alongside the rest.
-  const ASSISTANT = { workspaceBound: false, rendererOwnedOrigin: true, assistantMessaging: true };
+  // An assistant whose lane is enrolled for messaging, and is this Shell's hub,
+  // so its own inbox tools (#13335) and host tools (#13336), reserved here too,
+  // are on its surface alongside the rest.
+  const ASSISTANT = {
+    workspaceBound: false,
+    rendererOwnedOrigin: true,
+    assistantMessaging: true,
+    hubMessaging: true,
+  };
   const TWIN_KEYS = new Set<string>(Object.keys(OWNED_TWIN_TOOLS));
   const TWIN_VALUES = new Set<string>(Object.values(OWNED_TWIN_TOOLS));
 

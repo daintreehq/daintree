@@ -180,6 +180,12 @@ import {
   runAssistantMessagingTool,
   type AssistantMessagingAccess,
 } from "./assistantMessagingTools.js";
+import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
+import {
+  auditCodeForHostMessagingRefusal,
+  runHostMessagingTool,
+  type HostMessagingAccess,
+} from "./hostMessagingTools.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -1044,6 +1050,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * `assistant.getInbox` and `assistant.reply` are neither listed nor run.
    */
   assistantMessaging?: AssistantMessagingAccess;
+  /**
+   * The hub's reach to other hosts' assistants (#13336), bound to this
+   * session's help-session bearer. Absent for every other bearer; then the
+   * `host.*` messaging tools are neither listed nor run.
+   */
+  hostMessaging?: HostMessagingAccess;
   /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
   replyWaiter?: Pick<ReplyWaiterService, "wait">;
   /**
@@ -1259,6 +1271,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     workspaceBinding,
     terminalNotify,
     assistantMessaging,
+    hostMessaging,
     replyWaiter,
     resolveOwnPane,
     requestApproval,
@@ -1293,6 +1306,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     assistantMessaging !== undefined &&
     sessionStore.sessionHelpIdMap.has(sessionId) &&
     assistantMessaging.isAvailable();
+
+  // Whether this session is this Shell's enrolled hub while a host exists
+  // (#13336). Read per listing, never cached.
+  const hubMessagingAvailable = (): boolean =>
+    hostMessaging !== undefined &&
+    sessionStore.sessionHelpIdMap.has(sessionId) &&
+    hostMessaging.isAvailable();
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
@@ -1435,6 +1455,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       ...sessionSurface,
       rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
       assistantMessaging: laneMessagingAvailable(),
+      hubMessaging: hubMessagingAvailable(),
     };
     const tools = manifest
       .filter((entry) => shouldExposeTool(entry, tier, listSurface))
@@ -1666,6 +1687,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           if (!laneMessagingAvailable()) {
             for (const id of ASSISTANT_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
           }
+          // Likewise the hub's host tools, offered only to the hub itself (#13336).
+          if (!hubMessagingAvailable()) {
+            for (const id of HOST_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
+          }
           return {
             permittedActionIds,
             callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
@@ -1678,6 +1703,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               rendererOwnedOrigin,
               paneApproval: sessionSurface.paneApproval === true,
               paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
+              hubMessaging: hubMessagingAvailable(),
               perToolGrantedActionIds,
               nativeGrantedActionIds,
               confirmationsSkipped,
@@ -3345,6 +3371,50 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // Short-circuit: the hub's tools for other hosts' assistants (#13336)
+        // run in main over the link. Only the help session this Shell's hub was
+        // enrolled with gets past the runtime's own check, whatever admitted
+        // the call above. Named outcomes (opted out, unreachable, ambiguous,
+        // ...) are results; refusals are fixed text, and the audit projections
+        // keep message and reply text out of the log.
+        if (HOST_MESSAGING_TOOL_IDS.has(actionId)) {
+          emitToolCallStarted(false);
+          try {
+            const settled = await runHostMessagingTool(
+              actionId,
+              args,
+              hostMessaging !== undefined && sessionStore.sessionHelpIdMap.has(sessionId)
+                ? hostMessaging
+                : undefined
+            );
+            if (!settled.ok) {
+              outcome = {
+                kind: "result",
+                value: {
+                  ok: false,
+                  error: {
+                    code: auditCodeForHostMessagingRefusal(settled.code),
+                    message: settled.message,
+                  },
+                },
+              };
+              return buildToolError({ code: settled.code, message: settled.message });
+            }
+            const result = settled.value;
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: `${actionId} failed`,
+            });
+          }
+        }
+
         // Short-circuit: skills.search / skills.load run entirely in the main
         // process (#10892). The action manifest entries (renderer) carry
         // schema/tier/audit, but the skill registry — parsed plugin markdown —
@@ -3410,6 +3480,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 ...sessionSurface,
                 rendererOwnedOrigin,
                 assistantMessaging: laneMessagingAvailable(),
+                hubMessaging: hubMessagingAvailable(),
               }
             );
             outcome = { kind: "result", value: { ok: true, result } };

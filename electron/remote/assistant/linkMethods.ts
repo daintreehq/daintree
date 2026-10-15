@@ -29,10 +29,19 @@ export const AssistantLinkMethod = {
    * an event out of order changes nothing.
    */
   EXCHANGE_CHANGED: "assistant.exchange-changed",
+  /**
+   * Shell → Host: the answers a lane gave one of this sender's exchanges,
+   * while the host still holds them. A host from before this call answers
+   * UNSUPPORTED, which reads as "replies aren't available from this host".
+   */
+  GET_RESPONSES: "assistant.get-responses",
 } as const;
 
 export const MAX_EXCHANGE_BODY_CHARS = 256 * 1024;
 export const MAX_EXCHANGE_PAGE = 500;
+export const MAX_EXCHANGE_RESPONSES = 32;
+/** Longest answer text a host returns; a lane's reply is cut far shorter than this. */
+export const MAX_RESPONSE_TEXT_CHARS = 64 * 1024;
 export const MAX_LISTED_LANES = 256;
 const MAX_REFERENCE_TASK_IDS = 64;
 
@@ -140,4 +149,17 @@ export const ExchangeChangesSchema = z
 
 export const ExchangeChangedPayloadSchema = z
   .object({ revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) })
+  .strip();
+
+export const ExchangeResponseSchema = z
+  .object({
+    state: z.enum(["input-required", "completed"]),
+    text: z.string().max(MAX_RESPONSE_TEXT_CHARS),
+    at: timestamp,
+  })
+  .strip();
+export type ExchangeResponse = z.infer<typeof ExchangeResponseSchema>;
+
+export const ExchangeResponsesSchema = z
+  .object({ responses: z.array(ExchangeResponseSchema).max(MAX_EXCHANGE_RESPONSES) })
   .strip();

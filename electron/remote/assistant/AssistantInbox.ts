@@ -94,6 +94,15 @@ export function cleanProvenanceLabel(label: string): string {
   return cleaned.slice(0, ASSISTANT_PROVENANCE_LABEL_MAX_CHARS) || "unknown";
 }
 
+/** Whether a body is short enough for an assistant to be handed whole, fenced, in one result. */
+export function inboxBodyFits(body: string): boolean {
+  return (
+    body.length <= ASSISTANT_MESSAGE_MAX_CHARS &&
+    Buffer.byteLength(JSON.stringify(fenceUntrustedBody(body)), "utf8") <=
+      ASSISTANT_MESSAGE_MAX_SERIALIZED_BYTES
+  );
+}
+
 function refuse(code: "VALIDATION" | "RATE_LIMITED", message: string): AppError {
   return new AppError({ code, message });
 }

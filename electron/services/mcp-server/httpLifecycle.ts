@@ -57,6 +57,7 @@ import {
 } from "./tierAuth.js";
 import { createSessionServer, cleanupResourceSubscriptions } from "./sessionServer.js";
 import { bindAssistantMessaging } from "./assistantMessagingTools.js";
+import { bindHostMessaging } from "./hostMessagingTools.js";
 import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
@@ -2357,6 +2358,10 @@ export class HttpLifecycle {
         : {}),
       // The lane is whichever help session this transport is bound to (#13335).
       assistantMessaging: bindAssistantMessaging(() =>
+        this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
+      ),
+      // The hub is whichever help session this transport is bound to, if it is the hub (#13336).
+      hostMessaging: bindHostMessaging(() =>
         this.deps.sessionStore.sessionHelpIdMap.get(sessionId)
       ),
       // A pane bearer's own terminal is fixed for the bearer's life and was

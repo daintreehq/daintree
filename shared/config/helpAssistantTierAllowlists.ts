@@ -130,6 +130,12 @@ export const CORE_TIER_TOOLS = [
   // lane is enrolled for messaging, and run only for that lane's help session.
   "assistant.getInbox",
   "assistant.reply",
+  // The hub's reads of other hosts' assistants (#13336). Offered only to the
+  // help session this Shell's hub was enrolled with, while a host exists.
+  "host.list",
+  "host.listAssistants",
+  "host.getTask",
+  "host.listTasks",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -222,6 +228,10 @@ export const FULL_TIER_ADDONS = [
   // switch dialog is confirmed there. Registered only where Remote Hosts is.
   "host.switch",
   "project.openOnHost",
+  // The hub messaging an assistant on another host, and asking it to stop
+  // (#13336): both act on another machine, so only a `full` hub sends.
+  "host.sendMessage",
+  "host.cancelTask",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -262,6 +272,13 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   // A lane's inbox belongs to the assistant enrolled in it, never a pane (#13335).
   "assistant.getInbox",
   "assistant.reply",
+  // So does the hub's reach to other hosts' assistants (#13336).
+  "host.list",
+  "host.listAssistants",
+  "host.sendMessage",
+  "host.getTask",
+  "host.listTasks",
+  "host.cancelTask",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

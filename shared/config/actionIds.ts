@@ -542,6 +542,14 @@ export const BUILT_IN_ACTION_IDS = [
   "assistant.getInbox",
   "assistant.reply",
 
+  // -- hostMessagingActions (registered only where Remote Hosts is supported) --
+  "host.list",
+  "host.listAssistants",
+  "host.sendMessage",
+  "host.getTask",
+  "host.listTasks",
+  "host.cancelTask",
+
   // -- uiActions --
   "ui.sidebar.resetWidth",
 
@@ -632,4 +640,11 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // no lane and no inbox (#13335).
   "assistant.getInbox",
   "assistant.reply",
+  // Main-process only, for the hub's own help session: a plugin is no hub (#13336).
+  "host.list",
+  "host.listAssistants",
+  "host.sendMessage",
+  "host.getTask",
+  "host.listTasks",
+  "host.cancelTask",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

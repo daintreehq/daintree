@@ -31,7 +31,9 @@
  * them in its own main process — the batches (`*Many`, expanded there into
  * single calls this list already carries), `terminal.notifyWhenIdle`,
  * `mcp.surface`, `help.displayImage`, `skills.*`, `assistant.*` (a host's
- * enrolled lane reads its inbox exactly while a Shell drives it), the reads
+ * enrolled lane reads its inbox exactly while a Shell drives it), the hub's
+ * `host.*` messaging tools (a host can be a Shell to hosts of its own, and its
+ * hub keeps reaching them while it is driven), the reads
  * and owned twins
  * that act after a host-side check — and their definitions here only throw.
  * They are listed because this list is also the manifest a host is shown: an
@@ -62,6 +64,12 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "file.view",
   "fleet.getRunStatus",
   "help.displayImage",
+  "host.cancelTask",
+  "host.getTask",
+  "host.list",
+  "host.listAssistants",
+  "host.listTasks",
+  "host.sendMessage",
   "host.switch",
   "mcp.surface",
   "project.openOnHost",

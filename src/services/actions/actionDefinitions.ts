@@ -44,6 +44,7 @@ import { registerHostActions } from "./definitions/hostActions";
 import { registerPortActions } from "./definitions/portActions";
 import { isEitherRemoteRoleSupported, isRemoteShellSupported } from "@/lib/remoteHosts";
 import { registerAssistantMessagingActions } from "./definitions/assistantMessagingActions";
+import { registerHostMessagingActions } from "./definitions/hostMessagingActions";
 
 export type { ActionCallbacks, ActionRegistry } from "./actionTypes";
 
@@ -97,6 +98,8 @@ export function createActionDefinitions(
   if (isRemoteShellSupported()) {
     registerHostActions(actions, callbacks);
     registerPortActions(actions, callbacks);
+    // The hub's tools for other hosts' assistants: a Shell's only, absent on Windows (#13336).
+    registerHostMessagingActions(actions);
   }
   // Absent where Remote Hosts are: no host, no inbox (#13335). Registered on a
   // Shell too, since a host is shown the manifest of the view driving it.

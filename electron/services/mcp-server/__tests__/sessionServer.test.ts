@@ -4520,6 +4520,96 @@ describe("assistant inbox tools (#13335)", () => {
   });
 });
 
+describe("hub host-messaging tools (#13336)", () => {
+  const LISTED = { hosts: [] };
+  const AMBIGUOUS = {
+    outcome: "ambiguous" as const,
+    detail: "may have arrived",
+    retryAfterMs: null,
+    taskId: "task-1",
+    contextId: "ctx",
+    task: null,
+    wait: "none" as const,
+  };
+
+  function hubDeps(options: { available: boolean; tier?: "core" | "full"; access?: boolean }) {
+    const store = fakeSessionStore(options.tier ?? "core");
+    const mutable = store as unknown as {
+      sessionHelpIdMap: Map<string, string>;
+      sessionOriginMap: Map<string, string>;
+    };
+    mutable.sessionHelpIdMap = new Map([["sess", "hub"]]);
+    mutable.sessionOriginMap.set("sess", "help");
+    const access = {
+      isAvailable: vi.fn(() => options.available),
+      run: vi.fn(async (toolId: string) => ({
+        ok: true as const,
+        value: toolId === "host.list" ? LISTED : AMBIGUOUS,
+      })),
+    };
+    const deps = fakeDeps({
+      sessionStore: store,
+      requestManifest: vi
+        .fn()
+        .mockResolvedValue([
+          makeManifestEntry("host.list"),
+          makeManifestEntry("host.sendMessage"),
+          makeManifestEntry("terminal.list"),
+        ]),
+      ...(options.access === false ? {} : { hostMessaging: access as never }),
+    });
+    return { deps, access };
+  }
+
+  it("lists them only to the hub, and sends only from the full tier", async () => {
+    const core = hubDeps({ available: true });
+    const coreServer = createSessionServer("sess", core.deps);
+    await coreServer.connect(makeMockTransport());
+    const coreNames = (await listTools(coreServer)).tools.map((t) => t.name);
+    expect(coreNames).toContain("host.list");
+    expect(coreNames).not.toContain("host.sendMessage");
+
+    const full = hubDeps({ available: true, tier: "full" });
+    const fullServer = createSessionServer("sess", full.deps);
+    await fullServer.connect(makeMockTransport());
+    expect((await listTools(fullServer)).tools.map((t) => t.name)).toEqual(
+      expect.arrayContaining(["host.list", "host.sendMessage"])
+    );
+
+    const notHub = hubDeps({ available: false, tier: "full" });
+    const notHubServer = createSessionServer("sess", notHub.deps);
+    await notHubServer.connect(makeMockTransport());
+    const names = (await listTools(notHubServer)).tools.map((t) => t.name);
+    expect(names).toContain("terminal.list");
+    expect(names).not.toContain("host.list");
+    expect(names).not.toContain("host.sendMessage");
+  });
+
+  it("runs in main and returns an ambiguous send as a result, never an error", async () => {
+    const { deps, access } = hubDeps({ available: true, tier: "full" });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const args = { hostId: "studio", projectId: "p", slot: 0, generation: "g", text: "hi" };
+    const result = await callTool(server, { name: "host.sendMessage", arguments: args });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual(AMBIGUOUS);
+    expect(access.run).toHaveBeenCalledWith("host.sendMessage", args);
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses a session with no hub access, whatever admitted it", async () => {
+    const { deps } = hubDeps({ available: true, access: false });
+    const server = createSessionServer("sess", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "host.list", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+});
+
 describe("structuredContent for terminal query actions (#10676)", () => {
   // The three high-value query actions carry `mcpOutputSchema: true`, so the real
   // manifest entry the renderer reports back carries an object-typed outputSchema.

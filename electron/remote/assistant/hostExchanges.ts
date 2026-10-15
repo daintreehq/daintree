@@ -6,7 +6,13 @@ import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionSource } from "../metrics/hostMetricsHost.js";
 import type { AssistantExchangeStore, ExchangeChange } from "../exchange/AssistantExchangeStore.js";
-import type { CreateExchangeInput, ExchangeRecord, SenderActor } from "../exchange/types.js";
+import type {
+  CreateExchangeInput,
+  ExchangeKey,
+  ExchangeRecord,
+  SenderActor,
+} from "../exchange/types.js";
+import { inboxBodyFits, type InboxEnvelope } from "./AssistantInbox.js";
 import type {
   AssistantMessagingPolicy,
   LaneEnrollment,
@@ -16,11 +22,13 @@ import type {
 import {
   AssistantLinkMethod,
   AuthenticatePayloadSchema,
+  MAX_EXCHANGE_RESPONSES,
   ListExchangesPayloadSchema,
   MAX_LISTED_LANES,
   MessageIdPayloadSchema,
   SendPayloadSchema,
   type EnrolledLane,
+  type ExchangeResponse,
 } from "./linkMethods.js";
 
 declare module "../runtime.js" {
@@ -41,6 +49,14 @@ export interface AssistantExchangeHostDeps {
   wake?: (record: ExchangeRecord, enrollment: LaneEnrollment) => void | Promise<void>;
   /** Committed changes to any exchange on this host, whichever store wrote them. */
   onExchangeChanged?: (listener: (change: ExchangeChange) => void) => () => void;
+  /**
+   * Hands a newly accepted exchange's body to its lane's inbox, before any
+   * wake. A throw means the lane can never read it: the exchange is rejected
+   * rather than left waiting for a delivery that can't happen.
+   */
+  admit?: (record: ExchangeRecord, envelope: InboxEnvelope) => void;
+  /** The answers a lane gave an exchange; absent, the host doesn't hand replies back. */
+  responses?: (key: ExchangeKey) => ExchangeResponse[];
 }
 
 /**
@@ -53,6 +69,13 @@ export function senderIdForCredential(credential: string): string {
     .update(`daintree.assistant-sender\0${credential}`, "utf8")
     .digest("hex");
 }
+
+/**
+ * The fixed words two PERMISSION refusals carry, so a Shell can name them
+ * apart from "not enrolled for you" without the host saying more than that.
+ */
+export const LANE_NOT_RUNNING_MESSAGE = "The lane's assistant isn't running";
+export const HOST_MESSAGING_PAUSED_MESSAGE = "Assistant messaging is paused on this host";
 
 function refuseLane(reason: MessagingDenial): AppError {
   switch (reason) {
@@ -70,13 +93,13 @@ function refuseLane(reason: MessagingDenial): AppError {
     case "unavailable":
       return new AppError({
         code: "PERMISSION",
-        message: "The lane's assistant isn't running",
+        message: LANE_NOT_RUNNING_MESSAGE,
         userMessage: "That assistant isn't running on this host.",
       });
     case "paused":
       return new AppError({
         code: "PERMISSION",
-        message: "Assistant messaging is paused on this host",
+        message: HOST_MESSAGING_PAUSED_MESSAGE,
         userMessage: "Assistant messaging is paused on this host.",
       });
     default:
@@ -147,10 +170,42 @@ export function installAssistantExchangeHostWith(
     }
   };
 
-  const wire = ({ session, sessionId }: { session: LinkSession; sessionId: string }): void => {
+  /** False when the lane can never read the exchange, which is then rejected. */
+  const admit = (record: ExchangeRecord, envelope: InboxEnvelope): boolean => {
+    if (!deps.admit) return true;
+    try {
+      deps.admit(record, envelope);
+      return true;
+    } catch (error) {
+      console.warn("[AssistantExchanges] Couldn't hand an exchange to its lane:", error);
+      try {
+        deps.store.setState(
+          { kind: "receiver", ...record.receiver },
+          { senderId: record.senderId, messageId: record.messageId },
+          "rejected",
+          "inbox-refused"
+        );
+      } catch (stateError) {
+        console.warn("[AssistantExchanges] Couldn't record a refused exchange:", stateError);
+      }
+      return false;
+    }
+  };
+
+  const wire = ({
+    session,
+    sessionId,
+    client,
+  }: {
+    session: LinkSession;
+    sessionId: string;
+    client?: { clientName?: string };
+  }): void => {
     if (wired.has(session)) return;
     wired.add(session);
     const shell: MessagingShell = { kind: "remote", linkSessionId: sessionId };
+    // Display data the Shell chose for itself, cleaned by the inbox; never identity.
+    const sendingHost = client?.clientName || "Remote Shell";
 
     session.registerCallHandler(
       AssistantLinkMethod.AUTHENTICATE,
@@ -214,9 +269,28 @@ export function installAssistantExchangeHostWith(
       };
       const admitted = policy.checkLane({ ...check, kind: "admit" });
       if (!admitted.ok) throw refuseLane(admitted.reason);
+      // Refused before anything is recorded: a body the lane could never be handed whole.
+      if (deps.admit && !inboxBodyFits(payload.body)) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "The message is too long for an assistant's inbox",
+        });
+      }
       const result = deps.store.create(sender, input);
-      if (result.disposition === "created")
-        handOff(policy, result.record, { ...check, kind: "wake" });
+      if (result.disposition !== "created") return result;
+      // The hub on the sending Shell is the only lane that can address a host's lanes.
+      const envelope: InboxEnvelope = {
+        body: payload.body,
+        provenance: { sendingHost, sendingLane: "hub", hopCount: 1 },
+      };
+      if (!admit(result.record, envelope)) {
+        const refused = deps.store.get(sender, {
+          senderId: sender.senderId,
+          messageId: payload.messageId,
+        });
+        return refused ? { ...result, record: refused } : result;
+      }
+      handOff(policy, result.record, { ...check, kind: "wake" });
       return result;
     });
 
@@ -233,6 +307,19 @@ export function installAssistantExchangeHostWith(
       AssistantLinkMethod.LIST_EXCHANGES,
       ListExchangesPayloadSchema,
       ({ cursor, limit }) => deps.store.listChangesSince(requireSender(session), cursor, limit)
+    );
+
+    session.registerCallHandler(
+      AssistantLinkMethod.GET_RESPONSES,
+      MessageIdPayloadSchema,
+      ({ messageId }) => {
+        const sender = requireSender(session);
+        if (!deps.responses) throw unsupported();
+        // Only an exchange this sender owns; another's reads as having none.
+        const key = { senderId: sender.senderId, messageId };
+        if (deps.store.get(sender, key) === null) return { responses: [] };
+        return { responses: deps.responses(key).slice(-MAX_EXCHANGE_RESPONSES) };
+      }
     );
 
     session.registerCallHandler(
@@ -289,10 +376,12 @@ export async function installAssistantExchangeHost(
     { getSharedSqlite },
     { AssistantExchangeStore, onExchangeChanged },
     { getRemoteService, registerRemoteService },
+    { exchangeWakeSink },
   ] = await Promise.all([
     import("../../services/persistence/db.js"),
     import("../exchange/AssistantExchangeStore.js"),
     import("../runtime.js"),
+    import("../exchange/wakeSink.js"),
   ]);
   const sqlite = getSharedSqlite();
   if (!sqlite) {
@@ -313,10 +402,31 @@ export async function installAssistantExchangeHost(
   const timer = setInterval(sweep, SWEEP_INTERVAL_MS);
   timer.unref?.();
   const unregister = registerRemoteService("assistantExchangeStore", store);
+  // The inbox and the waker come with the messaging policy, read at each
+  // call; without them an exchange waits as submitted, as availability allows.
   const unwire = installAssistantExchangeHostWith(server, {
     policy: () => getRemoteService("assistantMessagingPolicy"),
     store,
     onExchangeChanged,
+    admit: (record, envelope) => {
+      const runtime = getRemoteService("assistantMessagingRuntime");
+      if (!runtime) throw unsupported();
+      runtime.admit(record, envelope);
+    },
+    wake: (record, enrollment) => {
+      getRemoteService("assistantLaneWaker")?.wake({
+        lane: { projectId: enrollment.projectId, slot: enrollment.slot },
+        generation: record.receiver.enrollmentGeneration,
+        shell: enrollment.enrolledBy,
+        exchangeId: record.taskId,
+        sink: exchangeWakeSink(
+          store,
+          { kind: "receiver", ...record.receiver },
+          { senderId: record.senderId, messageId: record.messageId }
+        ),
+      });
+    },
+    responses: (key) => getRemoteService("assistantMessagingRuntime")?.getResponses(key) ?? [],
   });
   return () => {
     clearInterval(timer);
