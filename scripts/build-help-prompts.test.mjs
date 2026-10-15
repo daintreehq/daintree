@@ -291,11 +291,21 @@ describe("help prompt outputs", () => {
 
     // A help session supervising a queue ran four wake mechanisms at once.
     // The recipe moved to the runbooks; the pacing rule stays in the prompt.
-    it("CLAUDE.md keeps one pacing mechanism and no long blocking call", () => {
+    // A notice alone once left an assistant idle for an hour after its agents
+    // finished, so it pairs with exactly one polling backstop.
+    it("CLAUDE.md pairs notices with one backstop and no long blocking call", () => {
       const watching = section(CLAUDE, "## Watching Agent Terminals");
       expect(watching).toMatch(/Never hold a long blocking call open/);
-      expect(watching).toMatch(/one pacing mechanism at a time/);
       expect(watching).toMatch(/`notify: true`/);
+      expect(watching).toMatch(/one `ScheduleWakeup` backstop/);
+      expect(watching).toMatch(/A notice can be missed/);
+      expect(watching).toMatch(/no other pacing/);
+    });
+
+    it.each(ALL_GENERATED)("%s never treats a notice as guaranteed", (_name, body) => {
+      expect(body).toMatch(/A notice is fast but can be missed/);
+      expect(body).not.toMatch(/The reply is always sent/);
+      expect(body).not.toMatch(/nor wait or poll/);
     });
 
     // Codex has no ScheduleWakeup and no Claude harness, so the Claude pacing
