@@ -134,6 +134,11 @@ const START_REFUSALS: Record<
     detail:
       "The assistant couldn't be started there. The host's window for that project may say why.",
   },
+  "agent-error": {
+    code: "lane_unavailable",
+    detail:
+      "The assistant opened, but its agent CLI answered with an error, such as not being signed in on that host. It was left open, unenrolled, for the person to see in that host's window; while it runs, that project can't start a different agent CLI.",
+  },
   "timed-out": {
     code: "lane_unavailable",
     detail:

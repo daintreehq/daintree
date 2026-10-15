@@ -1047,6 +1047,32 @@ describe("help.launchAgent", () => {
       );
     });
 
+    it("joins the agent main kept for the lane when the view came up cold (#13392)", async () => {
+      // A host's background view after the host restarted: nothing running and
+      // nothing in the view's own store, so only main knows what the lane ran.
+      const kept: Record<number, string> = { 0: "codex" };
+      Object.assign(window.electron.help, {
+        listPendingHibernationSlots: vi.fn().mockResolvedValue([0]),
+        peekPendingHibernation: vi.fn(async (_projectId: string, slot: number) =>
+          kept[slot] ? { agentId: kept[slot], agentSessionId: "s", cwd: "/repo" } : null
+        ),
+      });
+
+      await action.run(undefined, stubCtx);
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "codex", slot: 0 })
+      );
+
+      // The same rule as a hibernated sibling: only while the assistant can run it.
+      kept[0] = "gemini";
+      useHelpPanelStore.setState(useHelpPanelStore.getInitialState(), true);
+      vi.mocked(window.electron.help.provisionSession).mockClear();
+      await action.run(undefined, stubCtx);
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "claude", slot: 0 })
+      );
+    });
+
     it("keeps an explicit agent even when a sibling runs a different one", async () => {
       useHelpPanelStore.getState().setTerminal(0, "term-live", "codex", "sess-live");
 

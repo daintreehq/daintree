@@ -148,6 +148,40 @@ function siblingLaneAgentId(
 }
 
 /**
+ * The agents main kept to resume this workspace's lanes, by slot. A view that
+ * came up cold has none of them in its store (a host's background view after
+ * the host restarted), and its default can be a CLI that machine never runs,
+ * started in the very folder the project's assistant used.
+ */
+async function readKeptLaneAgents(workspaceId: string): Promise<Map<number, string>> {
+  const kept = new Map<number, string>();
+  const help = window.electron.help;
+  try {
+    for (const slot of (await help.listPendingHibernationSlots?.(workspaceId)) ?? []) {
+      const entry = await help.peekPendingHibernation?.(workspaceId, slot);
+      if (entry?.agentId) kept.set(slot, entry.agentId);
+    }
+  } catch (err) {
+    logError("Couldn't read the agents kept for this project's assistant lanes", err);
+  }
+  return kept;
+}
+
+/** The lane's own kept agent, else another lane's: like a hibernated sibling's, only one the assistant can still run. */
+function keptLaneAgentId(
+  kept: ReadonlyMap<number, string>,
+  slot: number,
+  canLaunch: (agentId: string) => boolean
+): string | null {
+  const own = kept.get(slot);
+  if (own && canLaunch(own)) return own;
+  for (const [other, agentId] of kept) {
+    if (other !== slot && canLaunch(agentId)) return agentId;
+  }
+  return null;
+}
+
+/**
  * Backstop for a picked resume's lane claim when its launch never settles —
  * longer than the controller's own launch watchdog, which reaps a hung launch
  * first, so the claim never lapses under a launch that is still running.
@@ -546,6 +580,11 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       // kills whatever a lane was running, so a busy tab is never a target: the
       // help agent opens beside it instead (#13192).
       await helpPanelRuntimeReady;
+      // Read before a lane is chosen and claimed: nothing is awaited between the
+      // claim and the provision, so no other launch can take the lane meanwhile.
+      const keptAgents = parsed?.agentId
+        ? new Map<number, string>()
+        : await readKeptLaneAgents(workspace.id);
       const panelState = useHelpPanelStore.getState();
       const lane =
         parsed?.slot === undefined
@@ -579,7 +618,10 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           const canLaunch = (id: string) =>
             wired.includes(id) &&
             (!isInitialized || !isBuiltInAgentId(id) || isAgentLaunchable(availability[id]));
-          agentId = siblingLaneAgentId(panelState, workspace.id, targetSlot, canLaunch) ?? agentId;
+          agentId =
+            siblingLaneAgentId(panelState, workspace.id, targetSlot, canLaunch) ??
+            keptLaneAgentId(keptAgents, targetSlot, canLaunch) ??
+            agentId;
         }
 
         try {

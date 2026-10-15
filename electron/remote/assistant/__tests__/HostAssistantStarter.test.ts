@@ -23,7 +23,16 @@ const trustScreen = (folder: string) =>
     "   Yes, I trust this folder",
     " Enter to confirm · Esc to cancel",
   ].join("\n");
-const READY_SCREEN = "Hi! How can I help?\n❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)";
+const GREETING_ROWS = [
+  "❯ Daintree started you for the hub assistant on",
+  "  another machine, to carry out its requests on",
+  "  this machine. Nothing to do yet: reply with one",
+  "  short sentence saying you're ready.",
+];
+const PROMPT_ROWS = ["❯ ", "  ⏵⏵ bypass permissions on (shift+tab to cycle)"];
+const screenWith = (...answer: string[]) =>
+  [...GREETING_ROWS, "", ...answer, "", ...PROMPT_ROWS].join("\n");
+const READY_SCREEN = screenWith("⏺ Ready to carry out the hub's requests here.");
 
 describe("HostAssistantStarter", () => {
   let clock: number;
@@ -285,6 +294,81 @@ describe("HostAssistantStarter", () => {
     await expect(starter.start(HOST, PROJECT, { authorized })).resolves.toEqual({
       status: "refused",
       reason: "launch-failed",
+    });
+  });
+
+  it("refuses an assistant whose CLI answers its greeting with its own failure, and enrolls nothing", async () => {
+    for (const answer of [
+      ["⏺ Login expired · Please run /login"],
+      [
+        "⏺ API Error: Request rejected (429) ·",
+        "  [1113][Insufficient balance or no",
+        "  resource package. Please recharge.]",
+      ],
+      ["■ unexpected status 401 Unauthorized: Missing bearer"],
+      ["■ Your access token could not be refreshed.", "  Please log out and sign in again."],
+      ["⎿ You've hit your limit · resets 10am (Asia/Manila)"],
+      ["⏺ You're out of extra usage · resets 6:40pm"],
+    ]) {
+      screens = [screenWith(...answer)];
+      await expect(starter.start(HOST, PROJECT, { authorized })).resolves.toEqual({
+        status: "refused",
+        reason: "agent-error",
+      });
+    }
+    expect(calls.some((call) => call.startsWith("enroll"))).toBe(false);
+  });
+
+  it("never reads the model's words or a tool's output as the CLI failing", async () => {
+    screens = [screenWith("⏺ Ready; I can help diagnose an API error or a login expired message.")];
+    await expect(starter.start(HOST, PROJECT, { authorized })).resolves.toMatchObject({
+      status: "ready",
+    });
+    expect(clock).toBeLessThan(5_000);
+
+    // A tool's output says nothing about the CLI, even in the CLI's own words.
+    screens = [
+      screenWith(
+        "⏺ Bash(check-service)",
+        "  ⎿  API Error: Request rejected (429)",
+        "⏺ Ready to carry out the hub's requests."
+      ),
+    ];
+    clock = 0;
+    await expect(
+      starter.start(HOST, PROJECT, { startNew: true, authorized })
+    ).resolves.toMatchObject({ status: "ready" });
+    expect(clock).toBeLessThan(5_000);
+
+    // Nor is a tool call the answer, an MCP one included, so it waits out the greeting time.
+    screens = [screenWith("⏺ daintree - list_projects (MCP)({})", "  ⎿  Unauthorized")];
+    clock = 0;
+    await expect(
+      starter.start(HOST, PROJECT, { startNew: true, authorized })
+    ).resolves.toMatchObject({ status: "ready" });
+    expect(clock).toBeGreaterThanOrEqual(20_000);
+  });
+
+  it("reads only the answer under the greeting, and waits a while for one that's slow", async () => {
+    // Another MCP server's failure is not the assistant's answer, above the greeting or under it.
+    screens = [
+      ["■ MCP client for `notes` failed: not logged in", "", screenWith()].join("\n"),
+      screenWith("• Working (3s • esc to interrupt)"),
+      screenWith("■ MCP client for `notes` failed: not logged in"),
+    ];
+    await expect(starter.start(HOST, PROJECT, { authorized })).resolves.toMatchObject({
+      status: "ready",
+      started: true,
+    });
+    expect(clock).toBeGreaterThanOrEqual(20_000);
+    expect(clock).toBeLessThan(45_000);
+  });
+
+  it("is ready only if the latest screen is at the prompt, not one seen before a question came up", async () => {
+    screens = [[...GREETING_ROWS, "", ...PROMPT_ROWS].join("\n"), trustScreen(SESSION_FOLDER)];
+    await expect(starter.start(HOST, PROJECT, { authorized })).resolves.toEqual({
+      status: "refused",
+      reason: "timed-out",
     });
   });
 

@@ -46,6 +46,7 @@ export type HostStartRefusal =
   | "busy"
   | "driven-elsewhere"
   | "launch-failed"
+  | "agent-error"
   | "not-enrolled"
   | "timed-out";
 
@@ -75,6 +76,8 @@ export interface HostStartOptions {
 const POLL_MS = 1_000;
 /** How long a new assistant gets to open its prompt, its trust question answered on the way. */
 const READY_WAIT_MS = 45_000;
+/** How long, once its prompt is up, a new assistant gets to answer its greeting. */
+const GREETING_WAIT_MS = 20_000;
 /** How long a hidden view gets to take the project's drive lease once it has loaded. */
 const DRIVE_WAIT_MS = 10_000;
 const SCREEN_LINES = 40;
@@ -98,6 +101,29 @@ const TRUST_ANSWERS: Readonly<Record<string, { question: RegExp; answer: string 
 /** What a CLI's footer shows once it's at its own prompt, ready for input. */
 const READY_MARKERS =
   /\? for shortcuts|bypass permissions|⏵⏵|context left|Ask Codex to do anything/;
+
+/** The greeting's first row as the CLI echoes it, behind its prompt glyph. */
+const GREETING_ROW = /^\s*[❯›>]\s*Daintree started you\b/;
+/** A row Claude Code (⏺) or Codex (•) starts its answer on. */
+const ANSWER_ROW = /^\s*[⏺•]\s*\S/;
+/** A tool call or progress line, drawn with the same glyphs as an answer but not one. */
+const TOOL_ROW =
+  /^\s*[⏺•]\s*(?:[A-Za-z][\w.:-]*\(|(?:Explored|Exploring|Ran|Running|Called|Calling|Edited|Editing|Read|Reading|Searched|Searching|Waited|Waiting|Working|Thinking)\b)|\(MCP\)|esc to interrupt/;
+/** Claude Code's ⎿ row: a tool's output under its call, or the CLI's own note under a prompt. */
+const RESULT_ROW = /^\s*⎿/;
+/**
+ * Claude Code's own diagnostic in place of an answer, never the model's prose:
+ * the row starts with it ("⏺ Login expired · Please run /login",
+ * "⏺ API Error: Request rejected (429) · …", "⎿ You've hit your limit · resets 10am").
+ */
+const CLAUDE_FAILURE =
+  /^\s*[⏺⎿]\s*(?:API Error\b|Login expired\b|Not logged in\b|Invalid API key\b|Credit balance is too low\b|OAuth (?:token|authentication)\b|Please run \/login\b|You(?:'|’)ve hit your (?:[\w-]+ )?limit\b|You(?:'|’)re out of (?:extra )?usage\b|(?:\d+-hour|Session|Weekly) limit reached\b)/i;
+/**
+ * Codex draws its own errors on ■ rows; these say it can't reach its model at
+ * all. Another MCP server failing to start says nothing about Codex itself.
+ */
+const CODEX_FAILURE =
+  /^\s*■(?!.*\bMCP\b).*\b(?:sign(?:ed)? in|log(?:ged)? ?in|unauthori[sz]ed|401|403|access token|api key|usage limit|quota|insufficient|credits?|balance)\b/i;
 
 interface LaunchedLane {
   slot: number;
@@ -143,6 +169,30 @@ function namesFolder(screen: string, folder: string): boolean {
 function atPrompt(screen: string): boolean {
   const lines = screen.split("\n").filter((line) => line.trim().length > 0);
   return READY_MARKERS.test(lines.slice(-8).join("\n"));
+}
+
+/**
+ * How the new assistant answered its greeting, read from the rows under the
+ * greeting: an answer, a CLI that couldn't answer at all, or nothing yet.
+ * Rows above the greeting (a banner, another server's startup error) never count.
+ */
+function greetingAnswer(screen: string): "answered" | "failed" | null {
+  const rows = screen.split("\n");
+  let greeting = -1;
+  for (let index = rows.length - 1; index >= 0 && greeting < 0; index--) {
+    if (GREETING_ROW.test(rows[index]!)) greeting = index;
+  }
+  if (greeting < 0) return null;
+  let answered = false;
+  // Under a tool call, a ⎿ row is that tool's output, whatever it says.
+  let underTool = false;
+  for (const row of rows.slice(greeting + 1)) {
+    if (ANSWER_ROW.test(row)) underTool = TOOL_ROW.test(row);
+    const cliOwn = !RESULT_ROW.test(row) || !underTool;
+    if ((cliOwn && CLAUDE_FAILURE.test(row)) || CODEX_FAILURE.test(row)) return "failed";
+    if (ANSWER_ROW.test(row) && !underTool) answered = true;
+  }
+  return answered ? "answered" : null;
 }
 
 const refused = (reason: HostStartRefusal): HostStartResult => ({ status: "refused", reason });
@@ -346,18 +396,27 @@ export class HostAssistantStarter {
     }
   }
 
-  /** Until the new assistant is at its prompt, answering only its own folder-trust question. */
+  /**
+   * Until the new assistant has answered its greeting, answering only its own
+   * folder-trust question. A CLI that answers with a failure (signed out, its
+   * account refused) is no assistant to hand work to; one at its prompt that
+   * hasn't answered yet is given the benefit of the doubt once its time is up.
+   */
   private async untilReady(
     hostId: HostId,
     wc: number,
     projectId: string,
     lane: LaunchedLane,
     authorized: () => boolean
-  ): Promise<"ready" | "timed-out" | "consent-withdrawn"> {
+  ): Promise<"ready" | "timed-out" | "agent-error" | "consent-withdrawn"> {
     const trust = TRUST_ANSWERS[lane.agentId];
     const deadline = this.now() + READY_WAIT_MS;
+    let promptAt: number | null = null;
+    // Ready is what the latest screen shows, never one seen earlier.
+    let atPromptNow = false;
     while (this.now() < deadline) {
       const screen = await this.screen(hostId, wc, projectId, lane.terminalId);
+      atPromptNow = false;
       if (screen !== null) {
         if (trust && trust.question.test(screen) && namesFolder(screen, lane.cwd)) {
           if (!authorized()) return "consent-withdrawn";
@@ -365,13 +424,19 @@ export class HostAssistantStarter {
             terminalId: lane.terminalId,
             choose: trust.answer,
           });
-        } else if (atPrompt(screen)) {
-          return "ready";
+        } else {
+          const answer = greetingAnswer(screen);
+          if (answer === "failed") return "agent-error";
+          if (atPrompt(screen)) {
+            atPromptNow = true;
+            promptAt ??= this.now();
+            if (answer === "answered" || this.now() - promptAt >= GREETING_WAIT_MS) return "ready";
+          }
         }
       }
       await this.sleep(POLL_MS);
     }
-    return "timed-out";
+    return atPromptNow ? "ready" : "timed-out";
   }
 
   /**

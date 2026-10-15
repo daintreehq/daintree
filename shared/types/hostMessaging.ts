@@ -288,7 +288,7 @@ export const HostStartAssistantArgsSchema = z.object({
     .max(64)
     .optional()
     .describe(
-      "The agent CLI to run. Omit for the host's default; a project's assistants share one."
+      "Agent CLI to run; omit to reuse the project's own, else the default. One per project."
     ),
   startNew: z
     .boolean()
