@@ -5,10 +5,10 @@ import { pluralize } from "@/lib/pluralize";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatBytes } from "@/lib/formatBytes";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { Circle, CircleDashed } from "lucide-react";
 import { HollowCircle, SpinnerCircle } from "@/components/icons";
-import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
+import { LinkMark } from "@/components/Hosts/LinkMark";
+import { HostNameText } from "@/components/Hosts/HostNameText";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { LazyHostSparkline } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
@@ -19,8 +19,6 @@ import {
   hostChipStatus,
   hostChipStatusText,
   hostLinkTone,
-  splitHostName,
-  type HostLinkTone,
   type HostMenuRow,
 } from "@/components/Hosts/hostModel";
 
@@ -53,46 +51,16 @@ export function HostSwitcherHeader() {
   );
 }
 
-const WarningGlyph = SEVERITY_GLYPH.warning;
-
-/**
- * Filled while the link is up, hollow while it isn't, dashed while it's being
- * dialled, and the warning triangle where the link needs a look: shape carries
- * the state, not colour. Lucide strokes in `currentColor`, which forced colours
- * repaint rather than erase.
- */
-function LinkMark({ tone }: { tone: HostLinkTone }) {
-  const Glyph = tone === "attention" ? WarningGlyph : tone === "connecting" ? CircleDashed : Circle;
-  return (
-    <span className="flex h-5 w-3 shrink-0 items-center justify-center" aria-hidden="true">
-      <Glyph
-        data-link-tone={tone}
-        strokeWidth={tone === "attention" ? 2 : 2.5}
-        className={cn(
-          tone === "attention" ? "h-3 w-3 text-status-warning" : "h-2.5 w-2.5",
-          tone === "live" && "fill-current text-text-primary",
-          (tone === "offline" || tone === "connecting") && "text-text-secondary"
-        )}
-      />
-    </span>
-  );
-}
-
 /** The host's own name with its distinguishing tail kept whole when it has to clip. */
 function HostName({ name, dim }: { name: string; dim: boolean }) {
-  const { nameHead, nameTail, nameDomain } = splitHostName(name);
   return (
-    <span
+    <HostNameText
+      name={name}
       className={cn(
-        "flex min-w-0 text-sm font-medium",
+        "text-sm font-medium",
         dim ? "text-text-secondary group-aria-selected:text-text-primary" : "text-text-primary"
       )}
-      title={name}
-    >
-      {nameHead && <span className="min-w-0 truncate">{nameHead}</span>}
-      <span className="shrink-0 whitespace-pre">{nameTail}</span>
-      {nameDomain && <span className="min-w-0 truncate">{nameDomain}</span>}
-    </span>
+    />
   );
 }
 

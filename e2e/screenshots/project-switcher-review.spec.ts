@@ -5,7 +5,11 @@
  * from fixtures — and writes one PNG per state per theme: browse, the anchored
  * dropdown, search, no match, empty, folded bands, plus the three layered states
  * a pointer opens on top of browse (a row's context menu, the Other band's sort
- * menu and a scratch's inline rename).
+ * menu and a scratch's inline rename). A second test draws the "Other hosts"
+ * band at 2x: hosts never connected, one connected beside three that aren't,
+ * every listing state at once, the link states on the way to a list, the
+ * cursor on each kind of row, and searches only another host answers — by a
+ * project, and by the host's own name.
  *
  *   DAINTREE_SHOT_PROJECTSWITCHER=1 DAINTREE_SHOT_DIR=/abs/out \
  *     ./node_modules/.bin/playwright test --project=screenshots project-switcher-review
@@ -17,7 +21,8 @@
  *   DAINTREE_SHOT_ONLY             comma-separated state filter
  *
  * Output: <state>--<theme>.png. A frame is written only after its state is
- * verified, and the run counts the files on disk against the plan.
+ * verified, and the run counts the files on disk against the plan. The band's
+ * states are named `hosts-*`, so `DAINTREE_SHOT_ONLY` picks them like any other.
  */
 
 import { test, expect, type Locator, type Page } from "@playwright/test";
@@ -206,6 +211,94 @@ const STATES: State[] = [
   },
 ];
 
+interface HostsState {
+  slug: string;
+  hosts: "offline" | "mixed" | "rich" | "edge" | "search";
+  fixture: string;
+  /** How many rows of each kind the band must draw before the frame is taken. */
+  rows: { project: number; connect: number; retry: number; host?: number };
+  /** Moves the cursor onto a band row, or leaves it where the palette put it. */
+  enter?: (page: Page) => Promise<void>;
+}
+
+const band = (page: Page) => page.getByTestId("project-switcher-other-hosts");
+
+const HOSTS_STATES: HostsState[] = [
+  {
+    slug: "hosts-offline",
+    hosts: "offline",
+    fixture: "browse",
+    rows: { project: 0, connect: 4, retry: 0 },
+  },
+  {
+    slug: "hosts-mixed",
+    hosts: "mixed",
+    fixture: "browse",
+    rows: { project: 2, connect: 3, retry: 0 },
+  },
+  {
+    slug: "hosts-rich",
+    hosts: "rich",
+    fixture: "browse",
+    rows: { project: 8, connect: 1, retry: 2 },
+  },
+  {
+    slug: "hosts-edge",
+    hosts: "edge",
+    fixture: "browse",
+    rows: { project: 0, connect: 2, retry: 1, host: 1 },
+  },
+  {
+    slug: "hosts-cursor-connect",
+    hosts: "mixed",
+    fixture: "browse",
+    rows: { project: 2, connect: 3, retry: 0 },
+    enter: async (page) => {
+      const row = band(page).locator('[data-option-kind="connect"]').first();
+      await row.hover();
+      await expect(row).toHaveAttribute("aria-selected", "true");
+    },
+  },
+  {
+    slug: "hosts-cursor-project",
+    hosts: "mixed",
+    fixture: "browse",
+    rows: { project: 2, connect: 3, retry: 0 },
+    enter: async (page) => {
+      const row = band(page).locator('[data-option-kind="project"]').first();
+      await row.hover();
+      await expect(row).toHaveAttribute("aria-selected", "true");
+    },
+  },
+  {
+    slug: "hosts-search-host",
+    hosts: "search",
+    fixture: "hosts-search-host",
+    rows: { project: 0, connect: 1, retry: 0 },
+    enter: async (page) => {
+      // Only a host matched: its own row takes Enter, and no "nothing matched" sits above it.
+      await expect(band(page).locator('[data-option-kind="connect"]')).toHaveAttribute(
+        "aria-selected",
+        "true"
+      );
+      await expect(page.getByTestId("project-empty-state")).toHaveCount(0);
+    },
+  },
+  {
+    slug: "hosts-search",
+    hosts: "search",
+    fixture: "hosts-search",
+    rows: { project: 1, connect: 0, retry: 0 },
+    enter: async (page) => {
+      // Nothing local matched, so the other host's project is what Enter opens.
+      await expect(band(page).locator('[data-option-kind="project"]').first()).toHaveAttribute(
+        "aria-selected",
+        "true"
+      );
+    },
+  },
+];
+
 let server: PreviewServer | undefined;
 
 test.beforeAll(async () => {
@@ -219,7 +312,8 @@ test.beforeAll(async () => {
   if (outReal === repoRoot || outReal.startsWith(repoRoot + path.sep)) {
     throw new Error(`DAINTREE_SHOT_DIR must be outside the repo (${OUT_DIR})`);
   }
-  const owned = new RegExp(`^(?:${STATES.map((s) => s.slug).join("|")})--.+\\.png$`);
+  const slugs = [...STATES, ...HOSTS_STATES].map((s) => s.slug);
+  const owned = new RegExp(`^(?:${slugs.join("|")})--.+\\.png$`);
   for (const file of readdirSync(OUT_DIR)) {
     if (owned.test(file)) rmSync(path.join(OUT_DIR, file));
   }
@@ -240,8 +334,10 @@ const POLISH_CSS = `
   }
 `;
 
-async function load(page: Page, fixture: string, theme: string): Promise<void> {
-  const url = `${server!.baseURL}/project-switcher-preview.html?state=${fixture}&theme=${theme}`;
+async function load(page: Page, fixture: string, theme: string, hosts?: string): Promise<void> {
+  const url =
+    `${server!.baseURL}/project-switcher-preview.html?state=${fixture}&theme=${theme}` +
+    (hosts ? `&hosts=${hosts}` : "");
   // The optimizer can re-bundle after the first page opens and reload it into a
   // blank document; one fresh navigation after a quiet wait gets past it.
   for (let attempt = 0; ; attempt++) {
@@ -320,4 +416,53 @@ test("project switcher — every state", async ({ page }) => {
   if (written.length !== expected || missing.length > 0) {
     throw new Error(`wrote ${written.length}/${expected}, missing ${missing.join(", ")}`);
   }
+});
+
+test.describe("other hosts band", () => {
+  // The band's type is 10-14px; at 1x a reviewer is judging antialiasing.
+  test.use({ deviceScaleFactor: 2 });
+
+  test("other hosts band — every state", async ({ page }) => {
+    test.info().annotations.push({
+      type: "conditional-skip",
+      description: "DAINTREE_SHOT_PROJECTSWITCHER is required for the project switcher capture",
+    });
+    test.skip(!ENABLED, "set DAINTREE_SHOT_PROJECTSWITCHER=1 to run the capture");
+    test.setTimeout(900_000);
+
+    await stubViteHmrClient(page);
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    page.setDefaultTimeout(30_000);
+    page.on("pageerror", (error) => console.log(`[other-hosts] pageerror: ${error.message}`));
+
+    const states = HOSTS_STATES.filter((s) => !ONLY || ONLY.includes(s.slug));
+    const written: string[] = [];
+
+    for (const theme of THEMES) {
+      for (const state of states) {
+        await load(page, state.fixture, theme, state.hosts);
+        const section = band(page);
+        await expect(section).toBeVisible();
+        for (const [kind, count] of Object.entries(state.rows)) {
+          await expect(section.locator(`[role="option"][data-option-kind="${kind}"]`)).toHaveCount(
+            count
+          );
+        }
+        await section.evaluate((el) => el.scrollIntoView({ block: "end" }));
+        await state.enter?.(page);
+        // Also lets a connected host, asked again as the palette opened, answer.
+        await page.waitForTimeout(250); // e2e-wait: ok — relist, scroll and highlight settle
+        const out = path.join(OUT_DIR, `${state.slug}--${theme}.png`);
+        await page.screenshot({ path: out, clip: await frame(page) });
+        written.push(out);
+      }
+    }
+
+    const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
+    const expected = states.length * THEMES.length;
+    const missing = written.filter((f) => !onDisk.includes(path.basename(f)));
+    if (written.length !== expected || missing.length > 0) {
+      throw new Error(`wrote ${written.length}/${expected}, missing ${missing.join(", ")}`);
+    }
+  });
 });
