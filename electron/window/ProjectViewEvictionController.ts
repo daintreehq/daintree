@@ -138,6 +138,22 @@ export function hasLiveAssistantBackend(
 }
 
 /**
+ * The active-agent rank of a cached view. A view of a host's project is asked
+ * of its host (#13359): its agents run there, so this machine's agent-state
+ * cache never sees them, and without the host's answer every such view ranked
+ * as the cheapest to evict.
+ */
+function viewHasActiveAgent(
+  host: ProjectViewManager,
+  projectId: string,
+  entry: ViewEntry
+): boolean {
+  if (isLocalViewKey(projectId)) return hasActiveAgent(host, projectId);
+  const wc = entry.view.webContents;
+  return !wc.isDestroyed() && host.remoteAgentActive?.(wc.id) === true;
+}
+
+/**
  * Evict a cached view whose renderer is already gone (OS memory eviction or
  * crash) instead of reloading it in the background. Deferred one tick like
  * the reload branches; re-checks state at run time — if the view was
@@ -162,7 +178,7 @@ export function evictDeadView(
       projectId,
       reason: trigger,
       ageMs: Date.now() - entry.lastUsed,
-      activeAgent: hasActiveAgent(host, projectId),
+      activeAgent: viewHasActiveAgent(host, projectId, entry),
     });
     host.evictionTimestamps.set(projectId, Date.now());
     cleanupEntry(host, projectId);
@@ -462,7 +478,7 @@ export function evictStaleViews(
   const residentGranted: EvictionCandidate[] = [];
   const assistantProtected: EvictionCandidate[] = [];
   for (const [projectId, entry] of evictable) {
-    const activeAgent = hasActiveAgent(host, projectId);
+    const activeAgent = viewHasActiveAgent(host, projectId, entry);
     const mcp = host.mcpActivityFor(projectId, entry.view.webContents);
     // `unknown` (the activity callback threw) deprioritizes but never protects:
     // it must not reach the exclusion set above, or one broken callback would

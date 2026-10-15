@@ -1139,6 +1139,13 @@ export class RemoteHostsClient {
     return this.options.manager.get(hostId)?.hasLiveAssistant(webContentsId) === true;
   }
 
+  /** Whether the view's host says an agent in its project is active there. */
+  viewHasActiveAgent(webContentsId: number): boolean {
+    const hostId = this.viewHost(webContentsId);
+    if (isLocalHostId(hostId)) return false;
+    return this.options.manager.get(hostId)?.hasActiveAgent(webContentsId) === true;
+  }
+
   /** A view's host: a project view's is in its key, and a view with no project follows its window. */
   viewHost(webContentsId: number): HostId {
     const key = this.options.senders.projectKeyFor(webContentsId);

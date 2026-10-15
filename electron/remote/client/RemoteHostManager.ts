@@ -20,6 +20,7 @@ import {
 } from "../link/messages.js";
 import type { LinkSession, LinkSessionOptions } from "../link/session.js";
 import {
+  EndpointAgentActivityPayloadSchema,
   EndpointAssistantPayloadSchema,
   EndpointResyncPayloadSchema,
   HostInfoSchema,
@@ -179,6 +180,13 @@ export class HostConnection {
    * would follow.
    */
   private readonly liveAssistants = new Set<number>();
+  /**
+   * Views the host says have an agent working, waiting or directing in their
+   * project there (#13359), so eviction ranks them with this machine's own
+   * active-agent views. Kept through a dropped link like `liveAssistants`: the
+   * agents run on regardless, and a resumed session repeats every answer.
+   */
+  private readonly activeAgentViews = new Set<number>();
   private readonly readyWaiters = new Set<() => void>();
   private info: HostInfo | null = null;
   private started = false;
@@ -551,6 +559,11 @@ export class HostConnection {
     return this.liveAssistants.has(webContentsId) && this.endpoints.has(webContentsId);
   }
 
+  /** Whether the host last said an agent in this view's project is active there. */
+  hasActiveAgent(webContentsId: number): boolean {
+    return this.activeAgentViews.has(webContentsId) && this.endpoints.has(webContentsId);
+  }
+
   /** The view now belongs to another host (or this machine): close its endpoint here. */
   retireView(webContentsId: number): void {
     this.closeEndpoint(webContentsId, "view-moved");
@@ -603,6 +616,21 @@ export class HostConnection {
           if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
           if (live) this.liveAssistants.add(webContentsId);
           else this.liveAssistants.delete(webContentsId);
+        }
+        return null;
+      }
+    );
+    session.registerCallHandler(
+      LinkMethod.ENDPOINT_AGENT_ACTIVITY,
+      EndpointAgentActivityPayloadSchema,
+      ({ endpoints }) => {
+        for (const { endpointId, projectId, active } of endpoints) {
+          const webContentsId = this.viewsByEndpoint.get(endpointId);
+          if (webContentsId === undefined) continue;
+          // Said about a binding the view has since left.
+          if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
+          if (active) this.activeAgentViews.add(webContentsId);
+          else this.activeAgentViews.delete(webContentsId);
         }
         return null;
       }
@@ -671,6 +699,8 @@ export class HostConnection {
         open.projectId = projectId;
         // The host revokes the old project's assistant when the endpoint moves.
         this.liveAssistants.delete(webContentsId);
+        // The old project's agents say nothing about the new one's.
+        this.activeAgentViews.delete(webContentsId);
       }
       return open.endpointId;
     }
@@ -709,6 +739,7 @@ export class HostConnection {
     this.endpoints.delete(webContentsId);
     this.viewsByEndpoint.delete(open.endpointId);
     this.liveAssistants.delete(webContentsId);
+    this.activeAgentViews.delete(webContentsId);
     const posted = this.postClose(this.session, open.endpointId);
     if (!posted) this.pendingCloses.add(open.endpointId);
     this.logEndpointClosed(webContentsId, open, cause, { closeQueued: !posted });
@@ -788,6 +819,7 @@ export class HostConnection {
     this.endpoints.clear();
     this.viewsByEndpoint.clear();
     this.liveAssistants.clear();
+    this.activeAgentViews.clear();
   }
 
   /**

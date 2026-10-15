@@ -23,6 +23,7 @@ import {
   EmptyPayloadSchema,
   LinkMethod,
   MAX_LISTED_PROJECTS,
+  type EndpointAgentActivityPayload,
   type EndpointAssistantPayload,
   type EndpointResyncPayload,
   type EndpointResyncReason,
@@ -87,6 +88,14 @@ export interface SessionHostOptions {
    * Read synchronously on every refresh; absent, every endpoint reads as having none.
    */
   assistantLive?: (endpoint: RemoteViewEndpoint) => boolean;
+  /**
+   * Whether an agent in this endpoint's project is working, waiting or
+   * directing, by this host's own agent state. Grid agents run here, so the
+   * Shell can only rank the view with its own active-agent views if this host
+   * tells it (#13359). Read synchronously on every refresh; absent, every
+   * endpoint reads as having none.
+   */
+  agentActive?: (endpoint: RemoteViewEndpoint) => boolean;
   describeProject?: (projectId: string) => ProjectDescription | null;
   listProjects?: () => HostProjectList;
   eventsHighWaterBytes?: number;
@@ -118,10 +127,18 @@ export type TransportChangeListener = (endpointIds: string[], attached: boolean)
 const DEFAULT_OVER_HIGH_WATER_GRACE_MS = 5_000;
 const DEFAULT_ACTIVITY_WINDOW_MS = 5 * 60_000;
 const DEFAULT_MAX_ENDPOINTS_PER_SESSION = 256;
-/** How soon an attached Shell that failed to take an assistant answer is asked again. */
-export const ASSISTANT_RETRY_MS = 1_000;
+/** How soon an attached Shell that failed to take an assistant or agent answer is asked again. */
+export const ANSWER_RETRY_MS = 1_000;
 /** Shell machines whose last project a host remembers; the oldest is dropped first. */
 const MAX_REMEMBERED_CLIENTS = 64;
+
+/**
+ * What the host tells a Shell about each of its views, for the Shell's
+ * eviction pass: a live assistant pinned to the view (#13349), and an active
+ * agent in the view's project (#13359).
+ */
+type EndpointAnswer = "assistant" | "agents";
+const ENDPOINT_ANSWERS: readonly EndpointAnswer[] = ["assistant", "agents"];
 
 interface SessionState {
   sessionId: string;
@@ -135,13 +152,13 @@ interface SessionState {
   stale: Set<string>;
   staleReason: EndpointResyncReason;
   /**
-   * What the Shell was last told about each endpoint's assistant, by client
+   * What the Shell was last told about each endpoint, per answer, by client
    * endpoint id. An endpoint missing here is owed an answer: cleared when the
    * link drops, so a resumed Shell hears every endpoint again.
    */
-  assistantTold: Map<string, boolean>;
+  told: Record<EndpointAnswer, Map<string, boolean>>;
   /** A retry of answers the attached Shell failed to take; cleared with its link. */
-  assistantRetry: ReturnType<typeof setTimeout> | null;
+  answerRetry: Record<EndpointAnswer, ReturnType<typeof setTimeout> | null>;
   overHighWaterTimer: ReturnType<typeof setTimeout> | null;
   handle: EndpointSessionHandle;
   /** When the Shell last used this host through a view; null until it does. */
@@ -317,7 +334,16 @@ export class SessionHost {
    */
   refreshAssistants(): void {
     if (this.disposed) return;
-    for (const state of this.states.values()) this.announceAssistants(state);
+    for (const state of this.states.values()) this.announce(state, "assistant");
+  }
+
+  /**
+   * An agent may have started or stopped working: tell each attached Shell
+   * about every endpoint whose answer changed since it was last told.
+   */
+  refreshAgentActivity(): void {
+    if (this.disposed) return;
+    for (const state of this.states.values()) this.announce(state, "agents");
   }
 
   dispose(): void {
@@ -355,8 +381,8 @@ export class SessionHost {
         resyncing: false,
         stale: new Set(),
         staleReason: "reattached",
-        assistantTold: new Map(),
-        assistantRetry: null,
+        told: { assistant: new Map(), agents: new Map() },
+        answerRetry: { assistant: null, agents: null },
         overHighWaterTimer: null,
         handle: undefined as unknown as EndpointSessionHandle,
         lastActiveAt: null,
@@ -435,7 +461,7 @@ export class SessionHost {
         // Whatever is pushed while the Shell is away is lost to it.
         for (const id of s.endpoints.keys()) s.stale.add(id);
         s.staleReason = "reattached";
-        s.assistantTold.clear();
+        for (const answer of ENDPOINT_ANSWERS) s.told[answer].clear();
         this.notifyTransport(s, false);
         this.publishFrontendCount();
       })
@@ -461,7 +487,7 @@ export class SessionHost {
       );
     });
     if (s.stale.size > 0 && !s.resyncing) this.announceResync(s);
-    this.announceAssistants(s);
+    for (const answer of ENDPOINT_ANSWERS) this.announce(s, answer);
   }
 
   private unbindLink(state: SessionState): void {
@@ -474,8 +500,11 @@ export class SessionHost {
     state.link = null;
     state.resyncing = false;
     this.clearOverHighWater(state);
-    if (state.assistantRetry) clearTimeout(state.assistantRetry);
-    state.assistantRetry = null;
+    for (const answer of ENDPOINT_ANSWERS) {
+      const retry = state.answerRetry[answer];
+      if (retry) clearTimeout(retry);
+      state.answerRetry[answer] = null;
+    }
   }
 
   private openEndpoint(state: SessionState, clientEndpointId: string, projectId: string | null) {
@@ -506,7 +535,8 @@ export class SessionHost {
     state.endpoints.set(clientEndpointId, endpoint);
     logger.info("Remote view endpoint opened", describeEndpoint(endpoint));
     // A new endpoint has no assistant yet, which is what the Shell assumes.
-    state.assistantTold.set(clientEndpointId, false);
+    // Its project's agents may already be working, so that answer is owed.
+    state.told.assistant.set(clientEndpointId, false);
     endpoint.onClose(() => {
       logger.info("Remote view endpoint closed", {
         ...describeEndpoint(endpoint),
@@ -515,7 +545,7 @@ export class SessionHost {
       if (state.endpoints.get(clientEndpointId) === endpoint) {
         state.endpoints.delete(clientEndpointId);
         state.stale.delete(clientEndpointId);
-        state.assistantTold.delete(clientEndpointId);
+        for (const answer of ENDPOINT_ANSWERS) state.told[answer].delete(clientEndpointId);
         this.publishFrontendCount();
       }
     });
@@ -523,6 +553,7 @@ export class SessionHost {
     // Opening a view here is using the host.
     state.lastActiveAt = Date.now();
     this.publishFrontendCount();
+    this.announce(state, "agents");
     for (const listener of [...this.openedListeners]) {
       try {
         listener(endpoint, state.handle);
@@ -544,8 +575,11 @@ export class SessionHost {
     // Switching project in a view is using the host.
     state.lastActiveAt = Date.now();
     this.publishFrontendCount();
-    // The assistant was the old project's, and the move revokes it.
-    this.announceAssistants(state);
+    // The assistant was the old project's, and the move revokes it. The Shell
+    // drops both answers when the view moves, so the new project's agents are
+    // owed one even when it reads the same as the old project's.
+    state.told.agents.delete(clientEndpointId);
+    for (const answer of ENDPOINT_ANSWERS) this.announce(state, answer);
   }
 
   private transportFor(state: SessionState): RemoteEndpointTransport {
@@ -673,26 +707,43 @@ export class SessionHost {
     });
   }
 
-  private announceAssistants(state: SessionState): void {
-    const read = this.options.assistantLive;
+  private announce(state: SessionState, answer: EndpointAnswer): void {
+    const read = answer === "assistant" ? this.options.assistantLive : this.options.agentActive;
     const link = state.link;
     if (!read || !link || !link.isOpen) return;
-    const payload: EndpointAssistantPayload = { endpoints: [] };
+    const told = state.told[answer];
+    const changed: Array<{ endpointId: string; projectId: string | null; value: boolean }> = [];
     for (const [id, endpoint] of state.endpoints) {
       if (endpoint.isClosed()) continue;
-      let live: boolean;
+      let value: boolean;
       try {
-        live = read(endpoint);
+        value = read(endpoint);
       } catch (error) {
-        console.error("[SessionHost] assistant liveness read failed:", error);
+        console.error(`[SessionHost] ${answer} answer read failed:`, error);
         continue;
       }
-      if (state.assistantTold.get(id) === live) continue;
-      state.assistantTold.set(id, live);
-      payload.endpoints.push({ endpointId: id, projectId: endpoint.projectId, live });
+      if (told.get(id) === value) continue;
+      told.set(id, value);
+      changed.push({ endpointId: id, projectId: endpoint.projectId, value });
     }
-    if (payload.endpoints.length === 0) return;
-    void link.call(LinkMethod.ENDPOINT_ASSISTANT, payload).catch((error: unknown) => {
+    if (changed.length === 0) return;
+    const call =
+      answer === "assistant"
+        ? link.call(LinkMethod.ENDPOINT_ASSISTANT, {
+            endpoints: changed.map(({ endpointId, projectId, value }) => ({
+              endpointId,
+              projectId,
+              live: value,
+            })),
+          } satisfies EndpointAssistantPayload)
+        : link.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
+            endpoints: changed.map(({ endpointId, projectId, value }) => ({
+              endpointId,
+              projectId,
+              active: value,
+            })),
+          } satisfies EndpointAgentActivityPayload);
+    void call.catch((error: unknown) => {
       // A Shell from before this call refuses it, and always will.
       const code = (error as { code?: unknown } | null)?.code;
       if (code === "UNSUPPORTED" || code === "VALIDATION") return;
@@ -701,15 +752,16 @@ export class SessionHost {
       // request allowance was full, say) is asked again shortly, since a
       // missed start leaves its view open to eviction until something else
       // changes.
-      for (const { endpointId, live } of payload.endpoints) {
-        if (state.assistantTold.get(endpointId) === live) state.assistantTold.delete(endpointId);
+      for (const { endpointId, value } of changed) {
+        if (told.get(endpointId) === value) told.delete(endpointId);
       }
-      if (state.link !== link || !link.isOpen || state.assistantRetry) return;
-      state.assistantRetry = setTimeout(() => {
-        state.assistantRetry = null;
-        this.announceAssistants(state);
-      }, ASSISTANT_RETRY_MS);
-      state.assistantRetry.unref?.();
+      if (state.link !== link || !link.isOpen || state.answerRetry[answer]) return;
+      const retry = setTimeout(() => {
+        state.answerRetry[answer] = null;
+        this.announce(state, answer);
+      }, ANSWER_RETRY_MS);
+      retry.unref?.();
+      state.answerRetry[answer] = retry;
     });
   }
 

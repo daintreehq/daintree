@@ -226,6 +226,9 @@ const isTerminalLive = (terminalId: string): boolean => liveTerminals.has(termin
 // host says a live assistant is pinned to them.
 const liveRemoteViews = new Set<number>();
 const remoteAssistantLive = (webContentsId: number): boolean => liveRemoteViews.has(webContentsId);
+// And the views whose host says an agent in their project is active there (#13359).
+const activeRemoteViews = new Set<number>();
+const remoteAgentActive = (webContentsId: number): boolean => activeRemoteViews.has(webContentsId);
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
@@ -318,6 +321,7 @@ describe("ProjectViewManager — eviction safety", () => {
     assistantBackends.clear();
     liveTerminals.clear();
     liveRemoteViews.clear();
+    activeRemoteViews.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -696,6 +700,7 @@ describe("ProjectViewManager — eviction safety", () => {
         assistantBackendsForProject,
         isTerminalLive,
         remoteAssistantLive,
+        remoteAgentActive,
       });
     }
 
@@ -1072,6 +1077,7 @@ describe("ProjectViewManager — eviction safety", () => {
           assistantBackendsForProject,
           isTerminalLive,
           remoteAssistantLive: askHost,
+          remoteAgentActive: askHost,
         });
         const wcA = createMockWebContents();
         managerWithLimit.registerInitialView(
@@ -1084,6 +1090,73 @@ describe("ProjectViewManager — eviction safety", () => {
 
         expect(evictedProjectIds()).toEqual(["proj-a"]);
         expect(askHost).not.toHaveBeenCalled();
+      });
+
+      describe("with agents active on its host (#13359)", () => {
+        it("ranks it with active-agent views, behind an ordinary local view", async () => {
+          // The issue's log: a host view with working agents evicted milliseconds
+          // after the user left it, while ordinary local views stayed.
+          const managerWithLimit = makeManager(2);
+          const wcR = await withRemoteView(managerWithLimit);
+          activeRemoteViews.add(wcR.id);
+
+          await leaveFor(managerWithLimit, "proj-b", "proj-c");
+
+          expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toContain(remoteKey);
+          expect(wcR.close).not.toHaveBeenCalled();
+          expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+        });
+
+        async function withActiveViews(mgr: ProjectViewManager) {
+          const wcR = await withRemoteView(mgr);
+          await leaveFor(mgr, "proj-b", "proj-c");
+          activeRemoteViews.add(wcR.id);
+          return wcR;
+        }
+
+        it("loses to a more recently used local view with an active agent", async () => {
+          const managerWithLimit = makeManager(4);
+          await withActiveViews(managerWithLimit);
+          mockGetAllTerminals.mockResolvedValue([
+            { id: "t-b", projectId: "proj-b", agentState: "working" },
+          ]);
+          await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+          managerWithLimit.setCachedViewLimit(2);
+
+          expect(evictedProjectIds()).toEqual(["proj-a", remoteKey]);
+          expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+            "projectview.eviction",
+            expect.objectContaining({ projectId: remoteKey, activeAgent: true })
+          );
+        });
+
+        it("outlasts a less recently used local view with an active agent", async () => {
+          const managerWithLimit = makeManager(4);
+          await withActiveViews(managerWithLimit);
+          mockGetAllTerminals.mockResolvedValue([
+            { id: "t-a", projectId: "proj-a", agentState: "working" },
+          ]);
+          await managerWithLimit.initAgentStateCache(mockPtyClient as never);
+
+          managerWithLimit.setCachedViewLimit(2);
+
+          // proj-b has no agent, so it goes first; then the older active view.
+          expect(evictedProjectIds()).toEqual(["proj-b", "proj-a"]);
+          expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toContain(remoteKey);
+        });
+
+        it("still yields to the forced reclaim, unlike a live assistant", async () => {
+          const managerWithLimit = makeManager(3);
+          const wcR = await withRemoteView(managerWithLimit);
+          await leaveFor(managerWithLimit, "proj-b");
+          activeRemoteViews.add(wcR.id);
+
+          managerWithLimit.reclaimCachedViewsUnderPressure();
+
+          expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toEqual(["proj-b"]);
+          expect(evictedProjectIds()).toEqual(["proj-a", remoteKey]);
+        });
       });
 
       it("won't give it to another window while its assistant is live (#13274)", async () => {
@@ -2331,6 +2404,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     assistantBackends.clear();
     liveTerminals.clear();
     liveRemoteViews.clear();
+    activeRemoteViews.clear();
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
