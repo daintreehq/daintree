@@ -170,7 +170,6 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
             <>
               <FindCodexSessionAction
                 panelId={panelId}
-                variant="gate"
                 onOpenSession={(sessionId) => launch({ kind: "resume", sessionId })}
               />
               <Button
