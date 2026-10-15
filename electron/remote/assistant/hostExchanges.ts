@@ -5,7 +5,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionSource } from "../metrics/hostMetricsHost.js";
-import type { AssistantExchangeStore } from "../exchange/AssistantExchangeStore.js";
+import type { AssistantExchangeStore, ExchangeChange } from "../exchange/AssistantExchangeStore.js";
 import type { CreateExchangeInput, ExchangeRecord, SenderActor } from "../exchange/types.js";
 import type {
   AssistantMessagingPolicy,
@@ -39,6 +39,8 @@ export interface AssistantExchangeHostDeps {
    * never fails an exchange this host accepted.
    */
   wake?: (record: ExchangeRecord, enrollment: LaneEnrollment) => void | Promise<void>;
+  /** Committed changes to any exchange on this host, whichever store wrote them. */
+  onExchangeChanged?: (listener: (change: ExchangeChange) => void) => () => void;
 }
 
 /**
@@ -243,8 +245,33 @@ export function installAssistantExchangeHostWith(
     );
   };
 
+  // Latest revision per sender, told once per tick: a reply writes several facts at once.
+  const due = new Map<string, number>();
+  const flush = (): void => {
+    const batch = [...due];
+    due.clear();
+    for (const [senderId, revision] of batch) {
+      for (const { session } of server.sessions) {
+        if (!session.isOpen || senders.get(session) !== senderId) continue;
+        session.call(AssistantLinkMethod.EXCHANGE_CHANGED, { revision }).catch(() => {
+          // Nothing to retry: the Shell reads every change by cursor when a session opens.
+        });
+      }
+    }
+  };
+  const offChanges =
+    deps.onExchangeChanged?.(({ senderId, revision }) => {
+      if (due.size === 0) queueMicrotask(flush);
+      due.set(senderId, Math.max(revision, due.get(senderId) ?? 0));
+    }) ?? (() => {});
+
   for (const ctx of server.sessions) wire(ctx);
-  return server.onSession(wire);
+  const offSession = server.onSession(wire);
+  return () => {
+    offChanges();
+    offSession();
+    due.clear();
+  };
 }
 
 const SWEEP_INTERVAL_MS = 60 * 60_000;
@@ -260,7 +287,7 @@ export async function installAssistantExchangeHost(
 ): Promise<() => void> {
   const [
     { getSharedSqlite },
-    { AssistantExchangeStore },
+    { AssistantExchangeStore, onExchangeChanged },
     { getRemoteService, registerRemoteService },
   ] = await Promise.all([
     import("../../services/persistence/db.js"),
@@ -289,6 +316,7 @@ export async function installAssistantExchangeHost(
   const unwire = installAssistantExchangeHostWith(server, {
     policy: () => getRemoteService("assistantMessagingPolicy"),
     store,
+    onExchangeChanged,
   });
   return () => {
     clearInterval(timer);

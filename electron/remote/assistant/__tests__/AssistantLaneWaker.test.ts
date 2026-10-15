@@ -82,6 +82,13 @@ describe("AssistantLaneWaker", () => {
     expect(h.outcomes).toEqual([]);
   });
 
+  it("carries a hub update's kind through to the pane, and leaves a message's unset", () => {
+    const h = enrolled();
+    h.waker.wake({ ...h.request(h.generation), kind: "update" });
+    h.waker.wake({ ...h.request(h.generation), exchangeId: "task-2" });
+    expect(h.queued.map((q) => q.wake.kind)).toEqual(["update", undefined]);
+  });
+
   it("never wakes a lane that isn't enrolled, and launches nothing", () => {
     const h = harness();
     h.waker.wake(h.request("gen-1"));

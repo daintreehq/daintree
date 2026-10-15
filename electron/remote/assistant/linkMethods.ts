@@ -23,6 +23,12 @@ export const AssistantLinkMethod = {
   LIST_EXCHANGES: "assistant.list-exchanges",
   /** Shell → Host: ask to cancel one of this sender's exchanges. */
   CANCEL_EXCHANGE: "assistant.cancel-exchange",
+  /**
+   * Host → Shell: one of this session's sender's exchanges changed. Carries
+   * only the revision; the Shell reads what changed by cursor, so a repeat or
+   * an event out of order changes nothing.
+   */
+  EXCHANGE_CHANGED: "assistant.exchange-changed",
 } as const;
 
 export const MAX_EXCHANGE_BODY_CHARS = 256 * 1024;
@@ -130,4 +136,8 @@ export const ExchangeChangesSchema = z
     hasMore: z.boolean(),
     reset: z.boolean(),
   })
+  .strip();
+
+export const ExchangeChangedPayloadSchema = z
+  .object({ revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) })
   .strip();

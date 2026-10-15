@@ -15,7 +15,11 @@ vi.mock("electron", () => ({
 }));
 
 import { openDb } from "../../../services/persistence/db.js";
-import { AssistantExchangeStore } from "../AssistantExchangeStore.js";
+import {
+  AssistantExchangeStore,
+  onExchangeChanged,
+  type ExchangeChange,
+} from "../AssistantExchangeStore.js";
 import type { CreateExchangeInput, ExchangeKey, ReceiverActor, SenderActor } from "../types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -544,6 +548,75 @@ describe("AssistantExchangeStore", () => {
       expect(store.sweep().auditPurged).toBe(1);
       // The expiry this sweep just recorded is newer than the retention line and stays.
       expect(auditRows().map((r) => r["daintree.exchange.event"])).toEqual(["expired"]);
+    });
+  });
+
+  describe("change notices", () => {
+    let heard: ExchangeChange[];
+    let off: () => void;
+
+    beforeEach(() => {
+      heard = [];
+      off = onExchangeChanged((change) => heard.push(change));
+    });
+
+    afterEach(() => off());
+
+    it("tells listeners each committed change, from any store over the database", () => {
+      const seen: Array<{ inTransaction: boolean; revision: number | undefined }> = [];
+      const offReader = onExchangeChanged(() =>
+        seen.push({
+          inTransaction: sqlite.inTransaction,
+          revision: store.get(shellA, keyA)?.revision,
+        })
+      );
+      const created = store.create(shellA, input()).record;
+      offReader();
+      // Told after the commit: a listener reading back sees what was written.
+      expect(seen).toEqual([{ inTransaction: false, revision: created.revision }]);
+      expect(heard).toEqual([{ senderId: "shell-a", revision: created.revision }]);
+
+      const other = new AssistantExchangeStore(sqlite, { now: () => clock });
+      const accepted = other.recordDelivery(lane, keyA, "accepted");
+      expect(heard.at(-1)).toEqual({ senderId: "shell-a", revision: accepted.revision });
+      expect(store.get(shellA, keyA)?.revision).toBe(accepted.revision);
+    });
+
+    it("says nothing for a repeat that writes nothing, or a write that fails", () => {
+      store.create(shellA, input());
+      heard = [];
+      store.create(shellA, input());
+      store.markAmbiguous(lane, keyA);
+      store.markAmbiguous(lane, keyA);
+      expect(heard).toHaveLength(1);
+      expect(() => store.create(shellA, input({ body: "something else" }))).toThrow();
+      expect(heard).toHaveLength(1);
+    });
+
+    it("keeps telling the rest when one listener throws", () => {
+      const offThrowing = onExchangeChanged(() => {
+        throw new Error("boom");
+      });
+      const after: ExchangeChange[] = [];
+      const offAfter = onExchangeChanged((change) => after.push(change));
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        store.create(shellA, input());
+        expect(after).toHaveLength(1);
+        expect(errors).toHaveBeenCalled();
+      } finally {
+        offAfter();
+        offThrowing();
+        errors.mockRestore();
+      }
+    });
+
+    it("tells the sweep's expiries too", () => {
+      store.create(shellA, input());
+      heard = [];
+      clock += 25 * HOUR;
+      store.sweep();
+      expect(heard).toEqual([{ senderId: "shell-a", revision: expect.any(Number) }]);
     });
   });
 });

@@ -563,8 +563,15 @@ describe("startRemoteHosts", () => {
     await startRemoteHosts({ hostMode: false });
     expect(messaging.installAssistantExchangeClient).toHaveBeenCalledTimes(1);
     const [deps] = messaging.installAssistantExchangeClient.mock.calls[0] as [
-      { session(hostId: string): Promise<unknown> },
+      {
+        session(hostId: string): Promise<unknown>;
+        addUseCheck(check: (hostId: string) => boolean): () => void;
+      },
     ];
+    // Open exchanges keep their host's link through the manager's own idle sweep.
+    const check = () => true;
+    deps.addUseCheck(check);
+    expect(m.client.manager.addUseCheck).toHaveBeenCalledWith(check);
     // A host removed from the list is never dialled for an exchange.
     await expect(deps.session("unknown-host")).resolves.toBeNull();
     expect(m.client.manager.touch).not.toHaveBeenCalledWith("unknown-host");

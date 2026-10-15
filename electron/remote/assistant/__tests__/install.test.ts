@@ -37,7 +37,10 @@ vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty.clien
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import { getRemoteService } from "../../runtime.js";
-import { installAssistantMessagingPolicy } from "../install.js";
+import type { ExchangeRecord } from "../../exchange/types.js";
+import type { MovedExchange } from "../AssistantExchangeClient.js";
+import type { LaneEnrollment } from "../AssistantMessagingPolicy.js";
+import { installAssistantMessagingPolicy, wakeHubForMoved } from "../install.js";
 
 describe("installAssistantMessagingPolicy", () => {
   let hosts: string[];
@@ -129,5 +132,42 @@ describe("installAssistantMessagingPolicy", () => {
     hosts = ["a"];
     hostsChanged();
     expect(pushes()).toEqual([1]);
+  });
+});
+
+describe("wakeHubForMoved", () => {
+  const hub = { projectId: "proj", slot: 0, generation: "hub-2" } as LaneEnrollment;
+  const moved = (taskId: string, hubGeneration: string): MovedExchange => ({
+    record: { taskId } as ExchangeRecord,
+    hubGeneration,
+  });
+
+  it("wakes the hub that sent each exchange, as an update from this Shell", () => {
+    const wake = vi.fn();
+    wakeHubForMoved(
+      [moved("task-1", "hub-2"), moved("task-2", "hub-1")],
+      { getHub: () => hub },
+      {
+        wake,
+      }
+    );
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(wake.mock.calls[0]![0]).toMatchObject({
+      lane: { projectId: "proj", slot: 0 },
+      generation: "hub-2",
+      shell: { kind: "local" },
+      exchangeId: "task-1",
+      kind: "update",
+    });
+  });
+
+  it("wakes nothing with no hub enrolled, or no waker", () => {
+    const wake = vi.fn();
+    wakeHubForMoved([moved("task-1", "hub-2")], { getHub: () => null }, { wake });
+    wakeHubForMoved([moved("task-1", "hub-2")], undefined, { wake });
+    expect(() =>
+      wakeHubForMoved([moved("task-1", "hub-2")], { getHub: () => hub }, undefined)
+    ).not.toThrow();
+    expect(wake).not.toHaveBeenCalled();
   });
 });

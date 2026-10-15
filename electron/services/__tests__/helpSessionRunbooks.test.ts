@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { formatLaneWakeLine } from "../mcp-server/terminalNotify.js";
+import { formatExchangeUpdateLine, formatLaneWakeLine } from "../mcp-server/terminalNotify.js";
 import {
   DAINTREE_RUNBOOKS_MCP_URL,
   RUNBOOKS_MCP_URL_ENV_VAR,
@@ -101,6 +101,13 @@ describe("buildMessagingAddendum (#13333)", () => {
     expect(quoted).toBeDefined();
     expect(line.startsWith(quoted!)).toBe(true);
     expect(line).toContain(LANE_INBOX_TOOL);
+  });
+
+  it("quotes how a hub's exchange update line opens, too (#13337)", () => {
+    const quoted = [...buildMessagingAddendum().matchAll(/starts "([^"]+)"/g)].map((m) => m[1]);
+    const line = formatExchangeUpdateLine(["task-1", "task-2"]);
+    expect(quoted.some((prefix) => line.startsWith(prefix!))).toBe(true);
+    expect(line).not.toContain("\n");
   });
 
   it("marks what another machine wrote as data, not instructions", () => {

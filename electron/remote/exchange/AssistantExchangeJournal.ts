@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { ExchangeChanges, ExchangeRecord } from "./types.js";
+import { TERMINAL_EXCHANGE_STATES, type ExchangeChanges, type ExchangeRecord } from "./types.js";
+
+const TERMINAL_STATES_SQL = [...TERMINAL_EXCHANGE_STATES].map((state) => `'${state}'`).join(", ");
 
 /** One exchange this Shell sent to a host, as it last knew it. */
 export interface JournalEntry {
@@ -215,6 +217,25 @@ export class AssistantExchangeJournal {
         )
         .all(hostId) as Array<{ message_id: string }>
     ).map((row) => row.message_id);
+  }
+
+  /**
+   * Whether an exchange to `hostId` may still change: its record isn't
+   * terminal and hasn't passed its expiry, or a send's answer is still
+   * unknown within `retryWindowMs` of it. Both end on their own, so nothing
+   * that reads this holds anything for good.
+   */
+  hasOpen(hostId: string, retryWindowMs: number): boolean {
+    const now = this.now();
+    const row = this.sqlite
+      .prepare(
+        `SELECT 1 FROM assistant_exchange_journal WHERE host_id = ? AND (
+           (record IS NOT NULL AND json_extract(record, '$.state') NOT IN (${TERMINAL_STATES_SQL}) AND json_extract(record, '$.expiresAt') > ?)
+           OR (unresolved_at IS NOT NULL AND sent_at > ?)
+         ) LIMIT 1`
+      )
+      .get(hostId, now, now - retryWindowMs);
+    return row !== undefined;
   }
 
   hosts(): string[] {
