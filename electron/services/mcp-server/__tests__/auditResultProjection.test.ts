@@ -242,6 +242,76 @@ describe("assistant messaging audit entries carry no body (#13335)", () => {
     });
   });
 
+  it.each([SHORT, LONG])("measures, never keeps, what a lane sends the hub (#13338)", (text) => {
+    const summary = summarizeMcpArgs(
+      projectAuditArgs("assistant.sendMessage", {
+        text,
+        contextId: "BODY-SENTINEL as a context",
+        referenceTaskIds: [TASK, "BODY-SENTINEL"],
+      })
+    );
+    expect(summary).not.toContain("BODY-SENTINEL");
+    expect(JSON.parse(summary)).toEqual({
+      contextId: null,
+      referenceTaskIds: 2,
+      textChars: text.length,
+    });
+    expect(
+      projectAuditResult("assistant.sendMessage", {
+        messageId: TASK,
+        contextId: TASK,
+        hopCount: 1,
+        state: "waiting-for-hub",
+      })
+    ).toEqual({ messageId: TASK, contextId: TASK, hopCount: 1, state: "waiting-for-hub" });
+  });
+
+  it("summarizes the sent view by state and reply size, never the hub's words (#13338)", () => {
+    const result = {
+      messages: [],
+      sent: [
+        {
+          messageId: TASK,
+          contextId: "ctx",
+          hopCount: 1,
+          state: "completed",
+          refusal: null,
+          sentAt: 1,
+          expiresAt: 2,
+          replies: [{ state: "completed", at: 1, untrustedText: LONG }],
+        },
+        {
+          messageId: "BODY-SENTINEL",
+          contextId: "ctx",
+          hopCount: 2,
+          state: "BODY-SENTINEL",
+          refusal: "hop_limit",
+          sentAt: 1,
+          expiresAt: 2,
+          replies: [],
+        },
+      ],
+      cursor: 4,
+      hasMore: false,
+    };
+    const summary = summarizeMcpResult(projectAuditResult("assistant.getInbox", result));
+    expect(summary).not.toContain("BODY-SENTINEL");
+    expect(projectAuditResult("assistant.getInbox", result)).toEqual({
+      messageCount: 0,
+      bodyChars: 0,
+      taskIds: [],
+      sentCount: 2,
+      sent: [
+        { messageId: TASK, state: "completed", refusal: null },
+        { messageId: null, state: null, refusal: "hop_limit" },
+      ],
+      replyCount: 1,
+      replyChars: LONG.length,
+      cursor: 4,
+      hasMore: false,
+    });
+  });
+
   it("leaves other tools' arguments to the generic summarizer", () => {
     const args = { url: "https://daintree.org/a.png" };
     expect(projectAuditArgs("help.displayImage", args)).toBe(args);

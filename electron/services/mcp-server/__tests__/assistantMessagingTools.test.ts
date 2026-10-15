@@ -8,9 +8,15 @@ import {
 
 function fakeRuntime(): AssistantMessagingRuntimeHandle & {
   getInbox: ReturnType<typeof vi.fn>;
+  sendMessage: ReturnType<typeof vi.fn>;
 } {
   return {
     isAvailable: vi.fn((helpSessionId: string) => helpSessionId === "help-1"),
+    isSendAvailable: vi.fn((helpSessionId: string) => helpSessionId === "help-1"),
+    sendMessage: vi.fn(() => ({
+      ok: true as const,
+      value: { messageId: "m", contextId: "m", hopCount: 1, state: "waiting-for-hub" as const },
+    })),
     getInbox: vi.fn(() => ({
       ok: true as const,
       value: { messages: [], cursor: 0, hasMore: false },
@@ -75,6 +81,39 @@ describe("runAssistantMessagingTool (#13335)", () => {
     uninstall();
     expect(result).toMatchObject({ ok: false, code: "INVALID_ARGS" });
     expect(runtime.getInbox).not.toHaveBeenCalled();
+  });
+
+  it("routes sendMessage to the caller's own lane and checks its schema (#13338)", () => {
+    const runtime = fakeRuntime();
+    const uninstall = setAssistantMessagingRuntime(runtime);
+    const access = bindAssistantMessaging(() => "help-1");
+    expect(access.isSendAvailable()).toBe(true);
+    expect(
+      runAssistantMessagingTool("assistant.sendMessage", { text: "landed", contextId: "c" }, access)
+    ).toMatchObject({ ok: true, value: { state: "waiting-for-hub" } });
+    expect(runtime.sendMessage).toHaveBeenCalledWith("help-1", { text: "landed", contextId: "c" });
+    // No destination of any kind can be named: the hub is implied by the enrollment.
+    expect(
+      runAssistantMessagingTool("assistant.sendMessage", { text: "x", hostId: "studio-04" }, access)
+    ).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    uninstall();
+    expect(access.isSendAvailable()).toBe(false);
+  });
+
+  it("refuses a tool id it doesn't own rather than treating it as a reply", () => {
+    const runtime = fakeRuntime();
+    const uninstall = setAssistantMessagingRuntime(runtime);
+    const access = bindAssistantMessaging(() => "help-1");
+    expect(
+      runAssistantMessagingTool(
+        "assistant.other",
+        { taskId: "t", state: "completed", text: "x" },
+        access
+      )
+    ).toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
+    uninstall();
+    expect(runtime.reply).not.toHaveBeenCalled();
   });
 
   it("refuses with no access at all", () => {

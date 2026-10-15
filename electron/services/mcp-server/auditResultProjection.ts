@@ -1,5 +1,9 @@
 import { HOST_MESSAGING_OUTCOMES } from "../../../shared/types/hostMessaging.js";
 import {
+  ASSISTANT_SEND_REFUSALS,
+  ASSISTANT_SENT_STATES,
+} from "../../../shared/types/assistantMessaging.js";
+import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
 } from "../../../shared/types/agentLastMessage.js";
@@ -105,6 +109,7 @@ function projectHandbackCarrier(result: unknown): unknown {
  */
 const AUDIT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REPLY_STATES: ReadonlySet<string> = new Set(["input-required", "completed"]);
+const INBOX_VIEWS: ReadonlySet<string> = new Set(["received", "sent"]);
 
 function auditId(value: unknown): string | null {
   return typeof value === "string" && AUDIT_ID_PATTERN.test(value) ? value : null;
@@ -132,8 +137,44 @@ function projectInbox(result: unknown): Record<string, unknown> {
     messageCount: record.messages.length,
     bodyChars,
     taskIds,
+    ...(Array.isArray(record.sent) ? projectSent(record.sent) : {}),
     cursor: finiteNumber(record.cursor),
     hasMore: record.hasMore === true,
+  };
+}
+
+const SENT_STATES: ReadonlySet<string> = new Set(ASSISTANT_SENT_STATES);
+const SEND_REFUSALS: ReadonlySet<string> = new Set(ASSISTANT_SEND_REFUSALS);
+
+/** Messages a lane sent the hub (#13338), reduced to their ids, states and reply sizes. */
+function projectSent(sent: unknown[]): Record<string, unknown> {
+  let replyCount = 0;
+  let replyChars = 0;
+  const rows = sent.map((item) => {
+    const row = asRecord(item);
+    const replies = Array.isArray(row?.replies) ? row.replies : [];
+    replyCount += replies.length;
+    for (const reply of replies) {
+      const text = asRecord(reply)?.untrustedText;
+      replyChars += typeof text === "string" ? text.length : 0;
+    }
+    return {
+      messageId: auditId(row?.messageId),
+      state: fromSet(row?.state, SENT_STATES),
+      refusal: fromSet(row?.refusal, SEND_REFUSALS),
+    };
+  });
+  return { sentCount: sent.length, sent: rows, replyCount, replyChars };
+}
+
+function projectSendMessage(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  if (record === null) return { status: "unrecognized" };
+  return {
+    messageId: auditId(record.messageId),
+    contextId: auditId(record.contextId),
+    hopCount: finiteNumber(record.hopCount),
+    state: fromSet(record.state, SENT_STATES),
   };
 }
 
@@ -222,6 +263,7 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
   ["terminal.waitUntilIdleBatch", projectHandbackCarrier],
   ["assistant.getInbox", projectInbox],
   ["assistant.reply", projectReply],
+  ["assistant.sendMessage", projectSendMessage],
   ["host.list", projectHostList],
   [
     "host.listAssistants",
@@ -269,7 +311,24 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
     "assistant.getInbox",
     (args) => {
       const record = asRecord(args);
-      return { cursor: finiteNumber(record?.cursor), limit: finiteNumber(record?.limit) };
+      return {
+        cursor: finiteNumber(record?.cursor),
+        limit: finiteNumber(record?.limit),
+        view: fromSet(record?.view, INBOX_VIEWS),
+      };
+    },
+  ],
+  [
+    "assistant.sendMessage",
+    (args) => {
+      const record = asRecord(args);
+      return {
+        contextId: auditId(record?.contextId),
+        referenceTaskIds: Array.isArray(record?.referenceTaskIds)
+          ? record.referenceTaskIds.length
+          : null,
+        textChars: typeof record?.text === "string" ? record.text.length : null,
+      };
     },
   ],
   ["host.list", () => ({})],

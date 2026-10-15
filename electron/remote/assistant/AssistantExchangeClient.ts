@@ -7,6 +7,7 @@ import type {
 } from "../exchange/AssistantExchangeJournal.js";
 import type { CreateDisposition, ExchangeChanges, ExchangeRecord } from "../exchange/types.js";
 import type { LinkSession } from "../link/session.js";
+import type { AssistantHubReceiver } from "./AssistantHubReceiver.js";
 import type { AssistantMessagingPolicy, MessagingRequestKind } from "./AssistantMessagingPolicy.js";
 import {
   AssistantLinkMethod,
@@ -16,7 +17,9 @@ import {
   ExchangeResponsesSchema,
   LaneListSchema,
   MAX_EXCHANGE_PAGE,
+  MessageIdPayloadSchema,
   SendResultSchema,
+  SendToHubPayloadSchema,
   type AssistantSendPayload,
   type EnrolledLane,
   type ExchangeResponse,
@@ -35,6 +38,8 @@ export interface AssistantExchangeClientDeps {
    * before a restart has none and isn't told: nothing is rebound to a new hub.
    */
   onExchangesMoved?: (hostId: HostId, moved: MovedExchange[]) => void;
+  /** Admits what a host's assistants send this Shell's hub (#13338); absent, the Shell refuses them. */
+  hubReceiver?: () => Pick<AssistantHubReceiver, "receive" | "lookUp"> | undefined;
   callTimeoutMs?: number;
 }
 
@@ -135,6 +140,8 @@ export class AssistantExchangeClient {
   private readonly again = new Set<HostId>();
   private readonly disposers: Array<() => void> = [];
   private readonly retries = new Map<HostId, ReturnType<typeof setTimeout>>();
+  /** Each host's latest session, for telling it of its messages to the hub. */
+  private readonly live = new Map<HostId, LinkSession>();
   private disposed = false;
   private readonly timeoutMs: number;
 
@@ -155,6 +162,18 @@ export class AssistantExchangeClient {
             return null;
           }
         );
+        // A host's assistants may message the hub before this Shell ever sent it anything.
+        this.live.set(hostId, session);
+        session.registerCallHandler(
+          AssistantLinkMethod.SEND_TO_HUB,
+          SendToHubPayloadSchema,
+          (payload) => this.requireReceiver().receive(hostId, payload)
+        );
+        session.registerCallHandler(
+          AssistantLinkMethod.GET_HUB_EXCHANGE,
+          MessageIdPayloadSchema,
+          ({ messageId }) => this.requireReceiver().lookUp(hostId, messageId)
+        );
         if (this.deps.journal.existingCredential(hostId) === null) return;
         void this.reconcile(hostId, session);
       })
@@ -171,6 +190,21 @@ export class AssistantExchangeClient {
     for (const timer of this.retries.values()) clearTimeout(timer);
     this.retries.clear();
     this.sentBy.clear();
+    this.live.clear();
+  }
+
+  /**
+   * Tells a host one of its messages to the hub changed, over its open session
+   * only: a host that isn't connected reads its open messages when it is.
+   */
+  tellHost(hostId: HostId, messageId: string): void {
+    const session = this.live.get(hostId);
+    if (this.disposed || !session?.isOpen) return;
+    session
+      .call(AssistantLinkMethod.HUB_EXCHANGE_CHANGED, { messageId }, { timeoutMs: this.timeoutMs })
+      .catch(() => {
+        // The host reads every open message when its next session opens.
+      });
   }
 
   /** The lanes this Shell's current session to the host enrolled. */
@@ -387,6 +421,17 @@ export class AssistantExchangeClient {
     } catch (error) {
       console.error("[AssistantExchanges] Telling the hub of moved exchanges failed:", error);
     }
+  }
+
+  private requireReceiver(): Pick<AssistantHubReceiver, "receive" | "lookUp"> {
+    const receiver = this.disposed ? undefined : this.deps.hubReceiver?.();
+    if (!receiver) {
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "This Shell doesn't take messages from a host's assistants",
+      });
+    }
+    return receiver;
   }
 
   private checkHost(hostId: HostId, kind: MessagingRequestKind): void {

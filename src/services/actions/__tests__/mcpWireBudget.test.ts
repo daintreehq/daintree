@@ -715,7 +715,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // before measuring: no result repeats the hostId it was called with, and the
   // task view drops what its other fields imply. Offered only to this Shell's
   // enrolled hub while a host exists, so the external ceiling above does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 130_500;
+  // #13338: assistant.sendMessage and the inbox's sent view, for a lane a
+  // remote Shell enrolled; also off the external surface.
+  const MAX_COHORT_PAYLOAD_BYTES = 132_700;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

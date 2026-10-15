@@ -126,10 +126,12 @@ export const CORE_TIER_TOOLS = [
   "slashCommands.list",
 
   "help.displayImage",
-  // An enrolled lane's own inbox (#13335). Offered only while the caller's own
-  // lane is enrolled for messaging, and run only for that lane's help session.
+  // An enrolled lane's own inbox (#13335) and its messages to the hub (#13338).
+  // Offered only while the caller's own lane is enrolled for messaging, and run
+  // only for that lane's help session.
   "assistant.getInbox",
   "assistant.reply",
+  "assistant.sendMessage",
   // The hub's reads of other hosts' assistants (#13336). Offered only to the
   // help session this Shell's hub was enrolled with, while a host exists.
   "host.list",
@@ -272,6 +274,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   // A lane's inbox belongs to the assistant enrolled in it, never a pane (#13335).
   "assistant.getInbox",
   "assistant.reply",
+  "assistant.sendMessage",
   // So does the hub's reach to other hosts' assistants (#13336).
   "host.list",
   "host.listAssistants",

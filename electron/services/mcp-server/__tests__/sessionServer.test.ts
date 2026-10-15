@@ -4360,6 +4360,7 @@ describe("assistant inbox tools (#13335)", () => {
 
   function laneDeps(options: {
     available: boolean;
+    sending?: boolean;
     origin?: string;
     helpSessionId?: string | null;
     access?: boolean;
@@ -4374,10 +4375,20 @@ describe("assistant inbox tools (#13335)", () => {
     mutable.sessionOriginMap.set("sess", options.origin ?? "help");
     const access = {
       isAvailable: vi.fn(() => options.available),
+      isSendAvailable: vi.fn(() => options.sending === true),
       getInbox: vi.fn(() => ({ ok: true as const, value: INBOX })),
       reply: vi.fn(() => ({
         ok: true as const,
         value: { taskId: "task-1", state: "completed" as const, revision: 4 },
+      })),
+      sendMessage: vi.fn(() => ({
+        ok: true as const,
+        value: {
+          messageId: "msg-9",
+          contextId: "msg-9",
+          hopCount: 1,
+          state: "waiting-for-hub" as const,
+        },
       })),
     };
     const deps = fakeDeps({
@@ -4387,6 +4398,7 @@ describe("assistant inbox tools (#13335)", () => {
         .mockResolvedValue([
           makeManifestEntry("assistant.getInbox"),
           makeManifestEntry("assistant.reply"),
+          makeManifestEntry("assistant.sendMessage"),
           makeManifestEntry("terminal.list"),
         ]),
       ...(options.access === false ? {} : { assistantMessaging: access }),
@@ -4409,6 +4421,40 @@ describe("assistant inbox tools (#13335)", () => {
     expect(names).toContain("terminal.list");
     expect(names).not.toContain("assistant.getInbox");
     expect(names).not.toContain("assistant.reply");
+  });
+
+  it("offers sendMessage only to a lane a remote Shell enrolled, never the hub (#13338)", async () => {
+    const hub = laneDeps({ available: true, sending: false });
+    const hubServer = createSessionServer("sess", hub.deps);
+    await hubServer.connect(makeMockTransport());
+    const hubNames = (await listTools(hubServer)).tools.map((t) => t.name);
+    expect(hubNames).toContain("assistant.getInbox");
+    expect(hubNames).not.toContain("assistant.sendMessage");
+    // Withheld from the listing and refused at dispatch alike.
+    const refused = await callTool(hubServer, {
+      name: "assistant.sendMessage",
+      arguments: { text: "hello" },
+    });
+    expect(refused.isError).toBe(true);
+    expect(hub.access.sendMessage).not.toHaveBeenCalled();
+
+    const lane = laneDeps({ available: true, sending: true });
+    const laneServer = createSessionServer("sess", lane.deps);
+    await laneServer.connect(makeMockTransport());
+    expect((await listTools(laneServer)).tools.map((t) => t.name)).toContain(
+      "assistant.sendMessage"
+    );
+    const sent = await callTool(laneServer, {
+      name: "assistant.sendMessage",
+      arguments: { text: "migration landed", contextId: "ctx" },
+    });
+    expect(sent.isError).toBeFalsy();
+    expect(sent.structuredContent).toMatchObject({ messageId: "msg-9", state: "waiting-for-hub" });
+    expect(lane.access.sendMessage).toHaveBeenCalledWith({
+      text: "migration landed",
+      contextId: "ctx",
+    });
+    expect(lane.deps.dispatchAction).not.toHaveBeenCalled();
   });
 
   it("runs both in main against the caller's own lane", async () => {
@@ -6611,6 +6657,7 @@ describe("workspace-bound external sessions (#11789)", () => {
         // Executed through the caller's bound messaging access (#13335).
         "assistant.getInbox": { args: {} },
         "assistant.reply": { args: { taskId: "task-1", state: "completed", text: "x" } },
+        "assistant.sendMessage": { args: { text: "x" } },
       };
 
       function viewlessDepsFor(name: string): SessionServerDeps {

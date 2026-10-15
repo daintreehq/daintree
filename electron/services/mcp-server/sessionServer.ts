@@ -174,6 +174,7 @@ import {
   ASSISTANT_GET_INBOX_TOOL,
   ASSISTANT_MESSAGING_TOOL_IDS,
   ASSISTANT_REPLY_TOOL,
+  ASSISTANT_SEND_MESSAGE_TOOL,
 } from "../../../shared/types/assistantMessaging.js";
 import {
   auditCodeForMessagingRefusal,
@@ -247,6 +248,7 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // (#13335); the lane is read from the caller's bearer, never a view.
   ASSISTANT_GET_INBOX_TOOL,
   ASSISTANT_REPLY_TOOL,
+  ASSISTANT_SEND_MESSAGE_TOOL,
 ]);
 /**
  * The main-process executors an owned tool can name. Kept apart from the rest
@@ -1307,6 +1309,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     sessionStore.sessionHelpIdMap.has(sessionId) &&
     assistantMessaging.isAvailable();
 
+  // Whether this session may also start a message to its Shell's hub
+  // (#13338): a lane a remote Shell enrolled, never the hub itself.
+  const laneSendingAvailable = (): boolean =>
+    laneMessagingAvailable() && assistantMessaging?.isSendAvailable() === true;
+
   // Whether this session is this Shell's enrolled hub while a host exists
   // (#13336). Read per listing, never cached.
   const hubMessagingAvailable = (): boolean =>
@@ -1455,6 +1462,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       ...sessionSurface,
       rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
       assistantMessaging: laneMessagingAvailable(),
+      assistantSending: laneSendingAvailable(),
       hubMessaging: hubMessagingAvailable(),
     };
     const tools = manifest
@@ -1686,6 +1694,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // enrolled (#13335), whatever its tier or grants; discovery agrees.
           if (!laneMessagingAvailable()) {
             for (const id of ASSISTANT_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
+          } else if (!laneSendingAvailable()) {
+            permittedActionIds.delete(ASSISTANT_SEND_MESSAGE_TOOL);
           }
           // Likewise the hub's host tools, offered only to the hub itself (#13336).
           if (!hubMessagingAvailable()) {
@@ -3325,23 +3335,27 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
-        // Short-circuit: an enrolled lane's inbox and replies (#13335) live in
-        // main beside the exchange records. The lane comes from this session's
+        // Short-circuit: an enrolled lane's inbox, replies (#13335) and its
+        // messages to the hub (#13338) live in main beside the exchange records. The lane comes from this session's
         // help bearer alone, so the access check is the call itself: every
         // other bearer, and a lane no longer enrolled as it was, is refused
         // here whatever admitted the call above. Refusals are fixed text and
         // results never carry a body into the audit (see its projections).
-        if (actionId === ASSISTANT_GET_INBOX_TOOL || actionId === ASSISTANT_REPLY_TOOL) {
+        if (ASSISTANT_MESSAGING_TOOL_IDS.has(actionId)) {
           emitToolCallStarted(false);
           try {
             // Help-session bearers only, as for help.displayImage: a pane or
             // api-key bearer has no lane, whatever its tier admitted.
+            // Sending is narrower again: only a lane a remote Shell enrolled,
+            // so the hub, which has the inbox tools, is refused it here too.
+            const eligible =
+              assistantMessaging !== undefined &&
+              sessionStore.sessionHelpIdMap.has(sessionId) &&
+              (actionId !== ASSISTANT_SEND_MESSAGE_TOOL || laneSendingAvailable());
             const settled = runAssistantMessagingTool(
               actionId,
               args,
-              assistantMessaging !== undefined && sessionStore.sessionHelpIdMap.has(sessionId)
-                ? assistantMessaging
-                : undefined
+              eligible ? assistantMessaging : undefined
             );
             if (!settled.ok) {
               outcome = {
@@ -3480,6 +3494,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 ...sessionSurface,
                 rendererOwnedOrigin,
                 assistantMessaging: laneMessagingAvailable(),
+                assistantSending: laneSendingAvailable(),
                 hubMessaging: hubMessagingAvailable(),
               }
             );
