@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
@@ -9,6 +17,7 @@ import {
   useMarkdownRenderPolicy,
 } from "@/components/Markdown/markdownRenderPolicy";
 import { MARKDOWN_FONT_SIZE_TOKEN } from "@/components/Markdown/MarkdownDocument";
+import { MarkdownTableLabelPrefix } from "@/components/Markdown/MarkdownTable";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { cn } from "@/lib/utils";
@@ -127,6 +136,13 @@ const BLOCK_LABEL: Record<BlockKind, string> = {
   unchanged: "",
   added: "Added block:",
   removed: "Removed block:",
+};
+
+/** Tells the two tab stops of a changed table apart (see `MarkdownTableLabelPrefix`). */
+const TABLE_LABEL_PREFIX: Record<BlockKind, string | undefined> = {
+  unchanged: undefined,
+  added: "Added",
+  removed: "Removed",
 };
 
 /**
@@ -305,15 +321,17 @@ function DiffBlock({
       data-whole={whole ? "true" : "false"}
     >
       {kind !== "unchanged" && <span className="sr-only">{BLOCK_LABEL[kind]}</span>}
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={rehypePlugins}
-        urlTransform={urlTransform}
-        components={components}
-        skipHtml
-      >
-        {content}
-      </ReactMarkdown>
+      <MarkdownTableLabelPrefix value={TABLE_LABEL_PREFIX[kind]}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={rehypePlugins}
+          urlTransform={urlTransform}
+          components={components}
+          skipHtml
+        >
+          {content}
+        </ReactMarkdown>
+      </MarkdownTableLabelPrefix>
     </div>
   );
 }
@@ -525,6 +543,138 @@ function UnchangedRun({
   );
 }
 
+/** Keys that scroll a focused table or activate something in it. */
+const READER_SCROLL_KEYS = new Set([
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+  " ",
+  "Enter",
+]);
+
+/** A table's column spans from its first row, in its viewport's scroll coordinates. */
+function columnSpans(viewport: HTMLElement): Array<[left: number, width: number]> {
+  const row = viewport.querySelector("tr");
+  if (!row) return [];
+  return [...row.children].map((cell) => {
+    const box = cell as HTMLElement;
+    return [box.offsetLeft, box.offsetWidth];
+  });
+}
+
+/** The leader's scroll offset, as the same point within the same column of the follower. */
+function correspondingOffset(leader: HTMLElement, follower: HTMLElement): number {
+  const from = columnSpans(leader);
+  const to = columnSpans(follower);
+  const offset = leader.scrollLeft;
+  if (from.length === 0 || from.length !== to.length) return offset;
+  const index = from.findIndex(([left, width]) => offset < left + width);
+  if (index === -1) return follower.scrollWidth;
+  const [left, width] = from[index]!;
+  const [targetLeft, targetWidth] = to[index]!;
+  return targetLeft + ((offset - left) / Math.max(width, 1)) * targetWidth;
+}
+
+/**
+ * The two halves of a changed table scroll as one. Each sits in its own
+ * viewport, so a reviewer who found the changed column in the removed table
+ * would otherwise have to find it again in the added one. Both open on the
+ * first change, since that column is what the reader came for.
+ *
+ * Each viewport follows the other by column rather than by pixel: the edit
+ * that made the pair usually changes a column's width, and a shared pixel
+ * offset would show two different column boundaries at the left edge. A
+ * follower's own scroll event is recognised by the offset it was given and not
+ * passed back, so a clamped echo cannot pin the wider half to the narrower
+ * one's end.
+ */
+function useLinkedTableScroll(pairRef: RefObject<HTMLDivElement | null>, contentKey: string) {
+  useEffect(() => {
+    const pair = pairRef.current;
+    if (!pair) return;
+    // Only a one-table-per-half pair has an obvious partner for each table.
+    const halves = [...pair.children].map((half) =>
+      half.querySelectorAll<HTMLElement>(".markdown-table__viewport")
+    );
+    if (halves.length !== 2 || halves.some((tables) => tables.length !== 1)) return;
+    const removed = halves[0]![0]!;
+    const added = halves[1]![0]!;
+
+    const echoes = new Map<HTMLElement, number>();
+    const follow = (leader: HTMLElement, follower: HTMLElement) => () => {
+      if (echoes.get(leader) === leader.scrollLeft) {
+        echoes.delete(leader);
+        return;
+      }
+      const before = follower.scrollLeft;
+      follower.scrollLeft = correspondingOffset(leader, follower);
+      if (follower.scrollLeft !== before) echoes.set(follower, follower.scrollLeft);
+    };
+    const fromRemoved = follow(removed, added);
+    const fromAdded = follow(added, removed);
+    removed.addEventListener("scroll", fromRemoved, { passive: true });
+    added.addEventListener("scroll", fromAdded, { passive: true });
+
+    // Opens the pair on its first change, re-checked whenever a table or its
+    // viewport settles at a new size — the wide layout lands in a later
+    // commit, fonts later still, and a narrowing pane can push the change back
+    // out — until the reader moves the table themselves. Tab passing through
+    // is not that; a scroll or activation key is. The change counts as shown
+    // only clear of the edge fades (the viewport's scroll padding); the whole
+    // cell is brought in when it fits, otherwise the change itself.
+    let readerMoved = false;
+    const yieldToReader = () => {
+      readerMoved = true;
+    };
+    const yieldToKey = (event: KeyboardEvent) => {
+      if (READER_SCROLL_KEYS.has(event.key)) readerMoved = true;
+    };
+    const reveal = () => {
+      if (readerMoved) return;
+      const mark =
+        added.querySelector(".rendered-markdown-diff__inline") ??
+        removed.querySelector(".rendered-markdown-diff__inline");
+      const cell = mark?.closest("td, th");
+      if (!mark || !cell) return;
+      const viewport = added.contains(mark) ? added : removed;
+      const box = viewport.getBoundingClientRect();
+      const inset = parseFloat(getComputedStyle(viewport).scrollPaddingLeft) || 0;
+      const left = box.left + inset;
+      const right = box.right - inset;
+      const change = mark.getBoundingClientRect();
+      if (change.left >= left && change.right <= right) return;
+      const whole = cell.getBoundingClientRect();
+      const anchor = whole.width <= right - left ? whole : change;
+      viewport.scrollLeft += anchor.left - left;
+    };
+    const intents = ["wheel", "pointerdown"] as const;
+    for (const type of intents) {
+      pair.addEventListener(type, yieldToReader, { capture: true, passive: true });
+    }
+    pair.addEventListener("keydown", yieldToKey, { capture: true, passive: true });
+    const layout = new ResizeObserver(reveal);
+    for (const viewport of [removed, added]) {
+      layout.observe(viewport);
+      if (viewport.firstElementChild) layout.observe(viewport.firstElementChild);
+    }
+
+    return () => {
+      layout.disconnect();
+      for (const type of intents) pair.removeEventListener(type, yieldToReader, { capture: true });
+      pair.removeEventListener("keydown", yieldToKey, { capture: true });
+      removed.removeEventListener("scroll", fromRemoved);
+      added.removeEventListener("scroll", fromAdded);
+    };
+    // Re-linked when the pair's text changes, since the tables may be new
+    // nodes; a refresh that changes nothing keeps the reader's position.
+  }, [pairRef, contentKey]);
+}
+
 function BlockChange({
   change,
   oldDefinitions,
@@ -540,29 +690,13 @@ function BlockChange({
 }) {
   const shared = { components, urlTransform };
   if (change.kind === "modified") {
-    // Removed then added, GitHub's ordering: the reader sees what the block
-    // said before the replacement that follows it.
     return (
-      <div className="rendered-markdown-diff__pair">
-        <DiffBlock
-          kind="removed"
-          source={change.old.source}
-          definitions={change.old.referenceIds.length ? oldDefinitions : ""}
-          ranges={change.inline.old}
-          expectedText={change.old.text}
-          whole={false}
-          {...shared}
-        />
-        <DiffBlock
-          kind="added"
-          source={change.new.source}
-          definitions={change.new.referenceIds.length ? newDefinitions : ""}
-          ranges={change.inline.new}
-          expectedText={change.new.text}
-          whole={false}
-          {...shared}
-        />
-      </div>
+      <ModifiedPair
+        change={change}
+        oldDefinitions={oldDefinitions}
+        newDefinitions={newDefinitions}
+        {...shared}
+      />
     );
   }
   const kind = change.kind === "unchanged" ? "unchanged" : change.kind;
@@ -581,5 +715,47 @@ function BlockChange({
       whole={kind !== "unchanged"}
       {...shared}
     />
+  );
+}
+
+function ModifiedPair({
+  change,
+  oldDefinitions,
+  newDefinitions,
+  components,
+  urlTransform,
+}: {
+  change: Extract<MarkdownBlockChange, { kind: "modified" }>;
+  oldDefinitions: string;
+  newDefinitions: string;
+  components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
+  urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
+}) {
+  const pairRef = useRef<HTMLDivElement>(null);
+  useLinkedTableScroll(pairRef, `${change.old.source}\n${change.new.source}`);
+  const shared = { components, urlTransform };
+  // Removed then added, GitHub's ordering: the reader sees what the block
+  // said before the replacement that follows it.
+  return (
+    <div ref={pairRef} className="rendered-markdown-diff__pair">
+      <DiffBlock
+        kind="removed"
+        source={change.old.source}
+        definitions={change.old.referenceIds.length ? oldDefinitions : ""}
+        ranges={change.inline.old}
+        expectedText={change.old.text}
+        whole={false}
+        {...shared}
+      />
+      <DiffBlock
+        kind="added"
+        source={change.new.source}
+        definitions={change.new.referenceIds.length ? newDefinitions : ""}
+        ranges={change.inline.new}
+        expectedText={change.new.text}
+        whole={false}
+        {...shared}
+      />
+    </div>
   );
 }
