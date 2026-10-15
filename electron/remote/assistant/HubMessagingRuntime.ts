@@ -161,6 +161,12 @@ class RefusalError extends Error {
 }
 
 const MINUTE_MS = 60_000;
+/** Outcomes the host gives a send it refused outright, recording nothing. */
+const REFUSED_UNRECORDED: ReadonlySet<HostMessagingOutcomeCode> = new Set([
+  "policy_rejected",
+  "lane_unavailable",
+  "paused",
+]);
 /** Sends to one host, and to all, per minute; reads and cancels across all hosts. */
 export const HUB_SENDS_PER_HOST_PER_MINUTE = 10;
 export const HUB_SENDS_PER_MINUTE = 30;
@@ -195,7 +201,8 @@ export function toHostTask(record: ExchangeRecord): HostTask {
     state: record.state,
     outcomeCode: record.outcome,
     delivery: {
-      acceptedAt: record.delivery.acceptedAt,
+      // The host holding a record is what accepting means ("Accepted means recorded").
+      acceptedAt: record.delivery.acceptedAt ?? record.createdAt,
       wakeTypedAt: record.delivery.wakeTypedAt,
       inboxFetchedAt: record.delivery.inboxFetchedAt,
       replyReceivedAt: record.delivery.replyReceivedAt,
@@ -273,6 +280,20 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     return !this.disposed && this.isHub(helpSessionId) && this.deps.hosts().length > 0;
   }
 
+  /**
+   * Whether this session could become the hub while a host exists. Its tools
+   * are offered on that alone, for clients that read the tool list once; the
+   * calls refuse until it is enrolled as the hub.
+   */
+  isReachable(helpSessionId: string): boolean {
+    return (
+      !this.disposed &&
+      this.deps.policy.isSupported() &&
+      this.deps.getSessionLane(helpSessionId) !== null &&
+      this.deps.hosts().length > 0
+    );
+  }
+
   /** Stops outstanding waits; exchanges on hosts are left as they are. */
   dispose(): void {
     this.disposed = true;
@@ -321,13 +342,16 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       const base = { lanes: null };
       const refused = this.refuse(args.hostId, "inspect") ?? this.limitRead();
       if (refused) return { ...refused, ...base };
+      // Listing passes the pause; taking a message doesn't, so no lane takes one now.
+      const admits = this.deps.policy.checkHost({ hostId: args.hostId, kind: "admit" });
+      const paused = !admits.ok && admits.reason === "paused";
       try {
         const listed = await this.requireClient().listLanes(args.hostId);
         const lanes = listed.map((lane) => ({
           projectId: lane.projectId,
           slot: lane.slot,
           generation: lane.generation,
-          available: lane.available,
+          available: lane.available && !paused,
         }));
         this.observeLanes(args.hostId, lanes);
         return { ...this.ok(), lanes };
@@ -377,6 +401,11 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
         }
         if (codeOf(error) === "VALIDATION") return { ...this.outcome("conflict"), ...base };
         const named = errorOutcome(error);
+        // A fresh send the host refused outright recorded nothing: there is no
+        // task to follow. A resend keeps its id, which may still name one.
+        if (named !== null && REFUSED_UNRECORDED.has(named) && args.taskId === undefined) {
+          return { ...this.outcome(named), ...base, taskId: null, contextId: null };
+        }
         if (named !== null) return { ...this.outcome(named), ...base };
         // Not proven undelivered: the journal still holds the attempt for a lookup.
         console.warn("[HubMessaging] A send ended without a known outcome:", error);

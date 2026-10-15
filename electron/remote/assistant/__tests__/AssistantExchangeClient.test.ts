@@ -66,6 +66,7 @@ class FakeHost {
   gate: Promise<void> | null = null;
   handlers = new Map<string, (payload: unknown) => unknown>();
   failNextList = false;
+  authCalls = 0;
 
   put(messageId: string, state: ExchangeState, replied = false): ExchangeRecord {
     const next = record(messageId, ++this.revision, state);
@@ -80,6 +81,7 @@ class FakeHost {
       call: async (method: string, payload: unknown) => {
         switch (method) {
           case AssistantLinkMethod.AUTHENTICATE:
+            this.authCalls++;
             return null;
           case AssistantLinkMethod.SEND: {
             const { messageId } = payload as { messageId: string };
@@ -120,6 +122,65 @@ class FakeHost {
     return this.handlers.get(AssistantLinkMethod.EXCHANGE_CHANGED)!({ revision: this.revision });
   }
 }
+
+describe("AssistantExchangeClient proving its sender (#13332)", () => {
+  let dir: string;
+  let sqlite: Database.Database;
+  let journal: AssistantExchangeJournal;
+  let client: AssistantExchangeClient;
+
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-exchange-auth-"));
+    sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    journal = new AssistantExchangeJournal(sqlite);
+  });
+
+  afterEach(() => {
+    client.dispose();
+    sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("proves itself on a new session to a host it may message, before it ever sent there", async () => {
+    let enabled = false;
+    let opened: (hostId: string, session: LinkSession) => void = () => {};
+    const host = new FakeHost();
+    const session = host.session();
+    client = new AssistantExchangeClient({
+      journal,
+      session: async () => session,
+      onSessionOpened: (listener) => {
+        opened = listener;
+        return () => {};
+      },
+      messagingEnabled: () => enabled,
+    });
+    client.start();
+
+    opened(HOST, session);
+    await settle();
+    expect(host.authCalls).toBe(0);
+
+    // Turned on while that session stays open: proven now, once.
+    enabled = true;
+    client.authenticateOpen(HOST);
+    await settle();
+    client.authenticateOpen(HOST);
+    await settle();
+    expect(host.authCalls).toBe(1);
+
+    const later = new FakeHost();
+    const next = later.session();
+    opened(HOST, next);
+    await settle();
+    expect(later.authCalls).toBe(1);
+  });
+});
 
 describe("AssistantExchangeClient change events", () => {
   let dir: string;

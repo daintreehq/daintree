@@ -229,6 +229,59 @@ describe("AssistantHostOutbox", () => {
     expect(second.ok && second.value.hopCount).toBe(1);
   });
 
+  it("keeps a message waiting while its Shell has no hub, then sends it once there is one", async () => {
+    let hub = false;
+    const shell = fakeSession("link-a", () =>
+      hub ? accepted() : { status: "refused", refusal: "no_hub" }
+    );
+    connect(shell);
+    outbox.enqueue(enrollment(), { text: "studio-02 is blocked on the schema" });
+    await settle();
+    // Told once why it waits, and nothing is dropped.
+    expect(outbox.listSent(enrollment(), 0, 10).sent[0]).toMatchObject({
+      state: "waiting-for-hub",
+      refusal: "no_hub",
+    });
+    expect(wakes).toHaveLength(1);
+    // A lane reading from its cursor sees why it waits.
+    expect(outbox.listSent(enrollment(), 1, 10).sent[0]).toMatchObject({ refusal: "no_hub" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(shell.calls).toHaveLength(2);
+    expect(wakes).toHaveLength(1);
+
+    hub = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(shell.calls).toHaveLength(3);
+    expect((shell.calls[2]!.payload as SendToHubPayload).body).toBe(
+      "studio-02 is blocked on the schema"
+    );
+    expect(outbox.listSent(enrollment(), 0, 10).sent[0]).toMatchObject({
+      state: "submitted",
+      refusal: null,
+    });
+  });
+
+  it("sends what waited on a Shell's old session over the one it came back on", async () => {
+    outbox.enqueue(enrollment(), { text: "done on feature/x", contextId: "ctx" });
+    const later = fakeSession("link-a2", () => accepted());
+    connect(later);
+    await settle();
+    expect(later.calls).toEqual([]);
+
+    outbox.rebindSession({ from: "link-a", to: "link-a2" });
+    await settle();
+    expect(later.calls.map((c) => c.method)).toEqual([AssistantLinkMethod.SEND_TO_HUB]);
+    // The conversation's hops moved with it.
+    const next = outbox.enqueue(
+      enrollment({ enrolledBy: { kind: "remote", linkSessionId: "link-a2" } }),
+      {
+        text: "and the follow-up",
+        contextId: "ctx",
+      }
+    );
+    expect(next.ok && next.value.hopCount).toBe(2);
+  });
+
   it("reads a Shell from before the call as not supporting it", async () => {
     const shell = fakeSession("link-a", () => {
       throw Object.assign(new Error("Unknown method"), { code: "UNSUPPORTED" });

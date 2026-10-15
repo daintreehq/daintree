@@ -6,6 +6,8 @@ import type * as HelpSessionServiceModule from "../../services/HelpSessionServic
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import type { ClientEndpoint, RemoteEndpointCloseCause } from "../endpoint.js";
 import { getEndpointRegistry } from "../endpointRegistry.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
+import { installDetachedAdoption } from "./helpDetachedAdoption.js";
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
@@ -50,6 +52,11 @@ async function getHelpSessionService(): Promise<typeof HelpSessionServiceModule>
     cachedHelpSessionService = await import("../../services/HelpSessionService.js");
   }
   return cachedHelpSessionService;
+}
+
+/** The session service if something has loaded it; nothing can be detached before then. */
+function helpSessionServiceIfLoaded(): HelpSessionServiceModule.HelpSessionService | null {
+  return cachedHelpSessionService?.helpSessionService ?? null;
 }
 
 async function handleGetFolderPath(): Promise<string | null> {
@@ -456,9 +463,9 @@ async function handlePeekPendingHibernation(
  */
 function liveLaneOptions(
   ctx: import("../types.js").IpcContext
-): { isTerminalLive: (terminalId: string) => boolean } | undefined {
+): { isTerminalLive: (terminalId: string) => boolean; viewHandle: number } | undefined {
   return !ctx.senderWindow && ctx.endpoint.kind === "remote-view"
-    ? { isTerminalLive: isAssistantTerminalLive }
+    ? { isTerminalLive: isAssistantTerminalLive, viewHandle: ctx.endpoint.handle }
     : undefined;
 }
 
@@ -703,6 +710,86 @@ export const helpNamespace = defineIpcNamespace({
   },
 });
 
+/**
+ * A view of a project coming back takes over that project's detached
+ * assistants at once (#13389), its panel open or not. Until then the
+ * assistant's MCP session is pinned to the view that went, so every Daintree
+ * tool it calls fails: an assistant left working, or one other machines'
+ * assistants are messaging, would be cut off until someone opened its panel.
+ * Nothing launches. Only the view that drives the project takes one (see
+ * `adoptForReturningViews`), and the service re-checks everything under the
+ * lane's lock.
+ */
+function installDetachedAssistantAdoption(): () => void {
+  // The lease service exists only once Host mode is installed, which may be
+  // after this runs; its changes matter too, since a returning Shell gets the
+  // lease back after its view attaches.
+  let offLease: (() => void) | null = null;
+  return installDetachedAdoption({
+    remoteEndpoints: () => getEndpointRegistry().getRemote(),
+    drivingEndpointId: (projectId) =>
+      peekDriveLeaseService()?.getHolderEndpoint(projectId)?.endpointId ?? null,
+    detachedSlots: (projectId) => helpSessionServiceIfLoaded()?.detachedSlots(projectId) ?? [],
+    adopt: async (projectId, slot, endpoint) => {
+      const { helpSessionService } = await getHelpSessionService();
+      return helpSessionService.adoptDetachedSession(
+        projectId,
+        slot,
+        endpoint.handle,
+        probeAssistantTerminal,
+        { keepRestoreIntent: true }
+      );
+    },
+    release: async (endpoint, projectId, adopted) => {
+      const { helpSessionService } = await getHelpSessionService();
+      // As the IPC path does: closed, back to detached; moved, never kept by another project.
+      if (endpoint.isClosed()) {
+        await detachRemoteViewSessions(helpSessionService, endpoint, {
+          cause: endpoint.closeCause ?? null,
+        });
+      } else if (endpoint.projectId !== projectId) {
+        await helpSessionService.revokeSession(adopted.lane.sessionId);
+      }
+    },
+    adopted: (endpoint, projectId, slot, adopted) => {
+      const service = helpSessionServiceIfLoaded();
+      if (service) trackRemoteViewSessions(service, endpoint, projectId);
+      logger.info("A returning view took over its project's running assistant", {
+        ...remoteViewFields(endpoint, { cause: null }),
+        slot,
+        helpSessionId: adopted.lane.sessionId,
+      });
+    },
+    onChange: (listener) => {
+      const watchLease = (): void => {
+        if (offLease) return;
+        const lease = peekDriveLeaseService();
+        if (lease) offLease = lease.onChange(listener);
+      };
+      watchLease();
+      const offRegistry = getEndpointRegistry().onChange(() => {
+        watchLease();
+        listener();
+      });
+      return () => {
+        offRegistry();
+        offLease?.();
+        offLease = null;
+      };
+    },
+    onFailure: (err) => {
+      logger.warn("Taking over a returning view's assistant failed", {
+        reason: formatErrorMessage(err, "adopt failed"),
+      });
+    },
+  });
+}
+
 export function registerHelpHandlers(): () => void {
-  return helpNamespace.register();
+  const unregister = helpNamespace.register();
+  const offAdoption = installDetachedAssistantAdoption();
+  return () => {
+    offAdoption();
+    unregister();
+  };
 }

@@ -40,6 +40,8 @@ export interface AssistantExchangeClientDeps {
   onExchangesMoved?: (hostId: HostId, moved: MovedExchange[]) => void;
   /** Admits what a host's assistants send this Shell's hub (#13338); absent, the Shell refuses them. */
   hubReceiver?: () => Pick<AssistantHubReceiver, "receive" | "lookUp"> | undefined;
+  /** This Shell's per-host opt-in; a host with it on is authenticated on every new session. */
+  messagingEnabled?: (hostId: HostId) => boolean;
   callTimeoutMs?: number;
 }
 
@@ -127,9 +129,11 @@ function invalidAnswer(hostId: HostId, method: string): AppError {
 /**
  * The Shell's side of assistant exchanges: the calls it makes on a host, and
  * the journal it keeps of what it sent. Every session that opens to a host
- * this Shell has sent to reconciles: it reads the host's changes since the
- * journal's cursor and looks up each send whose answer it never got. A host
- * that sleeps or a link that drops leaves an exchange where it was.
+ * this Shell has sent to, or may message, authenticates and reconciles: it
+ * reads the host's changes since the journal's cursor and looks up each send
+ * whose answer it never got. Authenticating is also what brings back the lanes
+ * this Shell enrolled over an earlier session. A host that sleeps or a link
+ * that drops leaves an exchange where it was.
  */
 export class AssistantExchangeClient {
   private readonly authenticated = new WeakSet<LinkSession>();
@@ -174,7 +178,14 @@ export class AssistantExchangeClient {
           MessageIdPayloadSchema,
           ({ messageId }) => this.requireReceiver().lookUp(hostId, messageId)
         );
-        if (this.deps.journal.existingCredential(hostId) === null) return;
+        // A host this Shell may message proves its sender at once, so lanes
+        // enrolled over an earlier session follow it here (#13332).
+        if (
+          this.deps.journal.existingCredential(hostId) === null &&
+          this.deps.messagingEnabled?.(hostId) !== true
+        ) {
+          return;
+        }
         void this.reconcile(hostId, session);
       })
     );
@@ -191,6 +202,17 @@ export class AssistantExchangeClient {
     this.retries.clear();
     this.sentBy.clear();
     this.live.clear();
+  }
+
+  /**
+   * Proves this Shell's sender on a host's open session if it hasn't yet, as
+   * when messaging was turned on for a host already connected. A lane enrolled
+   * over a session whose sender was never proven ends with that session.
+   */
+  authenticateOpen(hostId: HostId): void {
+    const session = this.live.get(hostId);
+    if (this.disposed || !session?.isOpen || this.authenticated.has(session)) return;
+    void this.reconcile(hostId, session);
   }
 
   /**

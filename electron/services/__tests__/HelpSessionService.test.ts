@@ -400,6 +400,64 @@ describe("HelpSessionService", () => {
         expect(mockPtyKill).toHaveBeenCalledWith("term-local", "help-session-revoked");
       });
 
+      it("lists the slots a returning view can take over, and none once taken", async () => {
+        await launchRemote();
+        expect(service.detachedSlots("proj-1")).toEqual([]);
+        await service.detachByWebContentsId(HANDLE);
+        expect(service.detachedSlots("proj-1")).toEqual([0]);
+        expect(service.detachedSlots("proj-2")).toEqual([]);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(service.detachedSlots("proj-1")).toEqual([]);
+      });
+
+      it("retires the MCP transports only when the pin moves, never for the view already holding it", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe, {
+          keepRestoreIntent: true,
+        });
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
+        // That view's panel binding a pane to it afterwards leaves the connection alone.
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
+      });
+
+      it("keeps the panel's restore intent through a host take-over until the view's own", async () => {
+        await launchRemote();
+        service.reportPanelOpen("proj-1", true);
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe, {
+          keepRestoreIntent: true,
+        });
+        const peek = () =>
+          service.peekPendingHibernation("proj-1", 0, {
+            isTerminalLive: live,
+            viewHandle: NEXT_HANDLE,
+          });
+        expect(peek()).toMatchObject({ live: true, panelWasOpen: true });
+        // The view's own take-over consumes it.
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(peek()).toMatchObject({ live: true, panelWasOpen: false });
+      });
+
+      it("still offers the running assistant to the view its host handed it to", async () => {
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+
+        // Taken over before that view's panel showed it: shown as running, not resumed.
+        expect(
+          service.peekPendingHibernation("proj-1", 0, {
+            isTerminalLive: live,
+            viewHandle: NEXT_HANDLE,
+          })
+        ).toMatchObject({ live: true, agentId: "claude" });
+        // Another view is never told it can have it.
+        expect(
+          service.peekPendingHibernation("proj-1", 0, { isTerminalLive: live, viewHandle: -9 })
+        ).toBeNull();
+      });
+
       it("hands the running assistant to the next view of its project", async () => {
         const result = await launchRemote();
         await service.detachByWebContentsId(HANDLE);

@@ -8,9 +8,10 @@ import type {
 
 /**
  * The Shell a lane answers to. A remote Shell is the link session this host
- * issued it: a fresh connection never inherits consent given over another,
- * and a resume keeps it only by presenting that session's secret. The client
- * id a Shell claims is not proof of identity, so it never appears here.
+ * issued it; a resume keeps it by presenting that session's secret. The client
+ * id a Shell claims is not proof of identity, so it never appears here. A
+ * lane's enrollment also records the sender credential that session proved
+ * (`LaneEnrollment.sender`), which alone moves consent to a later session.
  */
 export type MessagingShell = { kind: "local" } | { kind: "remote"; linkSessionId: string };
 
@@ -31,6 +32,14 @@ export interface LaneEnrollment {
   launchGeneration: number;
   enrolledBy: MessagingShell;
   enrolledAt: number;
+  /**
+   * The assistant sender the enrolling Shell proved on its link session, once
+   * it has. Consent follows that Shell rather than one connection: when the
+   * session ends the enrollment waits, and the same sender authenticating a
+   * later session takes it over with the same generation. Unproven, the
+   * enrollment ends with its session.
+   */
+  sender?: string;
 }
 
 /**
@@ -115,6 +124,12 @@ function copyEnrollment(enrollment: LaneEnrollment): LaneEnrollment {
   return { ...enrollment, enrolledBy: { ...enrollment.enrolledBy } };
 }
 
+/** A remote Shell's enrollments moved from one of its link sessions to a later one. */
+export interface SessionRebind {
+  from: string;
+  to: string;
+}
+
 function endReasonFor(reason: HelpSessionEndedEvent["reason"]): EnrollmentEndReason {
   switch (reason) {
     case "revoked":
@@ -148,6 +163,8 @@ export class AssistantMessagingPolicy {
   /** Enrollments that ended without being withdrawn, kept until the lane is enrolled again. */
   private readonly ended = new Map<string, EnrollmentEnded>();
   private readonly changeListeners = new Set<() => void>();
+  /** Live link sessions and the sender each proved; gone with the session. */
+  private readonly sessionSenders = new Map<string, string>();
   private revision = 0;
   private paused = false;
   private readonly platform: NodeJS.Platform;
@@ -176,7 +193,9 @@ export class AssistantMessagingPolicy {
     const key = laneKey(lane);
     if (key === null || !isValidShell(shell)) return { ok: false, reason: "invalid-lane" };
     const existing = this.current(key);
-    if (existing && !sameShell(existing.enrolledBy, shell)) {
+    // A Shell that's away can't keep the lane from one that's here: enrolling
+    // below replaces its waiting consent, and only once nothing else refuses.
+    if (existing && !sameShell(existing.enrolledBy, shell) && !this.waiting(existing)) {
       return { ok: false, reason: "wrong-shell" };
     }
     if (shell.kind === "local") {
@@ -199,32 +218,96 @@ export class AssistantMessagingPolicy {
           : { kind: "remote", linkSessionId: shell.linkSessionId },
       enrolledAt: this.now(),
     };
+    const sender =
+      shell.kind === "remote" ? this.sessionSenders.get(shell.linkSessionId) : undefined;
+    if (sender !== undefined) enrollment.sender = sender;
     this.enrollments.set(key, enrollment);
     this.ended.delete(key);
     this.changed();
     return { ok: true, enrollment: copyEnrollment(enrollment) };
   }
 
-  /** Withdraw consent. Only the Shell that enrolled the lane, naming the current generation. */
+  /**
+   * Withdraw consent, naming the current generation. Only the Shell that
+   * enrolled the lane, except while that Shell is away: anyone with a view of
+   * the lane may then turn it off, since withdrawing never gives access.
+   */
   unenroll(lane: LaneRef, shell: MessagingShell, generation: string): boolean {
     const key = laneKey(lane);
     if (key === null) return false;
     const existing = this.current(key);
     if (!existing || existing.generation !== generation) return false;
-    if (!sameShell(existing.enrolledBy, shell)) return false;
+    if (!sameShell(existing.enrolledBy, shell) && !this.waiting(existing)) return false;
     this.enrollments.delete(key);
     this.ended.delete(key);
     this.changed();
     return true;
   }
 
-  /** Ends every enrollment a remote Shell made, once its link session is gone for good. */
+  /**
+   * A link session proved which Shell's assistant sender it carries. Its
+   * enrollments record that sender, and those the same sender made over an
+   * earlier session move to this one, keeping their generation: a Shell that
+   * restarted, slept past the resume window or let an idle link go comes back
+   * to the lanes it enrolled. Another sender's never move.
+   */
+  bindSender(linkSessionId: string, senderId: string): SessionRebind[] {
+    if (linkSessionId.length === 0 || senderId.length === 0) return [];
+    // A session proves one sender for its whole life, resumes included.
+    const proven = this.sessionSenders.get(linkSessionId);
+    if (proven !== undefined && proven !== senderId) return [];
+    this.sessionSenders.set(linkSessionId, senderId);
+    const rebinds = new Map<string, string>();
+    let changed = false;
+    for (const enrollment of this.enrollments.values()) {
+      const by = enrollment.enrolledBy;
+      if (by.kind !== "remote") continue;
+      if (by.linkSessionId === linkSessionId) {
+        if (enrollment.sender === undefined) {
+          enrollment.sender = senderId;
+          changed = true;
+        }
+        continue;
+      }
+      if (enrollment.sender !== senderId) continue;
+      rebinds.set(by.linkSessionId, linkSessionId);
+      enrollment.enrolledBy = { kind: "remote", linkSessionId };
+      changed = true;
+    }
+    if (changed) this.changed();
+    return [...rebinds].map(([from, to]) => ({ from, to }));
+  }
+
+  /** The sender a live link session proved, if it has. */
+  sessionSender(linkSessionId: string): string | undefined {
+    return this.sessionSenders.get(linkSessionId);
+  }
+
+  /**
+   * Whether the lane's enrollment is waiting for its Shell to come back: made
+   * by a Shell whose sender was proven, over a session that has since ended.
+   */
+  isWaiting(lane: LaneRef): boolean {
+    const key = laneKey(lane);
+    const enrollment = key === null ? undefined : this.current(key);
+    return enrollment !== undefined && this.waiting(enrollment);
+  }
+
+  /**
+   * A remote Shell's link session is gone for good. Enrollments its sender
+   * was proven on wait for that Shell's next session (see `bindSender`):
+   * their lanes can still read and answer what already reached them, and
+   * what they write to the hub waits in the outbox, but no message reaches
+   * them until it is back. The rest end.
+   */
   releaseLinkSession(linkSessionId: string): void {
+    this.sessionSenders.delete(linkSessionId);
     let released = false;
     for (const [key, enrollment] of this.enrollments) {
       const by = enrollment.enrolledBy;
       if (by.kind === "remote" && by.linkSessionId === linkSessionId) {
-        this.end(key, enrollment, "shell-gone", false);
+        // Waiting now, which views show: the change is announced either way.
+        if (enrollment.sender === undefined) this.end(key, enrollment, "shell-gone", false);
         released = true;
       }
     }
@@ -233,6 +316,7 @@ export class AssistantMessagingPolicy {
 
   /** Ends every remote Shell's enrollments: this host stopped listening, so none can resume. */
   releaseRemoteShells(): void {
+    this.sessionSenders.clear();
     let released = false;
     for (const [key, enrollment] of this.enrollments) {
       if (enrollment.enrolledBy.kind !== "remote") continue;
@@ -350,6 +434,7 @@ export class AssistantMessagingPolicy {
     this.changeListeners.clear();
     this.enrollments.clear();
     this.ended.clear();
+    this.sessionSenders.clear();
     this.paused = false;
   }
 
@@ -380,6 +465,15 @@ export class AssistantMessagingPolicy {
     if (!replaced) return enrollment;
     this.end(key, enrollment, "relaunched");
     return undefined;
+  }
+
+  private waiting(enrollment: LaneEnrollment): boolean {
+    const by = enrollment.enrolledBy;
+    return (
+      by.kind === "remote" &&
+      enrollment.sender !== undefined &&
+      this.sessionSenders.get(by.linkSessionId) !== enrollment.sender
+    );
   }
 
   private isRunning(enrollment: LaneEnrollment): boolean {

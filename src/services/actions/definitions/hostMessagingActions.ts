@@ -34,8 +34,9 @@ const READ_ANNOTATIONS = {
  * manifest metadata only — schema, description, tier and audit. Execution
  * lives in the MCP CallTool handler (electron/services/mcp-server/sessionServer.ts):
  * only the help session this Shell's hub was enrolled with may call them, and
- * they reach hosts over the link from main. Listed only while that holds and
- * a host exists. `run()` throws if the renderer ever invokes it directly.
+ * they reach hosts over the link from main. Listed to any assistant session
+ * that could become the hub while a host exists, and refused until it is.
+ * `run()` throws if the renderer ever invokes it directly.
  */
 export function registerHostMessagingActions(actions: ActionRegistry): void {
   actions.set("host.list", () => ({

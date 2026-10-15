@@ -149,6 +149,7 @@ export function installAssistantMessagingPolicy(
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
     // The host side installs it with its server, which may come later or not at all.
     outbox: () => getRemoteService("assistantHostOutbox"),
+    hasHosts: deps.hasHosts,
   });
   const onAvailabilityChanged = deps.onAvailabilityChanged;
   const stopListening = onAvailabilityChanged
@@ -254,6 +255,8 @@ export interface AssistantExchangeClientInstallDeps {
   addUseCheck?(check: (hostId: HostId) => boolean): () => void;
   /** Told, at most once a tick per host, that the journal's exchanges for it changed. */
   onExchangesChanged?(hostId: HostId): void;
+  /** This Shell's per-host opt-in for assistant messaging. */
+  messagingEnabled?(hostId: HostId): boolean;
 }
 
 /**
@@ -277,13 +280,21 @@ export function installAssistantExchangeClient(
     }
   };
   // On change only: a host leaves the list through a removal this process sees.
-  const offHosts = deps.onHostsChanged(forgetRemovedHosts);
-  const client = new AssistantExchangeClient({
+  // Turning messaging on for a connected host proves this Shell's sender there now.
+  let client: AssistantExchangeClient | null = null;
+  const offHosts = deps.onHostsChanged(() => {
+    forgetRemovedHosts();
+    for (const hostId of deps.knownHosts()) {
+      if (deps.messagingEnabled?.(hostId) === true) client?.authenticateOpen(hostId);
+    }
+  });
+  client = new AssistantExchangeClient({
     journal,
     session: deps.session,
     onSessionOpened: deps.onSessionOpened,
     policy: () => getRemoteService("assistantMessagingPolicy"),
     hubReceiver: () => getRemoteService("assistantHubReceiver"),
+    messagingEnabled: deps.messagingEnabled,
     onExchangesMoved: (_hostId, moved) =>
       wakeHubForMoved(
         moved,

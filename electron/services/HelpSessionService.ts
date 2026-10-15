@@ -1951,7 +1951,7 @@ export class HelpSessionService {
   peekPendingHibernation(
     projectId: string,
     slot: number,
-    options?: { isTerminalLive?: (terminalId: string) => boolean }
+    options?: { isTerminalLive?: (terminalId: string) => boolean; viewHandle?: number }
   ): {
     agentId: string;
     agentSessionId: string;
@@ -1963,7 +1963,12 @@ export class HelpSessionService {
     // (#13360) is told it is running, ahead of any conversation pointer: what
     // it offers then is to show that process, not to resume a transcript.
     if (options?.isTerminalLive) {
-      const detached = this.findDetachedLane(projectId, slot, options.isTerminalLive);
+      // Taken over for this very view by its host when the view came back
+      // (`adoptableSlots`), before its panel showed it: still the running
+      // process to show, not a transcript to resume.
+      const detached =
+        this.findDetachedLane(projectId, slot, options.isTerminalLive) ??
+        this.findLaneHeldFor(projectId, slot, options.viewHandle, options.isTerminalLive);
       if (detached) {
         return {
           agentId: detached.agentId,
@@ -2226,6 +2231,35 @@ export class HelpSessionService {
     return null;
   }
 
+  /** The lane's running assistant if it is pinned to `viewHandle`, a remote view. */
+  private findLaneHeldFor(
+    projectId: string,
+    slot: number,
+    viewHandle: number | undefined,
+    isTerminalLive: (terminalId: string) => boolean
+  ): HelpSessionRecord | null {
+    if (viewHandle === undefined || !isRemoteEndpointHandle(viewHandle)) return null;
+    const record = this.findLaneBackend(projectId, slot);
+    if (!record || record.projectViewWebContentsId !== viewHandle) return null;
+    const terminalId = this.terminalBySessionId.get(record.sessionId);
+    return terminalId && isTerminalLive(terminalId) ? record : null;
+  }
+
+  /**
+   * The slots of a project whose assistant is detached (#13360): still
+   * running, with no view. What a returning view of the project takes over.
+   */
+  detachedSlots(projectId: string): number[] {
+    const slots: number[] = [];
+    for (const record of this.sessionsById.values()) {
+      if (record.revoked || record.projectId !== projectId || record.detachedAt === undefined) {
+        continue;
+      }
+      if (this.findLaneBackend(projectId, record.slot) === record) slots.push(record.slot);
+    }
+    return slots;
+  }
+
   /**
    * The lane's detached assistant (#13360), if its PTY is still running. A
    * detached one whose PTY has exited has nobody left to end it: it is revoked
@@ -2406,7 +2440,8 @@ export class HelpSessionService {
     projectId: string,
     slot: number,
     webContentsId: number,
-    probe: (terminalId: string) => Promise<HelpAdoptProbe | null>
+    probe: (terminalId: string) => Promise<HelpAdoptProbe | null>,
+    options?: { keepRestoreIntent?: boolean }
   ): Promise<HelpAdoptResult> {
     if (this.disposed || !projectId || !isRemoteEndpointHandle(webContentsId)) {
       return { status: "absent" };
@@ -2442,14 +2477,21 @@ export class HelpSessionService {
         return { status: "absent" };
       }
 
+      const repinned = record.projectViewWebContentsId !== webContentsId;
       record.windowId = webContentsId;
       record.projectViewWebContentsId = webContentsId;
       delete record.detachedAt;
-      delete record.panelOpenAtDetach;
-      try {
-        this.onMcpSessionRepinnedFn?.(record.token);
-      } catch (err) {
-        console.warn("[HelpSessionService] Resetting a taken-over assistant's MCP failed:", err);
+      // A host taking it over for a view whose panel hasn't shown it yet keeps
+      // whether the panel was open, so that view's cold restore can still open it.
+      if (options?.keepRestoreIntent !== true) delete record.panelOpenAtDetach;
+      // Only a pin that moved needs its transports retired. The view that
+      // already holds it showing it again must not cut a healthy connection.
+      if (repinned) {
+        try {
+          this.onMcpSessionRepinnedFn?.(record.token);
+        } catch (err) {
+          console.warn("[HelpSessionService] Resetting a taken-over assistant's MCP failed:", err);
+        }
       }
       return {
         status: "adopted",

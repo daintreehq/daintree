@@ -165,9 +165,31 @@ describe("HubMessagingRuntime (#13336)", () => {
       expect(runtime.isAvailable("hub-2")).toBe(true);
     });
 
+    it("lists no lane as taking messages while this Shell has messaging paused", async () => {
+      denial = "paused";
+      await expect(runtime.listAssistants("hub", { hostId: "studio" })).resolves.toMatchObject({
+        ok: true,
+        value: { outcome: "ok", lanes: [{ slot: 0, available: false }] },
+      });
+      denial = null;
+      await expect(runtime.listAssistants("hub", { hostId: "studio" })).resolves.toMatchObject({
+        value: { lanes: [{ slot: 0, available: true }] },
+      });
+    });
+
     it("is hidden until a host exists", () => {
       hosts = [];
       expect(runtime.isAvailable("hub")).toBe(false);
+      expect(runtime.isReachable("hub")).toBe(false);
+    });
+
+    it("is reachable from any lane's session while a host exists, though only the hub may call", async () => {
+      expect(runtime.isReachable("other-lane")).toBe(true);
+      expect(runtime.isReachable("stranger")).toBe(false);
+      await expect(runtime.list("other-lane")).resolves.toMatchObject({
+        ok: false,
+        code: "NOT_ELIGIBLE",
+      });
     });
 
     it("offers nothing once disposed", async () => {
@@ -280,6 +302,29 @@ describe("HubMessagingRuntime (#13336)", () => {
         ok: true,
         value: { outcome },
       });
+    });
+
+    it("hands back no taskId when the host refused before recording anything", async () => {
+      client.send.mockRejectedValueOnce(
+        new AppError({ code: "PERMISSION", message: "not enrolled" })
+      );
+      await expect(runtime.sendMessage("hub", SEND)).resolves.toMatchObject({
+        value: { outcome: "policy_rejected", taskId: null, contextId: null },
+      });
+      // Unknown outcomes keep theirs: the message may be on the host.
+      client.send.mockRejectedValueOnce(new AppError({ code: "HOST_DISCONNECTED", message: "x" }));
+      const disconnected = await runtime.sendMessage("hub", SEND);
+      expect(disconnected.ok && disconnected.value.taskId).not.toBeNull();
+      // A resend keeps its id: an earlier attempt under it may still be on the host.
+      client.send.mockRejectedValueOnce(
+        new AppError({ code: "PERMISSION", message: "not enrolled" })
+      );
+      await expect(
+        runtime.sendMessage("hub", { ...SEND, taskId: "task-resent" })
+      ).resolves.toMatchObject({ value: { outcome: "policy_rejected", taskId: "task-resent" } });
+      client.send.mockRejectedValueOnce(new AppError({ code: "UNSUPPORTED", message: "x" }));
+      const unsupported = await runtime.sendMessage("hub", SEND);
+      expect(unsupported.ok && unsupported.value.taskId).not.toBeNull();
     });
 
     it("names the policy's refusals without sending", async () => {

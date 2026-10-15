@@ -149,6 +149,21 @@ describe("assistant messaging IPC", () => {
     expect(policy.getEnrollment({ projectId: "proj", slot: 0 })).not.toBeNull();
   });
 
+  it("shows a lane whose Shell is away as on, so turning it off withdraws it (#13332)", async () => {
+    run(0, "s1");
+    await setLaneEnrolled(remoteCtx("link-a"), { projectId: "proj", slot: 0, enrolled: true });
+    policy.bindSender("link-a", "sender-a");
+    policy.releaseLinkSession("link-a");
+
+    const seen = await getState(localCtx(), { projectId: "proj", slot: 0 });
+    expect(seen.lane).toEqual({ enrolled: true, enrolledElsewhere: false, ended: null });
+    const off = await setLaneEnrolled(localCtx(), { projectId: "proj", slot: 0, enrolled: false });
+    expect(off.refusal).toBeNull();
+    expect(policy.getEnrollment({ projectId: "proj", slot: 0 })).toBeNull();
+    // Its Shell coming back finds nothing to take.
+    expect(policy.bindSender("link-a2", "sender-a")).toEqual([]);
+  });
+
   it("refuses a remote view with no link session", async () => {
     run(0, "s1");
     const result = await setLaneEnrolled(remoteCtx(undefined), {

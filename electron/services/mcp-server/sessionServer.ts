@@ -1329,6 +1329,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     sessionStore.sessionHelpIdMap.has(sessionId) &&
     hostMessaging.isAvailable();
 
+  // What a listing offers: the tools above from the session's start wherever
+  // its lane could be enrolled, not only once it is. Codex reads the tool
+  // list once and never acts on `tools/list_changed`, and a lane can only be
+  // enrolled after its assistant starts, so enrollment-gated listing never
+  // reached it. The calls themselves still refuse until the lane is enrolled.
+  const laneMessagingOffered = (): boolean =>
+    laneMessagingAvailable() ||
+    (assistantMessaging !== undefined &&
+      sessionStore.sessionHelpIdMap.has(sessionId) &&
+      assistantMessaging.isReachable?.() === true);
+  const laneSendingOffered = (): boolean =>
+    laneSendingAvailable() ||
+    (laneMessagingOffered() && assistantMessaging?.isSendReachable?.() === true);
+  const hubMessagingOffered = (): boolean =>
+    hubMessagingAvailable() ||
+    (hostMessaging !== undefined &&
+      sessionStore.sessionHelpIdMap.has(sessionId) &&
+      hostMessaging.isReachable?.() === true);
+
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
     {
@@ -1469,9 +1488,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const listSurface: SessionSurfacePolicy = {
       ...sessionSurface,
       rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
-      assistantMessaging: laneMessagingAvailable(),
-      assistantSending: laneSendingAvailable(),
-      hubMessaging: hubMessagingAvailable(),
+      assistantMessaging: laneMessagingOffered(),
+      assistantSending: laneSendingOffered(),
+      hubMessaging: hubMessagingOffered(),
     };
     const tools = manifest
       .filter((entry) => shouldExposeTool(entry, tier, listSurface))
@@ -1698,15 +1717,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             ...perToolGrantedActionIds,
             ...nativeGrantedActionIds,
           ]);
-          // The inbox tools are offered only while this session's own lane is
-          // enrolled (#13335), whatever its tier or grants; discovery agrees.
-          if (!laneMessagingAvailable()) {
+          // The inbox tools are offered only where this session's own lane
+          // could be enrolled (#13335), whatever its tier or grants; discovery agrees.
+          if (!laneMessagingOffered()) {
             for (const id of ASSISTANT_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
-          } else if (!laneSendingAvailable()) {
+          } else if (!laneSendingOffered()) {
             permittedActionIds.delete(ASSISTANT_SEND_MESSAGE_TOOL);
           }
-          // Likewise the hub's host tools, offered only to the hub itself (#13336).
-          if (!hubMessagingAvailable()) {
+          // Likewise the hub's host tools, offered only where a hub could be (#13336).
+          if (!hubMessagingOffered()) {
             for (const id of HOST_MESSAGING_TOOL_IDS) permittedActionIds.delete(id);
           }
           return {
@@ -1721,7 +1740,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               rendererOwnedOrigin,
               paneApproval: sessionSurface.paneApproval === true,
               paneSkipConfirmations: sessionSurface.paneSkipConfirmations === true,
-              hubMessaging: hubMessagingAvailable(),
+              hubMessaging: hubMessagingOffered(),
               perToolGrantedActionIds,
               nativeGrantedActionIds,
               confirmationsSkipped,
@@ -3510,9 +3529,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               {
                 ...sessionSurface,
                 rendererOwnedOrigin,
-                assistantMessaging: laneMessagingAvailable(),
-                assistantSending: laneSendingAvailable(),
-                hubMessaging: hubMessagingAvailable(),
+                assistantMessaging: laneMessagingOffered(),
+                assistantSending: laneSendingOffered(),
+                hubMessaging: hubMessagingOffered(),
               }
             );
             outcome = { kind: "result", value: { ok: true, result } };

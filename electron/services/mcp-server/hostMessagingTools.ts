@@ -37,6 +37,8 @@ import {
  */
 export interface HostMessagingRuntimeHandle {
   isAvailable(helpSessionId: string): boolean;
+  /** Whether this session could become the hub: offered from its start, refused until it is. */
+  isReachable?(helpSessionId: string): boolean;
   list(helpSessionId: string): Promise<HostMessagingOutcome<HostListResult>>;
   listAssistants(
     helpSessionId: string,
@@ -76,8 +78,10 @@ const INVALID_ARGS_MESSAGE = "The arguments don't match this tool's schema.";
 
 /** One MCP session's view of the hub runtime, keyed on the help session bound to it. */
 export interface HostMessagingAccess {
-  /** Whether this session is the hub and a host exists right now; decides listing too. */
+  /** Whether this session is the hub and a host exists right now. */
   isAvailable(): boolean;
+  /** Whether it could become the hub while a host exists; listing goes by this. */
+  isReachable?(): boolean;
   run(toolId: string, args: unknown): Promise<HostMessagingOutcome<HostMessagingToolResult>>;
 }
 
@@ -147,6 +151,10 @@ export function bindHostMessaging(
     isAvailable: () => {
       const found = caller();
       return found !== null && found.runtime.isAvailable(found.helpSessionId);
+    },
+    isReachable: () => {
+      const found = caller();
+      return found !== null && found.runtime.isReachable?.(found.helpSessionId) === true;
     },
     run: async (toolId, args) => {
       const found = caller();

@@ -19,6 +19,7 @@ import type {
   LaneEnrollment,
   MessagingDenial,
   MessagingShell,
+  SessionRebind,
 } from "./AssistantMessagingPolicy.js";
 import {
   AssistantLinkMethod,
@@ -59,6 +60,8 @@ export interface AssistantExchangeHostDeps {
   admit?: (record: ExchangeRecord, envelope: InboxEnvelope) => void;
   /** The answers a lane gave an exchange; absent, the host doesn't hand replies back. */
   responses?: (key: ExchangeKey) => ExchangeResponse[];
+  /** A Shell's enrollments moved to its newer link session; what waits on the old one follows. */
+  onSessionRebound?: (rebind: SessionRebind) => void;
 }
 
 /**
@@ -128,7 +131,8 @@ function unsupported(): AppError {
  * its Shell keeps for this host; exchanges are scoped to that sender, so they
  * outlive the session and a restart on either side, and two Shells never see
  * each other's. Sending to a lane also needs the lane's enrollment, which
- * belongs to the link session that made it and ends with it.
+ * belongs to the Shell whose sender its session proved: a later session of
+ * that Shell takes it over once it authenticates (`bindSender`).
  */
 export function installAssistantExchangeHostWith(
   server: MetricsSessionSource,
@@ -214,7 +218,8 @@ export function installAssistantExchangeHostWith(
       AuthenticatePayloadSchema,
       ({ credential }) => {
         const senderId = senderIdForCredential(credential);
-        const bound = senders.get(session);
+        // Per transport here, and per session id in the policy, so a resume can't swap senders either.
+        const bound = senders.get(session) ?? deps.policy()?.sessionSender(sessionId);
         if (bound !== undefined && bound !== senderId) {
           throw new AppError({
             code: "PERMISSION",
@@ -222,6 +227,15 @@ export function installAssistantExchangeHostWith(
           });
         }
         senders.set(session, senderId);
+        // Consent follows the Shell this proves, not one connection.
+        const policy = deps.policy();
+        for (const rebind of policy?.bindSender(sessionId, senderId) ?? []) {
+          try {
+            deps.onSessionRebound?.(rebind);
+          } catch (error) {
+            console.warn("[AssistantExchanges] Moving a rebound session's messages failed:", error);
+          }
+        }
         return null;
       }
     );
@@ -431,6 +445,7 @@ export async function installAssistantExchangeHost(
       });
     },
     responses: (key) => getRemoteService("assistantMessagingRuntime")?.getResponses(key) ?? [],
+    onSessionRebound: (rebind) => getRemoteService("assistantHostOutbox")?.rebindSession(rebind),
   });
   // What this host's lanes send the hub of the Shell that enrolled them (#13338).
   const outbox = new AssistantHostOutbox({
