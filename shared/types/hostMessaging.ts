@@ -163,9 +163,7 @@ export const HostSendMessageArgsSchema = z.object({
     .array(idSchema)
     .max(HOST_REFERENCE_TASK_IDS_MAX)
     .optional()
-    .describe(
-      `taskIds this message follows on from, at most ${HOST_REFERENCE_TASK_IDS_MAX}. Naming one whose assistant asked you a question closes it with that assistant's next completed reply.`
-    ),
+    .describe(`taskIds this answers or follows on from, at most ${HOST_REFERENCE_TASK_IDS_MAX}.`),
   taskId: idSchema
     .optional()
     .describe("Resend an ambiguous message under its own taskId. Never sends twice."),

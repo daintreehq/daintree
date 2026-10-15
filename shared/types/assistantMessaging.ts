@@ -198,7 +198,7 @@ export const AssistantSendMessageArgsSchema = z
       .max(ASSISTANT_REFERENCE_TASK_IDS_MAX)
       .optional()
       .describe(
-        `messageIds of your earlier messages this follows on from, at most ${ASSISTANT_REFERENCE_TASK_IDS_MAX}. Naming one the hub asked you a question on closes it with the hub's next completed reply.`
+        `messageIds this answers or follows on from, at most ${ASSISTANT_REFERENCE_TASK_IDS_MAX}.`
       ),
   })
   .strict();
