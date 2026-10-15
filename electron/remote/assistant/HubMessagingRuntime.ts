@@ -361,6 +361,7 @@ export function projectTree(
     entry(running.projectId).assistants.push({
       slot: running.slot,
       agentId: running.agentId,
+      attached: running.attached ?? null,
       generation: lane?.generation ?? null,
       available: lane ? lane.available && !paused : false,
     });
@@ -372,6 +373,7 @@ export function projectTree(
     entry(lane.projectId).assistants.push({
       slot: lane.slot,
       agentId: lane.agentId ?? null,
+      attached: null,
       generation: lane.generation,
       available: lane.available && !paused,
     });

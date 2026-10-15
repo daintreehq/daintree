@@ -65,6 +65,8 @@ const lanes = vi.hoisted(
 vi.mock("../../services/HelpSessionService.js", () => ({
   helpSessionService: {
     addSessionEndedListener: () => () => {},
+
+    addSessionReattachedListener: () => () => {},
     getRunningLaneSession: (projectId: string, slot: number) =>
       lanes.get(`${projectId}#${slot}`) ?? null,
     listRunningLanes: () =>

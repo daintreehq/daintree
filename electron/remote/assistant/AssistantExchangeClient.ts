@@ -235,7 +235,35 @@ export class AssistantExchangeClient {
   /** The lanes this Shell's current session to the host enrolled, and every assistant running there. */
   async listLanes(hostId: HostId): Promise<LaneList> {
     this.checkHost(hostId, "inspect");
+    return this.readLanes(hostId);
+  }
+
+  /**
+   * The same listing, for giving this Shell's lanes their views back after a
+   * restart: it needs the host's messaging opt-in, but not a hub, which the
+   * person may not have brought back yet when this runs.
+   */
+  async listOwnLanes(hostId: HostId): Promise<LaneList> {
+    const policy = this.deps.policy?.();
+    if (policy && !policy.isSupported()) {
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "Assistant messaging isn't supported here",
+      });
+    }
+    if (this.deps.messagingEnabled && !this.deps.messagingEnabled(hostId)) {
+      throw new AppError({
+        code: "PERMISSION",
+        message: `Assistant messaging to host ${hostId} refused: host-disabled`,
+      });
+    }
+    return this.readLanes(hostId);
+  }
+
+  private async readLanes(hostId: HostId): Promise<LaneList> {
     const session = await this.open(hostId);
+    // This Shell's enrollments move to a new session only once it proves its sender there.
+    await this.authenticate(hostId, session);
     const parsed = LaneListSchema.safeParse(
       await this.call(hostId, session, AssistantLinkMethod.LIST_LANES, null)
     );

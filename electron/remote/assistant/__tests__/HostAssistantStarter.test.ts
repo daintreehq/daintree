@@ -31,6 +31,7 @@ describe("HostAssistantStarter", () => {
   let screens: string[];
   let view: HostProjectViewResult;
   let drivingHere: boolean;
+  let vacant: boolean;
   let launched: unknown;
   let enrollAnswer: EnrollStartedResult["status"];
   let allowed: boolean;
@@ -52,6 +53,7 @@ describe("HostAssistantStarter", () => {
     screens = [READY_SCREEN];
     view = { status: "ready", webContentsId: VIEW, created: true };
     drivingHere = true;
+    vacant = false;
     launched = undefined;
     enrollAnswer = "enrolled";
     allowed = true;
@@ -87,7 +89,15 @@ describe("HostAssistantStarter", () => {
           channel: string,
           args: unknown[]
         ) => {
-          if (channel === "drive-lease:get") return { drivingHere };
+          if (channel === "drive-lease:get") {
+            return { isHolderEndpoint: drivingHere, holder: vacant ? null : { leaseId: 1 } };
+          }
+          if (channel === "drive-lease:take-over") {
+            calls.push("take-over");
+            if (vacant) drivingHere = true;
+            vacant = false;
+            return null;
+          }
           if (channel === "terminal:get-serialized-state") {
             calls.push(`read ${String(args[0])}`);
             const screen = screens.length > 1 ? screens.shift()! : screens[0]!;
@@ -235,6 +245,16 @@ describe("HostAssistantStarter", () => {
     expect(calls).toEqual([]);
   });
 
+  it("takes a lease nobody holds, as opening the project would, and only then launches", async () => {
+    drivingHere = false;
+    vacant = true;
+    await expect(starter.start(HOST, PROJECT, { authorized })).resolves.toMatchObject({
+      status: "ready",
+      started: true,
+    });
+    expect(calls[0]).toBe("take-over");
+  });
+
   it("won't launch from a view that doesn't drive the project", async () => {
     drivingHere = false;
     await expect(starter.start(HOST, PROJECT, { authorized })).resolves.toEqual({
@@ -284,5 +304,49 @@ describe("HostAssistantStarter", () => {
     expect(first).toMatchObject({ status: "ready", slot: 0, started: true });
     expect(second).toMatchObject({ status: "ready", slot: 0, started: false });
     expect(calls.filter((call) => call.startsWith("help.launchAgent"))).toHaveLength(1);
+  });
+
+  describe("reattach", () => {
+    it("gives each project with a lane enrolled here a driving view again, starting nothing", async () => {
+      lanes.lanes = [
+        { projectId: PROJECT, slot: 0, generation: "g0", available: true, agentId: "claude" },
+        { projectId: PROJECT, slot: 1, generation: "g1", available: true, agentId: "claude" },
+        { projectId: "nope", slot: 0, generation: "gx", available: true, agentId: "claude" },
+      ];
+      await expect(starter.reattach(HOST, authorized)).resolves.toEqual([
+        { projectId: "nope", reason: "no-project" },
+      ]);
+      expect(deps.prepareView).toHaveBeenCalledTimes(1);
+      expect(deps.prepareView).toHaveBeenCalledWith(HOST, PROJECT, "/repos/one");
+      expect(calls).toEqual([]);
+    });
+
+    it("stops when consent is withdrawn while it looks the project up", async () => {
+      lanes.lanes = [
+        { projectId: PROJECT, slot: 0, generation: "g0", available: true, agentId: "claude" },
+      ];
+      deps.projectPath.mockImplementationOnce(async () => {
+        allowed = false;
+        return "/repos/one";
+      });
+      await expect(starter.reattach(HOST, authorized)).resolves.toEqual([
+        { projectId: PROJECT, reason: "consent-withdrawn" },
+      ]);
+      expect(deps.prepareView).not.toHaveBeenCalled();
+    });
+
+    it("says which projects still have nowhere to go, and does nothing without consent", async () => {
+      lanes.lanes = [
+        { projectId: PROJECT, slot: 0, generation: "g0", available: true, agentId: "claude" },
+      ];
+      view = { status: "no-window" };
+      await expect(starter.reattach(HOST, authorized)).resolves.toEqual([
+        { projectId: PROJECT, reason: "no-window" },
+      ]);
+      allowed = false;
+      deps.prepareView.mockClear();
+      await expect(starter.reattach(HOST, authorized)).resolves.toEqual([]);
+      expect(deps.prepareView).not.toHaveBeenCalled();
+    });
   });
 });

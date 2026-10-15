@@ -422,6 +422,23 @@ describe("HelpSessionService", () => {
         expect(mockMcpServerService.resetHelpTransports).toHaveBeenCalledTimes(1);
       });
 
+      it("tells listeners when a view takes over an assistant that had none, and only then (#13392)", async () => {
+        const reattached = vi.fn();
+        const off = service.addSessionReattachedListener(reattached);
+        await launchRemote();
+        await service.detachByWebContentsId(HANDLE);
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(reattached).toHaveBeenCalledWith({
+          projectId: "proj-1",
+          slot: 0,
+          agentId: provisionInput().agentId,
+        });
+        // The view that already has it showing it again is no take-over.
+        await service.adoptDetachedSession("proj-1", 0, NEXT_HANDLE, liveProbe);
+        expect(reattached).toHaveBeenCalledTimes(1);
+        off();
+      });
+
       it("keeps the panel's restore intent through a host take-over until the view's own", async () => {
         await launchRemote();
         service.reportPanelOpen("proj-1", true);
@@ -2092,11 +2109,13 @@ describe("HelpSessionService", () => {
       expect(service.markTerminalForToken(second.token, "term-2")).toBe(true);
       const agentId = provisionInput().agentId;
       expect(service.listRunningLanes()).toEqual([
-        { projectId: "proj-1", slot: 0, agentId },
-        { projectId: "proj-1", slot: 1, agentId },
+        { projectId: "proj-1", slot: 0, agentId, attached: true },
+        { projectId: "proj-1", slot: 1, agentId, attached: true },
       ]);
       await service.revokeSession(first.sessionId);
-      expect(service.listRunningLanes()).toEqual([{ projectId: "proj-1", slot: 1, agentId }]);
+      expect(service.listRunningLanes()).toEqual([
+        { projectId: "proj-1", slot: 1, agentId, attached: true },
+      ]);
     });
 
     it("refuses rather than displaces an occupied lane when asked for a vacant one (#13392)", async () => {

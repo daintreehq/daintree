@@ -122,7 +122,15 @@ export const EnrolledLaneSchema = z
   .strip();
 export type EnrolledLane = z.infer<typeof EnrolledLaneSchema>;
 
-export const RunningAssistantSchema = z.object({ projectId: id, slot, agentId: id }).strip();
+export const RunningAssistantSchema = z
+  .object({
+    projectId: id,
+    slot,
+    agentId: id,
+    /** Whether its Daintree tools work: it runs through a live view. Absent from older hosts. */
+    attached: z.boolean().optional(),
+  })
+  .strip();
 
 export const EnrollStartedPayloadSchema = z.object({ projectId: id, slot, sessionId: id }).strict();
 export type EnrollStartedPayload = z.infer<typeof EnrollStartedPayloadSchema>;

@@ -610,6 +610,30 @@ describe("HostServer session resume", () => {
     void client;
   });
 
+  it("ends a superseded session at once when parked, or the moment it parks (#13392)", async () => {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    const detached: string[] = [];
+    const expired: Array<{ sessionId: string; cause: string }> = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionDetached((info) => detached.push(info.sessionId));
+    server.onSessionExpired((info) =>
+      expired.push({ sessionId: info.sessionId, cause: info.cause })
+    );
+    const client = startClient(server, { backoff: { initialMs: 5_000, maxMs: 5_000, jitter: 0 } });
+    await waitFor(() => seen.length === 1);
+    const firstId = seen[0]!.sessionId;
+    // Still attached: nothing ends now, but it won't be held once its link dies.
+    expect(server.supersede(firstId)).toBe(false);
+    expect(expired).toEqual([]);
+    (seen[0]!.session as unknown as { socket: net.Socket }).socket.destroy();
+    await waitFor(() => detached.includes(firstId));
+    await waitFor(() => expired.length === 1);
+    expect(expired).toEqual([{ sessionId: firstId, cause: "session-replaced" }]);
+    expect(server.supersede(firstId)).toBe(false);
+    void client;
+  });
+
   it("starts a fresh session once the grace window has passed", async () => {
     const server = await startServer({ resumeGraceMs: 20 });
     const seen: HostSessionContext[] = [];

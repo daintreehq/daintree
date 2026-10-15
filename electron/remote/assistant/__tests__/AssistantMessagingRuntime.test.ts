@@ -119,6 +119,51 @@ describe("AssistantMessagingRuntime", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("wakes a lane again for what it still owes an answer once it has its tools back (#13392)", () => {
+    const rewake = vi.fn();
+    runtime.dispose();
+    runtime = new AssistantMessagingRuntime({
+      policy,
+      store,
+      inbox,
+      getSessionLane: (sessionId) => sessionLanes.get(sessionId) ?? null,
+      rewake,
+      now: () => clock,
+    });
+    runLane("s1");
+    const enrollment = enroll();
+    const read = send(enrollment, "build it");
+    const answered = send(enrollment, "list the panes");
+    const asked = send(enrollment, "deploy it");
+    runtime.getInbox("s1", {});
+    runtime.reply("s1", { taskId: answered.taskId, state: "completed", text: "two panes" });
+    runtime.reply("s1", {
+      taskId: asked.taskId,
+      state: "input-required",
+      text: "staging or prod?",
+    });
+    const unread = send(enrollment, "and the docs");
+
+    expect(runtime.reannounce(LANE)).toBe(2);
+    expect(rewake.mock.calls.map(([, record]) => (record as ExchangeRecord).taskId)).toEqual([
+      read.taskId,
+      unread.taskId,
+    ]);
+    expect(rewake.mock.calls[0]![0]).toMatchObject({ generation: enrollment.generation });
+    // A queued re-wake asks again before typing: once answered, it's no longer owed.
+    const stillOwed = rewake.mock.calls[0]![2] as () => boolean;
+    expect(stillOwed()).toBe(true);
+    runtime.reply("s1", { taskId: read.taskId, state: "completed", text: "built" });
+    expect(stillOwed()).toBe(false);
+    // A lane nobody enrolled has nothing owed.
+    expect(runtime.reannounce({ projectId: "elsewhere", slot: 0 })).toBe(0);
+    // Nothing can be woken while paused: still owed, so it says not yet rather than none.
+    rewake.mockClear();
+    policy.setPaused(true);
+    expect(runtime.reannounce(LANE)).toBeNull();
+    expect(rewake).not.toHaveBeenCalled();
+  });
+
   it("moves an exchange its lane has read to working", () => {
     runLane("s1");
     const enrollment = enroll();

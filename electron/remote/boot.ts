@@ -271,6 +271,8 @@ function startClient(options: StartRemoteHostsOptions): void {
           summary,
         })),
       listHostProjects: (hostId) => client.client.listHostProjects({ hostId }),
+      onHostSessionOpened: (listener) =>
+        client.manager.onSessionOpened((hostId) => listener(hostId)),
       isHostStartEnabled: (hostId) => {
         const descriptor = client.registry.get(hostId);
         return (

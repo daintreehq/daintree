@@ -93,6 +93,8 @@ export const HOST_LIST_PROJECTS_MAX = 50;
 const hostAssistantSchema = z.object({
   slot: z.number(),
   agentId: z.string().nullable(),
+  // Pinned to a view its Daintree tools run through; false while it waits for one, null when not reported.
+  attached: z.boolean().nullable(),
   // Set once the assistant is enrolled for this Shell: what a message to it names.
   generation: z.string().nullable(),
   available: z.boolean(),

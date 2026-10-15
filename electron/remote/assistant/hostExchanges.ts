@@ -441,7 +441,7 @@ const MAX_SWEEP_BATCHES = 20;
  * support assistant messaging rather than handed records that vanish.
  */
 export async function installAssistantExchangeHost(
-  server: MetricsSessionSource
+  server: MetricsSessionSource & { supersede?(sessionId: string): boolean }
 ): Promise<() => void> {
   const [
     { getSharedSqlite },
@@ -500,7 +500,13 @@ export async function installAssistantExchangeHost(
       });
     },
     responses: (key) => getRemoteService("assistantMessagingRuntime")?.getResponses(key) ?? [],
-    onSessionRebound: (rebind) => getRemoteService("assistantHostOutbox")?.rebindSession(rebind),
+    onSessionRebound: (rebind) => {
+      getRemoteService("assistantHostOutbox")?.rebindSession(rebind);
+      // The Shell proved itself on a new session, so its old one, held for a
+      // resume that can't come, would only keep its views' leases and the
+      // assistants pinned to them.
+      server.supersede?.(rebind.from);
+    },
   });
   // What this host's lanes send the hub of the Shell that enrolled them (#13338).
   const outbox = new AssistantHostOutbox({

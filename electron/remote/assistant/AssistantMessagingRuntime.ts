@@ -94,6 +94,11 @@ export interface AssistantMessagingRuntimeDeps {
   outbox?: () => AssistantHostOutboxHandle | undefined;
   /** Whether this machine has a host of its own, so a lane here may become its hub. */
   hasHosts?: () => boolean;
+  /**
+   * Types the wake line for an exchange into its lane again, outside the one
+   * reserved first wake: what `reannounce` uses once a lane has its tools back.
+   */
+  rewake?: (enrollment: LaneEnrollment, record: ExchangeRecord, stillOwed: () => boolean) => void;
   now?: () => number;
 }
 
@@ -414,6 +419,42 @@ export class AssistantMessagingRuntime {
       throw new AssistantMessagingError("NOT_ELIGIBLE");
     }
     this.deps.inbox.admit(record, envelope);
+  }
+
+  /**
+   * Wakes a lane again for each exchange it still owes an answer, once a view
+   * has taken its assistant over after the one it ran through went away (a
+   * Shell restart, #13392). Its tool calls failed meanwhile, so it may have
+   * given up on a message it had already read. Answered and question-asking
+   * exchanges are left alone. Returns how many were announced, or null while
+   * the lane can't be woken yet: its Shell hasn't proved itself on a new
+   * session since a restart, or messaging is paused.
+   */
+  reannounce(lane: LaneRef): number | null {
+    const rewake = this.deps.rewake;
+    const enrollment = this.deps.policy.getEnrollment(lane);
+    if (!rewake || enrollment === null) return 0;
+    const wakeable = this.deps.policy.checkLane({
+      lane,
+      generation: enrollment.generation,
+      shell: enrollment.enrolledBy,
+      kind: "wake",
+    });
+    if (!wakeable.ok) return null;
+    const actor: ReceiverActor = { kind: "receiver", ...exchangeReceiverFor(enrollment) };
+    let announced = 0;
+    const owed = (entry: InboxEntry): ExchangeRecord | null => {
+      const record = this.bestEffort(() => this.deps.store.get(actor, entry.key));
+      if (!record || !isLive(record, this.now()) || record.state === "input-required") return null;
+      return this.deps.inbox.canRespond(entry.taskId) ? record : null;
+    };
+    for (const entry of this.deps.inbox.list(actor, 0)) {
+      const record = owed(entry);
+      if (!record) continue;
+      this.bestEffort(() => rewake(enrollment, record, () => owed(entry) !== null));
+      announced++;
+    }
+    return announced;
   }
 
   /** The answers to an exchange, for the Shell that sent it. */

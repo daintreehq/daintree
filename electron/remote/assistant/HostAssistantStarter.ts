@@ -11,6 +11,8 @@ export type ViewDispatchResult =
 export interface HostAssistantStarterDeps {
   /** The lanes this Shell enrolled on the host, and every assistant running there. */
   listLanes(hostId: HostId): Promise<LaneList>;
+  /** The same, with no hub needed: what `reattach` reads after a restart. Absent, `listLanes`. */
+  listOwnLanes?(hostId: HostId): Promise<LaneList>;
   /** A host project's path, or null when the host has no such project. */
   projectPath(hostId: HostId, projectId: string): Promise<string | null>;
   prepareView(
@@ -79,6 +81,7 @@ const SCREEN_LINES = 40;
 
 const SERIALIZED_STATE_CHANNEL = "terminal:get-serialized-state";
 const DRIVE_LEASE_CHANNEL = "drive-lease:get";
+const DRIVE_LEASE_TAKE_OVER_CHANNEL = "drive-lease:take-over";
 
 /**
  * The folder-trust question each agent CLI asks before it opens in a folder
@@ -173,9 +176,41 @@ export class HostAssistantStarter {
    * enrolled rather than racing it for a lane.
    */
   start(hostId: HostId, projectId: string, options: HostStartOptions): Promise<HostStartResult> {
+    return this.inTurn(hostId, projectId, () => this.run(hostId, projectId, options));
+  }
+
+  /**
+   * Gives every lane enrolled for this Shell on the host a view of its project
+   * again, so an assistant left without one (the Shell restarted, or its hidden
+   * view was closed) gets its Daintree tools back: the host hands a detached
+   * assistant to the view that drives its project (#13389). Starts and enrolls
+   * nothing. Answers the projects that still have no usable view, and why.
+   */
+  async reattach(
+    hostId: HostId,
+    authorized: () => boolean
+  ): Promise<Array<{ projectId: string; reason: HostStartRefusal }>> {
+    if (!authorized()) return [];
+    const listed = await (this.deps.listOwnLanes ?? this.deps.listLanes)(hostId);
+    const left: Array<{ projectId: string; reason: HostStartRefusal }> = [];
+    for (const projectId of new Set(listed.lanes.map((lane) => lane.projectId))) {
+      const reason = await this.inTurn(hostId, projectId, async () => {
+        if (!authorized()) return "consent-withdrawn" as const;
+        const path = await this.deps.projectPath(hostId, projectId);
+        if (path === null) return "no-project" as const;
+        if (!authorized()) return "consent-withdrawn" as const;
+        const view = await this.view(hostId, projectId, path, authorized);
+        return view.status === "ready" ? null : view.reason;
+      });
+      if (reason !== null) left.push({ projectId, reason });
+    }
+    return left;
+  }
+
+  private inTurn<T>(hostId: HostId, projectId: string, work: () => Promise<T>): Promise<T> {
     const key = `${hostId}\0${projectId}`;
     const previous = this.queue.get(key) ?? Promise.resolve();
-    const run = previous.catch(() => {}).then(() => this.run(hostId, projectId, options));
+    const run = previous.catch(() => {}).then(work);
     this.queue.set(key, run);
     void run
       .catch(() => {})
@@ -289,9 +324,20 @@ export class HostAssistantStarter {
     for (;;) {
       const lease = (await this.deps
         .invoke(hostId, view.webContentsId, projectId, DRIVE_LEASE_CHANNEL, [{ projectId }])
-        .catch(() => null)) as { drivingHere?: boolean } | null;
-      if (lease?.drivingHere === true)
+        .catch(() => null)) as { isHolderEndpoint?: boolean; holder?: unknown } | null;
+      // The host hands a detached assistant only to the view that holds the lease.
+      if (lease?.isHolderEndpoint === true) {
         return { status: "ready", webContentsId: view.webContentsId };
+      }
+      if (!authorized()) return { status: "refused", reason: "consent-withdrawn" };
+      if (lease && lease.holder === null) {
+        // Nobody drives it: take it, as opening the project would. Never from someone else.
+        await this.deps
+          .invoke(hostId, view.webContentsId, projectId, DRIVE_LEASE_TAKE_OVER_CHANNEL, [
+            { projectId, ifLeaseId: null },
+          ])
+          .catch(() => null);
+      }
       if (this.now() >= deadline) {
         return { status: "refused", reason: lease ? "driven-elsewhere" : "busy" };
       }

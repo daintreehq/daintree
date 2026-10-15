@@ -255,6 +255,12 @@ export interface RunningLane {
   projectId: string;
   slot: number;
   agentId: string;
+  /**
+   * Pinned to a view, which its Daintree tools run through; false while it
+   * waits for one. A link that dropped leaves it pinned until the host gives
+   * that session up, so true is the pin, not proof the view answers.
+   */
+  attached?: boolean;
 }
 
 /**
@@ -693,6 +699,7 @@ export class HelpSessionService {
   private readonly panelVisibleByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
   private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
+  private readonly sessionReattachedListeners = new Set<(lane: RunningLane) => void>();
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
@@ -742,6 +749,18 @@ export class HelpSessionService {
     };
   }
 
+  /**
+   * A view took over an assistant that had none (#13360, #13392): calls it
+   * made in between failed, so what it was in the middle of may need telling
+   * again. Same listener rules as `addSessionEndedListener`.
+   */
+  addSessionReattachedListener(listener: (lane: RunningLane) => void): () => void {
+    this.sessionReattachedListeners.add(listener);
+    return () => {
+      this.sessionReattachedListeners.delete(listener);
+    };
+  }
+
   private emitSessionEnded(
     record: Pick<HelpSessionRecord, "projectId" | "slot" | "sessionId">,
     reason: HelpSessionEndReason
@@ -770,7 +789,12 @@ export class HelpSessionService {
         assistantSlotKey(record.projectId, record.slot)
       );
       if (!terminalId || this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
-      lanes.push({ projectId: record.projectId, slot: record.slot, agentId: record.agentId });
+      lanes.push({
+        projectId: record.projectId,
+        slot: record.slot,
+        agentId: record.agentId,
+        attached: record.detachedAt === undefined,
+      });
     }
     return lanes;
   }
@@ -2519,6 +2543,7 @@ export class HelpSessionService {
       }
 
       const repinned = record.projectViewWebContentsId !== webContentsId;
+      const wasDetached = record.detachedAt !== undefined;
       record.windowId = webContentsId;
       record.projectViewWebContentsId = webContentsId;
       delete record.detachedAt;
@@ -2532,6 +2557,16 @@ export class HelpSessionService {
           this.onMcpSessionRepinnedFn?.(record.token);
         } catch (err) {
           console.warn("[HelpSessionService] Resetting a taken-over assistant's MCP failed:", err);
+        }
+      }
+      if (wasDetached) {
+        const lane = { projectId, slot, agentId: record.agentId };
+        for (const listener of [...this.sessionReattachedListeners]) {
+          try {
+            listener(lane);
+          } catch (err) {
+            console.warn("[HelpSessionService] Session-reattached listener failed:", err);
+          }
         }
       }
       return {

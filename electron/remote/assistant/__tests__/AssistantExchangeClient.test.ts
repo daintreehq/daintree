@@ -210,10 +210,28 @@ describe("AssistantExchangeClient listing a host's lanes", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("lists its own lanes for recovery with no hub, only while the host's messaging is on (#13392)", async () => {
+    const lane = { projectId: "proj-1", slot: 0, generation: "gen-1", available: true };
+    host.laneAnswer = { lanes: [lane] };
+    await expect(client.listOwnLanes(HOST)).resolves.toEqual({ lanes: [lane] });
+    expect(host.authCalls).toBe(1);
+
+    const off = new AssistantExchangeClient({
+      journal: new AssistantExchangeJournal(sqlite),
+      session: async () => host.session(),
+      onSessionOpened: () => () => {},
+      messagingEnabled: () => false,
+    });
+    await expect(off.listOwnLanes(HOST)).rejects.toMatchObject({ code: "PERMISSION" });
+    off.dispose();
+  });
+
   it("reads a host from before the assistant listing, and one that sends what this build doesn't know", async () => {
     const lane = { projectId: "proj-1", slot: 0, generation: "gen-1", available: true };
     host.laneAnswer = { lanes: [lane] };
     await expect(client.listLanes(HOST)).resolves.toEqual({ lanes: [lane] });
+    // Listing proves this Shell's sender first: its enrollments follow it to this session only then.
+    expect(host.authCalls).toBe(1);
 
     host.laneAnswer = {
       lanes: [{ ...lane, agentId: "codex", later: true }],

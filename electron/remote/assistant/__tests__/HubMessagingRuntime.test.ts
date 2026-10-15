@@ -245,7 +245,9 @@ describe("HubMessagingRuntime (#13336)", () => {
             projectId: "proj-2",
             name: "website",
             path: "/repos/website",
-            assistants: [{ slot: 0, agentId: "codex", generation: "gen-2", available: true }],
+            assistants: [
+              { slot: 0, agentId: "codex", attached: null, generation: "gen-2", available: true },
+            ],
           },
           { projectId: "proj-9", name: "notes", path: "/repos/notes", assistants: [] },
         ],
@@ -276,7 +278,9 @@ describe("HubMessagingRuntime (#13336)", () => {
           projectId: "proj-2",
           name: null,
           path: null,
-          assistants: [{ slot: 0, agentId: "codex", generation: "gen-2", available: true }],
+          assistants: [
+            { slot: 0, agentId: "codex", attached: null, generation: "gen-2", available: true },
+          ],
         },
       ]);
     });
@@ -726,8 +730,8 @@ describe("projectTree", () => {
         name: "beta",
         path: "/repos/beta",
         assistants: [
-          { slot: 0, agentId: "codex", generation: null, available: false },
-          { slot: 1, agentId: "codex", generation: "gen-b1", available: true },
+          { slot: 0, agentId: "codex", attached: null, generation: null, available: false },
+          { slot: 1, agentId: "codex", attached: null, generation: "gen-b1", available: true },
         ],
       },
       { projectId: "a", name: "alpha", path: "/repos/alpha", assistants: [] },
@@ -761,6 +765,24 @@ describe("projectTree", () => {
     expect(tree.omitted).toBe(0);
   });
 
+  it("passes on whether each assistant is pinned to a view, as the host reported it", () => {
+    const tree = projectTree(
+      {
+        lanes: [],
+        assistants: [
+          { projectId: "a", slot: 0, agentId: "codex", attached: false },
+          { projectId: "a", slot: 1, agentId: "codex", attached: true },
+        ],
+      },
+      [summary("a", "alpha")],
+      false
+    );
+    expect(tree.projects[0]!.assistants.map((assistant) => assistant.attached)).toEqual([
+      false,
+      true,
+    ]);
+  });
+
   it("keeps an enrolled lane whose assistant isn't running, and one in a project the host didn't name", () => {
     const tree = projectTree(
       { lanes: [{ projectId: "scratch", slot: 2, generation: "gen-s", available: false }] },
@@ -772,7 +794,9 @@ describe("projectTree", () => {
         projectId: "scratch",
         name: null,
         path: null,
-        assistants: [{ slot: 2, agentId: null, generation: "gen-s", available: false }],
+        assistants: [
+          { slot: 2, agentId: null, attached: null, generation: "gen-s", available: false },
+        ],
       },
     ]);
   });
