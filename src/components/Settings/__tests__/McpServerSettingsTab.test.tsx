@@ -1191,7 +1191,7 @@ describe("McpServerSettingsTab", () => {
       hideDocument(true);
       hideDocument(false);
 
-      await waitForContent(container, "1 anomaly signal (1 first-seen-combination)");
+      await waitForContent(container, "1 anomaly signal (1 first-seen tool and tier)");
       expect(
         container.querySelector("[data-anomaly-severity]")?.getAttribute("data-anomaly-severity")
       ).toBe("info");

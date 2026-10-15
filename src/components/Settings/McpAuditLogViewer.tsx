@@ -7,12 +7,22 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup } from "./SettingsGroup";
 import {
+  AUDIT_ANOMALY_KIND_LABEL,
+  AUDIT_ROW_CLASS,
+  AUDIT_ROW_DETAIL_CLASS,
   AUDIT_TIME_RANGE_MS,
   InlineErrorRow,
+  AuditAnomalyGlyph,
+  AuditAnomalyNote,
+  AuditArgs,
+  AuditDuration,
   AuditFilterBar,
   AuditFilterInput,
   AuditFilterSelect,
+  AuditId,
   AuditRecordTime,
+  AUDIT_ROW_META_CLASS,
+  AuditRowMark,
   AuditTimeRangeSelect,
   auditAgeLabel,
   type AuditTimeRange,
@@ -27,6 +37,7 @@ import {
   isAuditRecord,
   isGrantRecord,
   type AssistantTurnRecord,
+  type McpAnomalyKind,
   type McpAnomalySeverity,
   type McpAnomalySignal,
 } from "@shared/types";
@@ -108,37 +119,14 @@ const ANOMALY_SEVERITY_RANK: Record<McpAnomalySeverity, number> = {
   danger: 2,
 };
 
-/**
- * The severity lives in the mark; the words stay in neutral text, since
- * severity-coloured text fails 4.5:1 on most themes. The marks are the app's
- * severity glyphs, so forced colours keep info, warning and a failure cluster
- * apart by shape.
- */
-const ANOMALY_SEVERITY_VISUAL: Record<
-  McpAnomalySeverity,
-  { label: string; level: StatusSeverity }
-> = {
-  info: { label: "Anomaly (info)", level: "info" },
-  warning: { label: "Anomaly (warning)", level: "warning" },
-  danger: { label: "Anomaly (error)", level: "error" },
-};
-
 function higherSeverity(a: McpAnomalySeverity, b: McpAnomalySeverity): McpAnomalySeverity {
   return ANOMALY_SEVERITY_RANK[b] > ANOMALY_SEVERITY_RANK[a] ? b : a;
 }
 
-function AnomalyMark({
-  severity,
-  decorative = false,
-}: {
-  severity: McpAnomalySeverity | undefined;
-  decorative?: boolean;
-}) {
-  if (!severity) return null;
-  const { label, level } = ANOMALY_SEVERITY_VISUAL[severity];
-  return (
-    <SeverityMark severity={level} label={label} decorative={decorative} className="h-3 w-3" />
-  );
+/** What flagged one record: the highest severity among its signals, and their kinds. */
+interface RecordAnomaly {
+  severity: McpAnomalySeverity;
+  kinds: McpAnomalyKind[];
 }
 
 const OUTCOME_LABEL: Record<string, string> = {
@@ -299,22 +287,21 @@ function DispatchRow({
 }: {
   record: McpAuditRecord;
   now: number;
-  anomaly?: McpAnomalySeverity;
+  anomaly?: RecordAnomaly;
 }) {
   const args = record.argsSummary || "{}";
   return (
-    <li className="grid grid-cols-[auto_1fr_auto] gap-2 px-4 py-2 text-xs">
-      <div className="flex self-start items-center gap-1 mt-0.5">
+    <li className={AUDIT_ROW_CLASS}>
+      <AuditRowMark>
         <SeverityMark
           severity={RESULT_SEVERITY[record.result]}
           label={RESULT_LABEL[record.result]}
           className="h-3 w-3"
         />
-        <AnomalyMark severity={anomaly} />
-      </div>
-      <div className="min-w-0 select-text">
-        <div className="flex items-center gap-2">
-          <span className="min-w-0 font-mono text-text-primary break-all">{record.toolId}</span>
+      </AuditRowMark>
+      <div className={AUDIT_ROW_DETAIL_CLASS}>
+        <div className="flex flex-wrap items-center gap-x-2">
+          <AuditId className="text-text-primary">{record.toolId}</AuditId>
           {record.result !== "success" && (
             <span className="shrink-0 text-text-secondary">
               {RESULT_LABEL[record.result]}
@@ -324,30 +311,29 @@ function DispatchRow({
                 : ""}
             </span>
           )}
-        </div>
-        <div className="mt-0.5 font-mono text-text-secondary break-all line-clamp-3" title={args}>
-          {args}
+          {anomaly && <AuditAnomalyNote severity={anomaly.severity} kinds={anomaly.kinds} />}
         </div>
         {record.result === "unauthorized" && record.tierHint && (
-          <div className="mt-0.5 text-text-secondary">{tierHintText(record.tierHint)}</div>
+          <div className="text-text-secondary">{tierHintText(record.tierHint)}</div>
         )}
         {record.result === "unauthorized" && record.tierHint === null && (
-          <div className="mt-0.5 text-text-secondary">Not permitted at any tier</div>
+          <div className="text-text-secondary">Not permitted at any tier</div>
         )}
         {/* Never shown as "confirmed": nobody was asked (#12874). A decision
             beside the stamp means a remote Shell asked anyway (#13368). */}
         {record.authorization === "skip-preference" &&
           record.confirmationDecision === undefined && (
-            <div className="mt-0.5 text-text-secondary">
+            <div className="text-text-secondary">
               Confirmation skipped — Daintree confirmations setting
             </div>
           )}
+        <AuditArgs text={args} subject={record.toolId} />
       </div>
-      <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
-        <div>
-          <AuditRecordTime ts={record.timestamp} now={now} />
-        </div>
-        <div>{record.durationMs}ms</div>
+      <div className={AUDIT_ROW_META_CLASS}>
+        <AuditRecordTime ts={record.timestamp} now={now} />
+        <span>
+          <AuditDuration ms={record.durationMs} />
+        </span>
       </div>
     </li>
   );
@@ -362,30 +348,32 @@ function GrantRow({ record, now }: { record: McpGrantRecord; now: number }) {
       ? `${record.previousTier} → ${record.tier}`
       : null;
   return (
-    <li className="grid grid-cols-[auto_1fr_auto] gap-2 px-4 py-2 text-xs">
-      <SeverityMark
-        severity={GRANT_TYPE_SEVERITY[record.type]}
-        label={GRANT_TYPE_LABEL[record.type]}
-        className="mt-0.5 h-3 w-3"
-        decorative
-      />
-      <div className="min-w-0 select-text">
-        <div className="flex items-center gap-2">
+    <li className={AUDIT_ROW_CLASS}>
+      <AuditRowMark>
+        <SeverityMark
+          severity={GRANT_TYPE_SEVERITY[record.type]}
+          label={GRANT_TYPE_LABEL[record.type]}
+          className="h-3 w-3"
+          decorative
+        />
+      </AuditRowMark>
+      <div className={AUDIT_ROW_DETAIL_CLASS}>
+        <div className="flex flex-wrap items-center gap-x-2">
           <span className="text-text-primary">{GRANT_TYPE_LABEL[record.type]}</span>
-          <span className="min-w-0 font-mono text-text-secondary break-all">{record.toolId}</span>
+          <AuditId className="text-text-secondary">{record.toolId}</AuditId>
         </div>
-        {tierMove && <div className="mt-0.5 text-text-secondary">{tierMove}</div>}
+        {tierMove && <div className="text-text-secondary">{tierMove}</div>}
         {record.type === "grant.revoked" && record.revokedReason && (
-          <div className="mt-0.5 text-text-secondary">Reason: {record.revokedReason}</div>
+          <div className="text-text-secondary">Reason: {record.revokedReason}</div>
         )}
         {record.maxUses !== undefined &&
           (record.type === "grant.used" || record.type === "grant.exhausted") && (
-            <div className="mt-0.5 text-text-secondary">
+            <div className="text-text-secondary">
               {record.remainingUses ?? 0} of {record.maxUses} uses left
             </div>
           )}
         {record.expiresAt !== undefined && record.type === "grant.issued" && (
-          <div className="mt-0.5 text-text-secondary">
+          <div className="text-text-secondary">
             Expires{" "}
             {new Date(record.expiresAt).toLocaleTimeString([], {
               hour: "2-digit",
@@ -394,7 +382,7 @@ function GrantRow({ record, now }: { record: McpGrantRecord; now: number }) {
           </div>
         )}
       </div>
-      <div className="text-right text-text-secondary whitespace-nowrap tabular-nums">
+      <div className={AUDIT_ROW_META_CLASS}>
         <AuditRecordTime ts={record.timestamp} now={now} />
       </div>
     </li>
@@ -404,15 +392,23 @@ function GrantRow({ record, now }: { record: McpGrantRecord; now: number }) {
 interface LogRowProps {
   record: McpLogRecord;
   now: number;
-  anomaly?: McpAnomalySeverity;
+  anomaly?: RecordAnomaly;
 }
 
 // `now` only reaches a row through its age label, so a minute tick re-renders
 // just the rows whose label actually changed rather than every row in the log.
+// By value: the map behind `anomaly` is rebuilt on every minute tick, so its
+// objects are new even when the signals behind them haven't changed.
+function sameAnomaly(a: RecordAnomaly | undefined, b: RecordAnomaly | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.severity === b.severity && a.kinds.join() === b.kinds.join();
+}
+
 function sameRowOutput(prev: LogRowProps, next: LogRowProps): boolean {
   return (
     prev.record === next.record &&
-    prev.anomaly === next.anomaly &&
+    sameAnomaly(prev.anomaly, next.anomaly) &&
     (prev.now === next.now ||
       auditAgeLabel(prev.record.timestamp, prev.now) ===
         auditAgeLabel(next.record.timestamp, next.now))
@@ -557,12 +553,17 @@ export function McpAuditLogViewer({
     return anomalySignals.filter((s) => s.expiresAt === undefined || s.expiresAt > now);
   }, [anomalySignals, anomalySuppressed, now]);
 
-  const signalSeverityByRecordId = useMemo(() => {
-    const map = new Map<string, McpAnomalySeverity>();
+  const anomalyByRecordId = useMemo(() => {
+    const map = new Map<string, RecordAnomaly>();
     for (const sig of visibleSignals) {
       for (const id of sig.recordIds) {
         const prev = map.get(id);
-        map.set(id, prev ? higherSeverity(prev, sig.severity) : sig.severity);
+        if (!prev) {
+          map.set(id, { severity: sig.severity, kinds: [sig.kind] });
+        } else {
+          prev.severity = higherSeverity(prev.severity, sig.severity);
+          if (!prev.kinds.includes(sig.kind)) prev.kinds.push(sig.kind);
+        }
       }
     }
     return map;
@@ -654,12 +655,15 @@ export function McpAuditLogViewer({
           data-anomaly-severity={bannerSeverity}
           className="flex items-center gap-2 px-4 py-2.5 text-xs text-text-primary"
         >
-          <AnomalyMark severity={bannerSeverity} decorative />
+          <AuditAnomalyGlyph severity={bannerSeverity} />
           <span>
             {pluralize(visibleSignals.length, "anomaly signal")}
             {Object.entries(anomalyCountsByKind).length > 0 &&
               ` (${Object.entries(anomalyCountsByKind)
-                .map(([kind, count]) => `${count} ${kind}`)
+                .map(
+                  ([kind, count]) =>
+                    `${count} ${(AUDIT_ANOMALY_KIND_LABEL[kind as McpAnomalyKind] ?? kind).toLowerCase()}`
+                )
                 .join(", ")})`}
           </span>
         </div>
@@ -701,12 +705,18 @@ export function McpAuditLogViewer({
                   {` · ${pluralize(group.callCount, "call")}`}
                   {group.unauthorizedCount > 0 && ` · ${group.unauthorizedCount} unauthorized`}
                   {group.errorCount > 0 && ` · ${pluralize(group.errorCount, "error")}`}
-                  {` · ${group.totalDurationMs}ms`}
+                  {" · "}
+                  <AuditDuration ms={group.totalDurationMs} />
                 </>
               }
             >
               {group.records.map((record) => (
-                <LogRow key={record.id} record={record} now={now} />
+                <LogRow
+                  key={record.id}
+                  record={record}
+                  now={now}
+                  anomaly={anomalyByRecordId.get(record.id)}
+                />
               ))}
               {group.lifecycle.map((grant) => (
                 <LogRow key={grant.id} record={grant} now={now} />
@@ -719,7 +729,12 @@ export function McpAuditLogViewer({
               summary={pluralize(turnGroups.unassociated.length, "record")}
             >
               {turnGroups.unassociated.map((record) => (
-                <LogRow key={record.id} record={record} now={now} />
+                <LogRow
+                  key={record.id}
+                  record={record}
+                  now={now}
+                  anomaly={anomalyByRecordId.get(record.id)}
+                />
               ))}
             </RecordBlock>
           )}
@@ -741,7 +756,7 @@ export function McpAuditLogViewer({
               key={record.id}
               record={record}
               now={now}
-              anomaly={signalSeverityByRecordId.get(record.id)}
+              anomaly={anomalyByRecordId.get(record.id)}
             />
           ))}
         </ul>
