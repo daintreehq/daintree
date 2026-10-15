@@ -56,6 +56,7 @@ import {
   setRemoteHostNameResolver,
 } from "../../window/windowTitle.js";
 import { clearPendingRemoteRestoresForHost } from "../../window/openWindowsTracker.js";
+import { forgetRemoteRestoresForHost } from "../../window/remoteWindowRestore.js";
 import { clearHostPartitions } from "../../services/sessionCacheCleaner.js";
 import { forgetHostState, type HostStateCleanup } from "./forgetHostState.js";
 import { HostRegistry, type RemoteHostsStore } from "./HostRegistry.js";
@@ -537,6 +538,7 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
   },
   { name: "window titles", run: forgetRemoteWorkspaceTitles },
   { name: "window restores", run: clearPendingRemoteRestoresForHost },
+  { name: "window restore retries", run: forgetRemoteRestoresForHost },
   {
     name: "cached views",
     run(hostId) {
