@@ -1,6 +1,7 @@
 import { cn } from "../../lib/utils";
 import { systemClient } from "@/clients/systemClient";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
+import { ROW_CONTROL_CLASS, RowControlTooltip } from "@/components/ui/RowControl";
 import type { FileDecoration } from "@shared/types/forge";
 
 /**
@@ -95,16 +96,18 @@ interface FileDecorationBadgeProps {
  * decoration means: the plugin authors the `badge` glyph, the `tooltip`, an
  * optional `color`, and an optional `url` click target.
  *
- * Presentation only, by design: the badge lives inside a row that is itself a
+ * Never a focusable control: the badge lives inside a row that is itself a
  * `role="button"`, whose children are presentational, so a nested button would
  * be dropped or flattened by assistive tech and would add a tab stop to a list
  * that has exactly one. The row carries the meaning instead — its tooltip and
  * accessible description quote the provider's words, and a link is reached
- * from the keyboard through the row's context menu. Pointer users still click
- * a link badge directly: it opens through `systemClient.openExternal` (which
- * applies the protocol allowlist — lesson #9316 — so a provider can't reach
- * `file://` / `javascript:`), across a 24px target that gives back its extra
- * height so the row does not grow.
+ * from the keyboard through the row's context menu.
+ *
+ * A link badge is a pointer row control all the same: the shared 24px
+ * `ROW_CONTROL_CLASS` target (given back with `-my-1`, so the row does not
+ * grow) and a `RowControlTooltip` naming where it goes. It opens through
+ * `systemClient.openExternal`, which applies the protocol allowlist — lesson
+ * #9316 — so a provider can't reach `file://` / `javascript:`.
  */
 export function FileDecorationBadge({ decoration, className }: FileDecorationBadgeProps) {
   const view = resolveFileDecoration(decoration);
@@ -113,33 +116,44 @@ export function FileDecorationBadge({ decoration, className }: FileDecorationBad
 
   if (!url) return <FileDecorationPill view={view} className={className} />;
 
+  const destination = describeFileDecorationLink(view)?.[0];
   return (
-    <span
-      aria-hidden="true"
-      data-file-decoration-link=""
-      // Stop the click from bubbling to the row, which opens the diff on
-      // click — a link badge opens its link and nothing else.
-      onClick={(e) => {
-        e.stopPropagation();
-        void systemClient.openExternal(url);
-      }}
-      className={cn(
-        "group/decoration -my-1 inline-flex h-6 min-w-6 shrink-0 cursor-pointer items-center justify-center",
-        className
-      )}
+    <RowControlTooltip
+      label={
+        <span className="flex flex-col gap-0.5">
+          <span>{view.label}</span>
+          {destination && <span className="text-text-secondary">{destination}</span>}
+        </span>
+      }
     >
-      {/* The hover wash is a layer between the pill's fill and its glyph
-          rather than a new fill, so a provider's own colour survives it. The
-          neutral glyph steps up to primary with it, as row controls do; a
-          provider's own ink is left alone. */}
-      <FileDecorationPill
-        view={view}
-        className={cn(
-          "relative isolate after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:rounded-full after:bg-overlay-hover after:opacity-0 after:transition-opacity after:duration-150 after:ease-out group-hover/decoration:after:opacity-100 motion-reduce:after:transition-none",
-          !view.color &&
-            "transition-[color] duration-150 ease-out group-hover/decoration:text-text-primary motion-reduce:transition-none"
-        )}
-      />
-    </span>
+      <span
+        aria-hidden="true"
+        data-file-decoration-link=""
+        // Stop the click from bubbling to the row, which opens the diff on
+        // click — a link badge opens its link and nothing else.
+        onClick={(e) => {
+          e.stopPropagation();
+          void systemClient.openExternal(url);
+        }}
+        // A pointer move over the badge is the badge's, so the row's own path
+        // tooltip is not asked to open beside this one. Radix already closes
+        // any open tooltip when another opens; this keeps the row's from
+        // reopening over it.
+        onPointerMove={(e) => {
+          if (e.pointerType !== "touch") e.stopPropagation();
+        }}
+        className={cn(ROW_CONTROL_CLASS, "group/decoration -my-1", className)}
+      >
+        {/* The neutral glyph steps up to primary with the hover, as a row
+            control's icon does; a provider's own ink is left alone. */}
+        <FileDecorationPill
+          view={view}
+          className={cn(
+            !view.color &&
+              "transition-[color] duration-150 ease-out group-hover/decoration:text-text-primary motion-reduce:transition-none"
+          )}
+        />
+      </span>
+    </RowControlTooltip>
   );
 }

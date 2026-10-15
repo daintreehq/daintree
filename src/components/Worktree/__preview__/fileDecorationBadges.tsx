@@ -2,11 +2,13 @@ import { CHANGES, ROOT } from "./fileDecorationBadgesBridge";
 import "@/components/Panel/__preview__/installShims";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import latin400Woff2Url from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { usePluginContextMenuItemsStore } from "@/store/pluginContextMenuItemsStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FileChangeList } from "../FileChangeList";
+import { ensureLatin400Preload } from "@/lib/fontPreload";
 import "@/index.css";
 
 /**
@@ -23,6 +25,9 @@ import "@/index.css";
 const params = new URLSearchParams(window.location.search);
 const themeId = params.get("theme") ?? "daintree";
 
+// The row face is `font-display: optional`: miss its first 100ms and the page
+// keeps the fallback mono for good. Preload it the way the app's boot does.
+ensureLatin400Preload(latin400Woff2Url);
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
 document.body.style.margin = "0";

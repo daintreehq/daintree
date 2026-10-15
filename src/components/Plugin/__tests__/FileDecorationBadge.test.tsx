@@ -37,7 +37,9 @@ describe("FileDecorationBadge", () => {
     expect(el.closest('[aria-hidden="true"]')).not.toBeNull();
     expect(el.getAttribute("title")).toBeNull();
     rerender(
-      <FileDecorationBadge decoration={{ badge: "!", tooltip: "Open report", url: "https://x/r" }} />
+      <FileDecorationBadge
+        decoration={{ badge: "!", tooltip: "Open report", url: "https://x/r" }}
+      />
     );
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(container.querySelector("[tabindex]")).toBeNull();

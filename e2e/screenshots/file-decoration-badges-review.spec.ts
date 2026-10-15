@@ -110,6 +110,29 @@ const BADGES: Array<[string, string]> = [
   ["README.md", "12"],
 ];
 
+/**
+ * The platform font a row's file name actually painted in. The row face is
+ * `font-display: optional`, so a page that missed its first 100ms keeps the
+ * fallback mono for good even once `document.fonts` reports the face loaded;
+ * only the renderer can say which face drew the glyphs.
+ */
+async function rowNameFaces(page: Page): Promise<string[]> {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send("DOM.enable");
+    await cdp.send("CSS.enable");
+    const { root } = await cdp.send("DOM.getDocument", { depth: -1 });
+    const { nodeId } = await cdp.send("DOM.querySelector", {
+      nodeId: root.nodeId,
+      selector: '[data-surface="card"] [aria-label="Open README.md"] .truncate',
+    });
+    const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+    return fonts.map((font) => font.familyName);
+  } finally {
+    await cdp.detach();
+  }
+}
+
 async function load(page: Page, theme: string) {
   await stubViteHmrClient(page);
   await page.goto(`${server!.baseURL}/file-decoration-badges-preview.html?theme=${theme}`);
@@ -117,20 +140,22 @@ async function load(page: Page, theme: string) {
   // to reload, which the inert HMR client cannot do. One reload picks it up.
   const first = row(page, "README.md");
   await first.waitFor({ timeout: 15_000 }).catch(() => page.reload());
-  await expect(first).toBeVisible({ timeout: 30_000 });
-  // The decorations arrive a tick after the rows: wait for every badge.
-  for (const [file, glyph] of BADGES) {
-    await expect(badge(page, file, glyph)).toBeVisible({ timeout: 10_000 });
+  for (let attempt = 0; ; attempt++) {
+    await expect(first).toBeVisible({ timeout: 30_000 });
+    // The decorations arrive a tick after the rows: wait for every badge.
+    for (const [file, glyph] of BADGES) {
+      await expect(badge(page, file, glyph)).toBeVisible({ timeout: 10_000 });
+    }
+    const faces = await rowNameFaces(page);
+    if (faces.length > 0 && faces.every((face) => face === "JetBrains Mono")) break;
+    // The face is cached by now, so a reload paints in it.
+    if (attempt === 3) {
+      throw new Error(
+        `rows painted in ${faces.join(", ")}, not JetBrains Mono — refusing the frame`
+      );
+    }
+    await page.reload();
   }
-  // The first page of a cold server can paint before the webfonts land, and a
-  // frame in the fallback face reads as a type change that never happened.
-  await page.evaluate(async () => {
-    await document.fonts.ready;
-  });
-  const fontsLoaded = await page.evaluate(() =>
-    Array.from(document.fonts).every((face) => face.status !== "loading")
-  );
-  if (!fontsLoaded) throw new Error("webfonts still loading after fonts.ready");
   await page.mouse.move(1, 1);
   await page.waitForTimeout(250);
 }
