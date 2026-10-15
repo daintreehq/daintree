@@ -17,7 +17,6 @@ import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
 import { Button } from "@/components/ui/button";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { OVERLAY_SIDE_OFFSET } from "@/components/ui/overlayMotion";
 import { splitBranchType } from "@/components/Worktree/BranchLabel";
 import { useIsDockPopoverChild } from "@/components/ui/DockPopoverChildContext";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
@@ -608,7 +607,7 @@ function BranchName({
  */
 function RowRevealContent({ title, branch }: { title: string | null; branch: string | null }) {
   return (
-    <span className="flex flex-col gap-0.5 break-words text-pretty">
+    <span className="flex flex-col gap-0.5 break-words">
       {title && <span>{title}</span>}
       {branch && (
         <span className={cn("font-mono", title ? "text-2xs text-text-secondary" : "text-xs")}>
@@ -618,11 +617,6 @@ function RowRevealContent({ title, branch }: { title: string | null; branch: str
     </span>
   );
 }
-
-// Off the list's side rather than above or below the row, where it would cover
-// the neighbours the row is being told apart from. The trigger is the row, so
-// the offset also clears the list's padding and the popover's border.
-const REVEAL_SIDE_OFFSET = OVERLAY_SIDE_OFFSET + 9;
 
 interface MoveToWorktreeRowProps {
   row: PickerRow;
@@ -667,85 +661,86 @@ function MoveToWorktreeRow({
       // scrolls, and the list scrolls to every row the arrow keys reach.
       // Escape and the pointer take it down from the picker instead.
       open={isRevealed || undefined}
+      // Off the list's side rather than above or below the row, where it would
+      // cover the neighbours the row is being told apart from.
       side="left"
       align="start"
-      sideOffset={REVEAL_SIDE_OFFSET}
-      // Wide enough that a branch rarely wraps, since a break after one of its
-      // hyphens reads as hyphenation. A narrow pane leaves little room beside
-      // the picker; wrap there rather than run off the window.
-      contentClassName="max-w-[min(30rem,var(--radix-tooltip-content-available-width))]"
     >
-      <div
-        id={optionId}
-        role="option"
-        aria-selected={isActive}
-        // Kept in its place rather than hidden, so every other row still sits
-        // where it does in the sidebar.
-        aria-disabled={isCurrent || undefined}
-        aria-current={isCurrent ? "true" : undefined}
-        // Pointer-move rather than mouse-enter, so the cursor follows the pointer
-        // within a row too, and keyboard and pointer can never light two rows.
-        onPointerMove={isCurrent ? undefined : () => onHover(worktree.id)}
-        onClick={
-          isCurrent
-            ? undefined
-            : (event) => {
-                // Stopped here, not merely prevented: the pane under the picker
-                // focuses itself on any click it sees, whatever the default
-                // state, and focusing the pane that just left would pull the
-                // view over to the worktree it moved to.
-                event.stopPropagation();
-                onMove(worktree.id);
-              }
-        }
-        className={cn(
-          PALETTE_ROW_CLASS,
-          "flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5",
-          isCurrent ? "cursor-default" : "cursor-pointer"
-        )}
-      >
-        {/* Reserved whether or not there is a glyph, so the titles hold one column. */}
-        <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden="true">
-          {worktree.isMainWorktree ? (
-            <Sprout className="size-3.5 text-text-secondary" />
-          ) : color ? (
-            <span className="size-2 rounded-full" style={{ backgroundColor: color }} />
-          ) : null}
-        </span>
-        <span
+      {/* The reveal's trigger. It spans the list's padding so the tooltip's
+          standard offset clears the popover's edge instead of overlapping it. */}
+      <div className="-mx-2 px-2">
+        <div
+          id={optionId}
+          role="option"
+          aria-selected={isActive}
+          // Kept in its place rather than hidden, so every other row still sits
+          // where it does in the sidebar.
+          aria-disabled={isCurrent || undefined}
+          aria-current={isCurrent ? "true" : undefined}
+          // Pointer-move rather than mouse-enter, so the cursor follows the pointer
+          // within a row too, and keyboard and pointer can never light two rows.
+          onPointerMove={isCurrent ? undefined : () => onHover(worktree.id)}
+          onClick={
+            isCurrent
+              ? undefined
+              : (event) => {
+                  // Stopped here, not merely prevented: the pane under the picker
+                  // focuses itself on any click it sees, whatever the default
+                  // state, and focusing the pane that just left would pull the
+                  // view over to the worktree it moved to.
+                  event.stopPropagation();
+                  onMove(worktree.id);
+                }
+          }
           className={cn(
-            "flex min-w-0 flex-1 flex-col",
-            isCurrent ? "text-text-secondary" : "text-text-primary"
+            PALETTE_ROW_CLASS,
+            "flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5",
+            isCurrent ? "cursor-default" : "cursor-pointer"
           )}
         >
-          {isBranchTitled ? (
-            <BranchName
-              branch={headline.label}
-              Icon={BranchIcon}
-              head={branchHead}
-              tail={branchTail}
-              boxRef={branchBoxRef}
-              tailRef={branchTailRef}
-              isHeadline
-            />
-          ) : (
-            <span ref={titleRef} className="truncate text-sm">
-              {headline.label}
-            </span>
-          )}
-          {detail && (
-            <BranchName
-              branch={detail}
-              Icon={BranchIcon}
-              head={branchHead}
-              tail={branchTail}
-              boxRef={branchBoxRef}
-              tailRef={branchTailRef}
-              isHeadline={false}
-            />
-          )}
-        </span>
-        {isCurrent && <span className="shrink-0 text-xs text-text-secondary">Current</span>}
+          {/* Reserved whether or not there is a glyph, so the titles hold one column. */}
+          <span className="flex size-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+            {worktree.isMainWorktree ? (
+              <Sprout className="size-3.5 text-text-secondary" />
+            ) : color ? (
+              <span className="size-2 rounded-full" style={{ backgroundColor: color }} />
+            ) : null}
+          </span>
+          <span
+            className={cn(
+              "flex min-w-0 flex-1 flex-col",
+              isCurrent ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
+            {isBranchTitled ? (
+              <BranchName
+                branch={headline.label}
+                Icon={BranchIcon}
+                head={branchHead}
+                tail={branchTail}
+                boxRef={branchBoxRef}
+                tailRef={branchTailRef}
+                isHeadline
+              />
+            ) : (
+              <span ref={titleRef} className="truncate text-sm">
+                {headline.label}
+              </span>
+            )}
+            {detail && (
+              <BranchName
+                branch={detail}
+                Icon={BranchIcon}
+                head={branchHead}
+                tail={branchTail}
+                boxRef={branchBoxRef}
+                tailRef={branchTailRef}
+                isHeadline={false}
+              />
+            )}
+          </span>
+          {isCurrent && <span className="shrink-0 text-xs text-text-secondary">Current</span>}
+        </div>
       </div>
     </TruncatedTooltip>
   );
