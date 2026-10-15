@@ -172,9 +172,9 @@ function ClosingTabRow({
           onFocusRow(tab.id);
         }}
         onBlur={() => setHasFocus(false)}
-        // The end rows take the frame's inner radius so their inset focus
-        // outline follows its rounded corners instead of cutting across them.
-        className="flex min-w-0 items-start gap-2.5 px-3 py-2 focus-visible:-outline-offset-2 first:rounded-t-[calc(var(--radius-md)-1px)] last:rounded-b-[calc(var(--radius-md)-1px)]"
+        // The end rows take the frame's radius so their inset focus outline
+        // follows its rounded corners instead of cutting across them.
+        className="flex min-w-0 items-start gap-2.5 px-3 py-2 focus-visible:-outline-offset-2 first:rounded-t-[var(--radius-md)] last:rounded-b-[var(--radius-md)]"
       >
         <span
           aria-hidden="true"
