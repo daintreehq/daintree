@@ -157,7 +157,7 @@ describe("DiffViewer review notes", () => {
     clickGutter(0, "new");
     clickGutter(2, "new", true);
     expect(captured.selectedChanges).toEqual(["N1", "I2", "N2"]);
-    expect(screen.getByLabelText("New note on lines 1-3")).toBeTruthy();
+    expect(screen.getByLabelText("New note on lines 1–3")).toBeTruthy();
   });
 
   it("keeps typed draft text when shift-click moves the composer to a new row", () => {
@@ -167,7 +167,7 @@ describe("DiffViewer review notes", () => {
       target: { value: "Covers both" },
     });
     clickGutter(2, "new", true);
-    const extended = screen.getByLabelText("New note on lines 1-3");
+    const extended = screen.getByLabelText("New note on lines 1–3");
     expect(extended instanceof HTMLTextAreaElement && extended.value).toBe("Covers both");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     clickGutter(0, "new");
@@ -210,7 +210,7 @@ describe("DiffViewer review notes", () => {
     expect(captured.widgets).toBeUndefined();
     const detached = screen.getByTestId("diff-file-notes");
     expect(detached.textContent).toContain("Check this");
-    expect(detached.textContent).toContain("Stale");
+    expect(detached.textContent).toContain("Outdated");
     expect(Object.values(useDiffNotesStore.getState().notes)).toHaveLength(1);
   });
 
@@ -254,7 +254,7 @@ describe("DiffViewer review notes", () => {
     );
     const list = screen.getByTestId("diff-pending-file-notes");
     expect(list.textContent).toContain("Still needed");
-    expect(list.textContent).toContain("Not in view");
+    expect(list.textContent).toContain("Not shown");
     expect(list.textContent).not.toContain("Other file");
   });
 });

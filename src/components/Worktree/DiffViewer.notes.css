@@ -1,7 +1,10 @@
 /* Review notes (#12794). The open draft's range rides the library's
-   selected-change classes, whose stock fill is a fixed light-theme yellow. */
-.diff-viewer .diff-code-selected,
-.diff-viewer .diff-gutter-selected {
+   selected-change classes, whose stock fill is a fixed light-theme yellow. The
+   doubled class outranks the insert and delete fills, which light themes and
+   moved rows restate at a higher specificity — without it the range showed on
+   context rows only, in every light theme. */
+.diff-viewer tr td.diff-code-selected.diff-code-selected,
+.diff-viewer tr td.diff-gutter-selected.diff-gutter-selected {
   background-color: color-mix(in oklab, var(--color-status-info) 18%, transparent);
   color: inherit;
 }
@@ -11,23 +14,53 @@
 }
 
 /* The table is max-content wide, so the thread pins to the scroller's left
-   edge rather than stretching across (or scrolling out of) a wide file. */
+   edge rather than stretching across (or scrolling out of) a wide file. It is
+   measured against the pane, not the window: a viewport width ran a narrow
+   pane's cards past its edge, with their Edit and Delete out of view. Inside
+   the scroller that measure is the scroller's own width (`cqi`); above the
+   table, where no container sits, `max-width` holds it to the file's. */
+.diff-viewer .diff-file-scroll {
+  container-type: inline-size;
+}
+
 .diff-viewer .diff-note-thread {
   position: sticky;
   left: 0;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  width: min(42rem, 80vw);
+  width: min(42rem, 100cqi);
+  max-width: 100%;
   padding: 0.5rem 0.75rem;
   font-family: ui-sans-serif, system-ui, sans-serif;
   white-space: normal;
 }
 
+/* The centered split view never scrolls its table sideways, and a note on a
+   one-sided row gets only that side's half. Pinned at a fixed width it ran
+   past the table's edge, taking its Edit and Delete buttons out of view and
+   scrolling the whole panel when the editor took focus; here it fills its
+   column instead. */
+.diff-viewer .diff-file-centered .diff-note-thread {
+  position: static;
+  width: auto;
+  max-width: 42rem;
+}
+
+/* A widget on a row both sides share is always a new-side note (a context line
+   is read on the new side), so it sits under the new half like every other
+   new-side note rather than straddling the divider. */
+.diff-viewer .diff-file-centered td.diff-widget-content[colspan="4"] > .diff-note-thread {
+  margin-left: 50%;
+}
+
+/* The same measure as a thread, so a one-line note in a wide pane keeps its
+   Edit and Delete beside the words rather than across the screen. */
 .diff-note-list {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  max-width: 42rem;
   padding: 0.5rem 0.75rem;
 }
 

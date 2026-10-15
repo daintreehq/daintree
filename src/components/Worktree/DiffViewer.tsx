@@ -94,7 +94,9 @@ import {
   clearComposerDraft,
   DiffNoteCard,
   DiffNoteComposer,
+  returnFocusTo,
   type DiffNoteCardPlacement,
+  type DiffNoteCloseVia,
 } from "./DiffNoteWidgets";
 import { pluralize } from "@/lib/pluralize";
 
@@ -937,6 +939,13 @@ function FileDiff({
     )
   );
   const [noteDraft, setNoteDraft] = useState<DiffNoteDraft | null>(null);
+  // Whatever held focus when the composer opened — the diff region after a
+  // gutter click, or the Add file note button — so closing it hands focus back.
+  const draftOpenerRef = useRef<HTMLElement | null>(null);
+  const rememberDraftOpener = useCallback(() => {
+    const active = document.activeElement;
+    draftOpenerRef.current = active instanceof HTMLElement ? active : null;
+  }, []);
   const draftOwnerId = useId();
   useEffect(() => {
     setNoteDraft(null);
@@ -978,10 +987,15 @@ function FileDiff({
     return { anchor: { kind: "lines", side, startLine, endLine, contentHash }, keys };
   }, [noteDraft, renderedLineIndex]);
 
-  const closeNoteDraft = useCallback(() => {
-    setNoteDraft(null);
-    clearComposerDraft(draftOwnerId);
-  }, [draftOwnerId]);
+  const closeNoteDraft = useCallback(
+    (via: DiffNoteCloseVia) => {
+      returnFocusTo(draftOpenerRef.current, via);
+      draftOpenerRef.current = null;
+      setNoteDraft(null);
+      clearComposerDraft(draftOwnerId);
+    },
+    [draftOwnerId]
+  );
 
   // Notes that can't sit under their lines — file notes, stale ones, and any
   // whose rows are collapsed or not yet revealed — are listed above the table
@@ -997,12 +1011,16 @@ function FileDiff({
         if (existing) existing.push(note);
         else rows.set(placement.widgetKey, [note]);
       } else {
+        // An anchored note lands here only when its rows are collapsed or not
+        // revealed yet, which to the reader is the same as lines not rendered.
         detached.push({
           note,
           placement:
-            placement.status === "stale" || placement.status === "unplaced"
-              ? placement.status
-              : undefined,
+            placement.status === "stale"
+              ? "stale"
+              : placement.status === "file"
+                ? undefined
+                : "unplaced",
         });
       }
     }
@@ -1057,6 +1075,7 @@ function FileDiff({
         const target = change ? lineForChange(change) : null;
         if (!target) return;
         const { side: noteSide, line } = target;
+        rememberDraftOpener();
         setNoteDraft((current) => {
           if (event.shiftKey && current?.kind === "lines" && current.side === noteSide) {
             const startLine = Math.min(current.startLine, line);
@@ -1072,7 +1091,7 @@ function FileDiff({
         });
       },
     };
-  }, [notesEnabled, renderedLineIndex]);
+  }, [notesEnabled, renderedLineIndex, rememberDraftOpener]);
 
   const selectedChanges = draftPlacement?.keys.length ? draftPlacement.keys : EMPTY_KEYS;
 
@@ -1556,7 +1575,7 @@ function FileDiff({
   );
 
   return (
-    <div className="mb-2" style={fileStyle}>
+    <div className="mb-2" style={fileStyle} data-diff-file="">
       {relPath && (
         <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-1.5 bg-surface-sidebar border-b border-border-default text-xs font-mono">
           <TruncatedTooltip content={relPath}>
@@ -1597,8 +1616,12 @@ function FileDiff({
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    onClick={() => setNoteDraft({ kind: "file" })}
+                    onClick={() => {
+                      rememberDraftOpener();
+                      setNoteDraft({ kind: "file" });
+                    }}
                     aria-label="Add file note"
+                    data-note-file-add=""
                     // The copy beside it is a CopyButton; one glyph size per row.
                     className="shrink-0 [&_svg]:size-3.5"
                   >
