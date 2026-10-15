@@ -1,8 +1,9 @@
-import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
+import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { StateField, Compartment } from "@codemirror/state";
 import type { SlashCommand } from "@shared/types";
 import { getAllSlashCommandTokens, type SlashCommandToken } from "../hybridInputParsing";
-import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipCardText, chipHoverTooltip, chipTooltip } from "./chipCard";
 
 interface SlashChipFieldConfig {
   commandMap: Map<string, SlashCommand>;
@@ -20,7 +21,8 @@ class SlashChipWidget extends WidgetType {
   constructor(
     readonly command: string,
     readonly isValid: boolean,
-    readonly isSelected: boolean
+    readonly isSelected: boolean,
+    readonly description: string
   ) {
     super();
   }
@@ -29,7 +31,8 @@ class SlashChipWidget extends WidgetType {
     return (
       this.command === other.command &&
       this.isValid === other.isValid &&
-      this.isSelected === other.isSelected
+      this.isSelected === other.isSelected &&
+      this.description === other.description
     );
   }
 
@@ -40,7 +43,11 @@ class SlashChipWidget extends WidgetType {
     if (this.isSelected) classes.push("cm-chip-pending-delete");
     span.className = classes.join(" ");
     span.setAttribute("role", "img");
-    span.setAttribute("aria-label", `Slash command: ${this.command}`);
+    span.setAttribute(
+      "aria-label",
+      chipAriaLabel(`Slash command: ${this.command}`, this.isSelected)
+    );
+    if (this.description) span.setAttribute("aria-description", this.description);
     span.textContent = this.command;
     return span;
   }
@@ -85,7 +92,12 @@ export function createSlashChipField(config: SlashChipFieldConfig) {
           }
           const selected = isChipSelected(pending, token.start, token.end);
           return Decoration.replace({
-            widget: new SlashChipWidget(token.command, token.isValid, selected),
+            widget: new SlashChipWidget(
+              token.command,
+              token.isValid,
+              selected,
+              slashCommandDescription(config.commandMap.get(token.command))
+            ),
           }).range(token.start, token.end);
         });
         return Decoration.set(ranges, true);
@@ -103,20 +115,12 @@ export function createSlashChipField(config: SlashChipFieldConfig) {
   });
 }
 
-function createTooltipContent(command: SlashCommand): HTMLElement {
-  const container = document.createElement("div");
-  container.className = "max-w-[260px]";
-
-  const description = document.createElement("p");
-  description.className = "text-2xs text-text-primary/80 leading-snug";
-  description.textContent = command.description ?? command.label ?? "";
-  container.appendChild(description);
-
-  return container;
+function slashCommandDescription(command: SlashCommand | undefined): string {
+  return command?.description ?? command?.label ?? "";
 }
 
 export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
-  return hoverTooltip((view, pos) => {
+  return chipHoverTooltip((view, pos) => {
     const tokens = getAllSlashCommandTokens(view.state.doc.toString());
     const token = tokens.find((t) => pos >= t.start && pos < t.end);
     if (!token) return null;
@@ -124,25 +128,9 @@ export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
     const command = commandMap.get(token.command);
     if (!command) return null;
 
-    return {
-      pos: token.start,
-      end: token.end,
-      above: true,
-      create() {
-        const dom = document.createElement("div");
-        dom.className = "px-2 py-1 text-xs";
-        dom.style.cssText = `
-          background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
-          border-radius: var(--radius-xs);
-          border: 1px solid var(--theme-border-subtle);
-          box-shadow: 0 2px 8px var(--theme-scrim-soft);
-        `;
-
-        dom.appendChild(createTooltipContent(command));
-
-        return { dom };
-      },
-    };
+    return chipTooltip({ from: token.start, to: token.end }, ".cm-slash-command-chip", () => [
+      chipCardText(slashCommandDescription(command)),
+    ]);
   });
 }
 

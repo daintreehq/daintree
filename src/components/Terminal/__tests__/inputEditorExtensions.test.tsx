@@ -920,7 +920,7 @@ describe("fileDropChipField", () => {
     const removeButtons = view.dom.querySelectorAll(".cm-file-drop-chip .cm-chip-remove");
     expect(removeButtons).toHaveLength(2);
 
-    removeButtons[1]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    removeButtons[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const entries = view.state.field(fileDropChipField);
     expect(entries).toHaveLength(1);
@@ -964,7 +964,7 @@ describe("fileDropChipField", () => {
     const removeButtons = view.dom.querySelectorAll(".cm-file-drop-chip .cm-chip-remove");
     expect(removeButtons).toHaveLength(2);
 
-    removeButtons[1]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    removeButtons[1]!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const entries = view.state.field(fileDropChipField);
     expect(entries).toHaveLength(1);

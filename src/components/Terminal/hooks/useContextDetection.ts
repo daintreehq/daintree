@@ -2,6 +2,7 @@ import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { type ViewUpdate } from "@codemirror/view";
 import type { CompletionTrigger } from "@shared/types";
 import { getActiveCompletionContext, type ActiveCompletionContext } from "../hybridInputParsing";
+import { chipPendingDeleteField, isOwnedByAttachmentChip } from "../inputEditorExtensions";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 interface LatestRefShape {
@@ -133,14 +134,19 @@ export function useContextDetection({
         // doc without flattening a large draft on every caret move.
         const caret = update.state.selection.main.head;
         const line = update.state.doc.lineAt(caret);
-        const local = getActiveCompletionContext(
-          line.text,
-          caret - line.from,
-          activeTriggersRef.current
-        );
-        const next = local
-          ? { ...local, start: local.start + line.from, tokenEnd: local.tokenEnd + line.from }
-          : null;
+        // A chip staged for deletion is its own moment: Backspace has just
+        // selected it, and a menu offering to complete it says the opposite.
+        const local = update.state.field(chipPendingDeleteField, false)
+          ? null
+          : getActiveCompletionContext(line.text, caret - line.from, activeTriggersRef.current);
+        const start = local ? local.start + line.from : 0;
+        const tokenEnd = local ? local.tokenEnd + line.from : 0;
+        // A dropped file's `@path` spells a file query too, but it is an
+        // attachment, not something being typed.
+        const next =
+          local && !isOwnedByAttachmentChip(update.state, start, tokenEnd)
+            ? { ...local, start, tokenEnd }
+            : null;
         if (!contextsEqual(trackerRef.current, next)) {
           trackerRef.current = next;
           setActiveCompletionContext(next);

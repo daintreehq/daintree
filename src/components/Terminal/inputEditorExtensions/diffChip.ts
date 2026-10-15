@@ -1,7 +1,8 @@
-import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
+import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { StateField } from "@codemirror/state";
 import { getAllAtDiffTokens, type AtDiffToken, type DiffContextType } from "../hybridInputParsing";
-import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipCardText, chipHoverTooltip, chipTooltip } from "./chipCard";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
 
 const DIFF_LABELS: Record<DiffContextType, string> = {
@@ -9,6 +10,10 @@ const DIFF_LABELS: Record<DiffContextType, string> = {
   staged: "Staged diff",
   head: "HEAD diff",
 };
+
+function diffChipDescription(diffType: DiffContextType): string {
+  return `Attaches ${DIFF_LABELS[diffType].toLowerCase()} as context`;
+}
 
 const GIT_BRANCH_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`;
 
@@ -36,7 +41,11 @@ class DiffChipWidget extends WidgetType {
     const span = document.createElement("span");
     span.className = this.isSelected ? "cm-diff-chip cm-chip-pending-delete" : "cm-diff-chip";
     span.setAttribute("role", "img");
-    span.setAttribute("aria-label", `Diff: ${DIFF_LABELS[this.diffType]}`);
+    span.setAttribute(
+      "aria-label",
+      chipAriaLabel(`Diff: ${DIFF_LABELS[this.diffType]}`, this.isSelected)
+    );
+    span.setAttribute("aria-description", diffChipDescription(this.diffType));
 
     const icon = document.createElement("span");
     setTrustedInnerHTML(icon, createTrustedHTML(GIT_BRANCH_ICON_SVG));
@@ -88,34 +97,15 @@ export const diffChipField = StateField.define<DiffChipState>({
 });
 
 export function createDiffChipTooltip() {
-  return hoverTooltip((view, pos) => {
+  return chipHoverTooltip((view, pos) => {
     const chipState = view.state.field(diffChipField, false);
     if (!chipState) return null;
 
     const token = chipState.tokens.find((t) => pos >= t.start && pos < t.end);
     if (!token) return null;
 
-    return {
-      pos: token.start,
-      end: token.end,
-      above: true,
-      create() {
-        const dom = document.createElement("div");
-        dom.className = "px-2 py-1 text-xs";
-        dom.style.cssText = `
-          background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
-          border-radius: var(--radius-xs);
-          border: 1px solid var(--theme-border-subtle);
-          box-shadow: 0 2px 8px var(--theme-scrim-soft);
-        `;
-
-        const desc = document.createElement("p");
-        desc.className = "text-2xs text-text-primary/80 leading-snug";
-        desc.textContent = `Attaches ${DIFF_LABELS[token.diffType].toLowerCase()} as context`;
-        dom.appendChild(desc);
-
-        return { dom };
-      },
-    };
+    return chipTooltip({ from: token.start, to: token.end }, ".cm-diff-chip", () => [
+      chipCardText(diffChipDescription(token.diffType)),
+    ]);
   });
 }

@@ -1,4 +1,4 @@
-import { EditorView, keymap, type KeyBinding } from "@codemirror/view";
+import { EditorView, closeHoverTooltips, keymap, type KeyBinding } from "@codemirror/view";
 import { StateField, StateEffect, Prec, type Extension } from "@codemirror/state";
 
 export interface ChipPendingDelete {
@@ -39,6 +39,12 @@ export const chipPendingDeleteField = StateField.define<ChipPendingDelete | null
 
     return value;
   },
+  // While a chip is staged its own treatment is the selection indicator, so
+  // the drawn selection behind it is hidden rather than compounded with it.
+  provide: (f) =>
+    EditorView.editorAttributes.from(f, (value): Record<string, string> =>
+      value ? { class: "cm-chip-staging" } : {}
+    ),
 });
 
 function findAtomicRangeBefore(view: EditorView, pos: number): ChipPendingDelete | null {
@@ -115,7 +121,7 @@ const backspaceBinding: KeyBinding = {
     }
 
     view.dispatch({
-      effects: setChipPendingDelete.of(chip),
+      effects: [setChipPendingDelete.of(chip), closeHoverTooltips],
       selection: { anchor: chip.from, head: chip.to },
     });
     return true;
@@ -132,4 +138,13 @@ export function isChipSelected(
   to: number
 ): boolean {
   return !!pending && pending.from === from && pending.to === to;
+}
+
+/**
+ * A chip's accessible name. Staged, it also says what the next Backspace does:
+ * the stage is the keyboard route to removing a chip, and nothing else on
+ * screen announces it.
+ */
+export function chipAriaLabel(label: string, isSelected: boolean): string {
+  return isSelected ? `${label}, selected. Press Backspace to remove` : label;
 }

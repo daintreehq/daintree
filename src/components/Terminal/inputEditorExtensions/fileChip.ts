@@ -1,11 +1,12 @@
-import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
-import { StateField } from "@codemirror/state";
+import { EditorView, Decoration, WidgetType } from "@codemirror/view";
+import { StateField, type EditorState } from "@codemirror/state";
 import {
   getAllAtFileTokens,
   RESERVED_AT_TOKEN_PATHS,
   type AtFileToken,
 } from "../hybridInputParsing";
-import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipCardPath, chipHoverTooltip, chipTooltip } from "./chipCard";
 import { fileDropChipField } from "./fileDropChip";
 import { imageChipField } from "./imageChip";
 
@@ -18,14 +19,20 @@ interface RangeOwner {
   to: number;
 }
 
-function isOwnedByExplicitChip(view: EditorView, start: number, end: number): boolean {
-  const dropEntries: RangeOwner[] | undefined = view.state.field(fileDropChipField, false);
+/**
+ * Whether `start`–`end` overlaps a chip something inserted explicitly — a
+ * dropped file or a pasted image — rather than one parsed from typed text. A
+ * dropped file's `@path` also spells an `@file` token, and those ranges belong
+ * to the attachment: its chip, its card, and no completion menu.
+ */
+export function isOwnedByAttachmentChip(state: EditorState, start: number, end: number): boolean {
+  const dropEntries: RangeOwner[] | undefined = state.field(fileDropChipField, false);
   if (dropEntries) {
     for (const e of dropEntries) {
       if (e.from < end && e.to > start) return true;
     }
   }
-  const imageEntries: RangeOwner[] | undefined = view.state.field(imageChipField, false);
+  const imageEntries: RangeOwner[] | undefined = state.field(imageChipField, false);
   if (imageEntries) {
     for (const e of imageEntries) {
       if (e.from < end && e.to > start) return true;
@@ -50,7 +57,7 @@ class FileChipWidget extends WidgetType {
     const span = document.createElement("span");
     span.className = this.isSelected ? "cm-file-chip cm-chip-pending-delete" : "cm-file-chip";
     span.setAttribute("role", "img");
-    span.setAttribute("aria-label", `File: ${this.path}`);
+    span.setAttribute("aria-label", chipAriaLabel(`File: ${this.path}`, this.isSelected));
     span.textContent = `@${this.path}`;
     return span;
   }
@@ -79,7 +86,7 @@ const fileChipStateField = StateField.define<FileChipState>({
       if (!fieldValue || fieldValue.tokens.length === 0) return Decoration.none;
       const pending = view.state.field(chipPendingDeleteField, false) ?? null;
       const ranges = fieldValue.tokens
-        .filter((t) => !isOwnedByExplicitChip(view, t.start, t.end))
+        .filter((t) => !isOwnedByAttachmentChip(view.state, t.start, t.end))
         .map((token) => {
           const selected = isChipSelected(pending, token.start, token.end);
           return Decoration.replace({
@@ -93,7 +100,7 @@ const fileChipStateField = StateField.define<FileChipState>({
       const fieldValue = view.state.field(f, false);
       if (!fieldValue || fieldValue.tokens.length === 0) return Decoration.none;
       const ranges = fieldValue.tokens
-        .filter((t) => !isOwnedByExplicitChip(view, t.start, t.end))
+        .filter((t) => !isOwnedByAttachmentChip(view.state, t.start, t.end))
         .map((t) => Decoration.mark({}).range(t.start, t.end));
       if (ranges.length === 0) return Decoration.none;
       return Decoration.set(ranges, true);
@@ -105,43 +112,16 @@ export function createFileChipField() {
   return fileChipStateField;
 }
 
-function createFileTooltipContent(token: AtFileToken): HTMLElement {
-  const container = document.createElement("div");
-  container.className = "max-w-[300px]";
-
-  const pathEl = document.createElement("p");
-  pathEl.className = "text-2xs text-text-primary leading-snug font-mono break-all";
-  pathEl.textContent = token.path;
-  container.appendChild(pathEl);
-
-  return container;
-}
-
 export function createFileChipTooltip() {
-  return hoverTooltip((view, pos) => {
+  return chipHoverTooltip((view, pos) => {
     const chipState = view.state.field(fileChipStateField, false);
     if (!chipState) return null;
 
     const token = chipState.tokens.find((t) => pos >= t.start && pos < t.end);
-    if (!token) return null;
+    if (!token || isOwnedByAttachmentChip(view.state, token.start, token.end)) return null;
 
-    return {
-      pos: token.start,
-      end: token.end,
-      above: true,
-      create() {
-        const dom = document.createElement("div");
-        dom.className = "px-2 py-1 text-xs";
-        dom.style.cssText = `
-          background: var(--theme-surface-panel-elevated);
-          border-radius: var(--radius-xs);
-          box-shadow: 0 2px 8px var(--theme-scrim-soft);
-        `;
-
-        dom.appendChild(createFileTooltipContent(token));
-
-        return { dom };
-      },
-    };
+    return chipTooltip({ from: token.start, to: token.end }, ".cm-file-chip", () => [
+      chipCardPath(token.path),
+    ]);
   });
 }

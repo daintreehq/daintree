@@ -1,8 +1,9 @@
-import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
+import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect } from "@codemirror/state";
-import { formatChipLabel, removeChipRange } from "./base";
-import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { createChipRemoveControl, formatChipLabel, removeChipRange } from "./base";
+import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipCardPath, chipHoverTooltip, chipTooltip } from "./chipCard";
 
 interface ImageChipEntry {
   from: number;
@@ -28,7 +29,7 @@ class ImageChipWidget extends WidgetType {
     const span = document.createElement("span");
     span.className = this.isSelected ? "cm-image-chip cm-chip-pending-delete" : "cm-image-chip";
     span.setAttribute("role", "img");
-    span.setAttribute("aria-label", `Image: ${this.filePath}`);
+    span.setAttribute("aria-label", chipAriaLabel(`Image: ${this.filePath}`, this.isSelected));
 
     const img = document.createElement("img");
     img.src = this.thumbnailUrl;
@@ -42,28 +43,23 @@ class ImageChipWidget extends WidgetType {
     label.textContent = formatChipLabel(this.filePath);
     span.appendChild(label);
 
-    const removeBtn = document.createElement("button");
-    removeBtn.className = "cm-chip-remove";
-    removeBtn.setAttribute("aria-label", "Remove image");
-    removeBtn.textContent = "\u00d7";
-    removeBtn.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // Position-based lookup so duplicate chips for the same image remove
-      // the clicked chip, not the first occurrence (mirrors fileDropChip).
-      const entries = view.state.field(imageChipField, false);
-      if (!entries) return;
-      let pos = -1;
-      try {
-        pos = view.posAtDOM(span);
-      } catch {
-        // Widget DOM already detached — fall through to the path match.
-      }
-      const byPos = pos >= 0 ? entries.find((en) => pos >= en.from && pos < en.to) : undefined;
-      const entry = byPos ?? entries.find((en) => en.filePath === this.filePath);
-      if (entry) removeChipRange(view, entry.from, entry.to);
-    });
-    span.appendChild(removeBtn);
+    span.appendChild(
+      createChipRemoveControl(() => {
+        // Position-based lookup so duplicate chips for the same image remove
+        // the clicked chip, not the first occurrence (mirrors fileDropChip).
+        const entries = view.state.field(imageChipField, false);
+        if (!entries) return;
+        let pos = -1;
+        try {
+          pos = view.posAtDOM(span);
+        } catch {
+          // Widget DOM already detached — fall through to the path match.
+        }
+        const byPos = pos >= 0 ? entries.find((en) => pos >= en.from && pos < en.to) : undefined;
+        const entry = byPos ?? entries.find((en) => en.filePath === this.filePath);
+        if (entry) removeChipRange(view, entry.from, entry.to);
+      })
+    );
 
     return span;
   }
@@ -141,42 +137,22 @@ export function readImageChipPaths(view: EditorView | null | undefined): string[
 }
 
 export function createImageChipTooltip() {
-  return hoverTooltip((view, pos) => {
+  return chipHoverTooltip((view, pos) => {
     const entries = view.state.field(imageChipField, false);
     if (!entries || entries.length === 0) return null;
 
     const entry = entries.find((e) => pos >= e.from && pos <= e.to);
     if (!entry) return null;
 
-    return {
-      pos: entry.from,
-      end: entry.to,
-      above: true,
-      create() {
-        const dom = document.createElement("div");
-        dom.className = "px-2 py-2";
-        dom.style.cssText = `
-          background: var(--theme-surface-panel-elevated);
-          border-radius: var(--radius-sm);
-          box-shadow: 0 4px 12px var(--theme-scrim-medium);
-        `;
-
-        const img = document.createElement("img");
-        img.src = entry.thumbnailUrl;
-        img.alt = "Screenshot preview";
-        img.style.cssText =
-          "max-width: 200px; max-height: 200px; border-radius: var(--radius-xs); display: block;";
-        dom.appendChild(img);
-
-        const pathEl = document.createElement("p");
-        pathEl.style.cssText =
-          "font-size: var(--text-3xs); color: var(--theme-text-muted); margin-top: 4px; word-break: break-all; max-width: 200px;";
-        pathEl.textContent = entry.filePath;
-        dom.appendChild(pathEl);
-
-        return { dom };
-      },
-    };
+    return chipTooltip(entry, ".cm-image-chip", () => {
+      const img = document.createElement("img");
+      img.src = entry.thumbnailUrl;
+      img.alt = "Screenshot preview";
+      img.className = "block max-h-[180px] max-w-[240px] rounded-[var(--radius-sm)] object-contain";
+      const path = chipCardPath(entry.filePath);
+      path.classList.add("mt-1.5");
+      return [img, path];
+    });
   });
 }
 

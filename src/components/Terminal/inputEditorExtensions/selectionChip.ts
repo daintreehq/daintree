@@ -1,9 +1,12 @@
-import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
+import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { StateField } from "@codemirror/state";
 import { getAllAtSelectionTokens, type AtSelectionToken } from "../hybridInputParsing";
 import { TERMINAL_ICON_SVG } from "./base";
-import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipAriaLabel, chipPendingDeleteField, isChipSelected } from "./chipBackspace";
+import { chipCardText, chipHoverTooltip, chipTooltip } from "./chipCard";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
+
+const SELECTION_CHIP_DESCRIPTION = "Attaches current terminal text selection as context";
 
 interface SelectionChipState {
   tokens: AtSelectionToken[];
@@ -28,7 +31,8 @@ class SelectionChipWidget extends WidgetType {
       ? "cm-selection-chip cm-chip-pending-delete"
       : "cm-selection-chip";
     span.setAttribute("role", "img");
-    span.setAttribute("aria-label", "Terminal selection");
+    span.setAttribute("aria-label", chipAriaLabel("Terminal selection", this.isSelected));
+    span.setAttribute("aria-description", SELECTION_CHIP_DESCRIPTION);
 
     const icon = document.createElement("span");
     setTrustedInnerHTML(icon, createTrustedHTML(TERMINAL_ICON_SVG));
@@ -80,34 +84,15 @@ export const selectionChipField = StateField.define<SelectionChipState>({
 });
 
 export function createSelectionChipTooltip() {
-  return hoverTooltip((view, pos) => {
+  return chipHoverTooltip((view, pos) => {
     const chipState = view.state.field(selectionChipField, false);
     if (!chipState) return null;
 
     const token = chipState.tokens.find((t) => pos >= t.start && pos < t.end);
     if (!token) return null;
 
-    return {
-      pos: token.start,
-      end: token.end,
-      above: true,
-      create() {
-        const dom = document.createElement("div");
-        dom.className = "px-2 py-1 text-xs";
-        dom.style.cssText = `
-          background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
-          border-radius: var(--radius-xs);
-          border: 1px solid var(--theme-border-subtle);
-          box-shadow: 0 2px 8px var(--theme-scrim-soft);
-        `;
-
-        const desc = document.createElement("p");
-        desc.className = "text-2xs text-text-primary/80 leading-snug";
-        desc.textContent = "Attaches current terminal text selection as context";
-        dom.appendChild(desc);
-
-        return { dom };
-      },
-    };
+    return chipTooltip({ from: token.start, to: token.end }, ".cm-selection-chip", () => [
+      chipCardText(SELECTION_CHIP_DESCRIPTION),
+    ]);
   });
 }
