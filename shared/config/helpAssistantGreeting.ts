@@ -13,7 +13,7 @@ export const HELP_ASSISTANT_GREETING =
  * so this one states the role and asks for an answer that isn't a question.
  */
 export const HUB_STARTED_ASSISTANT_GREETING =
-  "Daintree started you for the hub assistant on another machine, to carry out its requests on this machine. Nothing to do yet: reply with one short sentence saying you're ready.";
+  "Daintree started you so the user's main assistant, on another machine, can hand you work on this one. Nothing to do yet: reply with one short sentence saying you're ready.";
 
 /** Every opening turn a launch sends on its own; a transcript holding only one is no conversation. */
 export const LAUNCH_GREETINGS: ReadonlySet<string> = new Set([

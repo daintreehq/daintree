@@ -135,7 +135,7 @@ describe("buildMessagingAddendum (#13333)", () => {
   });
 
   it("stays small: the shared prompt is near its size budget", () => {
-    // 1200 → 1750 for the swarm roles (#13392), measured at 1746 B: one
+    // 1200 → 1750 for the swarm roles (#13392), measured at 1749 B: one
     // paragraph naming the submanager's and the hub's parts and pointing at
     // runbooks for the procedures, which stay out of the prompt.
     expect(Buffer.byteLength(buildMessagingAddendum(), "utf8")).toBeLessThanOrEqual(1750);
