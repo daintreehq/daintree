@@ -111,7 +111,11 @@ export class ProjectAgentActivityCache {
         if (this.exited.has(terminal.id)) continue;
         // Learned even for a terminal whose state moved on: an event carries no
         // project, and main may not be tracking this one's spawn.
-        if (terminal.projectId) this.seededProjects.set(terminal.id, terminal.projectId);
+        if (terminal.projectId && this.seededProjects.get(terminal.id) !== terminal.projectId) {
+          this.seededProjects.set(terminal.id, terminal.projectId);
+          // An owner newly known can make a state already held count.
+          changed = true;
+        }
         if (this.touched.has(terminal.id)) continue;
         if (terminal.agentState === undefined) {
           // Still running, but no longer an agent: a shell reusing the id, say.

@@ -108,12 +108,15 @@ describe("ProjectAgentActivityCache (#13359)", () => {
 
   it("learns a terminal's project from an inventory taken before its latest state", async () => {
     // Main isn't tracking this terminal's spawn, so only the inventory names its project.
-    const { cache, pty } = setup();
+    const { cache, pty, onChange } = setup();
     cache.attach(pty);
     cache.noteState("t1", "working");
+    onChange.mockClear();
     pty.answer({ terminals: [{ id: "t1", projectId: "p1", agentState: "idle" }], degraded: false });
     await flush();
     expect(cache.isProjectActive("p1")).toBe(true);
+    // The project now counts, so the views showing it are owed an answer.
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 
   it("never brings back a terminal that exited while the inventory was read", async () => {
