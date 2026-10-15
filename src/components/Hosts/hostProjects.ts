@@ -62,6 +62,18 @@ function useLoaderRevision(): number {
   return useSyncExternalStore(subscribe, getLoaderRevision, getLoaderRevision);
 }
 
+function getHasLoader(): boolean {
+  return loader !== null;
+}
+
+/**
+ * Whether anything can list another host's projects yet. Until a loader is
+ * installed every listing comes back empty, which says nothing about the host.
+ */
+export function useHostProjectsListable(): boolean {
+  return useSyncExternalStore(subscribe, getHasLoader, getHasLoader);
+}
+
 /** A finished listing is reused this long before a host is asked again. */
 const CACHE_TTL_MS = 10_000;
 

@@ -207,10 +207,14 @@ function entry(spec: HostSpec, connection: HostConnectionState): HostListEntry {
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+/** How often staging re-checks the host list while it waits, and for how long. */
+const STAGE_POLL_MS = 10;
+const STAGE_POLL_LIMIT = 300;
+
 async function until(test: () => boolean, what: string): Promise<void> {
-  for (let i = 0; i < 300; i += 1) {
+  for (let i = 0; i < STAGE_POLL_LIMIT; i += 1) {
     if (test()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, STAGE_POLL_MS));
   }
   throw new Error(`other-hosts harness: timed out waiting for ${what}`);
 }

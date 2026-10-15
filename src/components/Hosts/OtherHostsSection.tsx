@@ -16,6 +16,7 @@ import { clientPlatform, localHostLabel, type HostLinkTone } from "./hostModel";
 import {
   listingProjects,
   retryHostProjects,
+  useHostProjectsListable,
   useOtherHostTargets,
   type HostListingState,
   type HostProjectRef,
@@ -141,6 +142,9 @@ function describeListing(listing: HostListingState, now: number): string | null 
 export function useOtherHostProjectOptions(query: string): OtherHostOptions {
   const supported = isRemoteShellSupported();
   const targets = useOtherHostTargets(clientPlatform());
+  // Without a loader every list comes back empty: that's "can't ask", not
+  // "nothing there", so it never earns a host its "No projects yet" row.
+  const listable = useHostProjectsListable();
   // In state rather than read here: a render-time clock would freeze under the
   // compiler's memoisation and leave "listed 1 min ago" saying so for an hour.
   const now = useGlobalMinuteClock();
@@ -186,10 +190,11 @@ export function useOtherHostProjectOptions(query: string): OtherHostOptions {
       });
     } else if (listing.status === "not-connected" && projects.length === 0 && offersAction) {
       options.push({ ...base, key: optionKey("connect", target.hostId), kind: "connect" });
-    } else if (listing.status === "loaded" && projects.length === 0 && offersAction) {
+    } else if (listing.status === "loaded" && projects.length === 0 && listable && offersAction) {
       options.push({ ...base, key: optionKey("host", target.hostId), kind: "host" });
     }
-    const firstListing = listing.status === "loading" && projects.length === 0 && !retrying;
+    const firstListing =
+      listing.status === "loading" && projects.length === 0 && !retrying && listable;
     if (options.length > 0 || (firstListing && offersAction)) {
       const listingWords = describeListing(listing, now);
       groups.push({
