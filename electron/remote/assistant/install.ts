@@ -242,8 +242,7 @@ export function installAssistantExchangeClient(
   client.start();
   // Bounded by each exchange's expiry. Holding the link never keeps the host awake.
   const offUseCheck =
-    deps.addUseCheck?.((hostId) => journal.hasOpen(hostId, EXCHANGE_RETRY_WINDOW_MS)) ??
-    (() => {});
+    deps.addUseCheck?.((hostId) => journal.hasOpen(hostId, EXCHANGE_RETRY_WINDOW_MS)) ?? (() => {});
   const unregister = registerRemoteService("assistantExchangeClient", client);
   return () => {
     offUseCheck();

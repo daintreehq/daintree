@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantExchangeStore, ExchangeChange } from "../../exchange/AssistantExchangeStore.js";
+import type {
+  AssistantExchangeStore,
+  ExchangeChange,
+} from "../../exchange/AssistantExchangeStore.js";
 import type { LinkSession } from "../../link/session.js";
 import type { MetricsSessionContext } from "../../metrics/hostMetricsHost.js";
 import { installAssistantExchangeHostWith, senderIdForCredential } from "../hostExchanges.js";

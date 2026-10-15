@@ -340,7 +340,12 @@ describe("AssistantExchangeClient change events", () => {
     expect(journal.unresolved(HOST)).toEqual(["m-1"]);
     host.put("m-1", "completed", true);
     // Read past by the page, then found by the lookup.
-    journal.applyChanges(HOST, { records: [], cursor: host.revision, hasMore: false, reset: false });
+    journal.applyChanges(HOST, {
+      records: [],
+      cursor: host.revision,
+      hasMore: false,
+      reset: false,
+    });
     await client.reconcile(HOST, session);
     expect(moved.map((m) => m.record.state)).toEqual(["completed"]);
   });

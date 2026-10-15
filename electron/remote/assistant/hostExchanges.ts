@@ -5,10 +5,7 @@ import { AppError } from "../../utils/errorTypes.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionSource } from "../metrics/hostMetricsHost.js";
-import type {
-  AssistantExchangeStore,
-  ExchangeChange,
-} from "../exchange/AssistantExchangeStore.js";
+import type { AssistantExchangeStore, ExchangeChange } from "../exchange/AssistantExchangeStore.js";
 import type { CreateExchangeInput, ExchangeRecord, SenderActor } from "../exchange/types.js";
 import type {
   AssistantMessagingPolicy,

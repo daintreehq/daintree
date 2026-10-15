@@ -144,9 +144,13 @@ describe("wakeHubForMoved", () => {
 
   it("wakes the hub that sent each exchange, as an update from this Shell", () => {
     const wake = vi.fn();
-    wakeHubForMoved([moved("task-1", "hub-2"), moved("task-2", "hub-1")], { getHub: () => hub }, {
-      wake,
-    });
+    wakeHubForMoved(
+      [moved("task-1", "hub-2"), moved("task-2", "hub-1")],
+      { getHub: () => hub },
+      {
+        wake,
+      }
+    );
     expect(wake).toHaveBeenCalledTimes(1);
     expect(wake.mock.calls[0]![0]).toMatchObject({
       lane: { projectId: "proj", slot: 0 },
@@ -161,7 +165,9 @@ describe("wakeHubForMoved", () => {
     const wake = vi.fn();
     wakeHubForMoved([moved("task-1", "hub-2")], { getHub: () => null }, { wake });
     wakeHubForMoved([moved("task-1", "hub-2")], undefined, { wake });
-    expect(() => wakeHubForMoved([moved("task-1", "hub-2")], { getHub: () => hub }, undefined)).not.toThrow();
+    expect(() =>
+      wakeHubForMoved([moved("task-1", "hub-2")], { getHub: () => hub }, undefined)
+    ).not.toThrow();
     expect(wake).not.toHaveBeenCalled();
   });
 });
