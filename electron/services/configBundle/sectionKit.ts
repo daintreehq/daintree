@@ -146,6 +146,31 @@ export function settleUndo(
   return leaves.map(({ key }) => ({ key, status: plan.statuses.get(key) ?? "failed" }));
 }
 
+/**
+ * An undo for a keyed map, worked on the map as stored rather than on
+ * `read()`: a read that sanitizes (drops an entry it can't parse, a field it
+ * doesn't know) would otherwise write that loss back over leaves the undo
+ * isn't touching. A write whose follow-up throws (a menu rebuild) is still
+ * judged by what the store now holds.
+ */
+export function storedMapUndo(
+  readStored: () => unknown,
+  writeStored: (value: Record<string, unknown>) => Promise<void> | void
+): (leaves: UndoLeaf[]) => Promise<UndoLeafResult[]> {
+  return async (leaves) => {
+    const stored = readStored();
+    const plan = planUndo(leaves, isRecord(stored) ? stored : {});
+    if (plan.pending.length > 0) {
+      try {
+        await writeStored(plan.next as Record<string, unknown>);
+      } catch (error) {
+        console.error("[ConfigBundleService] Undo write failed:", error);
+      }
+    }
+    return settleUndo(leaves, plan, readStored());
+  };
+}
+
 /** A list of records keyed by `id`, as recipes and custom themes are kept. */
 export function listLeafValue(list: unknown, id: string): unknown {
   return Array.isArray(list)

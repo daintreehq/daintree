@@ -180,13 +180,20 @@ export class ClientSettingsCopy {
     const hostId = this.requireHost(payload?.hostId);
     const session = this.session(hostId);
     const host = this.deps.hostLabel(hostId);
-    const { sections } = await this.outgoing(ALL_SECTIONS);
+    // Too much to compare in one go still leaves the last copy worth showing.
+    const sections = await this.outgoing(ALL_SECTIONS).then(
+      (collected) => collected.sections,
+      (error: unknown) => {
+        if (errorCode(error) === "PAYLOAD_TOO_LARGE") return null;
+        throw error;
+      }
+    );
 
     let raw: unknown;
     try {
       raw = await session.call(
         SettingsCopyLinkMethod.STATUS,
-        { sections },
+        { sections: sections ?? {} },
         { timeoutMs: PREVIEW_TIMEOUT_MS }
       );
     } catch (error) {
@@ -211,9 +218,12 @@ export class ClientSettingsCopy {
     const lastCopy = parsed.data.lastCopy;
     return {
       supported: true,
-      changes: PORTABLE_SETTINGS_CATEGORIES.filter((category) =>
-        category.sections.some((section) => changed.has(section))
-      ).map((category) => category.id),
+      changes:
+        sections === null
+          ? null
+          : PORTABLE_SETTINGS_CATEGORIES.filter((category) =>
+              category.sections.some((section) => changed.has(section))
+            ).map((category) => category.id),
       lastCopy: lastCopy && lastCopyOf(lastCopy),
     };
   }

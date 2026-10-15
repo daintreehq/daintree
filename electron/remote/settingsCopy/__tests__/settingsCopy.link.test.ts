@@ -399,6 +399,60 @@ describe("what a copy would change, and undoing the last one (#13347)", () => {
     });
   });
 
+  it("offers no older undo when the latest copy's record couldn't be saved", async () => {
+    const first = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: first.ticket });
+    const firstId = records.box.record!.copy.id;
+
+    records.write.mockImplementation(async (record: LastCopyRecord) => {
+      // Retiring the old undo lands; saving the new copy's record doesn't.
+      if (record.copy.id !== firstId) throw new Error("disk full");
+      records.box.record = structuredClone(record);
+      return record;
+    });
+    local.worktreeConfig = { pathPattern: "~/second/{branch-slug}" };
+    const second = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    const report = await client.apply({ hostId: HOST, ticket: second.ticket });
+
+    expect(report.outcome).toBe("applied");
+    expect((await client.status({ hostId: HOST })).lastCopy).toMatchObject({
+      id: firstId,
+      undo: "unavailable",
+    });
+    await expect(client.undo({ hostId: HOST, copyId: firstId })).rejects.toMatchObject({
+      code: "SETTINGS_COPY_UNDO_STALE",
+    });
+  });
+
+  it("copies nothing when it can't retire the previous undo", async () => {
+    const first = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: first.ticket });
+    records.write.mockRejectedValue(new Error("read-only disk"));
+    hostSide.service.apply.mockClear();
+
+    local.worktreeConfig = { pathPattern: "~/second/{branch-slug}" };
+    const second = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await expect(client.apply({ hostId: HOST, ticket: second.ticket })).rejects.toBeTruthy();
+    expect(hostSide.service.apply).not.toHaveBeenCalled();
+  });
+
+  it("spends the undo before writing, so one that can't be recorded can't run twice", async () => {
+    const first = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
+    await client.apply({ hostId: HOST, ticket: first.ticket });
+    const copyId = records.box.record!.copy.id;
+    records.write.mockImplementation(async (record: LastCopyRecord) => {
+      if (record.copy.undone) throw new Error("disk full");
+      records.box.record = structuredClone(record);
+      return record;
+    });
+
+    await client.undo({ hostId: HOST, copyId });
+    await expect(client.undo({ hostId: HOST, copyId })).rejects.toMatchObject({
+      code: "SETTINGS_COPY_UNDO_STALE",
+    });
+    expect(hostSide.service.undo).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the previous record when a copy rolls back", async () => {
     const first = await client.preview({ hostId: HOST, categories: ["worktreePath"] });
     await client.apply({ hostId: HOST, ticket: first.ticket });

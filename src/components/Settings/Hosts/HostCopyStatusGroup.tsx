@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PORTABLE_SETTINGS_CATEGORIES } from "@shared/config/portableSettings";
 import type { ConfigBundleSectionId } from "@shared/types/configBundle";
-import type { SettingsCopyLastCopy, SettingsCopyUndone } from "@shared/types/ipc/settingsCopy";
+import type { SettingsCopyLastCopy } from "@shared/types/ipc/settingsCopy";
 import type { HostId } from "@shared/types/remoteHosts";
 import { clientErrorText } from "@/utils/clientAppError";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
@@ -36,7 +36,7 @@ function describeCopy(copy: SettingsCopyLastCopy): string {
     `${applied} applied`,
     skipped > 0 ? `${skipped} skipped` : null,
   ];
-  if (copy.undo === "unavailable") parts.push("Too large to keep an undo");
+  if (copy.undo === "unavailable") parts.push("Can't be undone");
   if (copy.undone) {
     const restored = copy.undone.leaves.filter((leaf) => leaf.status === "restored").length;
     parts.push(
@@ -62,7 +62,14 @@ export function HostCopyStatusGroup({
   const [confirming, setConfirming] = useState(false);
   const [undoing, setUndoing] = useState(false);
   const [undoError, setUndoError] = useState<string | null>(null);
-  const [undone, setUndone] = useState<{ copyId: string; result: SettingsCopyUndone } | null>(null);
+  // An undo answering after the page moved on (disconnected, closed) is dropped.
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
 
   const status =
     state.kind === "ready" ? state.status : state.kind === "loading" ? state.previous : null;
@@ -72,22 +79,26 @@ export function HostCopyStatusGroup({
 
   const loading = state.kind === "loading";
   const lastCopy = status?.lastCopy ?? null;
-  const changed = status?.changes ?? [];
+  const changed = status?.changes ?? null;
 
   const driftLabel =
     status === null
       ? loading
         ? "Checking what a copy would change…"
         : "Couldn't check what a copy would change"
-      : `Copying from this computer would change ${pluralize(changed.length, "category", "categories")}`;
+      : changed === null
+        ? "Too many settings here to compare in one go"
+        : `Copying from this computer would change ${pluralize(changed.length, "category", "categories")}`;
   const driftDescription =
     status === null
       ? undefined
-      : changed.length === 0
-        ? `${hostName} already has everything this computer would copy. Settings only ${hostName} has aren't counted`
-        : PORTABLE_SETTINGS_CATEGORIES.filter((category) => changed.includes(category.id))
-            .map((category) => category.label)
-            .join(", ");
+      : changed === null
+        ? "Copying fewer categories at a time still works"
+        : changed.length === 0
+          ? `${hostName} already has everything this computer would copy. Settings only ${hostName} has aren't counted`
+          : PORTABLE_SETTINGS_CATEGORIES.filter((category) => changed.includes(category.id))
+              .map((category) => category.label)
+              .join(", ");
 
   const undo = () => {
     if (!lastCopy) return;
@@ -96,12 +107,13 @@ export function HostCopyStatusGroup({
     setUndoError(null);
     window.electron.settingsCopy.undo({ hostId, copyId }).then(
       (result) => {
+        if (!live.current) return;
         setUndoing(false);
         setConfirming(false);
-        setUndone({ copyId, result: result.undone });
         onUndone(result.lastCopy);
       },
       (err: unknown) => {
+        if (!live.current) return;
         setUndoing(false);
         setConfirming(false);
         setUndoError(clientErrorText(err, `Couldn't undo the copy on ${hostName}`));
@@ -110,8 +122,8 @@ export function HostCopyStatusGroup({
     );
   };
 
-  const shownUndo = undone && lastCopy?.id === undone.copyId ? undone.result : null;
-  const leftAlone = (shownUndo?.leaves ?? []).filter(
+  // From the host's own record, so it is still there on reopening the page.
+  const leftAlone = (lastCopy?.undone?.leaves ?? []).filter(
     (leaf) => leaf.status === "edited" || leaf.status === "failed"
   );
   const toUndo = lastCopy?.changed ?? [];

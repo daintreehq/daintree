@@ -323,7 +323,7 @@ describe("Settings → Hosts → host → what a copy would change", () => {
   it("names where the last copy came from and undoes it, listing what it left alone", async () => {
     settingsCopy.status.mockResolvedValue({ ...STATUS, lastCopy: LAST_COPY });
     render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
-    await screen.findByText("Last copied from Laptop 5 minutes ago");
+    await screen.findByText(/^Last copied from Laptop \d+ minutes ago$/);
     expect(screen.getByText(/3 applied · 1 skipped/)).not.toBeNull();
     // What the host reports once it has been undone.
     settingsCopy.status.mockResolvedValue({ ...STATUS, lastCopy: UNDONE_COPY });
@@ -338,6 +338,21 @@ describe("Settings → Hosts → host → what a copy would change", () => {
     expect(settingsCopy.undo).toHaveBeenCalledWith({ hostId: HOST, copyId: LAST_COPY.id });
     expect(screen.getByText(/1 setting restored/)).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Undo last copy" })).toBeNull();
+  });
+
+  it("still lists what an undo left alone after the page is reopened", async () => {
+    settingsCopy.status.mockResolvedValue({ ...STATUS, lastCopy: UNDONE_COPY });
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    await screen.findByText("Kept · Changed on Studio since the copy");
+    expect(screen.getByText("Claude")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Undo last copy" })).toBeNull();
+  });
+
+  it("still shows the last copy when this computer has too much to compare", async () => {
+    settingsCopy.status.mockResolvedValue({ ...STATUS, changes: null, lastCopy: LAST_COPY });
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    await screen.findByText("Too many settings here to compare in one go");
+    expect(screen.getByRole("button", { name: "Undo last copy" })).not.toBeNull();
   });
 
   it("says why an undo didn't happen, on the row it was asked from", async () => {

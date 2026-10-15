@@ -19,6 +19,7 @@ import {
   sameValue,
   scalarSection,
   skippedLeaf,
+  storedMapUndo,
   unchangedLeaf,
   withRecordLeaf,
   type SectionContext,
@@ -257,6 +258,10 @@ export function assistantModelsSection(
       }
       return results;
     },
+    undo: storedMapUndo(
+      () => store.get("helpAssistant.modelIds" as never),
+      (models) => store.set("helpAssistant.modelIds" as never, models as never)
+    ),
     restore: async (snapshot) => {
       store.set("helpAssistant.modelIds" as never, (isRecord(snapshot) ? snapshot : {}) as never);
     },
@@ -333,6 +338,10 @@ export function globalEnvironmentSection(): SectionHandler {
       }
       return results;
     },
+    undo: storedMapUndo(
+      () => store.get("globalEnvironmentVariables"),
+      (variables) => store.set("globalEnvironmentVariables", variables as never)
+    ),
     restore: async (snapshot) => {
       store.set("globalEnvironmentVariables", (isRecord(snapshot) ? snapshot : {}) as never);
     },

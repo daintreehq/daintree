@@ -69,6 +69,7 @@ import {
   type SectionHandler,
   planUndo,
   settleUndo,
+  storedMapUndo,
   type UndoLeaf,
   type UndoLeafResult,
   type UndoPlan,
@@ -791,6 +792,15 @@ export class ConfigBundleService {
         }
         return results;
       },
+      // The stored registry, not the sanitized read: an entry or field the
+      // read drops must survive an undo of some other agent.
+      undo: storedMapUndo(
+        () => store.get("userAgentRegistry"),
+        (registry) => {
+          store.set("userAgentRegistry", registry as Record<string, UserAgentConfig>);
+          new UserAgentRegistryService().reload();
+        }
+      ),
       restore: async (snapshot) => {
         store.set("userAgentRegistry", snapshot as Record<string, UserAgentConfig>);
         new UserAgentRegistryService().reload();
@@ -1054,14 +1064,13 @@ export class ConfigBundleService {
       // On the stored map, not `read()`: that drops overrides for actions this
       // build doesn't have registered right now (a plugin's), and writing it
       // back would lose them.
-      undo: async (leaves) => {
-        const plan = planUndo(leaves, store.get("keybindingOverrides.overrides") ?? {});
-        if (plan.pending.length > 0) {
-          store.set("keybindingOverrides.overrides", plan.next as Record<string, string[]>);
+      undo: storedMapUndo(
+        () => store.get("keybindingOverrides.overrides"),
+        async (overrides) => {
+          store.set("keybindingOverrides.overrides", overrides as Record<string, string[]>);
           await this.deps.rebuildMenu();
         }
-        return settleUndo(leaves, plan, store.get("keybindingOverrides.overrides"));
-      },
+      ),
       restore: async (snapshot) => {
         store.set("keybindingOverrides.overrides", (snapshot ?? {}) as Record<string, string[]>);
         await this.deps.rebuildMenu();

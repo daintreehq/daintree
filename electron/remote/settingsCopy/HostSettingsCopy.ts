@@ -7,6 +7,7 @@ import {
   type ConfigImportReport,
 } from "../../../shared/types/configBundle.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { CapturedSection, ConfigBundleService } from "../../services/ConfigBundleService.js";
 import type {
   SettingsCopyLastCopy,
@@ -253,14 +254,16 @@ export class HostSettingsCopy {
     const service = await this.deps.service();
     const report = await this.deps.runWrite(async () => {
       if ((await service.revision(entry.ids)) !== entry.revision) throw stale();
+      const retired = await this.retireUndo();
       const captured: CapturedSection[] = [];
       const applied = withRefused(
         await service.apply(entry.sections, { capture: captured }),
         entry.refused
       );
-      // A copy that rolled back changed nothing, so the copy before it is
-      // still the last one, and still undoable.
       if (applied.outcome === "applied") await this.record(entry, applied, captured, source);
+      // A copy that rolled back changed nothing, so the one before it is
+      // still the last copy, and still undoable.
+      else if (retired) await this.deps.records.write(retired).catch(() => undefined);
       return applied;
     });
     if (report.outcome === "applied") {
@@ -308,6 +311,26 @@ export class HostSettingsCopy {
     }
   }
 
+  /**
+   * Before a copy writes anything, the previous copy stops being undoable:
+   * if this copy's own record then fails to save, the page must not offer to
+   * undo an older one over it. A host that can't even do this copies nothing.
+   */
+  private async retireUndo(): Promise<LastCopyRecord | null> {
+    const previous = await this.deps.records.read();
+    if (!previous || previous.copy.undo !== "available") return null;
+    try {
+      await this.deps.records.write({ copy: { ...previous.copy, undo: "unavailable" } });
+    } catch (error) {
+      throw new AppError({
+        code: "INTERNAL",
+        message: formatErrorMessage(error, "Couldn't retire the previous copy's undo"),
+        userMessage: "This host couldn't save its record of the copy, so nothing was copied.",
+      });
+    }
+    return previous;
+  }
+
   private async status(request: SettingsCopyPreviewRequest): Promise<SettingsCopyStatusResult> {
     const { sections, unknownSections } = splitPayload(request);
     const service = await this.deps.service();
@@ -331,6 +354,9 @@ export class HostSettingsCopy {
       if (!record || record.copy.id !== copyId || record.copy.undo !== "available") {
         throw undoStale();
       }
+      // Spent before anything is written, so a record that can't be updated
+      // afterwards can't offer the same undo a second time.
+      await this.deps.records.write({ copy: { ...record.copy, undo: "done" } });
       const leaves = record.leaves ?? [];
       const bySection = new Map<ConfigBundleSectionId, CapturedSection>();
       for (const { section, key, before, after } of leaves) {
@@ -363,7 +389,11 @@ export class HostSettingsCopy {
       }
       return { undone, lastCopy };
     });
-    if (result.undone.leaves.some((leaf) => leaf.status === "restored")) {
+    // A failed leaf may still have been partly written (a menu rebuild that
+    // threw after the store took the value), so reconcile for those too.
+    if (
+      result.undone.leaves.some((leaf) => leaf.status === "restored" || leaf.status === "failed")
+    ) {
       try {
         await this.deps.reconcile();
       } catch (error) {

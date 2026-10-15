@@ -182,6 +182,21 @@ describe("undoing a copy", () => {
     });
   });
 
+  it("keeps a stored entry the section's own read leaves out", async () => {
+    const { service, captured } = await copy({ globalEnvironment: { SHARED: "new" } });
+    // Not a string, so the section never reads it, but it is the host's.
+    mockStore.set("globalEnvironmentVariables.ODD", 5);
+
+    expect(statuses(await service.undo(captured))).toEqual({
+      "globalEnvironment:SHARED": "restored",
+    });
+    expect(storeState.current.globalEnvironmentVariables).toEqual({
+      HOST_ONLY: "1",
+      SHARED: "old",
+      ODD: 5,
+    });
+  });
+
   it("leaves a value already put back as it was alone", async () => {
     const { service, captured } = await copy({ globalEnvironment: { SHARED: "new" } });
     mockStore.set("globalEnvironmentVariables.SHARED", "old");
