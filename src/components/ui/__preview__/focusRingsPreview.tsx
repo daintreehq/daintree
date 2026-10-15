@@ -411,7 +411,6 @@ const loadReview: Loader = async () => {
     { BaseBranchFileRow },
     { FileStageRow },
     { PrStatusChip },
-    { FileDecorationBadge },
     { FileChangeList },
     { DiffFileSidebar },
     { WorktreeStoreProvider },
@@ -421,7 +420,6 @@ const loadReview: Loader = async () => {
     import("@/components/Worktree/ReviewHub/BaseBranchFileRow"),
     import("@/components/Worktree/ReviewHub/FileStageRow"),
     import("@/components/Worktree/ReviewHub/PrStatusChip"),
-    import("@/components/Plugin/FileDecorationBadge"),
     import("@/components/Worktree/FileChangeList"),
     import("@/components/FileViewer/DiffFileSidebar"),
     import("@/contexts/WorktreeStoreContext"),
@@ -522,12 +520,6 @@ const loadReview: Loader = async () => {
                 worktreePath={root}
                 onOpenExternal={noop}
               />
-            </div>
-          </Shot>
-          <Shot id="file-decoration-badge" surface="panel" width={460}>
-            <div className="flex items-center gap-2 text-xs font-mono text-text-secondary">
-              <span className="truncate">src/components/charts/Legend.tsx</span>
-              <FileDecorationBadge decoration={decoration} />
             </div>
           </Shot>
           <Shot id="filechange-row" surface="panel" width={460}>

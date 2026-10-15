@@ -719,12 +719,19 @@ describe("FileChangeList — plugin file decorations", () => {
     decorationsRef.current = {
       "/repo/src/a.ts": { badge: "3", tooltip: "3 issues" },
     };
-    const { container, getByLabelText } = render(
+    const { container } = render(
       <FileChangeList changes={[file("/repo/src/a.ts"), file("/repo/src/b.ts")]} rootPath={ROOT} />
     );
-    const badge = getByLabelText("3 issues");
-    expect(badge.textContent).toBe("3");
-    // Only one badge in the whole list — the undecorated row has none.
-    expect(container.querySelectorAll('[aria-label="3 issues"]')).toHaveLength(1);
+    const decorated = container.querySelector<HTMLElement>('[aria-label="Open src/a.ts"]')!;
+    const plain = container.querySelector<HTMLElement>('[aria-label="Open src/b.ts"]')!;
+    const glyphs = (row: HTMLElement) =>
+      Array.from(row.querySelectorAll('[aria-hidden="true"]')).filter(
+        (el) => el.textContent === "3"
+      );
+    // The glyph is presentation only; the row speaks the provider's words.
+    expect(glyphs(decorated)).toHaveLength(1);
+    expect(decorated.getAttribute("aria-description")).toBe("3 issues");
+    expect(glyphs(plain)).toHaveLength(0);
+    expect(plain.hasAttribute("aria-description")).toBe(false);
   });
 });
