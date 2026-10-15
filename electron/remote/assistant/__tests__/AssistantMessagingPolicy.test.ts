@@ -22,9 +22,12 @@ function harness(overrides: Partial<AssistantMessagingPolicyDeps> = {}) {
   const launchGenerations = new Map<string, number>();
   const enabledHosts = new Set<string>();
   const listeners = new Set<(event: HelpSessionEndedEvent) => void>();
+  /** Which link session's view each run was started through, by session id. */
+  const startedBy = new Map<string, string>();
   let nextGeneration = 0;
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) => running.get(laneKey(projectId, slot)) ?? null,
+    startedThrough: (session, linkSessionId) => startedBy.get(session.sessionId) === linkSessionId,
     getLiveGeneration: (terminalId) => launchGenerations.get(terminalId) ?? null,
     isHostMessagingEnabled: (hostId) => enabledHosts.has(hostId),
     onSessionEnded: (listener) => {
@@ -59,7 +62,7 @@ function harness(overrides: Partial<AssistantMessagingPolicyDeps> = {}) {
       listener({ projectId, slot, sessionId, reason });
     }
   };
-  return { policy, running, launchGenerations, enabledHosts, listeners, run, end };
+  return { policy, running, launchGenerations, enabledHosts, listeners, startedBy, run, end };
 }
 
 const lane = (projectId = "proj", slot = 0) => ({ projectId, slot });
@@ -785,6 +788,52 @@ describe("AssistantMessagingPolicy", () => {
       h.policy.dispose();
       h.policy.setPaused(true);
       expect(heard).toBe(1);
+    });
+  });
+
+  describe("enrolling a run a hub started (#13392)", () => {
+    it("enrolls only the run it names, and only while nobody holds the lane", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.startedBy.set("s1", "link-a");
+      expect(h.policy.enrollStarted(lane("proj", 0), SHELL_A, "someone-else")).toEqual({
+        ok: false,
+        reason: "wrong-session",
+      });
+      expect(h.policy.enrollStarted(lane("proj", 1), SHELL_A, "s2")).toEqual({
+        ok: false,
+        reason: "unavailable",
+      });
+      // Knowing the session id isn't enough: the run has to have come through this Shell's view.
+      expect(h.policy.enrollStarted(lane("proj", 0), SHELL_B, "s1")).toEqual({
+        ok: false,
+        reason: "wrong-session",
+      });
+      const enrolled = h.policy.enrollStarted(lane("proj", 0), SHELL_A, "s1");
+      if (!enrolled.ok) throw new Error("expected enrollment");
+      // Asked again for the same run: the same enrollment, not a new generation.
+      const again = h.policy.enrollStarted(lane("proj", 0), SHELL_A, "s1");
+      expect(again.ok && again.enrollment.generation).toBe(enrolled.enrollment.generation);
+    });
+
+    it("never takes a lane another Shell holds, not even while that Shell is away", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.startedBy.set("s1", "link-a");
+      expect(h.policy.enroll(lane("proj", 0), SHELL_B).ok).toBe(true);
+      expect(h.policy.enrollStarted(lane("proj", 0), SHELL_A, "s1")).toEqual({
+        ok: false,
+        reason: "occupied",
+      });
+      h.policy.bindSender("link-b", "sender-b");
+      h.policy.releaseLinkSession("link-b");
+      expect(h.policy.isWaiting(lane("proj", 0))).toBe(true);
+      expect(h.policy.enrollStarted(lane("proj", 0), SHELL_A, "s1")).toEqual({
+        ok: false,
+        reason: "occupied",
+      });
+      // The person's own toggle keeps its rules: a Shell that's here may take a waiting lane.
+      expect(h.policy.enroll(lane("proj", 0), SHELL_A).ok).toBe(true);
     });
   });
 });

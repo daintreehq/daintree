@@ -2099,6 +2099,23 @@ describe("HelpSessionService", () => {
       expect(service.listRunningLanes()).toEqual([{ projectId: "proj-1", slot: 1, agentId }]);
     });
 
+    it("refuses rather than displaces an occupied lane when asked for a vacant one (#13392)", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected result");
+      expect(service.markTerminalForToken(first.token, "term-1")).toBe(true);
+      await expect(
+        service.provisionSession({ ...provisionInput(), vacantOnly: true })
+      ).rejects.toMatchObject({ code: "LANE_OCCUPIED" });
+      // The assistant already there keeps running.
+      expect(service.getRunningLaneSession("proj-1", 0)?.sessionId).toBe(first.sessionId);
+      const beside = await service.provisionSession({
+        ...provisionInput(),
+        slot: 1,
+        vacantOnly: true,
+      });
+      expect(beside?.sessionId).toBeTruthy();
+    });
+
     it("stops listing a lane the moment its teardown starts, before the PTY is gone", async () => {
       let resolveKill!: (id: string | null) => void;
       mockPtyGracefulKill.mockImplementationOnce(

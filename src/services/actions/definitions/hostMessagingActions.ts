@@ -12,6 +12,8 @@ import {
   HostListTasksResultSchema,
   HostSendMessageArgsSchema,
   HostSendMessageResultSchema,
+  HostStartAssistantArgsSchema,
+  HostStartAssistantResultSchema,
 } from "@shared/types/hostMessaging";
 
 function mainProcessOnly(id: string): () => Promise<never> {
@@ -161,5 +163,30 @@ export function registerHostMessagingActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.cancelTask"),
+  }));
+
+  actions.set("host.startAssistant", () => ({
+    id: "host.startAssistant",
+    title: "Add an assistant on a host",
+    description:
+      "Enroll an assistant in a host's project for you, reusing one already there or opening a new one, and return what a message to it needs. The person must allow this per host.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["assistant", "host", "remote", "swarm", "enroll", "submanager"],
+    palette: { mode: "hidden" },
+    argsSchema: HostStartAssistantArgsSchema,
+    resultSchema: HostStartAssistantResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // startNew opens another assistant each time it's asked.
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.startAssistant"),
   }));
 }

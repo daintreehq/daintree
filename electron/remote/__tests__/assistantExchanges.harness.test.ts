@@ -317,6 +317,28 @@ function shellA(): AssistantExchangeClient {
 }
 
 describe("assistant exchanges over the real link", () => {
+  it("enrolls nothing it can't show it started, and never a lane another Shell holds (#13392)", async () => {
+    db.sqlite = openFile("app.db");
+    const r = await harness();
+    prepare(r);
+    const a = shellA();
+    await expect(
+      a.enrollStarted(HOST_ID, { projectId: "proj-2", slot: 1, sessionId: "not-that-run" })
+    ).resolves.toEqual({ status: "wrong-session", lane: null });
+
+    // The right session id, but that run wasn't started through one of this Shell's views.
+    await expect(
+      a.enrollStarted(HOST_ID, { projectId: "proj-2", slot: 1, sessionId: "help-proj-2-1" })
+    ).resolves.toEqual({ status: "wrong-session", lane: null });
+    expect((await a.listLanes(HOST_ID)).lanes).toEqual([]);
+
+    // Slot 0 belongs to another Shell's session: never taken.
+    enrollOnHost("another-shell-session", 0);
+    await expect(
+      a.enrollStarted(HOST_ID, { projectId: "proj-2", slot: 0, sessionId: "help-proj-2-0" })
+    ).resolves.toEqual({ status: "occupied", lane: null });
+  }, 30_000);
+
   it(
     "hands a message to the lane's inbox and the lane's reply back to the Shell (#13336)",
     async () => {

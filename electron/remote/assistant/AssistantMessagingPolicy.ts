@@ -95,6 +95,12 @@ export interface AssistantMessagingPolicyDeps {
   getRunningLaneSession(projectId: string, slot: number): RunningLaneSession | null;
   /** Every lane with a running assistant on this machine, enrolled or not. */
   listRunningLanes?(): RunningLane[];
+  /**
+   * Whether a running assistant was started through a view of `linkSessionId`:
+   * its session is pinned to that link session's endpoint. Absent, nothing
+   * started remotely can be enrolled without the person's toggle.
+   */
+  startedThrough?(running: RunningLaneSession, linkSessionId: string): boolean;
   /** Which incarnation of a PTY is running under its id, or null when none is. */
   getLiveGeneration(terminalId: string): number | null;
   /** This Shell's per-host opt-in. */
@@ -228,6 +234,42 @@ export class AssistantMessagingPolicy {
     this.ended.delete(key);
     this.changed();
     return { ok: true, enrollment: copyEnrollment(enrollment) };
+  }
+
+  /**
+   * Enroll for `shell` a lane it just started, with nobody at the lane's
+   * screen to click: only the run with help session `sessionId`, and only while
+   * no other Shell holds the lane, not even one that's away. Checked and taken
+   * in one step, so neither can change between them. The person's own toggle
+   * keeps `enroll`'s rules.
+   */
+  enrollStarted(
+    lane: LaneRef,
+    shell: MessagingShell,
+    sessionId: string
+  ): EnrollmentResult | { ok: false; reason: "occupied" | "wrong-session" } {
+    const key = laneKey(lane);
+    if (key === null || !isValidShell(shell)) return { ok: false, reason: "invalid-lane" };
+    const existing = this.current(key);
+    if (existing && !sameShell(existing.enrolledBy, shell)) {
+      return { ok: false, reason: "occupied" };
+    }
+    const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
+    if (!running) return { ok: false, reason: "unavailable" };
+    // Knowing a session id proves nothing: the run has to have come through
+    // one of this Shell's own views. (A relaunch in place during start-up keeps
+    // its session and view, and is still the lane this Shell opened.)
+    if (
+      running.sessionId !== sessionId ||
+      shell.kind !== "remote" ||
+      this.deps.startedThrough?.(running, shell.linkSessionId) !== true
+    ) {
+      return { ok: false, reason: "wrong-session" };
+    }
+    if (existing && existing.sessionId === sessionId) {
+      return { ok: true, enrollment: copyEnrollment(existing) };
+    }
+    return this.enroll(lane, shell);
   }
 
   /**

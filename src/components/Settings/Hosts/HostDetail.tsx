@@ -6,7 +6,7 @@ import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { getAgentConfig } from "@shared/config/agentRegistry";
 import { formatHostConnection, sshTargetOf, type HostListEntry } from "@shared/types/remoteHosts";
 import { SettingsSection } from "../SettingsSection";
-import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
+import { SettingsDependents, SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { SettingsInput } from "../SettingsInput";
 import { SettingsSwitch } from "../SettingsSwitch";
 import { useSettingsSubpage } from "../SettingsSubpage";
@@ -160,6 +160,20 @@ export function HostDetail({
       (err: unknown) => {
         setMessagingDraft(null);
         setMessagingError(clientErrorText(err, "Couldn't save this setting"));
+      }
+    );
+  };
+  const [startDraft, setStartDraft] = useState<boolean | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
+  const startEnabled = startDraft ?? descriptor.assistantStartEnabled;
+  const setStart = (next: boolean) => {
+    setStartDraft(next);
+    setStartError(null);
+    remoteHostsClient.update({ hostId: descriptor.id, assistantStartEnabled: next }).then(
+      () => setStartDraft(null),
+      (err: unknown) => {
+        setStartDraft(null);
+        setStartError(clientErrorText(err, "Couldn't save this setting"));
       }
     );
   };
@@ -366,20 +380,41 @@ export function HostDetail({
           />
           {/* Cross-machine messaging isn't offered on Windows. */}
           {!isWindows() && (
-            <SettingsRow
-              label="Allow assistant messaging with this host"
-              description="The assistant you let accept messages from other machines can message assistants on this host too. Off by default."
-              error={messagingError ?? undefined}
-              control={({ labelId, descriptionId, disabled }) => (
-                <SettingsSwitch
-                  checked={messagingEnabled}
-                  onCheckedChange={setMessaging}
-                  disabled={disabled}
-                  aria-labelledby={labelId}
-                  aria-describedby={descriptionId}
+            <>
+              <SettingsRow
+                label="Allow assistant messaging with this host"
+                description="The assistant you let accept messages from other machines can message assistants on this host too. Off by default."
+                error={messagingError ?? undefined}
+                control={({ labelId, descriptionId, disabled }) => (
+                  <SettingsSwitch
+                    checked={messagingEnabled}
+                    onCheckedChange={setMessaging}
+                    disabled={disabled}
+                    aria-labelledby={labelId}
+                    aria-describedby={descriptionId}
+                  />
+                )}
+              />
+              <SettingsDependents
+                disabled={!messagingEnabled}
+                reason="Turn on assistant messaging to let the assistant start assistants here"
+              >
+                <SettingsRow
+                  label="Let the assistant start assistants on this host"
+                  description={`The assistant can start one in any of ${hostName}'s projects and message it, with nobody at ${hostName}. Each runs on ${hostName}'s own agent sign-in. Off by default.`}
+                  error={startError ?? undefined}
+                  control={({ labelId, descriptionId, disabled }) => (
+                    <SettingsSwitch
+                      checked={startEnabled}
+                      onCheckedChange={setStart}
+                      disabled={disabled}
+                      aria-labelledby={labelId}
+                      aria-describedby={descriptionId}
+                    />
+                  )}
                 />
-              )}
-            />
+              </SettingsDependents>
+            </>
           )}
         </SettingsGroup>
       </SettingsSection>

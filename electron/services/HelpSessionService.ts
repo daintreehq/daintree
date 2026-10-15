@@ -208,6 +208,12 @@ interface ProvisionInput {
    */
   slot?: number;
   /**
+   * Refuse with `LANE_OCCUPIED` rather than displace a session already in the
+   * lane: set when nobody at this machine asked for it (a hub on another
+   * machine starting an assistant), so it can never end someone's assistant.
+   */
+  vacantOnly?: boolean;
+  /**
    * Snapshot of the renderer's `ActionContext` captured synchronously when
    * the user launched the assistant, before any `await`. Bound to the MCP
    * session at handshake and replayed as `contextOverride` on every tool
@@ -595,6 +601,7 @@ export type HelpSessionErrorCode =
   | "MCP_PROBE_FAILED"
   | "USER_CONTENT_SYNC_FAILED"
   | "MIXED_AGENT_LANES"
+  | "LANE_OCCUPIED"
   | "UNSUPPORTED_ASSISTANT_AGENT";
 
 export class HelpSessionError extends Error {
@@ -1275,6 +1282,20 @@ export class HelpSessionService {
         "MIXED_AGENT_LANES",
         `Another session in this project is running ${liveSibling.agentId}; sessions of one project share a folder and have to use the same agent. Stop it first, or open the new session with ${liveSibling.agentId}.`
       );
+    }
+
+    // Checked inside the lane lock, so nothing can take the lane between this
+    // and the provision below.
+    if (input.vacantOnly) {
+      const occupant = [...this.sessionsByToken.values()].find(
+        (record) => !record.revoked && record.projectId === input.projectId && record.slot === slot
+      );
+      if (occupant) {
+        throw new HelpSessionError(
+          "LANE_OCCUPIED",
+          `Assistant ${slot + 1} of this project is already in use; it was left running.`
+        );
+      }
     }
 
     // Single-backend invariant (#7509): displace any prior unrevoked record

@@ -176,7 +176,9 @@ export function deactivateEntry(
       !AgentStateCache.hasActiveAgent(host, capturedProjectId)
     ) {
       const mcp = host.mcpActivityFor(capturedProjectId, vc);
-      if (!mcp.liveBinding && !mcp.dispatchLease && !mcp.unknown) {
+      // A host's live assistant runs its tool calls through this view (#13392).
+      const remoteAssistant = host.remoteAssistantLive?.(vc.id) === true;
+      if (!mcp.liveBinding && !mcp.dispatchLease && !mcp.unknown && !remoteAssistant) {
         void freezeWebContents(vc);
       }
     }

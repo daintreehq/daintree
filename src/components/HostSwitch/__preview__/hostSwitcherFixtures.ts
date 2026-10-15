@@ -74,6 +74,7 @@ function entry(spec: HostSpec): HostListEntry {
       addedAt: minutesAgo(60 * 24 * 30),
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
+      assistantStartEnabled: false,
     },
     connection: spec.connection,
     summary: spec.summary ? summary(spec.id, platform, spec.summary) : null,

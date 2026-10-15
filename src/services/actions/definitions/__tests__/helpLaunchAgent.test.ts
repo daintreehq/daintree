@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { CliAvailability } from "@shared/types";
+import { HUB_STARTED_ASSISTANT_GREETING } from "@shared/config/helpAssistantGreeting";
 
 const {
   mockDispatch,
@@ -855,6 +856,38 @@ describe("help.launchAgent", () => {
       // the slot this one was provisioned for.
       expect(laneDuringLaunch).toBeUndefined();
       expect(useHelpPanelStore.getState().sessions[1]?.terminalId).toBe("term-help");
+    });
+
+    it("launches into exactly the lane a caller names, refusing to displace and reporting the lane", async () => {
+      const result = await action.run({ slot: 2, vacantOnly: true }, stubCtx);
+
+      expect(provisionedSlot()).toBe(2);
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ slot: 2, vacantOnly: true })
+      );
+      expect(result).toMatchObject({ slot: 2, terminalId: "term-help", agentId: "claude" });
+    });
+
+    it("opens a hub-started assistant with the opening that asks it no question", async () => {
+      await action.run({ slot: 1, vacantOnly: true, greeting: "hub" }, stubCtx);
+
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "agent.launch",
+        expect.objectContaining({ prompt: HUB_STARTED_ASSISTANT_GREETING }),
+        { source: "user" }
+      );
+      expect(HUB_STARTED_ASSISTANT_GREETING.trim().endsWith("?")).toBe(false);
+    });
+
+    it("gives a caller that named a busy lane nothing, with no tab opened and no toast", async () => {
+      useHelpPanelStore.getState().setTerminal(0, "term-live", "claude", "sess-live");
+
+      const result = await action.run({ slot: 0, vacantOnly: true }, stubCtx);
+
+      expect(result).toBeUndefined();
+      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+      expect(mockNotify).not.toHaveBeenCalled();
+      expect(useHelpPanelStore.getState().isOpen).toBe(false);
     });
 
     it("prefers an existing empty tab over opening another", async () => {

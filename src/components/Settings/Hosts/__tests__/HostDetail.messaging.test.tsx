@@ -23,7 +23,7 @@ import { HostDetail } from "../HostDetail";
 
 const LABEL = "Allow assistant messaging with this host";
 
-function entry(assistantMessagingEnabled = false): HostListEntry {
+function entry(assistantMessagingEnabled = false, assistantStartEnabled = false): HostListEntry {
   return {
     descriptor: {
       id: "studio-01",
@@ -36,6 +36,7 @@ function entry(assistantMessagingEnabled = false): HostListEntry {
       addedAt: 0,
       notificationsEnabled: false,
       assistantMessagingEnabled,
+      assistantStartEnabled,
     },
     connection: { status: "unreachable", lastSeenAt: null, detail: null },
     summary: null,
@@ -80,10 +81,37 @@ describe("HostDetail assistant messaging opt-in", () => {
     expect(screen.getByText(/Couldn't save this setting|disk full/)).toBeTruthy();
   });
 
+  it("lets the assistant start assistants only once messaging is on, saving only its own field", async () => {
+    const { rerender } = render(<HostDetail entry={entry()} onBack={() => {}} />);
+    const startSwitch = () =>
+      screen.getByRole("switch", { name: "Let the assistant start assistants on this host" });
+    expect(
+      startSwitch().hasAttribute("disabled") ||
+        startSwitch().getAttribute("aria-disabled") === "true"
+    ).toBe(true);
+    expect(
+      screen.getByText("Turn on assistant messaging to let the assistant start assistants here")
+    ).toBeTruthy();
+
+    rerender(<HostDetail entry={entry(true)} onBack={() => {}} />);
+    expect(startSwitch().getAttribute("aria-checked")).toBe("false");
+    await act(async () => {
+      fireEvent.click(startSwitch());
+    });
+    expect(client.update).toHaveBeenCalledWith({
+      hostId: "studio-01",
+      assistantStartEnabled: true,
+    });
+
+    rerender(<HostDetail entry={entry(true, true)} onBack={() => {}} />);
+    expect(startSwitch().getAttribute("aria-checked")).toBe("true");
+  });
+
   it("isn't offered on Windows", () => {
     platform.windows = true;
     render(<HostDetail entry={entry()} onBack={() => {}} />);
     expect(screen.queryByText(LABEL)).toBeNull();
+    expect(screen.queryByText("Let the assistant start assistants on this host")).toBeNull();
     expect(screen.getByText("Notify me about this host")).toBeTruthy();
   });
 });

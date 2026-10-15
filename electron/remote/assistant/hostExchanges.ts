@@ -24,12 +24,14 @@ import type {
 import {
   AssistantLinkMethod,
   AuthenticatePayloadSchema,
+  EnrollStartedPayloadSchema,
   MAX_EXCHANGE_RESPONSES,
   ListExchangesPayloadSchema,
   MAX_LISTED_LANES,
   MessageIdPayloadSchema,
   SendPayloadSchema,
   type EnrolledLane,
+  type EnrollStartedResult,
   type ExchangeResponse,
   type LaneList,
   type RunningAssistant,
@@ -272,6 +274,45 @@ export function installAssistantExchangeHostWith(
         });
       return { lanes, assistants } satisfies LaneList;
     });
+
+    session.registerCallHandler(
+      AssistantLinkMethod.ENROLL_STARTED,
+      EnrollStartedPayloadSchema,
+      ({ projectId, slot, sessionId: helpSessionId }): EnrollStartedResult => {
+        // Only a Shell that proved its sender: consent then outlives this connection.
+        requireSender(session);
+        const policy = requirePolicy();
+        const lane = { projectId, slot };
+        const result = policy.enrollStarted(lane, shell, helpSessionId);
+        if (!result.ok) {
+          const status =
+            result.reason === "occupied" || result.reason === "wrong-session"
+              ? result.reason
+              : result.reason === "unavailable"
+                ? "not-running"
+                : "refused";
+          return { status, lane: null };
+        }
+        const agentId = policy
+          .listRunning()
+          .find((running) => running.projectId === projectId && running.slot === slot)?.agentId;
+        return {
+          status: "enrolled",
+          lane: {
+            projectId,
+            slot,
+            generation: result.enrollment.generation,
+            available: policy.checkLane({
+              lane,
+              generation: result.enrollment.generation,
+              shell,
+              kind: "wake",
+            }).ok,
+            ...(agentId === undefined ? {} : { agentId }),
+          },
+        };
+      }
+    );
 
     session.registerCallHandler(AssistantLinkMethod.SEND, SendPayloadSchema, (payload) => {
       const sender = requireSender(session);

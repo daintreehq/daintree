@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { assistantSlotKey } from "../../../shared/config/assistantSlots.js";
+import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "../../../shared/config/assistantSlots.js";
 import {
   HOST_LIST_PROJECTS_MAX,
   HOST_SEND_MAX_WAIT_MS,
@@ -21,6 +21,8 @@ import {
   type HostProjectEntry,
   type HostSendMessageArgs,
   type HostSendMessageResult,
+  type HostStartAssistantArgs,
+  type HostStartAssistantResult,
   type HostTask,
   type HostTaskReply,
 } from "../../../shared/types/hostMessaging.js";
@@ -42,6 +44,7 @@ import type {
   MessagingRequestKind,
 } from "./AssistantMessagingPolicy.js";
 import { inboxBodyFits } from "./AssistantInbox.js";
+import type { HostAssistantStarter, HostStartRefusal } from "./HostAssistantStarter.js";
 import type { LaneList } from "./linkMethods.js";
 import { HOST_MESSAGING_PAUSED_MESSAGE, LANE_NOT_RUNNING_MESSAGE } from "./hostExchanges.js";
 import { TokenBucket } from "./tokenBucket.js";
@@ -68,6 +71,10 @@ export interface HubMessagingRuntimeDeps {
   hosts(): ObservedHost[];
   /** A connected host's projects, most used first; names what its assistants work in. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
+  /** The person's per-host consent to starting assistants there, read at each call. */
+  startEnabled?(hostId: HostId): boolean;
+  /** Starts and enrolls an assistant in a host's project; absent where nothing can. */
+  starter?(): Pick<HostAssistantStarter, "start"> | null;
   now?: () => number;
   newId?: () => string;
   /** Resolves after `ms`; injectable so a test's wait doesn't take real time. */
@@ -76,6 +83,68 @@ export interface HubMessagingRuntimeDeps {
 }
 
 const ERROR_MESSAGE = "Hosts can't be reached for assistant messaging right now.";
+
+const START_OFF_DETAIL =
+  "Starting assistants is turned off for this host in this Shell's host settings. Only the person can turn it on.";
+
+/** Why a start didn't happen, as an outcome and fixed words the hub can act on. */
+const START_REFUSALS: Record<
+  HostStartRefusal,
+  { code: Exclude<HostMessagingOutcomeCode, "ok">; detail: string }
+> = {
+  "consent-withdrawn": {
+    code: "opted_out",
+    detail:
+      "Starting assistants on this host, or messaging, was turned off or paused while this ran, so it stopped. An assistant it had already opened may still be running, unenrolled.",
+  },
+  "driven-elsewhere": {
+    code: "lane_unavailable",
+    detail:
+      "Another machine is driving that project on the host, so an assistant can't be started there from this Shell. The person can take it over in a window here.",
+  },
+  "no-project": {
+    code: "not_found",
+    detail: "The host has no project with that id. List its assistants for the projects it has.",
+  },
+  "no-slot": {
+    code: "lane_unavailable",
+    detail: `That project already runs ${MAX_ASSISTANT_SLOTS} assistants, its limit. Use one of them.`,
+  },
+  "agent-mismatch": {
+    code: "policy_rejected",
+    detail:
+      "That project's assistants run a different agent CLI, and a project's assistants share one. Use theirs, or omit agentId.",
+  },
+  "no-window": {
+    code: "lane_unavailable",
+    detail:
+      "No window here shows this host, so an assistant there would have nothing to work through. The person can open the host in a window.",
+  },
+  "no-room": {
+    code: "lane_unavailable",
+    detail:
+      "The windows on this host can't hold another project right now. The person can close a project there.",
+  },
+  busy: {
+    code: "lane_unavailable",
+    detail: "That project is being opened in a window right now. Try again shortly.",
+  },
+  "launch-failed": {
+    code: "lane_unavailable",
+    detail:
+      "The assistant couldn't be started there. The host's window for that project may say why.",
+  },
+  "timed-out": {
+    code: "lane_unavailable",
+    detail:
+      "The assistant was started but didn't reach its prompt in time; it may be stopped on a question in the host's window. List the host's assistants before starting another.",
+  },
+  "not-enrolled": {
+    code: "policy_rejected",
+    detail:
+      "The assistant runs, but couldn't be enrolled for this Shell. List the host's assistants to see it.",
+  },
+};
 const NOT_ELIGIBLE_MESSAGE =
   "Only this Shell's hub assistant, in the session it was enrolled with, can reach assistants on other hosts.";
 
@@ -452,6 +521,49 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     });
   }
 
+  /**
+   * Starts an assistant in one of a host's projects and enrolls it for this
+   * Shell, with nobody at the host (see HostAssistantStarter). A send in all
+   * but name: the hub, an opted-in host, no pause, the send budget, and the
+   * person's own consent to starting assistants on that host.
+   */
+  startAssistant(
+    helpSessionId: string,
+    args: HostStartAssistantArgs
+  ): Promise<HostMessagingOutcome<HostStartAssistantResult>> {
+    return this.settle(helpSessionId, async () => {
+      const base = { assistant: null };
+      const refused = this.refuse(args.hostId, "admit") ?? this.limitSend(args.hostId);
+      if (refused) return { ...refused, ...base };
+      if (this.deps.startEnabled?.(args.hostId) !== true) {
+        return { ...this.outcomeWith("opted_out", START_OFF_DETAIL), ...base };
+      }
+      const starter = this.deps.starter?.() ?? null;
+      if (!starter) return { ...this.outcome("unsupported"), ...base };
+      try {
+        const result = await starter.start(args.hostId, args.projectId, {
+          ...(args.agentId === undefined ? {} : { agentId: args.agentId }),
+          ...(args.startNew === undefined ? {} : { startNew: args.startNew }),
+          // Asked again at every step: the person can turn either opt-in off,
+          // or pause messaging, while a start is under way.
+          authorized: () =>
+            !this.disposed &&
+            this.isHub(helpSessionId) &&
+            this.deps.startEnabled?.(args.hostId) === true &&
+            this.deps.policy.checkHost({ hostId: args.hostId, kind: "admit" }).ok,
+        });
+        if (result.status === "refused") {
+          const { code, detail } = START_REFUSALS[result.reason];
+          return { ...this.outcomeWith(code, detail), ...base };
+        }
+        const { status: _status, ...assistant } = result;
+        return { ...this.ok(), assistant };
+      } catch (error) {
+        return { ...this.failed(error), ...base };
+      }
+    });
+  }
+
   sendMessage(
     helpSessionId: string,
     args: HostSendMessageArgs
@@ -693,6 +805,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     retryAfterMs: number | null = null
   ): { outcome: HostMessagingOutcomeCode; detail: string | null; retryAfterMs: number | null } {
     return { outcome: code, detail: code === "ok" ? null : DETAILS[code], retryAfterMs };
+  }
+
+  /** An outcome whose usual words don't say why, with fixed words that do. */
+  private outcomeWith(
+    code: Exclude<HostMessagingOutcomeCode, "ok">,
+    detail: string
+  ): ReturnType<HubMessagingRuntime["outcome"]> {
+    return { outcome: code, detail, retryAfterMs: null };
   }
 
   /** A link failure as a named outcome; anything unnamed is a refusal with fixed words. */

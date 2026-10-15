@@ -15,12 +15,15 @@ import {
   ExchangeChangesSchema,
   ExchangeRecordSchema,
   ExchangeResponsesSchema,
+  EnrollStartedResultSchema,
   LaneListSchema,
   MAX_EXCHANGE_PAGE,
   MessageIdPayloadSchema,
   SendResultSchema,
   SendToHubPayloadSchema,
   type AssistantSendPayload,
+  type EnrollStartedPayload,
+  type EnrollStartedResult,
   type ExchangeResponse,
   type LaneList,
 } from "./linkMethods.js";
@@ -237,6 +240,22 @@ export class AssistantExchangeClient {
       await this.call(hostId, session, AssistantLinkMethod.LIST_LANES, null)
     );
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.LIST_LANES);
+    return parsed.data;
+  }
+
+  /**
+   * Enroll for this Shell an assistant its hub just started on the host: that
+   * run only, and only while no other Shell holds the lane.
+   */
+  async enrollStarted(hostId: HostId, payload: EnrollStartedPayload): Promise<EnrollStartedResult> {
+    this.checkHost(hostId, "admit");
+    const session = await this.open(hostId);
+    // The host enrolls only for a session that proved this Shell's sender.
+    await this.authenticate(hostId, session);
+    const parsed = EnrollStartedResultSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.ENROLL_STARTED, payload)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.ENROLL_STARTED);
     return parsed.data;
   }
 

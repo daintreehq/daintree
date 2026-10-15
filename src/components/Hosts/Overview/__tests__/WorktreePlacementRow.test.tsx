@@ -78,6 +78,7 @@ function entry(id: string, cpuPercent: number, connected = true): HostListEntry 
       addedAt: 0,
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
+      assistantStartEnabled: false,
     },
     connection: connected
       ? { status: "connected", rttMs: 5, handshake: HANDSHAKE }

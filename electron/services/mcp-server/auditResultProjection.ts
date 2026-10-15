@@ -298,6 +298,16 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
     })),
   ],
   ["host.cancelTask", hostResultProjection()],
+  [
+    "host.startAssistant",
+    hostResultProjection((record) => {
+      const assistant = asRecord(record.assistant);
+      return {
+        slot: finiteNumber(assistant?.slot),
+        started: typeof assistant?.started === "boolean" ? assistant.started : null,
+      };
+    }),
+  ],
 ]);
 
 /** The value to summarize for `toolId`'s audit record: its projection when it has one, else the result as is. */
@@ -387,6 +397,18 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
       hostId: auditHostId(asRecord(args)?.hostId),
       taskId: auditId(asRecord(args)?.taskId),
     }),
+  ],
+  [
+    "host.startAssistant",
+    (args) => {
+      const record = asRecord(args);
+      return {
+        hostId: auditHostId(record?.hostId),
+        projectId: auditId(record?.projectId),
+        agentId: auditId(record?.agentId),
+        startNew: record?.startNew === true,
+      };
+    },
   ],
   [
     "assistant.reply",

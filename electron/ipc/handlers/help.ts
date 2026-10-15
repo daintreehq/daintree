@@ -113,6 +113,8 @@ async function handleProvisionSession(
     context?: ActionContext;
     /** Assistant lane to provision into (#12108). Absent means slot 0. */
     slot?: number;
+    /** Refuse rather than displace a session already in that lane. */
+    vacantOnly?: boolean;
   }
 ): Promise<{
   sessionId: string;
@@ -142,6 +144,7 @@ async function handleProvisionSession(
     projectViewWebContentsId: ctx.webContentsId,
     actionContext: input.context,
     slot,
+    vacantOnly: input.vacantOnly === true,
   });
 }
 
@@ -341,7 +344,7 @@ async function handleAdoptDetachedSession(
 async function provisionForRemoteView(
   helpSessionService: HelpSessionServiceModule.HelpSessionService,
   endpoint: ClientEndpoint,
-  input: { projectId: string; agentId: string; context?: ActionContext },
+  input: { projectId: string; agentId: string; context?: ActionContext; vacantOnly?: boolean },
   slot: number
 ): Promise<HelpSessionServiceModule.ProvisionResult | null> {
   // Loaded on use: the project store reads Electron's paths as it loads.
@@ -366,6 +369,7 @@ async function provisionForRemoteView(
     projectViewWebContentsId: endpoint.handle,
     actionContext: input.context,
     slot,
+    vacantOnly: input.vacantOnly === true,
   });
   // The view closed or moved while this ran: the revoke for that found no
   // session yet, so this one would be left live with nobody to end it.

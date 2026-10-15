@@ -13,6 +13,7 @@ import {
   HOST_LIST_PROJECTS_MAX,
   HostListAssistantsResultSchema,
   HostListResultSchema,
+  HostStartAssistantResultSchema,
 } from "../../../../shared/types/hostMessaging.js";
 import {
   HUB_SENDS_PER_HOST_PER_MINUTE,
@@ -103,6 +104,8 @@ describe("HubMessagingRuntime (#13336)", () => {
   };
   let runtime: HubMessagingRuntime;
   let hostProjects: ReturnType<typeof vi.fn>;
+  let startEnabled: boolean;
+  let starter: { start: ReturnType<typeof vi.fn> } | null;
   let ids: number;
 
   beforeEach(() => {
@@ -136,8 +139,22 @@ describe("HubMessagingRuntime (#13336)", () => {
       { id: "proj-9", name: "notes", path: "/repos/notes" },
       { id: "proj-2", name: "website", path: "/repos/website" },
     ]);
+    startEnabled = true;
+    starter = {
+      start: vi.fn(async () => ({
+        status: "ready",
+        projectId: "proj-2",
+        slot: 1,
+        agentId: "claude",
+        generation: "gen-new",
+        available: true,
+        started: true,
+      })),
+    };
     runtime = new HubMessagingRuntime({
       listHostProjects: hostProjects as never,
+      startEnabled: () => startEnabled,
+      starter: () => starter as never,
       policy: {
         isSupported: () => true,
         getHub: () => hub,
@@ -283,6 +300,83 @@ describe("HubMessagingRuntime (#13336)", () => {
         outcome: "disconnected",
         projects: null,
         projectsOmitted: 0,
+      });
+    });
+  });
+
+  describe("host.startAssistant", () => {
+    const args = { hostId: "studio", projectId: "proj-2", agentId: "claude" };
+
+    it("starts and enrolls one, answering with what a message to it needs", async () => {
+      const started = await runtime.startAssistant("hub", args);
+      if (!started.ok) throw new Error("refused");
+      expect(HostStartAssistantResultSchema.parse(started.value)).toEqual({
+        outcome: "ok",
+        detail: null,
+        retryAfterMs: null,
+        assistant: {
+          projectId: "proj-2",
+          slot: 1,
+          agentId: "claude",
+          generation: "gen-new",
+          available: true,
+          started: true,
+        },
+      });
+      expect(starter?.start).toHaveBeenCalledWith(
+        "studio",
+        "proj-2",
+        expect.objectContaining({ agentId: "claude", authorized: expect.any(Function) })
+      );
+    });
+
+    it("hands the starter a consent check it reads live, so turning it off mid-start stops it", async () => {
+      await runtime.startAssistant("hub", args);
+      const { authorized } = starter!.start.mock.calls[0]![2] as { authorized: () => boolean };
+      expect(authorized()).toBe(true);
+      startEnabled = false;
+      expect(authorized()).toBe(false);
+      startEnabled = true;
+      denial = "paused";
+      expect(authorized()).toBe(false);
+      denial = null;
+      hub = { ...HUB, sessionId: "someone-else" };
+      expect(authorized()).toBe(false);
+    });
+
+    it("needs the person's per-host consent, on top of messaging, and isn't paused past", async () => {
+      startEnabled = false;
+      const off = await runtime.startAssistant("hub", args);
+      if (!off.ok) throw new Error("refused outright");
+      expect(HostStartAssistantResultSchema.parse(off.value)).toMatchObject({
+        outcome: "opted_out",
+        detail: expect.stringContaining("Starting assistants is turned off"),
+        assistant: null,
+      });
+      startEnabled = true;
+      denial = "paused";
+      await expect(runtime.startAssistant("hub", args)).resolves.toMatchObject({
+        value: { outcome: "paused", assistant: null },
+      });
+      expect(starter?.start).not.toHaveBeenCalled();
+      await expect(runtime.startAssistant("other-lane", args)).resolves.toMatchObject({
+        ok: false,
+        code: "NOT_ELIGIBLE",
+      });
+    });
+
+    it("says why a start didn't happen in fixed words", async () => {
+      starter!.start.mockResolvedValueOnce({ status: "refused", reason: "no-window" });
+      const refused = await runtime.startAssistant("hub", args);
+      if (!refused.ok) throw new Error("refused outright");
+      expect(HostStartAssistantResultSchema.parse(refused.value)).toMatchObject({
+        outcome: "lane_unavailable",
+        detail: expect.stringContaining("No window here shows this host"),
+        assistant: null,
+      });
+      starter = null;
+      await expect(runtime.startAssistant("hub", args)).resolves.toMatchObject({
+        value: { outcome: "unsupported", assistant: null },
       });
     });
   });

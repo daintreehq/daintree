@@ -22,6 +22,12 @@ export const AssistantLinkMethod = {
    * on the host with its agent, so the hub can see what it could reach.
    */
   LIST_LANES: "assistant.list-lanes",
+  /**
+   * Shell → Host: enroll for this session's Shell a lane its hub just started
+   * in one of the host's projects (#13392): only that run, by help session id,
+   * and only while no other Shell holds the lane.
+   */
+  ENROLL_STARTED: "assistant.enroll-started",
   /** Shell → Host: send a message to an enrolled lane; a resend of its messageId never sends twice. */
   SEND: "assistant.send",
   /** Shell → Host: one of this sender's exchanges by messageId, or null when the host has none. */
@@ -117,6 +123,17 @@ export const EnrolledLaneSchema = z
 export type EnrolledLane = z.infer<typeof EnrolledLaneSchema>;
 
 export const RunningAssistantSchema = z.object({ projectId: id, slot, agentId: id }).strip();
+
+export const EnrollStartedPayloadSchema = z.object({ projectId: id, slot, sessionId: id }).strict();
+export type EnrollStartedPayload = z.infer<typeof EnrollStartedPayloadSchema>;
+
+export const EnrollStartedResultSchema = z
+  .object({
+    status: z.enum(["enrolled", "occupied", "not-running", "wrong-session", "refused"]),
+    lane: EnrolledLaneSchema.nullable(),
+  })
+  .strip();
+export type EnrollStartedResult = z.infer<typeof EnrollStartedResultSchema>;
 export type RunningAssistant = z.infer<typeof RunningAssistantSchema>;
 
 export const LaneListSchema = z

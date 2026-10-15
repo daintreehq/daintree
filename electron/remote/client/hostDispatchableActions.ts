@@ -71,6 +71,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "host.listAssistants",
   "host.listTasks",
   "host.sendMessage",
+  "host.startAssistant",
   "host.switch",
   "mcp.surface",
   "project.openOnHost",

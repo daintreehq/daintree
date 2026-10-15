@@ -43,6 +43,7 @@ function descriptor(id: string, name: string, extra: Partial<HostDescriptor> = {
     addedAt: 1,
     notificationsEnabled: false,
     assistantMessagingEnabled: false,
+    assistantStartEnabled: false,
     ...extra,
   };
 }

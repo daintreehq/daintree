@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
@@ -21,6 +22,7 @@ import { getRemoteService, registerRemoteService } from "../runtime.js";
 import { exchangeWakeSink } from "../exchange/wakeSink.js";
 import { AssistantExchangeClient, type MovedExchange } from "./AssistantExchangeClient.js";
 import { AssistantHubReceiver } from "./AssistantHubReceiver.js";
+import { HostAssistantStarter, type HostAssistantStarterDeps } from "./HostAssistantStarter.js";
 import { AssistantInbox } from "./AssistantInbox.js";
 import { AssistantLaneWaker } from "./AssistantLaneWaker.js";
 import { AssistantMessagingPolicy, type MessagingShell } from "./AssistantMessagingPolicy.js";
@@ -56,6 +58,10 @@ export interface AssistantMessagingPolicyInstallDeps {
   observeHosts?(): ObservedHost[];
   /** A connected host's projects, for naming what its assistants work in. */
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
+  /** The person's consent to the hub starting assistants on a host, read at each call. */
+  isHostStartEnabled?(hostId: HostId): boolean;
+  /** What starting an assistant in a host's project takes from the windows here. */
+  hostAssistants?: Omit<HostAssistantStarterDeps, "listLanes" | "enrollStarted" | "sleep" | "now">;
 }
 
 function openExchangeDatabase(): Database.Database | null {
@@ -87,6 +93,15 @@ export function installAssistantMessagingPolicy(
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),
     listRunningLanes: () => helpSessionService.listRunningLanes(),
+    startedThrough: (running, linkSessionId) =>
+      getEndpointRegistry()
+        .getRemote()
+        .some(
+          (endpoint) =>
+            endpoint.handle === running.projectViewWebContentsId &&
+            endpoint.linkSessionId === linkSessionId &&
+            !endpoint.isClosed()
+        ),
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     isHostMessagingEnabled: deps.isHostMessagingEnabled,
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
@@ -160,12 +175,27 @@ export function installAssistantMessagingPolicy(
     ? runtime.onAvailabilityChanged(onAvailabilityChanged)
     : () => {};
   const unregisterRuntime = setAssistantMessagingRuntime(runtime);
+  const exchangeClient = (): AssistantExchangeClient => {
+    const client = getRemoteService("assistantExchangeClient");
+    if (!client) throw new Error("Assistant exchanges aren't available");
+    return client;
+  };
+  const hostAssistants = deps.hostAssistants;
+  const starter = hostAssistants
+    ? new HostAssistantStarter({
+        ...hostAssistants,
+        listLanes: (hostId) => exchangeClient().listLanes(hostId),
+        enrollStarted: (hostId, payload) => exchangeClient().enrollStarted(hostId, payload),
+      })
+    : null;
   const hub = new HubMessagingRuntime({
     policy,
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
     client: () => getRemoteService("assistantExchangeClient") ?? null,
     hosts: () => deps.observeHosts?.() ?? [],
     listHostProjects: deps.listHostProjects,
+    startEnabled: (hostId) => deps.isHostStartEnabled?.(hostId) === true,
+    starter: () => starter,
   });
   const unregisterHub = setHostMessagingRuntime(hub);
   // What a host's assistants send this hub (#13338), admitted through the same policy.

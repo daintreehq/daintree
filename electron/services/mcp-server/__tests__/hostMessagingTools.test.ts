@@ -28,6 +28,7 @@ function fakeRuntime() {
     ),
     listTasks: vi.fn(),
     cancelTask: vi.fn(),
+    startAssistant: vi.fn(),
   } satisfies HostMessagingRuntimeHandle;
 }
 
@@ -88,6 +89,27 @@ describe("runHostMessagingTool (#13336)", () => {
       message: "The arguments don't match this tool's schema.",
     });
     expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("hands a start to the runtime only with a projectId, and an agent and startNew when given", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostMessagingRuntime(runtime);
+    const access = bindHostMessaging(() => "hub");
+    await runHostMessagingTool(
+      "host.startAssistant",
+      { hostId: "h", projectId: "p", agentId: "codex", startNew: true },
+      access
+    );
+    const missing = await runHostMessagingTool("host.startAssistant", { hostId: "h" }, access);
+    uninstall();
+    expect(runtime.startAssistant).toHaveBeenCalledTimes(1);
+    expect(runtime.startAssistant).toHaveBeenCalledWith("hub", {
+      hostId: "h",
+      projectId: "p",
+      agentId: "codex",
+      startNew: true,
+    });
+    expect(missing).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 
   it("refuses with no access at all", async () => {

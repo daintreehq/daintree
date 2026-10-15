@@ -10,6 +10,7 @@ import { getPtyClient } from "../window/serviceRefs.js";
 import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { toDisposable } from "../utils/lifecycle.js";
+import { AppError } from "../utils/errorTypes.js";
 import { initRemoteHostsClient } from "./client/initClient.js";
 import { closeSshMasters } from "./client/sshTransport.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
@@ -270,6 +271,46 @@ function startClient(options: StartRemoteHostsOptions): void {
           summary,
         })),
       listHostProjects: (hostId) => client.client.listHostProjects({ hostId }),
+      isHostStartEnabled: (hostId) => {
+        const descriptor = client.registry.get(hostId);
+        return (
+          descriptor?.assistantMessagingEnabled === true &&
+          descriptor.assistantStartEnabled === true
+        );
+      },
+      hostAssistants: {
+        projectPath: async (hostId, projectId) =>
+          (await client.client.listHostProjects({ hostId })).find(
+            (project) => project.id === projectId
+          )?.path ?? null,
+        prepareView: (hostId, projectId, projectPath) =>
+          client.prepareHostProjectView(hostId, projectId, projectPath),
+        dispatch: async (webContentsId, actionId, args) => {
+          const { mcpServerService } = await import("../services/McpServerService.js");
+          const { result } = await mcpServerService.dispatchActionForHost(
+            webContentsId,
+            actionId,
+            args
+          );
+          return result.ok
+            ? { ok: true, result: result.result }
+            : { ok: false, code: result.error.code, message: result.error.message };
+        },
+        invoke: async (hostId, webContentsId, projectId, channel, args) => {
+          const connection = client.manager.get(hostId);
+          if (!connection) {
+            throw new AppError({
+              code: "HOST_DISCONNECTED",
+              message: `Host ${hostId} isn't connected`,
+            });
+          }
+          const envelope = await connection.invoke(webContentsId, projectId, channel, args);
+          if (!envelope.ok) {
+            throw new AppError({ code: "INTERNAL", message: envelope.error.message });
+          }
+          return envelope.data;
+        },
+      },
       // An enrolled lane's inbox tools, and the hub's host tools, come and go with its enrollment.
       onAvailabilityChanged: () => {
         void import("../services/McpServerService.js")

@@ -36,7 +36,10 @@ import {
   getAssistantWiredAgentIds,
 } from "@shared/config/agentRegistry";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
-import { HELP_ASSISTANT_GREETING } from "@shared/config/helpAssistantGreeting";
+import {
+  HELP_ASSISTANT_GREETING,
+  HUB_STARTED_ASSISTANT_GREETING,
+} from "@shared/config/helpAssistantGreeting";
 import { buildResumeCommand } from "@shared/types";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePaletteStore } from "@/store/paletteStore";
@@ -89,6 +92,23 @@ function pickHelpLaunchLane(
     if (!state.sessions[slot] && !isHeldHelpSlot(state, workspaceId, slot)) {
       return { slot, isNew: true };
     }
+  }
+  return null;
+}
+
+/**
+ * Exactly `slot`, when launching there displaces nothing (#13392): a caller
+ * that picked the slot against the host's own list of running assistants, which
+ * this view's tabs may not show, names it rather than letting the view choose.
+ */
+function exactHelpLaunchLane(
+  state: HelpPanelState,
+  workspaceId: string,
+  slot: number
+): { slot: number; isNew: boolean } | null {
+  if (isFreeHelpLane(state, workspaceId, slot)) return { slot, isNew: false };
+  if (!state.sessions[slot] && !isHeldHelpSlot(state, workspaceId, slot)) {
+    return { slot, isNew: true };
   }
   return null;
 }
@@ -427,8 +447,28 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     danger: "safe",
     scope: "renderer",
     keywords: ["assistant", "support", "docs", "guide"],
-    argsSchema: z.object({ agentId: AgentIdSchema.optional() }).optional(),
-    run: async (parsed?: { agentId?: string }) => {
+    argsSchema: z
+      .object({
+        agentId: AgentIdSchema.optional(),
+        // For a caller starting an assistant on someone's behalf (#13392): launch
+        // into exactly this lane, and refuse rather than displace one already there.
+        slot: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_ASSISTANT_SLOTS - 1)
+          .optional(),
+        vacantOnly: z.boolean().optional(),
+        // A fixed opening for an assistant nobody here will answer; never free text.
+        greeting: z.enum(["hub"]).optional(),
+      })
+      .optional(),
+    run: async (parsed?: {
+      agentId?: string;
+      slot?: number;
+      vacantOnly?: boolean;
+      greeting?: "hub";
+    }) => {
       // Snapshot the renderer's action context BEFORE any await. This is
       // bound to the MCP session at provision and replayed as the
       // contextOverride on every assistant tool call, so a focus shift
@@ -507,7 +547,13 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       // help agent opens beside it instead (#13192).
       await helpPanelRuntimeReady;
       const panelState = useHelpPanelStore.getState();
-      const lane = pickHelpLaunchLane(panelState, workspace.id);
+      const lane =
+        parsed?.slot === undefined
+          ? pickHelpLaunchLane(panelState, workspace.id)
+          : exactHelpLaunchLane(panelState, workspace.id, parsed.slot);
+      // A caller that named the lane is told by the missing result, with no
+      // tab opened or toast shown in a view nobody may be looking at.
+      if (!lane && parsed?.slot !== undefined) return undefined;
       if (!lane) {
         useFocusStore.getState().clearAssistantGesture();
         if (!panelState.isOpen) {
@@ -543,12 +589,15 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             agentId,
             context: capturedContext,
             slot: targetSlot,
+            ...(parsed?.vacantOnly ? { vacantOnly: true } : {}),
           });
         } catch (err) {
           logError("Failed to provision help session", err);
           // Decode BEFORE any message formatting: the contextBridge strips the
           // custom `code` property, so it rides an encoded message prefix.
           const code = extractHelpSessionErrorCode(err);
+          // A caller starting it on someone's behalf hears it from the missing result.
+          if (parsed?.vacantOnly) return undefined;
           let message = "Couldn't start the Daintree Assistant session.";
           if (code === "MCP_PROBE_FAILED") {
             message =
@@ -603,7 +652,8 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             agentId,
             cwd,
             location: "overlay",
-            prompt: HELP_ASSISTANT_GREETING,
+            prompt:
+              parsed?.greeting === "hub" ? HUB_STARTED_ASSISTANT_GREETING : HELP_ASSISTANT_GREETING,
             excludeFromPersistence: true,
             removeOnExit: true,
             ...(env && { env }),
@@ -659,11 +709,21 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
             helpPanel.requestFocus();
           }
           window.electron.help.markTerminal(result.result.terminalId).catch(() => {});
+          // What a caller starting an assistant on someone's behalf (a hub on
+          // another machine) needs to find and enroll the lane it landed in.
+          return {
+            slot: targetSlot,
+            terminalId: launchedTerminalId,
+            sessionId: session.sessionId,
+            agentId,
+            cwd,
+          };
         } else if (session) {
           window.electron.help.revokeSession(session.sessionId).catch((err) => {
             logError("Failed to revoke help session after failed launch", err);
           });
         }
+        return undefined;
       } finally {
         claimedHelpLaneKeys.delete(claimKey);
       }

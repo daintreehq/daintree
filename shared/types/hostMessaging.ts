@@ -22,6 +22,7 @@ export const HOST_SEND_MESSAGE_TOOL = "host.sendMessage";
 export const HOST_GET_TASK_TOOL = "host.getTask";
 export const HOST_LIST_TASKS_TOOL = "host.listTasks";
 export const HOST_CANCEL_TASK_TOOL = "host.cancelTask";
+export const HOST_START_ASSISTANT_TOOL = "host.startAssistant";
 
 export const HOST_MESSAGING_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
@@ -30,6 +31,7 @@ export const HOST_MESSAGING_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_GET_TASK_TOOL,
   HOST_LIST_TASKS_TOOL,
   HOST_CANCEL_TASK_TOOL,
+  HOST_START_ASSISTANT_TOOL,
 ]);
 
 /** Longest bounded wait `host.sendMessage` takes, in milliseconds. */
@@ -275,6 +277,40 @@ export const HostCancelTaskResultSchema = z.object({
 });
 export type HostCancelTaskResult = z.infer<typeof HostCancelTaskResultSchema>;
 
+export const HostStartAssistantArgsSchema = z.object({
+  hostId: hostIdSchema,
+  projectId: idSchema.describe("A projectId from the host's assistant listing."),
+  agentId: z
+    .string()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe(
+      "The agent CLI to run. Omit for the host's default; a project's assistants share one."
+    ),
+  startNew: z
+    .boolean()
+    .optional()
+    .describe("Start another even when one there is already enrolled for you."),
+});
+export type HostStartAssistantArgs = z.infer<typeof HostStartAssistantArgsSchema>;
+
+export const HostStartAssistantResultSchema = z.object({
+  ...outcomeFields,
+  assistant: z
+    .object({
+      projectId: z.string(),
+      slot: z.number(),
+      agentId: z.string().nullable(),
+      generation: z.string(),
+      available: z.boolean(),
+      // False when one already running there was enrolled rather than a new one started.
+      started: z.boolean(),
+    })
+    .nullable(),
+});
+export type HostStartAssistantResult = z.infer<typeof HostStartAssistantResultSchema>;
+
 /** Why a hub tool refused outright: the caller isn't the hub, or its arguments don't parse. */
 export type HostMessagingRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
@@ -284,7 +320,8 @@ export type HostMessagingToolResult =
   | HostSendMessageResult
   | HostGetTaskResult
   | HostListTasksResult
-  | HostCancelTaskResult;
+  | HostCancelTaskResult
+  | HostStartAssistantResult;
 
 export type HostMessagingOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostMessagingRefusalCode; message: string };

@@ -6,12 +6,14 @@ import {
   HOST_LIST_TASKS_TOOL,
   HOST_LIST_TOOL,
   HOST_SEND_MESSAGE_TOOL,
+  HOST_START_ASSISTANT_TOOL,
   HostCancelTaskArgsSchema,
   HostGetTaskArgsSchema,
   HostListArgsSchema,
   HostListAssistantsArgsSchema,
   HostListTasksArgsSchema,
   HostSendMessageArgsSchema,
+  HostStartAssistantArgsSchema,
   type HostCancelTaskArgs,
   type HostCancelTaskResult,
   type HostGetTaskArgs,
@@ -26,6 +28,8 @@ import {
   type HostMessagingToolResult,
   type HostSendMessageArgs,
   type HostSendMessageResult,
+  type HostStartAssistantArgs,
+  type HostStartAssistantResult,
 } from "../../../shared/types/hostMessaging.js";
 
 /**
@@ -60,6 +64,10 @@ export interface HostMessagingRuntimeHandle {
     helpSessionId: string,
     args: HostCancelTaskArgs
   ): Promise<HostMessagingOutcome<HostCancelTaskResult>>;
+  startAssistant(
+    helpSessionId: string,
+    args: HostStartAssistantArgs
+  ): Promise<HostMessagingOutcome<HostStartAssistantResult>>;
 }
 
 let installedRuntime: HostMessagingRuntimeHandle | null = null;
@@ -129,6 +137,10 @@ async function dispatch(
     case HOST_CANCEL_TASK_TOOL: {
       const parsed = HostCancelTaskArgsSchema.safeParse(raw);
       return parsed.success ? runtime.cancelTask(helpSessionId, parsed.data) : invalidArgs();
+    }
+    case HOST_START_ASSISTANT_TOOL: {
+      const parsed = HostStartAssistantArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.startAssistant(helpSessionId, parsed.data) : invalidArgs();
     }
     default:
       return invalidArgs();

@@ -11,7 +11,10 @@ import {
   normalizePromptTitle,
   summarizeClaudeTranscript,
 } from "../helpPastSessions.js";
-import { HELP_ASSISTANT_GREETING } from "../../../shared/config/helpAssistantGreeting.js";
+import {
+  HELP_ASSISTANT_GREETING,
+  HUB_STARTED_ASSISTANT_GREETING,
+} from "../../../shared/config/helpAssistantGreeting.js";
 
 const A = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
 const B = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
@@ -64,6 +67,11 @@ describe("summarizeClaudeTranscript", () => {
       reply(),
       line({ type: "ai-title", aiTitle: "Daintree help offer" })
     );
+    expect(summarizeClaudeTranscript(text, text)).toBeNull();
+  });
+
+  it("filters a transcript holding only a hub-started assistant's opening (#13392)", () => {
+    const text = transcript(prompt(HUB_STARTED_ASSISTANT_GREETING), reply());
     expect(summarizeClaudeTranscript(text, text)).toBeNull();
   });
 

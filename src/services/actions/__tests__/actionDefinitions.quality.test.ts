@@ -476,7 +476,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // What the prose has to carry is that a project's assistants name their agent
   // and that only one enrolled for this Shell has a generation. Off the
   // external surface, so the external total does not move.
-  const MAX_COHORT_TOTAL_BYTES = 21_000;
+  // 21_000 → 21_150 for the swarm manager's `host.startAssistant` (#13392),
+  // measured at 21_144 B. What the prose has to carry is that it reuses an
+  // assistant already there before opening one, what it returns, and that the
+  // person allows it per host. Full tier only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_150;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1438,6 +1442,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.getTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
       "host.listTasks": { hostId: "h-placeholder" },
       "host.cancelTask": { hostId: "h-placeholder", taskId: "task-placeholder" },
+      "host.startAssistant": { hostId: "h-placeholder", projectId: "p-placeholder" },
     };
 
     const failures: string[] = [];

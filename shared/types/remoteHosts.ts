@@ -242,6 +242,12 @@ export interface HostDescriptor {
   notificationsEnabled: boolean;
   /** Whether this Shell's assistant may message assistants on the host. Opt-in per host. */
   assistantMessagingEnabled: boolean;
+  /**
+   * Whether this Shell's hub assistant may start an assistant in one of the
+   * host's projects and enroll it for itself, without a person there. Opt-in
+   * per host, and only with messaging on.
+   */
+  assistantStartEnabled: boolean;
 }
 
 export type HostConnectionState =

@@ -722,7 +722,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // assistants' slot, agent, generation and availability, and `host.list`'s
   // lanes name their project and agent. Output schemas are a hard contract.
   // Offered only to this Shell's hub, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 133_200;
+  // 133_200 → 134_700 for `host.startAssistant` (#13392), measured at 134_648 B:
+  // its description, the project, agent and startNew arguments, and an output
+  // schema of the shared outcome fields beside the enrolled assistant's slot,
+  // agent, generation, availability and whether it was opened. Hub only.
+  const MAX_COHORT_PAYLOAD_BYTES = 134_700;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

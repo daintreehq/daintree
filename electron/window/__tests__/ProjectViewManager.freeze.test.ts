@@ -1001,6 +1001,65 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     expect(frozeProjA()).toBe(true);
   });
 
+  it("never freezes a cached view a host's live assistant runs its tool calls through", async () => {
+    const liveAssistantViews = new Set<number>();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      mcpViewActivity,
+      remoteAssistantLive: (webContentsId) => liveAssistantViews.has(webContentsId),
+    });
+    (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+      Promise.resolve("signal");
+    initialWc = createMockWebContents();
+    manager.registerInitialView(
+      { webContents: initialWc, setBounds: vi.fn() } as never,
+      "proj-a",
+      "/path/a"
+    );
+    await manager.switchTo("proj-b", "/path/b");
+    liveAssistantViews.add(initialWc.id);
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    expect(frozeProjA()).toBe(false);
+
+    // Once that assistant is gone, the next pass freezes the view like any other.
+    liveAssistantViews.delete(initialWc.id);
+    manager.refreezeUnprotectedCachedViews();
+    expect(frozeProjA()).toBe(true);
+  });
+
+  it("doesn't freeze a view with a host's live assistant as it's switched away from, either", async () => {
+    const liveAssistantViews = new Set<number>();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      mcpViewActivity,
+      remoteAssistantLive: (webContentsId) => liveAssistantViews.has(webContentsId),
+    });
+    (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+      Promise.resolve("signal");
+    initialWc = createMockWebContents();
+    manager.registerInitialView(
+      { webContents: initialWc, setBounds: vi.fn() } as never,
+      "proj-a",
+      "/path/a"
+    );
+    // Already in efficiency when the switch happens: deactivation is the freeze.
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    liveAssistantViews.add(initialWc.id);
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(frozeProjA()).toBe(false);
+  });
+
   it("re-freezes a view thawed for a dispatch once the lease is gone", async () => {
     // The bridge thaws on demand and nothing puts the view back: freezeAllCached
     // runs only on the transition INTO efficiency, and re-entering while already

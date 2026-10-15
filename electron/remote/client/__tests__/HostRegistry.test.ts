@@ -42,6 +42,7 @@ describe("HostRegistry", () => {
       addedAt: 1_000,
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
+      assistantStartEnabled: false,
     });
     expect(isValidRemoteHostId(added.id)).toBe(true);
     expect(registry.list()).toEqual([added]);
@@ -182,6 +183,27 @@ describe("HostRegistry", () => {
     expect(moved.assistantMessagingEnabled).toBe(false);
   });
 
+  it("keeps starting assistants off until turned on, and never carries it onto a different machine", () => {
+    const registry = new HostRegistry(memoryStore());
+    const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box.example" } });
+    expect(host.assistantStartEnabled).toBe(false);
+    registry.update({ hostId: host.id, assistantMessagingEnabled: true });
+    expect(registry.get(host.id)?.assistantStartEnabled).toBe(false);
+    expect(registry.update({ hostId: host.id, assistantStartEnabled: true })).toMatchObject({
+      assistantMessagingEnabled: true,
+      assistantStartEnabled: true,
+    });
+    expect(() =>
+      registry.update({ hostId: host.id, assistantStartEnabled: 1 as unknown as boolean })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+    expect(registry.update({ hostId: host.id, name: "Box" }).assistantStartEnabled).toBe(true);
+    const moved = registry.update({
+      hostId: host.id,
+      connection: { kind: "ssh", target: "other.example" },
+    });
+    expect(moved).toMatchObject({ assistantMessagingEnabled: false, assistantStartEnabled: false });
+  });
+
   it("forgets a host and reports changes", () => {
     const registry = new HostRegistry(memoryStore());
     const listener = vi.fn();
@@ -273,6 +295,7 @@ describe("HostRegistry", () => {
       addedAt: 1,
       notificationsEnabled: false,
       assistantMessagingEnabled: false,
+      assistantStartEnabled: false,
     };
     const registry = new HostRegistry(
       memoryStore({
@@ -322,6 +345,7 @@ describe("HostRegistry", () => {
         addedAt: 1,
         notificationsEnabled: true,
         assistantMessagingEnabled: false,
+        assistantStartEnabled: false,
       },
     ]);
     // Reading changes nothing on disk; the next write saves the new shape.

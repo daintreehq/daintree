@@ -1,7 +1,7 @@
 import { lstat, open, readdir, realpath } from "fs/promises";
 import os from "os";
 import path from "path";
-import { HELP_ASSISTANT_GREETING } from "../../shared/config/helpAssistantGreeting.js";
+import { LAUNCH_GREETINGS } from "../../shared/config/helpAssistantGreeting.js";
 import type { HelpPastSession } from "../../shared/types/ipc/help.js";
 import type { CodexFolderSessionsResult } from "../../shared/types/ipc/agentSubagents.js";
 
@@ -55,7 +55,7 @@ export function normalizePromptTitle(raw: string): string {
 }
 
 function isGreeting(prompt: string): boolean {
-  return prompt.replace(/\s+/g, " ").trim() === HELP_ASSISTANT_GREETING;
+  return LAUNCH_GREETINGS.has(prompt.replace(/\s+/g, " ").trim());
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
