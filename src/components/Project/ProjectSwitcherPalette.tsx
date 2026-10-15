@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleStop,
   Copy,
+  Ellipsis,
   FileText,
   FolderInput,
   FolderOpen,
@@ -22,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { FolderDown, Moon } from "@/components/icons";
+import { FolderClosed, FolderDown, Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { isMac } from "@/lib/platform";
@@ -79,7 +80,7 @@ import { defaultScratchName } from "@shared/utils/scratchName";
 import type {
   DeleteAllScratchesSnapshot,
   DeleteScratchTarget,
-  ProjectSectionKey,
+  ProjectBandKey,
   ProjectSwitcherBrowseBand,
   ProjectSwitcherMode,
   ProjectSwitcherProjectRow,
@@ -94,6 +95,14 @@ import {
   PROJECT_SWITCHER_SCRATCH_BAND_KEY,
   OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS,
 } from "@/hooks/useProjectSwitcherPalette";
+import { groupBandKey, isGroupBandKey } from "@/lib/projectGroupBands";
+import { useProjectGroupsStore } from "@/store/projectGroupsStore";
+import type { ProjectGroup } from "@shared/types/project";
+import {
+  ProjectFilingMenuItems,
+  ProjectGroupContextMenuItems,
+  ProjectGroupDropdownMenuItems,
+} from "./ProjectGroupMenus";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import {
   isOtherProjectsSortMode,
@@ -267,6 +276,13 @@ interface ProjectListItemProps {
   showCurrentLabel: boolean;
   /** Set when another host lists a project of the same name: which host this one is on. */
   hostName?: string;
+  /**
+   * Say which group the project is filed under. Only where no band header
+   * already says it — the ranked search list, which drops the bands.
+   */
+  showGroupLabel?: boolean;
+  /** Drawn under band headers (browse) rather than in the flat ranked list. */
+  inBands?: boolean;
   onSelect: (row: ProjectSwitcherProjectRow, source?: ProjectSwitchSelectSource) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -593,6 +609,51 @@ function ResumableAgentsLabel({ count }: { count: number }) {
  * and move-to-worktree pickers do. Hidden from readers because every row that
  * draws it already carries the fact in its accessible name or selection state.
  */
+/**
+ * Where a row is filed, said after its name wherever no band header says it:
+ * its group in search, and "Archived" anywhere outside the Archived band. Muted
+ * and plain like the host label beside it — it is provenance, not status.
+ */
+function ProjectFilingLabel({
+  projectName,
+  groupName: rawGroupName,
+  isArchived,
+}: {
+  projectName: string;
+  groupName?: string;
+  isArchived: boolean;
+}) {
+  // "Daintree · Daintree" says nothing the name didn't: a project filed under a
+  // group of its own name is already in the obvious place.
+  const groupName =
+    rawGroupName && rawGroupName.toLocaleLowerCase() !== projectName.toLocaleLowerCase()
+      ? rawGroupName
+      : undefined;
+  if (!groupName && !isArchived) return null;
+  const spoken = [groupName ? `in ${groupName}` : undefined, isArchived ? "archived" : undefined]
+    .filter(Boolean)
+    .join(", ");
+  // Two spans, and only the group name truncates: when space runs out it is
+  // "Archived" that must survive, since that is the fact a row outside the
+  // Archived band exists to say.
+  return (
+    <span className="ml-1.5 flex min-w-0 items-baseline text-xs text-text-secondary">
+      <span className="sr-only">, {spoken}</span>
+      {groupName && (
+        <span aria-hidden="true" className="min-w-0 truncate">
+          · {groupName}
+        </span>
+      )}
+      {isArchived && (
+        <span aria-hidden="true" className={cn("shrink-0", groupName && "ml-1")}>
+          {/* A real space for copy and text extraction; the margin draws it. */}
+          {groupName && " "}· Archived
+        </span>
+      )}
+    </span>
+  );
+}
+
 function CurrentLabel() {
   return (
     <span aria-hidden="true" className="shrink-0 text-xs text-text-secondary">
@@ -769,6 +830,8 @@ function ProjectListItem({
   nowMs,
   showCurrentLabel,
   hostName,
+  showGroupLabel = false,
+  inBands = false,
   onSelect,
   onStopProject,
   onCloseProject,
@@ -871,6 +934,14 @@ function ProjectListItem({
               {hostName}
             </span>
           )}
+          <ProjectFilingLabel
+            projectName={project.name}
+            groupName={showGroupLabel ? project.groupName : undefined}
+            // Under the Archived header the band already says it. Anywhere else
+            // — the ranked list, which has no headers, or Running, where a live
+            // agent lifted it — the row has to.
+            isArchived={project.isArchived === true && (!inBands || project.section !== "archived")}
+          />
           {/*
            * Said in the name, not just in `aria-current`. In browse the band
            * header carries it, but search drops the bands entirely — and even
@@ -978,6 +1049,18 @@ function ProjectListItem({
               </>
             )}
           </ContextMenuItem>
+        )}
+        {/*
+          Filing rides on the pin's prop: a surface that lets the user pin is
+          one that lets them organise, and the preview/read-only surfaces that
+          omit it omit both.
+        */}
+        {onTogglePinProject && (
+          <ProjectFilingMenuItems
+            projectId={project.id}
+            groupId={project.groupId}
+            isArchived={project.isArchived}
+          />
         )}
         {onCopyPath && (
           <ContextMenuItem onSelect={() => onCopyPath(project.path)}>
@@ -1118,7 +1201,7 @@ function ScratchListItem({
 }
 
 interface ProjectSection {
-  key: ProjectSectionKey;
+  key: ProjectBandKey;
   label: string;
   /** The band's VISIBLE rows — empty while collapsed. Always rows of `results`. */
   items: ProjectSwitcherProjectRow[];
@@ -1132,6 +1215,14 @@ interface ProjectSection {
    * lie at best and #11071 at worst.
    */
   collapsible: boolean;
+  /** Set on a user-made group's band. */
+  group?: ProjectGroup;
+  /** Group members shown in a band above — what an empty group says. */
+  liftedCount?: number;
+  /** Agents running across the band, for a folded header. */
+  activeAgentCount?: number;
+  /** Projects with a working assistant, for a folded header. */
+  workingAssistantCount?: number;
 }
 
 /**
@@ -1176,6 +1267,7 @@ function BandCollapseToggle({
   controlsId,
   testId,
   onToggle,
+  leadingIcon,
 }: {
   collapsed: boolean;
   label: string;
@@ -1183,6 +1275,8 @@ function BandCollapseToggle({
   controlsId: string;
   testId: string;
   onToggle: () => void;
+  /** Drawn between the chevron and the label: a user-made group's folder. */
+  leadingIcon?: React.ReactNode;
 }) {
   return (
     <button
@@ -1203,6 +1297,7 @@ function BandCollapseToggle({
         )}
         aria-hidden="true"
       />
+      {leadingIcon}
       <BandLabel label={label} labelId={labelId} />
     </button>
   );
@@ -1217,9 +1312,18 @@ function BandCollapsedCount({ count }: { count: number }) {
   return <span className="shrink-0 text-3xs tabular-nums">{count}</span>;
 }
 
+/**
+ * A band key made safe for an element id. Group keys carry a colon
+ * (`group:<id>`), which is legal in an id but has to be escaped in every
+ * selector that ever looks one up.
+ */
+function bandDomKey(key: ProjectBandKey): string {
+  return key.replace(":", "-");
+}
+
 /** Stable `aria-controls` target for a band's rows. */
-function bandListId(key: ProjectSectionKey): string {
-  return `project-section-list-${key}`;
+function bandListId(key: ProjectBandKey): string {
+  return `project-section-list-${bandDomKey(key)}`;
 }
 
 // Keyed by mode rather than a list, so the lookup below is total: a new mode in
@@ -1235,7 +1339,24 @@ const OTHER_PROJECTS_SORT_OPTIONS: Record<
 };
 
 /**
- * The Other band's header, which doubles as its sort control (#11455). The
+ * What a folded band says is still alive inside it, in the words its rows use:
+ * "2 agents running", "Assistant working", or both.
+ */
+function formatFoldedLiveness(agents: number, assistants: number): string {
+  const parts: string[] = [];
+  if (agents > 0) parts.push(`${pluralize(agents, "agent")} running`);
+  if (assistants > 0) {
+    parts.push(
+      assistants === 1 ? "assistant working" : `${pluralize(assistants, "assistant")} working`
+    );
+  }
+  const text = parts.join(" · ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * The header of every band whose order the user picks — Other projects and
+ * each user-made group — which doubles as its sort control (#11455). The
  * band is the residual catch-all, so its order is the one thing a reader can't
  * infer from the rows — the control's first job is naming that order, changing
  * it second. More so since the rows stopped printing their opened times
@@ -1262,31 +1383,63 @@ const OTHER_PROJECTS_SORT_OPTIONS: Record<
  * inset that positions the row cards below, so a `px-3` here would float the
  * label 12px inside the edge those cards line up on (#11943).
  */
-function OtherProjectsHeader({
+function SortableBandHeader({
+  bandKey,
   headerId,
   label,
   itemCount,
   collapsed,
   collapsible,
+  sortMode,
+  onSortModeChange,
+  group,
+  activeAgentCount = 0,
+  workingAssistantCount = 0,
   onToggleCollapsed,
   onReturnFocus,
 }: {
+  bandKey: ProjectBandKey;
   headerId: string;
   label: string;
   itemCount: number;
   collapsed: boolean;
   collapsible: boolean;
+  sortMode: OtherProjectsSortMode;
+  onSortModeChange: (mode: OtherProjectsSortMode) => void;
+  /** Set on a user-made group: adds its rename/move/delete actions. */
+  group?: ProjectGroup;
+  /** Agents running in the band — said on the header only while it is folded. */
+  activeAgentCount?: number;
+  /** Projects whose assistant is working — said beside the agents, same rule. */
+  workingAssistantCount?: number;
   onToggleCollapsed: () => void;
   onReturnFocus?: () => void;
 }) {
-  const sortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
-  const setSortMode = usePreferencesStore((state) => state.setProjectSwitcherOtherSortMode);
-
   const active = OTHER_PROJECTS_SORT_OPTIONS[sortMode];
   const ActiveIcon = active.Icon;
+  const isOther = bandKey === "other";
+  const sortLabel = isOther ? "other projects" : label;
 
   const handleValueChange = (value: string) => {
-    if (isOtherProjectsSortMode(value)) setSortMode(value);
+    if (isOtherProjectsSortMode(value)) onSortModeChange(value);
+  };
+
+  // Radix would restore focus to the trigger, which then eats ArrowDown and
+  // Enter to reopen itself — leaving the palette unable to walk or commit a row
+  // until focus moved by hand. The search box owns those keys, so send focus
+  // back there. Deferred a frame: focusing inside Radix's own focus-restore
+  // window loses the race with its teardown (same reason `ContentPanel`'s
+  // rename input defers).
+  //
+  // Only focus left stranded is taken back. Rename and Delete open a dialog
+  // that has claimed focus by the time this frame runs; pulling it back to the
+  // search box would leave the keyboard typing behind a visible modal.
+  const returnFocus = (event: Event) => {
+    event.preventDefault();
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active === null || active === document.body) onReturnFocus?.();
+    });
   };
 
   return (
@@ -1296,70 +1449,123 @@ function OtherProjectsHeader({
           role="presentation"
           className={cn(
             PALETTE_SECTION_LABEL_CLASS,
-            "flex items-center justify-between gap-2 px-2 py-1 normal-case tracking-normal"
+            "group/band-header flex items-center justify-between gap-2 px-2 py-1 normal-case tracking-normal"
           )}
         >
-          {collapsible ? (
-            <BandCollapseToggle
-              collapsed={collapsed}
-              label={label}
-              labelId={headerId}
-              controlsId={bandListId("other")}
-              testId="band-collapse-toggle-other"
-              onToggle={onToggleCollapsed}
-            />
-          ) : (
-            <BandLabel label={label} labelId={headerId} />
-          )}
-          {collapsed && <BandCollapsedCount count={itemCount} />}
-          {!collapsed && itemCount >= OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  data-testid="other-projects-sort-trigger"
-                  aria-label={`Sort other projects, currently ${active.label}`}
-                  className="flex shrink-0 items-center gap-1 text-text-secondary hover:text-text-primary transition-colors"
-                >
-                  <ActiveIcon className="w-3 h-3" aria-hidden="true" />
-                  {active.label}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                onCloseAutoFocus={(event) => {
-                  // Radix would restore focus to the trigger, which then eats
-                  // ArrowDown and Enter to reopen itself — leaving the palette
-                  // unable to walk or commit a row until focus moved by hand.
-                  // The search box owns those keys, so send focus back there.
-                  //
-                  // Deferred a frame: focusing inside Radix's own focus-restore
-                  // window loses the race with its teardown (same reason
-                  // `ContentPanel`'s rename input defers).
-                  event.preventDefault();
-                  requestAnimationFrame(() => onReturnFocus?.());
-                }}
+          <div className="flex min-w-0 items-center gap-2">
+            {collapsible ? (
+              <BandCollapseToggle
+                collapsed={collapsed}
+                label={label}
+                labelId={headerId}
+                controlsId={bandListId(bandKey)}
+                testId={`band-collapse-toggle-${bandDomKey(bandKey)}`}
+                onToggle={onToggleCollapsed}
+                // A user-made group carries the folder its filing actions use,
+                // so the sections the user made read apart from the ones the
+                // switcher makes — same label, same rule, one quiet glyph.
+                leadingIcon={
+                  group ? (
+                    <FolderClosed className="w-3 h-3 shrink-0" aria-hidden="true" />
+                  ) : undefined
+                }
+              />
+            ) : (
+              <BandLabel label={label} labelId={headerId} />
+            )}
+            {collapsed && (activeAgentCount > 0 || workingAssistantCount > 0) && (
+              // A folded group keeps its running projects in place rather than
+              // lifting them out, so the header is the only thing left to say
+              // they are there. Neutral words beside the run hue's own mark —
+              // the same pairing a running row's status line uses. Assistants
+              // are named apart from agents, as everywhere else: they are live
+              // work, but not runs the user launched.
+              <span
+                className="flex min-w-0 items-center gap-1 text-text-secondary"
+                data-testid={`band-running-rollup-${bandDomKey(bandKey)}`}
               >
-                <DropdownMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
-                  {OTHER_PROJECTS_SORT_MODES.map((value) => {
-                    const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
-                    return (
-                      <DropdownMenuRadioItem key={value} value={value}>
-                        <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                        {optionLabel}
-                      </DropdownMenuRadioItem>
-                    );
-                  })}
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+                <span
+                  className="workspace-mark h-1.5 w-1.5 shrink-0 rounded-full bg-activity-working"
+                  aria-hidden="true"
+                />
+                <span className="truncate">
+                  {formatFoldedLiveness(activeAgentCount, workingAssistantCount)}
+                </span>
+              </span>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {group && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    data-testid={`band-group-menu-${bandDomKey(bandKey)}`}
+                    aria-label={`${group.name} group actions`}
+                    // Revealed with the header rather than always drawn: one
+                    // control per group header, repeated down the list, would
+                    // be a column of dots competing with the rows. Held, and
+                    // lifted, while its own menu is open so the menu has a
+                    // visible owner. Before the count rather than after it, so
+                    // every header's right-hand count or sort still ends on the
+                    // same edge. 24px square for the pointer target floor,
+                    // pulled into the header's line so it doesn't grow it.
+                    className={cn(
+                      "-my-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-[opacity,background-color,color] duration-150 ease-out hover:text-text-primary",
+                      "opacity-0 group-hover/band-header:opacity-100",
+                      "data-[state=open]:opacity-100 data-[state=open]:bg-overlay-subtle data-[state=open]:text-text-primary"
+                    )}
+                  >
+                    <Ellipsis className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onCloseAutoFocus={returnFocus}>
+                  <ProjectGroupDropdownMenuItems group={group} />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            {collapsed && <BandCollapsedCount count={itemCount} />}
+            {!collapsed && itemCount >= OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    data-testid={
+                      isOther
+                        ? "other-projects-sort-trigger"
+                        : `band-sort-trigger-${bandDomKey(bandKey)}`
+                    }
+                    aria-label={`Sort ${sortLabel}, currently ${active.label}`}
+                    className="flex shrink-0 items-center gap-1 text-text-secondary hover:text-text-primary transition-colors"
+                  >
+                    <ActiveIcon className="w-3 h-3" aria-hidden="true" />
+                    {active.label}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onCloseAutoFocus={returnFocus}>
+                  <DropdownMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
+                    {OTHER_PROJECTS_SORT_MODES.map((value) => {
+                      const { label: optionLabel, Icon } = OTHER_PROJECTS_SORT_OPTIONS[value];
+                      return (
+                        <DropdownMenuRadioItem key={value} value={value}>
+                          <Icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                          {optionLabel}
+                        </DropdownMenuRadioItem>
+                      );
+                    })}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         </div>
       </ContextMenuTrigger>
       {/*
        * Right-click keeps the options reachable below the row threshold, where
-       * the visible trigger hides itself — the preference still applies there.
+       * the visible trigger hides itself — the order still applies there — and
+       * is where a group's own actions live for anyone who never hovers.
        */}
       <ContextMenuContent>
         <ContextMenuRadioGroup value={sortMode} onValueChange={handleValueChange}>
@@ -1373,8 +1579,40 @@ function OtherProjectsHeader({
             );
           })}
         </ContextMenuRadioGroup>
+        {group && (
+          <>
+            <ContextMenuSeparator />
+            <ProjectGroupContextMenuItems group={group} />
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/**
+ * What an open group with nothing to show says instead of looking abandoned.
+ * Hidden from assistive tech: it is not an option, it sits inside a listbox
+ * that may only hold options, and the band's header already names the group.
+ */
+function EmptyGroupHint({ liftedCount }: { liftedCount: number }) {
+  // Laid out on a row's own frame — the border, inset, status slot and tile
+  // slot it would have — so the sentence starts on the column the project
+  // names start on and reads as this group's content, not a stray note.
+  return (
+    <div
+      aria-hidden="true"
+      className="flex items-center gap-2 border border-transparent px-2 py-1.5 text-xs text-text-secondary"
+      data-testid="empty-group-hint"
+    >
+      <span className="w-2 shrink-0" />
+      <span className="w-8 shrink-0" />
+      <span className="min-w-0 truncate">
+        {liftedCount > 0
+          ? `${pluralize(liftedCount, "project")} shown above`
+          : "Right-click a project and choose Move to group"}
+      </span>
+    </div>
   );
 }
 
@@ -1494,7 +1732,10 @@ function ProjectListContent({
       } else {
         bands.push({
           key: row.section,
-          label: PROJECT_SECTION_LABELS[row.section],
+          // A group band read off `results` has no name to show — only the
+          // declared bands carry one — and this fallback is never the path a
+          // real switcher takes once groups exist.
+          label: isGroupBandKey(row.section) ? "" : PROJECT_SECTION_LABELS[row.section],
           items: [row],
           itemCount: 1,
           collapsed: false,
@@ -1526,6 +1767,10 @@ function ProjectListContent({
         itemCount: band.itemCount,
         collapsed: band.collapsed,
         collapsible: true,
+        group: band.group,
+        liftedCount: band.liftedCount,
+        activeAgentCount: band.activeAgentCount,
+        workingAssistantCount: band.workingAssistantCount,
       };
     });
 
@@ -1555,6 +1800,9 @@ function ProjectListContent({
   const selectedRowId = results[selectedIndex]?.id;
 
   const setBandCollapsed = usePreferencesStore((state) => state.setProjectSwitcherBandCollapsed);
+  const otherSortMode = usePreferencesStore((state) => state.projectSwitcherOtherSortMode);
+  const setOtherSortMode = usePreferencesStore((state) => state.setProjectSwitcherOtherSortMode);
+  const setGroupSortMode = useProjectGroupsStore((state) => state.setGroupSortMode);
 
   const hasBands = sections !== null && sections.length > 0;
 
@@ -1580,6 +1828,14 @@ function ProjectListContent({
             // project that became active mid-session can sit under another
             // header; only the "Current project" band makes the label redundant.
             showCurrentLabel={!hasBands || row.section !== "current"}
+            // Said wherever no header already says it: the ranked list has no
+            // headers at all, and a member drawn outside its own group's band —
+            // current, asking, pinned, or archived — would otherwise lose the
+            // one fact that says where it is filed.
+            showGroupLabel={
+              !hasBands || (row.groupId !== undefined && row.section !== groupBandKey(row.groupId))
+            }
+            inBands={hasBands}
             hostName={
               sharedNameHost?.names.has(row.name.toLocaleLowerCase())
                 ? sharedNameHost.hostName
@@ -1609,7 +1865,7 @@ function ProjectListContent({
       <div ref={listRef} id="project-list" role="listbox" aria-label="Workspaces">
         {sections && sections.length > 0 ? (
           sections.map((section, sectionIdx) => {
-            const headerId = `project-section-${section.key}`;
+            const headerId = `project-section-${bandDomKey(section.key)}`;
             const listId = bandListId(section.key);
             const toggle = () => setBandCollapsed(section.key, !section.collapsed);
 
@@ -1633,13 +1889,22 @@ function ProjectListContent({
                    */
                   className="px-1 py-1"
                 >
-                  {section.key === "other" ? (
-                    <OtherProjectsHeader
+                  {section.key === "other" || section.group ? (
+                    <SortableBandHeader
+                      bandKey={section.key}
                       headerId={headerId}
                       label={section.label}
                       itemCount={section.itemCount}
                       collapsed={section.collapsed}
                       collapsible={section.collapsible}
+                      sortMode={section.group ? section.group.sortMode : otherSortMode}
+                      onSortModeChange={(mode) => {
+                        if (section.group) void setGroupSortMode(section.group.id, mode);
+                        else setOtherSortMode(mode);
+                      }}
+                      group={section.group}
+                      activeAgentCount={section.activeAgentCount}
+                      workingAssistantCount={section.workingAssistantCount}
                       onToggleCollapsed={toggle}
                       onReturnFocus={onReturnFocus}
                     />
@@ -1660,7 +1925,7 @@ function ProjectListContent({
                           label={section.label}
                           labelId={headerId}
                           controlsId={listId}
-                          testId={`band-collapse-toggle-${section.key}`}
+                          testId={`band-collapse-toggle-${bandDomKey(section.key)}`}
                           onToggle={toggle}
                         />
                       ) : (
@@ -1675,7 +1940,12 @@ function ProjectListContent({
                     element that comes and goes would leave it dangling on every
                     fold.
                   */}
-                  <div id={listId}>{section.items.map(renderItem)}</div>
+                  <div id={listId}>
+                    {section.items.map(renderItem)}
+                    {section.group && !section.collapsed && section.items.length === 0 && (
+                      <EmptyGroupHint liftedCount={section.liftedCount ?? 0} />
+                    )}
+                  </div>
                 </div>
               </div>
             );

@@ -7,9 +7,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { ProjectSwitcherPalette } from "../ProjectSwitcherPalette";
+import { ProjectGroupDialogs } from "../ProjectGroupMenus";
+import { useProjectGroupsStore } from "@/store/projectGroupsStore";
+import { useProjectStore } from "@/store/projectStore";
+import type { ProjectGroup } from "@shared/types/project";
 import {
   PROJECT_SECTION_LABELS,
   type ProjectSectionKey,
+  type ProjectBandKey,
   type ProjectSwitcherBrowseBand,
   type ProjectSwitcherProjectRow,
   type ProjectSwitcherRow,
@@ -26,6 +31,7 @@ import "@/index.css";
  * Query parameters:
  *   ?theme=daintree|bondi|…   built-in theme id
  *   ?state=browse|dropdown|dropdown-menu|search|nomatch|empty|collapsed
+ *          |groups|groups-search|new-group|manage-groups|delete-group|archived-open
  */
 
 const params = new URLSearchParams(window.location.search);
@@ -44,7 +50,7 @@ function project(
   name: string,
   emoji: string,
   color: string,
-  section: ProjectSectionKey,
+  section: ProjectBandKey,
   extra: Partial<ProjectSwitcherProjectRow> = {}
 ): ProjectSwitcherProjectRow {
   return {
@@ -151,7 +157,161 @@ const SCRATCHES: SearchableScratch[] = [
 
 const noop = () => {};
 
-function withCollapsed(bands: ProjectSwitcherBrowseBand[], keys: ProjectSectionKey[]) {
+const GROUPS: ProjectGroup[] = [
+  { id: "daintree", name: "Daintree", position: 0, sortMode: "mostUsed", createdAt: 1 },
+  { id: "crisp", name: "Crisp Vector", position: 1, sortMode: "alphabetical", createdAt: 2 },
+  { id: "games", name: "Games", position: 2, sortMode: "recent", createdAt: 3 },
+];
+const groupNamed = (id: string) => GROUPS.find((g) => g.id === id)!;
+
+// The groups fixtures stand in for what the hook bands from real data: a
+// current project lifted out of its group, a group with a running member, a
+// folded group still reporting its run, an empty group, the residual Other
+// band, and the Archived band folded by default.
+const GROUPED_PROJECTS: ProjectSwitcherProjectRow[] = [
+  project("daintree-app", "Daintree", "🌴", "emerald", "current", {
+    isActive: true,
+    isOpenInThisWindow: true,
+    activeAgentCount: 2,
+    processCount: 3,
+    groupId: "daintree",
+    groupName: "Daintree",
+  }),
+  project("daintree-website", "Daintree Website", "🌴", "emerald", "group:daintree", {
+    activeAgentCount: 1,
+    processCount: 1,
+    latestWorkingSince: NOW - 6 * MIN,
+    groupId: "daintree",
+    groupName: "Daintree",
+  }),
+  project("assistant-backend", "Daintree Assistant Backend", "☁️", "sky", "group:daintree", {
+    groupId: "daintree",
+    groupName: "Daintree",
+  }),
+  project("canopy-model-backend", "canopy-model-backend", "🖥️", "slate", "group:daintree", {
+    groupId: "daintree",
+    groupName: "Daintree",
+  }),
+  project("strongtyped", "StrongTyped", "🔧", "slate", "other"),
+  project("logorefine", "LogoRefine", "✨", "amber", "other"),
+  project("lifeplan", "LifePlan", "🧮", "rose", "other"),
+  project("businessbenchmark", "BusinessBenchmark", "📈", "teal", "other", {
+    resumableAgentCount: 1,
+  }),
+];
+
+const GROUPED_BANDS: ProjectSwitcherBrowseBand[] = [
+  { key: "current", label: "Current project", itemCount: 1, collapsed: false },
+  {
+    key: "group:daintree",
+    label: "Daintree",
+    itemCount: 3,
+    collapsed: false,
+    group: groupNamed("daintree"),
+    liftedCount: 1,
+    activeAgentCount: 1,
+  },
+  {
+    key: "group:crisp",
+    label: "Crisp Vector",
+    itemCount: 2,
+    collapsed: true,
+    group: groupNamed("crisp"),
+    activeAgentCount: 1,
+    workingAssistantCount: 1,
+  },
+  {
+    key: "group:games",
+    label: "Games",
+    itemCount: 0,
+    collapsed: false,
+    group: groupNamed("games"),
+    liftedCount: 0,
+  },
+  { key: "other", label: "Other projects", itemCount: 4, collapsed: false },
+  { key: "archived", label: "Archived", itemCount: 3, collapsed: true },
+];
+
+const GROUP_SEARCH_ROWS: ProjectSwitcherProjectRow[] = [
+  project("crisp-vector-website", "crisp-vector-website", "⚙️", "slate", "group:crisp", {
+    groupId: "crisp",
+    groupName: "Crisp Vector",
+  }),
+  project("crisp-vector-backend", "crisp-vector-backend", "🗄️", "slate", "archived", {
+    groupId: "crisp",
+    groupName: "Crisp Vector",
+    isArchived: true,
+  }),
+  // A long name in a long-named group: the group name truncates, "Archived" stays.
+  project(
+    "crisp-vector-marketing-redesign",
+    "crisp-vector-marketing-site-redesign-2026",
+    "🎨",
+    "pink",
+    "archived",
+    { groupId: "crisp", groupName: "Crisp Vector", isArchived: true }
+  ),
+];
+
+// Archived rows for the open Archived band: one plain, one still filed under a
+// group (it keeps its group for when it comes back), one with a long name.
+const ARCHIVED_ROWS: ProjectSwitcherProjectRow[] = [
+  project("ask-google", "ask-google", "🔎", "sky", "archived", { isArchived: true }),
+  project("crisp-vector-backend", "crisp-vector-backend", "🗄️", "slate", "archived", {
+    isArchived: true,
+    groupId: "crisp",
+    groupName: "Crisp Vector",
+  }),
+  project("greg-priday-writing", "Greg Priday Writing", "📝", "amber", "archived", {
+    isArchived: true,
+  }),
+];
+
+const GROUP_STATES = [
+  "groups",
+  "groups-search",
+  "new-group",
+  "manage-groups",
+  "delete-group",
+  "archived-open",
+];
+const isGroupsState = GROUP_STATES.includes(state);
+if (isGroupsState) {
+  useProjectGroupsStore.setState({
+    groups: GROUPS,
+    dialog:
+      state === "new-group"
+        ? { kind: "create", projectId: "strongtyped" }
+        : state === "manage-groups"
+          ? { kind: "manage" }
+          : state === "delete-group"
+            ? { kind: "delete", groupId: "crisp" }
+            : null,
+  });
+  // The dialogs read membership and names off the project store, as in the app.
+  const member = (id: string, name: string, groupId?: string) =>
+    ({
+      id,
+      name,
+      path: `/Users/dev/Projects/${id}`,
+      emoji: "🌲",
+      lastOpened: NOW,
+      groupId,
+    }) as const;
+  useProjectStore.setState({
+    projects: [
+      member("daintree-app", "Daintree", "daintree"),
+      member("daintree-website", "Daintree Website", "daintree"),
+      member("assistant-backend", "Daintree Assistant Backend", "daintree"),
+      member("canopy-model-backend", "canopy-model-backend", "daintree"),
+      member("crisp-vector-website", "crisp-vector-website", "crisp"),
+      member("crisp-vector-backend", "crisp-vector-backend", "crisp"),
+      member("strongtyped", "StrongTyped"),
+    ],
+  });
+}
+
+function withCollapsed(bands: ProjectSwitcherBrowseBand[], keys: ProjectBandKey[]) {
   return bands.map((band) => (keys.includes(band.key) ? { ...band, collapsed: true } : band));
 }
 
@@ -196,8 +356,36 @@ function fixture(): Fixture {
       };
     case "empty":
       return { query: "", results: [], bands: [], scratches: [], ranked: false };
+    case "archived-open":
+      return {
+        query: "",
+        results: [...GROUPED_PROJECTS, ...ARCHIVED_ROWS],
+        bands: GROUPED_BANDS.map((band) =>
+          band.key === "archived" ? { ...band, collapsed: false, itemCount: 3 } : band
+        ),
+        scratches: SCRATCHES,
+        ranked: false,
+      };
+    case "groups":
+    case "new-group":
+    case "manage-groups":
+    case "delete-group":
+      return {
+        query: "",
+        results: GROUPED_PROJECTS,
+        bands: GROUPED_BANDS,
+        scratches: SCRATCHES,
+        ranked: false,
+      };
+    case "groups-search":
+      return {
+        query: "crisp",
+        results: GROUP_SEARCH_ROWS,
+        scratches: SCRATCHES,
+        ranked: true,
+      };
     case "collapsed": {
-      const collapsedKeys: ProjectSectionKey[] = ["other", "pinned"];
+      const collapsedKeys: ProjectBandKey[] = ["other", "pinned"];
       return {
         query: "",
         results: PROJECTS.filter((p) => !collapsedKeys.includes(p.section)),
@@ -279,6 +467,7 @@ createRoot(document.getElementById("root")!).render(
     <TooltipProvider>
       <div data-preview-frame className="h-screen w-screen">
         <Surface />
+        {isGroupsState && <ProjectGroupDialogs />}
       </div>
     </TooltipProvider>
   </StrictMode>

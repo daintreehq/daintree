@@ -481,6 +481,17 @@ export const CHANNEL_LEASE_POLICY = {
   "processes:get-snapshot": "free",
   // Checked per process against the project the lineage ledger recorded it under.
   "processes:kill-closed-terminal-processes": "handler",
+  // Filing — groups, a project's group, archiving — organises the switcher's
+  // list and changes nothing about any project, so it is host-wide settings,
+  // not driving: a viewer can file what it can see.
+  "project-groups:create": "free",
+  "project-groups:delete": "free",
+  "project-groups:list": "free",
+  "project-groups:rename": "free",
+  "project-groups:reorder": "free",
+  "project-groups:set-archived": "free",
+  "project-groups:set-membership": "free",
+  "project-groups:set-sort-mode": "free",
   "project-match:find": "free",
   "project-match:find-worktree-for-branch": "free",
   "project-match:scan": "free",

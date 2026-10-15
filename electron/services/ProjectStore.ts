@@ -165,6 +165,8 @@ function rowToProject(row: ProjectRow): Project {
   if (resumableAgentCount !== null) project.resumableAgentCount = resumableAgentCount;
   // Only `false` is carried: null means git-backed, and so does absence.
   if (row.gitBacked === false) project.gitBacked = false;
+  if (typeof row.archivedAt === "number") project.archivedAt = row.archivedAt;
+  if (typeof row.groupId === "string" && row.groupId.length > 0) project.groupId = row.groupId;
   const lastKnownStats = rowToRepoStats(row);
   if (lastKnownStats) project.lastKnownStats = lastKnownStats;
   return project;
@@ -1067,9 +1069,15 @@ export class ProjectStore {
     // number sets it; omitting the key leaves it untouched. Don't route the clear
     // through `undefined` — a callee that strips undefined keys would silently
     // drop the clear (review #4).
-    updates: Partial<Omit<Project, "autoParkedAt" | "resumableAgentCount">> & {
+    updates: Partial<
+      Omit<Project, "autoParkedAt" | "resumableAgentCount" | "archivedAt" | "groupId">
+    > & {
       autoParkedAt?: number | null;
       resumableAgentCount?: number | null;
+      // Same clear-by-null contract as `autoParkedAt`. Written only by the
+      // project-groups IPC, which validates them; `project:update` strips both.
+      archivedAt?: number | null;
+      groupId?: string | null;
     }
   ): Project {
     const db = getSharedDb();
@@ -1090,6 +1098,8 @@ export class ProjectStore {
       autoParkedAt: number | null;
       resumableAgentCount: number | null;
       gitBacked: boolean | null;
+      archivedAt: number | null;
+      groupId: string | null;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
     if (updates.path !== undefined) set.path = updates.path;
@@ -1112,6 +1122,8 @@ export class ProjectStore {
     // workspace clears the flag by passing `undefined`, which an existence-blind
     // check would silently drop and leave the row lightweight forever.
     if ("gitBacked" in updates) set.gitBacked = updates.gitBacked ?? null;
+    if ("archivedAt" in updates) set.archivedAt = updates.archivedAt ?? null;
+    if ("groupId" in updates) set.groupId = updates.groupId ?? null;
 
     if (Object.keys(set).length > 0) {
       db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();

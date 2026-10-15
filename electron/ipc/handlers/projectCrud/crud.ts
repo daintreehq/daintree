@@ -237,6 +237,10 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     // renderer that could set it would hand a row a resume promise the restore
     // never intends to keep, and the number is re-derived on the next save
     // anyway, so accepting it would only ever be a lie.
+    // `archivedAt` and `groupId` join them: they have their own channels
+    // (`project-groups:*`), which check the group exists and stamp the archive
+    // time on the host's clock. A generic update could file a project under a
+    // group that was never created.
     const {
       id: _id,
       path: _path,
@@ -245,6 +249,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       lastAccessedAt: _lat,
       gitBacked: _gitBacked,
       resumableAgentCount: _rac,
+      archivedAt: _archivedAt,
+      groupId: _groupId,
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);

@@ -127,6 +127,12 @@ export const LazyCreateProjectFolderDialog = lazyWithPreload(
 );
 export const preloadCreateProjectFolderDialog = LazyCreateProjectFolderDialog.preload;
 
+export const LazyProjectGroupDialogs = lazy(() =>
+  import("./components/Project/ProjectGroupMenus").then((m) => ({
+    default: m.ProjectGroupDialogs,
+  }))
+);
+
 export const LazyThemePalette = lazyWithPreload(
   () => import("./components/ThemePalette/ThemePalette"),
   (m) => m.ThemePalette

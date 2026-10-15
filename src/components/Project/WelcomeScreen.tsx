@@ -96,9 +96,15 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   //
   // Sorted before the cap, never after: slicing first would rank five projects
   // the frecency order happened to surface, not the five this mode ranks top.
+  //
+  // Archived projects are filed away, so they leave the pool before the cap —
+  // filtering after it would hand their slots to nobody. Only when everything
+  // is archived does the pool fall back to all of them: an empty list here
+  // would read as having no projects at all.
   const topProjects = useMemo(() => {
     const now = Date.now();
-    return [...projects]
+    const unarchived = projects.filter((project) => project.archivedAt === undefined);
+    return [...(unarchived.length > 0 ? unarchived : projects)]
       .map((project) => ({
         project,
         id: project.id,

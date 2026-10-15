@@ -97,6 +97,8 @@ type ConfirmDialogBaseProps = {
    * or disconnected.
    */
   restoreFocusTo?: RestoreFocusTarget;
+  /** Forwarded to {@link AppDialog.preferRestoreFocusTo}. */
+  preferRestoreFocusTo?: boolean;
   /** Forwarded to {@link AppDialog.onCloseComplete}. */
   onCloseComplete?: () => void;
   /**
@@ -171,6 +173,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     initialFocus,
     focusResetKey,
     restoreFocusTo,
+    preferRestoreFocusTo,
     onCloseComplete,
     hasPreview = false,
     size = "sm",
@@ -292,6 +295,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       initialFocus={initialFocus}
       focusResetKey={focusResetKey}
       restoreFocusTo={restoreFocusTo}
+      preferRestoreFocusTo={preferRestoreFocusTo}
       onCloseComplete={onCloseComplete}
     >
       <AppDialog.Header>

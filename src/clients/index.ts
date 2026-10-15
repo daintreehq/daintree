@@ -21,6 +21,7 @@ export {
 } from "./projectClient";
 export { globalEnvClient, invalidateGlobalEnvCache } from "./globalEnvClient";
 export { scratchClient } from "./scratchClient";
+export { projectGroupsClient } from "./projectGroupsClient";
 export { sessionRestoreClient } from "./sessionRestoreClient";
 export { windowOpeningClient } from "./windowOpeningClient";
 export { keepAwakeClient } from "./keepAwakeClient";

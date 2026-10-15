@@ -70,6 +70,7 @@ import { registerForgeSettingsHandlers } from "./handlers/forgeSettings.js";
 import { registerForgeCredentialImportHandlers } from "./handlers/forgeCredentialImport.js";
 import { registerForgeAuditHandlers } from "./handlers/forgeAudit.js";
 import { initForgeHealthRelay, disposeForgeHealthRelay } from "../services/forgeHealthRelay.js";
+import { registerProjectGroupsHandlers } from "./handlers/projectGroups.js";
 import { registerRunHistoryHandlers } from "./handlers/runHistory.js";
 import { registerCopyTreeHistoryHandlers } from "./handlers/copyTreeHistory.js";
 import { registerFleetHandlers } from "./handlers/fleet.js";
@@ -234,6 +235,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
       return disposeForgeHealthRelay;
     });
     register(() => registerForgeAuditHandlers());
+    register(() => registerProjectGroupsHandlers());
     register(() => registerRunHistoryHandlers());
     register(() => registerCopyTreeHistoryHandlers(deps));
     register(() => registerFleetHandlers());

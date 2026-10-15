@@ -78,7 +78,9 @@ import {
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
+  LazyProjectGroupDialogs,
 } from "./lazyPanels";
+import { useProjectGroupsStore } from "./store/projectGroupsStore";
 
 interface ModalHostLayerProps {
   quickSwitcher: UseQuickSwitcherReturn;
@@ -266,6 +268,7 @@ export function ModalHostLayer({
   // registry, a keybinding and the project switcher, none of which has a prop
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
+  const hasProjectGroupDialog = useProjectGroupsStore((s) => s.dialog !== null);
   const isCanopyOpen = useCanopyStore((s) => s.isOpen);
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
 
@@ -551,6 +554,16 @@ export function ModalHostLayer({
           </Suspense>
         )}
       </ErrorBoundary>
+      {/*
+        Mounted here, once per view, rather than inside the switcher: the
+        switcher renders in more than one place, and its menus open these from
+        whichever copy the user is in. Loaded only once one is asked for.
+      */}
+      {hasProjectGroupDialog && (
+        <Suspense fallback={null}>
+          <LazyProjectGroupDialogs />
+        </Suspense>
+      )}
       <StopProjectConfirmDialog
         projectId={projectSwitcherPalette.stopConfirmProjectId}
         isStopping={projectSwitcherPalette.isStoppingProject}

@@ -157,7 +157,9 @@ const CREATE_TABLES_SQL = `
     stats_pr_count INTEGER,
     stats_provider_id TEXT,
     stats_last_updated INTEGER,
-    git_backed INTEGER
+    git_backed INTEGER,
+    archived_at INTEGER,
+    group_id TEXT
   );
   CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,
