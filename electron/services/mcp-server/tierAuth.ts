@@ -26,7 +26,10 @@ import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrant
 import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
 import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 import type { McpUnavailableActionStub } from "../../../shared/types/mcpIntrospection.js";
-import { ASSISTANT_MESSAGING_TOOL_IDS } from "../../../shared/types/assistantMessaging.js";
+import {
+  ASSISTANT_MESSAGING_TOOL_IDS,
+  ASSISTANT_SEND_MESSAGE_TOOL,
+} from "../../../shared/types/assistantMessaging.js";
 import { HOST_MESSAGING_TOOL_IDS } from "../../../shared/types/hostMessaging.js";
 
 export { deriveBand, BAND_OVERRIDES };
@@ -149,6 +152,9 @@ export function shouldExposeTool(
   if (ASSISTANT_MESSAGING_TOOL_IDS.has(entry.id) && session.assistantMessaging !== true) {
     return false;
   }
+  if (entry.id === ASSISTANT_SEND_MESSAGE_TOOL && session.assistantSending !== true) {
+    return false;
+  }
   if (HOST_MESSAGING_TOOL_IDS.has(entry.id) && session.hubMessaging !== true) {
     return false;
   }
@@ -192,6 +198,12 @@ export interface SessionSurfacePolicy {
    * read live per listing, and as `=== true`.
    */
   assistantMessaging?: boolean;
+  /**
+   * Whether that lane was enrolled by a remote Shell, so it may start a
+   * message to the Shell's hub (#13338). Never true for the hub itself; read
+   * live per listing, and as `=== true`.
+   */
+  assistantSending?: boolean;
   /**
    * Whether this session is this Shell's enrolled hub and a host exists
    * (#13336). Only then are the `host.*` messaging tools offered; read live

@@ -28,6 +28,7 @@ import {
   type MessagingShell,
 } from "../AssistantMessagingPolicy.js";
 import { AssistantMessagingRuntime, exchangeReceiverFor } from "../AssistantMessagingRuntime.js";
+import type { AssistantHostOutboxHandle } from "../AssistantHostOutbox.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../../services/persistence/migrations");
@@ -310,5 +311,136 @@ describe("AssistantMessagingRuntime", () => {
     const result = runtime.getInbox("s1", {});
     expect(result).toMatchObject({ ok: false, code: "UNAVAILABLE" });
     expect(!result.ok && result.message).not.toContain("hi");
+  });
+
+  describe("starting a message to the hub (#13338)", () => {
+    const outbox = (): AssistantHostOutboxHandle & {
+      enqueue: ReturnType<typeof vi.fn>;
+      listSent: ReturnType<typeof vi.fn>;
+    } => ({
+      enqueue: vi.fn((_enrollment: LaneEnrollment, args: { text: string }) => ({
+        ok: true as const,
+        value: {
+          messageId: "m-1",
+          contextId: "m-1",
+          hopCount: 1,
+          state: "waiting-for-hub" as const,
+        },
+        args,
+      })),
+      listSent: vi.fn(() => ({ sent: [], cursor: 7, hasMore: false })),
+    });
+
+    const withOutbox = (handle: AssistantHostOutboxHandle | undefined) => {
+      runtime.dispose();
+      runtime = new AssistantMessagingRuntime({
+        policy,
+        store,
+        inbox,
+        getSessionLane: (sessionId) => sessionLanes.get(sessionId) ?? null,
+        outbox: () => handle,
+        now: () => clock,
+      });
+    };
+
+    it("queues it for a lane a remote Shell enrolled, under that enrollment", () => {
+      const handle = outbox();
+      withOutbox(handle);
+      runLane("s1");
+      const enrollment = enroll();
+      expect(runtime.isSendAvailable("s1")).toBe(true);
+      const result = runtime.sendMessage("s1", { text: "landed" });
+      expect(result).toMatchObject({ ok: true, value: { state: "waiting-for-hub" } });
+      expect(handle.enqueue).toHaveBeenCalledWith(enrollment, { text: "landed" });
+    });
+
+    it("is never available to the hub, a session that isn't the lane's, or without an outbox", () => {
+      const handle = outbox();
+      withOutbox(handle);
+      running.set(laneKey(LANE), {
+        sessionId: "hub",
+        terminalId: "t-hub",
+        projectViewWebContentsId: 1,
+      });
+      launchGenerations.set("t-hub", 1);
+      sessionLanes.set("hub", LANE);
+      expect(policy.enroll(LANE, { kind: "local" }).ok).toBe(true);
+      expect(runtime.isAvailable("hub")).toBe(true);
+      expect(runtime.isSendAvailable("hub")).toBe(false);
+      expect(runtime.sendMessage("hub", { text: "x" })).toMatchObject({
+        ok: false,
+        code: "NOT_ELIGIBLE",
+      });
+      expect(runtime.sendMessage("stranger", { text: "x" })).toMatchObject({
+        ok: false,
+        code: "NOT_ELIGIBLE",
+      });
+      expect(handle.enqueue).not.toHaveBeenCalled();
+
+      withOutbox(undefined);
+      const other: LaneRef = { projectId: "proj", slot: 1 };
+      runLane("s2", other);
+      expect(policy.enroll(other, SHELL).ok).toBe(true);
+      expect(runtime.isSendAvailable("s2")).toBe(false);
+      expect(runtime.sendMessage("s2", { text: "x" })).toMatchObject({
+        ok: false,
+        code: "UNAVAILABLE",
+      });
+    });
+
+    it("refuses while this machine has messaging paused, and passes on the outbox's refusals", () => {
+      const handle = outbox();
+      withOutbox(handle);
+      runLane("s1");
+      enroll();
+      policy.setPaused(true);
+      expect(runtime.sendMessage("s1", { text: "x" })).toMatchObject({ ok: false, code: "PAUSED" });
+      policy.setPaused(false);
+      handle.enqueue.mockReturnValueOnce({ ok: false, code: "HOP_LIMIT" });
+      const refused = runtime.sendMessage("s1", { text: "x", contextId: "c" });
+      expect(refused).toMatchObject({ ok: false, code: "HOP_LIMIT" });
+      expect(!refused.ok && refused.message).toMatch(/hop limit/);
+    });
+
+    it("reads the lane's sent messages through view sent, and none for the hub", () => {
+      const handle = outbox();
+      withOutbox(handle);
+      runLane("s1");
+      const enrollment = enroll();
+      expect(runtime.getInbox("s1", { view: "sent", cursor: 3, limit: 2 })).toEqual({
+        ok: true,
+        value: { messages: [], sent: [], cursor: 7, hasMore: false },
+      });
+      expect(handle.listSent).toHaveBeenCalledWith(enrollment, 3, 2);
+    });
+  });
+
+  it("refuses an answer too large for the sender to be handed whole", () => {
+    runLane("s1");
+    const record = send(enroll(), "which?");
+    // Few characters, but six bytes each once serialized.
+    const result = runtime.reply("s1", {
+      taskId: record.taskId,
+      state: "completed",
+      text: "\u0001".repeat(15_000),
+    });
+    expect(result).toMatchObject({ ok: false, code: "TOO_LARGE" });
+    expect(
+      store.get(SENDER, { senderId: SENDER.senderId, messageId: record.messageId })?.state
+    ).toBe("submitted");
+  });
+
+  it("tells response listeners each time the lane answers, repeated questions included", () => {
+    runLane("s1");
+    const record = send(enroll(), "which?");
+    const heard = vi.fn();
+    runtime.onResponse(heard);
+    runtime.reply("s1", { taskId: record.taskId, state: "input-required", text: "a?" });
+    runtime.reply("s1", { taskId: record.taskId, state: "input-required", text: "b?" });
+    expect(heard).toHaveBeenCalledTimes(2);
+    expect(heard).toHaveBeenLastCalledWith({
+      senderId: SENDER.senderId,
+      messageId: record.messageId,
+    });
   });
 });

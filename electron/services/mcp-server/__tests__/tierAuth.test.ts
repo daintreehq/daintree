@@ -462,6 +462,30 @@ describe("shouldExposeTool", () => {
       ).toBe(false);
     }
   );
+  // #13338: sending to the hub is narrower again, a lane a remote Shell
+  // enrolled, so the hub itself never sees it.
+  it("offers assistant.sendMessage only to a lane that may send, never the hub", () => {
+    const entry = makeEntry({ id: "assistant.sendMessage" });
+    const assistant = { workspaceBound: false, rendererOwnedOrigin: true };
+    expect(shouldExposeTool(entry, "core", { ...assistant, assistantMessaging: true })).toBe(false);
+    expect(
+      shouldExposeTool(entry, "core", {
+        ...assistant,
+        assistantMessaging: true,
+        assistantSending: true,
+      })
+    ).toBe(true);
+    // Sending without the lane's own messaging is never enough.
+    expect(shouldExposeTool(entry, "core", { ...assistant, assistantSending: true })).toBe(false);
+    expect(
+      shouldExposeTool(entry, "full", {
+        workspaceBound: false,
+        paneApproval: true,
+        assistantMessaging: true,
+        assistantSending: true,
+      })
+    ).toBe(false);
+  });
   // #13336: the hub's host tools are offered only to this Shell's enrolled hub,
   // reads on core and sends and cancels on full, and never to a pane or key.
   it.each([
@@ -2653,6 +2677,7 @@ describe("unscoped panel tools are reserved for renderer-owned origins (#12407)"
     workspaceBound: false,
     rendererOwnedOrigin: true,
     assistantMessaging: true,
+    assistantSending: true,
     hubMessaging: true,
   };
   const TWIN_KEYS = new Set<string>(Object.keys(OWNED_TWIN_TOOLS));

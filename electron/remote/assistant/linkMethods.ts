@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { MAX_ASSISTANT_SLOTS } from "../../../shared/config/assistantSlots.js";
+import {
+  ASSISTANT_MAX_HOP_COUNT,
+  ASSISTANT_SEND_REFUSALS,
+} from "../../../shared/types/assistantMessaging.js";
 import { EXCHANGE_STATES } from "../exchange/types.js";
 
 /**
@@ -35,6 +39,20 @@ export const AssistantLinkMethod = {
    * UNSUPPORTED, which reads as "replies aren't available from this host".
    */
   GET_RESPONSES: "assistant.get-responses",
+  /**
+   * Host → Shell: a message one of this session's enrolled lanes starts to the
+   * Shell's hub (#13338). The Shell knows the host from the connection, and
+   * answers whether it admitted it; a resend of its messageId never admits
+   * twice. A Shell from before this call answers UNSUPPORTED.
+   */
+  SEND_TO_HUB: "assistant.send-to-hub",
+  /** Host → Shell: where one of this host's messages to the hub stands, with the hub's answers. */
+  GET_HUB_EXCHANGE: "assistant.get-hub-exchange",
+  /**
+   * Shell → Host: one of the host's messages to the hub changed or was
+   * answered. Carries only the messageId; the host reads it back.
+   */
+  HUB_EXCHANGE_CHANGED: "assistant.hub-exchange-changed",
 } as const;
 
 export const MAX_EXCHANGE_BODY_CHARS = 256 * 1024;
@@ -163,3 +181,45 @@ export type ExchangeResponse = z.infer<typeof ExchangeResponseSchema>;
 export const ExchangeResponsesSchema = z
   .object({ responses: z.array(ExchangeResponseSchema).max(MAX_EXCHANGE_RESPONSES) })
   .strip();
+
+export const SendToHubPayloadSchema = z
+  .object({
+    messageId: id,
+    contextId: id,
+    referenceTaskIds: z.array(id).max(MAX_REFERENCE_TASK_IDS),
+    /** The host's lane that wrote it: display provenance the host vouches for, never a destination. */
+    sourceLane: z.object({ projectId: id, slot }).strict(),
+    /** How many messages the host's lanes have started in this contextId, this one included. */
+    hopCount: z.number().int().min(1).max(ASSISTANT_MAX_HOP_COUNT),
+    body: z.string().min(1).max(MAX_EXCHANGE_BODY_CHARS),
+  })
+  .strict();
+export type SendToHubPayload = z.infer<typeof SendToHubPayloadSchema>;
+
+export const HubExchangeSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("accepted"),
+      taskId: id,
+      state: z.enum(EXCHANGE_STATES),
+      /** The hop the Shell counted for it, which may be above the one the host claimed. */
+      hopCount: z.number().int().min(1).max(ASSISTANT_MAX_HOP_COUNT).optional(),
+      responses: z.array(ExchangeResponseSchema).max(MAX_EXCHANGE_RESPONSES),
+    })
+    .strip(),
+  z.object({ status: z.literal("refused"), refusal: z.enum(ASSISTANT_SEND_REFUSALS) }).strip(),
+  /** Nothing was recorded; send it again after `retryAfterMs`. */
+  z
+    .object({
+      status: z.literal("rate_limited"),
+      retryAfterMs: z
+        .number()
+        .int()
+        .min(0)
+        .max(60 * 60_000),
+    })
+    .strip(),
+]);
+export type HubExchange = z.infer<typeof HubExchangeSchema>;
+
+export const HubExchangeChangedPayloadSchema = z.object({ messageId: id }).strip();

@@ -17,7 +17,9 @@ import {
 import type { LinkSession } from "../link/session.js";
 import { callerDrives, type FleetCaller } from "../metrics/hostOps.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
+import { exchangeWakeSink } from "../exchange/wakeSink.js";
 import { AssistantExchangeClient, type MovedExchange } from "./AssistantExchangeClient.js";
+import { AssistantHubReceiver } from "./AssistantHubReceiver.js";
 import { AssistantInbox } from "./AssistantInbox.js";
 import { AssistantLaneWaker } from "./AssistantLaneWaker.js";
 import { AssistantMessagingPolicy, type MessagingShell } from "./AssistantMessagingPolicy.js";
@@ -38,6 +40,7 @@ declare module "../runtime.js" {
     assistantMessagingSurface: AssistantMessagingSurface;
     assistantLaneWaker: AssistantLaneWaker;
     assistantMessagingRuntime: AssistantMessagingRuntime;
+    assistantHubReceiver: AssistantHubReceiver;
   }
 }
 
@@ -144,6 +147,8 @@ export function installAssistantMessagingPolicy(
     store,
     inbox: new AssistantInbox(),
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
+    // The host side installs it with its server, which may come later or not at all.
+    outbox: () => getRemoteService("assistantHostOutbox"),
   });
   const onAvailabilityChanged = deps.onAvailabilityChanged;
   const stopListening = onAvailabilityChanged
@@ -157,12 +162,37 @@ export function installAssistantMessagingPolicy(
     hosts: () => deps.observeHosts?.() ?? [],
   });
   const unregisterHub = setHostMessagingRuntime(hub);
+  // What a host's assistants send this hub (#13338), admitted through the same policy.
+  const receiver = new AssistantHubReceiver({
+    policy,
+    store,
+    runtime,
+    hostName: (hostId) =>
+      deps.observeHosts?.().find((host) => host.hostId === hostId)?.name ?? "Remote host",
+    wake: (record, enrolled) =>
+      waker.wake({
+        lane: { projectId: enrolled.projectId, slot: enrolled.slot },
+        generation: enrolled.generation,
+        shell: { kind: "local" },
+        exchangeId: record.taskId,
+        sink: exchangeWakeSink(
+          store,
+          { kind: "receiver", ...record.receiver },
+          { senderId: record.senderId, messageId: record.messageId }
+        ),
+      }),
+    tellHost: (hostId, messageId) =>
+      getRemoteService("assistantExchangeClient")?.tellHost(hostId, messageId),
+  });
+  const unregisterReceiver = registerRemoteService("assistantHubReceiver", receiver);
   // The host's link calls hand accepted exchanges to the inbox through it.
   const unregisterRuntimeService = registerRemoteService("assistantMessagingRuntime", runtime);
   // A view that mounted before the policy existed read it as unavailable.
   push();
   return () => {
     stopListening();
+    unregisterReceiver();
+    receiver.dispose();
     unregisterHub();
     hub.dispose();
     unregisterRuntimeService();
@@ -251,6 +281,7 @@ export function installAssistantExchangeClient(
     session: deps.session,
     onSessionOpened: deps.onSessionOpened,
     policy: () => getRemoteService("assistantMessagingPolicy"),
+    hubReceiver: () => getRemoteService("assistantHubReceiver"),
     onExchangesMoved: (_hostId, moved) =>
       wakeHubForMoved(
         moved,

@@ -39,6 +39,7 @@ import type {
 } from "./AssistantMessagingPolicy.js";
 import { inboxBodyFits } from "./AssistantInbox.js";
 import { HOST_MESSAGING_PAUSED_MESSAGE, LANE_NOT_RUNNING_MESSAGE } from "./hostExchanges.js";
+import { TokenBucket } from "./tokenBucket.js";
 
 /** One host as this Shell observes it: its registry entry, its link, its last summary. */
 export interface ObservedHost {
@@ -156,38 +157,6 @@ const REFUSAL_MESSAGES = {
 class RefusalError extends Error {
   constructor(readonly code: keyof typeof REFUSAL_MESSAGES) {
     super(REFUSAL_MESSAGES[code]);
-  }
-}
-
-/** Lazily refilled; nothing ticks while nobody calls. */
-class TokenBucket {
-  private tokens: number;
-  private updatedAt: number;
-
-  constructor(
-    private readonly capacity: number,
-    private readonly refillPerMs: number,
-    now: number
-  ) {
-    this.tokens = capacity;
-    this.updatedAt = now;
-  }
-
-  /** Milliseconds until one token is there; 0 means one is. */
-  waitFor(now: number): number {
-    this.refill(now);
-    return this.tokens >= 1 ? 0 : Math.ceil((1 - this.tokens) / this.refillPerMs);
-  }
-
-  take(now: number): void {
-    this.refill(now);
-    this.tokens -= 1;
-  }
-
-  private refill(now: number): void {
-    const elapsed = Math.max(0, now - this.updatedAt);
-    this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.refillPerMs);
-    this.updatedAt = now;
   }
 }
 

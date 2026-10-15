@@ -6,6 +6,7 @@ import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionSource } from "../metrics/hostMetricsHost.js";
 import type { AssistantExchangeStore, ExchangeChange } from "../exchange/AssistantExchangeStore.js";
+import type { AssistantHostOutbox } from "./AssistantHostOutbox.js";
 import type {
   CreateExchangeInput,
   ExchangeKey,
@@ -34,6 +35,7 @@ import {
 declare module "../runtime.js" {
   interface RemoteServices {
     assistantExchangeStore: AssistantExchangeStore;
+    assistantHostOutbox: AssistantHostOutbox;
   }
 }
 
@@ -377,11 +379,13 @@ export async function installAssistantExchangeHost(
     { AssistantExchangeStore, onExchangeChanged },
     { getRemoteService, registerRemoteService },
     { exchangeWakeSink },
+    { AssistantHostOutbox },
   ] = await Promise.all([
     import("../../services/persistence/db.js"),
     import("../exchange/AssistantExchangeStore.js"),
     import("../runtime.js"),
     import("../exchange/wakeSink.js"),
+    import("./AssistantHostOutbox.js"),
   ]);
   const sqlite = getSharedSqlite();
   if (!sqlite) {
@@ -428,8 +432,26 @@ export async function installAssistantExchangeHost(
     },
     responses: (key) => getRemoteService("assistantMessagingRuntime")?.getResponses(key) ?? [],
   });
+  // What this host's lanes send the hub of the Shell that enrolled them (#13338).
+  const outbox = new AssistantHostOutbox({
+    server,
+    policy: () => getRemoteService("assistantMessagingPolicy"),
+    wake: ({ lane, generation, shell, messageId }) =>
+      getRemoteService("assistantLaneWaker")?.wake({
+        lane,
+        generation,
+        shell,
+        exchangeId: messageId,
+        kind: "update",
+        // The outbox holds what happened; telling the lane twice costs nothing.
+        sink: { beforeType: () => true, report: () => {} },
+      }),
+  });
+  const unregisterOutbox = registerRemoteService("assistantHostOutbox", outbox);
   return () => {
     clearInterval(timer);
+    unregisterOutbox();
+    outbox.dispose();
     unwire();
     unregister();
   };

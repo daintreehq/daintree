@@ -469,7 +469,9 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // before resending", and that a reply is another machine's words. Offered
   // only to this Shell's enrolled hub while a host exists, and off the external
   // surface, so the external total does not move.
-  const MAX_COHORT_TOTAL_BYTES = 20_650;
+  // #13338 adds assistant.sendMessage for a lane a remote Shell enrolled, and
+  // a sent view on assistant.getInbox; neither is on the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 20_950;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1419,6 +1421,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
       // Not strict, but its required fields share names with other schemas' own.
       "assistant.reply": { taskId: "task-placeholder", state: "completed", text: "noop" },
+      "assistant.sendMessage": { text: "noop" },
       "host.listAssistants": { hostId: "h-placeholder" },
       "host.sendMessage": {
         hostId: "h-placeholder",

@@ -1,14 +1,19 @@
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import {
   ASSISTANT_GET_INBOX_TOOL,
+  ASSISTANT_REPLY_TOOL,
+  ASSISTANT_SEND_MESSAGE_TOOL,
   AssistantGetInboxArgsSchema,
   AssistantReplyArgsSchema,
+  AssistantSendMessageArgsSchema,
   type AssistantGetInboxArgs,
   type AssistantGetInboxResult,
   type AssistantMessagingOutcome,
   type AssistantMessagingRefusalCode,
   type AssistantReplyArgs,
   type AssistantReplyResult,
+  type AssistantSendMessageArgs,
+  type AssistantSendMessageResult,
 } from "../../../shared/types/assistantMessaging.js";
 
 /**
@@ -19,8 +24,13 @@ import {
 export interface AssistantMessagingAccess {
   /** Whether this session is an enrolled lane right now; decides listing too. */
   isAvailable(): boolean;
+  /** Whether this session may start a message to its Shell's hub (#13338); never true for the hub. */
+  isSendAvailable(): boolean;
   getInbox(args: AssistantGetInboxArgs): AssistantMessagingOutcome<AssistantGetInboxResult>;
   reply(args: AssistantReplyArgs): AssistantMessagingOutcome<AssistantReplyResult>;
+  sendMessage(
+    args: AssistantSendMessageArgs
+  ): AssistantMessagingOutcome<AssistantSendMessageResult>;
 }
 
 /**
@@ -31,6 +41,7 @@ export interface AssistantMessagingAccess {
  */
 export interface AssistantMessagingRuntimeHandle {
   isAvailable(helpSessionId: string): boolean;
+  isSendAvailable(helpSessionId: string): boolean;
   getInbox(
     helpSessionId: string,
     args: AssistantGetInboxArgs
@@ -39,6 +50,10 @@ export interface AssistantMessagingRuntimeHandle {
     helpSessionId: string,
     args: AssistantReplyArgs
   ): AssistantMessagingOutcome<AssistantReplyResult>;
+  sendMessage(
+    helpSessionId: string,
+    args: AssistantSendMessageArgs
+  ): AssistantMessagingOutcome<AssistantSendMessageResult>;
 }
 
 let installedRuntime: AssistantMessagingRuntimeHandle | null = null;
@@ -78,6 +93,10 @@ export function bindAssistantMessaging(
       const found = caller();
       return found !== null && found.runtime.isAvailable(found.helpSessionId);
     },
+    isSendAvailable: () => {
+      const found = caller();
+      return found !== null && found.runtime.isSendAvailable(found.helpSessionId);
+    },
     getInbox: (args) => {
       const found = caller();
       return found === null ? notEligible : found.runtime.getInbox(found.helpSessionId, args);
@@ -86,11 +105,15 @@ export function bindAssistantMessaging(
       const found = caller();
       return found === null ? notEligible : found.runtime.reply(found.helpSessionId, args);
     },
+    sendMessage: (args) => {
+      const found = caller();
+      return found === null ? notEligible : found.runtime.sendMessage(found.helpSessionId, args);
+    },
   };
 }
 
 /**
- * Runs one of the two tools for the caller's own lane. Arguments are checked
+ * Runs one of the messaging tools for the caller's own lane. Arguments are checked
  * against the manifest schema here, since a main-process tool never passes
  * through renderer dispatch; a refusal says what was wrong in fixed words and
  * never repeats what was sent, because refusals reach the audit log.
@@ -99,18 +122,33 @@ export function runAssistantMessagingTool(
   toolId: string,
   args: unknown,
   access: AssistantMessagingAccess | undefined
-): AssistantMessagingOutcome<AssistantGetInboxResult | AssistantReplyResult> {
+): AssistantMessagingOutcome<
+  AssistantGetInboxResult | AssistantReplyResult | AssistantSendMessageResult
+> {
   if (access === undefined) {
     return { ok: false, code: "NOT_ELIGIBLE", message: NOT_ELIGIBLE_MESSAGE };
   }
-  if (toolId === ASSISTANT_GET_INBOX_TOOL) {
-    const parsed = AssistantGetInboxArgsSchema.safeParse(args ?? {});
-    if (!parsed.success) return { ok: false, code: "INVALID_ARGS", message: INVALID_ARGS_MESSAGE };
-    return access.getInbox(parsed.data);
+  const invalid = {
+    ok: false as const,
+    code: "INVALID_ARGS" as const,
+    message: INVALID_ARGS_MESSAGE,
+  };
+  switch (toolId) {
+    case ASSISTANT_GET_INBOX_TOOL: {
+      const parsed = AssistantGetInboxArgsSchema.safeParse(args ?? {});
+      return parsed.success ? access.getInbox(parsed.data) : invalid;
+    }
+    case ASSISTANT_REPLY_TOOL: {
+      const parsed = AssistantReplyArgsSchema.safeParse(args ?? {});
+      return parsed.success ? access.reply(parsed.data) : invalid;
+    }
+    case ASSISTANT_SEND_MESSAGE_TOOL: {
+      const parsed = AssistantSendMessageArgsSchema.safeParse(args ?? {});
+      return parsed.success ? access.sendMessage(parsed.data) : invalid;
+    }
+    default:
+      return { ok: false, code: "NOT_ELIGIBLE", message: NOT_ELIGIBLE_MESSAGE };
   }
-  const parsed = AssistantReplyArgsSchema.safeParse(args ?? {});
-  if (!parsed.success) return { ok: false, code: "INVALID_ARGS", message: INVALID_ARGS_MESSAGE };
-  return access.reply(parsed.data);
 }
 
 export function auditCodeForMessagingRefusal(code: AssistantMessagingRefusalCode): ActionErrorCode {
@@ -119,6 +157,8 @@ export function auditCodeForMessagingRefusal(code: AssistantMessagingRefusalCode
       return "RESTRICTED";
     case "UNKNOWN_TASK":
       return "NOT_FOUND";
+    case "PAUSED":
+      return "RESTRICTED";
     case "UNAVAILABLE":
       return "EXECUTION_ERROR";
     default:

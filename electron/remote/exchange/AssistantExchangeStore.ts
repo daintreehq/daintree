@@ -493,6 +493,21 @@ export class AssistantExchangeStore {
   }
 
   /**
+   * How many of a sender's exchanges in one conversation are still live or
+   * kept as history, expired ones aside. Read from the records themselves,
+   * so a restart forgets nothing a counter in memory would.
+   */
+  countInContext(sender: SenderActor, contextId: string): number {
+    return this.read((sqlite) => {
+      const row = this.statement(
+        sqlite,
+        "SELECT COUNT(*) AS n FROM assistant_exchanges WHERE sender_id = ? AND context_id = ? AND tombstoned_at IS NULL AND expires_at > ?"
+      ).get(sender.senderId, contextId, this.now()) as { n: number };
+      return row.n;
+    });
+  }
+
+  /**
    * This participant's records whose revision is past `cursor`, oldest change
    * first, each at its latest state. A cursor older than a purge gets
    * `reset: true` and a listing from the beginning, so a removal is never

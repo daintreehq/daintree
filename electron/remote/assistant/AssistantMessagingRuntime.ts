@@ -9,6 +9,8 @@ import {
   type AssistantMessagingRefusalCode,
   type AssistantReplyArgs,
   type AssistantReplyResult,
+  type AssistantSendMessageArgs,
+  type AssistantSendMessageResult,
 } from "../../../shared/types/assistantMessaging.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { isAppError } from "../../utils/errorTypes.js";
@@ -22,11 +24,13 @@ import {
 } from "../exchange/types.js";
 import {
   fenceUntrustedBody,
+  inboxBodyFits,
   type AssistantInbox,
   type InboxEnvelope,
   type InboxEntry,
   type InboxResponse,
 } from "./AssistantInbox.js";
+import type { AssistantHostOutboxHandle } from "./AssistantHostOutbox.js";
 import type {
   AssistantMessagingPolicy,
   LaneEnrollment,
@@ -60,6 +64,12 @@ const ERROR_MESSAGES: Record<AssistantMessagingErrorCode, string> = {
   UNKNOWN_TASK: "No message in this assistant's inbox has that taskId.",
   EXCHANGE_CLOSED: "That exchange has already ended, so it takes no further answer.",
   TOO_MANY_RESPONSES: "That exchange has taken as many answers as it can hold.",
+  PAUSED: "Assistant messaging is paused on this machine, so no new message can be sent.",
+  HOP_LIMIT:
+    "This conversation has reached its hop limit. Ask the user before continuing it, or start a new one only if they want you to.",
+  TOO_LARGE: "The message is too large for an assistant to be handed whole. Shorten it.",
+  OUTBOX_FULL:
+    "Too many of your messages are still waiting or unanswered. Check them with assistant.getInbox view sent.",
   UNAVAILABLE: "Assistant messages can't be read or recorded right now.",
 };
 
@@ -80,6 +90,8 @@ export interface AssistantMessagingRuntimeDeps {
   inbox: AssistantInbox;
   /** The lane a live help session was provisioned for; null once it is revoked or ending. */
   getSessionLane(helpSessionId: string): LaneRef | null;
+  /** Messages a host's lanes start to their Shell's hub (#13338); read at each call. */
+  outbox?: () => AssistantHostOutboxHandle | undefined;
   now?: () => number;
 }
 
@@ -118,6 +130,7 @@ function isLive(record: ExchangeRecord, now: number): boolean {
 export class AssistantMessagingRuntime {
   private readonly now: () => number;
   private readonly listeners = new Set<() => void>();
+  private readonly responseListeners = new Set<(key: ExchangeKey) => void>();
   private readonly unsubscribe: () => void;
 
   constructor(private readonly deps: AssistantMessagingRuntimeDeps) {
@@ -150,11 +163,36 @@ export class AssistantMessagingRuntime {
     return this.resolveCaller(helpSessionId).ok;
   }
 
+  /**
+   * Whether the caller may start a message to a hub: a lane enrolled by a
+   * remote Shell, on a machine whose host side is listening. A hub has no hub
+   * of its own to write to.
+   */
+  isSendAvailable(helpSessionId: string): boolean {
+    const resolved = this.resolveCaller(helpSessionId);
+    return (
+      resolved.ok &&
+      resolved.enrollment.enrolledBy.kind === "remote" &&
+      this.deps.outbox?.() !== undefined
+    );
+  }
+
   getInbox(
     helpSessionId: string,
     args: AssistantGetInboxArgs
   ): AssistantMessagingOutcome<AssistantGetInboxResult> {
-    return settle(() => this.readInbox(helpSessionId, args));
+    return settle(() =>
+      args.view === "sent"
+        ? this.readSent(helpSessionId, args)
+        : this.readInbox(helpSessionId, args)
+    );
+  }
+
+  sendMessage(
+    helpSessionId: string,
+    args: AssistantSendMessageArgs
+  ): AssistantMessagingOutcome<AssistantSendMessageResult> {
+    return settle(() => this.start(helpSessionId, args));
   }
 
   reply(
@@ -162,6 +200,49 @@ export class AssistantMessagingRuntime {
     args: AssistantReplyArgs
   ): AssistantMessagingOutcome<AssistantReplyResult> {
     return settle(() => this.answer(helpSessionId, args));
+  }
+
+  /**
+   * Queues a message to the hub of the Shell that enrolled the caller's lane.
+   * Nothing names the hub: it is whichever one that Shell has when the
+   * message reaches it, and no other Shell can be addressed at all.
+   */
+  private start(helpSessionId: string, args: AssistantSendMessageArgs): AssistantSendMessageResult {
+    const resolved = this.resolveCaller(helpSessionId);
+    if (!resolved.ok || resolved.enrollment.enrolledBy.kind !== "remote") {
+      throw new AssistantMessagingError("NOT_ELIGIBLE");
+    }
+    const { enrollment } = resolved;
+    const outbox = this.deps.outbox?.();
+    if (!outbox) throw new AssistantMessagingError("UNAVAILABLE");
+    const admitted = this.deps.policy.checkLane({
+      lane: { projectId: enrollment.projectId, slot: enrollment.slot },
+      generation: enrollment.generation,
+      shell: enrollment.enrolledBy,
+      kind: "admit",
+    });
+    if (!admitted.ok) {
+      throw new AssistantMessagingError(admitted.reason === "paused" ? "PAUSED" : "NOT_ELIGIBLE");
+    }
+    const queued = outbox.enqueue(enrollment, args);
+    if (!queued.ok) throw new AssistantMessagingError(queued.code);
+    return queued.value;
+  }
+
+  private readSent(helpSessionId: string, args: AssistantGetInboxArgs): AssistantGetInboxResult {
+    const resolved = this.resolveCaller(helpSessionId);
+    if (!resolved.ok) throw new AssistantMessagingError("NOT_ELIGIBLE");
+    const cursor = args.cursor ?? 0;
+    const outbox = this.deps.outbox?.();
+    if (!outbox || resolved.enrollment.enrolledBy.kind !== "remote") {
+      return { messages: [], sent: [], cursor, hasMore: false };
+    }
+    const page = outbox.listSent(
+      resolved.enrollment,
+      cursor,
+      Math.min(args.limit ?? ASSISTANT_INBOX_PAGE_MAX, ASSISTANT_INBOX_PAGE_MAX)
+    );
+    return { messages: [], sent: page.sent, cursor: page.cursor, hasMore: page.hasMore };
   }
 
   private readInbox(helpSessionId: string, args: AssistantGetInboxArgs): AssistantGetInboxResult {
@@ -213,6 +294,8 @@ export class AssistantMessagingRuntime {
 
   private answer(helpSessionId: string, args: AssistantReplyArgs): AssistantReplyResult {
     const actor = this.requireCaller(helpSessionId);
+    // Measured as the sender will be handed it, fenced, so no answer is ever too big to show.
+    if (!inboxBodyFits(args.text)) throw new AssistantMessagingError("TOO_LARGE");
     const entry = this.deps.inbox.find(actor, args.taskId);
     if (entry === null) throw new AssistantMessagingError("UNKNOWN_TASK");
     const record = this.read(() => this.deps.store.get(actor, entry.key));
@@ -230,6 +313,7 @@ export class AssistantMessagingRuntime {
     );
     this.deps.inbox.respond(entry, args.state, args.text);
     if (args.state === "completed") this.deps.inbox.drop(entry.taskId);
+    this.announceResponse(entry.key);
     return { taskId: entry.taskId, state: args.state, revision: updated.revision };
   }
 
@@ -254,6 +338,18 @@ export class AssistantMessagingRuntime {
     return this.deps.inbox.getResponses(key);
   }
 
+  /**
+   * Called after a lane answers an exchange, once the answer is held: a
+   * repeated question leaves the exchange's state, and so its revision, as it
+   * was, so a reader of answers can't wait on the store alone.
+   */
+  onResponse(listener: (key: ExchangeKey) => void): () => void {
+    this.responseListeners.add(listener);
+    return () => {
+      this.responseListeners.delete(listener);
+    };
+  }
+
   /** Called whenever a lane may have gained or lost its tools. */
   onAvailabilityChanged(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -265,7 +361,18 @@ export class AssistantMessagingRuntime {
   dispose(): void {
     this.unsubscribe();
     this.listeners.clear();
+    this.responseListeners.clear();
     this.deps.inbox.clear();
+  }
+
+  private announceResponse(key: ExchangeKey): void {
+    for (const listener of [...this.responseListeners]) {
+      try {
+        listener({ ...key });
+      } catch (err) {
+        console.error("[AssistantMessaging] Response listener failed:", err);
+      }
+    }
   }
 
   private requireCaller(helpSessionId: string): ReceiverActor {

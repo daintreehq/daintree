@@ -683,4 +683,111 @@ describe("assistant exchanges over the real link", () => {
     },
     TEST_TIMEOUT_MS
   );
+
+  it(
+    "lets a host's lane message this Shell's hub and reads the hub's reply back (#13338)",
+    async () => {
+      db.sqlite = openFile("app.db");
+      const r = await harness();
+      prepare(r);
+      enrollOnHost(hostSessionOf(r, null), 0);
+      const runtime = requireRemoteService("assistantMessagingRuntime");
+      // The hub has the inbox tools but no hub of its own to write to.
+      expect(runtime.isSendAvailable("help-proj-1-0")).toBe(false);
+      expect(runtime.isSendAvailable("help-proj-2-0")).toBe(true);
+
+      const sent = runtime.sendMessage("help-proj-2-0", {
+        text: "migration landed on feature/x, studio-04 can start",
+      });
+      if (!sent.ok) throw new Error(`send refused: ${sent.code}`);
+      expect(sent.value).toMatchObject({ hopCount: 1, state: "waiting-for-hub" });
+
+      const hubInbox = () => {
+        const inbox = runtime.getInbox("help-proj-1-0", {});
+        if (!inbox.ok) throw new Error(`hub inbox refused: ${inbox.code}`);
+        return inbox.value.messages;
+      };
+      await waitUntil(() => hubInbox().length === 1, "the message in the hub's inbox");
+      const [message] = hubInbox();
+      expect(message).toMatchObject({
+        messageId: sent.value.messageId,
+        contextId: sent.value.contextId,
+        provenance: { sendingLane: "slot 0 of project proj-2", hopCount: 1 },
+      });
+      expect(message!.untrustedBody).toContain("studio-04 can start");
+      // The host lane's own inbox is untouched: this went to the hub only.
+      const own = runtime.getInbox("help-proj-2-0", {});
+      expect(own.ok && own.value.messages).toEqual([]);
+
+      expect(
+        runtime.reply("help-proj-1-0", {
+          taskId: message!.taskId,
+          state: "completed",
+          text: "thanks, starting studio-04",
+        }).ok
+      ).toBe(true);
+      const sentView = () => {
+        const page = runtime.getInbox("help-proj-2-0", { view: "sent" });
+        if (!page.ok) throw new Error(`sent view refused: ${page.code}`);
+        return page.value.sent ?? [];
+      };
+      await waitUntil(() => sentView()[0]?.state === "completed", "the hub's reply on the host");
+      expect(sentView()[0]!.replies).toHaveLength(1);
+      expect(sentView()[0]!.replies[0]!.untrustedText).toContain("thanks, starting studio-04");
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "holds a host lane's message while its Shell is away and delivers it on resume (#13338)",
+    async () => {
+      db.sqlite = openFile("app.db");
+      const r = await harness();
+      prepare(r);
+      enrollOnHost(hostSessionOf(r, null), 0);
+      const runtime = requireRemoteService("assistantMessagingRuntime");
+      await r.dropLink();
+
+      const sent = runtime.sendMessage("help-proj-2-0", {
+        text: "blocked: need a schema decision",
+      });
+      if (!sent.ok) throw new Error(`send refused: ${sent.code}`);
+      const state = () => {
+        const page = runtime.getInbox("help-proj-2-0", { view: "sent" });
+        return page.ok ? page.value.sent?.[0]?.state : undefined;
+      };
+      expect(state()).toBe("waiting-for-hub");
+      const hubInbox = runtime.getInbox("help-proj-1-0", {});
+      expect(hubInbox.ok && hubInbox.value.messages).toEqual([]);
+
+      await r.restoreLink();
+      await waitUntil(() => state() === "submitted", "delivery once the Shell is back");
+      const delivered = runtime.getInbox("help-proj-1-0", {});
+      expect(delivered.ok && delivered.value.messages.map((m) => m.messageId)).toEqual([
+        sent.value.messageId,
+      ]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "refuses a host lane's message with the host's messaging switched off on this Shell (#13338)",
+    async () => {
+      db.sqlite = openFile("app.db");
+      const r = await harness();
+      prepare(r);
+      enrollOnHost(hostSessionOf(r, null), 0);
+      harnessState.client!.registry.update({ hostId: HOST_ID, assistantMessagingEnabled: false });
+      const runtime = requireRemoteService("assistantMessagingRuntime");
+      const sent = runtime.sendMessage("help-proj-2-0", { text: "hello" });
+      if (!sent.ok) throw new Error(`send refused: ${sent.code}`);
+      await waitUntil(() => {
+        const page = runtime.getInbox("help-proj-2-0", { view: "sent" });
+        return page.ok && page.value.sent?.[0]?.state === "refused";
+      }, "the Shell's refusal on the host");
+      const page = runtime.getInbox("help-proj-2-0", { view: "sent" });
+      expect(page.ok && page.value.sent?.[0]?.refusal).toBe("opted_out");
+    },
+    TEST_TIMEOUT_MS
+  );
 });
