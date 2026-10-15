@@ -1,6 +1,5 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { parseDiff } from "react-diff-view";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { installPreviewShims } from "@/components/HelpPanel/__preview__/previewShims";
@@ -10,8 +9,8 @@ import { useDiffNotesStore } from "@/store/diffNotesStore";
 import { DiffViewer } from "../DiffViewer";
 import { PendingFileNotes } from "../DiffNoteWidgets";
 import {
-  buildDiffLineIndex,
   hashLineRange,
+  type DiffLineIndex,
   type DiffNote,
   type DiffNoteAnchor,
   type DiffNoteSide,
@@ -93,21 +92,58 @@ index 41c2e07..9ad3f15 100644
  }
 `;
 
-const index = buildDiffLineIndex(parseDiff(DIFF)[0]!.hunks);
+/**
+ * The fixture's rendered lines by number, read straight off the patch so the
+ * harness doesn't pull the diff library into its own imports. Only the text
+ * matters for hashing; a line's content is the patch line without its marker,
+ * which is what the viewer's parser hands the hash too.
+ */
+function indexPatch(patch: string): DiffLineIndex {
+  const index: DiffLineIndex = { old: new Map(), new: new Map() };
+  let oldLine = 0;
+  let newLine = 0;
+  for (const line of patch.split("\n")) {
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (header) {
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      continue;
+    }
+    if (oldLine === 0 || line.startsWith("\\")) continue;
+    const content = line.slice(1);
+    if (line.startsWith("+")) {
+      index.new.set(newLine, { key: `I${newLine}`, content });
+      newLine++;
+    } else if (line.startsWith("-")) {
+      index.old.set(oldLine, { key: `D${oldLine}`, content });
+      oldLine++;
+    } else if (line.startsWith(" ")) {
+      index.old.set(oldLine, { key: `N${oldLine}`, content });
+      index.new.set(newLine, { key: `N${oldLine}`, content });
+      oldLine++;
+      newLine++;
+    }
+  }
+  return index;
+}
 
-function lines(side: DiffNoteSide, startLine: number, endLine = startLine): DiffNoteAnchor {
+const index = indexPatch(DIFF);
+
+type LinesAnchor = Extract<DiffNoteAnchor, { kind: "lines" }>;
+
+function lines(side: DiffNoteSide, startLine: number, endLine = startLine): LinesAnchor {
   const contentHash = hashLineRange(index, side, startLine, endLine);
   if (contentHash === null) throw new Error(`lines ${startLine}-${endLine} are not in the fixture`);
   return { kind: "lines", side, startLine, endLine, contentHash };
 }
 
 /** An anchor written against text the diff no longer shows, so it reads as stale. */
-function moved(side: DiffNoteSide, startLine: number, endLine = startLine): DiffNoteAnchor {
+function moved(side: DiffNoteSide, startLine: number, endLine = startLine): LinesAnchor {
   return { ...lines(side, startLine, endLine), contentHash: "0badf00d" };
 }
 
 /** An anchor on lines the diff doesn't render at all. */
-function offscreen(startLine: number, endLine = startLine): DiffNoteAnchor {
+function offscreen(startLine: number, endLine = startLine): LinesAnchor {
   return { kind: "lines", side: "new", startLine, endLine, contentHash: "5ca1ab1e" };
 }
 
