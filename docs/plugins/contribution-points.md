@@ -1186,6 +1186,8 @@ When two providers declare the **same exact scope string**, their decorations me
 
 From your `activate()` subscriptions and timers, call `host.invalidateFileDecorations(scope, paths?)` to signal that a scope's decorations changed and any renderer showing them should re-pull.
 
+On the worktree card, a decoration renders as the app's count pill in its own column at the end of the row, with the `tooltip` text added under the file path in the row's own tooltip (on hover and on keyboard focus) and read out as the row's description. Keep `badge` to two characters; a longer badge widens the column for the whole list. A decoration with a `url` is underlined, opens the link when its badge is clicked, and adds **Open in browser** to the row's context menu, which is how keyboard users reach it. If you pass a `color`, you own its contrast: a status wash under primary text (`bg-status-error/20 text-text-primary`) holds 4.5:1 across the built-in themes, while status-coloured text on its own wash does not.
+
 ## File editors — _Shipped (built-in only)_
 
 Declares a writable **Edit** mode alongside Source and Rendered in the host’s file browser and standalone file panel for the listed extensions. The manifest names the builtin view slot the plugin's renderer registers for the editor surface; the host resolves it enable-aware, so disabling the plugin removes Edit live and a panel persisted in `edit` mode falls back to Source without rewriting the preference. The first-party Markdown editor (`plugins/builtin/markdown-editor/`) is the one contributor.

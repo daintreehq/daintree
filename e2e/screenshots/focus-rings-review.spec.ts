@@ -185,12 +185,6 @@ const TARGETS: Target[] = [
     locate: (_p, shot) => shot.getByTestId("pr-checks-trigger"),
   },
   {
-    id: "file-decoration-badge",
-    fixture: "review",
-    source: ["src/components/Plugin/FileDecorationBadge.tsx", "if (url)", "^<button"],
-    locate: (_p, shot) => shot.getByRole("button", { name: "2 unresolved review comments" }),
-  },
-  {
     id: "filechange-row",
     fixture: "review",
     source: ["src/components/Worktree/FileChangeList.tsx", 'role="button"'],

@@ -26,22 +26,28 @@ describe("FileDecorationBadge", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders the provider badge with its tooltip as the accessible label", async () => {
+  it("renders the provider glyph as presentation only, never as a control", async () => {
     const FileDecorationBadge = await load();
-    const deco: FileDecoration = { badge: "3", tooltip: "3 lint warnings" };
-    render(<FileDecorationBadge decoration={deco} />);
-    const el = screen.getByLabelText("3 lint warnings");
-    expect(el.textContent).toBe("3");
-    // No url → static marker, not a button.
-    expect(el.tagName).toBe("SPAN");
+    // It sits inside a row that is itself a button, whose children are
+    // presentational: the row carries the words and owns the tab stop.
+    const { container, rerender } = render(
+      <FileDecorationBadge decoration={{ badge: "3", tooltip: "3 lint warnings" }} />
+    );
+    const el = screen.getByText("3");
+    expect(el.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(el.getAttribute("title")).toBeNull();
+    rerender(
+      <FileDecorationBadge decoration={{ badge: "!", tooltip: "Open report", url: "https://x/r" }} />
+    );
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(container.querySelector("[tabindex]")).toBeNull();
   });
 
-  it("becomes a button that opens the url through the protocol-checked openExternal", async () => {
+  it("opens a url badge through the protocol-checked openExternal", async () => {
     const FileDecorationBadge = await load();
     const deco: FileDecoration = { badge: "!", tooltip: "Open report", url: "https://x/report" };
     render(<FileDecorationBadge decoration={deco} />);
-    const btn = screen.getByRole("button", { name: "Open report" });
-    fireEvent.click(btn);
+    fireEvent.click(screen.getByText("!"));
     expect(openExternalMock).toHaveBeenCalledWith("https://x/report");
   });
 
@@ -51,7 +57,7 @@ describe("FileDecorationBadge", () => {
     // passed to className — it must not land in the inline style attribute.
     const deco: FileDecoration = { badge: "3", tooltip: "warn", color: "text-status-warning" };
     render(<FileDecorationBadge decoration={deco} />);
-    const el = screen.getByLabelText("warn");
+    const el = screen.getByText("3");
     expect(el.className).toContain("text-status-warning");
     expect(el.getAttribute("style")).toBeNull();
   });
@@ -65,7 +71,7 @@ describe("FileDecorationBadge", () => {
         <FileDecorationBadge decoration={deco} />
       </div>
     );
-    fireEvent.click(screen.getByRole("button", { name: "Open PR" }));
+    fireEvent.click(screen.getByText("↗"));
     expect(openExternalMock).toHaveBeenCalledWith("https://x/pr");
     expect(parentClick).not.toHaveBeenCalled();
   });

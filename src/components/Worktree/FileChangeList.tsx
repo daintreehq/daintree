@@ -12,7 +12,7 @@ import { DiffStat } from "@/components/ui/DiffStat";
 import type { FileChangeDetail } from "../../types";
 import { cn } from "../../lib/utils";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
-import { Folder } from "lucide-react";
+import { ExternalLink, Folder } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { basename, dirname, isAbsolute, join } from "@shared/utils/path";
 import {
@@ -20,7 +20,15 @@ import {
   getWorkingTreeChangeKey,
   type WorkingTreeFileChange,
 } from "@/lib/workingTreeDiff";
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuMeta,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { systemClient } from "@/clients/systemClient";
 import {
   isFileRowMenuKey,
   openFileRowMenuFromKeyboard,
@@ -31,7 +39,11 @@ import { useFileTreeDecorations } from "@/hooks/useFileTreeDecorations";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
-import { FileDecorationBadge } from "@/components/Plugin/FileDecorationBadge";
+import {
+  FileDecorationBadge,
+  describeFileDecorationLink,
+  resolveFileDecoration,
+} from "@/components/Plugin/FileDecorationBadge";
 import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { LIST_ROW_HOVER_CLASS, ROW_MENU_TARGET_CLASS } from "@/components/ui/paletteRowStyles";
 
@@ -62,6 +74,20 @@ function formatDirForDisplay(dir: string, maxSegments = 2): string {
   return "…/" + segments.slice(-maxSegments).join("/");
 }
 
+/**
+ * The badge column, sized once for the whole list from its widest badge so the
+ * churn figures hold one rail on every row. A count pill is about 6px a
+ * character plus 12px of padding, so two characters fill the 24px link target
+ * and each character past that needs a wider step. `header` is the column plus
+ * the row's 8px gap, which the group count clears to stay on the churn rail.
+ */
+const DECORATION_COLUMNS = [
+  { maxChars: 2, slot: "min-w-6", header: "mr-8" },
+  { maxChars: 3, slot: "min-w-8", header: "mr-10" },
+  { maxChars: Infinity, slot: "min-w-10", header: "mr-12" },
+] as const;
+type DecorationColumn = (typeof DECORATION_COLUMNS)[number];
+
 interface FolderGroup {
   dir: string;
   displayDir: string;
@@ -74,6 +100,8 @@ interface FileChangeRowProps {
   isNew: boolean;
   index: number;
   decoration: Parameters<typeof FileDecorationBadge>[0]["decoration"];
+  /** Set once any visible row is decorated: every row then keeps the badge column. */
+  decorationColumn: DecorationColumn | null;
   openFileAt: (index: number, triggerEl: HTMLElement | null) => void;
   renderItems: ReturnType<typeof useFileRowMenuItems>["renderItems"];
   rememberMenuTrigger: (rowEl: HTMLElement) => void;
@@ -95,6 +123,7 @@ function FileChangeRow({
   isNew,
   index,
   decoration,
+  decorationColumn,
   openFileAt,
   renderItems,
   rememberMenuTrigger,
@@ -105,6 +134,12 @@ function FileChangeRow({
 }: FileChangeRowProps) {
   const presentation = getGitStatusPresentation(change.status);
   const { base } = splitPath(change.relativePath);
+  // The badge itself is presentation only (see FileDecorationBadge), so the
+  // row is what explains it: the provider's words ride the row's tooltip on
+  // hover and focus, and its accessible description for assistive tech.
+  const decorationView = resolveFileDecoration(decoration);
+  const decorationUrl = decorationView?.url ?? null;
+  const linkHint = decorationView ? describeFileDecorationLink(decorationView) : null;
 
   const absolutePath = isAbsolute(change.path) ? change.path : join(rootPath, change.relativePath);
 
@@ -157,6 +192,14 @@ function FileChangeRow({
               tabIndex={isTabStop ? 0 : -1}
               onFocus={() => onRowFocus(rowKey)}
               aria-label={`Open ${change.relativePath}`}
+              // The same words the tooltip shows, for when it is closed.
+              aria-description={
+                decorationView
+                  ? linkHint
+                    ? `${decorationView.label}. ${linkHint.join(". ")}`
+                    : decorationView.label
+                  : undefined
+              }
               className={cn(
                 "group/filerow flex items-center text-xs font-mono rounded-[var(--radius-md)] px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors duration-150 ease-out",
                 LIST_ROW_HOVER_CLASS,
@@ -198,14 +241,52 @@ function FileChangeRow({
 
               <div className="ml-2 flex items-center gap-2 shrink-0 text-2xs">
                 <DiffStat insertions={change.insertions} deletions={change.deletions} />
-                <FileDecorationBadge decoration={decoration} />
+                {/* A column of its own, kept on every row once any row is
+                    decorated: the churn figures stay on one rail with the
+                    group counts, and the badges form a second one beside it. */}
+                {decorationColumn && (
+                  <span className={cn("flex shrink-0 justify-center", decorationColumn.slot)}>
+                    <FileDecorationBadge decoration={decoration} />
+                  </span>
+                )}
               </div>
             </div>
           </TooltipTrigger>
         </ContextMenuTrigger>
-        <TooltipContent side="bottom">{change.relativePath}</TooltipContent>
+        <TooltipContent side="bottom">
+          {decorationView ? (
+            <span className="flex flex-col gap-1">
+              <span>{change.relativePath}</span>
+              <span className="flex flex-col gap-0.5">
+                <span>{decorationView.label}</span>
+                {linkHint?.map((line) => (
+                  <span key={line} className="text-text-secondary">
+                    {line}
+                  </span>
+                ))}
+              </span>
+            </span>
+          ) : (
+            change.relativePath
+          )}
+        </TooltipContent>
       </Tooltip>
       <ContextMenuContent>
+        {/* The keyboard's route to a link badge, which cannot take focus inside
+            the row. A prefix of this surface's own, above the shared core. */}
+        {decorationView && decorationUrl && (
+          <>
+            <ContextMenuItem
+              onSelect={() => void systemClient.openExternal(decorationUrl)}
+              aria-label={`Open in browser, ${decorationView.host ?? "link"}: ${decorationView.label}`}
+            >
+              <ExternalLink className="w-3.5 h-3.5 mr-2" />
+              Open in browser
+              {decorationView.host && <ContextMenuMeta>{decorationView.host}</ContextMenuMeta>}
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         {renderItems(
           {
             absolutePath,
@@ -274,6 +355,15 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       [sortedChanges, maxVisible]
     );
     const remainingCount = Math.max(0, sortedChanges.length - maxVisible);
+    const decorationColumn = useMemo((): DecorationColumn | null => {
+      let widest = 0;
+      for (const change of visibleChanges) {
+        const view = resolveFileDecoration(decorations[change.path]);
+        if (view) widest = Math.max(widest, [...view.badge].length);
+      }
+      if (widest === 0) return null;
+      return DECORATION_COLUMNS.find((column) => widest <= column.maxChars) ?? null;
+    }, [visibleChanges, decorations]);
 
     // Track which row keys arrived since the previous render. Empty on mount because
     // prevKeysRef is seeded with the initial keys — the first paint must NOT flash
@@ -465,7 +555,13 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
             >
               <Folder className="w-3 h-3 shrink-0" />
               <span className="min-w-0 truncate font-mono font-medium">{group.displayDir}</span>
-              <span className="ml-auto shrink-0 pl-2 text-text-secondary">
+              <span
+                className={cn(
+                  "ml-auto shrink-0 pl-2 text-text-secondary",
+                  // Clears the badge column so the count stays on the churn rail.
+                  decorationColumn?.header
+                )}
+              >
                 ({group.files.length})
               </span>
             </div>
@@ -480,6 +576,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
                     isNew={newRowKeys.has(key)}
                     index={indexByKey.get(key) ?? 0}
                     decoration={decorations[file.path]}
+                    decorationColumn={decorationColumn}
                     openFileAt={openFileAt}
                     renderItems={renderItems}
                     rememberMenuTrigger={rememberMenuTrigger}
