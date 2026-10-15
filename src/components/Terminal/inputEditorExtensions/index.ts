@@ -23,7 +23,7 @@ export {
   createSlashChipCompartment,
   createSlashTooltipCompartment,
 } from "./slashChip";
-export { createFileChipField, createFileChipTooltip } from "./fileChip";
+export { createFileChipField, createFileChipTooltip, isOwnedByAttachmentChip } from "./fileChip";
 export {
   addImageChip,
   imageChipField,

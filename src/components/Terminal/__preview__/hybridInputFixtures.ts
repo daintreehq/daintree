@@ -87,3 +87,33 @@ export const TERMINAL_LINES = [
   "",
   "Done. The focus handoff now waits for the pane to mount.",
 ] as const;
+
+/**
+ * The chips case: a draft carrying every token-driven chip — a slash command,
+ * an `@file`, a diff, the terminal buffer and the terminal selection — so the
+ * attachments the spec adds land beside each kind they are judged against.
+ */
+export const CHIP_DRAFT =
+  "/compact then check @src/components/Terminal/HybridInputBar.tsx against @diff:staged with @terminal and @selection";
+
+/**
+ * What the chips case attaches through `insertFileAttachments`: a pasted
+ * screenshot (named the way a host inbox stamps one, so its label is
+ * deterministic) and a file dropped from outside the project, with a size.
+ */
+export const CHIP_ATTACHMENTS = [
+  {
+    source: "local",
+    filePath: "/var/folders/xy/T/daintree-clipboard/clipboard-20261015-143210-a1b2.png",
+    rawName: "clipboard-20261015-143210-a1b2.png",
+    fileName: "clipboard-20261015-143210-a1b2.png",
+    fileSize: 184_320,
+  },
+  {
+    source: "local",
+    filePath: "/Users/dev/Downloads/quarterly-report-q3.pdf",
+    rawName: "quarterly-report-q3.pdf",
+    fileName: "quarterly-report-q3.pdf",
+    fileSize: 2_457_600,
+  },
+] as const;

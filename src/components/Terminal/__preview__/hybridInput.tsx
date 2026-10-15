@@ -2,6 +2,7 @@ import "./hybridInputShims";
 import { StrictMode, use, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { Project } from "@shared/types/project";
@@ -18,7 +19,11 @@ import {
 } from "@/store/terminalColorSchemeStore";
 import { cn } from "@/lib/utils";
 import { HybridInputBar } from "../HybridInputBar";
+import { insertFileAttachments } from "../fileAttachments";
+import { fileDropChipField, imageChipField } from "../inputEditorExtensions";
 import {
+  CHIP_ATTACHMENTS,
+  CHIP_DRAFT,
   DRAFTS,
   PANE_AGENTS,
   PANE_TITLES,
@@ -55,6 +60,7 @@ import "@/index.css";
  *   ?draft=empty|short|reported|overflow   the seeded draft (ladder case)
  *   ?case=controls                  the control row at rest and disabled (the states spec hovers it)
  *   ?case=panes|fleet               whole grid panes, one of them selected (the selection-states spec)
+ *   ?case=chips                     one composer carrying every chip kind (the chips spec attaches the files)
  *   ?selected=N                     which pane of `panes`/`fleet` is the focused pane
  *   ?stash=1                        seed a stashed draft, adding the third trailing button
  */
@@ -179,6 +185,8 @@ const GROWTH_DRAFTS: DraftName[] = ["empty", "short", "reported", "overflow"];
 const SIDEBAR_WIDTHS = [380, 430] as const;
 const SIDEBAR_DRAFTS: DraftName[] = ["short", "reported", "sidebar"];
 const CONTROL_STATES = ["enabled", "disabled"] as const;
+const CHIPS_PANE = "chips";
+const CHIPS_WIDTH = 560;
 
 // Every pane the chosen case will mount, seeded here at module scope so no
 // component writes a store during render — a re-render would repeat the write
@@ -194,6 +202,9 @@ switch (caseName) {
     break;
   case "controls":
     CONTROL_STATES.forEach((state) => seedPane(`controls-${state}`, DRAFTS.short));
+    break;
+  case "chips":
+    seedPane(CHIPS_PANE, CHIP_DRAFT);
     break;
   case "tiles":
     TILE_AGENTS.forEach((_agent, i) => {
@@ -394,7 +405,57 @@ function Fleet() {
   );
 }
 
+function chipsView(): EditorView {
+  const dom = document.querySelector(`[data-hybrid-input-root="${CHIPS_PANE}"] .cm-editor`);
+  const view = dom instanceof HTMLElement ? EditorView.findFromDOM(dom) : null;
+  if (!view) throw new Error("the chips composer has no editor");
+  return view;
+}
+
+/**
+ * Hooks the chips spec drives. `attach` puts the fixture files into the draft
+ * through `insertFileAttachments`, the function a drop, a paste and the attach
+ * picker all end in, so the chips are inserted exactly as the app inserts them.
+ * `caretAfter` parks the caret at a chip's trailing edge, which is where the
+ * spec presses Tab from to see where focus goes next.
+ */
+const chipsHooks = {
+  async attach(): Promise<number> {
+    const view = chipsView();
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    await insertFileAttachments({ current: view }, view, CHIP_ATTACHMENTS, CWD);
+    return view.state.field(imageChipField).length + view.state.field(fileDropChipField).length;
+  },
+  caretAfter(kind: "image" | "file-drop"): void {
+    const view = chipsView();
+    const entry =
+      kind === "image"
+        ? view.state.field(imageChipField)[0]
+        : view.state.field(fileDropChipField)[0];
+    if (!entry) throw new Error(`no ${kind} chip to park the caret after`);
+    view.focus();
+    view.dispatch({ selection: { anchor: entry.to } });
+  },
+};
+Reflect.set(window, "__composerChips", chipsHooks);
+
+/**
+ * One composer at a working pane width, holding a draft with every chip kind.
+ * The space above it is room for the hover cards, which open upward, and the
+ * space to the right is room for one opened over the last chip on a line.
+ */
+function Chips() {
+  return (
+    <div className="flex w-fit flex-col px-8 pt-72 pr-48 pb-10" data-preview-case="chips">
+      <Column width={CHIPS_WIDTH} label={`${CHIPS_WIDTH}px · attachments`}>
+        <Bar terminalId={CHIPS_PANE} agentId="claude" />
+      </Column>
+    </div>
+  );
+}
+
 const CASES: Record<string, () => ReactNode> = {
+  chips: Chips,
   controls: Controls,
   panes: Panes,
   fleet: Fleet,
