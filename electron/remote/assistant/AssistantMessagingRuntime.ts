@@ -24,6 +24,7 @@ import {
 } from "../exchange/types.js";
 import {
   fenceUntrustedBody,
+  inboxBodyFits,
   type AssistantInbox,
   type InboxEnvelope,
   type InboxEntry,
@@ -293,6 +294,8 @@ export class AssistantMessagingRuntime {
 
   private answer(helpSessionId: string, args: AssistantReplyArgs): AssistantReplyResult {
     const actor = this.requireCaller(helpSessionId);
+    // Measured as the sender will be handed it, fenced, so no answer is ever too big to show.
+    if (!inboxBodyFits(args.text)) throw new AssistantMessagingError("TOO_LARGE");
     const entry = this.deps.inbox.find(actor, args.taskId);
     if (entry === null) throw new AssistantMessagingError("UNKNOWN_TASK");
     const record = this.read(() => this.deps.store.get(actor, entry.key));

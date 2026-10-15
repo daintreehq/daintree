@@ -346,6 +346,8 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
   private async refresh(entry: OutboxEntry, session: LinkSession): Promise<void> {
     if (entry.inFlight) return;
     entry.inFlight = true;
+    // Taken before the read, so an announcement landing during it reads again after.
+    entry.stale = false;
     let read = false;
     try {
       const answer = await session.call(
@@ -369,8 +371,12 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
       // Read again after a backoff, while the session lasts, or on reconnect.
     } finally {
       entry.inFlight = false;
-      if (read) entry.stale = false;
-      else entry.retryAt = this.now() + this.retryMs;
+      if (!read) {
+        entry.stale = true;
+        entry.retryAt = this.now() + this.retryMs;
+      } else {
+        entry.retryAt = Math.min(entry.retryAt, this.now());
+      }
       if (!this.disposed) this.schedule();
     }
   }
@@ -514,7 +520,8 @@ function budgetReplies(replies: readonly ExchangeResponse[]): {
     const reply = replies[index]!;
     const view = { state: reply.state, at: reply.at, untrustedText: fenceHubReply(reply.text) };
     const size = Buffer.byteLength(JSON.stringify(view), "utf8");
-    if (bytes + size > ASSISTANT_MESSAGE_MAX_SERIALIZED_BYTES) {
+    // The newest is always kept: `assistant.reply` refuses one too large to hand over whole.
+    if (kept.length > 0 && bytes + size > ASSISTANT_MESSAGE_MAX_SERIALIZED_BYTES) {
       return { replies: kept.reverse(), repliesOmitted: index + 1 };
     }
     bytes += size;

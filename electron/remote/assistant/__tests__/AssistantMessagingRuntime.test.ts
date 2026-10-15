@@ -415,6 +415,21 @@ describe("AssistantMessagingRuntime", () => {
     });
   });
 
+  it("refuses an answer too large for the sender to be handed whole", () => {
+    runLane("s1");
+    const record = send(enroll(), "which?");
+    // Few characters, but six bytes each once serialized.
+    const result = runtime.reply("s1", {
+      taskId: record.taskId,
+      state: "completed",
+      text: "\u0001".repeat(15_000),
+    });
+    expect(result).toMatchObject({ ok: false, code: "TOO_LARGE" });
+    expect(
+      store.get(SENDER, { senderId: SENDER.senderId, messageId: record.messageId })?.state
+    ).toBe("submitted");
+  });
+
   it("tells response listeners each time the lane answers, repeated questions included", () => {
     runLane("s1");
     const record = send(enroll(), "which?");

@@ -314,6 +314,44 @@ describe("AssistantHostOutbox", () => {
     expect(outbox.listSent(enrollment(), 0, 10).sent[0]!.state).toBe("completed");
   });
 
+  it("reads again when the Shell announces a move during a read already under way", async () => {
+    const shell = fakeSession("link-a", () => accepted());
+    connect(shell);
+    outbox.enqueue(enrollment(), { text: "hello" });
+    await settle();
+    let release: (() => void) | null = null;
+    let reads = 0;
+    shell.answer = (method) => {
+      if (method !== AssistantLinkMethod.GET_HUB_EXCHANGE) return accepted();
+      reads++;
+      if (reads === 1) {
+        const asked = accepted({
+          state: "input-required",
+          responses: [{ state: "input-required", text: "which?", at: 1 }],
+        });
+        return new Promise((resolve) => (release = () => resolve(asked)));
+      }
+      return accepted({
+        state: "completed",
+        responses: [
+          { state: "input-required", text: "which?", at: 1 },
+          { state: "completed", text: "never mind, done", at: 2 },
+        ],
+      });
+    };
+    shell.tell(AssistantLinkMethod.HUB_EXCHANGE_CHANGED, { messageId: "msg-1" });
+    await settle();
+    // The hub answered again while the first read was out.
+    shell.tell(AssistantLinkMethod.HUB_EXCHANGE_CHANGED, { messageId: "msg-1" });
+    release!();
+    await settle();
+    await settle();
+    expect(reads).toBe(2);
+    const [row] = outbox.listSent(enrollment(), 0, 10).sent;
+    expect(row!.state).toBe("completed");
+    expect(row!.replies).toHaveLength(2);
+  });
+
   it("keeps a row within one result, newest replies whole and older ones counted", async () => {
     const long = (n: number) => `${n}${"x".repeat(15_000)}`;
     const shell = fakeSession("link-a", () =>
