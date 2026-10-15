@@ -104,6 +104,215 @@
   border: 1px solid color-mix(in oklab, var(--color-border-default) 80%, transparent);
 }
 
+/* Every table scrolls on its own (MarkdownTable.tsx): the frame sits in the
+   flow, the viewport scrolls, the table keeps its native semantics inside.
+
+   The plugin's table margins (2em at the table's 0.875em) move to the frame,
+   which is what now follows a heading or opens the document, so the plugin's
+   own "h2 + *" and first/last-child exceptions are restated for it. Inside the
+   viewport a margin would only widen the fades and the focus ring. */
+.markdown-document :where(.markdown-table) {
+  position: relative;
+  container-type: inline-size;
+  margin-block: 1.75em;
+}
+
+.markdown-document :where(:is(h2, h3, h4, hr) + .markdown-table) {
+  margin-top: 0;
+}
+
+.markdown-document > :where(.markdown-table:first-child) {
+  margin-top: 0;
+}
+
+.markdown-document > :where(.markdown-table:last-child) {
+  margin-bottom: 0;
+}
+
+/* `position: relative` makes the viewport the containing block for anything
+   absolute inside a cell — the rendered diff's sr-only change labels — which
+   would otherwise anchor to the frame, escape the scroller, and widen the
+   pane again. */
+.markdown-document :where(.markdown-table__viewport) {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* A link focused inside lands clear of the edge fade. */
+  scroll-padding-inline: 1.5rem;
+}
+
+.markdown-document :where(.markdown-table__viewport > table) {
+  margin-block: 0;
+}
+
+/* Column sizing.
+
+   A table that fits keeps the plain 100%-wide auto layout, with one change: a
+   cell of prose (MarkdownTable marks it) keeps a readable floor, so a column of
+   sentences is never squeezed to its longest word to make the table fit.
+
+   A table that still cannot fit is going to scroll anyway, and there auto
+   layout is at its worst — every column at its min-content, the description
+   one word per line, rows hundreds of pixels tall. So it switches to its
+   natural width instead, with each cell's content capped at a reading measure
+   that follows the pane. The cap lives on an inner block: on the cell itself it
+   would clamp min-content too, and a long code string would spill out of its
+   cell rather than widen the column.
+
+   Inline code never wraps inside a table. A command broken across four chips
+   is neither readable nor copyable; it widens its column instead. */
+.markdown-document :where(td[data-prose], th[data-prose]) {
+  min-width: 12em;
+}
+
+.markdown-document :where(.markdown-table__cell) {
+  display: contents;
+}
+
+.markdown-document :where(td, th) :where(code) {
+  white-space: nowrap;
+}
+
+.markdown-document :where(.markdown-table[data-wide] table) {
+  width: max-content;
+  min-width: 100%;
+}
+
+.markdown-document :where(.markdown-table[data-wide] .markdown-table__cell) {
+  display: block;
+  min-width: min-content;
+  max-width: clamp(20em, 75cqi, 28em);
+}
+
+/* The "more this way" cue: the same fade ScrollShadowOverlay draws, as a mask
+   rather than a cover. A cover has to be painted in the colour behind it, and
+   a document sits on a canvas pane, a grid panel, a selected panel's tint, a
+   diff band or a plugin card; a mask fades the table into whichever it is.
+
+   The first layer fades the content inside the padding box. The other two keep
+   everything outside it opaque — the scrollbar gutter, and the focus ring that
+   sits 2px beyond the border box — so neither fades with the cells.
+
+   The fade widths animate on the frame and are inherited by the viewport: a
+   `transition` on the viewport would replace the focus ring's own transition,
+   which base.css owns for every focusable element. */
+@property --markdown-table-fade-start {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --markdown-table-fade-end {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+.markdown-document :where(.markdown-table[data-overflowing]) {
+  transition:
+    --markdown-table-fade-start var(--transition-duration) ease-out,
+    --markdown-table-fade-end var(--transition-duration) ease-out;
+}
+
+.markdown-document :where(.markdown-table[data-overflowing] > .markdown-table__viewport) {
+  mask-image:
+    linear-gradient(
+      to right,
+      transparent,
+      #000 var(--markdown-table-fade-start),
+      #000 calc(100% - var(--markdown-table-fade-end)),
+      transparent
+    ),
+    linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  mask-clip: padding-box, padding-box, no-clip;
+  mask-origin: padding-box, padding-box, border-box;
+  mask-size:
+    100% 100%,
+    100% 100%,
+    calc(100% + 8px) calc(100% + 8px);
+  mask-position:
+    0 0,
+    0 0,
+    -4px -4px;
+  mask-repeat: no-repeat;
+  mask-composite: add, exclude;
+}
+
+/* 24px, the width the mask-faded rails use (PortalToolbar, FigureRail). */
+.markdown-document :where(.markdown-table[data-scroll-start]) {
+  --markdown-table-fade-start: 1.5rem;
+}
+
+.markdown-document :where(.markdown-table[data-scroll-end]) {
+  --markdown-table-fade-end: 1.5rem;
+}
+
+/* High contrast, as ScrollShadowOverlay does it: the wash goes, and the edge
+   that has more content gets a rule. Forced colours repaint the border in a
+   system colour; increased contrast keeps theme colours, so it gets a hairline
+   in the strong border. Kept as two blocks on purpose — see index.css. */
+@media (forced-colors: active) {
+  .markdown-document :where(.markdown-table[data-overflowing] > .markdown-table__viewport) {
+    mask-image: none;
+  }
+
+  .markdown-document :where(.markdown-table[data-overflowing])::before,
+  .markdown-document :where(.markdown-table[data-overflowing])::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--transition-duration) ease-out;
+  }
+
+  .markdown-document :where(.markdown-table[data-overflowing])::before {
+    inset-inline-start: 0;
+    border-inline-start: 2px solid;
+  }
+
+  .markdown-document :where(.markdown-table[data-overflowing])::after {
+    inset-inline-end: 0;
+    border-inline-end: 2px solid;
+  }
+
+  .markdown-document :where(.markdown-table[data-scroll-start])::before,
+  .markdown-document :where(.markdown-table[data-scroll-end])::after {
+    opacity: 1;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .markdown-document :where(.markdown-table[data-overflowing] > .markdown-table__viewport) {
+    mask-image: none;
+  }
+
+  .markdown-document :where(.markdown-table[data-overflowing])::before,
+  .markdown-document :where(.markdown-table[data-overflowing])::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    width: 1px;
+    pointer-events: none;
+    background: var(--color-border-strong);
+    opacity: 0;
+    transition: opacity var(--transition-duration) ease-out;
+  }
+
+  .markdown-document :where(.markdown-table[data-overflowing])::before {
+    inset-inline-start: 0;
+  }
+
+  .markdown-document :where(.markdown-table[data-overflowing])::after {
+    inset-inline-end: 0;
+  }
+
+  .markdown-document :where(.markdown-table[data-scroll-start])::before,
+  .markdown-document :where(.markdown-table[data-scroll-end])::after {
+    opacity: 1;
+  }
+}
+
 .markdown-document :where(del) {
   opacity: 0.6;
 }

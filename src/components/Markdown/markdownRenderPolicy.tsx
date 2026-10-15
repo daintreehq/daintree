@@ -13,7 +13,7 @@ import {
   type ExtraProps,
   type Options,
 } from "react-markdown";
-import type { ElementContent, Element as HastElement } from "hast";
+import type { Element as HastElement } from "hast";
 import { toJsxRuntime } from "hast-util-to-jsx-runtime";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { refractor } from "refractor/core";
@@ -26,6 +26,8 @@ import { isPathInside } from "@shared/utils/path";
 import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
 import { MermaidDiagram } from "./mermaid/MermaidDiagram";
 import { canonicalLang } from "./fenceLanguage";
+import { hastText } from "./hastText";
+import { MarkdownTable, MarkdownTableCell, MarkdownTableHeaderCell } from "./MarkdownTable";
 import { activateMarkdownLink, HTTPish, resolveAgainstFile } from "./markdownLinkPolicy";
 
 export { activateMarkdownLink };
@@ -146,15 +148,6 @@ export function HighlightedCode({ language, code }: { language: string; code: st
   return <code className={`language-${lang}`}>{highlighted ?? code}</code>;
 }
 
-function hastText(nodes: readonly ElementContent[]): string {
-  let text = "";
-  for (const child of nodes) {
-    if (child.type === "text") text += child.value;
-    else if (child.type === "element") text += hastText(child.children);
-  }
-  return text;
-}
-
 /** The source of a ```mermaid fence, or null when `pre` holds anything else. */
 function mermaidFenceSource(pre: HastElement | undefined): string | null {
   const code = pre?.children.length === 1 ? pre.children[0] : undefined;
@@ -245,6 +238,9 @@ export function useMarkdownRenderPolicy({
   const components = useMemo<Components>(
     () => ({
       img: MarkdownImage,
+      table: MarkdownTable,
+      th: MarkdownTableHeaderCell,
+      td: MarkdownTableCell,
       pre: ({ node, children, ...props }) => {
         const mermaidSource = mermaidFenceSource(node);
         if (mermaidSource !== null) {
