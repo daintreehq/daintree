@@ -283,6 +283,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       onSessionOpened: (listener) => client.manager.onSessionOpened(listener),
       knownHosts: () => client.registry.list().map((host) => host.id),
       onHostsChanged: (listener) => client.registry.onChange(listener),
+      addUseCheck: (check) => client.manager.addUseCheck(check),
     })
   );
   // Answered only once a session exists, so registering costs nothing until then.

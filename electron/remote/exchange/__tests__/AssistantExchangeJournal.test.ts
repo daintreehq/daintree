@@ -214,4 +214,26 @@ describe("AssistantExchangeJournal", () => {
     expect(journal.list("studio")).toEqual([]);
     expect(journal.list("other").map((entry) => entry.messageId)).toEqual(["m-2"]);
   });
+
+  it("counts a host open while an exchange there can still change, and no longer", () => {
+    journal.credential("studio");
+    expect(journal.hasOpen("studio", 1_000)).toBe(false);
+
+    journal.noteSending("studio", "lost");
+    expect(journal.hasOpen("studio", 1_000)).toBe(true);
+    // An unknown answer holds only through the retry window.
+    clock += 2_000;
+    expect(journal.hasOpen("studio", 1_000)).toBe(false);
+
+    journal.recordAnswer("studio", record("live", 3, "working"));
+    expect(journal.hasOpen("studio", 1_000)).toBe(true);
+    expect(journal.hasOpen("other", 1_000)).toBe(false);
+    journal.recordAnswer("studio", record("live", 4, "completed"));
+    expect(journal.hasOpen("studio", 1_000)).toBe(false);
+
+    // A live record holds only until it expires.
+    journal.recordAnswer("studio", record("stale", 5, "working"));
+    clock = 10_000;
+    expect(journal.hasOpen("studio", 1_000)).toBe(false);
+  });
 });

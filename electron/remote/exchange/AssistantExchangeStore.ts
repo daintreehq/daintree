@@ -29,6 +29,38 @@ const MAX_REFERENCE_TASK_IDS = 64;
 const MAX_LIST_LIMIT = 500;
 const OUTCOME_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/;
 
+/** One record's change, as committed: who sent it and the revision it now holds. */
+export interface ExchangeChange {
+  senderId: string;
+  revision: number;
+}
+
+const changeListeners = new Set<(change: ExchangeChange) => void>();
+
+/**
+ * Told after every committed change to any exchange in this process, from
+ * whichever store wrote it: the host's link handlers, the receiving lane's
+ * own tools and the sweep each hold their own store over the one database.
+ */
+export function onExchangeChanged(listener: (change: ExchangeChange) => void): () => void {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+  };
+}
+
+function emitChanges(changes: readonly ExchangeChange[]): void {
+  for (const change of changes) {
+    for (const listener of [...changeListeners]) {
+      try {
+        listener(change);
+      } catch (error) {
+        console.error("[AssistantExchangeStore] change listener threw:", error);
+      }
+    }
+  }
+}
+
 export interface AssistantExchangeStoreOptions {
   now?: () => number;
   ttlMs?: number;
@@ -222,6 +254,8 @@ export class AssistantExchangeStore {
   private readonly auditRetentionMs: number;
   private readonly newTaskId: () => string;
   private readonly statements = new Map<string, Database.Statement>();
+  /** Changes the running write made, told to listeners once it commits. */
+  private pending: ExchangeChange[] | null = null;
 
   constructor(
     private readonly sqlite: Database.Database | null,
@@ -645,6 +679,7 @@ export class AssistantExchangeStore {
       "daintree.exchange.body_bytes": row.body_bytes,
       "daintree.exchange.latency_ms": Math.max(0, now - row.created_at),
     };
+    this.pending?.push({ senderId: row.sender_id, revision });
     if (previousState !== null) attributes["daintree.exchange.previous_state"] = previousState;
     if (row.reply_digest !== null) attributes["daintree.exchange.reply_digest"] = row.reply_digest;
     if (row.reply_bytes !== null) attributes["daintree.exchange.reply_bytes"] = row.reply_bytes;
@@ -707,7 +742,16 @@ export class AssistantExchangeStore {
   }
 
   private write<T>(work: (sqlite: Database.Database) => T): T {
-    return this.guard((sqlite) => sqlite.transaction(work).immediate(sqlite));
+    const changes: ExchangeChange[] = [];
+    this.pending = changes;
+    let result: T;
+    try {
+      result = this.guard((sqlite) => sqlite.transaction(work).immediate(sqlite));
+    } finally {
+      this.pending = null;
+    }
+    emitChanges(changes);
+    return result;
   }
 
   private read<T>(work: (sqlite: Database.Database) => T, snapshot = false): T {

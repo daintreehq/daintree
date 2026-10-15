@@ -12,6 +12,7 @@ import {
   createNoticeHold,
   extractNoticeReply,
   extractReply,
+  formatExchangeUpdateLine,
   formatLaneWakeLine,
   formatNoticeLine,
   LANE_WAKE_MAX_PENDING_MS,
@@ -1913,6 +1914,23 @@ describe("lane wakes (#13333)", () => {
     expect(h.client.submitted[0].text.startsWith(formatLaneWakeLine(["task-1"]))).toBe(true);
     expect(h.client.submitted[0].text).toContain("t-a");
     expect(w.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("types a hub's exchange updates on their own line, apart from new messages", async () => {
+    const h = setup();
+    const message = fakeWake("task-1");
+    const update = fakeWake("task-2");
+    update.wake.kind = "update";
+    h.service.enqueueWake(PANE, PROJECT, message.wake);
+    h.service.enqueueWake(PANE, PROJECT, update.wake);
+    await flushWake();
+
+    expect(h.client.submitted).toHaveLength(1);
+    const text = h.client.submitted[0].text;
+    expect(text).toContain(formatLaneWakeLine(["task-1"]));
+    expect(text).toContain(formatExchangeUpdateLine(["task-2"]));
+    expect(formatExchangeUpdateLine(["task-2"])).not.toContain("task-1");
+    expect(update.outcomes).toEqual([{ kind: "delivered" }]);
   });
 
   it("queues a duplicate once", async () => {

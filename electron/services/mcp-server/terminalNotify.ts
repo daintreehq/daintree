@@ -27,7 +27,11 @@ import {
 } from "../../../shared/types/terminalNotify.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { detectHandback } from "../pty/HandbackDetector.js";
-import { LANE_INBOX_TOOL, LANE_WAKE_LINE_PREFIX } from "../helpSessionRunbooks.js";
+import {
+  EXCHANGE_UPDATE_LINE_PREFIX,
+  LANE_INBOX_TOOL,
+  LANE_WAKE_LINE_PREFIX,
+} from "../helpSessionRunbooks.js";
 import { evaluateWakeGate, wakeGateOptionsFor } from "../../../shared/utils/terminalWakeGate.js";
 import { fenceFor } from "../../../shared/utils/quoteFence.js";
 
@@ -601,6 +605,11 @@ export type LaneWakeCheck = { kind: "ready" } | { kind: "held" | "unavailable"; 
 export interface LaneWake {
   /** The exchange's opaque handle; see {@link LANE_WAKE_ID_PATTERN}. */
   id: string;
+  /**
+   * `message` (the default) tells a receiving lane a message arrived;
+   * `update` tells the hub one of its own exchanges changed state (#13337).
+   */
+  kind?: "message" | "update";
   /** Asked synchronously immediately before the line is typed, and while it waits. */
   recheck(): LaneWakeCheck;
   /**
@@ -625,6 +634,12 @@ export function formatLaneWakeLine(ids: readonly string[]): string {
   return ids.length === 1
     ? `${LANE_WAKE_LINE_PREFIX} has a new message (exchange ${handles}). Read it with ${LANE_INBOX_TOOL}.`
     : `${LANE_WAKE_LINE_PREFIX} has ${ids.length} new messages (exchanges ${handles}). Read them with ${LANE_INBOX_TOOL}.`;
+}
+
+/** The fixed line telling a hub its exchanges moved: Daintree's own wording and the handles. */
+export function formatExchangeUpdateLine(ids: readonly string[]): string {
+  const noun = ids.length === 1 ? "exchange" : "exchanges";
+  return `${EXCHANGE_UPDATE_LINE_PREFIX} update (${noun} ${ids.join(", ")}).`;
 }
 
 interface WakeEntry {
@@ -2125,8 +2140,11 @@ export class TerminalNotifyService {
     for (const entry of wakes) entry.token = token;
     const dropped = entries.length > 0 ? owner.droppedCount : 0;
     owner.droppedCount -= dropped;
+    const messageIds = wakes.filter((e) => e.wake.kind !== "update").map((e) => e.wake.id);
+    const updateIds = wakes.filter((e) => e.wake.kind === "update").map((e) => e.wake.id);
     const lines = [
-      ...(wakes.length > 0 ? [formatLaneWakeLine(wakes.map((entry) => entry.wake.id))] : []),
+      ...(messageIds.length > 0 ? [formatLaneWakeLine(messageIds)] : []),
+      ...(updateIds.length > 0 ? [formatExchangeUpdateLine(updateIds)] : []),
       ...(entries.length > 0
         ? [
             formatNoticeLine(

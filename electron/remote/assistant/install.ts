@@ -9,7 +9,10 @@ import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
-import { AssistantExchangeStore } from "../exchange/AssistantExchangeStore.js";
+import {
+  AssistantExchangeStore,
+  EXCHANGE_RETRY_WINDOW_MS,
+} from "../exchange/AssistantExchangeStore.js";
 import type { LinkSession } from "../link/session.js";
 import { callerDrives, type FleetCaller } from "../metrics/hostOps.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
@@ -172,6 +175,8 @@ export interface AssistantExchangeClientInstallDeps {
   /** Hosts this Shell still knows; a removed host's journal goes with it. */
   knownHosts(): HostId[];
   onHostsChanged(listener: () => void): () => void;
+  /** Keeps a host's connection open while the check says so; asked on every idle sweep. */
+  addUseCheck?(check: (hostId: HostId) => boolean): () => void;
 }
 
 /**
@@ -201,10 +206,33 @@ export function installAssistantExchangeClient(
     session: deps.session,
     onSessionOpened: deps.onSessionOpened,
     policy: () => getRemoteService("assistantMessagingPolicy"),
+    onExchangesMoved: (_hostId, moved) => {
+      const hub = getRemoteService("assistantMessagingPolicy")?.getHub();
+      const waker = getRemoteService("assistantLaneWaker");
+      if (!hub || !waker) return;
+      for (const { record, hubGeneration } of moved) {
+        // Only the hub that sent it: a lane enrolled since is a different participant.
+        if (hubGeneration !== hub.generation) continue;
+        waker.wake({
+          lane: { projectId: hub.projectId, slot: hub.slot },
+          generation: hub.generation,
+          shell: { kind: "local" },
+          exchangeId: record.taskId,
+          kind: "update",
+          // The host's record holds what happened; telling the hub twice costs nothing.
+          sink: { beforeType: () => true, report: () => {} },
+        });
+      }
+    },
   });
   client.start();
+  // Bounded by each exchange's expiry. Holding the link never keeps the host awake.
+  const offUseCheck =
+    deps.addUseCheck?.((hostId) => journal.hasOpen(hostId, EXCHANGE_RETRY_WINDOW_MS)) ??
+    (() => {});
   const unregister = registerRemoteService("assistantExchangeClient", client);
   return () => {
+    offUseCheck();
     unregister();
     client.dispose();
     offHosts();

@@ -100,6 +100,7 @@ import { AssistantLinkMethod, type AssistantSendPayload } from "../assistant/lin
 import { LinkClient } from "../client/LinkClient.js";
 import { createDirectTransport } from "../client/transport.js";
 import { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
+import { AssistantExchangeStore } from "../exchange/AssistantExchangeStore.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import { hostSocketLocation } from "../host/hostSocketPath.js";
 import type { LinkSession } from "../link/session.js";
@@ -329,6 +330,50 @@ describe("assistant exchanges over the real link", () => {
       expect(await a.cancel(HOST_ID, "m-1")).toMatchObject({ state: "canceled" });
       const next = await a.listChanges(HOST_ID, changes.cursor);
       expect(next.records.map((record) => record.state)).toEqual(["canceled"]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "tells the sending Shell when its exchange changes on the host, and wakes its hub",
+    async () => {
+      db.sqlite = openFile("app.db");
+      const r = await harness();
+      prepare(r);
+      const b = await startShellB(r, openFile("shell-b.db"));
+      const generation = enrollOnHost(hostSessionOf(r, null), 0);
+      const a = shellA();
+      const wake = vi.spyOn(requireRemoteService("assistantLaneWaker"), "wake");
+      const sent = await a.send(HOST_ID, message({ generation }));
+      if (sent.status !== "accepted") throw new Error("not accepted");
+      // Authenticated as itself, on the same host.
+      await b.client.listChanges(HOST_ID, 0);
+
+      // The receiving lane's own tools write through a store of their own.
+      new AssistantExchangeStore(db.sqlite).recordDelivery(
+        { kind: "receiver", ...sent.record.receiver },
+        { senderId: sent.record.senderId, messageId: "m-1" },
+        "reply-received",
+        { body: "done" }
+      );
+
+      const journal = new AssistantExchangeJournal(db.sqlite!);
+      await waitUntil(
+        () => journal.get(HOST_ID, "m-1")?.record?.state === "completed",
+        "the journal to hear of the reply"
+      );
+      const hub = requireRemoteService("assistantMessagingPolicy").getHub()!;
+      expect(wake).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lane: { projectId: hub.projectId, slot: hub.slot },
+          generation: hub.generation,
+          shell: { kind: "local" },
+          exchangeId: sent.record.taskId,
+          kind: "update",
+        })
+      );
+      // Another Shell on the same host hears nothing of it.
+      expect(b.journal.list(HOST_ID)).toEqual([]);
     },
     TEST_TIMEOUT_MS
   );

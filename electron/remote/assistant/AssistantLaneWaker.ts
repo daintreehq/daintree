@@ -25,6 +25,8 @@ export interface LaneWakeRequest {
   shell: MessagingShell;
   /** The exchange's opaque handle, typed into the lane as is. */
   exchangeId: string;
+  /** A receiving lane's new message (the default), or the hub's own exchange having moved. */
+  kind?: LaneWake["kind"];
   sink: LaneWakeSink;
 }
 
@@ -63,6 +65,7 @@ export class AssistantLaneWaker {
       },
       {
         id: request.exchangeId,
+        ...(request.kind === undefined ? {} : { kind: request.kind }),
         recheck: () => this.check(request, pinned).check,
         beforeType: () => request.sink.beforeType(),
         report: (outcome) => request.sink.report(outcome),
