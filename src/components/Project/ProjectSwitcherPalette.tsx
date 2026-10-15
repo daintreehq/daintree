@@ -2525,7 +2525,7 @@ function ProjectSwitcherFooter({
 
   const hasSelection = selectedRow !== undefined;
   const isScratchSelected = selectedRow?.kind === "scratch";
-  const hint = hostOption
+  const hint: ReturnType<typeof getOtherHostEnterHint> = hostOption
     ? getOtherHostEnterHint(hostOption, modifiers.meta)
     : getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
 
