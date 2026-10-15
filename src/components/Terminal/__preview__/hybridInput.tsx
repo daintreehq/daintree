@@ -417,7 +417,7 @@ function chipsView(): EditorView {
  * through `insertFileAttachments`, the function a drop, a paste and the attach
  * picker all end in, so the chips are inserted exactly as the app inserts them.
  * `caretAfter` parks the caret at a chip's trailing edge, which is where the
- * spec's real Backspace starts the two-step delete from.
+ * spec presses Tab from to see where focus goes next.
  */
 const chipsHooks = {
   async attach(): Promise<number> {
@@ -428,8 +428,10 @@ const chipsHooks = {
   },
   caretAfter(kind: "image" | "file-drop"): void {
     const view = chipsView();
-    const entries = view.state.field(kind === "image" ? imageChipField : fileDropChipField);
-    const entry = entries[0];
+    const entry =
+      kind === "image"
+        ? view.state.field(imageChipField)[0]
+        : view.state.field(fileDropChipField)[0];
     if (!entry) throw new Error(`no ${kind} chip to park the caret after`);
     view.focus();
     view.dispatch({ selection: { anchor: entry.to } });

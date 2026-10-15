@@ -120,13 +120,11 @@ const OFFSCREEN: Rect = { left: 0, right: 0, top: 0, bottom: 0 };
  */
 function chipRect(view: EditorView, from: number, selector: string): Rect | null {
   for (const el of view.contentDOM.querySelectorAll<HTMLElement>(selector)) {
-    let at = -1;
     try {
-      at = view.posAtDOM(el);
+      if (view.posAtDOM(el) === from) return el.getClientRects()[0] ?? null;
     } catch {
-      continue;
+      // A widget detached mid-measure has no position; try the next one.
     }
-    if (at === from) return el.getClientRects()[0] ?? null;
   }
   return null;
 }
