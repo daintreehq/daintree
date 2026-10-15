@@ -872,6 +872,9 @@ describe("HostServer session resume", () => {
     server.onSessionExpired((info) => expired.push(info.sessionId));
     const client = startClient(server);
     await waitFor(() => seen.length === 1);
+    // The host has its session before the client has read WELCOME; a client
+    // stopped before then just drops the dial, with no GOODBYE to send.
+    await waitFor(() => client.getState().status === "connected");
     await client.stop();
     await waitFor(() => expired.length === 1);
     expect(expired).toEqual([seen[0]!.sessionId]);

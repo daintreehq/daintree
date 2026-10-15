@@ -10,7 +10,7 @@ import type { EnqueueResult } from "../../link/scheduler.js";
 import type { LinkSession } from "../../link/session.js";
 import type { HostSessionContext, HostSessionExpired } from "../HostServer.js";
 import { LinkMethod } from "../linkMethods.js";
-import { ASSISTANT_RETRY_MS, SessionHost } from "../SessionHost.js";
+import { ANSWER_RETRY_MS, SessionHost } from "../SessionHost.js";
 
 type Listener = (body: unknown) => void;
 
@@ -660,7 +660,7 @@ describe("SessionHost assistant liveness (#13349)", () => {
     await flush();
     expect(sentAssistants(link)).toHaveLength(1);
 
-    vi.advanceTimersByTime(ASSISTANT_RETRY_MS);
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
     expect(sentAssistants(link)).toHaveLength(2);
     expect(sentAssistants(link)[1]![1]).toEqual({
       endpoints: [{ endpointId: "view-1", projectId: "p1", live: true }],
@@ -676,7 +676,7 @@ describe("SessionHost assistant liveness (#13349)", () => {
     sessions.refreshAssistants();
     await flush();
 
-    vi.advanceTimersByTime(ASSISTANT_RETRY_MS);
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
     sessions.refreshAssistants();
     expect(sentAssistants(link)).toHaveLength(1);
   });
@@ -724,5 +724,132 @@ describe("SessionHost assistant liveness (#13349)", () => {
 
     sessions.refreshAssistants();
     expect(assistantCalls(link)).toHaveLength(1);
+  });
+});
+
+describe("SessionHost agent activity (#13359)", () => {
+  /** Projects with an agent working, waiting or directing here. */
+  let activeProjects: Set<string>;
+  let sessions: SessionHost;
+  let fake: ReturnType<typeof fakeServer>;
+
+  beforeEach(() => {
+    activeProjects = new Set();
+    fake = fakeServer();
+    sessions = new SessionHost(fake, {
+      dispatcher: { invokeForEndpoint: async () => wrapSuccess(null), sendForEndpoint: () => {} },
+      registry: new EndpointRegistryImpl(),
+      agentActive: (endpoint) => activeProjects.has(endpoint.projectId ?? ""),
+    });
+  });
+
+  afterEach(() => sessions.dispose());
+
+  // Every attempt, delivered or refused.
+  const agentCalls = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls
+      .filter(([method]) => method === LinkMethod.ENDPOINT_AGENT_ACTIVITY)
+      .map(([, payload]) => payload);
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  it("answers a view that opens onto agents already working, and only changes after", () => {
+    activeProjects.add("p1");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    expect(agentCalls(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }] },
+      { endpoints: [{ endpointId: "view-2", projectId: "p2", active: false }] },
+    ]);
+
+    sessions.refreshAgentActivity();
+    expect(agentCalls(link)).toHaveLength(2);
+
+    activeProjects.delete("p1");
+    activeProjects.add("p2");
+    sessions.refreshAgentActivity();
+    expect(agentCalls(link).at(-1)).toEqual({
+      endpoints: [
+        { endpointId: "view-1", projectId: "p1", active: false },
+        { endpointId: "view-2", projectId: "p2", active: true },
+      ],
+    });
+  });
+
+  it("answers again for a view that moved between two projects with active agents", () => {
+    // The Shell drops a view's answer when it moves, so an unchanged boolean
+    // still has to be said about the new binding.
+    activeProjects.add("p1");
+    activeProjects.add("p2");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, { endpointId: "view-1", projectId: "p2" });
+
+    expect(agentCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p2", active: true }],
+    });
+  });
+
+  it("tells a resumed Shell every view's answer, including what changed while it was away", () => {
+    activeProjects.add("p1");
+    const first = fakeLink();
+    fake.attach("s1", first);
+    open(first, "view-1", "p1");
+    open(first, "view-2", "p2");
+    first.drop();
+
+    activeProjects.clear();
+    activeProjects.add("p2");
+    sessions.refreshAgentActivity();
+
+    const second = fakeLink();
+    fake.attach("s1", second, true);
+    expect(agentCalls(second)).toEqual([
+      {
+        endpoints: [
+          { endpointId: "view-1", projectId: "p1", active: false },
+          { endpointId: "view-2", projectId: "p2", active: true },
+        ],
+      },
+    ]);
+  });
+
+  it("asks an attached Shell again when it failed to take an answer, but not one from before the call", async () => {
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    link.call.mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "RATE_LIMITED" }));
+    activeProjects.add("p1");
+    sessions.refreshAgentActivity();
+    await flush();
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    expect(agentCalls(link)).toHaveLength(3);
+    expect(agentCalls(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }],
+    });
+
+    link.call.mockRejectedValueOnce(Object.assign(new Error("old"), { code: "UNSUPPORTED" }));
+    activeProjects.delete("p1");
+    sessions.refreshAgentActivity();
+    await flush();
+    vi.advanceTimersByTime(ANSWER_RETRY_MS);
+    sessions.refreshAgentActivity();
+    expect(agentCalls(link)).toHaveLength(4);
+  });
+
+  it("keeps the assistant answer to itself", () => {
+    activeProjects.add("p1");
+    const link = fakeLink();
+    fake.attach("s1", link);
+    open(link, "view-1", "p1");
+    sessions.refreshAssistants();
+    expect(link.call.mock.calls.map(([method]) => method)).toEqual([
+      LinkMethod.ENDPOINT_AGENT_ACTIVITY,
+    ]);
   });
 });

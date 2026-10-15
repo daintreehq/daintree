@@ -22,6 +22,8 @@ export const LinkMethod = {
   ENDPOINT_RESYNC: "endpoint.resync",
   /** Host → Shell: whether a live Daintree Assistant is pinned to each of these endpoints. */
   ENDPOINT_ASSISTANT: "endpoint.assistant",
+  /** Host → Shell: whether an agent in each of these endpoints' projects is active here. */
+  ENDPOINT_AGENT_ACTIVITY: "endpoint.agent-activity",
 } as const;
 
 export interface HostInfo {
@@ -59,6 +61,20 @@ export interface EndpointAssistantState {
 
 export interface EndpointAssistantPayload {
   endpoints: EndpointAssistantState[];
+}
+
+/**
+ * Whether an agent in an endpoint's project is working, waiting or directing
+ * on the host. Same `projectId` rule as {@link EndpointAssistantState}.
+ */
+export interface EndpointAgentActivityState {
+  endpointId: string;
+  projectId: string | null;
+  active: boolean;
+}
+
+export interface EndpointAgentActivityPayload {
+  endpoints: EndpointAgentActivityState[];
 }
 
 const endpointId = z.string().min(1).max(256);
@@ -111,6 +127,18 @@ export const EndpointAssistantPayloadSchema = z.object({
         endpointId,
         projectId: z.string().min(1).max(256).nullable(),
         live: z.boolean(),
+      })
+    )
+    .max(4096),
+});
+
+export const EndpointAgentActivityPayloadSchema = z.object({
+  endpoints: z
+    .array(
+      z.object({
+        endpointId,
+        projectId: z.string().min(1).max(256).nullable(),
+        active: z.boolean(),
       })
     )
     .max(4096),

@@ -636,6 +636,10 @@ if (!gotTheLock) {
       // view's endpoint closes (#13349); the host says which views have one.
       remoteAssistantLive: (webContentsId) =>
         getRemoteService("windowHosts")?.viewHasLiveAssistant?.(webContentsId) === true,
+      // A host project's agents run on the host, out of sight of this
+      // machine's agent-state cache; the host says which views have one active.
+      remoteAgentActive: (webContentsId) =>
+        getRemoteService("windowHosts")?.viewHasActiveAgent?.(webContentsId) === true,
       // Keeps a workspace an MCP session is bound to out of the freeze sweep,
       // and out of eviction entirely while a dispatch is in flight (#11790).
       // A bound session drives a *background* workspace by design, and a frozen

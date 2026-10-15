@@ -4,10 +4,12 @@ import { helpSessionService } from "../../services/HelpSessionService.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { scratchStore } from "../../services/ScratchStore.js";
+import { events } from "../../services/events.js";
 import { setAttachedFrontendCount } from "../../services/PowerSaveBlockerService.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { registerRemoteService } from "../runtime.js";
 import { MAX_PROJECT_EMOJI_LENGTH } from "./linkMethods.js";
+import { ProjectAgentActivityCache } from "./ProjectAgentActivityCache.js";
 import type { RemoteViewEndpoint } from "./RemoteViewEndpoint.js";
 import { SessionHost, type SessionHostOptions, type SessionHostServer } from "./SessionHost.js";
 
@@ -17,7 +19,7 @@ declare module "../runtime.js" {
   }
 }
 
-/** How often the host re-reads which views have a live assistant, beside the PTY events. */
+/** How often the host re-reads its views' assistant and agent answers, beside the events. */
 export const ASSISTANT_SWEEP_MS = 30_000;
 
 /**
@@ -66,9 +68,13 @@ export function initRemoteHostsHost(
         ...(emoji && emoji.length <= MAX_PROJECT_EMOJI_LENGTH ? { emoji } : {}),
       })),
     assistantLive: assistantLiveFor,
+    agentActive: (endpoint) =>
+      endpoint.projectId !== null && agents.isProjectActive(endpoint.projectId),
     ...overrides,
   });
   const unregister = registerRemoteService("sessionHost", sessionHost);
+  // Read by `agentActive` above, which no endpoint can reach before this exists.
+  const agents = new ProjectAgentActivityCache(() => sessionHost.refreshAgentActivity());
   // An assistant's help binding is made before its PTY spawns, and every
   // revoke or displacement kills the PTY, so its spawn and its exit are the
   // moments its view's protection changes. The client may not exist yet when
@@ -81,19 +87,32 @@ export function initRemoteHostsHost(
     watched = getPtyClient();
     watched?.on("spawn-result", refresh);
     watched?.on("exit", refresh);
+    if (watched) agents.attach(watched);
   };
+  const offAgentState = events.on("agent:state-changed", ({ terminalId, state }) => {
+    if (terminalId) agents.noteState(terminalId, state);
+  });
   watchPty();
   const offOpened = sessionHost.onEndpointOpened(watchPty);
   // Not every end is an exit: a pty-host that dies mid-capture emits none, and
   // a revoke before the kill client is wired kills nothing. A slow sweep stops
   // the view those leave protected from staying so until something else changes.
-  const sweep = setInterval(refresh, ASSISTANT_SWEEP_MS);
+  // The agent cache reads the inventory again on the same beat: a failed or
+  // partial read, or a pty-host that restarted without a crash event, is
+  // repaired there, and any change it finds is announced as it lands.
+  const sweep = setInterval(() => {
+    refresh();
+    agents.reconcile();
+    sessionHost.refreshAgentActivity();
+  }, ASSISTANT_SWEEP_MS);
   sweep.unref?.();
   return {
     sessionHost,
     dispose() {
       clearInterval(sweep);
       offOpened();
+      offAgentState();
+      agents.dispose();
       watched?.off("spawn-result", refresh);
       watched?.off("exit", refresh);
       watched = null;

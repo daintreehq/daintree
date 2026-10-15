@@ -27,12 +27,21 @@ import type { LinkSession } from "../../link/session.js";
 import type { HostSessionContext } from "../HostServer.js";
 import { ASSISTANT_SWEEP_MS, initRemoteHostsHost } from "../initHost.js";
 import { LinkMethod } from "../linkMethods.js";
+import { events } from "../../../services/events.js";
 
-/** PtyClient's spawn registry and the two events the host follows. */
+/** PtyClient's spawn registry, its inventory, and the events the host follows. */
 class FakePty extends EventEmitter {
   readonly live = new Set<string>();
+  readonly owners = new Map<string, string>();
+  inventory: Array<{ id: string; projectId: string; agentState?: "working" | "idle" }> = [];
   hasTerminal(id: string): boolean {
     return this.live.has(id);
+  }
+  getTerminalProjectId(id: string): string | null {
+    return this.owners.get(id) ?? null;
+  }
+  async getAllTerminalsWithCompletenessAsync() {
+    return { terminals: [...this.inventory], degraded: false };
   }
 }
 
@@ -173,7 +182,9 @@ describe("initRemoteHostsHost assistant liveness (#13349)", () => {
     link.open("view-2", "p1");
 
     expect(pty.listenerCount("spawn-result")).toBe(1);
-    expect(pty.listenerCount("exit")).toBe(1);
+    // One for the assistant answers, one for the agent activity cache.
+    expect(pty.listenerCount("exit")).toBe(2);
+    expect(pty.listenerCount("host-crash")).toBe(1);
   });
 
   it("catches an end that no exit reported, on its sweep", () => {
@@ -206,6 +217,89 @@ describe("initRemoteHostsHost assistant liveness (#13349)", () => {
 
     expect(pty.listenerCount("spawn-result")).toBe(0);
     expect(pty.listenerCount("exit")).toBe(0);
+    expect(pty.listenerCount("host-crash")).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("initRemoteHostsHost agent activity (#13359)", () => {
+  const agentAnswers = (link: ReturnType<typeof fakeLink>) =>
+    link.call.mock.calls
+      .filter(([method]) => method === LinkMethod.ENDPOINT_AGENT_ACTIVITY)
+      .map(([, payload]) => payload);
+  const stateChanged = (terminalId: string, state: "working" | "idle") =>
+    events.emit("agent:state-changed", {
+      terminalId,
+      state,
+      previousState: state === "working" ? "idle" : "working",
+      timestamp: Date.now(),
+      trigger: "output",
+      confidence: 1,
+    } as never);
+
+  it("tells the Shell when an agent in a view's project starts and stops working", () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    expect(agentAnswers(link)).toEqual([
+      { endpoints: [{ endpointId: "view-1", projectId: "p1", active: false }] },
+    ]);
+
+    pty.owners.set("t-agent", "p1");
+    stateChanged("t-agent", "working");
+    expect(agentAnswers(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }],
+    });
+
+    stateChanged("t-agent", "idle");
+    expect(agentAnswers(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", active: false }],
+    });
+
+    // Another project's agent says nothing about this view.
+    pty.owners.set("t-other", "p2");
+    stateChanged("t-other", "working");
+    expect(agentAnswers(link)).toHaveLength(3);
+  });
+
+  it("reads the inventory again on its sweep, for agents no event told it about", async () => {
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    start();
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    await vi.advanceTimersByTimeAsync(0);
+
+    pty.inventory = [{ id: "t-agent", projectId: "p1", agentState: "working" }];
+    await vi.advanceTimersByTimeAsync(ASSISTANT_SWEEP_MS);
+    expect(agentAnswers(link).at(-1)).toEqual({
+      endpoints: [{ endpointId: "view-1", projectId: "p1", active: true }],
+    });
+  });
+
+  it("stops following agent state on dispose", () => {
+    const listeners = () =>
+      (events as unknown as { bus: { listenerCount(e: string): number } }).bus.listenerCount(
+        "agent:state-changed"
+      );
+    const before = listeners();
+    const pty = new FakePty();
+    ptyRef.current = pty;
+    const { dispose } = start();
+    expect(listeners()).toBe(before + 1);
+    const link = fakeLink();
+    server.attach(link);
+    link.open("view-1", "p1");
+    dispose();
+    host = null;
+
+    expect(listeners()).toBe(before);
+    pty.owners.set("t-agent", "p1");
+    stateChanged("t-agent", "working");
+    expect(agentAnswers(link)).toHaveLength(1);
   });
 });
