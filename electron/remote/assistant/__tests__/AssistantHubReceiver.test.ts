@@ -145,12 +145,48 @@ describe("AssistantHubReceiver", () => {
   it("answers a resend from its record without admitting or waking twice", () => {
     enrollHub();
     const first = receiver.receive("host-a", payload());
+    if (first.status !== "accepted") throw new Error("not accepted");
+    // Paused since: a resend still answers from what was admitted.
+    policy.setPaused(true);
     const again = receiver.receive("host-a", payload());
-    expect(again).toEqual(first);
+    expect(again).toMatchObject({ status: "accepted", taskId: first.taskId, state: "submitted" });
     expect(woken).toHaveLength(1);
+    policy.setPaused(false);
     // The same messageId from another host is another message.
     expect(receiver.receive("host-b", payload())).toMatchObject({ status: "accepted" });
     expect(woken).toHaveLength(2);
+  });
+
+  it("refuses a messageId reused for different words, without touching the first", () => {
+    enrollHub();
+    receiver.receive("host-a", payload());
+    expect(receiver.receive("host-a", payload({ body: "something else" }))).toEqual({
+      status: "refused",
+      refusal: "conflict",
+    });
+    const inbox = runtime.getInbox(HUB_SESSION, {});
+    expect(inbox.ok && inbox.value.messages.map((m) => m.untrustedBody)).toEqual([
+      expect.stringContaining("migration landed on feature/x"),
+    ]);
+  });
+
+  it("keeps counting a conversation's hops across a Shell restart, from the records", () => {
+    enrollHub();
+    receiver.receive("host-a", payload({ messageId: "m-1" }));
+    receiver.receive("host-a", payload({ messageId: "m-2" }));
+    // A new receiver over the same records, as after a restart, holds nothing in memory.
+    receiver.dispose();
+    receiver = new AssistantHubReceiver({
+      policy,
+      store,
+      runtime,
+      hostName: () => "Studio 04",
+      now: () => clock,
+    });
+    expect(receiver.receive("host-a", payload({ messageId: "m-3", hopCount: 1 }))).toEqual({
+      status: "refused",
+      refusal: "hop_limit",
+    });
   });
 
   it("refuses without the host's opt-in, a hub, or while paused", () => {

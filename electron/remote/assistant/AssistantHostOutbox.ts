@@ -3,6 +3,7 @@ import {
   ASSISTANT_CONVERSATION_MAX_HOPS,
   ASSISTANT_INBOX_PAGE_MAX,
   ASSISTANT_INBOX_PAGE_MAX_BYTES,
+  ASSISTANT_MESSAGE_MAX_SERIALIZED_BYTES,
   type AssistantSendMessageArgs,
   type AssistantSendMessageResult,
   type AssistantSendRefusal,
@@ -33,6 +34,8 @@ import {
 export const OUTBOX_MAX_OPEN_PER_LANE = 16;
 /** Messages held across every lane, finished ones included; the oldest finished goes first. */
 const OUTBOX_MAX_ENTRIES = 512;
+/** Conversations whose hops are counted at once; a new one is refused past this, never an old one forgotten. */
+const OUTBOX_MAX_CONTEXTS = 4096;
 /** How long a finished message stays readable in the sent view after its exchange expires. */
 const FINISHED_RETENTION_MS = 60 * 60_000;
 const CALL_TIMEOUT_MS = 15_000;
@@ -108,9 +111,11 @@ interface OutboxEntry {
   state: AssistantSentState;
   refusal: AssistantSendRefusal | null;
   replies: ExchangeResponse[];
-  /** Not sent again before this. */
+  /** Not sent, or read back, again before this. */
   retryAt: number;
   inFlight: boolean;
+  /** The Shell said it moved, or a read of it failed: read it back when next possible. */
+  stale: boolean;
 }
 
 function codeOf(error: unknown): string | null {
@@ -171,8 +176,12 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
     const messageId = this.newId();
     const contextId = args.contextId ?? messageId;
     const contextKey = `${linkSessionId}\u0000${contextId}`;
-    const hopCount = (this.contextHops.get(contextKey)?.hops ?? 0) + 1;
+    const counted = this.contextHops.get(contextKey);
+    const hopCount = (counted?.hops ?? 0) + 1;
     if (hopCount > ASSISTANT_CONVERSATION_MAX_HOPS) return { ok: false, code: "HOP_LIMIT" };
+    if (!counted && this.contextHops.size >= OUTBOX_MAX_CONTEXTS) {
+      return { ok: false, code: "OUTBOX_FULL" };
+    }
     const expiresAt = now + EXCHANGE_TTL_MS;
     this.contextHops.set(contextKey, { hops: hopCount, expiresAt });
     const entry: OutboxEntry = {
@@ -192,6 +201,7 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
       replies: [],
       retryAt: now,
       inFlight: false,
+      stale: false,
     };
     this.entries.set(messageId, entry);
     this.queueFlush();
@@ -227,11 +237,7 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
         refusal: entry.refusal,
         sentAt: entry.sentAt,
         expiresAt: entry.expiresAt,
-        replies: entry.replies.map((reply) => ({
-          state: reply.state,
-          at: reply.at,
-          untrustedText: fenceHubReply(reply.text),
-        })),
+        ...budgetReplies(entry.replies),
       };
       const size = Buffer.byteLength(JSON.stringify(view), "utf8");
       if (sent.length > 0 && bytes + size > ASSISTANT_INBOX_PAGE_MAX_BYTES) {
@@ -263,7 +269,10 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
       ({ messageId }) => {
         const entry = this.entries.get(messageId);
         // Only the Shell a message went to may say it moved.
-        if (entry && entry.linkSessionId === sessionId) void this.refresh(entry, session);
+        if (entry && entry.linkSessionId === sessionId) {
+          entry.stale = true;
+          void this.refresh(entry, session);
+        }
         return null;
       }
     );
@@ -272,8 +281,8 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
     const now = this.now();
     for (const entry of this.entries.values()) {
       if (entry.linkSessionId !== sessionId || FINAL_STATES.has(entry.state)) continue;
-      if (entry.state === "waiting-for-hub") entry.retryAt = Math.min(entry.retryAt, now);
-      else void this.refresh(entry, session);
+      entry.retryAt = Math.min(entry.retryAt, now);
+      if (entry.state !== "waiting-for-hub") entry.stale = true;
     }
     this.queueFlush();
   }
@@ -292,9 +301,11 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
     const now = this.now();
     this.prune(now);
     for (const entry of this.entries.values()) {
-      if (entry.state !== "waiting-for-hub" || entry.inFlight || entry.retryAt > now) continue;
+      if (!this.due(entry) || entry.retryAt > now) continue;
       const session = this.sessionFor(entry.linkSessionId);
-      if (session) void this.send(entry, session);
+      if (!session) continue;
+      if (entry.state === "waiting-for-hub") void this.send(entry, session);
+      else void this.refresh(entry, session);
     }
     this.schedule();
   }
@@ -318,10 +329,14 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
       if (parsed.success) this.apply(entry, parsed.data);
       else entry.retryAt = this.now() + this.retryMs;
     } catch (error) {
-      if (codeOf(error) === "UNSUPPORTED")
+      if (codeOf(error) === "UNSUPPORTED") {
         this.apply(entry, { status: "refused", refusal: "unsupported" });
-      // Lost on the way or unanswered: a resend under the same messageId never admits twice.
-      else entry.retryAt = this.now() + this.retryMs;
+      } else {
+        // Lost on the way or unanswered: a resend under the same messageId never
+        // admits twice. A link that was replaced meanwhile is tried at once.
+        entry.retryAt =
+          this.sessionFor(entry.linkSessionId) === session ? this.now() + this.retryMs : this.now();
+      }
     } finally {
       entry.inFlight = false;
       if (!this.disposed) this.schedule();
@@ -329,6 +344,9 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
   }
 
   private async refresh(entry: OutboxEntry, session: LinkSession): Promise<void> {
+    if (entry.inFlight) return;
+    entry.inFlight = true;
+    let read = false;
     try {
       const answer = await session.call(
         AssistantLinkMethod.GET_HUB_EXCHANGE,
@@ -338,14 +356,29 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
       if (this.disposed || this.entries.get(entry.messageId) !== entry) return;
       if (answer === null) {
         // The Shell no longer holds it: its exchange expired there.
+        read = true;
         if (!FINAL_STATES.has(entry.state)) this.change(entry, { state: "expired" });
         return;
       }
       const parsed = HubExchangeSchema.safeParse(answer);
-      if (parsed.success) this.apply(entry, parsed.data);
+      if (parsed.success) {
+        read = true;
+        this.apply(entry, parsed.data);
+      }
     } catch {
-      // Read again on the next announcement or reconnect.
+      // Read again after a backoff, while the session lasts, or on reconnect.
+    } finally {
+      entry.inFlight = false;
+      if (read) entry.stale = false;
+      else entry.retryAt = this.now() + this.retryMs;
+      if (!this.disposed) this.schedule();
     }
+  }
+
+  /** Whether the entry has something to send or read back. */
+  private due(entry: OutboxEntry): boolean {
+    if (entry.inFlight) return false;
+    return entry.state === "waiting-for-hub" || (entry.stale && !FINAL_STATES.has(entry.state));
   }
 
   private apply(entry: OutboxEntry, answer: HubExchange): void {
@@ -358,7 +391,8 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
       // Not admitted, so it spends none of the conversation's hops.
       const contextKey = `${entry.linkSessionId}\u0000${entry.contextId}`;
       const hops = this.contextHops.get(contextKey);
-      if (hops && hops.hops > 0) hops.hops -= 1;
+      if (hops && hops.hops > 1) hops.hops -= 1;
+      else this.contextHops.delete(contextKey);
       this.change(entry, { state: "refused", refusal: answer.refusal, body: null });
       this.tellLane(entry);
       return;
@@ -449,7 +483,7 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
     this.timer = null;
     let soonest: number | null = null;
     for (const entry of this.entries.values()) {
-      if (entry.state !== "waiting-for-hub" || entry.inFlight) continue;
+      if (!this.due(entry)) continue;
       if (this.sessionFor(entry.linkSessionId) === null) continue;
       soonest = soonest === null ? entry.retryAt : Math.min(soonest, entry.retryAt);
     }
@@ -463,4 +497,28 @@ export class AssistantHostOutbox implements AssistantHostOutboxHandle {
     );
     this.timer.unref?.();
   }
+}
+
+/**
+ * Replies as one sent row carries them, newest kept whole: older ones go first
+ * when the fenced text would pass what one result may hold. Every reply moves
+ * its row, so each was readable whole when it arrived.
+ */
+function budgetReplies(replies: readonly ExchangeResponse[]): {
+  replies: AssistantSentMessage["replies"];
+  repliesOmitted: number;
+} {
+  const kept: AssistantSentMessage["replies"] = [];
+  let bytes = 0;
+  for (let index = replies.length - 1; index >= 0; index--) {
+    const reply = replies[index]!;
+    const view = { state: reply.state, at: reply.at, untrustedText: fenceHubReply(reply.text) };
+    const size = Buffer.byteLength(JSON.stringify(view), "utf8");
+    if (bytes + size > ASSISTANT_MESSAGE_MAX_SERIALIZED_BYTES) {
+      return { replies: kept.reverse(), repliesOmitted: index + 1 };
+    }
+    bytes += size;
+    kept.push(view);
+  }
+  return { replies: kept.reverse(), repliesOmitted: 0 };
 }

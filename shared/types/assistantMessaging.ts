@@ -69,9 +69,7 @@ export const AssistantGetInboxArgsSchema = z.object({
   view: z
     .enum(["received", "sent"])
     .optional()
-    .describe(
-      "received (default) or sent: your messages to the hub, with its replies."
-    ),
+    .describe("received (default) or sent: yours to the hub, with replies."),
 });
 
 export type AssistantGetInboxArgs = z.infer<typeof AssistantGetInboxArgsSchema>;
@@ -122,6 +120,7 @@ export const ASSISTANT_SEND_REFUSALS = [
   "hop_limit",
   "too_large",
   "unsupported",
+  "conflict",
 ] as const;
 export type AssistantSendRefusal = (typeof ASSISTANT_SEND_REFUSALS)[number];
 
@@ -139,7 +138,10 @@ export const AssistantSentMessageSchema = z.object({
   refusal: z.enum(ASSISTANT_SEND_REFUSALS).nullable(),
   sentAt: z.number(),
   expiresAt: z.number(),
+  /** The newest replies that fit one result whole, oldest first. */
   replies: z.array(AssistantSentReplySchema),
+  /** Older replies left out to fit; each was shown when it arrived. */
+  repliesOmitted: z.number(),
 });
 
 export type AssistantSentMessage = z.infer<typeof AssistantSentMessageSchema>;

@@ -292,6 +292,51 @@ describe("AssistantHostOutbox", () => {
     expect(outbox.listSent(enrollment(), page.cursor, 10).sent).toEqual([]);
   });
 
+  it("reads a moved message again after a failed read, without another announcement", async () => {
+    const shell = fakeSession("link-a", () => accepted());
+    connect(shell);
+    outbox.enqueue(enrollment(), { text: "hello" });
+    await settle();
+    let reads = 0;
+    shell.answer = (method) => {
+      if (method !== AssistantLinkMethod.GET_HUB_EXCHANGE) return accepted();
+      if (++reads === 1) throw Object.assign(new Error("busy"), { code: "PERSIST_FAILED" });
+      return accepted({
+        state: "completed",
+        responses: [{ state: "completed", text: "done", at: 3 }],
+      });
+    };
+    shell.tell(AssistantLinkMethod.HUB_EXCHANGE_CHANGED, { messageId: "msg-1" });
+    await settle();
+    expect(outbox.listSent(enrollment(), 0, 10).sent[0]!.state).toBe("submitted");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(reads).toBe(2);
+    expect(outbox.listSent(enrollment(), 0, 10).sent[0]!.state).toBe("completed");
+  });
+
+  it("keeps a row within one result, newest replies whole and older ones counted", async () => {
+    const long = (n: number) => `${n}${"x".repeat(15_000)}`;
+    const shell = fakeSession("link-a", () =>
+      accepted({
+        state: "input-required",
+        responses: [1, 2, 3, 4].map((n) => ({
+          state: "input-required" as const,
+          text: long(n),
+          at: n,
+        })),
+      })
+    );
+    connect(shell);
+    outbox.enqueue(enrollment(), { text: "hello" });
+    await settle();
+    const page = outbox.listSent(enrollment(), 0, 10);
+    const [row] = page.sent;
+    expect(row!.replies.length).toBeGreaterThan(0);
+    expect(row!.replies.length + row!.repliesOmitted).toBe(4);
+    expect(row!.replies.at(-1)!.untrustedText).toContain(long(4));
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(50 * 1024);
+  });
+
   it("reads open messages again when the Shell reconnects", async () => {
     const first = fakeSession("link-a", () => accepted());
     connect(first);
