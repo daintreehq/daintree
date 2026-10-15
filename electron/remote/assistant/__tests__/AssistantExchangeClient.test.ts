@@ -317,6 +317,34 @@ describe("AssistantExchangeClient change events", () => {
     }
   });
 
+  it("tells the hub of a move it only learned by looking up a send whose answer was lost", async () => {
+    await sendOne();
+    // A resend whose answer is lost leaves it unresolved; the host meanwhile has the reply.
+    const call = session.call.bind(session);
+    session.call = (async (method: string, payload: unknown, options?: object) => {
+      if (method === AssistantLinkMethod.SEND) {
+        throw Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" });
+      }
+      return call(method, payload, options as never);
+    }) as LinkSession["call"];
+    const resent = await client.send(HOST, {
+      messageId: "m-1",
+      contextId: "ctx",
+      referenceTaskIds: [],
+      projectId: "proj",
+      slot: 0,
+      generation: "lane-gen",
+      body: "hello",
+    });
+    expect(resent.status).toBe("unknown");
+    expect(journal.unresolved(HOST)).toEqual(["m-1"]);
+    host.put("m-1", "completed", true);
+    // Read past by the page, then found by the lookup.
+    journal.applyChanges(HOST, { records: [], cursor: host.revision, hasMore: false, reset: false });
+    await client.reconcile(HOST, session);
+    expect(moved.map((m) => m.record.state)).toEqual(["completed"]);
+  });
+
   it("answers an announcement after it was disposed without reading anything", async () => {
     await sendOne();
     client.dispose();

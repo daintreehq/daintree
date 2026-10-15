@@ -1,6 +1,6 @@
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { EXCHANGE_RETRY_WINDOW_MS } from "../exchange/AssistantExchangeStore.js";
+import { EXCHANGE_RETRY_WINDOW_MS, EXCHANGE_TTL_MS } from "../exchange/AssistantExchangeStore.js";
 import type { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
 import type { CreateDisposition, ExchangeChanges, ExchangeRecord } from "../exchange/types.js";
 import type { LinkSession } from "../link/session.js";
@@ -110,7 +110,7 @@ export class AssistantExchangeClient {
   private readonly authenticated = new WeakSet<LinkSession>();
   private readonly reconciling = new Map<HostId, Promise<void>>();
   /** The hub enrollment each exchange sent in this run went out under, by host and messageId. */
-  private readonly sentBy = new Map<string, string>();
+  private readonly sentBy = new Map<string, { hubGeneration: string; sentAt: number }>();
   /** Hosts that announced a change while their reconcile was already reading. */
   private readonly again = new Set<HostId>();
   private readonly disposers: Array<() => void> = [];
@@ -191,7 +191,7 @@ export class AssistantExchangeClient {
     // Only a message new to the journal is this hub's: a resend keeps whose it was, and
     // one sent before a restart stays no hub's.
     const hub = entry === null ? this.deps.policy?.()?.getHub() : null;
-    if (hub) this.sentBy.set(sentKey(hostId, payload.messageId), hub.generation);
+    if (hub) this.bind(sentKey(hostId, payload.messageId), hub.generation);
     let answer: unknown;
     try {
       answer = await session.call(AssistantLinkMethod.SEND, payload, { timeoutMs: this.timeoutMs });
@@ -267,6 +267,15 @@ export class AssistantExchangeClient {
     return run;
   }
 
+  /** Bindings outlive no exchange: past its TTL the host has expired it whatever happened. */
+  private bind(key: string, hubGeneration: string): void {
+    const now = Date.now();
+    for (const [other, binding] of this.sentBy) {
+      if (now - binding.sentAt > EXCHANGE_TTL_MS) this.sentBy.delete(other);
+    }
+    this.sentBy.set(key, { hubGeneration, sentAt: now });
+  }
+
   private retryLater(hostId: HostId, session?: LinkSession): void {
     if (this.disposed || this.retries.has(hostId)) return;
     const timer = setTimeout(() => {
@@ -317,7 +326,7 @@ export class AssistantExchangeClient {
         if (!changes.hasMore) break;
       }
       for (const messageId of journal.unresolved(hostId)) {
-        await this.lookUp(hostId, session, messageId);
+        await this.lookUp(hostId, session, messageId, (record) => noteMoves([record]));
       }
     } finally {
       if (moved.size > 0) this.tellMoved(hostId, [...moved.values()]);
@@ -328,9 +337,9 @@ export class AssistantExchangeClient {
     const moved: MovedExchange[] = [];
     for (const record of records) {
       const key = sentKey(hostId, record.messageId);
-      const hubGeneration = this.sentBy.get(key);
-      if (hubGeneration === undefined) continue;
-      moved.push({ record, hubGeneration });
+      const binding = this.sentBy.get(key);
+      if (binding === undefined) continue;
+      moved.push({ record, hubGeneration: binding.hubGeneration });
       // A reply may still land after another terminal state, so only a reply or expiry ends it.
       if (record.delivery.replyReceivedAt !== null || record.tombstonedAt !== null) {
         this.sentBy.delete(key);
@@ -372,7 +381,8 @@ export class AssistantExchangeClient {
   private async lookUp(
     hostId: HostId,
     session: LinkSession,
-    messageId: string
+    messageId: string,
+    beforeRecording?: (record: ExchangeRecord) => void
   ): Promise<ExchangeRecord | null> {
     const { journal } = this.deps;
     // The attempt this lookup is about: a send started after it is not settled by its answer.
@@ -388,6 +398,7 @@ export class AssistantExchangeClient {
     }
     const parsed = ExchangeRecordSchema.safeParse(answer);
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.GET_EXCHANGE);
+    beforeRecording?.(parsed.data);
     journal.recordAnswer(hostId, parsed.data);
     return parsed.data;
   }
