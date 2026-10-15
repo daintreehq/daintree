@@ -23,6 +23,8 @@ export interface TruncatedTooltipProps {
   content: React.ReactNode;
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
+  /** Gap from the trigger, for a trigger inset from the surface the tip should clear. */
+  sideOffset?: number;
   contentClassName?: string;
   disabled?: boolean;
   isTruncated?: boolean;
@@ -47,6 +49,7 @@ export function TruncatedTooltip({
   content,
   side,
   align,
+  sideOffset,
   contentClassName,
   disabled,
   isTruncated: isTruncatedProp,
@@ -79,7 +82,12 @@ export function TruncatedTooltip({
     // long as the user is reading it — no auto-dismiss.
     <Tooltip open={showTooltip ? open : false} onOpenChange={onOpenChange} autoDismiss={false}>
       <TooltipTrigger asChild>{React.cloneElement(children, extraProps)}</TooltipTrigger>
-      <TooltipContent side={side} align={align} className={contentClassName}>
+      <TooltipContent
+        side={side}
+        align={align}
+        sideOffset={sideOffset}
+        className={contentClassName}
+      >
         {content}
       </TooltipContent>
     </Tooltip>

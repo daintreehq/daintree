@@ -36,6 +36,40 @@ const BRANCH_TYPE_ICONS: Record<string, LucideIcon> = {
   other: GitBranch,
 };
 
+export interface BranchTypeParts {
+  /** The type the prefix names ("Feature", "Bugfix"), or null for a bare name. */
+  displayName: string | null;
+  Icon: LucideIcon | null;
+  /** The prefix exactly as the branch spells it, without its slash. */
+  prefix: string;
+  /** Everything after the prefix, uncut. */
+  rest: string;
+}
+
+/**
+ * A branch as its type and the rest of its name: `feature/login` is a Feature
+ * glyph and `login`. The sidebar draws every branch this way, so a surface
+ * that shows the same branch uses this rather than its own map.
+ */
+export function splitBranchType(label: string): BranchTypeParts {
+  const parts = label.split("/");
+  if (parts.length <= 1) return { displayName: null, Icon: null, prefix: "", rest: label };
+
+  const [prefix, ...tail] = parts;
+  const config = BRANCH_PREFIX_MAP[prefix!.toLowerCase()];
+  const typeId = config ? config.id : DEFAULT_BRANCH_TYPE.id;
+  return {
+    displayName: config
+      ? config.displayName
+      : prefix!.length <= 4
+        ? prefix!.toUpperCase()
+        : prefix!.charAt(0).toUpperCase() + prefix!.slice(1).toLowerCase(),
+    Icon: BRANCH_TYPE_ICONS[typeId] ?? GitBranch,
+    prefix: prefix!,
+    rest: tail.join("/"),
+  };
+}
+
 interface BranchLabelProps {
   label: string;
   isActive: boolean;
@@ -51,34 +85,10 @@ export function BranchLabel({
   isMainWorktree,
   className,
 }: BranchLabelProps) {
-  const { displayName, typeId, rest } = useMemo(() => {
-    const parts = label.split("/");
-    if (parts.length <= 1) {
-      return { displayName: null, typeId: null, rest: truncateBranchName(label, 40) };
-    }
-
-    const [prefix, ...tail] = parts;
-    const config = BRANCH_PREFIX_MAP[prefix!.toLowerCase()];
-
-    if (config) {
-      return {
-        displayName: config.displayName,
-        typeId: config.id,
-        rest: truncateBranchName(tail.join("/"), 36),
-      };
-    } else {
-      return {
-        displayName:
-          prefix!.length <= 4
-            ? prefix!.toUpperCase()
-            : prefix!.charAt(0).toUpperCase() + prefix!.slice(1).toLowerCase(),
-        typeId: DEFAULT_BRANCH_TYPE.id,
-        rest: truncateBranchName(tail.join("/"), 36),
-      };
-    }
+  const { displayName, Icon, rest } = useMemo(() => {
+    const parts = splitBranchType(label);
+    return { ...parts, rest: truncateBranchName(parts.rest, parts.displayName === null ? 40 : 36) };
   }, [label]);
-
-  const Icon = typeId ? (BRANCH_TYPE_ICONS[typeId] ?? GitBranch) : null;
 
   return (
     <Tooltip autoDismiss={false}>
