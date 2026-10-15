@@ -230,7 +230,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; end your turn, don't poll. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; may be missed: poll too. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {
@@ -2170,7 +2170,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         notify: {
           description:
-            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; end your turn, don't poll. Agent panes and assistants only.",
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; may be missed: poll too. Agent panes and assistants only.",
           type: "boolean",
         },
         replyLines: {

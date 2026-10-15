@@ -61,7 +61,7 @@ The prompts carry only the basics: orientation, safety rules, and how to answer.
 
 Both open with the same orientation: the two MCP servers and what to do when either is off, finding tools at runtime (a tool name is its action ID), the tier model with `TIER_NOT_PERMITTED` and confirm-gated actions, and the rule that local tools never stand in for the tier. Then a short index of the core tools, the rules for answering launched agents' dialogs and confirmations, and how to read agent state as an observation. They differ in:
 
-- **`CLAUDE.md`** — the rule to pace long waits with notices or `ScheduleWakeup` rather than a blocking call.
+- **`CLAUDE.md`** — the rule to pace long waits with a notice plus one `ScheduleWakeup` backstop rather than a blocking call: a notice can be missed.
 - **`AGENTS.md`** (Codex, and the experimental Copilot integration) — the role-override header and how to call tools from `exec`.
 
 Both also share:

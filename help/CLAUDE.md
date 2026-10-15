@@ -35,7 +35,7 @@ All in `core`; call them directly, without `actions.search`.
 - Launch: `agent.launch({ agentId, prompt, name, notify: true, handback: true, worktreeId?, model?, agentLaunchFlags? })`, the built-in agent id; `worktreeId` defaults to active. Always pass `name`; the same `agentId` one at a time. No task: omit `prompt`, `notify` and `handback`. Per launch, no preset: Codex `model: "gpt-6-sol"` (or `gpt-6-astra`, `gpt-6-luna`), `agentLaunchFlags: ["-c", "model_reasoning_effort=high"]`. One prompt, several agents: `agent.launchMany({ agentIds, prompt, name, notify: true, handback: true })`; no per-agent model or flags.
 - Check: `terminal.getStatus({ terminalIds, includeOutput })`.
 - Prompt: `terminal.sendCommand({ terminalId, command })`; one each to several: `terminal.sendCommandMany({ sends: [{ terminalId, command }], notify: true, handback: true })`.
-- Replies: for answers due within minutes, `waitForReply: true` on a launch, send or batch returns each reply at its done marker. For longer work pass `notify: true, handback: true` and end your turn; each reply arrives as it prints, even mid-turn. **The reply is always sent: never read a terminal to fetch it**, nor wait or poll; read one only if the quote is cut off. `terminal.waitUntilIdleBatch` only where `notify` is refused.
+- Replies: for answers due within minutes, `waitForReply: true` on a launch, send or batch returns each at its done marker. For longer work pass `notify: true, handback: true` and end your turn; replies come as notices, even mid-turn. **A notice is fast but can be missed**: each turn, check every agent you await with `terminal.getStatus`; name any still running as you end it. `terminal.waitUntilIdleBatch` only where `notify` is refused.
 - Close: `terminal.close({ terminalId })` or `terminal.closeMany({ terminalIds })`. Close only what the user asked to, or yours once reported.
 
 ## How to Answer
@@ -91,4 +91,4 @@ For Daintree questions the docs can't answer, say **"I don't have documentation 
 
 ## Watching Agent Terminals
 
-Never hold a long blocking call open: the user can't talk to you during one. Beyond a short wait (`waitForReply` on a quick answer), end your turn and let a `notify: true` notice wake you, or pace with `ScheduleWakeup` and a non-blocking `terminal.getStatus` each time; one pacing mechanism at a time.
+Never hold a long blocking call open: the user can't talk to you during one. Beyond a short wait (`waitForReply` on a quick answer), end your turn with `notify: true` to wake you early and one `ScheduleWakeup` backstop of about 10 minutes that checks a non-blocking `terminal.getStatus`. A notice can be missed: re-arm the backstop while agents run, and no other pacing.

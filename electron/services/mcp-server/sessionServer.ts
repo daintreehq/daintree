@@ -639,20 +639,28 @@ function bindWait(result: CallToolResult, wait: ReplyWait): string | undefined {
   return terminalId;
 }
 
+/** How a call's reply wait ended, as its held notice needs to know. */
+type ReleaseNotice = (answered: boolean, stoppedWithoutMarker: boolean) => void;
+
 /**
  * Settle a call's held notice by how its reply wait ended: an answered wait
  * already told the caller, and one that ran out leaves the notice as the word
- * of the end.
+ * of the end. A stop with no marker can still be followed by one.
  */
-function releaseNoticeAfter(wait: ReplyWait, release: (answered: boolean) => void): void {
-  void wait.promise.then((reply) => release(reply.outcome !== "timeout"));
+function releaseNoticeAfter(wait: ReplyWait, release: ReleaseNotice): void {
+  void wait.promise.then((reply) =>
+    release(
+      reply.outcome !== "timeout",
+      reply.outcome === "settled" && reply.handback === undefined
+    )
+  );
 }
 
 /** A send's or launch's result with the reply it waited for. */
 async function attachReply(
   result: CallToolResult,
   wait: ReplyWait,
-  releaseNotice?: (answered: boolean) => void
+  releaseNotice?: ReleaseNotice
 ): Promise<CallToolResult> {
   if (releaseNotice !== undefined) releaseNoticeAfter(wait, releaseNotice);
   // A failed dispatch is returned as it came, even when its wait had already
@@ -1761,7 +1769,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // A call with `notify` and `waitForReply` both holds its notice while the
     // wait runs, since the wait answers the caller itself when it can; this
     // settles it once the wait ends.
-    let releaseNotice: ((answered: boolean) => void) | undefined;
+    let releaseNotice: ReleaseNotice | undefined;
 
     // Set once the ownership gate inside the IIFE has cleared, and read by the
     // delegated dispatch and the post-cleanup release. Undefined for every
@@ -3027,8 +3035,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // Settled once the item is back, so the launch's notice exists by then.
             const releaseItemNotice = () => {
               if (wait === undefined || noticeHold === undefined || noticePane === null) return;
-              releaseNoticeAfter(wait, (answered) =>
-                terminalNotify?.releaseHold(noticePane, noticeHold, answered)
+              releaseNoticeAfter(wait, (answered, stoppedWithoutMarker) =>
+                terminalNotify?.releaseHold(noticePane, noticeHold, answered, stoppedWithoutMarker)
               );
             };
             let itemResult: CallToolResult;
@@ -3123,7 +3131,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const hold =
             batchItem?.noticeHold ??
             (waitForReply && replyWaiter !== undefined ? createNoticeHold() : undefined);
-          const noticeOptions = { replyLines, ...(hold !== undefined ? { hold } : {}) };
+          const handback =
+            typeof args === "object" &&
+            args !== null &&
+            (args as Record<string, unknown>).handback === true;
+          const noticeOptions = {
+            replyLines,
+            ...(hold !== undefined ? { hold } : {}),
+            ...(handback ? { handback } : {}),
+          };
           try {
             if (actionId === AGENT_LAUNCH_TOOL) {
               if ((readStringArg(args, "prompt") ?? "").trim().length === 0) {
@@ -3152,7 +3168,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           // A batch settles its items' holds itself, as each item's wait ends.
           if (hold !== undefined && batchItem?.noticeHold === undefined) {
-            releaseNotice = (answered) => terminalNotify.releaseHold(pane, hold, answered);
+            releaseNotice = (answered, stoppedWithoutMarker) =>
+              terminalNotify.releaseHold(pane, hold, answered, stoppedWithoutMarker);
           }
         }
 

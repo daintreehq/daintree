@@ -18,6 +18,8 @@ import {
   LANE_WAKE_MAX_PENDING_MS,
   LANE_WAKE_RECHECK_MS,
   MAX_QUEUED_WAKES_PER_PANE,
+  NOTIFY_RECHECK_MAX_MS,
+  NOTIFY_RECHECK_MIN_MS,
   runNotifyWhenIdleTool,
   type FiredNotice,
   type LaneWake,
@@ -1100,6 +1102,291 @@ describe("TerminalNotifyService", () => {
     });
   });
 
+  describe("a stop without the marker the prompt asked for", () => {
+    async function launchedWithHandback(h: ReturnType<typeof setup>, handback = true) {
+      const pending = await h.service.prepareLaunch(PANE, { handback });
+      h.client.terminals.set("t-new", working());
+      pending.complete({ launched: true, terminalId: "t-new", spawnStatus: null });
+    }
+
+    /** The pane read the line and finished the turn it started. */
+    async function paneTookItsTurn(h: ReturnType<typeof setup>) {
+      await vi.advanceTimersByTimeAsync(600);
+      h.client.terminals.set(OWN, atPrompt(Date.now()));
+      h.settle(OWN);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS);
+    }
+
+    it("reports the stop and keeps one notice for the marker", async () => {
+      const h = setup();
+      await launchedWithHandback(h);
+
+      // The agent ended its turn with its work running in the background.
+      h.settle("t-new");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text).toContain(
+        "t-new stopped working, now waiting at its prompt, with no done marker yet (another notice follows when it next stops)"
+      );
+      expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1 });
+
+      await paneTookItsTurn(h);
+      h.resume("t-new");
+      h.handbackObserved("t-new", undefined, "sleep finished, KUMQUAT");
+      await flushNotice();
+
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toContain("t-new printed its done marker");
+      expect(h.client.submitted[1].text).toContain("sleep finished, KUMQUAT");
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+
+    it("reports the next stop once when the marker never prints", async () => {
+      const h = setup();
+      await launchedWithHandback(h);
+      h.settle("t-new");
+      await flushNotice();
+      await paneTookItsTurn(h);
+
+      h.resume("t-new");
+      h.settle("t-new");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toContain("t-new stopped working");
+      expect(h.client.submitted[1].text).not.toContain("no done marker yet");
+
+      await paneTookItsTurn(h);
+      h.resume("t-new");
+      h.settle("t-new");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+
+    it("arms nothing more when the stop shows the marker", async () => {
+      const h = setup();
+      await launchedWithHandback(h);
+      h.settle("t-new", {
+        lastHandback: { message: "done", observedAt: Date.now(), truncated: false },
+      });
+      await flushNotice();
+
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text).not.toContain("no done marker yet");
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+
+    it("drops the follow-up when a later prompt replaces the one it waits on", async () => {
+      const h = setup();
+      await launchedWithHandback(h);
+      h.settle("t-new");
+      await flushNotice();
+      expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1 });
+
+      h.service.supersede(PANE, "t-new");
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+
+    it("follows a send's own marker, never another prompt's", async () => {
+      const h = setup();
+      const pending = await h.service.prepareSend(PANE, "t-a", { handback: true });
+      pending.complete({ sent: true, terminalId: "t-a", submissionToken: "tok-1" });
+      await vi.advanceTimersByTimeAsync(100);
+      h.settle("t-a");
+      await flushNotice();
+      expect(h.client.submitted[0].text).toContain("no done marker yet");
+      await paneTookItsTurn(h);
+
+      h.resume("t-a");
+      h.handbackObserved("t-a", "tok-other", "someone else's answer");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(1);
+
+      h.handbackObserved("t-a", "tok-1", "the real answer");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toContain("the real answer");
+    });
+
+    it("reports an exit while the follow-up waits", async () => {
+      const h = setup();
+      await launchedWithHandback(h);
+      h.settle("t-new");
+      await flushNotice();
+      await paneTookItsTurn(h);
+
+      h.client.exit("t-new", 1);
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toContain("t-new exited (code 1)");
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+
+    it("gives way to a new notified prompt, whose marker alone it then waits on", async () => {
+      const h = setup();
+      await launchedWithHandback(h);
+      h.settle("t-new");
+      await flushNotice();
+      await paneTookItsTurn(h);
+
+      const pending = await h.service.prepareSend(PANE, "t-new", { handback: true });
+      pending.complete({ sent: true, terminalId: "t-new", submissionToken: "tok-2" });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1 });
+
+      // The launch prompt's marker, printed late, answers nothing now.
+      h.handbackObserved("t-new", undefined, "launch answer");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(1);
+
+      h.handbackObserved("t-new", "tok-2", "second answer");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(2);
+      expect(h.client.submitted[1].text).toContain("second answer");
+    });
+
+    it("outlives a reply wait that answered with the stop, and reports the marker after it", async () => {
+      const h = setup();
+      const hold = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold, handback: true });
+      h.client.terminals.set("t-new", working());
+      pending.complete({ launched: true, terminalId: "t-new", spawnStatus: null });
+
+      h.settle("t-new");
+      await flushNotice();
+      // The wait answers with the stop; the notice for that stop goes with it.
+      h.service.releaseHold(PANE, hold, true);
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1 });
+
+      h.resume("t-new");
+      h.handbackObserved("t-new", undefined, "finished in the background");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text).toContain("finished in the background");
+    });
+
+    it("types nothing before the reply wait answers, and nothing it already answered", async () => {
+      const h = setup();
+      const hold = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold, handback: true });
+      h.client.terminals.set("t-new", working());
+      pending.complete({ launched: true, terminalId: "t-new", spawnStatus: null });
+
+      h.settle("t-new");
+      await flushNotice();
+      h.resume("t-new");
+      h.handbackObserved("t-new", undefined, "done before the wait ended");
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+
+      // The wait came back with that marker.
+      h.service.releaseHold(PANE, hold, true);
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+
+    it("hands the follow-up what a delayed activation replays after the stop", async () => {
+      const h = setup();
+      const writtenAt = Date.now();
+      h.client.records.set("tok-1", { phase: "queued", at: writtenAt });
+      const pending = await h.service.prepareSend(PANE, "t-a", { handback: true });
+      pending.complete({ sent: true, terminalId: "t-a", submissionToken: "tok-1" });
+
+      // All before the write is confirmed: a stop past the window, a resume, an exit.
+      h.settle("t-a");
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 500);
+      h.resume("t-a");
+      h.client.exit("t-a", 0);
+      h.client.records.set("tok-1", { phase: "pty_written", at: writtenAt });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text).toContain("no done marker yet");
+      expect(h.client.submitted[0].text).toContain("t-a exited (code 0)");
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+
+    it("keeps the follow-up when the wait answers the stop before the notice settles", async () => {
+      const h = setup();
+      const hold = createNoticeHold();
+      const pending = await h.service.prepareLaunch(PANE, { hold, handback: true });
+      h.client.terminals.set("t-new", working());
+      pending.complete({ launched: true, terminalId: "t-new", spawnStatus: null });
+
+      h.settle("t-new");
+      await vi.advanceTimersByTimeAsync(500);
+      h.service.releaseHold(PANE, hold, true, true);
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)).toMatchObject({ pendingCount: 1 });
+
+      h.resume("t-new");
+      h.handbackObserved("t-new", undefined, "done after all");
+      await flushNotice();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text).toContain("done after all");
+    });
+
+    it("hands a launch's follow-up an exit seen before the launch reported back", async () => {
+      const h = setup();
+      const pending = await h.service.prepareLaunch(PANE, { handback: true });
+      h.client.terminals.set("t-new", working());
+      h.settle("t-new");
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 500);
+      h.resume("t-new");
+      h.client.exit("t-new", 2);
+      pending.complete({ launched: true, terminalId: "t-new", spawnStatus: null });
+      await flushNotice();
+
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text).toContain("no done marker yet");
+      expect(h.client.submitted[0].text).toContain("t-new exited (code 2)");
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+
+    it("hands the follow-up a replay longer than the remembered history", async () => {
+      const h = setup();
+      const writtenAt = Date.now();
+      h.client.records.set("tok-1", { phase: "queued", at: writtenAt });
+      const pending = await h.service.prepareSend(PANE, "t-a", { handback: true });
+      pending.complete({ sent: true, terminalId: "t-a", submissionToken: "tok-1" });
+
+      // Two real stops, then enough brief ones to push both out of the
+      // eight changes remembered per terminal.
+      for (let stop = 0; stop < 2; stop++) {
+        await vi.advanceTimersByTimeAsync(100);
+        h.settle("t-a");
+        await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + 500);
+        h.resume("t-a");
+      }
+      for (let blip = 0; blip < 5; blip++) {
+        await vi.advanceTimersByTimeAsync(100);
+        h.settle("t-a");
+        await vi.advanceTimersByTimeAsync(100);
+        h.resume("t-a");
+      }
+      h.client.records.set("tok-1", { phase: "pty_written", at: writtenAt });
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text.match(/t-a stopped working/g)).toHaveLength(2);
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+
+    it("never follows up a prompt that asked for no marker", async () => {
+      const h = setup();
+      await launchedWithHandback(h, false);
+      h.settle("t-new");
+      await flushNotice();
+
+      expect(h.client.submitted[0].text).not.toContain("no done marker yet");
+      expect(h.service.getPaneState(OWN)?.pendingCount ?? 0).toBe(0);
+    });
+  });
+
   describe("routing and project scoping", () => {
     it("types each notice into the pane that asked, and no other", async () => {
       const h = setup();
@@ -1196,6 +1483,135 @@ describe("TerminalNotifyService", () => {
 
       h.settle("t-a");
       await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)?.delivery).toMatchObject({
+        status: "held",
+        reason: "typing",
+      });
+    });
+
+    it("looks again at an idle pane that refused the line, with no move of its own", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      const own = h.client.terminals.get(OWN)!;
+      h.client.terminals.delete(OWN);
+
+      h.settle("t-a");
+      await flushNotice();
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)?.delivery).toMatchObject({
+        status: "blocked",
+        reason: "unreadable",
+      });
+
+      // Readable again, and still sitting at its prompt: no event says so.
+      h.client.terminals.set(OWN, own);
+      await vi.advanceTimersByTimeAsync(NOTIFY_RECHECK_MIN_MS);
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.client.submitted[0].text).toContain("t-a");
+    });
+
+    it("backs off while the pane keeps refusing", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      h.client.terminals.set(OWN, { ...atPrompt(Date.now() - 60_000), waitingReason: "question" });
+
+      h.settle("t-a");
+      await flushNotice();
+      expect(h.service.getPaneState(OWN)?.delivery).toMatchObject({
+        status: "blocked",
+        reason: "question",
+      });
+
+      // The first look comes back still blocked; the second waits twice as long.
+      await vi.advanceTimersByTimeAsync(NOTIFY_RECHECK_MIN_MS + 100);
+      h.client.terminals.set(OWN, atPrompt(Date.now() - 60_000));
+      await vi.advanceTimersByTimeAsync(NOTIFY_RECHECK_MIN_MS * 2 - 1_000);
+      expect(h.client.submitted).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.client.submitted).toHaveLength(1);
+      expect(NOTIFY_RECHECK_MAX_MS).toBeGreaterThanOrEqual(NOTIFY_RECHECK_MIN_MS * 2);
+    });
+
+    it("backs off to the cap, and starts over once a line goes out", async () => {
+      const h = setup();
+      const reads = vi.spyOn(h.client, "getTerminalAsync");
+      const ownReads = () =>
+        reads.mock.calls.filter(([id, token]) => id === OWN && token === undefined).length;
+      const blocked = () => ({
+        ...atPrompt(Date.now() - 60_000),
+        waitingReason: "question" as const,
+      });
+      const expectNextLookAfter = async (gapMs: number) => {
+        const before = ownReads();
+        await vi.advanceTimersByTimeAsync(gapMs - 200);
+        expect(ownReads()).toBe(before);
+        await vi.advanceTimersByTimeAsync(400);
+        expect(ownReads()).toBe(before + 1);
+      };
+
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      h.client.terminals.set(OWN, blocked());
+      h.settle("t-a");
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + NOTIFY_COALESCE_MS);
+      for (const gap of [
+        NOTIFY_RECHECK_MIN_MS,
+        NOTIFY_RECHECK_MIN_MS * 2 - 200,
+        NOTIFY_RECHECK_MAX_MS - 200,
+        NOTIFY_RECHECK_MAX_MS - 200,
+      ]) {
+        await expectNextLookAfter(gap);
+      }
+
+      h.client.terminals.set(OWN, atPrompt(Date.now() - 60_000));
+      await vi.advanceTimersByTimeAsync(NOTIFY_RECHECK_MAX_MS);
+      expect(h.client.submitted).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(600);
+      h.client.terminals.set(OWN, atPrompt(Date.now()));
+      h.settle(OWN);
+      await vi.advanceTimersByTimeAsync(MIN_NOTIFY_INTERVAL_MS);
+
+      await h.service.whenIdle(PANE, { terminalId: "t-b" });
+      h.client.terminals.set(OWN, blocked());
+      h.settle("t-b");
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + NOTIFY_COALESCE_MS);
+      await expectNextLookAfter(NOTIFY_RECHECK_MIN_MS);
+    });
+
+    it("starts the backoff over when the refused notices go without a line", async () => {
+      const h = setup();
+      const reads = vi.spyOn(h.client, "getTerminalAsync");
+      const ownReads = () =>
+        reads.mock.calls.filter(([id, token]) => id === OWN && token === undefined).length;
+
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      // Still pending, so the pane's record outlives t-a's notice.
+      await h.service.whenIdle(PANE, { terminalId: "t-b" });
+      h.client.terminals.set(OWN, { ...atPrompt(Date.now() - 60_000), waitingReason: "question" });
+      h.settle("t-a");
+      await vi.advanceTimersByTimeAsync(
+        NOTIFY_TARGET_SETTLE_MS + NOTIFY_COALESCE_MS + NOTIFY_RECHECK_MIN_MS * 3 + 100
+      );
+
+      // A new prompt to t-a drops its refused notice; nothing was typed.
+      h.service.supersede(PANE, "t-a");
+      expect(h.client.submitted).toEqual([]);
+
+      h.settle("t-b");
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + NOTIFY_COALESCE_MS);
+      const before = ownReads();
+      await vi.advanceTimersByTimeAsync(NOTIFY_RECHECK_MIN_MS + 200);
+      expect(ownReads()).toBe(before + 1);
+    });
+
+    it("never types over a draft however long the pane stays idle", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      const settledAt = Date.now() - 60_000;
+      h.client.terminals.set(OWN, { ...atPrompt(settledAt), lastTypedInputAt: settledAt + 1 });
+
+      h.settle("t-a");
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
       expect(h.client.submitted).toEqual([]);
       expect(h.service.getPaneState(OWN)?.delivery).toMatchObject({
         status: "held",

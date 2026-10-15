@@ -1102,7 +1102,32 @@ describe("terminal notices", () => {
 
       const hold = terminalNotify.prepareSend.mock.calls[0]?.[2]?.hold;
       expect(hold).toBeDefined();
-      expect(terminalNotify.releaseHold).toHaveBeenCalledWith(OWN_PANE, hold, true);
+      expect(terminalNotify.releaseHold).toHaveBeenCalledWith(OWN_PANE, hold, true, false);
+    });
+
+    it("tells the notice when the wait answered with a stop and no marker", async () => {
+      const wait = vi.fn(() => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        promise: Promise.resolve({ terminalId: "t-a", outcome: "settled" as const }),
+      }));
+      const { terminalNotify, start } = notifyDeps({ origin: "help" }, { replyWaiter: { wait } });
+      const server = await start("session-wait-notify-no-marker");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: {
+          terminalId: "t-a",
+          command: "one fact",
+          notify: true,
+          handback: true,
+          waitForReply: true,
+        },
+      });
+      await Promise.resolve();
+
+      const hold = terminalNotify.prepareSend.mock.calls[0]?.[2]?.hold;
+      expect(terminalNotify.releaseHold).toHaveBeenCalledWith(OWN_PANE, hold, true, true);
     });
 
     it("gives each batch item's notice its own hold, released when its wait runs out", async () => {
@@ -1142,8 +1167,8 @@ describe("terminal notices", () => {
       expect(holds[0]).toBeDefined();
       expect(holds[0]).not.toBe(holds[1]);
       expect(terminalNotify.releaseHold.mock.calls).toEqual([
-        [OWN_PANE, holds[0], false],
-        [OWN_PANE, holds[1], false],
+        [OWN_PANE, holds[0], false, false],
+        [OWN_PANE, holds[1], false, false],
       ]);
     });
 
@@ -1451,6 +1476,23 @@ describe("terminal notices", () => {
 
       expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", { replyLines: 12 });
       expect(dispatchAction.mock.calls[0]?.[1]).toEqual({ terminalId: "t-a", command: "vote" });
+    });
+
+    it("tells the notice the prompt asked for a handback, and still sends the flag", async () => {
+      const { terminalNotify, dispatchAction, start } = notifyDeps({ origin: "help" });
+      const server = await start("session-send-handback");
+
+      await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: "t-a", command: "vote", notify: true, handback: true },
+      });
+
+      expect(terminalNotify.prepareSend).toHaveBeenCalledWith(OWN_PANE, "t-a", { handback: true });
+      expect(dispatchAction.mock.calls[0]?.[1]).toEqual({
+        terminalId: "t-a",
+        command: "vote",
+        handback: true,
+      });
     });
 
     it("forwards a malformed reply length for the send's own schema to reject", async () => {

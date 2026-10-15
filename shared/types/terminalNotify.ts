@@ -102,7 +102,7 @@ const WAITING_REASON_VALUES = ["prompt", "question", "approval", "error"] as con
  * drift apart.
  */
 export const NOTIFY_ARG_DESCRIPTION =
-  "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; end your turn, don't poll. Agent panes and assistants only.";
+  "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; may be missed: poll too. Agent panes and assistants only.";
 
 /** Model-facing description of `replyLines`, shared like {@link NOTIFY_ARG_DESCRIPTION}. */
 export const NOTIFY_REPLY_LINES_DESCRIPTION =
