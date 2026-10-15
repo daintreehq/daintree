@@ -109,6 +109,16 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
   },
 };
 
+/** The same timeout, when the view asking was reported hidden throughout: an observation, not a refusal. */
+const UNSEEN_TIMEOUT_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_TIMEOUT",
+    message:
+      "Confirmation timed out without a response, and the Daintree view showing it was hidden the whole time, so nobody saw it to answer. Nothing was declined.",
+  },
+};
+
 /**
  * How long a dispatch waits for an in-flight worktree snapshot (#13348): the
  * worktree port's own request deadline, well inside main's 30s dispatch clock,
@@ -1361,7 +1371,7 @@ export function useMcpBridge(): void {
               if (decision === "timeout") {
                 window.electron.mcpBridge.sendDispatchActionResponse({
                   requestId,
-                  result: TIMEOUT_RESULT,
+                  result: resolution.unseen ? UNSEEN_TIMEOUT_RESULT : TIMEOUT_RESULT,
                   confirmationDecision: "timeout",
                 });
                 return;

@@ -203,7 +203,11 @@ export interface McpConfirmResolution {
    * Present only on an approval of a dialog that offered the session scope
    * (#12692), and `session` only when the user chose it.
    */
-  scope?: McpApprovalScope;
+  scope?: McpApprovalScope; /**
+   * Present only on a timeout of a request whose window was never on screen
+   * while it asked: nobody could have answered it, so nothing was declined.
+   */
+  unseen?: true;
 }
 
 interface McpConfirmState {
@@ -217,7 +221,8 @@ interface McpConfirmActions {
   resolveCurrent: (
     decision: McpConfirmationDecision,
     selectedTargetIds?: readonly string[],
-    scope?: McpApprovalScope
+    scope?: McpApprovalScope,
+    unseen?: boolean
   ) => void;
   drop: (requestId: string) => void;
   reset: () => void;
@@ -286,7 +291,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
     set({ queue: next });
   },
 
-  resolveCurrent: (decision, selectedTargetIds, scope) => {
+  resolveCurrent: (decision, selectedTargetIds, scope, unseen) => {
     const { current, queue } = get();
     if (current === null) return;
     const resolve = resolvers.get(current.requestId);
@@ -304,6 +309,7 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
       ...(approved && current.offerSessionApproval === true && scope === "session"
         ? { scope: "session" as const }
         : {}),
+      ...(decision === "timeout" && unseen === true ? { unseen: true as const } : {}),
     });
     advance(set, queue);
   },
