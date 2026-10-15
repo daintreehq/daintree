@@ -2186,6 +2186,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./settingsCopy.js").SettingsCopyPreviewPayload];
     result: import("./settingsCopy.js").SettingsCopyPreview;
   };
+  "settings-copy:status": {
+    args: [payload: import("./settingsCopy.js").SettingsCopyStatusPayload];
+    result: import("./settingsCopy.js").SettingsCopyStatus;
+  };
+  "settings-copy:undo": {
+    args: [payload: import("./settingsCopy.js").SettingsCopyUndoPayload];
+    result: import("./settingsCopy.js").SettingsCopyUndoResult;
+  };
   "shortcut-hints:get-counts": {
     args: [];
     result: Record<string, number>;

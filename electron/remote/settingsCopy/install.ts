@@ -1,3 +1,5 @@
+import path from "node:path";
+import { app } from "electron";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import {
   getConfigBundleService,
@@ -9,6 +11,7 @@ import type { LinkSession } from "../link/session.js";
 import { registerRemoteService } from "../runtime.js";
 import { ClientSettingsCopy } from "./ClientSettingsCopy.js";
 import { HostSettingsCopy } from "./HostSettingsCopy.js";
+import { LastCopyStore } from "./LastCopyStore.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
@@ -44,7 +47,9 @@ export function installSettingsCopyClient(deps: SettingsCopyClientDeps): () => v
 }
 
 export interface SettingsCopyHostServer {
-  onSession(listener: (ctx: { session: LinkSession }) => void): () => void;
+  onSession(
+    listener: (ctx: { session: LinkSession; client: { clientName: string } }) => void
+  ): () => void;
 }
 
 /** Host mode: preview and apply settings an attached Shell copies here when its person asks. */
@@ -53,8 +58,11 @@ export function installSettingsCopyHost(server: SettingsCopyHostServer): () => v
     service: getConfigBundleService,
     runWrite: runConfigWrite,
     reconcile: reconcileAfterConfigWrite,
+    records: new LastCopyStore(
+      path.join(app.getPath("userData"), "settings-copy", "last-copy.json")
+    ),
   });
-  const off = server.onSession(({ session }) => host.attach(session));
+  const off = server.onSession(({ session, client }) => host.attach(session, client.clientName));
   return () => {
     off();
     host.dispose();

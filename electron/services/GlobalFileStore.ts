@@ -148,6 +148,17 @@ export class GlobalFileStore {
     });
   }
 
+  /**
+   * Rewrite the list in one queue turn: `transform` sees the latest recipes and
+   * returns the list to save, or null to leave the file alone. For a change
+   * that must compare and write with nothing landing in between.
+   */
+  async transformRecipes(
+    transform: (recipes: TerminalRecipe[]) => TerminalRecipe[] | null
+  ): Promise<void> {
+    await this.enqueueRecipesUpdate(async () => transform(await this.getRecipes()));
+  }
+
   async deleteRecipe(recipeId: string): Promise<void> {
     await this.enqueueRecipesUpdate(async () => {
       const recipes = await this.getRecipes();

@@ -55,14 +55,24 @@ import {
   emptyCheck,
   humanizeKey,
   isRecord,
+  listLeafValue,
+  recordLeafValue,
   sameValue,
   skippedLeaf,
   stableStringify,
   unchangedLeaf,
+  withListLeaf,
+  withRecordLeaf,
   type SectionCheck,
   type SectionContext,
   type SectionDiff,
   type SectionHandler,
+  planUndo,
+  settleUndo,
+  storedMapUndo,
+  type UndoLeaf,
+  type UndoLeafResult,
+  type UndoPlan,
 } from "./configBundle/sectionKit.js";
 import {
   customPresetIds,
@@ -107,6 +117,17 @@ import {
  * snapshot restored from the exported projection would erase everything the
  * projection left out.
  */
+
+/** The leaves one section's apply changed, in the shape an undo takes them back. */
+export interface CapturedSection {
+  section: ConfigBundleSectionId;
+  leaves: UndoLeaf[];
+}
+
+export interface UndoSectionResult {
+  section: ConfigBundleSectionId;
+  leaves: UndoLeafResult[];
+}
 
 export interface ConfigBundleServiceDeps {
   /** Rebuilds the application menu after keybinding overrides change. */
@@ -484,7 +505,8 @@ export class ConfigBundleService {
    * NOT a failure: those leaves are reported skipped and the import stands.
    */
   async apply(
-    incoming: Partial<Record<ConfigBundleSectionId, unknown>>
+    incoming: Partial<Record<ConfigBundleSectionId, unknown>>,
+    options: { capture?: CapturedSection[] } = {}
   ): Promise<ConfigImportReport> {
     const snapshots: Array<{ handler: SectionHandler; snapshot: unknown }> = [];
     const sections: ConfigImportSectionReport[] = [];
@@ -516,6 +538,7 @@ export class ConfigBundleService {
         // Snapshot before the first write of this section, never after.
         snapshots.push({ handler, snapshot: current });
         const leaves = await handler.apply(payload, current);
+        if (options.capture) await this.capture(handler, current, leaves, options.capture);
         sections.push({
           section: id,
           present: true,
@@ -573,6 +596,78 @@ export class ConfigBundleService {
     }
 
     return { outcome: "applied", sections, errors, rolledBack };
+  }
+
+  /**
+   * What each applied leaf held before and after, read back from the store
+   * rather than taken from the payload, so an undo compares against what
+   * actually landed. A leaf the read-back shows unchanged isn't kept.
+   */
+  private async capture(
+    handler: SectionHandler,
+    before: unknown,
+    leaves: ConfigImportLeafResult[],
+    into: CapturedSection[]
+  ): Promise<void> {
+    const applied = leaves.filter((leaf) => leaf.status === "applied");
+    if (applied.length === 0) return;
+    const after = await handler.read();
+    const leafOf = handler.leafValue ?? recordLeafValue;
+    const changed: UndoLeaf[] = [];
+    for (const { key } of applied) {
+      const was = leafOf(before, key);
+      const now = leafOf(after, key);
+      if (sameValue(was, now)) continue;
+      changed.push({
+        key,
+        ...(was !== undefined ? { before: was } : {}),
+        ...(now !== undefined ? { after: now } : {}),
+      });
+    }
+    if (changed.length > 0) into.push({ section: handler.id, leaves: changed });
+  }
+
+  /**
+   * Take a copy back, leaf by leaf, latest section first. A leaf still holding
+   * what the copy wrote gets its earlier value back (or goes, if the copy added
+   * it); one already back as it was is left; anything else was edited since and
+   * stays as it is. Nothing outside the copy's leaves is written.
+   */
+  async undo(sections: readonly CapturedSection[]): Promise<UndoSectionResult[]> {
+    const order = (id: ConfigBundleSectionId) => CONFIG_BUNDLE_SECTION_IDS.indexOf(id);
+    const results: UndoSectionResult[] = [];
+    for (const { section, leaves } of [...sections].sort(
+      (a, b) => order(b.section) - order(a.section)
+    )) {
+      const handler = this.handlerFor(section);
+      if (!handler) {
+        results.push({ section, leaves: leaves.map(({ key }) => ({ key, status: "failed" })) });
+        continue;
+      }
+      try {
+        results.push({
+          section,
+          leaves: handler.undo
+            ? await handler.undo(leaves)
+            : await this.undoLeaves(handler, leaves),
+        });
+      } catch (error) {
+        console.error(`[ConfigBundleService] Failed to undo ${section}:`, error);
+        results.push({ section, leaves: leaves.map(({ key }) => ({ key, status: "failed" })) });
+      }
+    }
+    return results;
+  }
+
+  private async undoLeaves(handler: SectionHandler, leaves: UndoLeaf[]): Promise<UndoLeafResult[]> {
+    const leafOf = handler.leafValue ?? recordLeafValue;
+    const plan = planUndo(leaves, await handler.read(), leafOf, handler.withLeaf);
+    if (plan.pending.length === 0) return settleUndo(leaves, plan, undefined, leafOf);
+    // `restore` writes the section as a whole, but from the current value
+    // with only these leaves swapped, so everything else is written back as
+    // it already is.
+    await handler.restore(plan.next);
+    return settleUndo(leaves, plan, await handler.read(), leafOf);
   }
 
   /**
@@ -697,6 +792,15 @@ export class ConfigBundleService {
         }
         return results;
       },
+      // The stored registry, not the sanitized read: an entry or field the
+      // read drops must survive an undo of some other agent.
+      undo: storedMapUndo(
+        () => store.get("userAgentRegistry"),
+        (registry) => {
+          store.set("userAgentRegistry", registry as Record<string, UserAgentConfig>);
+          new UserAgentRegistryService().reload();
+        }
+      ),
       restore: async (snapshot) => {
         store.set("userAgentRegistry", snapshot as Record<string, UserAgentConfig>);
         new UserAgentRegistryService().reload();
@@ -957,6 +1061,16 @@ export class ConfigBundleService {
         }
         return results;
       },
+      // On the stored map, not `read()`: that drops overrides for actions this
+      // build doesn't have registered right now (a plugin's), and writing it
+      // back would lose them.
+      undo: storedMapUndo(
+        () => store.get("keybindingOverrides.overrides"),
+        async (overrides) => {
+          store.set("keybindingOverrides.overrides", overrides as Record<string, string[]>);
+          await this.deps.rebuildMenu();
+        }
+      ),
       restore: async (snapshot) => {
         store.set("keybindingOverrides.overrides", (snapshot ?? {}) as Record<string, string[]>);
         await this.deps.rebuildMenu();
@@ -1158,6 +1272,15 @@ export class ConfigBundleService {
         if (wrote) await this.deps.refreshTitleBar();
 
         return results;
+      },
+      leafValue: (value, key) =>
+        key.startsWith("theme:")
+          ? listLeafValue(isRecord(value) ? value.customSchemes : undefined, key.slice(6))
+          : recordLeafValue(value, key),
+      withLeaf: (value, key, leaf) => {
+        if (!key.startsWith("theme:")) return withRecordLeaf(value, key, leaf);
+        const record = isRecord(value) ? value : {};
+        return { ...record, customSchemes: withListLeaf(record.customSchemes, key.slice(6), leaf) };
       },
       restore: async (snapshot) => {
         const theme = readTheme();
@@ -1435,6 +1558,24 @@ export class ConfigBundleService {
           );
         }
         return results;
+      },
+      leafValue: listLeafValue,
+      // Not `restore`: it deletes and re-adds, and the undo must leave every
+      // recipe it isn't taking back exactly where and as it is. Compared and
+      // written in one turn of the recipe queue, so an edit can't land between.
+      undo: async (leaves) => {
+        let plan: UndoPlan | undefined;
+        await projectStore.transformGlobalRecipes((recipes) => {
+          plan = planUndo(leaves, recipes, listLeafValue, withListLeaf);
+          return plan.pending.length > 0 ? (plan.next as TerminalRecipe[]) : null;
+        });
+        if (!plan) throw new Error("The recipe store did not run the undo");
+        return settleUndo(
+          leaves,
+          plan,
+          plan.pending.length > 0 ? await projectStore.getGlobalRecipes() : undefined,
+          listLeafValue
+        );
       },
       restore: async (snapshot) => {
         const snapshotById = byId(snapshot);

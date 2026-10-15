@@ -837,6 +837,8 @@ export const CHANNEL_LOCALITY = {
   "session-restore:view-hydrated": "shell",
   "settings-copy:apply": "shell",
   "settings-copy:preview": "shell",
+  "settings-copy:status": "shell",
+  "settings-copy:undo": "shell",
   "setup:agent-install": "host",
   "setup:agent-install-progress": "host",
   "shortcut-hints:get-counts": "shell",

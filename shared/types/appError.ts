@@ -70,6 +70,9 @@ export type AppErrorCode =
   // A host's settings changed after the copy to it was previewed; it applies
   // nothing and asks for a fresh preview rather than write over the change.
   | "SETTINGS_PREVIEW_STALE"
+  // The host's last settings copy was replaced or already undone since the
+  // page showed it; nothing is undone and the page refreshes to see why.
+  | "SETTINGS_COPY_UNDO_STALE"
   // ssh reached the host, but Daintree there isn't running in Host mode.
   | "HOST_MODE_OFF"
   // ssh reached the host and couldn't log in: authentication or the host key

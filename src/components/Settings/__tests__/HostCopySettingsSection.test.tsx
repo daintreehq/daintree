@@ -2,7 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ConfigImportReport } from "@shared/types/configBundle";
-import type { SettingsCopyPreview } from "@shared/types/ipc/settingsCopy";
+import type {
+  SettingsCopyLastCopy,
+  SettingsCopyPreview,
+  SettingsCopyStatus,
+  SettingsCopyUndoResult,
+} from "@shared/types/ipc/settingsCopy";
 import { PORTABLE_SETTINGS_CATEGORIES } from "@shared/config/portableSettings";
 import { HostCopySettingsSection } from "../Hosts/HostCopySettingsSection";
 
@@ -72,9 +77,50 @@ const REPORT: ConfigImportReport = {
   ],
 };
 
+const LAST_COPY: SettingsCopyLastCopy = {
+  id: "fedcba9876543210fedcba9876543210",
+  source: "Laptop",
+  at: Date.now() - 5 * 60_000,
+  sections: [
+    { section: "agentSettings", applied: 2, skipped: 1 },
+    { section: "worktreeConfig", applied: 1, skipped: 0 },
+  ],
+  undo: "available",
+  changed: [
+    { section: "agentSettings", key: "claude", label: "Claude" },
+    { section: "worktreeConfig", key: "pathPattern", label: "Path pattern" },
+  ],
+};
+
+const STATUS: SettingsCopyStatus = {
+  supported: true,
+  changes: ["agentSettings", "worktreePath"],
+  lastCopy: null,
+};
+
+const UNDONE: SettingsCopyUndoResult["undone"] = {
+  at: Date.now(),
+  leaves: [
+    { section: "agentSettings", key: "claude", label: "Claude", status: "edited" },
+    { section: "worktreeConfig", key: "pathPattern", label: "Path pattern", status: "restored" },
+  ],
+};
+
+const UNDONE_COPY: SettingsCopyLastCopy = {
+  ...LAST_COPY,
+  undo: "done",
+  changed: undefined,
+  undone: UNDONE,
+};
+
 const settingsCopy = {
   preview: vi.fn(async (): Promise<SettingsCopyPreview> => PREVIEW),
   apply: vi.fn(async (): Promise<ConfigImportReport> => REPORT),
+  status: vi.fn(async (): Promise<SettingsCopyStatus> => STATUS),
+  undo: vi.fn(async (): Promise<SettingsCopyUndoResult> => ({
+    undone: UNDONE,
+    lastCopy: UNDONE_COPY,
+  })),
 };
 
 function appError(code: string, userMessage: string): Error {
@@ -90,6 +136,7 @@ function isChecked(label: string): boolean {
 }
 
 beforeEach(() => {
+  settingsCopy.status.mockReset().mockImplementation(async () => STATUS);
   Object.defineProperty(window, "electron", {
     value: { settingsCopy },
     configurable: true,
@@ -223,5 +270,108 @@ describe("Settings → Hosts → host → Copy settings", () => {
   it("offers the copy for a host that was just added", () => {
     render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected offered />);
     expect(screen.getByText(/Studio starts from defaults/)).not.toBeNull();
+  });
+});
+
+describe("Settings → Hosts → host → what a copy would change", () => {
+  function categoryLabel(id: string): string {
+    return PORTABLE_SETTINGS_CATEGORIES.find((c) => c.id === id)!.label;
+  }
+
+  it("says what a copy from here would change on opening, and again on Refresh", async () => {
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    await screen.findByText("Copying from this computer would change 2 categories");
+    expect(
+      screen.getByText([categoryLabel("agentSettings"), categoryLabel("worktreePath")].join(", "))
+    ).not.toBeNull();
+    expect(settingsCopy.status).toHaveBeenCalledWith({ hostId: HOST });
+
+    settingsCopy.status.mockResolvedValueOnce({ ...STATUS, changes: [] });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByText("Copying from this computer would change 0 categories");
+    expect(settingsCopy.status).toHaveBeenCalledTimes(2);
+  });
+
+  it("never asks while disconnected", () => {
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected={false} />);
+    expect(settingsCopy.status).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing for a host too old to say", async () => {
+    settingsCopy.status.mockResolvedValueOnce({ supported: false, changes: [], lastCopy: null });
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    await waitFor(() => expect(screen.queryByText(/Checking what a copy/)).toBeNull());
+    expect(screen.queryByText(/Copying from this computer/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+  });
+
+  it("drops an answer for a host the page has since moved off", async () => {
+    let answerFirst: (status: SettingsCopyStatus) => void = () => {};
+    settingsCopy.status.mockImplementationOnce(
+      () => new Promise<SettingsCopyStatus>((resolve) => (answerFirst = resolve))
+    );
+    const { rerender } = render(
+      <HostCopySettingsSection hostId={HOST} hostName="Studio" connected />
+    );
+    settingsCopy.status.mockResolvedValueOnce({ ...STATUS, changes: [] });
+    rerender(<HostCopySettingsSection hostId="studio-02" hostName="Other" connected />);
+    await screen.findByText("Copying from this computer would change 0 categories");
+    await act(async () => answerFirst(STATUS));
+    expect(screen.queryByText("Copying from this computer would change 2 categories")).toBeNull();
+  });
+
+  it("names where the last copy came from and undoes it, listing what it left alone", async () => {
+    settingsCopy.status.mockResolvedValue({ ...STATUS, lastCopy: LAST_COPY });
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    await screen.findByText(/^Last copied from Laptop \d+ minutes ago$/);
+    expect(screen.getByText(/3 applied · 1 skipped/)).not.toBeNull();
+    // What the host reports once it has been undone.
+    settingsCopy.status.mockResolvedValue({ ...STATUS, lastCopy: UNDONE_COPY });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo last copy" }));
+    await screen.findByText("Undo the last settings copy to 'Studio'?");
+    expect(screen.getByText("Path pattern")).not.toBeNull();
+    expect(settingsCopy.undo).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo copy" }));
+    await screen.findByText("Kept · Changed on Studio since the copy");
+    expect(settingsCopy.undo).toHaveBeenCalledWith({ hostId: HOST, copyId: LAST_COPY.id });
+    expect(screen.getByText(/1 setting restored/)).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Undo last copy" })).toBeNull();
+  });
+
+  it("still lists what an undo left alone after the page is reopened", async () => {
+    settingsCopy.status.mockResolvedValue({ ...STATUS, lastCopy: UNDONE_COPY });
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    await screen.findByText("Kept · Changed on Studio since the copy");
+    expect(screen.getByText("Claude")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Undo last copy" })).toBeNull();
+  });
+
+  it("still shows the last copy when this computer has too much to compare", async () => {
+    settingsCopy.status.mockResolvedValue({ ...STATUS, changes: null, lastCopy: LAST_COPY });
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    await screen.findByText("Too many settings here to compare in one go");
+    expect(screen.getByRole("button", { name: "Undo last copy" })).not.toBeNull();
+  });
+
+  it("says why an undo didn't happen, on the row it was asked from", async () => {
+    settingsCopy.status.mockResolvedValue({ ...STATUS, lastCopy: LAST_COPY });
+    settingsCopy.undo.mockRejectedValueOnce(
+      appError("SETTINGS_COPY_UNDO_STALE", "Studio has a newer copy. Refresh to see it.")
+    );
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    fireEvent.click(await screen.findByRole("button", { name: "Undo last copy" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo copy" }));
+    await screen.findByText("Studio has a newer copy. Refresh to see it.");
+  });
+
+  it("checks again after a copy lands", async () => {
+    render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected />);
+    await screen.findByText("Copying from this computer would change 2 categories");
+    fireEvent.click(screen.getByRole("button", { name: "Preview changes on Studio" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Copy to Studio" }));
+    await screen.findByText("1 applied · 1 skipped");
+    await waitFor(() => expect(settingsCopy.status).toHaveBeenCalledTimes(2));
   });
 });

@@ -17,6 +17,8 @@ import { pluralNoun, pluralize } from "@/lib/pluralize";
 import { SettingsCheckbox } from "../SettingsCheckbox";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsActions, SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
+import { HostCopyStatusGroup } from "./HostCopyStatusGroup";
+import { useHostSettingsCopyStatus } from "./useHostSettingsCopyStatus";
 
 interface HostCopySettingsSectionProps {
   hostId: HostId;
@@ -96,6 +98,7 @@ export function HostCopySettingsSection({
   // Answers for a request that has since been superseded (selection changed,
   // a newer preview, the host went away) are dropped, never shown.
   const generation = useRef(0);
+  const status = useHostSettingsCopyStatus(hostId, hostName, connected);
 
   useEffect(() => {
     generation.current += 1;
@@ -171,10 +174,13 @@ export function HostCopySettingsSection({
     setError(null);
     window.electron.settingsCopy.apply({ hostId, ticket: shown.ticket }).then(
       (report) => {
+        // What the host now has, and the copy it just recorded.
+        status.refresh();
         if (generation.current !== ticket) return;
         setPhase({ kind: "result", preview: shown, report });
       },
       (err: unknown) => {
+        if (clientErrorCode(err) === "OUTCOME_UNKNOWN") status.refresh();
         if (generation.current !== ticket) return;
         const code = clientErrorCode(err);
         const previewAgain = code === "SETTINGS_PREVIEW_STALE" || code === "OUTCOME_UNKNOWN";
@@ -218,6 +224,24 @@ export function HostCopySettingsSection({
   return (
     <SettingsSection id="host-copy-settings" title="Copy settings" description={description}>
       <div className="space-y-4">
+        <HostCopyStatusGroup
+          hostId={hostId}
+          hostName={hostName}
+          state={status.state}
+          busy={busy}
+          onRefresh={status.refresh}
+          onUndone={(lastCopy) => {
+            // Shown at once; the refresh then brings the drift up to date.
+            const current =
+              status.state.kind === "ready"
+                ? status.state.status
+                : status.state.kind === "loading"
+                  ? status.state.previous
+                  : null;
+            if (current) status.show({ ...current, lastCopy });
+            status.refresh();
+          }}
+        />
         <SettingsGroup label="What to copy">
           <SettingsCheckbox
             id="host-copy-all"

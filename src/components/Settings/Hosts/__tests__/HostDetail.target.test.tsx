@@ -18,6 +18,7 @@ const client = vi.hoisted(() => ({
 
 vi.mock("@/clients/remoteHostsClient", () => ({ remoteHostsClient: client }));
 vi.mock("../HostPluginsSection", () => ({ HostPluginsSection: () => null }));
+vi.mock("../HostCopySettingsSection", () => ({ HostCopySettingsSection: () => null }));
 
 import { HostDetail } from "../HostDetail";
 

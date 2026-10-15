@@ -15,10 +15,13 @@ import {
   diffRecord,
   emptyCheck,
   isRecord,
+  recordLeafValue,
   sameValue,
   scalarSection,
   skippedLeaf,
+  storedMapUndo,
   unchangedLeaf,
+  withRecordLeaf,
   type SectionContext,
   type SectionDiff,
   type SectionHandler,
@@ -255,6 +258,10 @@ export function assistantModelsSection(
       }
       return results;
     },
+    undo: storedMapUndo(
+      () => store.get("helpAssistant.modelIds" as never),
+      (models) => store.set("helpAssistant.modelIds" as never, models as never)
+    ),
     restore: async (snapshot) => {
       store.set("helpAssistant.modelIds" as never, (isRecord(snapshot) ? snapshot : {}) as never);
     },
@@ -331,6 +338,10 @@ export function globalEnvironmentSection(): SectionHandler {
       }
       return results;
     },
+    undo: storedMapUndo(
+      () => store.get("globalEnvironmentVariables"),
+      (variables) => store.set("globalEnvironmentVariables", variables as never)
+    ),
     restore: async (snapshot) => {
       store.set("globalEnvironmentVariables", (isRecord(snapshot) ? snapshot : {}) as never);
     },
@@ -626,6 +637,22 @@ export function permissionBypassSection(): SectionHandler {
         );
       }
       return results;
+    },
+    // `agents.<id>` is that agent's whole entry; the id is the rest of the key, dots and all.
+    leafValue: (value, key) => {
+      const snapshot = asSnapshot(value);
+      return key.startsWith("agents.")
+        ? recordLeafValue(snapshot.agents, key.slice("agents.".length))
+        : recordLeafValue(snapshot, key);
+    },
+    withLeaf: (value, key, leaf) => {
+      const snapshot = asSnapshot(value);
+      return key.startsWith("agents.")
+        ? {
+            ...snapshot,
+            agents: withRecordLeaf(snapshot.agents, key.slice("agents.".length), leaf),
+          }
+        : withRecordLeaf(snapshot, key, leaf);
     },
     restore: async (snapshot) => {
       const prior = asSnapshot(snapshot);

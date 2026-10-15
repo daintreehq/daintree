@@ -12,6 +12,10 @@ export const SettingsCopyLinkMethod = {
   PREVIEW: "settings.copy.preview",
   /** Write what a ticket previewed, unless the host's settings changed since. */
   APPLY: "settings.copy.apply",
+  /** What a copy of a bundle would change, with no ticket, and the last copy received (#13347). */
+  STATUS: "settings.copy.status",
+  /** Take back the last copy's leaves that still hold what it wrote. */
+  UNDO: "settings.copy.undo",
 } as const;
 
 /**
@@ -101,3 +105,45 @@ export const SettingsCopyReportSchema = z.object({
   rolledBack: z.boolean(),
   restoreFailed: z.boolean().optional(),
 });
+
+export const SettingsCopyUndoSchema = z.object({ copyId: ticket });
+
+const count = z.number().int().nonnegative();
+
+const undone = z.object({
+  at: z.number().int().nonnegative(),
+  leaves: z
+    .array(
+      z.object({
+        section: sectionId,
+        key: text,
+        label: text,
+        status: z.enum(["restored", "unchanged", "edited", "failed"]),
+      })
+    )
+    .max(10_000),
+});
+
+const lastCopy = z.object({
+  id: ticket,
+  source: z.string().max(256),
+  at: z.number().int().nonnegative(),
+  sections: z.array(z.object({ section: sectionId, applied: count, skipped: count })).max(64),
+  undo: z.enum(["available", "unavailable", "done"]),
+  changed: z
+    .array(z.object({ section: sectionId, key: text, label: text }))
+    .max(10_000)
+    .optional(),
+  undone: undone.optional(),
+});
+
+/** The host's status, validated before this Shell shows any of it. */
+export const SettingsCopyStatusResultSchema = z.object({
+  sections: z.array(z.object({ section: sectionId, add: count, update: count })).max(64),
+  unknownSections: z.array(sectionId).max(64),
+  lastCopy: lastCopy.nullable(),
+});
+export type SettingsCopyStatusResult = z.infer<typeof SettingsCopyStatusResultSchema>;
+
+export const SettingsCopyUndoResultSchema = z.object({ undone, lastCopy });
+export type SettingsCopyUndoLinkResult = z.infer<typeof SettingsCopyUndoResultSchema>;
