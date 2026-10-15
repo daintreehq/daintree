@@ -868,6 +868,35 @@ describe("help.launchAgent", () => {
       expect(result).toMatchObject({ slot: 2, terminalId: "term-help", agentId: "claude" });
     });
 
+    it("gives way when something else binds the stale lane while it launches", async () => {
+      useHelpPanelStore.getState().setTerminal(0, "term-dead", "claude", "sess-dead");
+      vi.mocked(window.electron.help.provisionSession).mockImplementationOnce(async () => {
+        // The lane's own controller started a session there meanwhile.
+        useHelpPanelStore.getState().setTerminal(0, "term-other", "claude", "sess-other");
+        return {
+          sessionId: "sess-new",
+          sessionPath: "/mock/help",
+          token: "tok-new",
+          tier: "core",
+          mcpUrl: null,
+          windowId: 1,
+        };
+      });
+
+      const result = await action.run({ slot: 0, vacantOnly: true }, stubCtx);
+
+      expect(result).toBeUndefined();
+      expect(useHelpPanelStore.getState().sessions[0]).toMatchObject({
+        terminalId: "term-other",
+        sessionId: "sess-other",
+      });
+      expect(window.electron.help.revokeSession).not.toHaveBeenCalledWith("sess-other");
+      expect(mockRemovePanel).not.toHaveBeenCalledWith("term-other", expect.anything());
+      // Its own new terminal goes instead.
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-new");
+      expect(mockRemovePanel).toHaveBeenCalledWith("term-help");
+    });
+
     it("opens a hub-started assistant with the opening that asks it no question", async () => {
       await action.run({ slot: 1, vacantOnly: true, greeting: "hub" }, stubCtx);
 
@@ -880,14 +909,50 @@ describe("help.launchAgent", () => {
     });
 
     it("gives a caller that named a busy lane nothing, with no tab opened and no toast", async () => {
+      // The view's tab could be stale, so main decides; it refuses a lane its assistant runs in.
       useHelpPanelStore.getState().setTerminal(0, "term-live", "claude", "sess-live");
+      vi.mocked(window.electron.help.provisionSession).mockRejectedValueOnce(
+        new Error("[HelpSessionError|LANE_OCCUPIED] An assistant is already running in that lane")
+      );
 
       const result = await action.run({ slot: 0, vacantOnly: true }, stubCtx);
 
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ slot: 0, vacantOnly: true })
+      );
       expect(result).toBeUndefined();
-      expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
       expect(mockNotify).not.toHaveBeenCalled();
       expect(useHelpPanelStore.getState().isOpen).toBe(false);
+      expect(useHelpPanelStore.getState().sessions[0]).toMatchObject({
+        terminalId: "term-live",
+        sessionId: "sess-live",
+      });
+      expect(window.electron.help.revokeSession).not.toHaveBeenCalled();
+      expect(mockDispatch).not.toHaveBeenCalledWith(
+        "agent.launch",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("lets go of a lane whose assistant went with its host once main finds nothing there (#13392)", async () => {
+      // The host restarted with the link down: the exit never arrived.
+      useHelpPanelStore.getState().setTerminal(0, "term-dead", "claude", "sess-dead");
+      useHelpPanelStore.getState().setHibernateSession("proj-default", 0, {
+        sessionId: "agent-dead",
+        cwd: "/repo",
+        agentId: "claude",
+      });
+      const result = await action.run({ slot: 0, vacantOnly: true }, stubCtx);
+
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ slot: 0, vacantOnly: true })
+      );
+      // Released without killing anything, before the new assistant binds.
+      expect(mockRemovePanel).toHaveBeenCalledWith("term-dead", { backendAlreadyClosed: true });
+      expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-dead");
+      expect(result).toMatchObject({ slot: 0, terminalId: "term-help" });
+      expect(useHelpPanelStore.getState().sessions[0]?.terminalId).toBe("term-help");
     });
 
     it("prefers an existing empty tab over opening another", async () => {

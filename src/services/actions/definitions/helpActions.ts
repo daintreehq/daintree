@@ -114,6 +114,70 @@ function exactHelpLaunchLane(
 }
 
 /**
+ * A lane this view still shows bound to an assistant, for a caller that
+ * refuses to displace one (#13392). After its host restarted with the link
+ * down, the exit never arrived and the lane stays taken by a terminal that is
+ * gone; only main can say so. It provisions the lane only when the host runs
+ * no assistant there, and refuses otherwise, so the binding is let go only on
+ * that answer.
+ */
+function staleHelpLaunchLane(
+  state: HelpPanelState,
+  workspaceId: string,
+  slot: number
+): {
+  slot: number;
+  isNew: false;
+  stale: { terminalId: string | null; sessionId: string | null };
+} | null {
+  const lane = state.sessions[slot];
+  if (!lane || (lane.terminalId === null && lane.sessionId === null)) return null;
+  // Another launch heading for it owns it.
+  if (claimedHelpLaneKeys.has(assistantSlotKey(workspaceId, slot))) return null;
+  return {
+    slot,
+    isNew: false,
+    stale: { terminalId: lane.terminalId, sessionId: lane.sessionId },
+  };
+}
+
+/**
+ * Let go of a stale lane's binding once main has provisioned the lane, which it
+ * does only when the host runs no assistant there: what the view still shows
+ * went with its host. Done in the same step as the new terminal binds, so the
+ * lane is never empty for its own controller to launch into meanwhile, and only
+ * while the lane still holds what was found: anything that bound it since owns
+ * it, and the launch gives way. The pane goes without a kill being sent; the
+ * view drops its copy of the old resume token, as a view loaded afresh would
+ * never have had it.
+ */
+function releaseStaleHelpLane(
+  workspaceId: string,
+  slot: number,
+  stale: { terminalId: string | null; sessionId: string | null }
+): void {
+  const state = useHelpPanelStore.getState();
+  const current = state.sessions[slot];
+  if (
+    !current ||
+    current.terminalId !== stale.terminalId ||
+    current.sessionId !== stale.sessionId
+  ) {
+    return;
+  }
+  if (stale.sessionId) {
+    window.electron.help.revokeSession(stale.sessionId).catch((err) => {
+      logError("Failed to revoke a help session its host had already ended", err);
+    });
+  }
+  if (stale.terminalId) {
+    usePanelStore.getState().removePanel(stale.terminalId, { backendAlreadyClosed: true });
+  }
+  state.clearTerminal(slot);
+  state.clearHibernateSession(workspaceId, slot);
+}
+
+/**
  * The agent another lane of this workspace is running or will resume with.
  * Lanes of one project share a session folder and must run one agent — main
  * refuses a mismatch with `MIXED_AGENT_LANES` — so a help launch beside them
@@ -586,10 +650,17 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         ? new Map<number, string>()
         : await readKeptLaneAgents(workspace.id);
       const panelState = useHelpPanelStore.getState();
-      const lane =
+      const lane: {
+        slot: number;
+        isNew: boolean;
+        stale?: { terminalId: string | null; sessionId: string | null };
+      } | null =
         parsed?.slot === undefined
           ? pickHelpLaunchLane(panelState, workspace.id)
-          : exactHelpLaunchLane(panelState, workspace.id, parsed.slot);
+          : (exactHelpLaunchLane(panelState, workspace.id, parsed.slot) ??
+            (parsed.vacantOnly
+              ? staleHelpLaunchLane(panelState, workspace.id, parsed.slot)
+              : null));
       // A caller that named the lane is told by the missing result, with no
       // tab opened or toast shown in a view nobody may be looking at.
       if (!lane && parsed?.slot !== undefined) return undefined;
@@ -718,6 +789,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           // slot meanwhile — or bound the tab this launch reused — it is ours to
           // keep only while it is still free.
           claimedHelpLaneKeys.delete(claimKey);
+          if (lane.stale) releaseStaleHelpLane(workspace.id, targetSlot, lane.stale);
           const bindState = useHelpPanelStore.getState();
           const laneLost = bindState.sessions[targetSlot]
             ? !isFreeHelpLane(bindState, workspace.id, targetSlot)
