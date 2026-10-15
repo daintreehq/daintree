@@ -2082,6 +2082,37 @@ describe("HelpSessionService", () => {
       expect(service.getRunningLaneSession("proj-1", 1)).toBeNull();
     });
 
+    it("lists every lane running an assistant, with its agent, and drops one once revoked", async () => {
+      const first = await service.provisionSession(provisionInput());
+      const second = await service.provisionSession({ ...provisionInput(), slot: 1 });
+      if (!first || !second) throw new Error("expected results");
+      // Provisioned is not running: nothing listed until a PTY is bound.
+      expect(service.listRunningLanes()).toEqual([]);
+      expect(service.markTerminalForToken(first.token, "term-1")).toBe(true);
+      expect(service.markTerminalForToken(second.token, "term-2")).toBe(true);
+      const agentId = provisionInput().agentId;
+      expect(service.listRunningLanes()).toEqual([
+        { projectId: "proj-1", slot: 0, agentId },
+        { projectId: "proj-1", slot: 1, agentId },
+      ]);
+      await service.revokeSession(first.sessionId);
+      expect(service.listRunningLanes()).toEqual([{ projectId: "proj-1", slot: 1, agentId }]);
+    });
+
+    it("stops listing a lane the moment its teardown starts, before the PTY is gone", async () => {
+      let resolveKill!: (id: string | null) => void;
+      mockPtyGracefulKill.mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (resolveKill = resolve))
+      );
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.markTerminalForToken(result.token, "term-1")).toBe(true);
+      const revoke = service.revokeSession(result.sessionId, { captureHibernation: true });
+      expect(service.listRunningLanes()).toEqual([]);
+      resolveKill(null);
+      await revoke;
+    });
+
     it("names a session's lane until the session is revoked (#13335)", async () => {
       const result = await service.provisionSession({ ...provisionInput(), slot: 1 });
       if (!result) throw new Error("expected result");

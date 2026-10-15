@@ -77,11 +77,33 @@ export type HostListArgs = z.infer<typeof HostListArgsSchema>;
 
 const laneSchema = z.object({
   projectId: z.string(),
+  projectName: z.string().nullable(),
   slot: z.number(),
   generation: z.string(),
   available: z.boolean(),
+  agentId: z.string().nullable(),
 });
 export type HostAssistantLane = z.infer<typeof laneSchema>;
+
+/** Most projects one `host.listAssistants` returns; those with assistants come first. */
+export const HOST_LIST_PROJECTS_MAX = 50;
+
+const hostAssistantSchema = z.object({
+  slot: z.number(),
+  agentId: z.string().nullable(),
+  // Set once the assistant is enrolled for this Shell: what a message to it names.
+  generation: z.string().nullable(),
+  available: z.boolean(),
+});
+export type HostProjectAssistant = z.infer<typeof hostAssistantSchema>;
+
+const hostProjectSchema = z.object({
+  projectId: z.string(),
+  name: z.string().nullable(),
+  path: z.string().nullable(),
+  assistants: z.array(hostAssistantSchema),
+});
+export type HostProjectEntry = z.infer<typeof hostProjectSchema>;
 
 export const HostListEntrySchema = z.object({
   hostId: z.string(),
@@ -113,7 +135,8 @@ export type HostListAssistantsArgs = z.infer<typeof HostListAssistantsArgsSchema
 
 export const HostListAssistantsResultSchema = z.object({
   ...outcomeFields,
-  lanes: z.array(laneSchema).nullable(),
+  projects: z.array(hostProjectSchema).nullable(),
+  projectsOmitted: z.number(),
 });
 export type HostListAssistantsResult = z.infer<typeof HostListAssistantsResultSchema>;
 

@@ -10,8 +10,14 @@ import type {
 import { RetryWindowPassedError } from "../AssistantExchangeClient.js";
 import { LANE_NOT_RUNNING_MESSAGE } from "../hostExchanges.js";
 import {
+  HOST_LIST_PROJECTS_MAX,
+  HostListAssistantsResultSchema,
+  HostListResultSchema,
+} from "../../../../shared/types/hostMessaging.js";
+import {
   HUB_SENDS_PER_HOST_PER_MINUTE,
   HubMessagingRuntime,
+  projectTree,
   type ObservedHost,
 } from "../HubMessagingRuntime.js";
 
@@ -96,6 +102,7 @@ describe("HubMessagingRuntime (#13336)", () => {
     known: ReturnType<typeof vi.fn>;
   };
   let runtime: HubMessagingRuntime;
+  let hostProjects: ReturnType<typeof vi.fn>;
   let ids: number;
 
   beforeEach(() => {
@@ -110,9 +117,10 @@ describe("HubMessagingRuntime (#13336)", () => {
     denial = null;
     checks = [];
     client = {
-      listLanes: vi.fn(async () => [
-        { projectId: "proj-2", slot: 0, generation: "gen-2", available: true },
-      ]),
+      listLanes: vi.fn(async () => ({
+        lanes: [{ projectId: "proj-2", slot: 0, generation: "gen-2", available: true }],
+        assistants: [{ projectId: "proj-2", slot: 0, agentId: "codex" }],
+      })),
       send: vi.fn(async (_hostId: string, payload: { messageId: string; contextId: string }) => ({
         status: "accepted",
         disposition: "created",
@@ -124,7 +132,12 @@ describe("HubMessagingRuntime (#13336)", () => {
       cancel: vi.fn(async () => record({ cancelRequestedAt: 20 })),
       known: vi.fn(() => null),
     };
+    hostProjects = vi.fn(async () => [
+      { id: "proj-9", name: "notes", path: "/repos/notes" },
+      { id: "proj-2", name: "website", path: "/repos/website" },
+    ]);
     runtime = new HubMessagingRuntime({
+      listHostProjects: hostProjects as never,
       policy: {
         isSupported: () => true,
         getHub: () => hub,
@@ -169,11 +182,14 @@ describe("HubMessagingRuntime (#13336)", () => {
       denial = "paused";
       await expect(runtime.listAssistants("hub", { hostId: "studio" })).resolves.toMatchObject({
         ok: true,
-        value: { outcome: "ok", lanes: [{ slot: 0, available: false }] },
+        value: {
+          outcome: "ok",
+          projects: [{ assistants: [{ slot: 0, available: false }] }, { assistants: [] }],
+        },
       });
       denial = null;
       await expect(runtime.listAssistants("hub", { hostId: "studio" })).resolves.toMatchObject({
-        value: { lanes: [{ slot: 0, available: true }] },
+        value: { projects: [{ assistants: [{ slot: 0, available: true }] }, { assistants: [] }] },
       });
     });
 
@@ -196,6 +212,78 @@ describe("HubMessagingRuntime (#13336)", () => {
       runtime.dispose();
       expect(runtime.isAvailable("hub")).toBe(false);
       await expect(runtime.list("hub")).resolves.toMatchObject({ code: "NOT_ELIGIBLE" });
+    });
+  });
+
+  describe("host.listAssistants", () => {
+    it("lists the host's projects with the assistants in each, in the advertised shape", async () => {
+      const listed = await runtime.listAssistants("hub", { hostId: "studio" });
+      if (!listed.ok) throw new Error("refused");
+      expect(HostListAssistantsResultSchema.parse(listed.value)).toEqual({
+        outcome: "ok",
+        detail: null,
+        retryAfterMs: null,
+        projects: [
+          {
+            projectId: "proj-2",
+            name: "website",
+            path: "/repos/website",
+            assistants: [{ slot: 0, agentId: "codex", generation: "gen-2", available: true }],
+          },
+          { projectId: "proj-9", name: "notes", path: "/repos/notes", assistants: [] },
+        ],
+        projectsOmitted: 0,
+      });
+      // host.list then names the lane's project from that listing, without asking again.
+      const hostList = await runtime.list("hub");
+      if (!hostList.ok) throw new Error("refused");
+      expect(HostListResultSchema.parse(hostList.value).hosts[0]?.lanes).toEqual([
+        {
+          projectId: "proj-2",
+          projectName: "website",
+          slot: 0,
+          generation: "gen-2",
+          available: true,
+          agentId: "codex",
+        },
+      ]);
+      expect(hostProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("still lists the assistants, unnamed, when the host's projects can't be read", async () => {
+      hostProjects.mockRejectedValueOnce(new Error("HOST_DISCONNECTED"));
+      const listed = await runtime.listAssistants("hub", { hostId: "studio" });
+      if (!listed.ok) throw new Error("refused");
+      expect(HostListAssistantsResultSchema.parse(listed.value).projects).toEqual([
+        {
+          projectId: "proj-2",
+          name: null,
+          path: null,
+          assistants: [{ slot: 0, agentId: "codex", generation: "gen-2", available: true }],
+        },
+      ]);
+    });
+
+    it("refuses in the advertised shape", async () => {
+      denial = "host-disabled";
+      const refused = await runtime.listAssistants("hub", { hostId: "studio" });
+      if (!refused.ok) throw new Error("refused outright");
+      expect(HostListAssistantsResultSchema.parse(refused.value)).toMatchObject({
+        outcome: "opted_out",
+        projects: null,
+        projectsOmitted: 0,
+      });
+      client.listLanes.mockRejectedValueOnce(
+        new AppError({ code: "HOST_DISCONNECTED", message: "link dropped" })
+      );
+      denial = null;
+      const failed = await runtime.listAssistants("hub", { hostId: "studio" });
+      if (!failed.ok) throw new Error("refused outright");
+      expect(HostListAssistantsResultSchema.parse(failed.value)).toMatchObject({
+        outcome: "disconnected",
+        projects: null,
+        projectsOmitted: 0,
+      });
     });
   });
 
@@ -245,7 +333,16 @@ describe("HubMessagingRuntime (#13336)", () => {
       expect(listed.value.hosts[0]).toMatchObject({
         connection: "disconnected",
         agentsObserved: null,
-        lanes: [{ projectId: "proj-2", slot: 0, generation: "gen-2", available: true }],
+        lanes: [
+          {
+            projectId: "proj-2",
+            projectName: "website",
+            slot: 0,
+            generation: "gen-2",
+            available: true,
+            agentId: "codex",
+          },
+        ],
         lanesObservedAt: 1_000_000,
       });
       expect(client.listLanes).toHaveBeenCalledTimes(1);
@@ -509,5 +606,100 @@ describe("HubMessagingRuntime (#13336)", () => {
     const listed = await runtime.listAssistants("hub", { hostId: "studio" });
     expect(listed).toMatchObject({ ok: false, code: "UNAVAILABLE" });
     if (!listed.ok) expect(listed.message).not.toContain("secret");
+  });
+});
+
+describe("projectTree", () => {
+  const summary = (id: string, name: string) => ({ id, name, path: `/repos/${name}` });
+
+  it("names each assistant's project, lists projects with assistants first, and keeps the host's order", () => {
+    const tree = projectTree(
+      {
+        lanes: [
+          { projectId: "b", slot: 1, generation: "gen-b1", available: true, agentId: "codex" },
+        ],
+        assistants: [
+          { projectId: "b", slot: 1, agentId: "codex" },
+          { projectId: "b", slot: 0, agentId: "codex" },
+        ],
+      },
+      [summary("a", "alpha"), summary("b", "beta"), summary("c", "gamma")],
+      false
+    );
+    expect(tree.projects).toEqual([
+      {
+        projectId: "b",
+        name: "beta",
+        path: "/repos/beta",
+        assistants: [
+          { slot: 0, agentId: "codex", generation: null, available: false },
+          { slot: 1, agentId: "codex", generation: "gen-b1", available: true },
+        ],
+      },
+      { projectId: "a", name: "alpha", path: "/repos/alpha", assistants: [] },
+      { projectId: "c", name: "gamma", path: "/repos/gamma", assistants: [] },
+    ]);
+    expect(tree.lanes).toEqual([
+      {
+        projectId: "b",
+        projectName: "beta",
+        slot: 1,
+        generation: "gen-b1",
+        available: true,
+        agentId: "codex",
+      },
+    ]);
+  });
+
+  it("orders projects with assistants by the host's own order, and lists a repeated project once", () => {
+    const tree = projectTree(
+      {
+        lanes: [],
+        assistants: [
+          { projectId: "c", slot: 0, agentId: "claude" },
+          { projectId: "a", slot: 0, agentId: "codex" },
+        ],
+      },
+      [summary("a", "alpha"), summary("b", "beta"), summary("a", "alpha"), summary("c", "gamma")],
+      false
+    );
+    expect(tree.projects.map((project) => project.projectId)).toEqual(["a", "c", "b"]);
+    expect(tree.omitted).toBe(0);
+  });
+
+  it("keeps an enrolled lane whose assistant isn't running, and one in a project the host didn't name", () => {
+    const tree = projectTree(
+      { lanes: [{ projectId: "scratch", slot: 2, generation: "gen-s", available: false }] },
+      [],
+      false
+    );
+    expect(tree.projects).toEqual([
+      {
+        projectId: "scratch",
+        name: null,
+        path: null,
+        assistants: [{ slot: 2, agentId: null, generation: "gen-s", available: false }],
+      },
+    ]);
+  });
+
+  it("marks nothing available while paused, and counts the projects past the cap", () => {
+    const many = Array.from({ length: HOST_LIST_PROJECTS_MAX + 3 }, (_, i) =>
+      summary(`p${i}`, `project-${i}`)
+    );
+    const tree = projectTree(
+      {
+        lanes: [{ projectId: "p60", slot: 0, generation: "g", available: true, agentId: "claude" }],
+        assistants: [{ projectId: "p60", slot: 0, agentId: "claude" }],
+      },
+      [...many, summary("p60", "late")],
+      true
+    );
+    expect(tree.projects[0]).toMatchObject({
+      projectId: "p60",
+      assistants: [{ available: false }],
+    });
+    expect(tree.projects).toHaveLength(HOST_LIST_PROJECTS_MAX);
+    expect(tree.omitted).toBe(many.length + 1 - HOST_LIST_PROJECTS_MAX);
   });
 });

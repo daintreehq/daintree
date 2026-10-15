@@ -21,8 +21,8 @@ import {
   SendResultSchema,
   SendToHubPayloadSchema,
   type AssistantSendPayload,
-  type EnrolledLane,
   type ExchangeResponse,
+  type LaneList,
 } from "./linkMethods.js";
 
 export interface AssistantExchangeClientDeps {
@@ -229,15 +229,15 @@ export class AssistantExchangeClient {
       });
   }
 
-  /** The lanes this Shell's current session to the host enrolled. */
-  async listLanes(hostId: HostId): Promise<EnrolledLane[]> {
+  /** The lanes this Shell's current session to the host enrolled, and every assistant running there. */
+  async listLanes(hostId: HostId): Promise<LaneList> {
     this.checkHost(hostId, "inspect");
     const session = await this.open(hostId);
     const parsed = LaneListSchema.safeParse(
       await this.call(hostId, session, AssistantLinkMethod.LIST_LANES, null)
     );
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.LIST_LANES);
-    return parsed.data.lanes;
+    return parsed.data;
   }
 
   /**

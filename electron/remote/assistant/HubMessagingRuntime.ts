@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { assistantSlotKey } from "../../../shared/config/assistantSlots.js";
 import {
+  HOST_LIST_PROJECTS_MAX,
   HOST_SEND_MAX_WAIT_MS,
   HOST_TASK_PAGE_MAX,
   HOST_TASK_REPLIES_MAX_BYTES,
@@ -16,11 +18,13 @@ import {
   type HostListTasksResult,
   type HostMessagingOutcome,
   type HostMessagingOutcomeCode,
+  type HostProjectEntry,
   type HostSendMessageArgs,
   type HostSendMessageResult,
   type HostTask,
   type HostTaskReply,
 } from "../../../shared/types/hostMessaging.js";
+import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import type {
   HostConnectionState,
   HostId,
@@ -38,6 +42,7 @@ import type {
   MessagingRequestKind,
 } from "./AssistantMessagingPolicy.js";
 import { inboxBodyFits } from "./AssistantInbox.js";
+import type { LaneList } from "./linkMethods.js";
 import { HOST_MESSAGING_PAUSED_MESSAGE, LANE_NOT_RUNNING_MESSAGE } from "./hostExchanges.js";
 import { TokenBucket } from "./tokenBucket.js";
 
@@ -61,6 +66,8 @@ export interface HubMessagingRuntimeDeps {
     "listLanes" | "send" | "get" | "getResponses" | "listChanges" | "cancel" | "known"
   > | null;
   hosts(): ObservedHost[];
+  /** A connected host's projects, most used first; names what its assistants work in. */
+  listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
   now?: () => number;
   newId?: () => string;
   /** Resolves after `ms`; injectable so a test's wait doesn't take real time. */
@@ -232,6 +239,93 @@ function observedConnection(state: HostConnectionState): HostListEntry["connecti
  * come from its last summary and are null when none came; its lanes are what
  * the last `host.listAssistants` saw, never fetched on its behalf.
  */
+/**
+ * A host's projects with the assistants running in each, as the host reported
+ * them: projects with assistants first, then the rest in the host's own order.
+ * An enrolled lane carries its generation; one whose assistant isn't running
+ * is still listed, unavailable, so the hub sees it waiting.
+ */
+export function projectTree(
+  listed: LaneList,
+  summaries: readonly HostProjectSummary[],
+  paused: boolean
+): { projects: HostProjectEntry[]; omitted: number; lanes: HostAssistantLane[] } {
+  // A repeated id keeps its first, most-used place.
+  const listedIds = new Set<string>();
+  const unique = summaries.filter((summary) => {
+    if (listedIds.has(summary.id)) return false;
+    listedIds.add(summary.id);
+    return true;
+  });
+  const order = new Map(unique.map((summary, index) => [summary.id, index]));
+  const byId = new Map(unique.map((summary) => [summary.id, summary]));
+  const entries = new Map<string, HostProjectEntry>();
+  const entry = (projectId: string): HostProjectEntry => {
+    let found = entries.get(projectId);
+    if (!found) {
+      const summary = byId.get(projectId);
+      found = {
+        projectId,
+        name: summary?.name ?? null,
+        path: summary?.path ?? null,
+        assistants: [],
+      };
+      entries.set(projectId, found);
+    }
+    return found;
+  };
+  const enrolled = new Map(
+    listed.lanes.map((lane) => [assistantSlotKey(lane.projectId, lane.slot), lane])
+  );
+  const runningAgent = new Map(
+    (listed.assistants ?? []).map((running) => [
+      assistantSlotKey(running.projectId, running.slot),
+      running.agentId,
+    ])
+  );
+  const seen = new Set<string>();
+  for (const running of listed.assistants ?? []) {
+    const key = assistantSlotKey(running.projectId, running.slot);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const lane = enrolled.get(key);
+    entry(running.projectId).assistants.push({
+      slot: running.slot,
+      agentId: running.agentId,
+      generation: lane?.generation ?? null,
+      available: lane ? lane.available && !paused : false,
+    });
+  }
+  for (const lane of listed.lanes) {
+    const key = assistantSlotKey(lane.projectId, lane.slot);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entry(lane.projectId).assistants.push({
+      slot: lane.slot,
+      agentId: lane.agentId ?? null,
+      generation: lane.generation,
+      available: lane.available && !paused,
+    });
+  }
+  for (const project of entries.values()) project.assistants.sort((a, b) => a.slot - b.slot);
+  const rank = (projectId: string) => order.get(projectId) ?? Number.MAX_SAFE_INTEGER;
+  const withAssistants = [...entries.values()].sort(
+    (a, b) => rank(a.projectId) - rank(b.projectId)
+  );
+  const without = unique.filter((summary) => !entries.has(summary.id)).map((s) => entry(s.id));
+  const all = [...withAssistants, ...without];
+  const projects = all.slice(0, HOST_LIST_PROJECTS_MAX);
+  const lanes: HostAssistantLane[] = listed.lanes.map((lane) => ({
+    projectId: lane.projectId,
+    projectName: byId.get(lane.projectId)?.name ?? null,
+    slot: lane.slot,
+    generation: lane.generation,
+    available: lane.available && !paused,
+    agentId: lane.agentId ?? runningAgent.get(assistantSlotKey(lane.projectId, lane.slot)) ?? null,
+  }));
+  return { projects, omitted: all.length - projects.length, lanes };
+}
+
 export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
   private readonly now: () => number;
   private readonly newId: () => string;
@@ -339,7 +433,7 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
     args: HostListAssistantsArgs
   ): Promise<HostMessagingOutcome<HostListAssistantsResult>> {
     return this.settle(helpSessionId, async () => {
-      const base = { lanes: null };
+      const base = { projects: null, projectsOmitted: 0 };
       const refused = this.refuse(args.hostId, "inspect") ?? this.limitRead();
       if (refused) return { ...refused, ...base };
       // Listing passes the pause; taking a message doesn't, so no lane takes one now.
@@ -347,14 +441,11 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       const paused = !admits.ok && admits.reason === "paused";
       try {
         const listed = await this.requireClient().listLanes(args.hostId);
-        const lanes = listed.map((lane) => ({
-          projectId: lane.projectId,
-          slot: lane.slot,
-          generation: lane.generation,
-          available: lane.available && !paused,
-        }));
+        // Names are a convenience: a host that can't list its projects still lists its assistants.
+        const summaries = await this.hostProjects(args.hostId);
+        const { projects, omitted, lanes } = projectTree(listed, summaries, paused);
         this.observeLanes(args.hostId, lanes);
-        return { ...this.ok(), lanes };
+        return { ...this.ok(), projects, projectsOmitted: omitted };
       } catch (error) {
         return { ...this.failed(error), ...base };
       }
@@ -573,6 +664,14 @@ export class HubMessagingRuntime implements HostMessagingRuntimeHandle {
       return { record: latest, settled: settled(latest) };
     } finally {
       this.waits -= 1;
+    }
+  }
+
+  private async hostProjects(hostId: HostId): Promise<readonly HostProjectSummary[]> {
+    try {
+      return (await this.deps.listHostProjects?.(hostId)) ?? [];
+    } catch {
+      return [];
     }
   }
 

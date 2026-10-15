@@ -269,6 +269,7 @@ function startClient(options: StartRemoteHostsOptions): void {
           lastSeenAt: descriptor.lastSeenAt,
           summary,
         })),
+      listHostProjects: (hostId) => client.client.listHostProjects({ hostId }),
       // An enrolled lane's inbox tools, and the hub's host tools, come and go with its enrollment.
       onAvailabilityChanged: () => {
         void import("../services/McpServerService.js")

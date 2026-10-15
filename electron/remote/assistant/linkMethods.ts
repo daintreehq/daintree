@@ -17,7 +17,10 @@ import { EXCHANGE_STATES } from "../exchange/types.js";
 export const AssistantLinkMethod = {
   /** Shell → Host: bind this session to the Shell's sender credential for this host. */
   AUTHENTICATE: "assistant.authenticate",
-  /** Shell → Host: the lanes this session enrolled. */
+  /**
+   * Shell → Host: the lanes this session enrolled, and every assistant running
+   * on the host with its agent, so the hub can see what it could reach.
+   */
   LIST_LANES: "assistant.list-lanes",
   /** Shell → Host: send a message to an enrolled lane; a resend of its messageId never sends twice. */
   SEND: "assistant.send",
@@ -107,13 +110,23 @@ export const EnrolledLaneSchema = z
     generation: id,
     /** Whether the lane would take a message now: its assistant is running and messaging isn't paused. */
     available: z.boolean(),
+    /** The agent CLI the lane's assistant runs; absent while it isn't running. */
+    agentId: id.optional(),
   })
   .strip();
 export type EnrolledLane = z.infer<typeof EnrolledLaneSchema>;
 
+export const RunningAssistantSchema = z.object({ projectId: id, slot, agentId: id }).strip();
+export type RunningAssistant = z.infer<typeof RunningAssistantSchema>;
+
 export const LaneListSchema = z
-  .object({ lanes: z.array(EnrolledLaneSchema).max(MAX_LISTED_LANES) })
+  .object({
+    lanes: z.array(EnrolledLaneSchema).max(MAX_LISTED_LANES),
+    /** Absent from a host older than the listing of every assistant. */
+    assistants: z.array(RunningAssistantSchema).max(MAX_LISTED_LANES).optional(),
+  })
   .strip();
+export type LaneList = z.infer<typeof LaneListSchema>;
 
 export const ExchangeRecordSchema = z
   .object({

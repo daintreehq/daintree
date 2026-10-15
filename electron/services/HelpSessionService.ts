@@ -245,6 +245,12 @@ export interface RunningLaneSession {
   projectViewWebContentsId: number;
 }
 
+export interface RunningLane {
+  projectId: string;
+  slot: number;
+  agentId: string;
+}
+
 /**
  * What a take-over learns about a detached assistant's PTY (#13360): enough
  * for the new view to show the running pane without asking the pty-host
@@ -746,6 +752,20 @@ export class HelpSessionService {
         console.warn("[HelpSessionService] Session-ended listener failed:", record.sessionId, err);
       }
     }
+  }
+
+  /** Every lane with a running assistant, in the terms `getRunningLaneSession` uses. */
+  listRunningLanes(): RunningLane[] {
+    const lanes: RunningLane[] = [];
+    for (const record of this.sessionsById.values()) {
+      if (record.revoked || record.ending) continue;
+      const terminalId = this.activeHelpTerminalBySlotKey.get(
+        assistantSlotKey(record.projectId, record.slot)
+      );
+      if (!terminalId || this.terminalBySessionId.get(record.sessionId) !== terminalId) continue;
+      lanes.push({ projectId: record.projectId, slot: record.slot, agentId: record.agentId });
+    }
+    return lanes;
   }
 
   /**

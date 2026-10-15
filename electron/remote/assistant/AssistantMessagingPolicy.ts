@@ -3,6 +3,7 @@ import { assistantSlotKey, isValidAssistantSlot } from "../../../shared/config/a
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import type {
   HelpSessionEndedEvent,
+  RunningLane,
   RunningLaneSession,
 } from "../../services/HelpSessionService.js";
 
@@ -92,6 +93,8 @@ export interface HostCheck {
 export interface AssistantMessagingPolicyDeps {
   /** The help session a lane is running right now; never launches one. */
   getRunningLaneSession(projectId: string, slot: number): RunningLaneSession | null;
+  /** Every lane with a running assistant on this machine, enrolled or not. */
+  listRunningLanes?(): RunningLane[];
   /** Which incarnation of a PTY is running under its id, or null when none is. */
   getLiveGeneration(terminalId: string): number | null;
   /** This Shell's per-host opt-in. */
@@ -346,6 +349,11 @@ export class AssistantMessagingPolicy {
       }
     }
     return listed;
+  }
+
+  /** Every assistant running on this machine, enrolled or not; reports only. */
+  listRunning(): RunningLane[] {
+    return this.deps.listRunningLanes?.() ?? [];
   }
 
   /** The lane enrolled on this Shell itself, if any. */

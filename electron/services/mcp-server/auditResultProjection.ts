@@ -267,9 +267,19 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
   ["host.list", projectHostList],
   [
     "host.listAssistants",
-    hostResultProjection((record) => ({
-      laneCount: Array.isArray(record.lanes) ? record.lanes.length : null,
-    })),
+    // Counts only: a host's project names and paths stay out of the audit.
+    hostResultProjection((record) => {
+      const projects = Array.isArray(record.projects) ? record.projects : null;
+      return {
+        projectCount: projects?.length ?? null,
+        assistantCount:
+          projects?.reduce<number>((sum, project) => {
+            const assistants = asRecord(project)?.assistants;
+            return sum + (Array.isArray(assistants) ? assistants.length : 0);
+          }, 0) ?? null,
+        projectsOmitted: finiteNumber(record.projectsOmitted),
+      };
+    }),
   ],
   [
     "host.sendMessage",

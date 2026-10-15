@@ -471,7 +471,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // surface, so the external total does not move.
   // #13338 adds assistant.sendMessage for a lane a remote Shell enrolled, and
   // a sent view on assistant.getInbox; neither is on the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 20_950;
+  // 20_950 → 21_000 for the swarm manager (#13392): `host.listAssistants` now
+  // lists a host's projects with the assistants in each, measured at 20_972 B.
+  // What the prose has to carry is that a project's assistants name their agent
+  // and that only one enrolled for this Shell has a generation. Off the
+  // external surface, so the external total does not move.
+  const MAX_COHORT_TOTAL_BYTES = 21_000;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

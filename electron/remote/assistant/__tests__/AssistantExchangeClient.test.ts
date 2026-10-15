@@ -67,6 +67,7 @@ class FakeHost {
   handlers = new Map<string, (payload: unknown) => unknown>();
   failNextList = false;
   authCalls = 0;
+  laneAnswer: unknown = { lanes: [] };
 
   put(messageId: string, state: ExchangeState, replied = false): ExchangeRecord {
     const next = record(messageId, ++this.revision, state);
@@ -89,6 +90,8 @@ class FakeHost {
           }
           case AssistantLinkMethod.GET_EXCHANGE:
             return this.records.get((payload as { messageId: string }).messageId) ?? null;
+          case AssistantLinkMethod.LIST_LANES:
+            return this.laneAnswer;
           case AssistantLinkMethod.LIST_EXCHANGES: {
             this.listCalls++;
             const gate = this.gate;
@@ -179,6 +182,48 @@ describe("AssistantExchangeClient proving its sender (#13332)", () => {
     opened(HOST, next);
     await settle();
     expect(later.authCalls).toBe(1);
+  });
+});
+
+describe("AssistantExchangeClient listing a host's lanes", () => {
+  let dir: string;
+  let sqlite: Database.Database;
+  let client: AssistantExchangeClient;
+  let host: FakeHost;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-exchange-lanes-"));
+    sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    host = new FakeHost();
+    const session = host.session();
+    client = new AssistantExchangeClient({
+      journal: new AssistantExchangeJournal(sqlite),
+      session: async () => session,
+      onSessionOpened: () => () => {},
+      messagingEnabled: () => true,
+    });
+  });
+
+  afterEach(() => {
+    client.dispose();
+    sqlite.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reads a host from before the assistant listing, and one that sends what this build doesn't know", async () => {
+    const lane = { projectId: "proj-1", slot: 0, generation: "gen-1", available: true };
+    host.laneAnswer = { lanes: [lane] };
+    await expect(client.listLanes(HOST)).resolves.toEqual({ lanes: [lane] });
+
+    host.laneAnswer = {
+      lanes: [{ ...lane, agentId: "codex", later: true }],
+      assistants: [{ projectId: "proj-1", slot: 0, agentId: "codex", later: true }],
+      later: true,
+    };
+    await expect(client.listLanes(HOST)).resolves.toEqual({
+      lanes: [{ ...lane, agentId: "codex" }],
+      assistants: [{ projectId: "proj-1", slot: 0, agentId: "codex" }],
+    });
   });
 });
 

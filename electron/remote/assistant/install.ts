@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
@@ -53,6 +54,8 @@ export interface AssistantMessagingPolicyInstallDeps {
   onAvailabilityChanged?(): void;
   /** Every host this Shell knows, as last observed; what the hub's `host.list` reads. */
   observeHosts?(): ObservedHost[];
+  /** A connected host's projects, for naming what its assistants work in. */
+  listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
 }
 
 function openExchangeDatabase(): Database.Database | null {
@@ -83,6 +86,7 @@ export function installAssistantMessagingPolicy(
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),
+    listRunningLanes: () => helpSessionService.listRunningLanes(),
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     isHostMessagingEnabled: deps.isHostMessagingEnabled,
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
@@ -161,6 +165,7 @@ export function installAssistantMessagingPolicy(
     getSessionLane: (helpSessionId) => helpSessionService.getSessionLane(helpSessionId),
     client: () => getRemoteService("assistantExchangeClient") ?? null,
     hosts: () => deps.observeHosts?.() ?? [],
+    listHostProjects: deps.listHostProjects,
   });
   const unregisterHub = setHostMessagingRuntime(hub);
   // What a host's assistants send this hub (#13338), admitted through the same policy.

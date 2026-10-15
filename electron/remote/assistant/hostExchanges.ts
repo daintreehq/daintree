@@ -31,6 +31,8 @@ import {
   SendPayloadSchema,
   type EnrolledLane,
   type ExchangeResponse,
+  type LaneList,
+  type RunningAssistant,
 } from "./linkMethods.js";
 
 declare module "../runtime.js" {
@@ -242,21 +244,33 @@ export function installAssistantExchangeHostWith(
 
     session.registerCallHandler(AssistantLinkMethod.LIST_LANES, EmptyPayloadSchema, () => {
       const policy = requirePolicy();
+      // Agents are read from everything running, before the listing is capped.
+      const running = policy.listRunning();
+      const agents = new Map(
+        running.map((lane) => [assistantSlotKey(lane.projectId, lane.slot), lane.agentId])
+      );
+      const agentOf = (projectId: string, slot: number) =>
+        agents.get(assistantSlotKey(projectId, slot));
+      const assistants: RunningAssistant[] = running.slice(0, MAX_LISTED_LANES);
       const lanes: EnrolledLane[] = policy
         .listEnrollments(shell)
         .slice(0, MAX_LISTED_LANES)
-        .map((enrollment) => ({
-          projectId: enrollment.projectId,
-          slot: enrollment.slot,
-          generation: enrollment.generation,
-          available: policy.checkLane({
-            lane: { projectId: enrollment.projectId, slot: enrollment.slot },
+        .map((enrollment) => {
+          const agentId = agentOf(enrollment.projectId, enrollment.slot);
+          return {
+            projectId: enrollment.projectId,
+            slot: enrollment.slot,
             generation: enrollment.generation,
-            shell,
-            kind: "wake",
-          }).ok,
-        }));
-      return { lanes };
+            available: policy.checkLane({
+              lane: { projectId: enrollment.projectId, slot: enrollment.slot },
+              generation: enrollment.generation,
+              shell,
+              kind: "wake",
+            }).ok,
+            ...(agentId === undefined ? {} : { agentId }),
+          };
+        });
+      return { lanes, assistants } satisfies LaneList;
     });
 
     session.registerCallHandler(AssistantLinkMethod.SEND, SendPayloadSchema, (payload) => {

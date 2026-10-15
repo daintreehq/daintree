@@ -164,7 +164,7 @@ A Shell sends messages to assistants on a host, and reads what became of them, o
 | Method | Payload | Answer |
 | --- | --- | --- |
 | `assistant.authenticate` | the Shell's sender credential for this host | null |
-| `assistant.list-lanes` | none | the lanes this session enrolled, with their generation and whether each would take a message now |
+| `assistant.list-lanes` | none | the lanes this session enrolled, with their generation, their agent and whether each would take a message now; and every assistant running on the host, enrolled or not, with its project, slot and agent. The hub joins these with `host.list-projects` so `host.listAssistants` shows a host's projects and the assistants in each |
 | `assistant.send` | `messageId`, `contextId`, `referenceTaskIds`, `projectId`, `slot`, `generation`, `body` | `{ disposition: created \| existing \| tombstoned, record }` |
 | `assistant.get-exchange` | `messageId` | the record, or null when the host has none |
 | `assistant.list-exchanges` | `cursor`, optional `limit` (at most 500) | `{ records, cursor, hasMore, reset }` |

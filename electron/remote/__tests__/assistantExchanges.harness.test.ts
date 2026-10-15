@@ -67,6 +67,11 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     addSessionEndedListener: () => () => {},
     getRunningLaneSession: (projectId: string, slot: number) =>
       lanes.get(`${projectId}#${slot}`) ?? null,
+    listRunningLanes: () =>
+      [...lanes.keys()].map((key) => {
+        const [projectId, slot] = key.split("#");
+        return { projectId: projectId!, slot: Number(slot), agentId: "claude" };
+      }),
     getSessionLane: (sessionId: string) => {
       for (const [key, lane] of lanes) {
         if (lane.sessionId !== sessionId) continue;
@@ -363,9 +368,12 @@ describe("assistant exchanges over the real link", () => {
       expect(getEndpointRegistry().getRemote()).toHaveLength(0);
 
       const a = shellA();
-      expect(await a.listLanes(HOST_ID)).toEqual([
-        { projectId: "proj-2", slot: 0, generation, available: true },
+      // Over the real link: the lane names its agent, and the host lists what is running.
+      const listed = await a.listLanes(HOST_ID);
+      expect(listed.lanes).toEqual([
+        { projectId: "proj-2", slot: 0, generation, available: true, agentId: "claude" },
       ]);
+      expect(listed.assistants).toContainEqual({ projectId: "proj-2", slot: 0, agentId: "claude" });
 
       const sent = await a.send(HOST_ID, message({ generation }));
       expect(sent).toMatchObject({
@@ -456,8 +464,8 @@ describe("assistant exchanges over the real link", () => {
       const laneB = enrollOnHost(hostSessionOf(r, SHELL_B), 1);
       const a = shellA();
 
-      expect((await a.listLanes(HOST_ID)).map((lane) => lane.slot)).toEqual([0]);
-      expect((await b.client.listLanes(HOST_ID)).map((lane) => lane.slot)).toEqual([1]);
+      expect((await a.listLanes(HOST_ID)).lanes.map((lane) => lane.slot)).toEqual([0]);
+      expect((await b.client.listLanes(HOST_ID)).lanes.map((lane) => lane.slot)).toEqual([1]);
 
       // B can't reach A's lane, whatever it names.
       await expect(
@@ -596,7 +604,7 @@ describe("assistant exchanges over the real link", () => {
 
       // Consent ended with the sessions it was given to: a new message needs a new
       // enrollment, while a resend of one already taken still answers from its record.
-      expect(await a.listLanes(HOST_ID)).toEqual([]);
+      expect((await a.listLanes(HOST_ID)).lanes).toEqual([]);
       await expect(
         a.send(HOST_ID, message({ messageId: "m-2", generation: laneA }))
       ).rejects.toMatchObject({ code: "PERMISSION" });
