@@ -117,6 +117,22 @@ describe("classifyBranch", () => {
     expect(typeOf("fix-typo")).toBe("bugfix");
   });
 
+  it("reads a hyphenated type off the first segment of a slashed name, whole", () => {
+    expect(classifyBranch("feature-login/step-2")).toMatchObject({
+      type: { id: "feature" },
+      prefix: "",
+      rest: "feature-login/step-2",
+    });
+    expect(typeOf("FEATURE-login/step-2")).toBeNull();
+  });
+
+  it("reads a dependency bot's hyphenated branch as dependencies", () => {
+    expect(typeOf("dependabot-vite-8")).toBe("deps");
+    expect(typeOf("renovate-react-19")).toBe("deps");
+    // An agent's name is not a work type, hyphenated or not.
+    expect(typeOf("codex-login")).toBeNull();
+  });
+
   it.each(["CI-42-flaky-test", "UI-7-header", "DB-1-schema", "feature-", "feature", "my-branch"])(
     "does not read a type into %s",
     (branch) => {

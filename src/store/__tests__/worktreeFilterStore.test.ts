@@ -710,6 +710,21 @@ describe("worktreeFilterStore persistence scoping", () => {
     expect(Array.from(state.statusFilters)).toEqual(["active"]);
   });
 
+  it("seeds only known type filters from the legacy combined blob", async () => {
+    const legacyBlob = JSON.stringify({
+      state: { typeFilters: ["hotfix", "dependabot", "toString", 3] },
+    });
+    installLocalStorage({
+      getItem: (key) => (key === GLOBAL_KEY ? legacyBlob : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect(Array.from(store.getState().typeFilters)).toEqual(["hotfix"]);
+  });
+
   it("does not re-seed when the scoped key already exists", async () => {
     const legacyBlob = JSON.stringify({
       state: { pinnedWorktrees: ["wt-legacy-pin"] },
@@ -1203,6 +1218,39 @@ describe("worktreeFilterStore cross-view write merge (#11351)", () => {
       JSON.parse(backing.get(PROJECT_KEY)!);
     expect(projectBlob.state.pinnedWorktrees).toEqual(["wt-1"]); // sibling's pin survived
     expect(projectBlob.state.query).toBe("needle"); // this window's change applied
+  });
+
+  it("a stale window's write keeps a sibling's type filters, minus ids nobody knows", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400);
+
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: ["design", "retired-type"],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          manualOrder: [],
+        },
+      })
+    );
+
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: { state: { typeFilters: string[]; query: string } } = JSON.parse(
+      backing.get(PROJECT_KEY)!
+    );
+    expect(projectBlob.state.typeFilters).toEqual(["design"]);
+    expect(projectBlob.state.query).toBe("needle");
   });
 
   it("a stale same-project window's write preserves a sibling's 'Has an agent' filter", async () => {
