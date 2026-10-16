@@ -9,8 +9,31 @@ import {
   buildConfirmationsAddendum,
   buildMessagingAddendum,
   buildRunbooksAddendum,
+  buildRunbooksHostHeaders,
   resolveRunbooksMcpUrl,
 } from "../helpSessionRunbooks.js";
+
+describe("buildRunbooksHostHeaders", () => {
+  it("sends nothing for an unreported state", () => {
+    expect(buildRunbooksHostHeaders(null)).toEqual({});
+  });
+
+  it.each(["none", "configured", "connected"] as const)(
+    "reports the hosts state %s and leaves the lane header out when it can't be messaged",
+    (hosts) => {
+      expect(buildRunbooksHostHeaders({ hosts, laneReachable: false })).toEqual({
+        "Daintree-Hosts": hosts,
+      });
+    }
+  );
+
+  it("marks a lane another machine's assistant can message", () => {
+    expect(buildRunbooksHostHeaders({ hosts: "none", laneReachable: true })).toEqual({
+      "Daintree-Hosts": "none",
+      "Daintree-Lane": "reachable",
+    });
+  });
+});
 
 describe("resolveRunbooksMcpUrl", () => {
   it("uses the production endpoint when no override is set", () => {

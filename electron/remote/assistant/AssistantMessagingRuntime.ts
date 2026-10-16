@@ -192,9 +192,13 @@ export class AssistantMessagingRuntime {
    * the calls still refuse until the lane is enrolled.
    */
   isReachable(helpSessionId: string): boolean {
+    return this.isMachineReachable() && this.deps.getSessionLane(helpSessionId) !== null;
+  }
+
+  /** Whether another machine's assistant could ever message one here: it listens as a host or has hosts. */
+  isMachineReachable(): boolean {
     return (
       this.deps.policy.isSupported() &&
-      this.deps.getSessionLane(helpSessionId) !== null &&
       (this.deps.outbox?.() !== undefined || this.deps.hasHosts?.() === true)
     );
   }

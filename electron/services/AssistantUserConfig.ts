@@ -524,7 +524,7 @@ export function tomlString(value: string): string {
   return `"${escaped}"`;
 }
 
-function tomlInlineTable(map: Record<string, string>): string {
+export function tomlInlineTable(map: Record<string, string>): string {
   const entries = Object.entries(map).map(
     ([key, value]) => `${tomlString(key)}=${tomlString(value)}`
   );
