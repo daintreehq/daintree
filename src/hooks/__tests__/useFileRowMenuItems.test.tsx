@@ -646,6 +646,23 @@ describe("useFileRowMenuItems — Copy file contents", () => {
     expect(labels(copy)).not.toContain("Copy file contents");
   });
 
+  it("copies through the surface's own text when one is injected, skipping file.read", async () => {
+    // The file panel holds the loaded text of a file `file.read` may refuse
+    // (outside every project root); the item follows the text, not the
+    // extension guess.
+    const onCopyFileContents = vi.fn();
+    const menu = await openMenu({
+      row: { absolutePath: "/elsewhere/notes.custom", name: "notes.custom" },
+      options: { onCopyFileContents },
+    });
+    const copy = await openSubmenu(menu, "Copy");
+
+    fireEvent.click(within(copy).getByRole("menuitem", { name: "Copy file contents" }));
+
+    expect(onCopyFileContents).toHaveBeenCalledTimes(1);
+    expect(dispatchMock.mock.calls.some(([id]) => id === "file.read")).toBe(false);
+  });
+
   it("copies an empty file as the empty string", async () => {
     useAnnouncerStore.setState({ polite: null, assertive: null });
     dispatchMock.mockImplementation((id) =>

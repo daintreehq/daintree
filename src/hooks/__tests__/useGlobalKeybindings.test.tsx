@@ -1446,6 +1446,22 @@ describe("useGlobalKeybindings — row-menu stand-down", () => {
     expect(pressMenuKey(host.querySelector<HTMLElement>("#row")!).defaultPrevented).toBe(false);
   });
 
+  it("never hands an owned menu key on to general resolution", () => {
+    // The combos are `terminal.contextMenu`'s own default bindings, so the
+    // resolver would consume them like any other shortcut — the stand-down has
+    // to stop before it, not just skip the panel-menu branch.
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.contextMenu" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    const host = mount(`<div data-row-menu=""><div id="row"></div></div>`);
+
+    expect(pressMenuKey(host.querySelector<HTMLElement>("#row")!).defaultPrevented).toBe(false);
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    mocks.keybindingService.resolveKeybinding.mockReset();
+  });
+
   it("stands down inside an already-open menu, which portals outside every marker", () => {
     const host = mount(`<div role="menu"><div id="item" role="menuitem"></div></div>`);
     expect(pressMenuKey(host.querySelector<HTMLElement>("#item")!).defaultPrevented).toBe(false);

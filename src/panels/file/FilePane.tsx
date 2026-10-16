@@ -1429,6 +1429,12 @@ export function FilePane({
           // The toolbar's reveal: it takes the guarded fallback for a file
           // outside every project root, which this pane deliberately displays.
           onReveal: () => void handleOpenExternal("reveal"),
+          // The text already on screen, as the toolbar copies it — `file.read`
+          // would refuse a file outside every project root. Unset while
+          // nothing is loaded, leaving the shared read to answer.
+          ...(copyableContents !== null && {
+            onCopyFileContents: () => copyWithToast("File contents", copyableContents),
+          }),
         }
       )}
     </>

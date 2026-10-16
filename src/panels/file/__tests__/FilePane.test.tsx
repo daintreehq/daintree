@@ -3981,6 +3981,30 @@ describe("FilePane file menu on its content (#13423)", () => {
     expect(screen.queryByRole("menuitem", { name: "Show in file browser" })).toBeNull();
   });
 
+  it("copies the loaded text itself, so a file outside every root still copies", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    fileMenuRenderMock.mockImplementation(
+      (_surface: unknown, _target: unknown, options?: { onCopyFileContents?: () => void }) =>
+        options?.onCopyFileContents && (
+          <ContextMenuItem onSelect={options.onCopyFileContents}>Copy contents</ContextMenuItem>
+        )
+    );
+    readMock.mockResolvedValue({ content: "outside text" });
+    renderPane("/elsewhere/notes.ts");
+
+    // Settled read: the pane only offers its own text once it holds some.
+    await waitFor(() =>
+      expect(screen.getByTestId("code-viewer-mock").getAttribute("data-content")).toBe(
+        "outside text"
+      )
+    );
+    fireEvent.contextMenu(screen.getByTestId("file-pane-body"));
+    fireEvent.click(await screen.findByText("Copy contents"));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("outside text"));
+  });
+
   it("reveals through the pane's own out-of-root reveal", async () => {
     fileMenuRenderMock.mockImplementation(
       (_surface: unknown, _target: unknown, options?: { onReveal?: () => void }) =>

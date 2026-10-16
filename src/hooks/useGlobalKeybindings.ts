@@ -123,11 +123,17 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // `document.body`, outside every `data-row-menu` marker, so a repeat
       // press inside the open menu would otherwise fall through to here and
       // open the focused panel's menu on top of it.
+      const isMenuKey =
+        e.key === "ContextMenu" ||
+        (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey);
+      const ownsMenuKey =
+        target.closest("[data-row-menu]") !== null || target.closest('[role="menu"]') !== null;
+      // A full stand-down, not just a skip of the branch below: these combos
+      // are `terminal.contextMenu`'s own default bindings, so general
+      // resolution further down would consume them all the same.
+      if (isMenuKey && ownsMenuKey) return;
       if (
-        (e.key === "ContextMenu" ||
-          (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) &&
-        target.closest("[data-row-menu]") === null &&
-        target.closest('[role="menu"]') === null &&
+        isMenuKey &&
         // An isolated surface types to its own terminal: the focused grid
         // pane's menu is not what these keys mean there.
         !isolated
