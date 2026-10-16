@@ -62,7 +62,7 @@ import { SectionBar } from "./CanopySectionBar";
 import { CanopyStatusBar } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
 import { CanopyPitch } from "./CanopyPitch";
-import { CANOPY_BETA_TERMS, CANOPY_WAITLIST_URL } from "./canopyTerms";
+import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "./canopyTerms";
 import { useListReorderMotion } from "./useListReorderMotion";
 
 /** Ages are minute-grained, as in Pilot. */
@@ -301,7 +301,7 @@ export function CanopyView() {
         data-testid="canopy-dialog"
       >
         <AppDialog.Header>
-          <AppDialog.Title icon={<Telescope />}>Canopy</AppDialog.Title>
+          <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
           <span className="flex-1" />
           <AppDialog.CloseButton />
         </AppDialog.Header>
@@ -1525,7 +1525,7 @@ function CanopyInbox({
       data-testid="canopy-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<Telescope />}>Canopy</AppDialog.Title>
+        <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
         <span className="mr-3 ml-3 min-w-0 flex-1 truncate text-sm text-text-secondary">
           {summaryLine}
         </span>

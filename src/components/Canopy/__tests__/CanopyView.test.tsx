@@ -59,7 +59,7 @@ vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
 
 import { notify } from "@/lib/notify";
 import { CanopyView } from "../CanopyView";
-import { CANOPY_BETA_TERMS, CANOPY_WAITLIST_URL } from "../canopyTerms";
+import { CANOPY_BETA_TERMS, CANOPY_TITLE, CANOPY_WAITLIST_URL } from "../canopyTerms";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -302,6 +302,7 @@ describe("CanopyView", () => {
     expect(dialog.textContent).toContain("recent scrollback");
     expect(dialog.textContent).toContain("This can miss some secrets.");
     expect(dialog.textContent).toContain("Settings > Canopy");
+    expect(within(document.body).getByRole("dialog", { name: CANOPY_TITLE })).toBeTruthy();
     // The keyboard lands on the offer's heading: Enter alone agrees to nothing.
     expect(document.activeElement?.id).toBe("canopy-pitch-title");
     fireEvent.click(screenButton(dialog, "Privacy policy"));
@@ -323,6 +324,7 @@ describe("CanopyView", () => {
     expect(canopy.setMode).toHaveBeenCalledWith("on");
     // On: the user's own agents, in the inbox.
     expect(document.querySelector("[data-testid=canopy-dialog] [role=listbox]")).not.toBeNull();
+    expect(within(document.body).getByRole("dialog", { name: CANOPY_TITLE })).toBeTruthy();
   });
 
   it("hides Canopy from its offer, closing it with a way back", async () => {
@@ -1060,6 +1062,7 @@ describe("CanopyView", () => {
     expect(dialog.textContent).not.toContain("Turn on Canopy");
     expect(dialog.querySelector("[role=listbox]")).toBeNull();
     expect(dialog.querySelector("[aria-busy=true]")).not.toBeNull();
+    expect(within(document.body).getByRole("dialog", { name: CANOPY_TITLE })).toBeTruthy();
     // The keyboard waits inside the dialog, not on whatever opened it.
     await frames();
     expect(document.activeElement).toBe(dialog.querySelector("[aria-busy=true]"));

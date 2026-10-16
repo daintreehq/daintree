@@ -16,6 +16,7 @@ import {
   CANOPY_REDACTION,
   CANOPY_SENDS,
   CANOPY_STOP,
+  CANOPY_TITLE,
 } from "./canopyTerms";
 
 /** Long enough to read a row that just rose to the top. */
@@ -106,7 +107,7 @@ export function CanopyPitch({
       data-testid="canopy-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<Telescope />}>Canopy</AppDialog.Title>
+        <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
         <span className="flex-1" />
         <AppDialog.CloseButton />
       </AppDialog.Header>
