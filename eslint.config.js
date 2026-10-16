@@ -1418,6 +1418,8 @@ export default tseslint.config(
       // Built output of the workspace CLI packages (tsup). Bundled JS isn't
       // source and trips no-undef on Node globals when linted locally.
       "packages/*/dist/**",
+      // Browser SDK kit bundled by scripts/build-plugin-ui-browser.mjs.
+      "packages/plugin-sdk/browser/**",
       // Generated API-surface snapshots (raw tsup .d.ts output committed for
       // review by scripts/ci/check-api-surface.mjs) — not hand-authored source.
       "packages/*/api-report/**",

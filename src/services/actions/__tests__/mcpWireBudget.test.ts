@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { findWireStrippedKeywords } from "@shared/utils/mcpWireSchema";
 import { HELP_TIER_CUMULATIVE } from "@shared/config/helpAssistantTierAllowlists";
-import { measureWireSurface, type WireTool } from "./helpers/wireSurface";
+import {
+  actionIdsAbsentOnThisPlatform,
+  measureWireSurface,
+  type WireTool,
+} from "./helpers/wireSurface";
 import { TerminalSubmissionRecordSchema } from "../definitions/schemas";
 
 /**
@@ -770,7 +774,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
     // floor is the `full` tool set, since the cohort is that set plus the owned
     // twins and the external roster, both of which may overlap it.
     const tools = await surface();
-    expect(tools.length).toBeGreaterThanOrEqual(HELP_TIER_CUMULATIVE.full.length);
+    const absent = await actionIdsAbsentOnThisPlatform();
+    expect(tools.map((tool) => tool.id)).toEqual(
+      expect.arrayContaining(HELP_TIER_CUMULATIVE.full.filter((id) => !absent.has(id)))
+    );
     expect(tools.filter((t) => t.external).length).toBeGreaterThan(15);
   });
 });

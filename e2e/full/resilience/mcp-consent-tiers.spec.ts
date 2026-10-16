@@ -408,9 +408,7 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
     await expect(dialog).toContainText(apiKey.slice(-4));
     // Picking a worktree is part of what is approved, so it cannot be waved
     // through for the rest of the session — and an api-key client is not offered it.
-    await expect(
-      dialog.getByRole("checkbox", { name: "Allow for the rest of this session" })
-    ).toHaveCount(0);
+    await expect(dialog.getByRole("checkbox", { name: "Allow for this session" })).toHaveCount(0);
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
 
     expect(toolErrorCode(await declined)).toBe("USER_REJECTED");
@@ -510,7 +508,7 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
     const dialog = approvalDialog(pageA, FULL_ONLY_TOOL_TITLE);
     await expect(dialog).toBeVisible({ timeout: T_LONG });
     await expect(approvalDialog(pageB, FULL_ONLY_TOOL_TITLE)).toHaveCount(0);
-    await expect(dialog).toContainText("beyond what this project's MCP tier lets agents do");
+    await expect(dialog).toContainText("Above this project's MCP tier, so it needs your approval");
     await expect(dialog).toContainText("Agent in a terminal pane");
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(toolErrorCode(await declined)).toBe("USER_REJECTED");
@@ -520,10 +518,13 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
     const again = approvalDialog(pageA, FULL_ONLY_TOOL_TITLE);
     await expect(again).toBeVisible({ timeout: T_LONG });
     await expect(approvalDialog(pageB, FULL_ONLY_TOOL_TITLE)).toHaveCount(0);
-    const allow = again.getByRole("checkbox", { name: "Allow for the rest of this session" });
+    const allow = again.getByRole("checkbox", { name: "Allow for this session" });
     await allow.check();
     await expect(allow).toBeChecked();
-    const confirm = again.getByRole("button", { name: FULL_ONLY_TOOL_TITLE, exact: true });
+    const confirm = again.getByRole("button", {
+      name: `${FULL_ONLY_TOOL_TITLE} and allow for session`,
+      exact: true,
+    });
     await expect(confirm).toBeEnabled({ timeout: T_LONG });
     await confirm.click();
     const answer = await approved;

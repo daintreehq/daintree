@@ -28,6 +28,9 @@ const baseConfig: KnipConfig = {
     // an explicit entry.
     "src/workers/*.worker.ts",
 
+    // Tailwind directives declare stylesheet dependencies as well as JS imports.
+    "src/index.css",
+
     // Invoked by the electron-builder CLI and documented diagnostic scripts
     // that aren't wired through package.json.
     "electron-builder.config.cjs",
@@ -58,6 +61,8 @@ const baseConfig: KnipConfig = {
     // The liveness and module-hook guards launch these drivers by string path
     // in isolated Node processes, so Knip cannot follow the spawn edge.
     "scripts/perf/__tests__/moduleHookProbe.ts",
+    // Cross-process restore test loads this Main harness by a non-literal path.
+    "electron/services/pty/__tests__/passiveCaptureRestoreHarness.ts",
     "scripts/perf/__tests__/scenarioSmokeDriver.ts",
 
     // why: bench-only classic script inlined by vite.config.ts via readFileSync
@@ -78,6 +83,22 @@ const baseConfig: KnipConfig = {
     // so declare the TypeScript roots directly and retain analysis of their
     // imported shims and fixtures.
     "src/components/Fleet/__preview__/preview.tsx",
+    "src/components/icons/__preview__/agentStateGlyphs.tsx",
+    "src/components/Browser/__preview__/addressSuggestionsPreview.tsx",
+    "src/components/Worktree/__preview__/diffNotesPreview.tsx",
+    "src/components/Worktree/__preview__/fileDecorationBadges.tsx",
+    "src/panels/file/__preview__/preview.tsx",
+    "src/components/Terminal/__preview__/findCodexSession.tsx",
+    "src/components/HostFilePicker/__preview__/hostFilePickerPreview.tsx",
+    "src/components/HostSwitch/__preview__/hostSwitcher.tsx",
+    "src/components/Markdown/__preview__/preview.tsx",
+    "src/components/Panel/__preview__/moveToWorktreePicker.tsx",
+    "src/services/plugin/__preview__/pluginPanelPreview.tsx",
+    "src/components/Portal/__preview__/closeConfirmPreview.tsx",
+    "src/components/Project/__preview__/processesDialogPreview.tsx",
+    "src/components/HostSwitch/__preview__/projectMatchChooserPreview.tsx",
+    "src/components/Pulse/__preview__/pulseHealthChips.tsx",
+    "src/components/Settings/__preview__/auditRowsPreview.tsx",
     "src/components/Canopy/__preview__/preview.tsx",
     "src/components/Hosts/__preview__/hostPresencePreview.tsx",
     "src/components/Hosts/__preview__/portsPreview.tsx",
@@ -197,7 +218,7 @@ const baseConfig: KnipConfig = {
   // so scripts/postinstall.cjs and scripts/afterPack.cjs are covered.
   project: [
     "electron/**/*.{ts,cts}",
-    "src/**/*.{ts,tsx}",
+    "src/**/*.{ts,tsx,css}",
     "shared/**/*.ts",
     "scripts/**/*.{js,mjs,cjs,ts}",
     "e2e/**/*.ts",
@@ -329,6 +350,8 @@ const baseConfig: KnipConfig = {
     // The samples are not npm workspaces and therefore cannot declare these
     // host-repository development dependencies themselves.
     "@daintreehq/plugin-sdk",
+    // A host-provided virtual module; the SDK ships its ambient declaration.
+    "@daintreehq/plugin-ui",
     "@daintreehq/plugin-vite",
     // The app compiles the tour engine from source through tsconfig, Vite and
     // Vitest aliases rather than as an installed dependency.

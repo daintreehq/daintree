@@ -35,8 +35,8 @@ describe("readHostStylesheet", () => {
     );
     expect(files.map((file) => path.relative(dir, file.path))).toEqual([
       "index.css",
-      "styles/host/b.css",
-      "styles/host/a.css",
+      path.join("styles", "host", "b.css"),
+      path.join("styles", "host", "a.css"),
     ]);
   });
 
@@ -85,7 +85,7 @@ describe("readHostStylesheet", () => {
 
     readHostStylesheet(entry, { onFile: (file) => seen.push(path.relative(dir, file)) });
 
-    expect(seen).toEqual(["index.css", "styles/host/a.css"]);
+    expect(seen).toEqual(["index.css", path.join("styles", "host", "a.css")]);
   });
 
   it("throws when a referenced partial is missing", () => {

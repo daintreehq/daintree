@@ -188,7 +188,7 @@ describe("check-design-contract", () => {
       });
 
       expect(result.ok).toBe(false);
-      expect(result.output).toContain("src/styles/host/base.css:4");
+      expect(result.output).toContain(`${path.join("src", "styles", "host", "base.css")}:4`);
       expect(result.output).toContain("belongs in src/styles/design-contract.css");
     });
 
@@ -199,7 +199,7 @@ describe("check-design-contract", () => {
       });
 
       expect(result.ok).toBe(false);
-      expect(result.output).toContain("src/styles/host/late.css:4");
+      expect(result.output).toContain(`${path.join("src", "styles", "host", "late.css")}:4`);
     });
 
     it("fails on a subdirectory of host partials", () => {

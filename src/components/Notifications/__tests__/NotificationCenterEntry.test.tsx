@@ -711,6 +711,11 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(screen.getByText("Report on GitHub"));
     });
     expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith("system.openExternal", expect.anything(), {
+        source: "user",
+      })
+    );
   });
 
   it("writes the correlation ID to the clipboard when Copy is selected", async () => {
@@ -749,14 +754,16 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(item);
     });
 
-    expect(getVersionInfoMock).toHaveBeenCalled();
-    expect(dispatchMock).toHaveBeenCalledWith(
-      "system.openExternal",
-      expect.objectContaining({
-        url: expect.stringContaining("github.com/daintreehq/daintree/issues/new"),
-      }),
-      { source: "user" }
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "system.openExternal",
+        expect.objectContaining({
+          url: expect.stringContaining("github.com/daintreehq/daintree/issues/new"),
+        }),
+        { source: "user" }
+      )
     );
+    expect(getVersionInfoMock).toHaveBeenCalled();
   });
 
   it("swallows a serialization error from buildNotificationReportUrl (e.g., lone surrogate)", async () => {
@@ -764,6 +771,7 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
     // buildNotificationReportUrl) to throw URIError. The handler must catch
     // it — otherwise the rejection escapes `void handleReportOnGitHub()` as
     // an unhandled promise. Asserts the click resolves and no dispatch fires.
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     render(
       <NotificationCenterEntry
         entry={makeEntry({
@@ -780,11 +788,20 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
         fireEvent.click(item);
       })
     ).resolves.toBeUndefined();
+    // The handler loads its dependencies asynchronously; wait for its catch,
+    // so a negative dispatch assertion cannot pass before the handler runs.
+    await waitFor(() =>
+      expect(warning).toHaveBeenCalledWith(
+        "Failed to build notification report",
+        expect.any(URIError)
+      )
+    );
     expect(dispatchMock).not.toHaveBeenCalledWith(
       "system.openExternal",
       expect.anything(),
       expect.anything()
     );
+    warning.mockRestore();
   });
 
   it("falls back to the bridge openExternal when the action dispatch reports !ok", async () => {
@@ -803,7 +820,7 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
     await act(async () => {
       fireEvent.click(item);
     });
-    expect(openExternal).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1));
   });
 });
 

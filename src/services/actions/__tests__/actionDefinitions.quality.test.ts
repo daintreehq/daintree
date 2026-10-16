@@ -1400,7 +1400,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // through. This is the completeness guard (#10580, lesson #8341): the exported
     // deny-list and the actual `denyPluginDispatch: true` definitions must be the
     // same set, or both the runtime dispatch gate and the manifest validator drift.
-    const { registry } = await createRegistryWithAudit();
+    const registry = await createActionRegistryWithRemoteHosts();
     const flaggedInRegistry = new Set<string>();
     for (const [id, factory] of registry) {
       if (factory().denyPluginDispatch === true) {
@@ -1412,7 +1412,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
 
   it("rejects plugin-source dispatch with RESTRICTED for every injection action", async () => {
     const { ActionService } = await import("../../ActionService");
-    const { registry } = await createRegistryWithAudit();
+    const registry = await createActionRegistryWithRemoteHosts();
     const service = new ActionService();
     for (const [, factory] of registry) {
       service.register(factory());

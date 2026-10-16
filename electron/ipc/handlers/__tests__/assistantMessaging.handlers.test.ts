@@ -43,6 +43,7 @@ function remoteCtx(linkSessionId: string | undefined, projectId = "proj"): Ctx {
 }
 
 describe("assistant messaging IPC", () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
   const running = new Map<string, RunningLaneSession>();
   let hosts = 1;
   let policy: AssistantMessagingPolicy;
@@ -56,6 +57,8 @@ describe("assistant messaging IPC", () => {
     });
 
   beforeEach(() => {
+    // Exercise supported-platform behavior on every runner; Windows denial has its own test.
+    Object.defineProperty(process, "platform", { value: "darwin" });
     running.clear();
     hosts = 1;
     policy = new AssistantMessagingPolicy({
@@ -78,6 +81,7 @@ describe("assistant messaging IPC", () => {
     for (const teardown of teardowns.splice(0)) teardown();
     policy.dispose();
     vi.unstubAllGlobals();
+    Object.defineProperty(process, "platform", platform);
   });
 
   it("stays unavailable to this machine's windows until a host exists", async () => {

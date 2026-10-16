@@ -123,16 +123,8 @@ interface ElectronSide {
 }
 
 async function loadElectronSide(): Promise<ElectronSide> {
-  const root = "../../../electron/services/";
-  const load = (file: string) => import(/* @vite-ignore */ `${root}${file}`);
-  const [manager, paths, ledger, persistence] = await Promise.all([
-    load("ProjectStateManager.js"),
-    load("projectStorePaths.js"),
-    load("pty/lifecycleLedger.js"),
-    load("pty/agentSessionCapturePersistence.js"),
-  ]);
-  const side: ElectronSide = Object.assign({}, manager, paths, ledger, persistence);
-  return side;
+  const harness = "../../../electron/services/pty/__tests__/passiveCaptureRestoreHarness.ts";
+  return import(/* @vite-ignore */ harness);
 }
 
 const SESSION_ID = "019a0000-0000-7000-8000-0000000012c3";

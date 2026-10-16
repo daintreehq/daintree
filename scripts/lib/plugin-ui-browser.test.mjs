@@ -144,8 +144,11 @@ describe("rewriteLocalUrls", () => {
         "c{background:url('./assets/noise.png')}"
     );
     expect(assets).toEqual([
-      { source: "/repo/node_modules/f/mono-400.woff2", target: "assets/mono-400.woff2" },
-      { source: "/repo/src/assets/noise.png", target: "assets/noise.png" },
+      {
+        source: path.resolve("/repo/node_modules/f/mono-400.woff2"),
+        target: "assets/mono-400.woff2",
+      },
+      { source: path.resolve("/repo/src/assets/noise.png"), target: "assets/noise.png" },
     ]);
   });
 
@@ -161,7 +164,7 @@ describe("rewriteLocalUrls", () => {
   it("keeps a url's query and fragment on the copy", () => {
     const { css, assets } = rewriteLocalUrls("a{b:url(./icons.svg#close)}", "/r", exists);
     expect(css).toBe("a{b:url(./assets/icons.svg#close)}");
-    expect(assets).toEqual([{ source: "/r/icons.svg", target: "assets/icons.svg" }]);
+    expect(assets).toEqual([{ source: path.resolve("/r/icons.svg"), target: "assets/icons.svg" }]);
   });
 
   it("leaves data, remote and fragment urls alone", () => {
