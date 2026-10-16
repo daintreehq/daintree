@@ -17,9 +17,9 @@ Arguments: `$ARGUMENTS`
 
 ## Runbooks and the user's decisions
 
-Your runbook search for this request: `"Work batches of issues in parallel worktrees, merge their pull requests, then start the next batch"`. It selects `daintree.orchestration.fan-out-work` with `daintree.foundation`; follow them for the mechanics they own (dialogs, ownership, delivery, proving a finish). The user wrote this skill, and it records their decisions where those runbooks leave room or assume otherwise:
+These rounds are owned by the runbook `daintree.orchestration.work-in-waves` (merge-gated rounds, drains included), with `daintree.foundation` for the mechanics (dialogs, ownership, delivery, proving a finish). Load them with one runbook search for this request, `"Work batches of issues in parallel worktrees, merge their pull requests, then start the next batch"`, and follow `work-in-waves` for the rounds whatever else the search returns. A catalog without it predates it: take the mechanics from `daintree.foundation` and the rounds from this skill. The user wrote this skill, and it records their decisions where those runbooks leave room or assume otherwise:
 
-- **The batch and its overlap policy are `/next-batch`'s.** It allows ordinary overlap and leaves it to `/prs:merge`, excluding only structural clashes: looser than fan-out's disjointness gate, by the user's choice. Report its verdict as the gate's result; don't re-split, serialize or drop issues.
+- **The batch and its overlap policy are `/next-batch`'s.** It allows ordinary overlap and leaves it to `/prs:merge`, excluding only structural clashes: the user's policy, looser than a disjointness gate. Report its verdict as the gate's result; don't re-split, serialize or drop issues.
 - **The cap is the batch size**, already approved.
 - **Each unit's whole chain is one command, `/work <n>`**, sent unchanged with no brief.
 - **No `handback` on `/work` or `/prs:merge`**, for `daintree.agents.run-agent-command`'s reason: Daintree appends its instruction to the prompt text, which would become the command's arguments. Both print their own end markers, read exactly with `terminal.readLastMessageOwned`. The pick is a sentence, so it takes `handback`.
@@ -86,7 +86,16 @@ With filters, the first sentence becomes `Run /next-batch with a count of <size>
 
 ## 2. Start
 
-`git -C <main path> fetch origin <base>` first: neither a forge merge nor worktree creation updates local refs. Each issue's branch is `bugfix/issue-<n>-<slug>` with the `bug` label, else `feature/issue-<n>-<slug>`; the slug is the lowercased title with every run of other characters than a-z and 0-9 as one `-`, cut to 40 characters at a hyphen. `/work` keeps a branch holding its issue number.
+`git -C <main path> fetch origin <base>` first: neither a forge merge nor worktree creation updates local refs. Each issue's branch is `bugfix/issue-<n>-<slug>` with the `bug` label, else `feature/issue-<n>-<slug>`; the slug is the lowercased title with every run of other characters than a-z and 0-9 as one `-`, cut to 40 characters at a hyphen. Derive both with exactly these reads, one issue at a time, never by splitting `@tsv` with `IFS read` (an empty field collapses, so an unlabelled issue's title lands in the labels and its branch ends `issue-<n>-`):
+
+```bash
+J=$(gh issue view <n> --repo <owner>/<repo> --json labels,title)
+prefix=$(jq -r 'if any(.labels[]?; .name == "bug") then "bugfix" else "feature" end' <<<"$J")
+slug=$(jq -r '.title | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-|-$"; "") | if length > 40 then .[0:41] | sub("-[^-]*$"; "") | .[0:40] else . end' <<<"$J")
+echo "$prefix/issue-<n>-$slug"
+```
+
+`/work` keeps a branch holding its issue number.
 
 ```json tool=worktree.createWithRecipe
 {"source":{"kind":"newBranch","branchName":"feature/issue-13401-<slug>","baseBranch":"origin/<base>","fromRemote":true,"collisionPolicy":"error","issueNumber":13401,"assignToSelf":true},"focusPolicy":"preserve"}
