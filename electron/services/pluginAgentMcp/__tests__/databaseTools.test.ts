@@ -383,15 +383,15 @@ describe("runDatabaseWrite", () => {
   });
 
   it("says rows were dropped even when only the column list did not fit", () => {
-    const t = target("ledger", LEDGER);
+    const t = target("ledger", `${LEDGER} INSERT INTO tx (account, v) VALUES (1, 'x');`);
+    // No row to trim first: only dropping the column list can mark it.
     const result = write(
       t,
-      `INSERT INTO tx (account, v) VALUES (1, 'x') RETURNING v AS "${"c".repeat(400)}"`,
+      `UPDATE tx SET v = 'y' WHERE v = 'none' RETURNING v AS "${"c".repeat(400)}"`,
       undefined,
       300
     );
-    expect(result).toMatchObject({ changes: 1, columns: [], rows: [], truncated: true });
-    expect(count(t)).toBe(1);
+    expect(result).toMatchObject({ changes: 0, columns: [], rows: [], truncated: true });
   });
 
   it("leaves nothing behind when the statement fails part way", () => {

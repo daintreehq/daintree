@@ -991,6 +991,9 @@ describe("runPluginDatabaseWrite", () => {
     expect(writableOpenUri("\\\\server\\share\\ledger.db", true)).toBe(
       "file:////server/share/ledger.db?mode=rw"
     );
+    expect(writableOpenUri("\\\\localhost\\C$\\data\\ledger.db", true)).toBe(
+      "file:////localhost/C$/data/ledger.db?mode=rw"
+    );
   });
 
   it("rolls back what a RETURNING statement wrote when its caller throws", () => {

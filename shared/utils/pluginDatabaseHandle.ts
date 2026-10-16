@@ -481,14 +481,22 @@ export function readPluginDatabaseRows(
  * The URI a declared write opens its file by: `mode=rw` opens read-write and
  * never creates. A UNC path's server goes into the path behind an empty
  * authority (`file:////server/share/…`), since SQLite refuses any authority
- * but `localhost`. Exported for its test on either platform's paths.
+ * but `localhost`. URL parsing drops a `localhost` server altogether, which
+ * would leave the path naming the local drive, so that one is put back from
+ * the path itself. Exported for its test on either platform's paths.
  */
 export function writableOpenUri(
   filePath: string,
   windows: boolean = process.platform === "win32"
 ): string {
   const url = pathToFileURL(filePath, { windows });
-  return `file://${url.host === "" ? "" : `//${url.host}`}${url.pathname}?mode=rw`;
+  const server =
+    url.host !== ""
+      ? url.host
+      : windows && /^[\\/]{2}localhost[\\/]/i.test(filePath)
+        ? "localhost"
+        : "";
+  return `file://${server === "" ? "" : `//${server}`}${url.pathname}?mode=rw`;
 }
 
 /**

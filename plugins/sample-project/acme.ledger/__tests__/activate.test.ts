@@ -347,6 +347,7 @@ describe("acme.ledger — tool calls round-trip through the project's database",
     const { call, dispose } = await activated();
     await call("list_transactions");
     expect(transaction("2026-09-01", -1, "\tEating Out\n").rows![0]![3]).toBe("eating out");
+    expect(transaction("2026-09-02", -1, "\u00a0Rent\u3000\ufeff").rows![0]![3]).toBe("rent");
     dispose();
   });
 
