@@ -137,6 +137,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `file.openPanel` | Open file panel | safe | `path`, `rootPath?`, `viewMode?` |
 | `file.read` | Read file | safe | `path`, `rootPath?` |
 | `file.showItemInFolder` | Reveal in file manager | safe | `path`, `allowOutsideRoots?` |
+| `file.trash` | Move file to Trash | confirm | `filePath`, `worktreeId?`, `worktreePath?` |
 | `file.view` | View file | safe | `path`, `col?`, `confineToRoot?`, `line?`, `rootPath?`, `viewMode?`, `worktreeId?` |
 | `files.search` | Search files | safe | `query`, `cwd?`, `limit?` |
 
@@ -189,6 +190,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `git.abortRepositoryOperation` | Abort Git operation | confirm | `cwd?`, `operation?`, `worktreeId?`, `worktreePath?` |
 | `git.commit` | Commit | safe | `message`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.continueRepositoryOperation` | Continue Git operation | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.discardFileChanges` | Discard file changes | confirm | `filePath`, `worktreeId?`, `worktreePath?` |
 | `git.fetch` | Fetch | safe | `cwd?`, `prune?`, `worktreeId?`, `worktreePath?` |
 | `git.forcePushWithLease` | Force push with lease | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.getFileDiff` | Get file diff | safe | `filePath`, `status`, `cwd?`, `ignoreWhitespace?`, `maxBytes?`, `offset?`, `worktreeId?`, `worktreePath?` |
