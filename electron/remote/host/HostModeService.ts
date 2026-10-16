@@ -4,7 +4,14 @@ import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.
 import type { AdvertiseState } from "./advertise.js";
 import type { CommandResult, CommandRunner } from "./hostCommands.js";
 import type { HostListener } from "./hostListener.js";
-import { driversRow, keychainRow, sleepRow, socketRow, startAtLoginRow } from "./hostModeRows.js";
+import {
+  driversRow,
+  isWslKernel,
+  keychainRow,
+  sleepRow,
+  socketRow,
+  startAtLoginRow,
+} from "./hostModeRows.js";
 import {
   classifyKeychainWithoutTrial,
   runKeychainPreflight,
@@ -34,6 +41,8 @@ export interface HostModeAdvertiser {
 
 export interface HostModeServiceDeps {
   platform: NodeJS.Platform;
+  /** Whether this Linux runs in WSL; read from the kernel when left out. */
+  wsl?: boolean;
   readSettings(): HostModeSettings;
   writeSettings(next: HostModeSettings): void;
   /** Where the socket lives (or would), known before anything listens. */
@@ -81,6 +90,7 @@ export class HostModeService {
   private preflight: Promise<void> | null = null;
   private observation: StartAtLoginObservation | null = null;
   private pmset: CommandResult | null = null;
+  private readonly wsl: boolean;
   private observed: Promise<void> | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -90,6 +100,7 @@ export class HostModeService {
 
   constructor(private readonly deps: HostModeServiceDeps) {
     this.advertiser = deps.createAdvertiser(() => this.pushSoon());
+    this.wsl = deps.wsl ?? isWslKernel(deps.platform);
   }
 
   /** Listen for Shells; used at boot and by the switch. Concurrent calls share one start. */
@@ -395,9 +406,10 @@ export class HostModeService {
           consented: settings.startAtLogin,
           observation: this.observation,
           installError: this.installError,
+          wsl: this.wsl,
         }),
         keychainRow(keychain),
-        sleepRow(this.deps.platform, this.pmset),
+        sleepRow(this.deps.platform, this.pmset, this.wsl),
         driversRow(attachedClients),
       ],
     };

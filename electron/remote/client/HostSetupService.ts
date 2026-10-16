@@ -268,6 +268,7 @@ export class HostSetupService {
       probe: () => this.probeOutcome(connection, channel),
       sleep: this.deps.sleep ?? abortableSleep,
       now: this.deps.now,
+      updateChannel: this.deps.clientBuild().channel,
     });
   }
 

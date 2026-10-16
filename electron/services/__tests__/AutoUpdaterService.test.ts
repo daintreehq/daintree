@@ -1067,6 +1067,14 @@ describe("AutoUpdaterService", () => {
       });
     });
 
+    it("setChannel switches the channel when called directly, before the updater has started", async () => {
+      // Host setup's enable request can land before the updater initializes.
+      const result = await autoUpdaterService.setChannel("nightly");
+      expect(result).toBe("nightly");
+      expect(storeMock.set).toHaveBeenCalledWith("updateChannel", "nightly");
+      expect(autoUpdaterMock.setFeedURL).not.toHaveBeenCalled();
+    });
+
     it("IPC UPDATE_SET_CHANNEL coerces unknown value to stable", async () => {
       autoUpdaterService.initialize();
 
@@ -1682,6 +1690,37 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     });
 
+    it("won't stage a download from a check of the old feed that answers after the switch", async () => {
+      const checkingHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "checking-for-update"
+      )![1];
+      checkingHandler();
+      await setChannelHandler(null, "nightly");
+      storeMock.set.mockClear();
+      availableHandler({ version: "2.0.0" });
+      downloadedHandler({ version: "2.0.0" });
+
+      expect(storeMock.set).not.toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+      const quitHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
+      )![1];
+      quitHandler(TRUSTED_SENDER);
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+    });
+
+    it("stages a download from a check that began after the switch", async () => {
+      const checkingHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "checking-for-update"
+      )![1];
+      await setChannelHandler(null, "nightly");
+      storeMock.set.mockClear();
+      checkingHandler();
+      availableHandler({ version: "2.0.0" });
+      downloadedHandler({ version: "2.0.0" });
+
+      expect(storeMock.set).toHaveBeenCalledWith("pendingUpdateVersion", "2.0.0");
+    });
+
     it("cancels any in-flight retry timer on channel switch", async () => {
       const errorHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
         (args) => args[0] === "error"
@@ -2222,8 +2261,13 @@ describe("AutoUpdaterService", () => {
       await setChannelHandler(null, "nightly");
       expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(false);
 
-      // Fire update-available to sync downloadGeneration with the new channel
-      // before the download completes.
+      // A check of the new feed: electron-updater emits checking-for-update as
+      // it starts, then update-available, which ties the download to the new
+      // channel before it completes.
+      const checkingHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "checking-for-update"
+      )![1];
+      checkingHandler();
       availableHandler({ version: "2.0.0-nightly.1" });
       downloadedHandler({ version: "2.0.0-nightly.1" });
 

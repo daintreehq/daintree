@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
   isHostModeRequested,
+  requestedUpdateChannel,
   resolveHostModeLaunch,
   isAttachStdioRequested,
   shouldUseHeadlessOzone,
 } from "../hostModeLaunch.js";
 
 describe("hostModeLaunch", () => {
+  it("reads the update channel host setup sends, only beside --enable-host-mode", () => {
+    const enable = ["daintree", "--host-mode", "--enable-host-mode", "--host-mode-handoff"];
+    expect(requestedUpdateChannel([...enable, "--update-channel=nightly"])).toBe("nightly");
+    expect(requestedUpdateChannel([...enable, "--update-channel=stable"])).toBe("stable");
+    expect(requestedUpdateChannel(enable)).toBeNull();
+    expect(requestedUpdateChannel([...enable, "--update-channel=beta"])).toBeNull();
+    expect(requestedUpdateChannel([...enable, "--update-channel", "nightly"])).toBeNull();
+    expect(
+      requestedUpdateChannel(["daintree", "--host-mode", "--update-channel=nightly"])
+    ).toBeNull();
+  });
+
   it("recognises the --host-mode switch", () => {
     expect(isHostModeRequested(["daintree", "--host-mode"])).toBe(true);
     expect(isHostModeRequested(["daintree"])).toBe(false);

@@ -32,6 +32,8 @@ import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 
 export const MAC_APP_PATH = "/Applications/Daintree.app";
 export const DEB_INSTALL_DIR = "/opt/Daintree";
+/** The packaged app's settings folder under `~/.config` (Electron's userData, by product name). */
+const LINUX_SETTINGS_DIR_NAME = "Daintree";
 export const LINUX_UNIT_NAME = "daintree-host.service";
 /** The deb's executable: what a unit for a deb install runs. */
 export const DEB_EXECUTABLE = `${DEB_INSTALL_DIR}/daintree`;
@@ -76,6 +78,8 @@ export function buildHostProbeScript(): string {
   const linuxDir = `"/run/user/$(id -u)/${LINUX_RUNTIME_DIR_NAME}"`;
   const mac = [
     `d=${macDir}`,
+    // Settings there mean Daintree has run as this user, who may have chosen its update channel.
+    `if [ -f "$d/config.json" ]; then echo "${MARK}settings yes"; else echo "${MARK}settings no"; fi`,
     `if [ -d ${MAC_APP_PATH} ]; then echo "${MARK}install app-bundle ${MAC_APP_PATH}"`,
     `echo "${MARK}version $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' ${MAC_APP_PATH}/Contents/Info.plist 2>/dev/null)"`,
     `${buildInfoRead(`${MAC_APP_PATH}/Contents/Resources/app.asar`)}; fi`,
@@ -86,6 +90,7 @@ export function buildHostProbeScript(): string {
   ].join("; ");
   const linux = [
     `d=${linuxDir}`,
+    `if [ -f "\${XDG_CONFIG_HOME:-$HOME/.config}/${LINUX_SETTINGS_DIR_NAME}/config.json" ]; then echo "${MARK}settings yes"; else echo "${MARK}settings no"; fi`,
     `if [ -d ${DEB_INSTALL_DIR} ]; then echo "${MARK}install deb ${DEB_INSTALL_DIR}"`,
     `echo "${MARK}version $(dpkg-query -W -f='\${Version}' daintree 2>/dev/null)"`,
     `${buildInfoRead(`${DEB_INSTALL_DIR}/resources/app.asar`)}; fi`,
@@ -135,6 +140,11 @@ export interface ParsedProbe {
   hostModeListening: boolean;
   hostPid: number | null;
   canDownload: boolean;
+  /**
+   * Whether Daintree keeps settings there for this user, so has run there and
+   * may have had its update channel chosen; null when the probe didn't say.
+   */
+  hasSettings: boolean | null;
   advice: HostAdvice;
   /** What the host's Daintree last recorded about Host mode (host-mode.json). */
   hostModeState: HostModeObservation | null;
@@ -324,6 +334,7 @@ export function parseHostProbe(stdout: string): ParsedProbe {
     hostModeListening: one("listening") === "yes",
     hostPid: hostPidText && /^\d{1,10}$/.test(hostPidText) ? Number(hostPidText) : null,
     canDownload: one("download") === "yes",
+    hasSettings: values.has("settings") ? one("settings") === "yes" : null,
     advice: {
       sleepObserved,
       sleepDisabled,
@@ -454,10 +465,16 @@ export async function probeHost(params: {
       },
     };
   }
-  // A WSL distro sleeps only when this PC does, and the Shell with it: its own sleep setting says nothing.
+  // A WSL distro sleeps only when this PC does, and the Shell with it: its own
+  // sleep setting says nothing. Nor does lingering: WSL holds the user's login
+  // session open for as long as the distro runs, and a distro that stops takes
+  // every service with it, lingering or not.
   const observed: ParsedProbe =
     connection.kind === "wsl"
-      ? { ...parsed, advice: { ...parsed.advice, sleepObserved: null, sleepDisabled: null } }
+      ? {
+          ...parsed,
+          advice: { ...parsed.advice, sleepObserved: null, sleepDisabled: null, linger: null },
+        }
       : parsed;
   return {
     parsed: observed,

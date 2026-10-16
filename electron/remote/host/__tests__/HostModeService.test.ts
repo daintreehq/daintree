@@ -121,6 +121,8 @@ function makeService(overrides: Partial<HostModeServiceDeps> = {}, initial?: Hos
   };
   const service = new HostModeService({
     platform: "linux",
+    // Run in a WSL distro or not, these tests describe an ordinary Linux host.
+    wsl: false,
     readSettings: () => settings,
     writeSettings: (next) => {
       settings = next;

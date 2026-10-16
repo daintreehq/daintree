@@ -1,3 +1,4 @@
+import os from "node:os";
 import type { AttachedClientInfo, HostModeStatusRow } from "../../../shared/types/ipc/hostMode.js";
 import type { AdvertiseState } from "./advertise.js";
 import type { CommandResult } from "./hostCommands.js";
@@ -11,6 +12,15 @@ import type { StartAtLoginObservation } from "./startAtLogin.js";
  */
 
 export const PMSET_SLEEP_COMMAND = "sudo pmset -a sleep 0 disksleep 0";
+
+/**
+ * Whether this Linux runs in WSL, by the kernel WSL ships ("…-microsoft-standard-WSL2").
+ * There the distro holds the user's login for as long as it runs, and sleeps
+ * only with the PC: lingering and suspend say nothing about reaching the host.
+ */
+export function isWslKernel(platform: NodeJS.Platform, release: string = os.release()): boolean {
+  return platform === "linux" && /microsoft/i.test(release);
+}
 
 export function socketRow(input: {
   enabled: boolean;
@@ -43,6 +53,7 @@ export function startAtLoginRow(input: {
   consented: boolean;
   observation: StartAtLoginObservation | null;
   installError: string | null;
+  wsl?: boolean;
 }): HostModeStatusRow {
   const obs = input.observation;
   if (input.installError) {
@@ -83,6 +94,13 @@ export function startAtLoginRow(input: {
   const lingerCommand = obs.userName ? `loginctl enable-linger ${obs.userName}` : undefined;
   if (obs.unitState !== null && obs.unitState !== "enabled") {
     return { id: "start-at-login", state: "warning", detail: `${unit} (${obs.path})${stale}` };
+  }
+  if (input.wsl) {
+    return {
+      id: "start-at-login",
+      state: obs.current ? "ok" : "warning",
+      detail: `${unit}; it starts with this WSL distribution${stale}`,
+    };
   }
   if (obs.linger === "no") {
     return {
@@ -130,8 +148,16 @@ function minutes(value: number): string {
 
 export function sleepRow(
   platform: NodeJS.Platform,
-  pmset: CommandResult | null
+  pmset: CommandResult | null,
+  wsl = false
 ): HostModeStatusRow {
+  if (wsl) {
+    return {
+      id: "sleep",
+      state: "ok",
+      detail: "A WSL distribution sleeps only when its PC does",
+    };
+  }
   if (platform === "linux") {
     return {
       id: "sleep",

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { driversRow, parsePmset, sleepRow, socketRow, startAtLoginRow } from "../hostModeRows.js";
+import {
+  driversRow,
+  isWslKernel,
+  parsePmset,
+  sleepRow,
+  socketRow,
+  startAtLoginRow,
+} from "../hostModeRows.js";
 import type { StartAtLoginObservation } from "../startAtLogin.js";
 
 const systemd: StartAtLoginObservation = {
@@ -29,6 +36,12 @@ describe("host mode status rows", () => {
 
   it("points Linux at systemd-inhibit rather than guessing", () => {
     expect(sleepRow("linux", null).detail).toContain("systemd-inhibit");
+    // A WSL distribution sleeps with its PC; there's nothing to hold off in it.
+    expect(sleepRow("linux", null, true)).toEqual({
+      id: "sleep",
+      state: "ok",
+      detail: "A WSL distribution sleeps only when its PC does",
+    });
   });
 
   it("describes a systemd unit with linger", () => {
@@ -44,6 +57,24 @@ describe("host mode status rows", () => {
         installError: null,
       })
     ).toMatchObject({ state: "unknown", command: "loginctl enable-linger greg" });
+  });
+
+  it("says nothing of linger in a WSL distribution, which holds the login while it runs", () => {
+    expect(
+      startAtLoginRow({
+        consented: true,
+        observation: { ...systemd, linger: "no" },
+        installError: null,
+        wsl: true,
+      })
+    ).toEqual({
+      id: "start-at-login",
+      state: "ok",
+      detail: "systemd user unit enabled; it starts with this WSL distribution",
+    });
+    expect(isWslKernel("linux", "6.18.54.1-microsoft-standard-WSL2")).toBe(true);
+    expect(isWslKernel("linux", "6.8.0-1021-azure")).toBe(false);
+    expect(isWslKernel("darwin", "6.18.54.1-microsoft-standard-WSL2")).toBe(false);
   });
 
   it("describes a LaunchAgent", () => {

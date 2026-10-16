@@ -199,6 +199,8 @@ class AutoUpdaterService {
   private checkingMenuTimeout: NodeJS.Timeout | null = null;
   private menuStateListeners: Set<(state: UpdateMenuState) => void> = new Set();
   private channelGeneration = 0;
+  /** The channel generation when the check now running began. */
+  private checkGeneration = 0;
   private downloadGeneration = 0;
   private checkingHandler: (() => void) | null = null;
   private availableHandler: ((info: UpdateInfo) => void) | null = null;
@@ -757,6 +759,60 @@ class AutoUpdaterService {
     }
   }
 
+  /**
+   * Follow `channel` from now on, as the Settings switch does: a staged update
+   * from the channel being left is dropped. Host setup uses it too, to give a
+   * host it just installed the channel of the Shell that installed it.
+   */
+  async setChannel(channel: unknown): Promise<"stable" | "nightly"> {
+    const validated: "stable" | "nightly" = channel === "nightly" ? "nightly" : "stable";
+    // Mirror the `?? "stable"` fallback that initialize() applies. Without
+    // it, a fresh install (no stored key) reads previousChannel as
+    // undefined and the same-channel guard never fires — saving "stable"
+    // would discard a validly-staged installer.
+    const previousChannel = store.get("updateChannel") ?? "stable";
+    store.set("updateChannel", validated);
+
+    // Same-channel re-save (e.g. user opens settings and clicks Save
+    // without changing the channel) must not blow away a validly-staged
+    // installer for the active channel.
+    if (validated === previousChannel) return validated;
+
+    // Reset all install guards synchronously BEFORE the async clear so
+    // quitAndInstallIfReady() and the IPC handler can't race through
+    // during the await window and install the old channel's payload.
+    autoUpdater.autoInstallOnAppQuit = false;
+    this.updateDownloaded = false;
+    this.lastBroadcastVersion = null;
+    // The staged payload belongs to the channel being left; a renderer that
+    // mounts before the new channel's first check must not be handed it.
+    this.latestUpdate = null;
+    this.resetRetryState();
+    this.clearCheckingMenuTimeout();
+    this.setMenuState("idle");
+    // Drop the pending-install marker for the prior channel so the next
+    // boot doesn't fire a false-positive mismatch (issue #9261). The new
+    // channel's download will re-arm it via update-downloaded.
+    try {
+      store.delete("pendingUpdateVersion");
+    } catch (err) {
+      console.error("[MAIN] Failed to clear pendingUpdateVersion on channel switch:", err);
+    }
+    // Separate try so a throw above still drops the attempt marker — the
+    // two keys are only meaningful as a pair.
+    this.forgetInstallStage();
+    // Transition to Idle done; now discard the staged installer on disk
+    // and reconfigure the feed. Re-arm happens in the update-downloaded
+    // handler when the new channel's download completes.
+    this.channelGeneration += 1;
+    await this.clearStagedInstaller();
+
+    if (this.initialized) {
+      this.configureFeedForChannel(validated);
+    }
+    return validated;
+  }
+
   initialize(): void {
     if (this.initialized) {
       console.log("[MAIN] Auto-updater already initialized, skipping");
@@ -770,54 +826,9 @@ class AutoUpdaterService {
         return store.get("updateChannel") ?? "stable";
       });
 
-      ipcMain.handle(CHANNELS.UPDATE_SET_CHANNEL, async (_event, channel: unknown) => {
-        const validated: "stable" | "nightly" = channel === "nightly" ? "nightly" : "stable";
-        // Mirror the `?? "stable"` fallback that initialize() applies. Without
-        // it, a fresh install (no stored key) reads previousChannel as
-        // undefined and the same-channel guard never fires — saving "stable"
-        // would discard a validly-staged installer.
-        const previousChannel = store.get("updateChannel") ?? "stable";
-        store.set("updateChannel", validated);
-
-        // Same-channel re-save (e.g. user opens settings and clicks Save
-        // without changing the channel) must not blow away a validly-staged
-        // installer for the active channel.
-        if (validated === previousChannel) return validated;
-
-        // Reset all install guards synchronously BEFORE the async clear so
-        // quitAndInstallIfReady() and the IPC handler can't race through
-        // during the await window and install the old channel's payload.
-        autoUpdater.autoInstallOnAppQuit = false;
-        this.updateDownloaded = false;
-        this.lastBroadcastVersion = null;
-        // The staged payload belongs to the channel being left; a renderer that
-        // mounts before the new channel's first check must not be handed it.
-        this.latestUpdate = null;
-        this.resetRetryState();
-        this.clearCheckingMenuTimeout();
-        this.setMenuState("idle");
-        // Drop the pending-install marker for the prior channel so the next
-        // boot doesn't fire a false-positive mismatch (issue #9261). The new
-        // channel's download will re-arm it via update-downloaded.
-        try {
-          store.delete("pendingUpdateVersion");
-        } catch (err) {
-          console.error("[MAIN] Failed to clear pendingUpdateVersion on channel switch:", err);
-        }
-        // Separate try so a throw above still drops the attempt marker — the
-        // two keys are only meaningful as a pair.
-        this.forgetInstallStage();
-        // Transition to Idle done; now discard the staged installer on disk
-        // and reconfigure the feed. Re-arm happens in the update-downloaded
-        // handler when the new channel's download completes.
-        this.channelGeneration += 1;
-        await this.clearStagedInstaller();
-
-        if (this.initialized) {
-          this.configureFeedForChannel(validated);
-        }
-        return validated;
-      });
+      ipcMain.handle(CHANNELS.UPDATE_SET_CHANNEL, (_event, channel: unknown) =>
+        this.setChannel(channel)
+      );
 
       ipcMain.handle(CHANNELS.UPDATE_GET_LAST_CHECK, () => {
         return store.get("lastUpdateCheck") ?? null;
@@ -928,12 +939,15 @@ class AutoUpdaterService {
 
       this.checkingHandler = () => {
         console.log("[MAIN] Checking for update...");
+        this.checkGeneration = this.channelGeneration;
       };
       autoUpdater.on("checking-for-update", this.checkingHandler);
 
       this.availableHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update available:", info.version);
-        this.downloadGeneration = this.channelGeneration;
+        // The generation the check began under: a check of the old feed that
+        // answers after a channel switch must not stage its download as current.
+        this.downloadGeneration = this.checkGeneration;
         // Read the reason before `isManualCheck` is cleared — it feeds the check.
         const suppressionReason = this.getUpdateAvailableSuppressionReason(info.version);
         this.isManualCheck = false;
@@ -1063,10 +1077,10 @@ class AutoUpdaterService {
         // attempt marker the pending handoff just wrote — leaving a failed
         // install with no record of having been tried (issue #11481).
         if (this.installInFlight) return;
-        // Stale-download guard: downloadGeneration was captured in
-        // update-available, channelGeneration is incremented on channel
-        // switch. If they diverged, this download belongs to the prior
-        // channel and must not re-arm install.
+        // Stale-download guard: downloadGeneration is the generation its check
+        // began under, channelGeneration is incremented on channel switch. If
+        // they diverged, this download belongs to the prior channel and must
+        // not re-arm install.
         if (this.channelGeneration !== this.downloadGeneration) return;
         this.updateDownloaded = true;
         // After the guard, never before: a stale download from the previous
@@ -1334,6 +1348,7 @@ class AutoUpdaterService {
     this.lastBroadcastVersion = null;
     this.channelHandlersRegistered = false;
     this.channelGeneration = 0;
+    this.checkGeneration = 0;
     this.downloadGeneration = 0;
     this.initialized = false;
     this.clearCheckingMenuTimeout();
