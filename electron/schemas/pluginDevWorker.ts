@@ -48,6 +48,7 @@ const HOST_CALL_METHODS = {
   showToast: true,
   dispatch: true,
   reloadPanel: true,
+  restartWorker: true,
   "actions.list": true,
   "actions.get": true,
   "settings.get": true,

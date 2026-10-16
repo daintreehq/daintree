@@ -205,6 +205,7 @@ import type {
   PluginMcpToolDefinition,
   PluginDocumentsApi,
   PluginRenderPdfResult,
+  WorkerRestartResult,
 } from "../../../shared/types/plugin.js";
 import type {
   LoadedPlugin,
@@ -603,6 +604,14 @@ export interface PluginHostFactoryDeps {
    * `recordPushRejected`.
    */
   trackPromptWait?: (pluginId: string) => () => void;
+  /**
+   * Admit and schedule a plugin's request to restart its own worker
+   * (`host.restartWorker`, #13410). Answers synchronously and starts the
+   * restart only after the caller has been answered. `boundPlugin` is the
+   * instance the calling host was bound to, so a request from a superseded
+   * instance can never restart its successor.
+   */
+  requestWorkerSelfRestart: (pluginId: string, boundPlugin: LoadedPlugin) => WorkerRestartResult;
 }
 
 /**
@@ -2239,6 +2248,14 @@ export function createHost(
       }
       if (!isBound()) return "unavailable";
       return panelReloadDispatcher.reload(pluginId, panelId, boundProjectId);
+    },
+    // NOT revoke-guarded: a plugin reaches for this long after activate(),
+    // when its host calls have started timing out. No capability gate — it
+    // restarts only the caller's own worker, identified by this closure's
+    // binding, the same restart the user's "Restart plugin" button runs.
+    restartWorker: async () => {
+      if (!isBound()) return "unavailable";
+      return deps.requestWorkerSelfRestart(pluginId, boundPlugin!);
     },
     // NOT revoke-guarded for the same reason as invalidateFileDecorations:
     // plugins fire toasts from post-activation callbacks and timers. Liveness

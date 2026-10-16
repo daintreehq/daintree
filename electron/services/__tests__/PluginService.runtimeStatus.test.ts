@@ -110,6 +110,7 @@ vi.mock("../plugin-capability/instances.js", () => ({
 import { PluginService } from "../PluginService.js";
 import { broadcastToRenderer, broadcastToProjectRenderers } from "../../ipc/utils.js";
 import type { PluginRuntimeStatus, PluginWorkerState } from "../../../shared/types/plugin.js";
+import { PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS } from "../../../shared/types/plugin.js";
 
 let tmpDir: string;
 let pluginsRoot: string;
@@ -547,6 +548,128 @@ describe("restartPluginWorker — the panel's last recovery (#12278)", () => {
 
     expect(result?.worker?.state).toBe("failed");
     expect(result?.worker?.reason).toBe("activation-failed");
+
+    service.dispose();
+  });
+});
+
+describe("host.restartWorker — a plugin restarting its own worker (#13410)", () => {
+  type SelfRestart = (pluginId: string, boundPlugin: unknown) => string;
+
+  function requestSelfRestart(service: PluginService): SelfRestart {
+    const svc = service as unknown as { requestWorkerSelfRestart: SelfRestart };
+    return svc.requestWorkerSelfRestart.bind(service);
+  }
+
+  function workerBackedPlugin(id: string) {
+    return {
+      manifest: { name: id },
+      isBuiltin: false,
+      resolvedMain: path.join(pluginsRoot, id, "dist", "index.js"),
+    };
+  }
+
+  const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  it("answers before the restart starts, then runs the ordinary restart", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const plugin = workerBackedPlugin("acme.prod");
+    internals(service).plugins.set("acme.prod", plugin);
+    const restart = vi.spyOn(service, "restartPluginWorker").mockResolvedValue(null);
+
+    expect(requestSelfRestart(service)("acme.prod", plugin)).toBe("scheduled");
+    // A microtask drain is what runs between the host's answer and the
+    // bridge's post of it; the restart must not have started by then.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(restart).not.toHaveBeenCalled();
+
+    await nextTurn();
+    expect(restart).toHaveBeenCalledWith("acme.prod");
+
+    service.dispose();
+  });
+
+  it("refuses a second request inside the cooldown, even from the restarted worker", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const plugin = workerBackedPlugin("acme.prod");
+    internals(service).plugins.set("acme.prod", plugin);
+    const restart = vi.spyOn(service, "restartPluginWorker").mockResolvedValue(null);
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const request = requestSelfRestart(service);
+
+    expect(request("acme.prod", plugin)).toBe("scheduled");
+    await nextTurn();
+    now += PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS - 1;
+    expect(request("acme.prod", plugin)).toBe("rate-limited");
+    await nextTurn();
+    expect(restart).toHaveBeenCalledTimes(1);
+
+    now += 1;
+    expect(request("acme.prod", plugin)).toBe("scheduled");
+
+    service.dispose();
+  });
+
+  it("keeps each instance's budget separate", () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const a = workerBackedPlugin("acme.a");
+    const b = workerBackedPlugin("acme.b");
+    internals(service).plugins.set("acme.a", a);
+    internals(service).plugins.set("acme.b", b);
+    vi.spyOn(service, "restartPluginWorker").mockResolvedValue(null);
+    const request = requestSelfRestart(service);
+
+    expect(request("acme.a", a)).toBe("scheduled");
+    expect(request("acme.b", b)).toBe("scheduled");
+
+    service.dispose();
+  });
+
+  it("answers unavailable for a builtin, which has no worker", () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const builtin = { manifest: { name: "daintree.github" }, isBuiltin: true, resolvedMain: "/b.js" };
+    internals(service).plugins.set("daintree.github", builtin);
+
+    expect(requestSelfRestart(service)("daintree.github", builtin)).toBe("unavailable");
+
+    service.dispose();
+  });
+
+  it("answers unavailable to a superseded instance and drops a restart it scheduled", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const stale = workerBackedPlugin("acme.prod");
+    internals(service).plugins.set("acme.prod", stale);
+    const restart = vi.spyOn(service, "restartPluginWorker").mockResolvedValue(null);
+    const request = requestSelfRestart(service);
+
+    expect(request("acme.prod", stale)).toBe("scheduled");
+    // Reloaded before the restart got its turn: the new instance is not the
+    // one that asked.
+    const fresh = workerBackedPlugin("acme.prod");
+    internals(service).plugins.set("acme.prod", fresh);
+    await nextTurn();
+    expect(restart).not.toHaveBeenCalled();
+    expect(request("acme.prod", stale)).toBe("unavailable");
+
+    service.dispose();
+  });
+
+  it("logs a failed restart instead of leaving it unhandled", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const plugin = workerBackedPlugin("acme.prod");
+    internals(service).plugins.set("acme.prod", plugin);
+    vi.spyOn(service, "restartPluginWorker").mockRejectedValue(new Error("is disabled"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(requestSelfRestart(service)("acme.prod", plugin)).toBe("scheduled");
+    await nextTurn();
+    await Promise.resolve();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("acme.prod"),
+      expect.objectContaining({ message: "is disabled" })
+    );
 
     service.dispose();
   });

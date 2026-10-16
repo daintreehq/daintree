@@ -54,6 +54,7 @@ export type {
   PluginPanelLifecycleEvent,
   PluginPanelLifecyclePhase,
   PanelReloadResult,
+  WorkerRestartResult,
 } from "./plugin.js";
 
 // ── Focused panel (worker-facing) ───────────────────────────────────

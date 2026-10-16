@@ -801,6 +801,37 @@ export interface PluginPanelLifecycleEvent {
 export type PanelReloadResult = "scheduled" | "not-mounted" | "rate-limited" | "unavailable";
 
 /**
+ * What the host did with a `host.restartWorker()` request (#13410). An
+ * acknowledgment of scheduling only — the restart runs after the answer is
+ * delivered, so the caller never sees the replacement come up.
+ *
+ * - `"scheduled"` — the plugin's worker will be torn down and started again.
+ * - `"rate-limited"` — a self-restart was already accepted within the last
+ *   30 seconds. Nothing is queued.
+ * - `"unavailable"` — there is no worker to restart: the plugin runs in
+ *   process (a builtin), is disabled or unloaded, or has no backend code.
+ */
+export type WorkerRestartResult = "scheduled" | "rate-limited" | "unavailable";
+
+/** Minimum gap between two accepted `host.restartWorker()` requests from one plugin. */
+export const PLUGIN_WORKER_SELF_RESTART_COOLDOWN_MS = 30_000;
+
+/**
+ * Worker-side deadlines for a host call (#13410), enforced in the worker so
+ * they fire even when main is the side that stopped answering. An expired
+ * call rejects with an error whose `code` is `"TIMEOUT"`; a timeout never
+ * proves the host did nothing.
+ */
+export const PLUGIN_HOST_CALL_TIMEOUT_MS = 60_000;
+/** Deadline for a host call that walks a tree or runs git. */
+export const PLUGIN_HOST_CALL_SLOW_TIMEOUT_MS = 120_000;
+/**
+ * Deadline for a host call that may first wait on a person: a first-use
+ * capability consent dialog (five minutes to answer) or an OS keychain prompt.
+ */
+export const PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS = 360_000;
+
+/**
  * One machine wake observation delivered to a plugin (#12175). Frozen before
  * delivery, and carries only timing — never what the machine was doing while
  * suspended.
@@ -4967,6 +4998,21 @@ export interface PluginHostApi extends PluginActivationApi {
    *   names another plugin's panel, or names a panel that belongs to no plugin.
    */
   reloadPanel(panelId: string): Promise<PanelReloadResult>;
+  /**
+   * Restart this plugin's own worker (#13410): the same restart as the
+   * "Restart plugin" button. Panels rebind to the new worker rather than
+   * closing. Use it to recover when host calls keep timing out — every host
+   * call still outstanding in the old worker is abandoned with it.
+   *
+   * Resolves with a {@link WorkerRestartResult} before the restart begins.
+   * One request per 30 seconds is accepted; the rest resolve
+   * `"rate-limited"`, and nothing is queued. A plugin that runs in
+   * process (a builtin) has no worker and resolves `"unavailable"`.
+   *
+   * No capability is required. NOT revoke-guarded, and resolves
+   * `"unavailable"` once the plugin is unloaded.
+   */
+  restartWorker(): Promise<WorkerRestartResult>;
   /**
    * Surface a toast notification. The host namespaces the message as
    * `{pluginId}: {message}` for provenance — a plugin cannot spoof another

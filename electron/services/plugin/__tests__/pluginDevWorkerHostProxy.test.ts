@@ -14,6 +14,10 @@ import {
   PLUGIN_INVOKE_MAX_RESULT_BYTES,
   PLUGIN_PUSH_MAX_PAYLOAD_BYTES,
 } from "../../../../shared/config/pluginBudgets.js";
+import {
+  PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS,
+  PLUGIN_HOST_CALL_TIMEOUT_MS,
+} from "../../../../shared/types/plugin.js";
 
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -1833,5 +1837,141 @@ describe("worker host.fs.walk", () => {
     const { proxy } = connect(host);
     await proxy.host.fs.walk!("/repo", null as never);
     expect(host.fs.walk).toHaveBeenCalledWith("/repo", null);
+  });
+});
+
+describe("PluginDevWorkerHostProxy host-call deadline (#13410)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function lastCall(sent: any[], method: string) {
+    return [...sent].reverse().find((m) => m.type === "host-call" && m.method === method);
+  }
+
+  it("rejects a call main never answers with a typed TIMEOUT and cancels it on main", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.storage.get("k");
+    const outcome = promise.then(
+      () => "resolved",
+      (err) => err
+    );
+    const call = lastCall(sent, "storage.get");
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS - 1);
+    expect(sent.some((m) => m.type === "host-cancel")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const err = await outcome;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.code).toBe("TIMEOUT");
+    expect(err.message).toMatch(/^TIMEOUT: .*storage\.get/);
+    expect(sent).toContainEqual({ type: "host-cancel", requestId: call.requestId });
+  });
+
+  it("ignores main's late answer to a call that already timed out", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.storage.get("k");
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    const call = lastCall(sent, "storage.get");
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+
+    expect(
+      proxy.handleMessage({ type: "host-result", requestId: call.requestId, ok: true, result: 1 })
+    ).toBe(true);
+  });
+
+  it("clears the deadline once main answers", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.storage.get("k");
+    expect(vi.getTimerCount()).toBe(1);
+    resolveCall(proxy, sent, "storage.get", "v");
+    await expect(promise).resolves.toBe("v");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears the deadline when the worker is disposed", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.reloadPanel("p1");
+    proxy.dispose();
+    await expect(promise).resolves.toBe("unavailable");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects a grace-bearing call on timeout instead of answering its fallback", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.reloadPanel("p1");
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+  });
+
+  it("gives a call that may wait on a consent dialog longer than an ordinary one", async () => {
+    const { proxy } = makeProxy();
+    let settled = false;
+    const promise = proxy.host.terminals.readScreen("t1");
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    void promise.catch(() => undefined).finally(() => (settled = true));
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(
+      PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS - PLUGIN_HOST_CALL_TIMEOUT_MS
+    );
+    await rejected;
+  });
+
+  it("never times out a prompt waiting on the person", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.showConfirm({ title: "Go?", message: "Go?" });
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS * 10);
+    resolveCall(proxy, sent, "showConfirm", true);
+    await expect(promise).resolves.toBe(true);
+  });
+
+  it("bounds a cancelled call main still owes an answer for", async () => {
+    const { proxy, sent } = makeProxy();
+    const controller = new AbortController();
+    const promise = proxy.host.sendToAgent("hi", { terminalId: "t1" }, {
+      signal: controller.signal,
+    });
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    controller.abort();
+    expect(sent.filter((m) => m.type === "host-cancel")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_INTERACTIVE_TIMEOUT_MS);
+    await rejected;
+  });
+
+  it("releases main's watcher when a watch times out", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.fs.watch(["/repo/a.ts"], vi.fn());
+    const rejected = expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+    const subscriptionId = lastCall(sent, "fs.watch").params.subscriptionId;
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CALL_TIMEOUT_MS);
+    await rejected;
+    expect(sent).toContainEqual({ type: "unsubscribe", subscriptionId });
+  });
+});
+
+describe("PluginDevWorkerHostProxy restartWorker (#13410)", () => {
+  it("relays the request and resolves with main's answer", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.restartWorker();
+    expect(sent.find((m) => m.type === "host-call" && m.method === "restartWorker")).toBeDefined();
+    resolveCall(proxy, sent, "restartWorker", "scheduled");
+    await expect(promise).resolves.toBe("scheduled");
+  });
+
+  it("resolves unavailable when the worker is torn down before main answers", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.restartWorker();
+    proxy.dispose();
+    await expect(promise).resolves.toBe("unavailable");
   });
 });

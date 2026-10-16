@@ -79,6 +79,7 @@ import {
 import { AGENT_MCP_MAX_RESULT_BYTES } from "../../../shared/types/plugin.js";
 import type {
   PanelReloadResult,
+  WorkerRestartResult,
   PluginAgentPane,
   PluginSendToAgentResult,
   PluginTerminalScreenResult,
@@ -97,6 +98,11 @@ import {
 } from "./pluginPayloadLimits.js";
 import { resolveInvokeTimeoutMs } from "./pluginInvokeDeadline.js";
 import { errorWithFields } from "./pluginHostErrorFields.js";
+import {
+  hostCallDeadlineMs,
+  hostCallTimeoutError,
+  isHostCallTimeoutError,
+} from "./pluginHostCallDeadline.js";
 import { openPluginDatabase } from "./pluginDatabase.js";
 import { validateAgentMcpTools } from "../pluginAgentMcp/validateTools.js";
 import type {
@@ -114,7 +120,7 @@ type Post = (message: PluginWorkerToHostMessage) => void;
 interface PendingCall {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  /** Detach the abort listener once the call settles (no-op when no signal was passed). */
+  /** Detach the abort listener and clear the deadline once the call settles. */
   cleanup?: () => void;
   /**
    * When set, {@link PluginDevWorkerHostProxy.dispose} resolves this call with
@@ -601,10 +607,13 @@ export class PluginDevWorkerHostProxy {
       return Promise.reject(abortErrorFor(signal));
     }
     const requestId = `c${this.nextId++}`;
+    const deadlineMs = hostCallDeadlineMs(method, params);
     return new Promise<T>((resolve, reject) => {
       let onAbort: (() => void) | undefined;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
       const cleanup = (): void => {
         if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+        if (deadline !== undefined) clearTimeout(deadline);
       };
       this.pendingCalls.set(requestId, {
         resolve: resolve as (value: unknown) => void,
@@ -647,6 +656,25 @@ export class PluginDevWorkerHostProxy {
           reject(abortErrorFor(signal));
         };
         signal.addEventListener("abort", onAbort, { once: true });
+      }
+      // Armed in the worker so the caller is released even when main is the
+      // side that stopped answering (#13410). It also bounds a
+      // `hostAnswersAbort` call, whose cancel otherwise waits on main. A
+      // timeout rejects even a grace-bearing call: grace is for unload and
+      // cancellation, and a stalled host is neither.
+      if (deadlineMs > 0) {
+        deadline = setTimeout(() => {
+          if (!this.pendingCalls.has(requestId)) return;
+          this.pendingCalls.delete(requestId);
+          cleanup();
+          try {
+            this.post({ type: "host-cancel", requestId });
+          } catch {
+            // best-effort — the entry is already claimed
+          }
+          reject(hostCallTimeoutError(this.pluginId, method, deadlineMs));
+        }, deadlineMs);
+        deadline.unref?.();
       }
       try {
         const invocationId = this.invocation.getStore();
@@ -1235,6 +1263,10 @@ export class PluginDevWorkerHostProxy {
         }
         return this.callWithGrace<PanelReloadResult>("reloadPanel", { panelId }, "unavailable");
       },
+      // Main schedules the restart after this answer is posted, so the reply
+      // reaches this worker before its teardown does (#13410).
+      restartWorker: () =>
+        this.callWithGrace<WorkerRestartResult>("restartWorker", undefined, "unavailable"),
       // Built-in action catalog (#10561). list/get relay over the port like
       // dispatch; canDispatch is derived locally from get() (no extra
       // round-trip), mirroring the real host. callWithGrace resolves the
@@ -1464,8 +1496,9 @@ export class PluginDevWorkerHostProxy {
             this.subscriptions.delete(subscriptionId);
             // A cancel that reaches main after the watch settled finds no call
             // to abort, so main would keep a watcher nobody listens to; this
-            // releases it (and is a no-op when main never registered one).
-            if (options?.signal?.aborted) {
+            // releases it (and is a no-op when main never registered one). A
+            // timed-out watch is the same race.
+            if (options?.signal?.aborted || isHostCallTimeoutError(err)) {
               try {
                 this.post({ type: "unsubscribe", subscriptionId });
               } catch {
