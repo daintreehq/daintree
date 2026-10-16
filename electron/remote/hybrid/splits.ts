@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import { clipboard, shell } from "electron";
 import type { AppState, BootResult, HydrateResult } from "../../../shared/types/ipc/app.js";
 import type {
@@ -19,6 +20,7 @@ import {
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
 import { openExternalUrl } from "../../utils/openExternal.js";
+import { assertExtensionAllowed } from "../../utils/executablePathGuard.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { HybridSplit } from "../../ipc/endpoint.js";
 import type { IpcContext } from "../../ipc/types.js";
@@ -431,12 +433,35 @@ const refuseOpenOnHost = refuse(
   (host) => `This file is on ${host}, not this computer. Use Copy host path instead.`
 );
 
-/** Opening a host file with this machine's default app: only a WSL distro's, through its share. */
+/**
+ * Opening a host file with this machine's default app: only a WSL distro's,
+ * through its share. The default app runs what it opens, so the launcher's
+ * executable deny-list applies to the path as named and to what it resolves
+ * to: a harmless-looking name in the distro can't link to something Windows
+ * would execute.
+ */
 const openOnHost: HybridSplit = async (context) => {
-  const targetPath = typeof context.args[0] === "string" ? context.args[0] : null;
-  const windowsPath = targetPath ? wslWindowsPath(context.hostId, targetPath) : null;
+  const arg = context.args[0];
+  const targetPath = typeof arg === "string" ? arg : (arg as { path?: unknown } | undefined)?.path;
+  const windowsPath =
+    typeof targetPath === "string" && targetPath.startsWith("/")
+      ? wslWindowsPath(context.hostId, targetPath)
+      : null;
   if (!windowsPath) return refuseOpenOnHost(context);
-  const failure = await shell.openPath(windowsPath);
+  assertExtensionAllowed(windowsPath);
+  let resolved: string;
+  try {
+    resolved = await fs.realpath(windowsPath);
+  } catch {
+    // Windows can't follow a link made in the distro, so the default app couldn't open one either.
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: `Couldn't resolve ${windowsPath}`,
+      userMessage: `Couldn't open ${String(targetPath)} from Windows: it isn't on ${hostLabel(context.hostId)}, or it's a link Windows can't follow.`,
+    });
+  }
+  assertExtensionAllowed(resolved);
+  const failure = await shell.openPath(resolved);
   if (failure) {
     throw new AppError({ code: "INTERNAL", message: failure, userMessage: failure });
   }

@@ -2,6 +2,7 @@ import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import type {
   HandshakeMismatch,
   HostArch,
+  HostConnection,
   HostConnectionState,
   HostDescriptor,
   HostPlatform,
@@ -231,4 +232,25 @@ export function restartConfirmLabel(impact: HostRestartImpact): string {
 /** Whether waiting for idle can be watched: the host reports both working and waiting agents. */
 export function canWaitForIdle(impact: HostRestartImpact): boolean {
   return impact.detail !== null || (impact.agents !== null && impact.agents.waiting !== null);
+}
+
+/**
+ * What removing a host from this device does to it. A remote machine runs on;
+ * a WSL distro is only kept running by this app, so its terminals and agents
+ * end once WSL stops it.
+ */
+export function removeHostOutcome(connection: HostConnection | undefined, hostName: string): {
+  label: string;
+  sentence: string;
+} {
+  if (connection?.kind === "wsl") {
+    return {
+      label: `Terminals and agents in ${hostName} end once WSL stops it`,
+      sentence: `Its projects stay in the distribution, but Daintree stops keeping ${hostName} running, so WSL stops it, with its terminals and agents, once nothing else on this PC uses it.`,
+    };
+  }
+  return {
+    label: `Projects and Daintree on ${hostName} keep running`,
+    sentence: `Projects and Daintree on ${hostName} keep running.`,
+  };
 }

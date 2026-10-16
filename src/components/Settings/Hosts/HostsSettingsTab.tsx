@@ -6,13 +6,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { useRemoteHosts } from "@/hooks/useRemoteHosts";
 import { remoteConnectionKind } from "@/lib/remoteHosts";
-import { formatHostConnection, type HostId } from "@shared/types/remoteHosts";
+import { formatHostConnection, type HostConnection, type HostId } from "@shared/types/remoteHosts";
 import HostModeGroup from "../HostModeGroup";
 import { SettingsSection } from "../SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
-import { connectionLabel, platformLabel } from "./hostLabels";
+import { connectionLabel, platformLabel, removeHostOutcome } from "./hostLabels";
 import {
   onHostSettingsRequest,
   takePendingHostSettings,
@@ -34,7 +34,11 @@ export default function HostsSettingsTab() {
   const { hosts, loaded, loadError, refresh } = useRemoteHosts();
   const [addOpen, setAddOpen] = useState(false);
   const [detailHostId, setDetailHostId] = useState<HostId | null>(null);
-  const [forgetTarget, setForgetTarget] = useState<{ id: HostId; name: string } | null>(null);
+  const [forgetTarget, setForgetTarget] = useState<{
+    id: HostId;
+    name: string;
+    connection: HostConnection;
+  } | null>(null);
   const [forgetError, setForgetError] = useState<string | null>(null);
   // Leaving a host's details puts focus back on the Details button it came
   // from (or, once removed, the list's Add host); entering from the keyboard
@@ -245,7 +249,11 @@ export default function HostsSettingsTab() {
                             aria-label={`Remove ${descriptor.name} from this device`}
                             onClick={() => {
                               setForgetError(null);
-                              setForgetTarget({ id: descriptor.id, name: descriptor.name });
+                              setForgetTarget({
+                                id: descriptor.id,
+                                name: descriptor.name,
+                                connection: descriptor.connection,
+                              });
                             }}
                           >
                             <Trash2 aria-hidden="true" />
@@ -269,7 +277,7 @@ export default function HostsSettingsTab() {
         onClose={() => setForgetTarget(null)}
         variant="destructive"
         title={`Remove '${forgetTarget?.name ?? "host"}' from this device?`}
-        description={`Its connection here closes, windows attached to it return to this machine, and its plugin permissions, history and browser data on this device are cleared. Projects and Daintree on ${forgetTarget?.name ?? "the host"} keep running.`}
+        description={`Its connection here closes, windows attached to it return to this machine, and its plugin permissions, history and browser data on this device are cleared. ${removeHostOutcome(forgetTarget?.connection, forgetTarget?.name ?? "the host").sentence}`}
         confirmLabel="Remove host"
         onConfirm={confirmForget}
         isConfirmLoading={forgetting}

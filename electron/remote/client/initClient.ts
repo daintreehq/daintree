@@ -605,7 +605,11 @@ const WSL_RUNTIME_DIR_NAMES = app.isPackaged ? ["daintree"] : ["daintree", "dain
 function transportFor(
   connection: HostConnection,
   clientDir: string,
-  wslKeepalive: WslKeepalive,
+  wsl: {
+    keepalive: WslKeepalive;
+    /** The host is being removed or re-pointed: its old distro must not be held again. */
+    isRetiring(connection: HostConnection): boolean;
+  },
   ensureRunning?: (signal: AbortSignal) => Promise<boolean>
 ): LinkTransport {
   let supported: HostConnection;
@@ -627,7 +631,9 @@ function transportFor(
       return new WslTransport({
         distro: supported.distro,
         run: defaultCommandRunner,
-        keepalive: (distro) => wslKeepalive.want(distro),
+        keepalive: (distro) => {
+          if (!wsl.isRetiring(supported)) wsl.keepalive.want(distro);
+        },
         ensureRunning,
         runtimeDirNames: WSL_RUNTIME_DIR_NAMES,
       });
@@ -682,8 +688,13 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     createTransport:
       hooks.createTransport ??
       ((descriptor) =>
-        transportFor(descriptor.connection, clientDir, wslKeepalive, (signal) =>
-          ensureHostRunning(descriptor.id, descriptor.connection, signal)
+        transportFor(
+          descriptor.connection,
+          clientDir,
+          // A dial while the host is removed or re-pointed (a notification, an
+          // update's reconnect) would hold the old distro after its release.
+          { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
+          (signal) => ensureHostRunning(descriptor.id, descriptor.connection, signal)
         )),
     handshake: getLocalHandshakeInfo,
     client: {

@@ -26,6 +26,7 @@ import {
   agentClipboardDirectory,
 } from "../agentSettings.js";
 import { setUserRegistry } from "../../config/agentRegistry.js";
+import { setAgentCommandDialectResolver } from "../../utils/shellEscape.js";
 import type { AgentConfig } from "../../config/agentRegistry.js";
 
 // Force POSIX shell-escape semantics so the hardcoded single-quote assertions
@@ -1711,6 +1712,33 @@ describe("Windows launch command quoting", () => {
       initialPrompt: `don't print "hi"`,
     });
     expect(command.endsWith(` 'don''t print "hi"'`)).toBe(true);
+  });
+});
+
+describe("launch commands built for another machine's shell", () => {
+  const originalPlatform = process.platform;
+  afterEach(() => {
+    setAgentCommandDialectResolver(null);
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("quotes for a WSL host's bash even under a Windows Shell", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    setAgentCommandDialectResolver(() => "posix");
+    const command = generateAgentCommand("claude", {}, "claude", { initialPrompt: "don't stop" });
+    // PowerShell's doubled apostrophe would reach bash as "dont stop".
+    expect(command.endsWith(` 'don'\\''t stop'`)).toBe(true);
+    expect(command).not.toContain("'don''t");
+    expect(buildResumeCommand("claude", "session", ["--value=$(x)"])).toContain(
+      "'--value=$(x)'"
+    );
+  });
+
+  it("leaves this machine's own platform in charge when nothing says otherwise", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    setAgentCommandDialectResolver(() => null);
+    const command = generateAgentCommand("claude", {}, "claude", { initialPrompt: "don't" });
+    expect(command.endsWith(` 'don''t'`)).toBe(true);
   });
 });
 

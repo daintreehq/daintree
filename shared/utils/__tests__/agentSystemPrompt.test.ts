@@ -17,6 +17,7 @@ import {
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
 } from "../../types/agentSettings.js";
+import { setAgentCommandDialectResolver } from "../shellEscape.js";
 
 const INSTRUCTION = "Do not ask multiple-choice questions; infer the best option.";
 
@@ -287,5 +288,21 @@ describe("standing instruction through the launch builders", () => {
     );
     expect(extractSystemPromptArgs(reconciled, "codex")).toEqual(resolved.args);
     expect(reconciled).not.toContain("tui.whimsy=false");
+  });
+});
+
+describe("resolveSystemPromptArgs for a command built for another machine", () => {
+  const originalPlatform = process.platform;
+  afterEach(() => {
+    setAgentCommandDialectResolver(null);
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("checks a WSL host's instruction against bash, not this Windows Shell's PowerShell", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const prompt = "Keep work under $HOME and quote `code` spans.";
+    expect(resolveSystemPromptArgs("claude", prompt).ok).toBe(false);
+    setAgentCommandDialectResolver(() => "posix");
+    expect(resolveSystemPromptArgs("claude", prompt)).toMatchObject({ ok: true });
   });
 });

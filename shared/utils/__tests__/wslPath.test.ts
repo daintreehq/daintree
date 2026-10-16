@@ -11,6 +11,10 @@ describe("wslUncPath", () => {
     );
     expect(wslUncPath("Debian", "/")).toBe("\\\\wsl.localhost\\Debian\\");
     expect(wslUncPath("Debian", "/srv//x/")).toBe("\\\\wsl.localhost\\Debian\\srv\\x");
+    // Names that only start like a device are ordinary.
+    expect(wslUncPath("Debian", "/home/console/auxiliary.md")).toBe(
+      "\\\\wsl.localhost\\Debian\\home\\console\\auxiliary.md"
+    );
   });
 
   it("refuses paths Windows can't name or that would step outside the one meant", () => {
@@ -27,6 +31,15 @@ describe("wslUncPath", () => {
       "/a|b",
       "/a\nb",
       "/a\0b",
+      // Windows drops a trailing dot or space, naming a different file.
+      "/home/dt/report.txt.",
+      "/home/dt/report ",
+      "/home/dt./x",
+      // Device names stay devices, whatever extension follows.
+      "/home/dt/CON",
+      "/home/dt/nul.txt",
+      "/home/dt/com1.log",
+      "/home/dt/Lpt9",
     ]) {
       expect(wslUncPath("Ubuntu", path)).toBeNull();
     }

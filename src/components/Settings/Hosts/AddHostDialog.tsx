@@ -96,6 +96,11 @@ function addressOf(connection: HostConnection): string {
   return sshTargetOf(connection) ?? wslDistroOf(connection) ?? "";
 }
 
+/** A distro name as typed in a command line: quoted when it holds a space. */
+function wslCommandArg(distro: string): string {
+  return distro.includes(" ") ? `"${distro}"` : distro;
+}
+
 /** A distro that can't run a Host, in words; null when it can. */
 function wslRefusal(host: DiscoveredHost): string | null {
   return host.wsl && host.wsl.version !== 2 ? "WSL 1 can't run Daintree" : null;
@@ -168,7 +173,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [discoverAttempt, setDiscoverAttempt] = useState(0);
   // On Windows a host is a WSL distro on this PC; elsewhere a machine reached over ssh.
-  const viaWsl = remoteConnectionKind() === "wsl";
+  // An existing host keeps its own kind: its address is never read as another kind's.
+  const viaWsl = (existing?.connection.kind ?? remoteConnectionKind()) === "wsl";
   const makeConnection = (address: string) =>
     viaWsl ? wslConnection(address) : sshConnection(address);
   const [target, setTarget] = useState(existing ? addressOf(existing.connection) : "");
@@ -729,8 +735,13 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       loading: busy,
     };
   } else if (step === "check") {
-    // Host mode runs as a systemd user service, which has nothing to run under without it.
-    const noSystemd = probe?.platform === "linux" && probe.advice.systemd === false;
+    // Setup starts a WSL distro's Host as a systemd user service, which has
+    // nothing to run under without it; a Host already listening needs no setup.
+    const noSystemd =
+      viaWsl &&
+      probe?.platform === "linux" &&
+      probe.advice.systemd === false &&
+      !probe.hostModeListening;
     const localSuggestion =
       // Only while adding: an existing host keeps its saved target, which a
       // reconnect after install or Host mode would still dial.
@@ -798,7 +809,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                     </p>
                     <HostCommand
                       label="Restart the distribution"
-                      command={`wsl --terminate ${target}`}
+                      command={`wsl --terminate ${wslCommandArg(target)}`}
                     />
                   </>
                 )}
@@ -810,7 +821,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           (viaWsl ? (
             <p className="mt-3 text-xs text-text-secondary">
               Daintree runs programs in the distribution with <code>wsl.exe</code>. Check that{" "}
-              <code>wsl -d {target}</code> opens a shell there.
+              <code>wsl -d {wslCommandArg(target)}</code> opens a shell there.
             </p>
           ) : (
             <p className="mt-3 text-xs text-text-secondary">

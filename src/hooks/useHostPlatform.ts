@@ -6,6 +6,7 @@ import {
   type HostConnection,
 } from "@shared/types/remoteHosts";
 import { isLinux, isMac, isWindows } from "@/lib/platform";
+import { setAgentCommandDialectResolver } from "@shared/utils/shellEscape";
 
 export type HostPlatformName = "darwin" | "linux" | "win32";
 
@@ -130,3 +131,10 @@ export function _resetHostPlatformForTests(): void {
   info = null;
   listeners.clear();
 }
+
+// Agent launch commands built in a remote view run in its host's shell, never
+// this machine's: a Windows Shell's view of a WSL project quotes for bash.
+// Hosts are macOS or Linux, so before the host is known it is POSIX.
+setAgentCommandDialectResolver(() =>
+  isRemoteWindow() ? (hostShellDialect() ?? "posix") : null
+);

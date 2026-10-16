@@ -22,7 +22,13 @@ import { HostCopySettingsSection } from "./HostCopySettingsSection";
 import { takeFirstConnect } from "./hostCopySettingsRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
-import { buildLabel, connectionLabel, describeBuildDifference, platformLabel } from "./hostLabels";
+import {
+  buildLabel,
+  connectionLabel,
+  describeBuildDifference,
+  platformLabel,
+  removeHostOutcome,
+} from "./hostLabels";
 import { describeHostForge } from "@/components/Hosts/hostForges";
 import { clientErrorText } from "@/utils/clientAppError";
 import { isWindows } from "@/lib/platform";
@@ -121,6 +127,7 @@ export function HostDetail({
   // Only an ssh target can be changed here; another kind of connection is shown as it is.
   const sshTarget = sshTargetOf(descriptor.connection);
   const wslDistro = wslDistroOf(descriptor.connection);
+  const removeOutcome = removeHostOutcome(descriptor.connection, hostName);
   const [changeTargetOpen, setChangeTargetOpen] = useState(false);
   const connected = connection.status === "connected";
   // What a host reports is about it now only while it is connected: kept from
@@ -494,7 +501,7 @@ export function HostDetail({
       <SettingsSection title="Remove host">
         <SettingsGroup>
           <SettingsRow
-            label={`Projects and Daintree on ${hostName} keep running`}
+            label={removeOutcome.label}
             description="Its connection here closes, windows attached to it return to this machine, and it leaves your host list"
             error={removeError ?? undefined}
             control={
@@ -511,7 +518,7 @@ export function HostDetail({
         onClose={() => setConfirmRemove(false)}
         variant="destructive"
         title={`Remove '${hostName}' from this device?`}
-        description={`Its connection here closes, windows attached to it return to this machine, and its plugin permissions, history and browser data on this device are cleared. Projects and Daintree on ${hostName} keep running.`}
+        description={`Its connection here closes, windows attached to it return to this machine, and its plugin permissions, history and browser data on this device are cleared. ${removeOutcome.sentence}`}
         confirmLabel="Remove host"
         onConfirm={remove}
         isConfirmLoading={removing}

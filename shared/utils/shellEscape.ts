@@ -7,6 +7,25 @@
  * Detects if the current platform is Windows.
  * Works in both Node.js and browser environments.
  */
+/**
+ * The shell an agent launch command will run under, for a command built for
+ * another machine: a remote view's renderer reports its host's (a Windows
+ * Shell showing a project in a WSL distro builds commands for bash). Null
+ * leaves it to this process's own platform.
+ */
+let agentCommandDialectResolver: (() => "windows" | "posix" | null) | null = null;
+
+export function setAgentCommandDialectResolver(
+  resolve: (() => "windows" | "posix" | null) | null
+): void {
+  agentCommandDialectResolver = resolve;
+}
+
+/** How agent launch arguments are quoted and checked: the host's shell when it isn't this machine's. */
+export function agentCommandDialect(): "windows" | "posix" {
+  return agentCommandDialectResolver?.() ?? (isWindows() ? "windows" : "posix");
+}
+
 export function isWindows(): boolean {
   // Node.js environment
   if (typeof process !== "undefined" && process.platform) {

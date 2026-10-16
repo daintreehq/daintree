@@ -705,6 +705,27 @@ describe("AddHostDialog", () => {
   });
 });
 
+describe("AddHostDialog for hosts without systemd", () => {
+  it("lets an ssh Linux host already listening carry on, with or without systemd", async () => {
+    remoteHosts.probe!.mockResolvedValueOnce(
+      probeResult({
+        connection: { kind: "ssh", target: "greg@devuan" },
+        platform: "linux",
+        hostModeListening: true,
+        matchesClient: true,
+        advice: { ...probeResult().advice, systemd: false },
+      })
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@devuan" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    expect(await screen.findByRole("button", { name: "Continue" })).toBeTruthy();
+    expect(screen.queryByTestId("add-host-no-systemd")).toBeNull();
+  });
+});
+
 describe("AddHostDialog on Windows (WSL distros)", () => {
   const distro = (name: string, version: number, isDefault = false, alreadyAdded = false) => ({
     name,
@@ -780,6 +801,44 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
     expect(screen.queryByRole("button", { name: "Plan install" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
+  });
+
+  it("quotes a distro name with spaces in the commands it shows", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce([distro("Ubuntu 22.04 LTS", 2)]);
+    remoteHosts.probe!.mockResolvedValue(
+      probeResult({
+        connection: { kind: "wsl", distro: "Ubuntu 22.04 LTS" },
+        platform: "linux",
+        install: null,
+        hostModeListening: false,
+        advice: { ...probeResult().advice, systemd: false },
+      })
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Ubuntu 22\.04 LTS/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Check distribution" }));
+    expect(await screen.findByText('wsl --terminate "Ubuntu 22.04 LTS"')).toBeTruthy();
+  });
+
+  it("keeps an existing host's own kind, even on a machine that reaches hosts another way", async () => {
+    // A WSL host's record carried to a Mac: its distro name must never be read as an ssh alias.
+    connectionKind.value = "ssh";
+    remoteHosts.probe!.mockResolvedValue(
+      probeResult({ connection: { kind: "wsl", distro: "Ubuntu" }, platform: "linux" })
+    );
+    render(
+      <AddHostDialog
+        isOpen
+        onClose={() => {}}
+        existing={{ hostId: "ubuntu", name: "Ubuntu", connection: { kind: "wsl", distro: "Ubuntu" } }}
+      />
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Check host" }));
+    await waitFor(() =>
+      expect(remoteHosts.probe).toHaveBeenCalledWith({
+        connection: { kind: "wsl", distro: "Ubuntu" },
+      })
+    );
   });
 
   it("says how to install a distro when there is none, and looks again", async () => {

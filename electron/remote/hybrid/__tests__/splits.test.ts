@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   openExternal: vi.fn(async () => undefined),
   writeText: vi.fn(),
+  showItemInFolder: vi.fn(),
+  openPath: vi.fn(async (_path: string) => ""),
+  realpath: vi.fn(async (path: string) => path),
   readShellHydrateFields: vi.fn(() => ({
     safeMode: false,
     gpuWebGLHardware: true,
@@ -56,7 +59,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({
-  shell: { openExternal: mocks.openExternal },
+  shell: {
+    openExternal: mocks.openExternal,
+    showItemInFolder: mocks.showItemInFolder,
+    openPath: mocks.openPath,
+  },
   clipboard: { writeText: mocks.writeText },
 }));
 vi.mock("../../../ipc/handlers/app/state.js", () => ({
@@ -79,6 +86,21 @@ vi.mock("../../../window/windowRef.js", () => ({
     getByWindowId: () => ({ services: { projectViewManager: mocks.pvm } }),
   }),
 }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, default: { ...actual, realpath: mocks.realpath }, realpath: mocks.realpath };
+});
+// A WSL host is only ever opened from a Windows Shell, so the launcher's
+// deny-list is the one Windows builds: it is chosen when the module loads.
+vi.mock("../../../utils/executablePathGuard.js", async (importOriginal) => {
+  const platform = process.platform;
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  try {
+    return await importOriginal();
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  }
+});
 vi.mock("../../runtime.js", () => ({
   getRemoteService: vi.fn((key: string) =>
     key === "remoteHostsClient" && mocks.hasClient ? mocks.client : undefined
@@ -752,6 +774,89 @@ describe("opening host files", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  describe("on a WSL host, whose files are on this PC", () => {
+    const sshHosts = mocks.client.list.getMockImplementation()!;
+    beforeEach(() => {
+      const wslHosts = () => [
+        {
+          descriptor: {
+            id: "studio",
+            name: "Ubuntu",
+            connection: { kind: "wsl", distro: "Ubuntu-24.04" },
+          },
+          connection: { status: "connected" },
+          summary: null,
+        },
+      ];
+      mocks.client.list.mockImplementation(wslHosts as unknown as typeof sshHosts);
+    });
+    afterEach(() => {
+      mocks.client.list.mockImplementation(sshHosts);
+    });
+
+    it("reveals a host path in Explorer through WSL's share", async () => {
+      const { invoke, listener } = setup(vi.fn(), () => "local");
+      await invoke(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER, [{ path: "/home/dt/repo/a.ts" }]);
+      expect(mocks.showItemInFolder).toHaveBeenCalledWith(
+        "\\\\wsl.localhost\\Ubuntu-24.04\\home\\dt\\repo\\a.ts"
+      );
+      expect(mocks.writeText).not.toHaveBeenCalled();
+      // A name Windows can't hold is copied instead.
+      await invoke(CHANNELS.SYSTEM_SHOW_ITEM_IN_FOLDER, [{ path: "/home/dt/a:b" }]);
+      expect(mocks.writeText).toHaveBeenCalledWith("/home/dt/a:b");
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("opens a host file with this PC's default app, as the preload sends it", async () => {
+      const { invoke } = setup(vi.fn(), () => "local");
+      await invoke(CHANNELS.SYSTEM_OPEN_PATH, [{ path: "/home/dt/repo/notes.md" }]);
+      expect(mocks.openPath).toHaveBeenCalledWith(
+        "\\\\wsl.localhost\\Ubuntu-24.04\\home\\dt\\repo\\notes.md"
+      );
+    });
+
+    it("never runs an executable, named as one or behind a harmless-looking link", async () => {
+      const { invoke } = setup(vi.fn(), () => "local");
+      for (const path of ["/home/dt/payload.exe", "/home/dt/run.BAT", "/home/dt/x.lnk"]) {
+        await expect(invoke(CHANNELS.SYSTEM_OPEN_PATH, [{ path }])).rejects.toMatchObject({
+          code: "INVALID_PATH",
+        });
+      }
+      mocks.realpath.mockResolvedValueOnce(
+        "\\\\wsl.localhost\\Ubuntu-24.04\\home\\dt\\evil.exe"
+      );
+      await expect(
+        invoke(CHANNELS.SYSTEM_OPEN_PATH, [{ path: "/home/dt/notes.txt" }])
+      ).rejects.toMatchObject({ code: "INVALID_PATH" });
+      expect(mocks.openPath).not.toHaveBeenCalled();
+    });
+
+    it("says why when the file is gone or a link Windows can't follow", async () => {
+      mocks.realpath.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+      const { invoke } = setup(vi.fn(), () => "local");
+      await expect(
+        invoke(CHANNELS.SYSTEM_OPEN_PATH, [{ path: "/home/dt/gone.md" }])
+      ).rejects.toMatchObject({
+        code: "INVALID_PATH",
+        userMessage:
+          "Couldn't open /home/dt/gone.md from Windows: it isn't on Ubuntu, or it's a link Windows can't follow.",
+      });
+      expect(mocks.openPath).not.toHaveBeenCalled();
+    });
+
+    it("opens the editor through its WSL remote", async () => {
+      const forward = vi.fn(() => ({ preferredEditor: { id: "vscode" }, discoveredEditors: [] }));
+      const { invoke } = setup(forward, () => "local");
+      await invoke(CHANNELS.SYSTEM_OPEN_IN_EDITOR, [
+        { path: "/home/dt/repo/a b.ts", line: 3, col: 7, projectId: "p1" },
+      ]);
+      expect(mocks.openExternal).toHaveBeenCalledWith(
+        "vscode://vscode-remote/wsl+Ubuntu-24.04/home/dt/repo/a%20b.ts:3:7",
+        { activate: true }
+      );
+    });
+  });
+
   it("refuses native pickers and clipboard capture clearly", async () => {
     const forward = vi.fn();
     const { invoke, listener } = setup(forward, () => "local");
@@ -795,6 +900,17 @@ describe("opening host files", () => {
       "vscode://vscode-remote/ssh-remote+studio/srv/a%3Fb%23c.ts"
     );
     expect(buildRemoteEditorUrl({ ...base, editorId: "vscode", line: 0 })).toBeNull();
+  });
+
+  it("builds a WSL editor URL with the distro encoded and refuses one that isn't a distro name", () => {
+    expect(
+      buildRemoteEditorUrl({ editorId: null, wslDistro: "Ubuntu 22.04 LTS", path: "/home/a.ts", line: 2 })
+    ).toBe("vscode://vscode-remote/wsl+Ubuntu%2022.04%20LTS/home/a.ts:2");
+    expect(
+      buildRemoteEditorUrl({ editorId: "cursor", wslDistro: "Debian", path: "/srv/x.ts" })
+    ).toBe("cursor://vscode-remote/wsl+Debian/srv/x.ts");
+    expect(buildRemoteEditorUrl({ editorId: null, wslDistro: "-d evil", path: "/a" })).toBeNull();
+    expect(buildRemoteEditorUrl({ editorId: null, wslDistro: "Debian", path: "a" })).toBeNull();
   });
 
   it("opens every target the SSH transport accepts, hex-encoding the ones a URI would mangle", () => {
