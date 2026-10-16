@@ -702,7 +702,7 @@ export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
  * string is static and origin-agnostic, sent verbatim to api-key clients that
  * never receive that catalog, so a sentence about it would be false for most of
  * its readers. The rule for reading a stub belongs in each first-party client's
- * own prompt — `scripts/help-src/` for the ones this repo ships, and
+ * own prompt — `scripts/assistant-src/` for the ones this repo ships, and
  * `DAINTREE_HOST.md` in `daintreehq/assistant` for the companion CLI, which
  * carries its own.
  *

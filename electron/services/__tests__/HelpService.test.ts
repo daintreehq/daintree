@@ -50,8 +50,8 @@ describe("HelpService", () => {
     const { getHelpFolderPath } = await import("../HelpService.js");
     const result = getHelpFolderPath();
 
-    expect(result).toBe(path.join("/repo", "help"));
-    expect(fsMock.existsSync).toHaveBeenCalledWith(path.join("/repo", "help"));
+    expect(result).toBe(path.join("/repo", "assistant"));
+    expect(fsMock.existsSync).toHaveBeenCalledWith(path.join("/repo", "assistant"));
   });
 
   it("resolves from resourcesPath in packaged mode when directory exists", async () => {
@@ -61,8 +61,8 @@ describe("HelpService", () => {
     const { getHelpFolderPath } = await import("../HelpService.js");
     const result = getHelpFolderPath();
 
-    expect(result).toBe(path.join("/app/resources", "help"));
-    expect(fsMock.existsSync).toHaveBeenCalledWith(path.join("/app/resources", "help"));
+    expect(result).toBe(path.join("/app/resources", "assistant"));
+    expect(fsMock.existsSync).toHaveBeenCalledWith(path.join("/app/resources", "assistant"));
   });
 
   it("caches the result and does not call existsSync on subsequent calls", async () => {

@@ -49,7 +49,7 @@ Plugins are manifest-driven, activate out-of-process in unsandboxed `utilityProc
 | `shared/types/ipc/generated*.ts` | `npm run codegen:ipc && npm run codegen:ipc-renderer` |
 | `docs/keyboard-shortcuts.md`     | `npm run codegen:keybindings`                         |
 | drizzle migrations               | `npm run db:generate`                                 |
-| help prompts                     | `npm run build:help`                                  |
+| assistant prompts                | `npm run build:assistant`                             |
 
 Ten ratchet baselines live in `scripts/baselines/` — **regenerate the baseline, never hand-edit the JSON**: `lint:ratchet` (eslint warnings), `e2e-waits` (unannotated `waitForTimeout` / `isVisible({ timeout })` in E2E specs), `compiler-budget` (React Compiler bailouts), `import-budget`, `renderer-import-budget`, `renderer-bundle-budget`, `first-render-chunk-budget`, `test-ratio`, `check:ipc-handwritten`, `theme:text-ramp`. Seven have matching `*:check`/`*:update` scripts; three do not — update `lint:ratchet` with `-- --update`, `check:ipc-handwritten` via `ipc-handwritten:update`, and `theme:text-ramp` with `-- --check` / `-- --plan` (`--plan` rewrites the manifest).
 

@@ -155,7 +155,7 @@ module.exports = async function () {
     },
     files: baseFiles(),
     extraResources: [
-      { from: "help", to: "help" },
+      { from: "assistant", to: "assistant" },
       { from: "electron/resources/sounds", to: "sounds" },
     ],
     // node-pty and better-sqlite3 contain native .node binaries that need

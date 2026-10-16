@@ -9,10 +9,10 @@ import { config as codexConfig } from "../shared/config/agents/codex.ts";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 
-const CLAUDE = readFileSync(path.join(root, "help/CLAUDE.md"), "utf8");
-const AGENTS = readFileSync(path.join(root, "help/AGENTS.md"), "utf8");
-const SHARED = readFileSync(path.join(root, "scripts/help-src/SHARED.md"), "utf8");
-const AGENTS_HEAD = readFileSync(path.join(root, "scripts/help-src/AGENTS.head.md"), "utf8");
+const CLAUDE = readFileSync(path.join(root, "assistant/CLAUDE.md"), "utf8");
+const AGENTS = readFileSync(path.join(root, "assistant/AGENTS.md"), "utf8");
+const SHARED = readFileSync(path.join(root, "scripts/assistant-src/SHARED.md"), "utf8");
+const AGENTS_HEAD = readFileSync(path.join(root, "scripts/assistant-src/AGENTS.head.md"), "utf8");
 
 /** The body of one `## ` section, so a rule is pinned where it belongs. */
 function section(body, heading) {
@@ -463,7 +463,7 @@ describe("help prompt outputs", () => {
     });
 
     // These sections were first added to the generated files directly, which
-    // the next `build:help` would have silently erased. They live in the
+    // the next `build:assistant` would have silently erased. They live in the
     // per-agent partials because each CLI finds its transcript differently.
     it("each prompt locates its own CLI's session transcript and not the other's", () => {
       expect(AGENTS).toContain("CODEX_THREAD_ID");
@@ -488,19 +488,19 @@ describe("help prompt outputs", () => {
   });
 });
 
-describe("build-help-prompts script integration", () => {
+describe("build-assistant-prompts script integration", () => {
   let workdir;
 
   beforeEach(() => {
-    workdir = mkdtempSync(path.join(os.tmpdir(), "help-prompts-"));
+    workdir = mkdtempSync(path.join(os.tmpdir(), "assistant-prompts-"));
     mkdirSync(path.join(workdir, "scripts"));
-    mkdirSync(path.join(workdir, "help"));
-    cpSync(path.join(root, "scripts/help-src"), path.join(workdir, "scripts/help-src"), {
+    mkdirSync(path.join(workdir, "assistant"));
+    cpSync(path.join(root, "scripts/assistant-src"), path.join(workdir, "scripts/assistant-src"), {
       recursive: true,
     });
     cpSync(
-      path.join(root, "scripts/build-help-prompts.mjs"),
-      path.join(workdir, "scripts/build-help-prompts.mjs")
+      path.join(root, "scripts/build-assistant-prompts.mjs"),
+      path.join(workdir, "scripts/build-assistant-prompts.mjs")
     );
   });
 
@@ -509,7 +509,7 @@ describe("build-help-prompts script integration", () => {
   });
 
   function runScript(args = []) {
-    return spawnSync("node", [path.join(workdir, "scripts/build-help-prompts.mjs"), ...args], {
+    return spawnSync("node", [path.join(workdir, "scripts/build-assistant-prompts.mjs"), ...args], {
       cwd: workdir,
       encoding: "utf8",
     });
@@ -519,18 +519,18 @@ describe("build-help-prompts script integration", () => {
     const result = runScript();
     expect(result.status).toBe(0);
     for (const [name, expected] of ALL_GENERATED) {
-      const actual = readFileSync(path.join(workdir, "help", name), "utf8");
+      const actual = readFileSync(path.join(workdir, "assistant", name), "utf8");
       expect(actual).toBe(expected);
     }
   });
 
   it("--check exits 1 and names the stale file when an output drifts", () => {
     runScript();
-    const stale = path.join(workdir, "help/CLAUDE.md");
+    const stale = path.join(workdir, "assistant/CLAUDE.md");
     writeFileSync(stale, readFileSync(stale, "utf8") + "DRIFT_MARKER\n");
     const check = runScript(["--check"]);
     expect(check.status).toBe(1);
-    expect(check.stderr).toContain(path.join("help", "CLAUDE.md"));
+    expect(check.stderr).toContain(path.join("assistant", "CLAUDE.md"));
     expect(check.stderr).toContain("out of sync");
   });
 
