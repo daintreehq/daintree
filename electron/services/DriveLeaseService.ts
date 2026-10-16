@@ -1,13 +1,12 @@
 import { app } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
-import { LOCAL_CLIENT_ID } from "../ipc/endpoint.js";
+import { LOCAL_CLIENT_ID, isCanopyViewerEndpointId } from "../ipc/endpoint.js";
 import type { ClientEndpoint, ClientRef, EndpointRegistry } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import type { LeaseGate } from "../ipc/dispatcher.js";
 import { getLocalClientRef, getLocalEndpoint } from "../ipc/localEndpoint.js";
 import { AppError } from "../utils/errorTypes.js";
 import { getChannelLeaseTarget } from "../ipc/channelLeasePolicy.js";
-import { isCanopyViewerEndpointId } from "../remote/canopy/linkMethods.js";
 import {
   resolveLeaseTarget,
   type LeaseTargetResolution,
