@@ -10,6 +10,10 @@ import {
 } from "./linkMethods.js";
 import type { CanopyViewers } from "./viewer.js";
 
+/** How often, and how far apart, a lost-viewer notice the Shell didn't take is sent again. */
+export const VIEWER_LOST_RETRIES = 5;
+export const VIEWER_LOST_RETRY_MS = 1_000;
+
 export interface CanopySessionContext {
   session: LinkSession;
   client: LinkClientInfo;
@@ -44,6 +48,8 @@ export function installCanopyHostWith(
 ): () => void {
   const wired = new WeakSet<LinkSession>();
   let nextSession = 0;
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  let disposed = false;
 
   const wire = ({ session, client }: CanopySessionContext): void => {
     if (wired.has(session)) return;
@@ -57,12 +63,26 @@ export function installCanopyHostWith(
      * after the push in progress, and the Shell told to have its panel say
      * its state again, on the request lane rather than the full one.
      */
+    const tell = (viewerId: string, attempt: number): void => {
+      if (!session.isOpen || disposed) return;
+      session.call(CanopyLinkMethod.VIEWER_LOST, { viewerId }).catch(() => {
+        // A full request queue isn't a dropped link: say it again while the
+        // link is up. The link going down resyncs every reader anyway.
+        if (attempt + 1 >= VIEWER_LOST_RETRIES) return;
+        const timer = setTimeout(
+          () => {
+            timers.delete(timer);
+            tell(viewerId, attempt + 1);
+          },
+          VIEWER_LOST_RETRY_MS * (attempt + 1)
+        );
+        timer.unref?.();
+        timers.add(timer);
+      });
+    };
     const lose = (viewerId: string): void => {
       queueMicrotask(() => {
-        if (!viewers.close(prefix + viewerId) || !session.isOpen) return;
-        session.call(CanopyLinkMethod.VIEWER_LOST, { viewerId }).catch(() => {
-          // The link going down resyncs every reader of this host anyway.
-        });
+        if (viewers.close(prefix + viewerId)) tell(viewerId, 0);
       });
     };
     session.registerCallHandler(
@@ -113,7 +133,10 @@ export function installCanopyHostWith(
   for (const ctx of server.sessions) wire(ctx);
   const offSession = server.onSession(wire);
   return () => {
+    disposed = true;
     offSession();
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
     viewers.dispose();
   };
 }

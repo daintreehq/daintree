@@ -1,12 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientEndpoint } from "../../../ipc/endpoint.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { LinkSession } from "../../link/session.js";
-import { installCanopyHostWith, type CanopySessionContext } from "../host.js";
+import {
+  VIEWER_LOST_RETRIES,
+  VIEWER_LOST_RETRY_MS,
+  installCanopyHostWith,
+  type CanopySessionContext,
+} from "../host.js";
 import { CANOPY_VIEWER_ENDPOINT_PREFIX, CanopyLinkMethod } from "../linkMethods.js";
 import { CanopyViewers } from "../viewer.js";
 
-function fakeSession(postResult: () => string) {
+function fakeSession(postResult: () => string, callFailures: Error[] = []) {
   const handlers = new Map<string, (payload: unknown) => unknown>();
   const closeListeners: Array<() => void> = [];
   const posts: unknown[] = [];
@@ -23,6 +28,8 @@ function fakeSession(postResult: () => string) {
     },
     call: vi.fn(async (method: string, payload: unknown) => {
       calls.push([method, payload]);
+      const failure = callFailures.shift();
+      if (failure) throw failure;
       return null;
     }),
     onClose: (listener: () => void) => {
@@ -39,7 +46,7 @@ function fakeSession(postResult: () => string) {
   };
 }
 
-function setup(postResult: () => string = () => "queued") {
+function setup(postResult: () => string = () => "queued", callFailures: Error[] = []) {
   const endpoints: ClientEndpoint[] = [];
   const viewers = new CanopyViewers({
     source: { observeCanopy: () => () => {}, observeFleet: () => null },
@@ -49,7 +56,7 @@ function setup(postResult: () => string = () => "queued") {
       return wrapSuccess(null);
     },
   });
-  const link = fakeSession(postResult);
+  const link = fakeSession(postResult, callFailures);
   const ctx: CanopySessionContext = {
     session: link.session,
     client: { clientId: "shell-1", clientName: "mbp", platform: "darwin" },
@@ -64,6 +71,10 @@ function setup(postResult: () => string = () => "queued") {
     });
   return { link, endpoints, viewers, invoke };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("installCanopyHostWith", () => {
   it("addresses a viewer's pushes to it, as the Shell named it", async () => {
@@ -101,5 +112,16 @@ describe("installCanopyHostWith", () => {
     expect(s.endpoints.map((endpoint) => endpoint.isClosed())).toEqual([true, false]);
     s.link.close();
     expect(s.endpoints[1].isClosed()).toBe(true);
+  });
+
+  it("says a viewer was lost again while the link is up but the Shell didn't take it", async () => {
+    vi.useFakeTimers();
+    const busy = Array.from({ length: VIEWER_LOST_RETRIES + 2 }, () => new Error("RATE_LIMITED"));
+    const s = setup(() => "refused", busy);
+    await s.invoke("v1");
+    await vi.advanceTimersByTimeAsync(
+      VIEWER_LOST_RETRY_MS * VIEWER_LOST_RETRIES * VIEWER_LOST_RETRIES
+    );
+    expect(s.link.calls).toHaveLength(VIEWER_LOST_RETRIES);
   });
 });
