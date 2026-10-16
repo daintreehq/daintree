@@ -260,6 +260,11 @@ export const LazyGitPullRebaseConfirmDialog = lazyWithPreload(
 );
 export const preloadGitPullRebaseConfirmDialog = LazyGitPullRebaseConfirmDialog.preload;
 
+export const LazyFileMutationConfirmDialog = lazyWithPreload(
+  () => import("./components/Git/FileMutationConfirmDialog"),
+  (m) => m.FileMutationConfirmDialog
+);
+
 export const LazyGitWorktreeOperationConfirmDialog = lazyWithPreload(
   () => import("./components/Git/GitWorktreeOperationConfirmDialog"),
   (m) => m.GitWorktreeOperationConfirmDialog

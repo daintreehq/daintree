@@ -73,6 +73,7 @@ import {
   LazyDiagnosticsReviewDialogHost,
   LazyGitPushConfirmDialog,
   LazyGitPullRebaseConfirmDialog,
+  LazyFileMutationConfirmDialog,
   LazyGitWorktreeOperationConfirmDialog,
   LazyGitForcePushConfirmDialog,
   LazyRecipeConflictDialog,
@@ -147,6 +148,7 @@ interface ModalHostLayerProps {
   diagnosticsReviewResetKey: number;
   gitPushResetKey: number;
   gitPullRebaseResetKey: number;
+  fileMutationResetKey: number;
   gitWorktreeOperationResetKey: number;
   gitForcePushResetKey: number;
   recipeConflictResetKey: number;
@@ -243,6 +245,7 @@ export function ModalHostLayer({
   diagnosticsReviewResetKey,
   gitPushResetKey,
   gitPullRebaseResetKey,
+  fileMutationResetKey,
   gitWorktreeOperationResetKey,
   gitForcePushResetKey,
   recipeConflictResetKey,
@@ -922,6 +925,18 @@ export function ModalHostLayer({
         >
           <Suspense fallback={null}>
             <LazyGitPullRebaseConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="FileMutationConfirmDialog"
+          resetKeys={[fileMutationResetKey]}
+        >
+          <Suspense fallback={null}>
+            <LazyFileMutationConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}

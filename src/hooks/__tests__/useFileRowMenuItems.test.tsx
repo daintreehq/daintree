@@ -220,6 +220,9 @@ describe("useFileRowMenuItems — canonical order", () => {
       expect.stringContaining("Insert file reference"),
       "---",
       "Copy",
+      "---",
+      "Discard changes",
+      "Delete file",
     ]);
   });
 
@@ -259,6 +262,9 @@ describe("useFileRowMenuItems — canonical order", () => {
       "Copy",
       "---",
       "Extensions",
+      "---",
+      "Discard changes",
+      "Delete file",
     ]);
 
     const extensions = await openSubmenu(menu, "Extensions");
@@ -358,12 +364,15 @@ describe("useFileRowMenuItems — conditional items", () => {
     expect(rendered).not.toContain("Open file");
     expect(rendered).not.toContain("Open in editor");
     // Two of the three opens gone still leaves the rule with items above it.
+    // Nothing on disk to delete; Discard is what brings it back.
     expect(structure(menu)).toEqual([
       "Open diff",
       "Reveal in Finder",
       expect.stringContaining("Insert file reference"),
       "---",
       "Copy",
+      "---",
+      "Discard changes",
     ]);
 
     const copy = await openSubmenu(menu, "Copy");
@@ -772,6 +781,85 @@ describe("useFileRowMenuItems — reveal", () => {
       expect(dispatchMock.mock.calls.some(([id]) => id === "file.showItemInFolder")).toBe(true)
     );
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useFileRowMenuItems — discard and delete (#13424)", () => {
+  function mutationItems(menu: HTMLElement): string[] {
+    return labels(menu).filter((label) => label === "Discard changes" || label === "Delete file");
+  }
+
+  it.each([
+    ["modified", ["Discard changes", "Delete file"]],
+    ["added", ["Discard changes", "Delete file"]],
+    ["renamed", ["Discard changes", "Delete file"]],
+    ["copied", ["Discard changes", "Delete file"]],
+    ["deleted", ["Discard changes"]],
+    // Nothing to restore to, so discarding and deleting are one operation.
+    ["untracked", ["Delete file"]],
+    ["ignored", ["Delete file"]],
+    ["conflicted", []],
+    [null, ["Delete file"]],
+  ] as const)("offers the right items for a %s file", async (status, expected) => {
+    const menu = await openMenu({ row: { status } });
+    expect(mutationItems(menu)).toEqual(expected);
+  });
+
+  it("offers neither for a folder, and leaves no trailing rule", async () => {
+    const menu = await openMenu({
+      row: { isDirectory: true, relativePath: "src", name: "src", status: "modified" },
+    });
+    expect(mutationItems(menu)).toEqual([]);
+    expect(structure(menu).at(-1)).toBe("Copy");
+  });
+
+  it.each([
+    ["no worktree id", { worktreeId: null }],
+    ["no worktree root", { worktreePath: "" }],
+  ] as const)("offers neither on a surface with %s", async (_label, surface) => {
+    const menu = await openMenu({ surface });
+    expect(mutationItems(menu)).toEqual([]);
+  });
+
+  it("offers neither when the row's status is not the working tree's", async () => {
+    const menu = await openMenu({ options: { statusIsLocal: false } });
+    expect(mutationItems(menu)).toEqual([]);
+  });
+
+  it.each([
+    ["Discard changes", "git.discardFileChanges"],
+    ["Delete file", "file.trash"],
+  ])("%s dispatches %s with the worktree-relative path", async (label, actionId) => {
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: label }));
+
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        actionId,
+        { worktreePath: WORKTREE, filePath: "src/index.ts" },
+        { source: "context-menu" }
+      )
+    );
+  });
+
+  it("toasts a failed discard with a Retry that dispatches again", async () => {
+    dispatchMock.mockImplementation(() =>
+      Promise.resolve({ ok: false, error: { message: "No trash on this volume" } })
+    );
+    const menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Discard changes" }));
+
+    await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    const payload = notifyMock.mock.calls[0]?.[0];
+    expect(payload?.title).toBe("Couldn't discard changes");
+    expect(payload?.message).toBe("No trash on this volume");
+
+    payload?.action?.onClick();
+    await waitFor(() =>
+      expect(
+        dispatchMock.mock.calls.filter(([id]) => id === "git.discardFileChanges")
+      ).toHaveLength(2)
+    );
   });
 });
 

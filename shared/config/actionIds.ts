@@ -175,6 +175,7 @@ export const BUILT_IN_ACTION_IDS = [
   "file.openInBrowser",
   "file.openImageViewer",
   "file.showItemInFolder",
+  "file.trash",
   "file.openPanel",
 
   // -- slashCommandsActions --
@@ -202,6 +203,7 @@ export const BUILT_IN_ACTION_IDS = [
   "git.listCommits",
   "git.stageFile",
   "git.unstageFile",
+  "git.discardFileChanges",
   "git.stageAll",
   "git.unstageAll",
   "git.commit",

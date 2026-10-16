@@ -33,6 +33,8 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "git.mergeBaseIntoBranch",
   "git.abortRepositoryOperation",
   "git.forcePushWithLease",
+  "git.discardFileChanges",
+  "file.trash",
   "terminal.kill",
   "terminal.killBatch",
   "terminal.killAll",
@@ -122,6 +124,10 @@ const BYPASS_WIRED = new Set([
   "git.mergeBaseIntoBranch",
   "git.abortRepositoryOperation",
   "git.forcePushWithLease", // deferred-promise via gitForcePushStore; GitForcePushConfirmDialog resolves it
+  // Deferred-promise via fileMutationConfirmStore (#13424); FileMutationConfirmDialog
+  // is mounted globally in ModalHostLayer, so neither ID is co-located with it.
+  "git.discardFileChanges",
+  "file.trash",
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)

@@ -653,6 +653,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileWatch.js").FileWatchFingerprintPayload];
     result: import("./fileWatch.js").FileWatchFingerprintResult;
   };
+  "files:trash": {
+    args: [payload: { worktreePath: string; relativePath: string }];
+    result: void;
+  };
   "fleet:get-snapshot": {
     args: [];
     result: import("./fleet.js").FleetSnapshot | null;
@@ -931,6 +935,10 @@ export interface GeneratedIpcInvokeMap {
   "gemini:get-status": {
     args: [];
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
+  };
+  "git:discard-file-changes": {
+    args: [payload: { worktreePath: string; relativePath: string }];
+    result: void;
   };
   "git:fetch": {
     args: [payload: { cwd: string; prune?: boolean | undefined }];

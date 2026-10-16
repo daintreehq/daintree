@@ -1031,6 +1031,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "git.mergeBaseIntoBranch",
   "git.abortRepositoryOperation",
   "git.forcePushWithLease",
+  "git.discardFileChanges",
+  "file.trash",
   "terminal.kill",
   "terminal.killBatch",
   "terminal.killAll",
@@ -1144,6 +1146,11 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // before calling IPC; GitForcePushConfirmDialog resolves the Promise. Same
   // shape as git.push, and the action ID is not co-located with the dialog.
   "git.forcePushWithLease",
+  // Deferred-promise via fileMutationConfirmStore (#13424); the action run()
+  // awaits confirmation before calling IPC, and FileMutationConfirmDialog,
+  // mounted globally in ModalHostLayer, resolves the Promise.
+  "git.discardFileChanges",
+  "file.trash",
   // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
   // action ID not co-located with the ConfirmDialog in that file.
   "project.remove",
@@ -1297,6 +1304,8 @@ describe("destructive-action danger metadata", () => {
       // validation and reach the confirm gate.
       label: "placeholder",
       sessionId: "session-placeholder",
+      // git.discardFileChanges/file.trash act on one named file.
+      filePath: "placeholder.txt",
       // git.rebaseOntoBase/mergeBaseIntoBranch require the base branch before
       // their confirm gate runs (#12092). It is deliberately NOT optional: a
       // base-branch default resolved inside a destructive submit is exactly the

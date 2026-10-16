@@ -29,7 +29,7 @@ const LFS_POINTER_HEADER_BYTES = Buffer.from(LFS_POINTER_HEADER, "ascii");
  * inside one), so the link can't be used to read the rest of this machine.
  * Fails closed when the host's file service isn't running.
  */
-async function remoteCallerHoldsRoot(ctx: IpcContext, root: string): Promise<boolean> {
+export async function remoteCallerHoldsRoot(ctx: IpcContext, root: string): Promise<boolean> {
   if (ctx.endpoint?.kind !== "remote-view") return true;
   const projectId = ctx.endpoint.projectId;
   const files = getRemoteService("hostFileService");

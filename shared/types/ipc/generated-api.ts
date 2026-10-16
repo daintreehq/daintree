@@ -330,6 +330,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["file-browser:stat-paths"]["args"]
     ): Promise<IpcInvokeMap["file-browser:stat-paths"]["result"]>;
   };
+  files: {
+    trash(
+      ...args: IpcInvokeMap["files:trash"]["args"]
+    ): Promise<IpcInvokeMap["files:trash"]["result"]>;
+  };
   fileTransfer: {
     answerHostPick(
       ...args: IpcInvokeMap["file-transfer:answer-host-pick"]["args"]
@@ -435,6 +440,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["gemini:get-status"]["result"]>;
   };
   git: {
+    discardFileChanges(
+      ...args: IpcInvokeMap["git:discard-file-changes"]["args"]
+    ): Promise<IpcInvokeMap["git:discard-file-changes"]["result"]>;
     fetch(...args: IpcInvokeMap["git:fetch"]["args"]): Promise<IpcInvokeMap["git:fetch"]["result"]>;
   };
   help: {

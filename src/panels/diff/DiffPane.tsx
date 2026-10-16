@@ -1206,6 +1206,7 @@ export function DiffPane({
             // Already resolved here; the sidebar would otherwise repeat the
             // path→worktree lookup the pane has done above.
             worktreeId={worktreeId ?? null}
+            statusIsLocal={diffSource !== "base-branch"}
             onSelect={(index) => {
               if (index === currentIndex) return;
               selectFileAt(index);
