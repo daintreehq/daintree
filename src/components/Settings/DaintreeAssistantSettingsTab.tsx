@@ -483,8 +483,9 @@ export function DaintreeAssistantSettingsTab() {
 
   // Resolved model catalog for the currently-preferred agent. `null` means "not
   // loaded / unavailable" (we render nothing); an empty array means "agent has
-  // no models" (also nothing). The model picker only appears once a non-empty
-  // catalog resolves for the selected agent. A failed read is not "this agent
+  // no models", which shows the row only to keep a saved choice and its reset.
+  // Otherwise the picker appears once a non-empty catalog resolves for the
+  // selected agent. A failed read is not "this agent
   // has no models": the row stays, with Retry. Tagged with the agent it was
   // read for, so a switch never shows the previous agent's models, saved choice
   // or failure for a render.
