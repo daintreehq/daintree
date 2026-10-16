@@ -121,6 +121,12 @@ interface CIStatus {
     pending: number;
     /** Whether required-checks gating is currently satisfied, if the provider gates. */
     requiredChecksPassing?: boolean;
+    /**
+     * Commit the provider actually read this verdict from, which can trail the
+     * PR's head for a few seconds after a push. The host never shows a verdict
+     * for a commit other than the head it last observed. Omit when unknown.
+     */
+    headSha?: string;
     /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
     freshnessToken?: string;
     /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */

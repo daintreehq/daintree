@@ -3858,6 +3858,306 @@ describe("PullRequestService", () => {
     });
   });
 
+  describe("CI across a push (#13399)", () => {
+    const SECOND = 1000;
+
+    // One worktree on PR 1. `head` is the PR's current commit as the REST probe
+    // reports it; `ci` is what the forge answers for CI on each read. The probe
+    // diffs against what the service tracks, exactly like the real one, so a
+    // tick only reports a change when `head` moved.
+    function makePushHarness(initialCi: CIStatus | null) {
+      const state: { head: string; ci: CIStatus | null; prState: ForgePR["state"] } = {
+        head: "sha1",
+        ci: initialCi,
+        prState: "open",
+      };
+      const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+        const map = new Map<string, ForgePR | null>();
+        for (const branch of branches) {
+          map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
+        }
+        return map;
+      });
+      const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+      const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, CIStatus | null>();
+        for (const n of prNumbers) map.set(n, state.ci);
+        return map;
+      });
+      const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, ForgePR | null>();
+        for (const n of prNumbers) map.set(n, makeMockForgePR({ number: n, state: state.prState }));
+        return map;
+      });
+      const probeOpenPRList = vi.fn(async (_repo: RepoRef, tracked: PRSnapshot[]) => {
+        const changed = tracked
+          .filter((t) => t.headSha !== state.head)
+          .map((t) => ({
+            number: t.number,
+            headSha: state.head,
+            updatedAt: "2024-02-02T00:00:00Z",
+            state: "open" as const,
+            title: t.title,
+          }));
+        return changed.length > 0
+          ? { kind: "changed" as const, changed }
+          : { kind: "unchanged" as const };
+      });
+      mockImpl.batchLookups = { findPRsByNumbers, getCIStatuses, probeOpenPRList };
+      return { state, getCIStatuses };
+    }
+
+    function ci(state: CIStatus["state"], headSha: string): CIStatus {
+      return { ...ciStatusFixture(state), headSha };
+    }
+
+    async function settle() {
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+      pullRequestService.initialize("/repo", "test-project-id");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+      await pullRequestService.refresh();
+      await flushLoaders();
+      // Seeds the head marker from the probe.
+      await revalidate(pullRequestService);
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      events.on("sys:pr:detected", (payload) => detected.push(payload));
+      return { pullRequestService, detected };
+    }
+
+    async function revalidate(service: unknown): Promise<void> {
+      await (
+        service as unknown as { revalidateResolvedPRs: () => Promise<void> }
+      ).revalidateResolvedPRs();
+      await flushLoaders();
+    }
+
+    function jump(ms: number): void {
+      vi.setSystemTime(Date.now() + ms);
+    }
+
+    it("retracts the previous head's failure on a push that changes nothing else", async () => {
+      const { state } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      await revalidate(pullRequestService);
+
+      // Title and state are unchanged, so before this fix nothing was emitted
+      // and the cross (and the CI-failed alarm it drives) stayed up.
+      expect(detected.length).toBeGreaterThan(0);
+      expect(detected[0]?.ciStatus).toBeUndefined();
+      expect(detected[0]?.prCiStatus).toBeUndefined();
+      expect(detected[0]?.isCiStatusLoading).toBeUndefined();
+
+      pullRequestService.destroy();
+    });
+
+    it("never re-applies a verdict that still describes the old head", async () => {
+      // GitHub's PR head trails the push, so the post-push read can still
+      // answer for sha1 — that answer must not bring the cross back.
+      const { state } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      await revalidate(pullRequestService);
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+
+      expect(detected.some((e) => e.ciStatus?.state === "failure")).toBe(false);
+      expect(detected.some((e) => e.prCiStatus === "failure")).toBe(false);
+
+      pullRequestService.destroy();
+    });
+
+    it("keeps reading until the new head reports checks, then shows what it reported", async () => {
+      const { state, getCIStatuses } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      state.ci = ci("neutral", "sha2"); // no checks registered yet
+      await revalidate(pullRequestService);
+
+      // No checks yet reads like "no CI", but this PR had CI: hold the badge
+      // blank rather than settle on neutral, and stay on the boost cadence.
+      expect(detected.some((e) => e.ciStatus?.state === "neutral")).toBe(false);
+      const svc = pullRequestService as unknown as { boostExpiresAt: number | null };
+      expect(svc.boostExpiresAt).not.toBeNull();
+
+      getCIStatuses.mockClear();
+      state.ci = ci("pending", "sha2");
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+
+      expect(getCIStatuses).toHaveBeenCalledTimes(1);
+      expect(detected.at(-1)?.ciStatus?.state).toBe("pending");
+      expect(detected.at(-1)?.prCiStatus).toBe("pending");
+
+      pullRequestService.destroy();
+    });
+
+    it("gives up after the grace window and accepts that the head has no checks", async () => {
+      const { state, getCIStatuses } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      state.ci = ci("neutral", "sha2");
+      await revalidate(pullRequestService);
+
+      getCIStatuses.mockClear();
+      // Ten minutes of 30s ticks. Reads are bounded by the window, not by how
+      // long the wait goes on.
+      for (let i = 0; i < 20; i++) {
+        jump(30 * SECOND);
+        await revalidate(pullRequestService);
+      }
+
+      expect(getCIStatuses.mock.calls.length).toBeGreaterThan(0);
+      expect(getCIStatuses.mock.calls.length).toBeLessThanOrEqual(7);
+      // The read that closed the window is shown as-is: [skip ci], path filters.
+      expect(detected.at(-1)?.ciStatus?.state).toBe("neutral");
+      const svc = pullRequestService as unknown as { boostExpiresAt: number | null };
+      expect(svc.boostExpiresAt).toBeNull();
+
+      pullRequestService.destroy();
+    });
+
+    it("restarts the window on a second push instead of adding another", async () => {
+      const { state, getCIStatuses } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService } = await settle();
+
+      state.head = "sha2";
+      state.ci = ci("neutral", "sha2");
+      await revalidate(pullRequestService);
+
+      jump(150 * SECOND);
+      state.head = "sha3";
+      state.ci = ci("neutral", "sha3");
+      await revalidate(pullRequestService);
+
+      // Past the first push's deadline, inside the second's.
+      jump(120 * SECOND);
+      getCIStatuses.mockClear();
+      await revalidate(pullRequestService);
+      expect(getCIStatuses).toHaveBeenCalledTimes(1);
+
+      // And the second window closes on its own schedule.
+      jump(120 * SECOND);
+      await revalidate(pullRequestService);
+      getCIStatuses.mockClear();
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
+    it("closes the window on schedule even while a blur backfill is owed", async () => {
+      // The backfill flag short-circuits the read selection; the deadline must
+      // not ride on that selection or the wait never ends.
+      const { state, getCIStatuses } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      state.ci = ci("neutral", "sha2");
+      await revalidate(pullRequestService);
+      const entries = (
+        pullRequestService as unknown as { detectedPRs: Map<string, { needsCiBackfill?: boolean }> }
+      ).detectedPRs;
+      for (const entry of entries.values()) entry.needsCiBackfill = true;
+
+      for (let i = 0; i < 10; i++) {
+        jump(30 * SECOND);
+        await revalidate(pullRequestService);
+      }
+      getCIStatuses.mockClear();
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+
+      expect(getCIStatuses).not.toHaveBeenCalled();
+      expect(detected.at(-1)?.ciStatus?.state).toBe("neutral");
+      const svc = pullRequestService as unknown as { boostExpiresAt: number | null };
+      expect(svc.boostExpiresAt).toBeNull();
+
+      pullRequestService.destroy();
+    });
+
+    it("does not wait for checks on a PR that closed with the push", async () => {
+      const { state, getCIStatuses } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService } = await settle();
+
+      state.head = "sha2";
+      state.prState = "closed";
+      state.ci = ci("neutral", "sha2");
+      await revalidate(pullRequestService);
+
+      const svc = pullRequestService as unknown as { boostExpiresAt: number | null };
+      expect(svc.boostExpiresAt).toBeNull();
+      getCIStatuses.mockClear();
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+
+    it("keeps waiting across a manual refresh instead of settling on no checks", async () => {
+      const { state } = makePushHarness(ci("failure", "sha1"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      state.ci = ci("neutral", "sha2");
+      await revalidate(pullRequestService);
+      await pullRequestService.refresh();
+      await flushLoaders();
+
+      expect(detected.some((e) => e.ciStatus?.state === "neutral")).toBe(false);
+
+      state.ci = ci("success", "sha2");
+      jump(30 * SECOND);
+      await revalidate(pullRequestService);
+      expect(detected.at(-1)?.ciStatus?.state).toBe("success");
+
+      pullRequestService.destroy();
+    });
+
+    it("accepts a new head's checks from a provider that doesn't name the commit", async () => {
+      const { state } = makePushHarness(ciStatusFixture("failure"));
+      const { pullRequestService, detected } = await settle();
+
+      state.head = "sha2";
+      state.ci = ciStatusFixture("pending");
+      await revalidate(pullRequestService);
+
+      expect(detected.at(-1)?.ciStatus?.state).toBe("pending");
+
+      pullRequestService.destroy();
+    });
+
+    it("does not wait for checks on a PR that never reported any", async () => {
+      const { state, getCIStatuses } = makePushHarness(ci("neutral", "sha1"));
+      const { pullRequestService } = await settle();
+
+      state.head = "sha2";
+      state.ci = ci("neutral", "sha2");
+      await revalidate(pullRequestService);
+
+      getCIStatuses.mockClear();
+      for (let i = 0; i < 6; i++) {
+        jump(30 * SECOND);
+        await revalidate(pullRequestService);
+      }
+
+      expect(getCIStatuses).not.toHaveBeenCalled();
+
+      pullRequestService.destroy();
+    });
+  });
+
   describe("unchanged re-announcements", () => {
     it("announces a branch's missing PR once, not on every poll", async () => {
       mockForgeProviderResolved(async () => null);
