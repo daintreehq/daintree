@@ -168,10 +168,10 @@ function callAction(
 }
 
 /**
- * Parse a result through the action's own declared schema. Nothing does this at
- * runtime (`resultSchema` is manifest documentation, never enforced), so the
- * round-trip has to be asserted or `run()` silently drifts from what MCP
- * advertises as the tool's outputSchema.
+ * Parse a result through the action's own declared schema, as dispatch does
+ * (it returns the parse, stripping undeclared keys), so the round-trip has to
+ * be asserted or `run()` silently drifts from what MCP advertises as the
+ * tool's outputSchema.
  */
 function parseAgainstSchema(actions: ActionRegistry, id: string, result: unknown) {
   const schema = getDefinition(actions, id).resultSchema;
@@ -675,7 +675,10 @@ describe("agentActions adversarial", () => {
       spawnStatus: "panel-limit",
       panelLimit,
     });
-    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+    // Dispatch returns the schema's parse, which strips undeclared keys: the
+    // snapshot has to survive it, not just validate.
+    const parsed = parseAgainstSchema(actions, "agent.launch", result);
+    expect(parsed.success && parsed.data).toEqual(result);
   });
 
   it("agent.launch tells a re-entrant launch of the same agent apart from a failure (#13382)", async () => {

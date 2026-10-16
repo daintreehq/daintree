@@ -246,10 +246,7 @@ export interface LaunchAgentOptions {
 
 /** Why `launchAgent` resolved to `null` without throwing. */
 export type LaunchDeclineReason =
-  | "panel-limit"
-  | "already-launching"
-  | "spawn-failed"
-  | "unavailable";
+  "panel-limit" | "already-launching" | "spawn-failed" | "unavailable";
 
 export interface LaunchDecline {
   reason: LaunchDeclineReason;
@@ -480,14 +477,17 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         // Handle browser pane specially
         if (agentId === "browser") {
           try {
-            const terminalId = await addPanel({
-              kind: "browser",
-              cwd,
-              worktreeId: effectiveWorktreeId || undefined,
-              location: launchOptions?.location,
-              activateDockOnCreate: launchOptions?.activateDockOnCreate,
-              spawnedBy: launchOptions?.spawnedBy,
-            }, addPanelCommit);
+            const terminalId = await addPanel(
+              {
+                kind: "browser",
+                cwd,
+                worktreeId: effectiveWorktreeId || undefined,
+                location: launchOptions?.location,
+                activateDockOnCreate: launchOptions?.activateDockOnCreate,
+                spawnedBy: launchOptions?.spawnedBy,
+              },
+              addPanelCommit
+            );
             if (!terminalId) return declineAddPanel();
             const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
             const location = rawLocation === "dock" ? "dock" : "grid";
@@ -507,16 +507,19 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             // (#11668). Resolved from the view's own project, never the
             // globally-current one.
             const devCommand = await readViewDevServerCommand();
-            const terminalId = await addPanel({
-              kind: "dev-preview",
-              title: "Dev server",
-              devCommand,
-              cwd,
-              worktreeId: effectiveWorktreeId || undefined,
-              location: launchOptions?.location,
-              activateDockOnCreate: launchOptions?.activateDockOnCreate,
-              spawnedBy: launchOptions?.spawnedBy,
-            }, addPanelCommit);
+            const terminalId = await addPanel(
+              {
+                kind: "dev-preview",
+                title: "Dev server",
+                devCommand,
+                cwd,
+                worktreeId: effectiveWorktreeId || undefined,
+                location: launchOptions?.location,
+                activateDockOnCreate: launchOptions?.activateDockOnCreate,
+                spawnedBy: launchOptions?.spawnedBy,
+              },
+              addPanelCommit
+            );
             if (!terminalId) return declineAddPanel();
             const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
             const location = rawLocation === "dock" ? "dock" : "grid";

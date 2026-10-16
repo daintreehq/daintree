@@ -11,10 +11,9 @@ const addPanel = vi.fn();
 
 vi.mock("@/store/panelStore", () => {
   const state = { addPanel: (...args: unknown[]) => addPanel(...args), panelsById: {} };
-  const usePanelStore = Object.assign(
-    (selector: (s: typeof state) => unknown) => selector(state),
-    { getState: () => state }
-  );
+  const usePanelStore = Object.assign((selector: (s: typeof state) => unknown) => selector(state), {
+    getState: () => state,
+  });
   return { usePanelStore };
 });
 
@@ -122,6 +121,30 @@ describe("useAgentLauncher — declined launches name their reason (#13382)", ()
     });
 
     expect(launched).toBeNull();
+    expect(onDecline).toHaveBeenCalledExactlyOnceWith({
+      reason: "panel-limit",
+      panelLimit: SNAPSHOT,
+    });
+  });
+
+  it("reports panel-limit from the terminal launch path too, not only panel kinds", async () => {
+    addPanel.mockImplementation(
+      async (
+        _options: unknown,
+        commit?: { onLimitRefused?: (snapshot: PanelLimitSnapshot) => void }
+      ) => {
+        commit?.onLimitRefused?.(SNAPSHOT);
+        return null;
+      }
+    );
+    const onDecline = vi.fn();
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("terminal", { onDecline });
+    });
+
+    expect(addPanel).toHaveBeenCalledOnce();
     expect(onDecline).toHaveBeenCalledExactlyOnceWith({
       reason: "panel-limit",
       panelLimit: SNAPSHOT,
