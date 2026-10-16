@@ -61,7 +61,7 @@ Alongside the usual template files it emits:
 - a `dev` script running `vite build --watch`. Only the `command` and `view` templates are accepted with `--project`: `mcp` and `full` scaffold `contributes.mcpServers`, which a project-scoped manifest may not declare, so the command refuses them instead of writing a manifest the host would decline to load (use `contributes.agentMcp` to serve tools from a project plugin)
 - `vite.config.ts` with **inline** source maps and absolute `sources`, so DevTools breakpoints land in the real `.tsx` without a sidecar `.map` having to be served over `plugin://`
 - a watcher recipe in `<projectRoot>/.daintree/recipes/`, so Daintree can bring the build up with the rest of the project environment
-- a `.gitignore` that force-includes `dist/`, and a `README.md` explaining why
+- a `.gitignore` that force-includes `dist/`, and a `README.md` explaining why — and, for the `view` template, pointing at the [panel preview](#preview-a-panel-outside-daintree) rather than the running app
 - no `.dntrignore` and no `package` script — a project plugin is distributed by being committed, not as a `.dntr`
 - no `.claude/skills/daintree-tour/`, and an `@types/node` dev dependency, because the project `vite.config.ts` imports `node:path`
 

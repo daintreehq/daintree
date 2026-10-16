@@ -344,7 +344,7 @@ playwright-report/
 !dist/**
 `;
 
-function projectReadme(ctx: ScaffoldContext, recipeName: string): string {
+function projectReadme(ctx: ScaffoldContext, recipeName: string, hasPreview: boolean): string {
   const dir = projectPluginRelDir(ctx.scopedName);
   const hasServer = ctx.template === "mcp" || ctx.template === "full";
   const devLine = hasServer
@@ -396,8 +396,36 @@ It flags the patterns that make a panel slow or look foreign — a list pushed
 whole on every change, polling in the view, hand-rolled buttons and inputs,
 stock Tailwind colours — and names the fix. The plugin's Performance section
 in Project settings → Plugins shows what Daintree measured while it ran.
-`;
+${hasPreview ? PROJECT_README_PREVIEW : ""}`;
 }
+
+// The agent working in this repository reads the README, not Daintree's docs, so
+// without this it reaches for the running app — and asks for Daintree to be
+// relaunched with a debugging port — to see a panel the preview already shows.
+const PROJECT_README_PREVIEW = `
+## Previewing a panel
+
+To see the panel, drive it, or check a change to it, use the panel preview, not
+the running Daintree app. Write a story in \`review/panel.stories.tsx\` for each
+state the panel can be in, then run:
+
+\`\`\`bash
+npx playwright install chromium   # once
+npm run test:preview
+\`\`\`
+
+It renders every story against a mock host in a background browser and saves a
+screenshot of each under \`test-results/\`, which you can read. A capture fails on
+a console error or a story that did not render, so a passing run is evidence
+rather than a guess. Set \`use.viewport\` in \`playwright.config.ts\` to the
+panel size you want.
+
+Do not drive Daintree's own window to test a panel, and do not relaunch Daintree
+with \`--remote-debugging-port\` so a browser tool can attach to it: input aimed
+at the app lands in whichever window the user has focused. Load the plugin in
+Daintree only for what the host alone shows — activation, the worker, real data
+and its performance numbers.
+`;
 
 // Ships commented-out so a fresh plugin excludes nothing extra — it exists to
 // make the mechanism discoverable, since `.gitignore` alone can't express
@@ -602,7 +630,11 @@ function projectVariant(
   // `.dntrignore` only shapes a `.dntr` archive, and a project plugin is never
   // packaged into one.
   delete next[".dntrignore"];
-  next["README.md"] = projectReadme(ctx, projectRecipeName(ctx.scopedName));
+  next["README.md"] = projectReadme(
+    ctx,
+    projectRecipeName(ctx.scopedName),
+    "review/panel.stories.tsx" in files
+  );
   return next;
 }
 
