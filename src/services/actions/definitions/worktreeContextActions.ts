@@ -23,6 +23,10 @@ import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
+import {
+  WORKTREE_LABEL_COLOR_NAMES,
+  worktreeLabelTokenForName,
+} from "@shared/theme/worktreeColors";
 import { composeFileBrowserTitle } from "@/panels/file-browser/title";
 // Static, unlike the stores below: this module carries the panel types plus a
 // handful of pure predicates over them, so it drags in no client or store graph.
@@ -540,6 +544,42 @@ export function registerWorktreeContextActions(
           throw new Error("No worktree selected");
         }
         callbacks.onInject(targetWorktreeId);
+      },
+    })
+  );
+
+  actions.set("worktree.setLabelColor", () =>
+    defineAction({
+      id: "worktree.setLabelColor",
+      title: "Set worktree label colour",
+      description:
+        "Marks a worktree with a colour on its sidebar card so the user can pick it out. The same colour replaces its automatic one in panel headers and pickers. Cosmetic only.",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      keywords: ["label", "colour", "color", "tag", "mark", "highlight"],
+      argsSchema: z.object({
+        worktreeId: z.string().min(1).describe("Worktree id, from the worktree list"),
+        color: z
+          .enum(WORKTREE_LABEL_COLOR_NAMES)
+          .nullable()
+          .describe("Label colour; null clears it"),
+      }),
+      run: async (args) => {
+        const { worktreeId, color } = args;
+        if (!getCurrentViewStore().getState().worktrees.has(worktreeId)) {
+          throw new Error(`Worktree not found: ${worktreeId}`);
+        }
+        // Lazy, like the panel stores below: the filter store's persistence
+        // layer reads localStorage at module scope.
+        const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
+        useWorktreeFilterStore
+          .getState()
+          .setWorktreeLabelColor(
+            worktreeId,
+            color === null ? null : worktreeLabelTokenForName(color)
+          );
       },
     })
   );

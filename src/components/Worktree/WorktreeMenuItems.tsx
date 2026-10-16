@@ -66,8 +66,15 @@ import {
   Package,
   Plus,
   ServerCog,
+  Tag,
   Workflow,
 } from "@/components/icons";
+import {
+  isWorktreeLabelToken,
+  WORKTREE_LABEL_COLORS,
+  type WorktreeLabelToken,
+} from "@shared/theme/worktreeColors";
+import { worktreeLabelColorStyle } from "./worktreeLabelColorStyle";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
 import { hostFileManagerRevealLabel, isRemoteWindow } from "@/hooks/useHostPlatform";
 import { BrandMark } from "@/components/icons/BrandMark";
@@ -205,6 +212,10 @@ export interface WorktreeMenuItemsProps {
   onTogglePin?: () => void;
   onToggleCollapse?: () => void;
   isCollapsed?: boolean;
+  /** The worktree's colour label, or null when it has none. */
+  labelColor?: WorktreeLabelToken | null;
+  /** Receives null for None. Dispatches `worktree.setLabelColor`. */
+  onSetLabelColor?: (token: WorktreeLabelToken | null) => void;
   // Optional only so a workspace root needn't pass inert handlers: the
   // `worktree.sessions.*` actions resolve a worktree id and no-op without one.
   onDockAll?: () => void;
@@ -312,6 +323,8 @@ export function WorktreeMenuItems({
   onTogglePin,
   onToggleCollapse,
   isCollapsed,
+  labelColor,
+  onSetLabelColor,
   onDockAll,
   onMaximizeAll,
   onResetRenderers,
@@ -1109,7 +1122,11 @@ export function WorktreeMenuItems({
     !worktree.isMainWorktree &&
     !isExternalWorktree(worktree);
   const hasMoveRows = Boolean(onMoveUp || onMoveDown);
-  const organizeSub = worktree && (canPin || onToggleCollapse || hasMoveRows) && (
+  // Main and external worktrees get a label even though they can't be pinned —
+  // the main worktree is the case labels exist for (#13408).
+  const canLabel = Boolean(onSetLabelColor);
+  const hasCardRows = canPin || Boolean(onToggleCollapse) || canLabel;
+  const organizeSub = worktree && (hasCardRows || hasMoveRows) && (
     <C.Sub key="organize">
       <C.SubTrigger>
         <ArrowUpDown className={ICON} />
@@ -1146,7 +1163,37 @@ export function WorktreeMenuItems({
             )}
           </C.Item>
         )}
-        {hasMoveRows && (canPin || onToggleCollapse) && <C.Separator />}
+        {canLabel && (
+          <C.Sub>
+            <C.SubTrigger>
+              <Tag className={ICON} />
+              Label
+            </C.SubTrigger>
+            <C.SubContent>
+              <C.RadioGroup
+                value={labelColor ?? "none"}
+                onValueChange={(value: string) => {
+                  const next = isWorktreeLabelToken(value) ? value : null;
+                  if (next === (labelColor ?? null)) return;
+                  onSetLabelColor?.(next);
+                }}
+              >
+                <C.RadioItem value="none">None</C.RadioItem>
+                {WORKTREE_LABEL_COLORS.map((color) => (
+                  <C.RadioItem key={color.token} value={color.token}>
+                    <span
+                      aria-hidden="true"
+                      className="worktree-label-swatch mr-2"
+                      style={worktreeLabelColorStyle(color.token)}
+                    />
+                    {color.label}
+                  </C.RadioItem>
+                ))}
+              </C.RadioGroup>
+            </C.SubContent>
+          </C.Sub>
+        )}
+        {hasMoveRows && hasCardRows && <C.Separator />}
         {hasMoveRows && (
           <>
             <C.Item onSelect={onMoveUp} disabled={!onMoveUp || !canMoveUp}>

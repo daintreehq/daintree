@@ -43,3 +43,59 @@ export function computeWorktreeColorMap(
   }
   return map;
 }
+
+/**
+ * Colours a user can pin to a worktree as a label. Deliberately short: most of
+ * the hue wheel already means something on a worktree card (green success,
+ * amber/orange warning, rose danger, slate the keyboard cursor), and cyan,
+ * indigo and purple sit too close to these to separate as a 3px line (#13408).
+ *
+ * The token is what gets stored, not a hex value, so a label follows the theme
+ * and the colour-vision overrides. The name stays the same whatever hue a
+ * colour-vision mode remaps it to.
+ */
+export const WORKTREE_LABEL_COLORS = [
+  { name: "teal", label: "Teal", token: "category-teal" },
+  { name: "blue", label: "Blue", token: "category-blue" },
+  { name: "violet", label: "Violet", token: "category-violet" },
+  { name: "pink", label: "Pink", token: "category-pink" },
+] as const;
+
+export type WorktreeLabelColorName = (typeof WORKTREE_LABEL_COLORS)[number]["name"];
+export type WorktreeLabelToken = (typeof WORKTREE_LABEL_COLORS)[number]["token"];
+
+export const WORKTREE_LABEL_COLOR_NAMES = WORKTREE_LABEL_COLORS.map((c) => c.name) as [
+  WorktreeLabelColorName,
+  ...WorktreeLabelColorName[],
+];
+
+export function isWorktreeLabelToken(value: unknown): value is WorktreeLabelToken {
+  return WORKTREE_LABEL_COLORS.some((c) => c.token === value);
+}
+
+export function worktreeLabelTokenForName(name: WorktreeLabelColorName): WorktreeLabelToken {
+  return WORKTREE_LABEL_COLORS.find((c) => c.name === name)!.token;
+}
+
+export function worktreeLabelDisplayName(token: WorktreeLabelToken): string {
+  return WORKTREE_LABEL_COLORS.find((c) => c.token === token)!.label;
+}
+
+/**
+ * Overlay user labels onto the automatic map. A label shows even when there is
+ * only one worktree; clearing it hands the worktree back to the automatic
+ * colour, single-worktree suppression included. Returns `autoMap` itself when
+ * nothing is labelled, so the reference stays stable for consumers.
+ */
+export function applyWorktreeLabelColors(
+  autoMap: Record<string, string> | null,
+  labels: Readonly<Record<string, WorktreeLabelToken>>
+): Record<string, string> | null {
+  const entries = Object.entries(labels);
+  if (entries.length === 0) return autoMap;
+  const result: Record<string, string> = { ...(autoMap ?? {}) };
+  for (const [id, token] of entries) {
+    result[id] = `var(--theme-${token})`;
+  }
+  return result;
+}

@@ -484,7 +484,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // the prose has to carry is that it reads Codex's own report of a host's
   // quota, and that Claude Code's usage isn't readable by other apps, so the
   // hub asks that host's assistant for /usage instead. Off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 21_400;
+  // 21_400 → 21_550 for `worktree.setLabelColor` (#13408), measured at
+  // 21_535 B. Only 32 B were spare against the 120 B floor. What the prose has
+  // to carry is that the colour reaches the panel headers and pickers as well
+  // as the card, and that it is cosmetic. Full tier only, off the external
+  // surface.
+  const MAX_COHORT_TOTAL_BYTES = 21_550;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

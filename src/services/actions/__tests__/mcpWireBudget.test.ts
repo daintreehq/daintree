@@ -731,7 +731,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // outcome fields beside the host's Codex reading as Codex reports it (each
   // window's percent used, length and reset, or why there is none) and when
   // this Shell received it. Hub only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 136_850;
+  // 136_850 → 137_300 for `worktree.setLabelColor` (#13408), measured at
+  // 137_269 B: its description, the worktreeId and color arguments, and no
+  // output schema. Full tier only, so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 137_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

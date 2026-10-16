@@ -755,6 +755,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const hasFacetFilters = useWorktreeFilterStore((state) => state.hasFacetFilters);
   const hasFacetFiltersActive = hasFacetFilters();
   const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
+  const worktreeLabelColors = useWorktreeFilterStore((state) => state.worktreeLabelColors);
   const pruneStaleWorktreeIds = useWorktreeFilterStore((state) => state.pruneStaleWorktreeIds);
   const setQuickStateFilter = useWorktreeFilterStore((state) => state.setQuickStateFilter);
 
@@ -834,13 +835,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const setManualOrder = useWorktreeFilterStore((state) => state.setManualOrder);
 
-  // Clean up stale pinned/collapsed worktrees (single store write so pruning
-  // costs one persist flush, not N) and stale manual order entries. Merged so
-  // the worktree-ID Set is built at most once per pass.
+  // Clean up stale pinned/collapsed/labelled worktrees (single store write so
+  // pruning costs one persist flush, not N) and stale manual order entries.
+  // Merged so the worktree-ID Set is built at most once per pass.
+  //
+  // Only against a list the host actually delivered: before the first snapshot,
+  // while a load is in flight, or after one failed, `worktrees` is empty or
+  // stale, and pruning against it would wipe every pin and label in the project
+  // (#13408). A reconnect is not gated: the view keeps its last full list
+  // through it, and a reconnect flag that outlives its recovery would otherwise
+  // switch pruning off for the rest of the session.
+  const canPruneWorktreeIds =
+    isInitialized && !isLoading && error === null && worktreeLoadError === null;
   useEffect(() => {
+    if (!canPruneWorktreeIds) return;
+    const labelledIds = Object.keys(worktreeLabelColors);
     if (
       pinnedWorktrees.length === 0 &&
       collapsedWorktrees.length === 0 &&
+      labelledIds.length === 0 &&
       manualOrder.length === 0
     ) {
       return;
@@ -848,7 +861,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const existingIds = new Set(worktrees.map((w) => w.id));
     const hasStalePin = pinnedWorktrees.some((id) => !existingIds.has(id));
     const hasStaleCollapsed = collapsedWorktrees.some((id) => !existingIds.has(id));
-    if (hasStalePin || hasStaleCollapsed) {
+    const hasStaleLabel = labelledIds.some((id) => !existingIds.has(id));
+    if (hasStalePin || hasStaleCollapsed || hasStaleLabel) {
       pruneStaleWorktreeIds(existingIds);
     }
     if (manualOrder.length > 0) {
@@ -858,9 +872,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       }
     }
   }, [
+    canPruneWorktreeIds,
     worktrees,
     pinnedWorktrees,
     collapsedWorktrees,
+    worktreeLabelColors,
     manualOrder,
     pruneStaleWorktreeIds,
     setManualOrder,

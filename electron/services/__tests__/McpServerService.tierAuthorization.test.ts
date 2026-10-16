@@ -1483,6 +1483,12 @@ describe("McpServerService", () => {
         description: "Run resource teardown commands for a worktree",
         danger: "confirm",
       }),
+      // Full-only (#13408).
+      createManifestEntry({
+        id: "worktree.setLabelColor" as ActionId,
+        title: "Set Worktree Label Colour",
+        description: "Mark a worktree's sidebar card with a colour",
+      }),
       createManifestEntry({
         id: "git.stageFile" as ActionId,
         title: "Stage File",
