@@ -323,10 +323,12 @@ export function installAssistantMessagingPolicy(
     defaults.schedule();
   });
   const offPolicyReannounce = policy.onChange(payReannounce);
-  // Read at each provision and held for that session; a host that connects later counts from the next.
+  // Read at each provision and held for that session; a host that connects later counts from the
+  // next. A lane is an assistant a hub on another machine can enroll, so only listening as a host
+  // makes one: a hub's own assistant hears from its hosts, but not as their lane.
   helpSessionService.setRunbooksHostState(() => {
     const hosts = observedRunbooksHostsState(deps.hasHosts(), deps.observeHosts?.() ?? null);
-    return hosts === null ? null : { hosts, laneReachable: runtime.isMachineReachable() };
+    return hosts === null ? null : { hosts, laneReachable: runtime.listensAsHost() };
   });
   const onAvailabilityChanged = deps.onAvailabilityChanged;
   const stopListening = onAvailabilityChanged

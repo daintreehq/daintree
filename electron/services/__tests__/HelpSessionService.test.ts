@@ -4952,7 +4952,7 @@ describe("HelpSessionService", () => {
       expect(lane.mcpServers["daintree-runbooks"]?.headers).toEqual({ "Daintree-Hosts": "none" });
     });
 
-    it.each([
+    const unreported: [string, (() => RunbooksHostState | null) | null][] = [
       ["no state is wired", null],
       ["the state is unreported", () => null],
       [
@@ -4961,7 +4961,9 @@ describe("HelpSessionService", () => {
           throw new Error("registry gone");
         },
       ],
-    ] as const)("sends no headers when %s", async (_label, read) => {
+    ];
+
+    it.each(unreported)("sends no headers when %s", async (_label, read) => {
       service.setRunbooksHostState(read);
       const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
       if (!result) throw new Error("expected result");
@@ -4977,13 +4979,33 @@ describe("HelpSessionService", () => {
       expect(lane.mcpServers["daintree-runbooks"]).toEqual({ type: "http", url: RUNBOOKS_URL });
     });
 
-    it("doesn't read the state while runbooks are off", async () => {
+    it("keeps a Codex session's flags as provisioned when the state changes after", async () => {
+      const read = vi.fn<() => RunbooksHostState | null>(() => ({
+        hosts: "connected",
+        laneReachable: false,
+      }));
+      service.setRunbooksHostState(read);
+      const result = await service.provisionSession({ ...provisionInput(), agentId: "codex" });
+      if (!result) throw new Error("expected result");
+      const provisioned = service.getCodexLaunchArgs(result.token);
+
+      read.mockReturnValue({ hosts: "none", laneReachable: false });
+      expect(service.getCodexLaunchArgs(result.token)).toEqual(provisioned);
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["runbook search is off", { runbookSearch: false }],
+      ["Daintree control is off", { daintreeControl: false, runbookSearch: true }],
+    ])("doesn't read the state while %s", async (_label, settings) => {
       const read = vi.fn<() => RunbooksHostState | null>(() => hubWithLane);
       service.setRunbooksHostState(read);
-      mockStoreGet.mockReturnValue({ runbookSearch: false });
-      await service.provisionSession(provisionInput());
+      mockStoreGet.mockReturnValue(settings);
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
 
       expect(read).not.toHaveBeenCalled();
+      expect((await readLaneConfig(result)).mcpServers["daintree-runbooks"]).toBeUndefined();
     });
   });
 });

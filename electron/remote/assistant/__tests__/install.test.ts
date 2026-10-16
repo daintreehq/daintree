@@ -170,10 +170,14 @@ describe("installAssistantMessagingPolicy", () => {
         observed({ hostId: "attic", assistantMessagingEnabled: false, connection: connected }),
       ];
       installObserving();
-      expect(read()).toMatchObject({ hosts: "configured" });
+      // Having hosts makes this machine their hub, not a lane of theirs.
+      expect(read()).toEqual({ hosts: "configured", laneReachable: false });
 
       seen = [observed({ connection: connected })];
-      expect(read()).toMatchObject({ hosts: "connected" });
+      expect(read()).toEqual({ hosts: "connected", laneReachable: false });
+
+      seen = [];
+      expect(read()).toEqual({ hosts: "configured", laneReachable: false });
     });
 
     it("reports nothing when hosts exist but can't be observed", () => {
