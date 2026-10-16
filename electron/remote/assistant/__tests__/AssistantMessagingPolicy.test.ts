@@ -1024,6 +1024,61 @@ describe("AssistantMessagingPolicy", () => {
       expect(h.policy.getEnrollment(lane())).toBeNull();
     });
 
+    it("gives a run whose consent ended back to the Shell that gave it, never to another", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.startedBy.set("s1", "link-a");
+      h.policy.bindSender("link-a", "sender-a");
+      expect(h.policy.enrollByDefault(lane(), SHELL_A).ok).toBe(true);
+      // The host stopped listening; another Shell's view then took the assistant over.
+      h.policy.releaseRemoteShells();
+      h.startedBy.set("s1", "link-b");
+      h.policy.bindSender("link-b", "sender-b");
+      expect(h.policy.enrollByDefault(lane(), SHELL_B)).toEqual({
+        ok: false,
+        reason: "wrong-shell",
+      });
+      expect(h.policy.enrollByDefault(lane(), LOCAL)).toEqual({ ok: false, reason: "wrong-shell" });
+      // The person there may still turn it on themselves.
+      expect(h.policy.getEnded(lane())).toEqual({
+        reason: "shell-gone",
+        at: 1_000,
+        enrolledBy: SHELL_A,
+      });
+
+      // The Shell that gave it, back on a new session, gets it again.
+      h.startedBy.set("s1", "link-a2");
+      h.policy.bindSender("link-a2", "sender-a");
+      expect(
+        h.policy.enrollByDefault(lane(), { kind: "remote", linkSessionId: "link-a2" }).ok
+      ).toBe(true);
+    });
+
+    it("lets a new run go to whichever Shell's view it runs in", () => {
+      const h = harness();
+      h.run("proj", 0, "s1");
+      h.startedBy.set("s1", "link-a");
+      h.policy.bindSender("link-a", "sender-a");
+      expect(h.policy.enrollByDefault(lane(), SHELL_A).ok).toBe(true);
+      h.policy.releaseRemoteShells();
+      h.run("proj", 0, "s2");
+      h.startedBy.set("s2", "link-b");
+      h.policy.bindSender("link-b", "sender-b");
+      expect(h.policy.enrollByDefault(lane(), SHELL_B).ok).toBe(true);
+    });
+
+    it("waits for a spawn to succeed, so a spawn that fails never holds the hub", () => {
+      const confirmed = new Set<string>();
+      const h = harness({ spawnConfirmed: (terminalId) => confirmed.has(terminalId) });
+      h.run("proj", 0, "s1");
+      expect(h.policy.enrollByDefault(lane(), LOCAL)).toEqual({ ok: false, reason: "unavailable" });
+      // The person's own toggle doesn't wait.
+      expect(h.policy.enroll(lane(), LOCAL).ok).toBe(true);
+      h.policy.unenroll(lane(), LOCAL, h.policy.getHub()!.generation);
+      confirmed.add("t-s1");
+      expect(h.policy.enrollByDefault(lane(), LOCAL).ok).toBe(true);
+    });
+
     it("enrolls nothing on Windows", () => {
       const h = harness({ platform: "win32" });
       h.run("proj", 0, "s1");

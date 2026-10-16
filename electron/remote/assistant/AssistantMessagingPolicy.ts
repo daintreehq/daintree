@@ -85,6 +85,14 @@ export type EnrollmentResult =
  */
 export type DefaultEnrollmentRefusal = "occupied" | "declined" | "unproven" | "wrong-session";
 
+/** An ended enrollment, with the run it was for and the sender that gave it. */
+interface EndedRecord extends EnrollmentEnded {
+  sessionId: string;
+  terminalId: string;
+  launchGeneration: number;
+  sender?: string;
+}
+
 /** The run a person turned messages off for; only that run, never the lane. */
 interface DeclinedRun {
   projectId: string;
@@ -121,6 +129,12 @@ export interface AssistantMessagingPolicyDeps {
   startedThrough?(running: RunningLaneSession, linkSessionId: string): boolean;
   /** Which incarnation of a PTY is running under its id, or null when none is. */
   getLiveGeneration(terminalId: string): number | null;
+  /**
+   * Whether that incarnation's spawn succeeded and it hasn't closed. A pending
+   * spawn already has a live generation; only a default waits for this, so a
+   * spawn that then fails never holds the hub. Absent, every live one counts.
+   */
+  spawnConfirmed?(terminalId: string, launchGeneration: number): boolean;
   /** This Shell's per-host opt-in. */
   isHostMessagingEnabled(hostId: HostId): boolean;
   onSessionEnded(listener: (event: HelpSessionEndedEvent) => void): () => void;
@@ -189,7 +203,7 @@ function laneKey(lane: LaneRef): string | null {
 export class AssistantMessagingPolicy {
   private readonly enrollments = new Map<string, LaneEnrollment>();
   /** Enrollments that ended without being withdrawn, kept until the lane is enrolled again. */
-  private readonly ended = new Map<string, EnrollmentEnded>();
+  private readonly ended = new Map<string, EndedRecord>();
   /** Runs the person turned off, which no default enrolls again; gone with the run. */
   private readonly declined = new Map<string, DeclinedRun>();
   private readonly changeListeners = new Set<() => void>();
@@ -254,8 +268,17 @@ export class AssistantMessagingPolicy {
     if (key === null || !isValidShell(shell)) return { ok: false, reason: "invalid-lane" };
     if (this.current(key)) return { ok: false, reason: "occupied" };
     const run = this.liveRun(lane);
-    if (!run) return { ok: false, reason: "unavailable" };
+    if (
+      !run ||
+      this.deps.spawnConfirmed?.(run.running.terminalId, run.launchGeneration) === false
+    ) {
+      return { ok: false, reason: "unavailable" };
+    }
     if (this.isDeclined(key, run)) return { ok: false, reason: "declined" };
+    // A run another Shell's consent ended on (the host stopped listening, say,
+    // and another Shell's view then took the assistant over) isn't given to a
+    // different Shell by default; the Shell that gave it gets it back.
+    if (this.endedForAnother(key, run, shell)) return { ok: false, reason: "wrong-shell" };
     if (shell.kind === "local") {
       if (this.getHub()) return { ok: false, reason: "hub-taken" };
       if (this.hubDeclined()) return { ok: false, reason: "declined" };
@@ -479,7 +502,9 @@ export class AssistantMessagingPolicy {
     if (key === null) return null;
     this.current(key);
     const ended = this.ended.get(key);
-    return ended ? { ...ended, enrolledBy: { ...ended.enrolledBy } } : null;
+    return ended
+      ? { reason: ended.reason, at: ended.at, enrolledBy: { ...ended.enrolledBy } }
+      : null;
   }
 
   isPaused(): boolean {
@@ -647,6 +672,28 @@ export class AssistantMessagingPolicy {
     return false;
   }
 
+  private endedForAnother(
+    key: string,
+    run: { running: RunningLaneSession; launchGeneration: number },
+    shell: MessagingShell
+  ): boolean {
+    const ended = this.ended.get(key);
+    if (
+      !ended ||
+      ended.sessionId !== run.running.sessionId ||
+      ended.terminalId !== run.running.terminalId ||
+      ended.launchGeneration !== run.launchGeneration
+    ) {
+      return false;
+    }
+    if (shell.kind === "local" || ended.enrolledBy.kind === "local") {
+      return shell.kind !== ended.enrolledBy.kind;
+    }
+    return (
+      ended.sender === undefined || ended.sender !== this.sessionSenders.get(shell.linkSessionId)
+    );
+  }
+
   /** Whether a hub the person turned off is still running. */
   private hubDeclined(): boolean {
     for (const [key, declined] of [...this.declined]) {
@@ -675,7 +722,16 @@ export class AssistantMessagingPolicy {
     notify = true
   ): void {
     this.enrollments.delete(key);
-    this.ended.set(key, { reason, at: this.now(), enrolledBy: { ...enrollment.enrolledBy } });
+    const ended: EndedRecord = {
+      reason,
+      at: this.now(),
+      enrolledBy: { ...enrollment.enrolledBy },
+      sessionId: enrollment.sessionId,
+      terminalId: enrollment.terminalId,
+      launchGeneration: enrollment.launchGeneration,
+    };
+    if (enrollment.sender !== undefined) ended.sender = enrollment.sender;
+    this.ended.set(key, ended);
     if (notify) this.changed();
   }
 

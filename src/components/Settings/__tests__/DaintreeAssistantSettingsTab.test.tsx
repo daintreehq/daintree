@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.stubGlobal(
@@ -2165,6 +2165,10 @@ describe("DaintreeAssistantSettingsTab accepting messages from other machines (#
     const { container } = renderTab();
     await waitForContent(container, "Search documentation");
     await waitFor(() => expect(messaging.getState).toHaveBeenCalledWith(undefined));
+    // Absent after the answer landed, not merely before it did.
+    await act(async () => {
+      await messaging.getState.mock.results[0]?.value;
+    });
     expect(screen.queryByRole("switch", { name: LABEL })).toBeNull();
   });
 

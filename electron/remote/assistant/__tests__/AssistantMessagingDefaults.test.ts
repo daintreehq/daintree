@@ -127,6 +127,15 @@ describe("AssistantMessagingDefaults (#13441)", () => {
     expect(h.policy.listEnrollments()).toEqual([]);
   });
 
+  it("drops a pass already queued when it's disposed", async () => {
+    const h = harness();
+    h.run("proj", 0, LOCAL);
+    h.defaults.schedule();
+    h.defaults.dispose();
+    await Promise.resolve();
+    expect(h.policy.getHub()).toBeNull();
+  });
+
   it("coalesces passes to one per tick and stops after disposal", async () => {
     const h = harness();
     let passes = 0;

@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const broadcastToRenderer = vi.hoisted(() => vi.fn());
-const running = vi.hoisted(() => new Map<string, { sessionId: string; terminalId: string }>());
+const running = vi.hoisted(
+  () =>
+    new Map<string, { sessionId: string; terminalId: string; projectViewWebContentsId?: number }>()
+);
+const sessionEnded = vi.hoisted(() => new Set<(event: unknown) => void>());
+/** Which project each of this machine's views shows, by WebContents id. */
+const views = vi.hoisted(() => new Map<number, string>());
+/** Spawn outcomes the lifecycle ledger recorded, by terminal id. */
+const ledger = vi.hoisted(
+  () => new Map<string, { generation: number; spawnOk?: boolean; closedAt?: number }>()
+);
 const pty = vi.hoisted(() => {
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const generations = new Map<string, number>();
@@ -25,9 +35,19 @@ const pty = vi.hoisted(() => {
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToRenderer }));
 vi.mock("../../../services/HelpSessionService.js", () => ({
   helpSessionService: {
-    getRunningLaneSession: (projectId: string, slot: number) =>
-      running.get(`${projectId}:${slot}`) ?? null,
-    addSessionEndedListener: () => () => {},
+    getRunningLaneSession: (projectId: string, slot: number) => {
+      const run = running.get(`${projectId}:${slot}`);
+      return run ? { projectViewWebContentsId: 0, ...run } : null;
+    },
+    listRunningLanes: () =>
+      [...running.keys()].map((key) => {
+        const [projectId, slot] = key.split(":");
+        return { projectId: projectId!, slot: Number(slot), agentId: "claude", attached: true };
+      }),
+    addSessionEndedListener: (listener: (event: unknown) => void) => {
+      sessionEnded.add(listener);
+      return () => sessionEnded.delete(listener);
+    },
 
     addSessionReattachedListener: () => () => {},
     setMessagingReach: () => {},
@@ -36,8 +56,15 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
 vi.mock("../../../services/DriveLeaseService.js", () => ({ peekDriveLeaseService: () => null }));
 vi.mock("../../metrics/hostOps.js", () => ({ callerDrives: () => false }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty.client }));
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getProjectForWebContents: (id: number) => views.get(id) ?? null,
+}));
+vi.mock("../../../services/pty/lifecycleLedger.js", () => ({
+  getLifecycleLedger: () => ({ getEntry: (id: string) => ledger.get(id) }),
+}));
 
 import { CHANNELS } from "../../../ipc/channels.js";
+import { getEndpointRegistry } from "../../../ipc/endpointRegistry.js";
 import { getRemoteService, registerRemoteService } from "../../runtime.js";
 import type { HostProjectViewResult } from "../../client/hostProjectViews.js";
 import type { ExchangeRecord } from "../../exchange/types.js";
@@ -74,6 +101,9 @@ describe("installAssistantMessagingPolicy", () => {
     hostListeners = new Set();
     pty.listeners.clear();
     pty.generations.clear();
+    sessionEnded.clear();
+    views.clear();
+    ledger.clear();
   });
 
   afterEach(() => {
@@ -192,9 +222,160 @@ describe("installAssistantMessagingPolicy", () => {
     expect(getRemoteService("assistantMessagingSurface")).toBeUndefined();
     expect(hostListeners.size).toBe(0);
     expect(pty.listeners.get("spawn-result")?.size ?? 0).toBe(0);
+    expect(pty.listeners.get("exit")?.size ?? 0).toBe(0);
+    expect(sessionEnded.size).toBe(0);
     hosts = ["a"];
     hostsChanged();
     expect(pushes()).toEqual([1]);
+  });
+});
+
+describe("installAssistantMessagingPolicy applying the saved default (#13441)", () => {
+  let accepts: boolean;
+  let messagingHost: boolean;
+  let defaultListeners: Set<() => void>;
+  let uninstall: (() => void) | null = null;
+  const endpoints: Array<() => void> = [];
+
+  const install = () =>
+    (uninstall = installAssistantMessagingPolicy({
+      isHostMessagingEnabled: () => true,
+      hasHosts: () => true,
+      onHostsChanged: () => () => {},
+      acceptsByDefault: () => accepts,
+      onDefaultChanged: (listener) => {
+        defaultListeners.add(listener);
+        return () => defaultListeners.delete(listener);
+      },
+      hasMessagingHost: () => messagingHost,
+    }));
+  const policy = () => getRemoteService("assistantMessagingPolicy")!;
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+  /** A run that spawned, in the view `view`; positive ids are this machine's own views. */
+  const start = (lane: string, sessionId: string, view: number, spawned = true) => {
+    const terminalId = `t-${sessionId}`;
+    running.set(lane, { sessionId, terminalId, projectViewWebContentsId: view });
+    pty.generations.set(terminalId, 1);
+    ledger.set(terminalId, spawned ? { generation: 1, spawnOk: true } : { generation: 1 });
+    pty.emit("spawn-result", terminalId, { success: spawned, id: terminalId });
+  };
+
+  beforeEach(() => {
+    broadcastToRenderer.mockClear();
+    running.clear();
+    pty.listeners.clear();
+    pty.generations.clear();
+    sessionEnded.clear();
+    views.clear();
+    ledger.clear();
+    accepts = true;
+    messagingHost = true;
+    defaultListeners = new Set();
+  });
+
+  afterEach(() => {
+    uninstall?.();
+    uninstall = null;
+    for (const remove of endpoints.splice(0)) remove();
+  });
+
+  it("makes a run in this machine's own view the hub once it has spawned", async () => {
+    views.set(11, "proj");
+    install();
+    start("proj:0", "s1", 11, false);
+    await settle();
+    expect(policy().getHub()).toBeNull();
+    ledger.set("t-s1", { generation: 1, spawnOk: true });
+    pty.emit("spawn-result", "t-s1", { success: true, id: "t-s1" });
+    await settle();
+    expect(policy().getHub()).toMatchObject({ projectId: "proj", slot: 0, sessionId: "s1" });
+  });
+
+  it("leaves a run alone whose view shows another project, or is no view of this machine", async () => {
+    views.set(11, "other");
+    install();
+    start("proj:0", "s1", 11);
+    start("proj:1", "s2", 12);
+    await settle();
+    expect(policy().listEnrollments()).toEqual([]);
+  });
+
+  it("waits for the saved default and a host with messaging on, then applies them", async () => {
+    views.set(11, "proj");
+    accepts = false;
+    messagingHost = false;
+    install();
+    start("proj:0", "s1", 11);
+    await settle();
+    expect(policy().getHub()).toBeNull();
+    accepts = true;
+    for (const listener of [...defaultListeners]) listener();
+    await settle();
+    // Still no host to hear from.
+    expect(policy().getHub()).toBeNull();
+    messagingHost = true;
+    for (const listener of [...defaultListeners]) listener();
+    await settle();
+    expect(policy().getHub()).not.toBeNull();
+  });
+
+  it("gives the hub to a sibling once the hub the person turned off stops", async () => {
+    views.set(11, "proj");
+    install();
+    start("proj:0", "s1", 11);
+    start("proj:1", "s2", 11);
+    await settle();
+    const hub = policy().getHub();
+    expect(hub).toMatchObject({ slot: 0 });
+    policy().unenroll({ projectId: "proj", slot: 0 }, { kind: "local" }, hub!.generation, {
+      decline: true,
+    });
+    await settle();
+    expect(policy().getHub()).toBeNull();
+
+    running.delete("proj:0");
+    for (const listener of [...sessionEnded]) {
+      listener({ projectId: "proj", slot: 0, sessionId: "s1", reason: "revoked" });
+    }
+    await settle();
+    expect(policy().getHub()).toMatchObject({ slot: 1 });
+  });
+
+  it("enrolls a run in a remote Shell's open view for that Shell once it proved its sender", async () => {
+    const endpoint = {
+      endpointId: "remote-1",
+      clientId: "client",
+      projectId: "proj",
+      kind: "remote-view" as const,
+      handle: -5,
+      linkSessionId: "link-a",
+      send: () => {},
+      request: async () => null,
+      onClose: () => ({ dispose: () => {} }),
+      isClosed: () => false,
+    };
+    getEndpointRegistry().add(endpoint as never);
+    endpoints.push(() => getEndpointRegistry().remove("remote-1"));
+    messagingHost = false;
+    install();
+    start("proj:0", "s1", -5);
+    await settle();
+    expect(policy().getEnrollment({ projectId: "proj", slot: 0 })).toBeNull();
+    policy().bindSender("link-a", "sender-a");
+    await settle();
+    expect(policy().getEnrollment({ projectId: "proj", slot: 0 })).toMatchObject({
+      enrolledBy: { kind: "remote", linkSessionId: "link-a" },
+    });
+  });
+
+  it("stops applying it on teardown", async () => {
+    views.set(11, "proj");
+    install();
+    uninstall!();
+    uninstall = null;
+    expect(defaultListeners.size).toBe(0);
   });
 });
 

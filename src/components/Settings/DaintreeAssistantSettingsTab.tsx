@@ -1314,7 +1314,7 @@ export function DaintreeAssistantSettingsTab() {
             <SettingsSwitchCard
               id="assistant-accept-remote-messages"
               title="Accept messages from other machines by default"
-              subtitle="Assistants here accept them as they start, without being turned on in their panel. Turning one off there lasts until it restarts."
+              subtitle="As each assistant here starts, it turns on Accept messages from other machines wherever that can be on. Turning it off in an assistant's panel lasts until that assistant restarts."
               isEnabled={settings.acceptRemoteMessages}
               onChange={toggleAcceptRemoteMessages}
               disabled={settingsUnavailable}

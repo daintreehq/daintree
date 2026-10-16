@@ -11,6 +11,7 @@ import { setAssistantMessagingRuntime } from "../../services/mcp-server/assistan
 import { setHostMessagingRuntime } from "../../services/mcp-server/hostMessagingTools.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
 import type { PtyClient } from "../../services/PtyClient.js";
+import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { AssistantExchangeJournal } from "../exchange/AssistantExchangeJournal.js";
@@ -155,6 +156,14 @@ export function installAssistantMessagingPolicy(
             !endpoint.isClosed()
         ),
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
+    spawnConfirmed: (terminalId, launchGeneration) => {
+      const entry = getLifecycleLedger().getEntry(terminalId);
+      return (
+        entry?.generation === launchGeneration &&
+        entry.spawnOk === true &&
+        entry.closedAt === undefined
+      );
+    },
     isHostMessagingEnabled: deps.isHostMessagingEnabled,
     onSessionEnded: (listener) => helpSessionService.addSessionEndedListener(listener),
   });
@@ -181,11 +190,15 @@ export function installAssistantMessagingPolicy(
     policy.reconcile();
     defaults.schedule();
   };
+  // A run that ends can free the hub for a sibling (a declined hub, say)
+  // without any enrollment changing.
+  const runEnded = () => defaults.schedule();
   let watched: PtyClient | null = null;
   const watchPty = () => {
     if (watched) return;
     watched = getPtyClient();
     watched?.on("spawn-result", reconcile);
+    watched?.on("exit", runEnded);
   };
   watchPty();
   const offPolicy = policy.onChange(() => {
@@ -194,6 +207,7 @@ export function installAssistantMessagingPolicy(
     defaults.schedule();
   });
   const offDefault = deps.onDefaultChanged?.(() => defaults.schedule()) ?? (() => {});
+  const offSessionEnded = helpSessionService.addSessionEndedListener(runEnded);
   // Only the first host arriving or the last one going changes what views
   // show, and whether the hub is offered its host tools.
   const offHosts = deps.onHostsChanged(() => {
@@ -368,6 +382,7 @@ export function installAssistantMessagingPolicy(
   return () => {
     defaults.dispose();
     offDefault();
+    offSessionEnded();
     offReattached();
     offPolicyReannounce();
     owedReannounce.clear();
@@ -389,6 +404,7 @@ export function installAssistantMessagingPolicy(
     offHosts();
     offPolicy();
     watched?.off("spawn-result", reconcile);
+    watched?.off("exit", runEnded);
     watched = null;
     runtime.dispose();
     policy.dispose();
