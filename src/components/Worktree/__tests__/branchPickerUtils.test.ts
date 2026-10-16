@@ -3,6 +3,7 @@ import {
   formatBranchLabel,
   toBranchOption,
   buildBranchRows,
+  deriveDefaultBaseBranch,
   type BranchOption,
   type BranchPickerRow,
 } from "../branchPickerUtils";
@@ -488,6 +489,39 @@ describe("branchPickerUtils", () => {
         );
         expect(rows.find((r) => r.name === "dev")!.committerDate).toBeNull();
       });
+    });
+  });
+});
+
+describe("deriveDefaultBaseBranch", () => {
+  const b = (name: string, extra: Partial<BranchInfo> = {}): BranchInfo => ({
+    name,
+    current: false,
+    commit: "abc123",
+    ...extra,
+  });
+
+  it("prefers the checked-out branch over main", () => {
+    expect(deriveDefaultBaseBranch([b("main"), b("develop", { current: true })])).toEqual({
+      name: "develop",
+      fromRemote: false,
+    });
+  });
+
+  it("falls back to main, then master, then the first branch", () => {
+    expect(deriveDefaultBaseBranch([b("feature"), b("master"), b("main")]).name).toBe("main");
+    expect(deriveDefaultBaseBranch([b("feature"), b("master")]).name).toBe("master");
+    expect(deriveDefaultBaseBranch([b("feature"), b("other")]).name).toBe("feature");
+  });
+
+  it("returns an empty name for an empty list", () => {
+    expect(deriveDefaultBaseBranch([])).toEqual({ name: "", fromRemote: false });
+  });
+
+  it("marks a remote default as fromRemote", () => {
+    expect(deriveDefaultBaseBranch([b("origin/main", { remote: "origin" })])).toEqual({
+      name: "origin/main",
+      fromRemote: true,
     });
   });
 });
