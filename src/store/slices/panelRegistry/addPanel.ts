@@ -28,7 +28,7 @@ import { getXtermOptions, calculateTerminalDimensions } from "@/config/xtermConf
 import { deriveTerminalRuntimeIdentity } from "@/utils/terminalChrome";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
-import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
+import { usePanelLimitStore, buildPanelLimitSnapshot } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
 import { saveNormalized } from "./persistence";
 import {
@@ -343,14 +343,19 @@ export const createAddPanelActions = (
       isHeldForRecovery(get().panelsById[options.requestedId]);
     if (!options.bypassLimits && !replacesHeldPane) {
       const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
-      const globalCount = countNonTrashTerminals(get());
-      const tier = evaluatePanelLimit(globalCount, {
+      const snapshot = buildPanelLimitSnapshot(countNonTrashTerminals(get()), {
         softWarningLimit,
         confirmationLimit,
         hardLimit,
       });
 
-      if (tier === "hard") {
+      if (snapshot.tier === "hard") {
+        logWarn("[TerminalStore] Refused a panel at the hard panel limit", {
+          kind: options.kind ?? "terminal",
+          count: snapshot.count,
+          hardLimit,
+        });
+        commit?.onLimitRefused?.(snapshot);
         notify({
           type: "warning",
           priority: "high",

@@ -3,6 +3,7 @@ import type { Worktree } from "@shared/types/worktree";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
 import type { SettingsNavTarget } from "@/components/Settings";
 import type { AddPanelOptions } from "@/store";
+import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 
 type AddTerminalOptions = AddPanelOptions;
 
@@ -29,6 +30,17 @@ export type AnyActionDefinition = ActionDefinition<any, any> & {
 export type ActionRegistry = Map<ActionId, () => AnyActionDefinition>;
 
 export type NavigationDirection = "up" | "down" | "left" | "right";
+
+/**
+ * Why a launch resolved to `null` without throwing. Structurally mirrors
+ * `LaunchDecline` in `@/hooks/useAgentLauncher`; duplicated so this type never
+ * depends on the renderer hook (#11547).
+ */
+export interface LaunchDecline {
+  reason: "panel-limit" | "already-launching" | "spawn-failed" | "unavailable";
+  /** The count and limits the refusal was judged on; set only for `panel-limit`. */
+  panelLimit: PanelLimitSnapshot | null;
+}
 
 export interface ActionCallbacks {
   onOpenSettings: () => void;
@@ -71,6 +83,7 @@ export interface ActionCallbacks {
       requestedId?: string;
       force?: boolean;
       name?: string;
+      onDecline?: (decline: LaunchDecline) => void;
     }
   ) => Promise<{
     terminalId: string;

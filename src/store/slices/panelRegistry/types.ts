@@ -13,6 +13,7 @@ import type {
   AddPanelOptions,
 } from "@/types";
 import type { PanelInstance, PanelWorktreeMoveNotice } from "@shared/types/panel";
+import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 
 export type { AddPanelOptions };
 
@@ -446,4 +447,10 @@ export interface AddPanelCommitOptions {
      */
     stillApplies: () => boolean;
   };
+  /**
+   * Told when this call is refused at the hard panel limit, with the count and
+   * limits the refusal was judged on. The return value alone is `null` for
+   * several unrelated reasons, so a caller that must report why reads it here.
+   */
+  onLimitRefused?: (snapshot: PanelLimitSnapshot) => void;
 }

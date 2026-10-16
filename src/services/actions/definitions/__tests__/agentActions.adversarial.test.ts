@@ -140,6 +140,7 @@ function launchedResult(overrides: Record<string, unknown> = {}) {
     location: "grid",
     spawnStatus: null,
     ...LAUNCH_IDENTITY,
+    panelLimit: null,
     reply: null,
     ...overrides,
   };
@@ -236,6 +237,7 @@ describe("agentActions adversarial", () => {
       prompt: "hello",
       interactive: true,
       modelId: "gpt-5",
+      onDecline: expect.any(Function),
     });
     expect(result).toEqual(launchedResult());
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
@@ -532,6 +534,7 @@ describe("agentActions adversarial", () => {
       branch: "feature/parallel",
       cwd: "/repo/wt-42/packages/app",
       cwdOutsideWorktree: false,
+      panelLimit: null,
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
@@ -615,6 +618,7 @@ describe("agentActions adversarial", () => {
       location: "grid",
       spawnStatus: "missing-cli",
       ...LAUNCH_IDENTITY,
+      panelLimit: null,
       reply: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
@@ -622,8 +626,7 @@ describe("agentActions adversarial", () => {
 
   it("agent.launch reports a declined launch as launched:false, not null (#11547)", async () => {
     const callbacks = makeCallbacks();
-    // The launcher declines without throwing for a re-entrant launch of the
-    // same agent or when Electron is unavailable.
+    // A launcher that declines without naming why is still a failure to start.
     callbacks.onLaunchAgent.mockResolvedValueOnce(null);
     const actions = setupActions(callbacks);
 
@@ -635,13 +638,62 @@ describe("agentActions adversarial", () => {
       launched: false,
       terminalId: null,
       location: null,
-      spawnStatus: null,
+      spawnStatus: "spawn-failed",
       worktreeId: null,
       worktreePath: null,
       branch: null,
       cwd: null,
       cwdOutsideWorktree: null,
+      panelLimit: null,
       reply: null,
+    });
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+  });
+
+  it("agent.launch names a hard-limit refusal and the limits it was judged on (#13382)", async () => {
+    const callbacks = makeCallbacks();
+    const panelLimit = {
+      count: 32,
+      softWarningLimit: 12,
+      confirmationLimit: 20,
+      hardLimit: 32,
+      tier: "hard" as const,
+    };
+    callbacks.onLaunchAgent.mockImplementationOnce(
+      async (_agentId: string, options?: { onDecline?: (d: unknown) => void }) => {
+        options?.onDecline?.({ reason: "panel-limit", panelLimit });
+        return null;
+      }
+    );
+    const actions = setupActions(callbacks);
+
+    const result = await callAction(actions, "agent.launch", { agentId: "claude" });
+
+    expect(result).toMatchObject({
+      launched: false,
+      terminalId: null,
+      spawnStatus: "panel-limit",
+      panelLimit,
+    });
+    expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
+  });
+
+  it("agent.launch tells a re-entrant launch of the same agent apart from a failure (#13382)", async () => {
+    const callbacks = makeCallbacks();
+    callbacks.onLaunchAgent.mockImplementationOnce(
+      async (_agentId: string, options?: { onDecline?: (d: unknown) => void }) => {
+        options?.onDecline?.({ reason: "already-launching", panelLimit: null });
+        return null;
+      }
+    );
+    const actions = setupActions(callbacks);
+
+    const result = await callAction(actions, "agent.launch", { agentId: "claude" });
+
+    expect(result).toMatchObject({
+      launched: false,
+      spawnStatus: "already-launching",
+      panelLimit: null,
     });
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });

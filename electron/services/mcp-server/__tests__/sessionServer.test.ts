@@ -9597,6 +9597,13 @@ describe("session-scoped resource ownership (#11909)", () => {
             { id: "terminal-users-own", title: "the user's shell" },
             { id: "terminal-other-session", title: "another client's agent" },
           ],
+          panelLimit: {
+            count: 3,
+            softWarningLimit: 12,
+            confirmationLimit: 20,
+            hardLimit: 32,
+            tier: "ok",
+          },
         },
       },
     };
@@ -9626,8 +9633,11 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(listedIds(result)).toEqual(["terminal-mine"]);
       // Text body and structuredContent read one filtered value; a filter
       // reaching only one of them would leak the full listing to the other.
+      // The panel limit stays project-wide: it is what a launch is judged on,
+      // not a count of this caller's own rows.
       expect(structuredOf(result)).toEqual({
         terminals: [{ id: "terminal-mine", title: "our agent" }],
+        panelLimit: LISTING.result.result.panelLimit,
       });
       // The strip is half of one mechanism, not a tidy-up: the renderer
       // refuses any `owned` it receives, so forwarding it would fail the very

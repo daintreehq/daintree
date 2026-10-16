@@ -778,7 +778,10 @@ function filterTerminalListToOwned(
   owns: (terminalId: string) => boolean
 ): import("../../../shared/types/actions.js").ActionDispatchResult {
   if (!result.ok) return result;
-  const payload = result.result as { terminals?: unknown } | null | undefined;
+  const payload = result.result as
+    | { terminals?: unknown; panelLimit?: unknown }
+    | null
+    | undefined;
   if (!Array.isArray(payload?.terminals)) {
     return {
       ok: false,
@@ -792,10 +795,15 @@ function filterTerminalListToOwned(
   return {
     ok: true,
     result: {
+      // Rebuilt rather than spread so a field added to the listing later is
+      // reviewed here, not passed through unfiltered.
       terminals: payload.terminals.filter((row) => {
         const id = (row as { id?: unknown } | null | undefined)?.id;
         return typeof id === "string" && owns(id);
       }),
+      // The project-wide count the hard limit is judged on, never narrowed to
+      // this caller's own rows.
+      panelLimit: payload.panelLimit,
     },
   };
 }

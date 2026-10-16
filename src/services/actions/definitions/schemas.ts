@@ -446,6 +446,19 @@ export const WorktreeSummarySchema = z.object({
   setupState: WorktreeSetupStateSchema,
 });
 
+// The count is every panel holding a limit slot in this project view (trash,
+// dialog and non-persisted panels excluded), the number `addPanel` enforces —
+// not the length of a filtered listing.
+// A launch is refused once count reaches hardLimit. Plain numbers: `.int()`
+// would put safe-integer bounds on every field of the wire schema.
+export const PanelLimitSnapshotSchema = z.object({
+  count: z.number(),
+  softWarningLimit: z.number(),
+  confirmationLimit: z.number(),
+  hardLimit: z.number(),
+  tier: z.enum(["ok", "soft", "confirm", "hard"]),
+});
+
 export const TerminalSummarySchema = z.object({
   id: z.string(),
   kind: z.string(),

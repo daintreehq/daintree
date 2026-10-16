@@ -1,4 +1,4 @@
-import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionCallbacks, ActionRegistry, LaunchDecline } from "../actionTypes";
 import {
   requireExplicitWorktreeForAgentDispatch,
   requireWorktreeId,
@@ -15,6 +15,7 @@ import {
   TerminalSpawnSourceSchema,
   AddPanelFocusPolicySchema,
   AgentFacingSessionRecordSchema,
+  PanelLimitSnapshotSchema,
 } from "./schemas";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
@@ -472,7 +473,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       launched: z.boolean(),
       terminalId: z.string().nullable(),
       location: z.enum(["grid", "dock"]).nullable(),
-      spawnStatus: z.literal("missing-cli").nullable(),
+      spawnStatus: z
+        .enum(["missing-cli", "panel-limit", "already-launching", "spawn-failed", "unavailable"])
+        .nullable()
+        .describe(
+          "Null on a launch, else why not: panel-limit (see panelLimit), already-launching (retry), missing-cli (setup panel opened)."
+        ),
       worktreeId: z.string().nullable(),
       worktreePath: z.string().nullable(),
       branch: z.string().nullable(),
@@ -481,6 +487,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // a cwd in another repo still files under the resolved worktree (#13130).
       // Null when either path is unknown.
       cwdOutsideWorktree: z.boolean().nullable(),
+      // Nested nullable is safe: only a nullable root disables the output schema.
+      panelLimit: PanelLimitSnapshotSchema.nullable(),
       // Filled in by main when the call waits for the reply.
       reply: AwaitedReplySchema.nullable(),
     }),
@@ -596,6 +604,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         );
       }
       const handbackCode = handback === true ? mintHandbackCode() : undefined;
+      let decline: LaunchDecline | null = null;
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
         cwd,
@@ -619,24 +628,31 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         requestedId,
         force,
         name,
+        onDecline: (d) => {
+          decline = d;
+        },
       });
-      // Nothing to report: the launcher declined (Electron unavailable, a
-      // re-entrant launch of the same agent, or a caught spawn failure). Still
-      // an object so the MCP output schema stays satisfiable — `launched:false`
-      // is the honest discriminant, where a bare null read as a success with no
-      // terminal. Genuine rejections (unknown id, unresolvable worktree) throw
-      // out of the launcher and surface as ok:false instead.
+      // The launcher declined (the hard panel limit, a re-entrant launch of the
+      // same agent, a caught spawn failure, Electron unavailable) and says why.
+      // Still an object so the MCP output schema stays satisfiable —
+      // `launched:false` is the honest discriminant, where a bare null read as a
+      // success with no terminal. Genuine rejections (unknown id, unresolvable
+      // worktree) throw out of the launcher and surface as ok:false instead.
       if (!result) {
+        // Widened back: TS narrows a closure-assigned `let` to its initializer.
+        const declined = decline as LaunchDecline | null;
         return {
           launched: false,
           terminalId: null,
           location: null,
-          spawnStatus: null,
+          // A decline the launcher did not name is still a failure to start.
+          spawnStatus: declined?.reason ?? "spawn-failed",
           worktreeId: null,
           worktreePath: null,
           branch: null,
           cwd: null,
           cwdOutsideWorktree: null,
+          panelLimit: declined?.panelLimit ?? null,
           reply: null,
         };
       }
@@ -652,6 +668,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         branch: result.branch,
         cwd: result.cwd,
         cwdOutsideWorktree: result.cwdOutsideWorktree,
+        panelLimit: null,
         reply: null,
       };
     },

@@ -663,3 +663,65 @@ describe("construction geometry for restored panes (#11718)", () => {
     expect(panel.rows).toBe(24);
   });
 });
+
+describe("addPanel — names a hard-limit refusal to its caller (#13382)", () => {
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    spawn.mockReset();
+    spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
+  });
+
+  it("reports the count and limits a refusal was judged on, and still returns null", async () => {
+    usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
+    await usePanelStore.getState().addPanel({ kind: "terminal", requestedId: "a", cwd: "/repo" });
+    await usePanelStore.getState().addPanel({ kind: "terminal", requestedId: "b", cwd: "/repo" });
+    usePanelLimitStore.setState({ softWarningLimit: 1, confirmationLimit: 2, hardLimit: 2 });
+    const onLimitRefused = vi.fn();
+
+    await expect(
+      usePanelStore
+        .getState()
+        .addPanel({ kind: "terminal", requestedId: "c", cwd: "/repo" }, { onLimitRefused })
+    ).resolves.toBeNull();
+
+    expect(onLimitRefused).toHaveBeenCalledExactlyOnceWith({
+      count: 2,
+      softWarningLimit: 1,
+      confirmationLimit: 2,
+      hardLimit: 2,
+      tier: "hard",
+    });
+    expect(usePanelStore.getState().panelsById["c"]).toBeUndefined();
+  });
+
+  it("stays silent for an add the confirm band lets through", async () => {
+    usePanelLimitStore.setState({ softWarningLimit: 1, confirmationLimit: 1, hardLimit: 5 });
+    await usePanelStore.getState().addPanel({ kind: "terminal", requestedId: "a", cwd: "/repo" });
+    const onLimitRefused = vi.fn();
+
+    await expect(
+      usePanelStore
+        .getState()
+        .addPanel({ kind: "terminal", requestedId: "b", cwd: "/repo" }, { onLimitRefused })
+    ).resolves.toBe("b");
+    expect(onLimitRefused).not.toHaveBeenCalled();
+  });
+
+  it("stays silent for a bypassed add at the limit", async () => {
+    usePanelLimitStore.setState({ softWarningLimit: 1, confirmationLimit: 1, hardLimit: 1 });
+    await usePanelStore
+      .getState()
+      .addPanel({ kind: "terminal", requestedId: "a", cwd: "/repo", bypassLimits: true });
+    const onLimitRefused = vi.fn();
+
+    await expect(
+      usePanelStore
+        .getState()
+        .addPanel(
+          { kind: "terminal", requestedId: "b", cwd: "/repo", bypassLimits: true },
+          { onLimitRefused }
+        )
+    ).resolves.toBe("b");
+    expect(onLimitRefused).not.toHaveBeenCalled();
+  });
+});
