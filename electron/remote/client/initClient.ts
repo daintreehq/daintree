@@ -616,7 +616,7 @@ function transportFor(
       return new WslTransport({
         distro: supported.distro,
         run: defaultCommandRunner,
-        keepalive: (distro) => wslKeepalive.hold(distro),
+        keepalive: (distro) => wslKeepalive.want(distro),
         ensureRunning,
         runtimeDirNames: WSL_RUNTIME_DIR_NAMES,
       });

@@ -12,7 +12,9 @@ import type { SystemOpenInEditorFallback } from "../../../shared/types/ipc/syste
 import type { ScratchSwitchPayload } from "../../../shared/types/ipc/scratch.js";
 import type { Scratch } from "../../../shared/types/scratch.js";
 import {
+  isValidWslDistroName,
   toHostScopedKey,
+  wslDistroOf,
   type HostDescriptor,
   type HostId,
 } from "../../../shared/types/remoteHosts.js";

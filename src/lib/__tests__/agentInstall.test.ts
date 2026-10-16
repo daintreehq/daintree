@@ -56,6 +56,21 @@ describe("agentInstall", () => {
       expect(detectOS()).toBe("generic");
     });
 
+    it("names the host's OS in a remote window, whatever this machine is", async () => {
+      // A Windows Shell showing a project in a WSL distro: the tools go on Linux.
+      stubNavigator("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "Win32");
+      vi.doMock("@/hooks/useHostPlatform", () => ({
+        isRemoteWindow: () => true,
+        getHostPlatform: () => "linux",
+      }));
+      try {
+        const { detectOS } = await import("../agentInstall");
+        expect(detectOS()).toBe("linux");
+      } finally {
+        vi.doUnmock("@/hooks/useHostPlatform");
+      }
+    });
+
     it("should return generic when navigator is undefined", async () => {
       Object.defineProperty(globalThis, "navigator", {
         value: undefined,

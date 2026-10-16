@@ -74,7 +74,7 @@ export interface HostSetupDeps {
    */
   isRetiring?(connection: HostConnection): boolean;
   /** Holds WSL distros up between setup's commands; released when a host is forgotten. */
-  wslKeepalive?: Pick<WslKeepalive, "hold" | "release">;
+  wslKeepalive?: Pick<WslKeepalive, "touch" | "release">;
 }
 
 /** Per-machine cache key: an ssh host keeps the key of its target alone. */
@@ -401,7 +401,7 @@ export class HostSetupService {
         return createWslCommandChannel({
           distro: supported.distro,
           run: this.deps.run,
-          keepalive: keepalive ? (distro) => keepalive.hold(distro) : undefined,
+          keepalive: keepalive ? (distro) => keepalive.touch(distro) : undefined,
         });
       }
     }

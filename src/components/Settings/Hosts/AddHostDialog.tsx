@@ -725,6 +725,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       loading: busy,
     };
   } else if (step === "check") {
+    // Host mode runs as a systemd user service, which has nothing to run under without it.
+    const noSystemd = probe?.platform === "linux" && probe.advice.systemd === false;
     const localSuggestion =
       // Only while adding: an existing host keeps its saved target, which a
       // reconnect after install or Host mode would still dial.
@@ -776,6 +778,28 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
               }
             />
             <Line label="Host mode" value={probe.hostModeListening ? "Listening" : "Off"} />
+            {noSystemd && (
+              <div className="mt-3 space-y-2" data-testid="add-host-no-systemd">
+                <p role="alert" className="text-xs text-status-error">
+                  {viaWsl
+                    ? `${target} runs without systemd, which Daintree's Host mode needs.`
+                    : "This machine runs without systemd, which Daintree's Host mode needs on Linux."}
+                </p>
+                {viaWsl && (
+                  <>
+                    <p className="text-xs text-text-secondary">
+                      Turn it on in that distribution&apos;s <code>/etc/wsl.conf</code> (a{" "}
+                      <code>[boot]</code> section with <code>systemd=true</code>), then restart it
+                      and check again.
+                    </p>
+                    <HostCommand
+                      label="Restart the distribution"
+                      command={`wsl --terminate ${target}`}
+                    />
+                  </>
+                )}
+              </div>
+            )}
           </>
         )}
         {!probe.reachable &&
@@ -792,7 +816,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           ))}
       </div>
     );
-    if (probe && !probe.reachable) {
+    if (probe && (!probe.reachable || noSystemd)) {
       primary = { label: "Check again", onClick: () => check(), disabled: busy, loading: busy };
     } else if (probe?.matchesClient === true) {
       primary = { label: "Continue", onClick: () => toEnable(probe), disabled: busy };

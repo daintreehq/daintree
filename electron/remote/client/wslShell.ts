@@ -14,7 +14,7 @@ import { WSL_ENV, withWslDiagnostics, wslExecArgs, wslExecutable } from "./wslCo
 export function createWslCommandChannel(params: {
   distro: string;
   run: CommandRunner;
-  /** Holds the distro up for as long as this Shell wants it (see WslKeepalive). */
+  /** Holds the distro up for a while after each command (see WslKeepalive.touch). */
   keepalive?: (distro: string) => void;
   wslPath?: string;
 }): HostCommandChannel {
@@ -22,12 +22,17 @@ export function createWslCommandChannel(params: {
   const wsl = params.wslPath ?? wslExecutable();
   const exec = async (script: string, options?: CommandOptions, input?: CommandInput) => {
     params.keepalive?.(distro);
-    const result = await run(wsl, wslExecArgs(distro, ["/bin/sh", "-c", script]), {
-      ...options,
-      ...(input && { input }),
-      env: { ...options?.env, ...WSL_ENV },
-    });
-    return withWslDiagnostics(result);
+    try {
+      const result = await run(wsl, wslExecArgs(distro, ["/bin/sh", "-c", script]), {
+        ...options,
+        ...(input && { input }),
+        env: { ...options?.env, ...WSL_ENV },
+      });
+      return withWslDiagnostics(result);
+    } finally {
+      // From the end too: a long command (a download) can outlast the hold it started with.
+      params.keepalive?.(distro);
+    }
   };
   return {
     exec: (script, options) => exec(script, options),

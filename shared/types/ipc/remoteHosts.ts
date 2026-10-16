@@ -315,6 +315,12 @@ export interface HostAdvice {
    * Without it an AppImage host runs extracted. Null on macOS.
    */
   fuse: boolean | null;
+  /**
+   * Linux: whether systemd is the init system (PID 1), which Host mode's user
+   * service needs. A WSL distro runs without it unless its /etc/wsl.conf
+   * turns it on. Null on macOS, or when it wasn't seen.
+   */
+  systemd?: boolean | null;
 }
 
 export type LinuxPackagePreference = "deb" | "appimage";
