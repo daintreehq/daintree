@@ -71,11 +71,15 @@ const STEPS: Array<{ id: Step; label: string }> = [
   { id: "advise", label: "Advise" },
 ];
 
-/** Machines not yet added first, then by name as people number them (studio-2 before studio-10). */
+/**
+ * Machines not yet added first, then WSL's default distro, then by name as
+ * people number them (studio-2 before studio-10).
+ */
 function sortDiscovered(found: DiscoveredHost[]): DiscoveredHost[] {
   return [...found].sort(
     (a, b) =>
       Number(a.alreadyAdded) - Number(b.alreadyAdded) ||
+      Number(b.wsl?.isDefault === true) - Number(a.wsl?.isDefault === true) ||
       a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })
   );
 }

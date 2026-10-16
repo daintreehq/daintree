@@ -15,10 +15,13 @@ vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: React.ReactNode) => children };
 });
+// How this machine reaches hosts: ssh, or (a Windows Shell) WSL distros.
+const connectionKind = vi.hoisted(() => ({ value: "ssh" as "ssh" | "wsl" }));
 vi.mock("@/lib/remoteHosts", () => ({
   isRemoteShellSupported: () => supported.value,
   isRemoteHostSupported: () => supported.value,
   isEitherRemoteRoleSupported: () => supported.value,
+  remoteConnectionKind: () => connectionKind.value,
 }));
 vi.mock("@/lib/platform", async () => {
   const actual = await vi.importActual<typeof import("@/lib/platform")>("@/lib/platform");
@@ -85,6 +88,7 @@ beforeEach(() => {
   _resetDriveLeaseBannerForTesting();
   useHostConnectionStore.getState().reset();
   supported.value = true;
+  connectionKind.value = "ssh";
   mac.value = true;
   dispatch.mockClear();
   has.mockReturnValue(false);
@@ -207,6 +211,25 @@ describe("HostChip", () => {
       expect(chip.getAttribute("data-host-location")).toBe("remote");
       expect(chip.className).not.toMatch(/status-/);
       expect(chip.className).not.toMatch(/accent/);
+    } finally {
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+    }
+  });
+
+  it("says a Windows Shell's remote window is in a WSL distro", async () => {
+    connectionKind.value = "wsl";
+    mac.value = false;
+    window.__DAINTREE_HOST_ID__ = { id: "h1" };
+    try {
+      useHostConnectionStore.setState({
+        hostId: "h1",
+        hostName: "Ubuntu",
+        connection: { status: "unreachable", lastSeenAt: 1, detail: null },
+      });
+      const { container } = await renderWithHosts([host("h1", "Ubuntu")]);
+      const chip = container.querySelector<HTMLElement>("[data-testid='host-chip']")!;
+      expect(chip.getAttribute("aria-label")).toBe("Working on WSL · Ubuntu, unreachable");
+      expect(chip.textContent).not.toContain("SSH");
     } finally {
       delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
     }

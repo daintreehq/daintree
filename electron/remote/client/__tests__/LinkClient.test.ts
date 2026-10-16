@@ -6,6 +6,7 @@ import { logBuffer } from "../../../services/LogBuffer.js";
 import {
   HostModeOffError,
   SshAccessError,
+  UnusableConnectionError,
   TransportError,
   createDirectTransport,
   type LinkTransport,
@@ -202,6 +203,34 @@ describe("LinkClient backoff", () => {
     await waitFor(() => transport.opens === 2);
     await waitFor(() => client!.getState().status === "unreachable");
     expect(transport.opens).toBe(2);
+  });
+
+  it("stops retrying a host this machine can't reach as set up (WSL missing, no such distro)", async () => {
+    const transport = {
+      opens: 0,
+      async open(): Promise<never> {
+        transport.opens++;
+        throw new UnusableConnectionError(
+          "Ubuntu isn't installed in WSL",
+          "There is no distribution with the supplied name."
+        );
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "win32" },
+      backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+      random: () => 0,
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({
+      retryAt: null,
+      detail: "There is no distribution with the supplied name.",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(transport.opens).toBe(1);
   });
 
   it("applies jitter below the base delay", async () => {

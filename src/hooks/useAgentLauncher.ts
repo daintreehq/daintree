@@ -15,7 +15,6 @@ import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
-import { isMac, isWindows } from "@/lib/platform";
 import { isAbsolute, isPathInside, pathComparisonKey } from "@shared/utils/path";
 import { readViewDevServerCommand } from "@/utils/devServerCommand";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -52,7 +51,13 @@ import {
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
 import { resolveAgentLaunchKind, sanitizeTerminalName } from "@/utils/agentLaunchValidation";
-import { hostShellDialect, isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
+import {
+  hostShellDialect,
+  isHostMac,
+  isHostWindows,
+  isRemoteWindow,
+  resolveHostTmpDir,
+} from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
@@ -427,7 +432,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         // Resolved once, spread into every success return so a caller learns
         // where the launch landed without re-deriving it.
         const launchIdentity = buildLaunchIdentity(effectiveWorktreeId, targetWorktree, cwd, {
-          caseInsensitive: isMac() || isWindows(),
+          // The project's host decides: a Linux host's paths are case-sensitive under any Shell.
+          caseInsensitive: isHostMac() || isHostWindows(),
         });
 
         // Handle browser pane specially

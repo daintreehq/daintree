@@ -74,7 +74,7 @@ import { requireSupportedConnection } from "./connection.js";
 import { SshTransport } from "./sshTransport.js";
 import { WslKeepalive } from "./wslKeepalive.js";
 import { WslTransport } from "./wslTransport.js";
-import { TransportError, type LinkTransport } from "./transport.js";
+import { TransportError, UnusableConnectionError, type LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
 import {
   prepareHostProjectView,
@@ -608,7 +608,18 @@ function transportFor(
   wslKeepalive: WslKeepalive,
   ensureRunning?: (signal: AbortSignal) => Promise<boolean>
 ): LinkTransport {
-  const supported = requireSupportedConnection(connection);
+  let supported: HostConnection;
+  try {
+    supported = requireSupportedConnection(connection);
+  } catch (error) {
+    // Reported as the link's own failure, so every caller sees why without a throw to catch.
+    const reason = isAppError(error)
+      ? (error.userMessage ?? error.message)
+      : formatErrorMessage(error, "This host can't be reached from here");
+    return {
+      open: () => Promise.reject(new UnusableConnectionError(reason, reason)),
+    };
+  }
   switch (supported.kind) {
     case "ssh":
       return new SshTransport({ target: supported.target, clientDir, ensureRunning });

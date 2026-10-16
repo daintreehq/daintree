@@ -107,7 +107,8 @@ export function hostScopedKey(id: string): string {
  * other names match `fileManagerRevealLabel`, asked of the host's platform.
  */
 export function hostFileManagerRevealLabel(): string {
-  if (isRemoteWindow()) return "Copy host path";
+  // A WSL distro's files are on this PC: Explorer shows them through WSL's share.
+  if (isRemoteWindow()) return snapshot().connection?.kind === "wsl" ? "Show in Explorer" : "Copy host path";
   if (isHostMac()) return "Show in Finder";
   if (isHostWindows()) return "Show in Explorer";
   return "Show in file manager";

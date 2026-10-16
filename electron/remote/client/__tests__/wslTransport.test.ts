@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { formatAttachPreamble } from "../../host/attachStdio.js";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import type { StreamCommandChild } from "../commandStreamTransport.js";
-import { HostModeOffError, TransportError } from "../transport.js";
+import { HostModeOffError, TransportError, UnusableConnectionError } from "../transport.js";
 import {
   WslTransport,
   buildWslAttachArgv,
@@ -168,8 +168,9 @@ describe("WslTransport", () => {
       { ensureRunning }
     );
     const error = await transport.open(signal()).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(TransportError);
-    expect((error as TransportError).message).toBe("Couldn't reach Ubuntu-24.04 through WSL");
+    // Nothing a retry does differently changes this: the link waits for a Connect.
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect((error as TransportError).message).toBe("Ubuntu-24.04 isn't installed in WSL");
     expect((error as TransportError).detail).toContain("WSL_E_DISTRO_NOT_FOUND");
     expect(ensureRunning).not.toHaveBeenCalled();
     expect(spawns).toEqual([]);
@@ -177,10 +178,22 @@ describe("WslTransport", () => {
 
   it("says WSL is missing when wsl.exe can't be started", async () => {
     const { transport } = setup([result({ code: null, spawnError: "spawn wsl.exe ENOENT" })]);
-    await expect(transport.open(signal())).rejects.toMatchObject({
+    const error = await transport.open(signal()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnusableConnectionError);
+    expect(error).toMatchObject({
       message: "WSL isn't available on this PC",
       detail: "spawn wsl.exe ENOENT",
     });
+  });
+
+  it("retries other wsl.exe failures: a distro that failed to start may start next time", async () => {
+    const { transport } = setup([
+      result({ code: 4294967295, stdout: "The operation timed out.\nError code: Wsl/Service/0x8007045b\n" }),
+    ]);
+    const error = await transport.open(signal()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).not.toBeInstanceOf(UnusableConnectionError);
+    expect((error as TransportError).message).toBe("Couldn't reach Ubuntu-24.04 through WSL");
   });
 
   it("refuses a launch command it won't run, and a discovery file that isn't one", async () => {

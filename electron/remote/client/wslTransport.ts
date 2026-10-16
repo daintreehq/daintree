@@ -13,10 +13,17 @@ import { safeLaunchCommand } from "./sshTransport.js";
 import {
   HostModeOffError,
   TransportError,
+  UnusableConnectionError,
   type LinkTransport,
   type LinkTransportConnection,
 } from "./transport.js";
-import { WSL_ENV, withWslDiagnostics, wslExecArgs, wslExecutable } from "./wslCommand.js";
+import {
+  WSL_ENV,
+  isWslServiceFailure,
+  withWslDiagnostics,
+  wslExecArgs,
+  wslExecutable,
+} from "./wslCommand.js";
 
 /**
  * A link to a Linux Host inside a WSL distro on this Windows machine (#12830).
@@ -57,6 +64,8 @@ const DISCOVERY_TIMEOUT_MS = 60_000;
 const PREAMBLE_TIMEOUT_MS = 60_000;
 /** The find script's exit code when no live Host is listening. */
 const NO_HOST_EXIT = 3;
+/** wsl.exe's error code for a distro name it doesn't know; its message around it is translated. */
+const WSL_DISTRO_NOT_FOUND = /WSL_E_DISTRO_NOT_FOUND/;
 
 const RUNTIME_DIR_NAME = /^[A-Za-z0-9._-]+$/;
 
@@ -142,7 +151,7 @@ export class WslTransport implements LinkTransport {
     );
     if (signal.aborted) throw new TransportError("Connection cancelled", null);
     if (result.spawnError) {
-      throw new TransportError("WSL isn't available on this PC", result.spawnError);
+      throw new UnusableConnectionError("WSL isn't available on this PC", result.spawnError);
     }
     if (result.timedOut) {
       throw new TransportError(`${distro} didn't answer in time`, failureDetail(result, "wsl.exe"));
@@ -151,10 +160,12 @@ export class WslTransport implements LinkTransport {
       throw new HostModeOffError(`Daintree isn't running in Host mode in ${distro}.`);
     }
     if (result.code !== 0) {
-      throw new TransportError(
-        `Couldn't reach ${distro} through WSL`,
-        failureDetail(result, `wsl.exe exited with ${result.code}`)
-      );
+      const detail = failureDetail(result, `wsl.exe exited with ${result.code}`);
+      // wsl.exe's own code for a name it doesn't know: only installing or renaming one changes it.
+      if (isWslServiceFailure(result.code) && WSL_DISTRO_NOT_FOUND.test(detail)) {
+        throw new UnusableConnectionError(`${distro} isn't installed in WSL`, detail);
+      }
+      throw new TransportError(`Couldn't reach ${distro} through WSL`, detail);
     }
     const info = parseDiscoveryInfo(result.stdout);
     if (!info) throw new TransportError("Host discovery file is not valid", null);

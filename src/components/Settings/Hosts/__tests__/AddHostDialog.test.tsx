@@ -11,6 +11,13 @@ import type { HostListEntry } from "@shared/types/remoteHosts";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { AddHostDialog } from "../AddHostDialog";
 
+// Which kind of host this machine adds: ssh, or (a Windows Shell) WSL distros.
+const connectionKind = vi.hoisted(() => ({ value: "ssh" as "ssh" | "wsl" }));
+vi.mock("@/lib/remoteHosts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/remoteHosts")>()),
+  remoteConnectionKind: () => connectionKind.value,
+}));
+
 function probeResult(overrides: Partial<HostProbeResult> = {}): HostProbeResult {
   return {
     connection: { kind: "ssh", target: "greg@studio" },
@@ -134,6 +141,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   Reflect.deleteProperty(window, "electron");
+  connectionKind.value = "ssh";
 });
 
 async function walkToAddHost() {
@@ -694,5 +702,92 @@ describe("AddHostDialog", () => {
     } finally {
       platform.mockRestore();
     }
+  });
+});
+
+describe("AddHostDialog on Windows (WSL distros)", () => {
+  const distro = (name: string, version: number, isDefault = false, alreadyAdded = false) => ({
+    name,
+    connection: { kind: "wsl" as const, distro: name },
+    source: "wsl" as const,
+    platform: "linux" as const,
+    online: true,
+    alreadyAdded,
+    wsl: { version, isDefault },
+  });
+
+  beforeEach(() => {
+    connectionKind.value = "wsl";
+  });
+
+  it("lists this PC's distros, default first, with no ssh field, and checks the one picked", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce([
+      distro("archlinux", 2),
+      distro("Legacy", 1),
+      distro("Ubuntu-24.04", 2, true),
+      distro("Debian", 2, false, true),
+    ]);
+    remoteHosts.probe!.mockResolvedValueOnce(
+      probeResult({ connection: { kind: "wsl", distro: "Ubuntu-24.04" }, platform: "linux" })
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    const list = await screen.findByTestId("add-host-wsl-distros");
+    const names = [...list.querySelectorAll("li")].map(
+      (row) => row.querySelector(".font-medium")?.textContent
+    );
+    expect(names).toEqual(["Ubuntu-24.04", "archlinux", "Legacy", "Debian"]);
+    expect(screen.queryByPlaceholderText("user@devbox.local")).toBeNull();
+    expect(screen.getByText("WSL 1 can't run Daintree")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: /Legacy/ }) as HTMLButtonElement).disabled
+    ).toBe(true);
+    expect((screen.getByRole("button", { name: /Debian/ }) as HTMLButtonElement).disabled).toBe(
+      true
+    );
+
+    const check = () => screen.getByRole("button", { name: "Check distribution" });
+    expect(check().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: /Ubuntu-24\.04/ }));
+    expect(check().getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(check());
+    await waitFor(() =>
+      expect(remoteHosts.probe).toHaveBeenCalledWith({
+        connection: { kind: "wsl", distro: "Ubuntu-24.04" },
+      })
+    );
+    expect(await screen.findByText("Starts")).toBeTruthy();
+  });
+
+  it("stops at the check for a distro without systemd, and says how to turn it on", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce([distro("FedoraLinux-44", 2)]);
+    remoteHosts.probe!.mockResolvedValue(
+      probeResult({
+        connection: { kind: "wsl", distro: "FedoraLinux-44" },
+        platform: "linux",
+        install: null,
+        hostModeListening: false,
+        matchesClient: false,
+        advice: { ...probeResult().advice, systemd: false },
+      })
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /FedoraLinux-44/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Check distribution" }));
+    expect(
+      await screen.findByText("FedoraLinux-44 runs without systemd, which Daintree's Host mode needs.")
+    ).toBeTruthy();
+    expect(screen.getByText("wsl --terminate FedoraLinux-44")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Plan install" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(remoteHosts.probe).toHaveBeenCalledTimes(2));
+  });
+
+  it("says how to install a distro when there is none, and looks again", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce([]);
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    expect(await screen.findByText(/No WSL distributions are installed/)).toBeTruthy();
+    remoteHosts.discover!.mockResolvedValueOnce([distro("Ubuntu", 2, true)]);
+    fireEvent.click(screen.getByRole("button", { name: "Look again" }));
+    expect(await screen.findByRole("button", { name: /Ubuntu/ })).toBeTruthy();
   });
 });
