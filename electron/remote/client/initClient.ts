@@ -358,10 +358,12 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       }
       return windowOpener();
     },
-    openRemoteProject(windowId, hostId, projectId, projectPath) {
+    openRemoteProject(windowId, hostId, projectId, projectPath, focusIntent) {
       return inTurn(windowId, async () => {
         const pvm = managerFor(windowId);
         const from = pvm.getActiveProjectId();
+        // Before the swap, as a local switch records it: the view consumes it on activation.
+        if (focusIntent) pvm.setPendingFocusIntent(toHostScopedKey(hostId, projectId), focusIntent);
         const { view, isNew } = await pvm.switchToHostProject(hostId, projectId, projectPath);
         recordWindowSwitch(windowId, from, toHostScopedKey(hostId, projectId));
         // The title names the place: "<project> — <host>".
@@ -370,7 +372,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         if (wc && !wc.isDestroyed()) hooks.onRemoteViewActivated?.(windowId, wc, isNew);
       });
     },
-    async openLocalProject(windowId, projectId) {
+    async openLocalProject(windowId, projectId, focusIntent) {
       // A scratch is a workspace a view shows like a project, with no project row.
       const scratch = isScratchWorkspaceId(projectId)
         ? scratchStore.getScratchById(projectId)
@@ -383,6 +385,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       await inTurn(windowId, async () => {
         const pvm = managerFor(windowId);
         const from = pvm.getActiveProjectId();
+        if (focusIntent) pvm.setPendingFocusIntent(workspace.id, focusIntent);
         const { view, isNew } = await pvm.switchTo(workspace.id, workspace.path);
         recordWindowSwitch(windowId, from, workspace.id);
         const registry = getWindowRegistry();
@@ -457,6 +460,19 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       // Focusing the window doesn't hand keyboard focus to its project view.
       const wc = ctx.services.projectViewManager?.getActiveView()?.webContents;
       if (wc && !wc.isDestroyed()) wc.focus();
+    },
+    focusInWindow(windowId, hostId, projectId, focusIntent) {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      if (!pvm) return;
+      const key = isLocalHostId(hostId) ? projectId : toHostScopedKey(hostId, projectId);
+      // On screen there and done arriving: the view hears it now. Otherwise the
+      // switch bringing it there delivers it, and any other switch discards it.
+      const wc = pvm.getActiveProjectId() === key ? pvm.getActiveView()?.webContents : undefined;
+      if (wc && !wc.isDestroyed() && pvm.getOutgoingBridgeProjectId() === null) {
+        wc.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, focusIntent);
+        return;
+      }
+      pvm.setPendingFocusIntent(key, focusIntent);
     },
     showsHost(windowId, hostId) {
       const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;

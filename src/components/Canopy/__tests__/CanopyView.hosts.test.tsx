@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   release: vi.fn(async () => {}),
   dispatch: vi.fn(async () => ({ ok: true })),
   retryHostProjects: vi.fn(),
+  switchWindowHost: vi.fn(),
 }));
 
 vi.mock("react-dom", async () => {
@@ -28,6 +29,7 @@ vi.mock("@/lib/remoteHosts", () => ({
 }));
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => ({ hosts: state.hosts, localSummary: state.localSummary }),
+  getHostListSnapshot: () => ({ hosts: state.hosts, localSummary: state.localSummary }),
   hasRemoteHosts: (list: { hosts: HostListEntry[] }) => list.hosts.length > 0,
 }));
 vi.mock("@/components/Hosts/hostProjects", () => ({
@@ -61,6 +63,7 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanopyView } from "../CanopyView";
 import { useCanopyStore } from "@/store/canopyStore";
+import { notify } from "@/lib/notify";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
@@ -215,13 +218,18 @@ function installElectron() {
     runBranch: vi.fn(async () => "main"),
     answer: vi.fn(async () => {}),
     trash: vi.fn(async () => null),
+    untrash: vi.fn(async () => {}),
     rename: vi.fn(async () => {}),
     refresh: vi.fn(async () => {}),
     setMode: vi.fn(async () => canopySnapshot()),
     captureBackdrop: vi.fn(async () => null),
   };
   Object.defineProperty(window, "electron", {
-    value: { canopy, system: { openExternal: vi.fn() } },
+    value: {
+      canopy,
+      system: { openExternal: vi.fn() },
+      remoteHosts: { switchWindowHost: state.switchWindowHost },
+    },
     configurable: true,
     writable: true,
   });
@@ -263,7 +271,13 @@ beforeEach(() => {
     if (channel === "canopy:set-active") return remoteCanopy;
     if (channel === "fleet:get-snapshot") return remoteFleet;
     if (channel === "canopy:run-branch") return "remote-branch";
+    if (channel === "canopy:trash") return 7;
     return null;
+  });
+  state.switchWindowHost.mockResolvedValue({
+    outcome: "switched",
+    hostId: "studio",
+    projectId: "p1",
   });
   useProjectStore.setState({
     projects: [{ id: "p1", path: "/repo", name: "local-app", emoji: "🌳", lastOpened: NOW }],
@@ -356,7 +370,7 @@ describe("the Canopy host picker", () => {
     expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();
   });
 
-  it("shows another host's run live and answers it there, going nowhere on this host", async () => {
+  it("shows another host's run live and answers it there", async () => {
     const own = installElectron();
     remoteCanopy = canopySnapshot({ cards: [approvalCard("remote-run")] });
     useCanopyStore.setState({ hostId: "studio" });
@@ -365,19 +379,7 @@ describe("the Canopy host picker", () => {
     const row = document.getElementById("canopy-card-remote-run")!;
     // Its live terminal, read from that host.
     expect(document.querySelector('[data-canopy-terminal][data-run="remote-run"]')).not.toBeNull();
-    // Going to it, renaming it and trashing it would act on this window's host.
-    expect(screen.queryByRole("button", { name: "Go to terminal" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Trash terminal" })).toBeNull();
-
     act(() => row.focus());
-    fireEvent.keyDown(row, { key: "Enter" });
-    fireEvent.keyDown(row, { key: "F2" });
-    fireEvent.keyDown(row, { key: "Backspace", metaKey: true });
-    fireEvent.doubleClick(row);
-    await settle();
-    expect(state.dispatch).not.toHaveBeenCalled();
-    expect(own.trash).not.toHaveBeenCalled();
-    expect(own.rename).not.toHaveBeenCalled();
 
     await act(async () => {
       fireEvent.keyDown(row, { key: "1" });
@@ -401,6 +403,135 @@ describe("the Canopy host picker", () => {
       expect.objectContaining({ spawnedAt: NOW - 3_600_000 })
     );
     expect(own.archive).not.toHaveBeenCalled();
+  });
+
+  it("goes to another host's run by moving the window to its project, focusing its pane there", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+    });
+    await settle();
+    expect(state.switchWindowHost).toHaveBeenCalledWith({
+      hostId: "studio",
+      newWindow: false,
+      projectId: "p1",
+      focusIntent: { intent: "focus-panel", panelId: "remote-run" },
+    });
+    // Never this host's own navigation: the run's terminal isn't here.
+    expect(state.dispatch).not.toHaveBeenCalled();
+    // Closed only once the switch landed.
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+  });
+
+  it("opens another host's run in a new window on a modified click or Enter", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    const row = document.getElementById("canopy-card-remote-run")!;
+    act(() => row.focus());
+    // Both modifiers, so the platform's own new-window key is among them.
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "Enter", metaKey: true, ctrlKey: true });
+    });
+    await settle();
+    expect(state.switchWindowHost).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "studio", newWindow: true, projectId: "p1" })
+    );
+  });
+
+  it("stays open when going to another host's run didn't move anything", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+
+    state.switchWindowHost.mockResolvedValueOnce({ outcome: "superseded", hostId: "studio" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+    });
+    await settle();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+
+    vi.mocked(notify).mockClear();
+    state.switchWindowHost.mockRejectedValueOnce(new Error("The host went away"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+    });
+    await settle();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    // The host switch's own failure, with the same switch to try again.
+    const toast = vi.mocked(notify).mock.calls.at(-1)![0];
+    expect(toast.title).toBe("Couldn't switch to studio-01");
+    state.switchWindowHost.mockClear();
+    await act(async () => {
+      toast.actions?.find((action) => action.label === "Retry")?.onClick();
+    });
+    expect(state.switchWindowHost).toHaveBeenCalledWith({
+      hostId: "studio",
+      newWindow: false,
+      projectId: "p1",
+      focusIntent: { intent: "focus-panel", panelId: "remote-run" },
+    });
+  });
+
+  it("renames another host's run on that host", async () => {
+    const own = installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    const row = document.getElementById("canopy-card-remote-run")!;
+    act(() => row.focus());
+    fireEvent.keyDown(row, { key: "F2" });
+    await settle();
+    const field = document.querySelector<HTMLInputElement>(
+      "[data-canopy-detail] [data-canopy-rename] input"
+    )!;
+    fireEvent.change(field, { target: { value: "auth fix" } });
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(state.invoke).toHaveBeenCalledWith(
+      "studio",
+      "canopy:rename",
+      "remote-run",
+      { spawnedAt: NOW - 3_600_000 },
+      "auth fix"
+    );
+    expect(own.rename).not.toHaveBeenCalled();
+  });
+
+  it("trashes another host's run there, and takes it back there after the picker moved", async () => {
+    const own = installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    const row = document.getElementById("canopy-card-remote-run")!;
+    act(() => row.focus());
+    fireEvent.keyDown(row, { key: "Backspace", metaKey: true, ctrlKey: true });
+    vi.mocked(notify).mockClear();
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "Backspace", metaKey: true, ctrlKey: true });
+    });
+    await settle();
+    expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:trash", "remote-run", {
+      spawnedAt: NOW - 3_600_000,
+    });
+    expect(own.trash).not.toHaveBeenCalled();
+    const toast = vi.mocked(notify).mock.calls.at(-1)![0];
+    expect(toast.title).toBe("Terminal trashed");
+
+    // The receipt is the trashing host's: Undo goes back there, wherever the panel is now.
+    act(() => useCanopyStore.getState().setHostId(null));
+    await settle();
+    await act(async () => {
+      toast.actions?.find((action) => action.label === "Undo")?.onClick();
+    });
+    expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:untrash", 7);
+    expect(own.untrash).not.toHaveBeenCalled();
   });
 
   it("presses no answer into another host's run while the link to it is down", async () => {

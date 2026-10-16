@@ -130,6 +130,8 @@ const pvmState = vi.hoisted(() => ({
   views: new Map<string, { webContents: unknown }>(),
   /** Every key the window was asked to show, in order, before it landed. */
   requested: [] as string[],
+  /** Each focus intent parked, with how many switches had been asked for when it was. */
+  parked: [] as Array<{ key: string; intent: unknown; before: number }>,
   create: null as null | ((key: string) => { webContents: unknown }),
 }));
 const fakePvm = vi.hoisted(() => {
@@ -163,7 +165,10 @@ const fakePvm = vi.hoisted(() => {
     },
     getActiveProjectId: () => pvmState.active,
     getActiveView: () => (pvmState.active ? (pvmState.views.get(pvmState.active) ?? null) : null),
-    setPendingFocusIntent: () => undefined,
+    getOutgoingBridgeProjectId: () => null,
+    setPendingFocusIntent: (key: string, intent: unknown) => {
+      pvmState.parked.push({ key, intent, before: pvmState.requested.length });
+    },
   };
 });
 
@@ -237,6 +242,7 @@ afterEach(async () => {
   pvmState.active = null;
   pvmState.views.clear();
   pvmState.requested.length = 0;
+  pvmState.parked.length = 0;
   pvmState.create = null;
   mcp.dispatched.length = 0;
   scratches.clear();
@@ -378,6 +384,33 @@ describe("switching hosts (integration harness)", () => {
         REMOTE_KEY,
         "proj-2",
       ]);
+    },
+    TEST_TIMEOUT_MS
+  );
+
+  it(
+    "parks the pane to focus on the view a switch opens, keyed as that view is, before it opens",
+    async () => {
+      const { local } = await startWindowOnLocalProject();
+      const client = harnessState.client!;
+      const focusIntent = { intent: "focus-panel", panelId: "term-1" } as const;
+      await client.client.switchWindowHost(from(local), {
+        hostId: HOST_ID,
+        newWindow: false,
+        projectId: "proj-1",
+        focusIntent,
+      });
+      expect(pvmState.active).toBe(REMOTE_KEY);
+      expect(pvmState.parked).toEqual([{ key: REMOTE_KEY, intent: focusIntent, before: 0 }]);
+
+      await client.client.switchWindowHost(from(activeView()), {
+        hostId: "local",
+        newWindow: false,
+        projectId: "proj-2",
+        focusIntent,
+      });
+      expect(pvmState.active).toBe("proj-2");
+      expect(pvmState.parked.at(-1)).toEqual({ key: "proj-2", intent: focusIntent, before: 1 });
     },
     TEST_TIMEOUT_MS
   );

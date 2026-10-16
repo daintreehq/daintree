@@ -12,6 +12,7 @@ import type {
   OperationOutcome,
   OperationProgress,
 } from "../remoteHosts.js";
+import type { ProjectFocusOnActivateIntent } from "./project.js";
 
 export interface AddHostPayload {
   name: string;
@@ -44,6 +45,12 @@ export interface SwitchWindowHostPayload {
   newWindow: boolean;
   /** Project to open on the target host once attached. */
   projectId?: string;
+  /**
+   * What to focus in that project once it is showing, wherever it ends up:
+   * this window, a new one, or the window that already had it. Ignored
+   * without a `projectId`.
+   */
+  focusIntent?: ProjectFocusOnActivateIntent;
 }
 
 /**

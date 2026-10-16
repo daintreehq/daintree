@@ -1,6 +1,7 @@
 import type { MouseEvent } from "react";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
 import type { SwitchWindowHostResult } from "@shared/types/ipc/remoteHosts";
+import type { ProjectFocusOnActivateIntent } from "@shared/types/ipc/project";
 import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
@@ -115,23 +116,36 @@ export function notifyHostSwitchFailure(
 
 /**
  * Switch this window (or a new one) to a host, optionally straight into one of
- * its projects. `onStayed` hears when the window ends up where it was: the
- * switch failed, or was cancelled or overtaken by a newer navigation.
+ * its projects, and with that project a pane to focus once it is showing.
+ * `onStayed` hears when the window ends up where it was: the switch failed, or
+ * was cancelled or overtaken by a newer navigation. Resolves to where the
+ * switch landed, or null when it failed (the failure toast has said so).
  */
 export async function switchToHost(
   hostId: HostId,
   newWindow: boolean,
   projectId?: string,
-  options?: { onStayed?: () => void }
-): Promise<void> {
+  options?: { onStayed?: () => void; focusIntent?: ProjectFocusOnActivateIntent }
+): Promise<SwitchWindowHostResult | null> {
+  const focusIntent = projectId === undefined ? undefined : options?.focusIntent;
   try {
-    const result = await window.electron.remoteHosts.switchWindowHost(
-      projectId === undefined ? { hostId, newWindow } : { hostId, newWindow, projectId }
-    );
+    const result = await window.electron.remoteHosts.switchWindowHost({
+      hostId,
+      newWindow,
+      ...(projectId === undefined ? {} : { projectId }),
+      ...(focusIntent === undefined ? {} : { focusIntent }),
+    });
     if (result?.outcome === "superseded") options?.onStayed?.();
     followSwitchResult(result);
+    return result ?? null;
   } catch (error) {
     options?.onStayed?.();
-    notifyHostSwitchFailure(hostId, error, () => void switchToHost(hostId, newWindow, projectId));
+    notifyHostSwitchFailure(
+      hostId,
+      error,
+      () =>
+        void switchToHost(hostId, newWindow, projectId, focusIntent ? { focusIntent } : undefined)
+    );
+    return null;
   }
 }

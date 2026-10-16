@@ -77,6 +77,7 @@ import {
 import { canopyOwnHostId, type CanopyScope } from "@/store/canopyStore";
 import { retryHostProjects, useHostProjectLists } from "@/components/Hosts/hostProjects";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
+import { isNewWindowClick, switchToHost } from "@/components/Hosts/hostSwitching";
 import type { HostId } from "@shared/types/remoteHosts";
 
 /** No other host's projects to list: one array, so the lookup's key stays put. */
@@ -394,7 +395,7 @@ interface ShortcutRow {
  * Every key the panel answers to, one press away instead of always on screen,
  * grouped by where the keyboard is: the pane's keys are the agent's.
  */
-function CanopyShortcuts({ otherHost = false }: { otherHost?: boolean }) {
+function CanopyShortcuts() {
   const step = isMac() ? "Cmd" : "Alt";
   // How to get here again: the user's own binding, and double-Shift while on.
   const toggle = useEffectiveCombo("canopy.toggle");
@@ -417,8 +418,7 @@ function CanopyShortcuts({ otherHost = false }: { otherHost?: boolean }) {
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
         { keys: ["J", "K"], label: "Move down or up" },
         { keys: ["Home", "End"], label: "First or last agent" },
-        // Another host's runs are answered here, but not gone to.
-        ...(otherHost ? [] : [{ keys: ["Enter"], label: "Go to terminal" }]),
+        { keys: ["Enter"], label: "Go to terminal" },
         {
           keys: ["1", "9"],
           range: true,
@@ -427,14 +427,12 @@ function CanopyShortcuts({ otherHost = false }: { otherHost?: boolean }) {
         { keys: ["Y"], label: "Take the first choice, when it's read as safe" },
         { keys: ["R"], label: "Reply" },
         { keys: ["E"], label: "Archive, or move back to the inbox" },
-        ...(otherHost ? [] : [{ keys: ["F2"], label: "Rename" }]),
+        { keys: ["F2"], label: "Rename" },
         { keys: ["U"], label: "Mark as read or unread" },
         { keys: ["Alt+U"], label: "Mark all as read" },
         { keys: ["Z"], label: "Undo" },
         { keys: ["Shift+F10"], label: "More actions" },
-        ...(otherHost
-          ? []
-          : [{ keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" }]),
+        { keys: ["Cmd+Backspace"], label: "Trash, pressed twice; Z takes it back" },
         { keys: ["Escape"], label: "Close" },
         ...(closeCombo ? [{ keys: [closeCombo], label: "Close Canopy" }] : []),
       ],
@@ -1152,10 +1150,26 @@ function CanopyInbox({
   }, []);
 
   const handlers = useMemo<CanopyCardHandlers>(() => {
-    const openRun = (item: CanopyItem) => {
-      // Another host's run: going to it would land on a terminal of the window's own.
-      if (otherHost) return;
+    const openRun = (item: CanopyItem, newWindow = false) => {
       readNow(item);
+      if (hostId !== null) {
+        // Another host's run: the window moves to that host and project (or a
+        // new one opens there, or the window already showing it comes
+        // forward), and the pane is focused wherever it lands. The panel
+        // stays open on a switch that didn't happen; its toast says why.
+        const focusIntent = { intent: "focus-panel", panelId: item.runId } as const;
+        void switchToHost(hostId, newWindow, item.workspaceId, { focusIntent }).then((result) => {
+          if (
+            result === null ||
+            result.outcome === "superseded" ||
+            result.outcome === "choose-project"
+          ) {
+            return;
+          }
+          close();
+        });
+        return;
+      }
       const args = { runId: item.runId, workspaceId: item.workspaceId };
       if (item.workspaceId !== getViewWorkspaceId()) {
         // The switch replaces this view, so the panel closes first.
@@ -1186,26 +1200,14 @@ function CanopyInbox({
         ? api.archive(item.runId, target(item))
         : api.archive(item.runId, target(item), expectTurn);
     const unarchive = (item: CanopyItem) => api.unarchive(item.runId, target(item));
-    // Another host's run has no terminal here to do it by hand in: the way
-    // back is trying again, on that host.
-    const recover = (item: CanopyItem, retry: () => void) =>
-      otherHost ? { label: "Retry", onClick: retry } : goTo(item);
     const archiveFailed =
       (item: CanopyItem) =>
       (error: unknown): void =>
-        failToast(
-          "Couldn't archive",
-          error,
-          recover(item, () => safeFireAndForget(archive(item).catch(archiveFailed(item))))
-        );
+        failToast("Couldn't archive", error, goTo(item));
     const unarchiveFailed =
       (item: CanopyItem) =>
       (error: unknown): void =>
-        failToast(
-          "Couldn't move to inbox",
-          error,
-          recover(item, () => safeFireAndForget(unarchive(item).catch(unarchiveFailed(item))))
-        );
+        failToast("Couldn't move to inbox", error, goTo(item));
     return {
       onOpen: openRun,
       // Escape from the pane lands on the run's row; a run folded away in
@@ -1297,15 +1299,7 @@ function CanopyInbox({
           )
         );
       },
-      onSendFailed: (item, error) =>
-        failToast(
-          "Couldn't send to agent",
-          error,
-          // The reply is still in its composer, on the run's own host.
-          otherHost
-            ? { label: "Reply", onClick: () => openPaneNow(item.runId, "composer") }
-            : goTo(item)
-        ),
+      onSendFailed: (item, error) => failToast("Couldn't send to agent", error, goTo(item)),
       onAnswer: function answer(item, label) {
         readNow(item);
         // On to the next run that needs you, as a reply from the composer does —
@@ -1323,22 +1317,15 @@ function CanopyInbox({
               }
               if (next && next.runId !== item.runId) focusCardNow(next.runId);
             },
-            (error: unknown) =>
-              failToast(
-                "Couldn't answer",
-                error,
-                recover(item, () => answer(item, label))
-              )
+            (error: unknown) => failToast("Couldn't answer", error, goTo(item))
           )
         );
       },
       // No toast on success: the user watched the name change. A refusal says
       // so and keeps the name it had.
       onRename: (item, title) => {
-        // Renaming reaches only the window's own host.
-        if (otherHost) return Promise.resolve();
         const rename = (): Promise<void> =>
-          window.electron.canopy.rename(item.runId, target(item), title).catch((error: unknown) => {
+          api.rename(item.runId, target(item), title).catch((error: unknown) => {
             failToast("Couldn't rename terminal", error, {
               label: "Retry",
               onClick: () => safeFireAndForget(rename()),
@@ -1350,18 +1337,19 @@ function CanopyInbox({
       onTrash: (item) => {
         // The trash keeps a terminal only briefly, and its own countdown sits
         // behind this panel, in whichever project the run is in: so the way
-        // back is offered here, on the toast and on Z.
-        // Trashing reaches only the window's own host.
-        if (otherHost) return;
+        // back is offered here, on the toast and on Z. The receipt means
+        // something only to the host that trashed it, so Undo goes back there
+        // whichever host the panel shows by then.
+        const trashedOn = api;
         const undo = reserveUndo();
         safeFireAndForget(
-          window.electron.canopy.trash(item.runId, target(item)).then(
+          trashedOn.trash(item.runId, target(item)).then(
             (receipt) => {
               if (receipt === null) return undo.forget();
               undo.land(
                 () =>
                   safeFireAndForget(
-                    window.electron.canopy.untrash(receipt).catch((error: unknown) =>
+                    trashedOn.untrash(receipt).catch((error: unknown) =>
                       // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
                       notify({
                         type: "error",
@@ -1563,15 +1551,13 @@ function CanopyInbox({
     // Keys aimed at the list's selected row act on the selected agent.
     const selected = visible[activeIndex];
     if (!selected) return;
-    // Another host's run: Enter and F2 would act on the window's own, so they
-    // do nothing; its pane takes the rest, as it does here.
     if (event.key === "Enter") {
       event.preventDefault();
-      if (!otherHost) handlers.onOpen(selected);
+      // Cmd/Ctrl+Enter: another host's run opens in a new window, as a click does.
+      handlers.onOpen(selected, isNewWindowClick(event));
       return;
     }
     if (event.key === "F2") {
-      if (otherHost) return;
       event.preventDefault();
       askRename(selected);
       return;
@@ -1622,17 +1608,12 @@ function CanopyInbox({
     onToggleRead: toggleRead,
     onReread: function reread(item) {
       safeFireAndForget(
-        api
-          .reread(item.runId, { spawnedAt: item.row.run.spawnedAt })
-          .catch((error: unknown) =>
-            failToast(
-              "Couldn't read the screen again",
-              error,
-              otherHost
-                ? { label: "Retry", onClick: () => reread(item) }
-                : { label: "Go to terminal", onClick: () => handlers.onOpen(item) }
-            )
-          )
+        api.reread(item.runId, { spawnedAt: item.row.run.spawnedAt }).catch((error: unknown) =>
+          failToast("Couldn't read the screen again", error, {
+            label: "Go to terminal",
+            onClick: () => handlers.onOpen(item),
+          })
+        )
       );
     },
     onArchive: handlers.onArchive,
@@ -1641,7 +1622,6 @@ function CanopyInbox({
       focusCardNow(item.runId);
       setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
     },
-    otherHost,
     onOpenChange: (open) => {
       menuOpenRef.current = open;
       if (open) return;
@@ -1751,7 +1731,7 @@ function CanopyInbox({
           ]}
         />
       )}
-      <CanopyShortcuts otherHost={otherHost} />
+      <CanopyShortcuts />
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -1973,7 +1953,7 @@ function CanopyInbox({
                             }
                             onSelect={() => selectRow(item.runId)}
                             onClick={() => readNow(item)}
-                            onOpen={() => handlers.onOpen(item)}
+                            onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
                             onArchive={() => handlers.onArchive(item)}
                           />
                         </CanopyRowMenu>
@@ -2025,7 +2005,7 @@ function CanopyInbox({
                               }
                               onSelect={() => selectRow(item.runId)}
                               onClick={() => readNow(item)}
-                              onOpen={() => handlers.onOpen(item)}
+                              onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
                               onArchive={() => handlers.onArchive(item)}
                             />
                           </CanopyRowMenu>

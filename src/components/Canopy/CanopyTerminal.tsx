@@ -576,7 +576,7 @@ export function CanopyTerminal({
                   Go to terminal
                 </Button>
               ) : (
-                // Another host's run has no pane of this window's to go to.
+                // No pane to go to: the stream is opened again here.
                 <Button variant="outline" size="xs" onClick={() => reopenRef.current?.("opening")}>
                   Retry
                 </Button>

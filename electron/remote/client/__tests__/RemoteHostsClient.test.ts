@@ -237,6 +237,107 @@ describe("RemoteHostsClient", () => {
     expect(router.hostForSender(8)).toBeNull();
   });
 
+  it("hands the project the switch opens what to focus once it is showing", async () => {
+    const focusIntent = { intent: "focus-panel", panelId: "term-1" } as const;
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+      focusIntent,
+    });
+    expect(windows.openRemoteProject).toHaveBeenCalledWith(
+      1,
+      "studio-01",
+      "proj-1",
+      "/srv/proj-1",
+      focusIntent
+    );
+
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "local",
+      newWindow: false,
+      projectId: "proj-local",
+      focusIntent,
+    });
+    expect(windows.openLocalProject).toHaveBeenCalledWith(1, "proj-local", focusIntent);
+
+    // A new window opened on the project takes it too.
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: true,
+      projectId: "proj-2",
+      focusIntent,
+    });
+    expect(windows.openRemoteProject).toHaveBeenLastCalledWith(
+      7,
+      "studio-01",
+      "proj-2",
+      "/srv/proj-2",
+      focusIntent
+    );
+  });
+
+  it("hands the window already showing the project what to focus, as it comes forward", async () => {
+    const focusIntent = { intent: "focus-panel", panelId: "term-1" } as const;
+    windows.projectOwner = vi.fn(() => ({ windowId: 2, showing: true }));
+    windows.revealWindow = vi.fn();
+    windows.focusInWindow = vi.fn();
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+        focusIntent,
+      })
+    ).resolves.toMatchObject({ outcome: "focused-elsewhere", targetWindowId: 2 });
+    expect(windows.revealWindow).toHaveBeenCalledWith(2);
+    expect(windows.focusInWindow).toHaveBeenCalledWith(2, "studio-01", "proj-1", focusIntent);
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+
+    // This machine's project, shown in another window, the same way.
+    windows.redirectToLocalOwner = vi.fn(() => 3);
+    vi.mocked(windows.focusInWindow).mockClear();
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "local",
+      newWindow: false,
+      projectId: "proj-local",
+      focusIntent,
+    });
+    expect(windows.focusInWindow).toHaveBeenCalledWith(3, "local", "proj-local", focusIntent);
+  });
+
+  it("focuses nothing in a window that came forward without being asked to", async () => {
+    windows.projectOwner = vi.fn(() => ({ windowId: 2, showing: true }));
+    windows.revealWindow = vi.fn();
+    windows.focusInWindow = vi.fn();
+    await client.switchWindowHost(ctxFor(5, 1), {
+      hostId: "studio-01",
+      newWindow: false,
+      projectId: "proj-1",
+    });
+    expect(windows.focusInWindow).not.toHaveBeenCalled();
+  });
+
+  it("refuses a focus intent that isn't one", async () => {
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+        focusIntent: { intent: "focus-panel", panelId: "" },
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      client.switchWindowHost(ctxFor(5, 1), {
+        hostId: "studio-01",
+        newWindow: false,
+        projectId: "proj-1",
+        focusIntent: { intent: "explode" } as never,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(windows.openRemoteProject).not.toHaveBeenCalled();
+  });
+
   it("asks a view's own host whether its assistant is live, and no host for a local view (#13349)", () => {
     manager.connect("studio-01");
     manager.liveAssistants.set("studio-01", new Set([6, 8]));

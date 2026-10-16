@@ -11,7 +11,8 @@ type ElectronCanopy = Window["electron"]["canopy"];
 
 /**
  * What the inbox asks of a host's Canopy: the reads and the inbox's own
- * actions, never typing into a run or answering it. The window's own host is
+ * actions, renaming and trashing included, never typing into a run or
+ * answering it. The window's own host is
  * `window.electron.canopy` itself; any other goes through `remoteCanopyApi`.
  */
 export type CanopyApi = Pick<
@@ -27,6 +28,9 @@ export type CanopyApi = Pick<
   | "reread"
   | "runBranch"
   | "setMode"
+  | "rename"
+  | "trash"
+  | "untrash"
 >;
 
 /** The window's own host, looked up at each call as the panel always has. */
@@ -42,6 +46,9 @@ export const ownCanopyApi: CanopyApi = {
   reread: (...args) => window.electron.canopy.reread(...args),
   runBranch: (...args) => window.electron.canopy.runBranch(...args),
   setMode: (...args) => window.electron.canopy.setMode(...args),
+  rename: (...args) => window.electron.canopy.rename(...args),
+  trash: (...args) => window.electron.canopy.trash(...args),
+  untrash: (...args) => window.electron.canopy.untrash(...args),
 };
 
 /** The same calls, made on another host's Canopy and on nothing else. */
@@ -62,6 +69,9 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
     reread: on("canopy:reread"),
     runBranch: on("canopy:run-branch"),
     setMode: on("canopy:set-mode"),
+    rename: on("canopy:rename"),
+    trash: on("canopy:trash"),
+    untrash: on("canopy:untrash"),
   };
 }
 
