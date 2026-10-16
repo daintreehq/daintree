@@ -253,13 +253,21 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
   const settle = async () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
   };
-  /** A run that spawned, in the view `view`; positive ids are this machine's own views. */
-  const start = (lane: string, sessionId: string, view: number, spawned = true) => {
+  /**
+   * A run in the view `view` (positive ids are this machine's own views),
+   * spawned unless `pending`, which leaves it waiting on the pty-host's answer.
+   */
+  const start = (lane: string, sessionId: string, view: number, pending = false) => {
     const terminalId = `t-${sessionId}`;
     running.set(lane, { sessionId, terminalId, projectViewWebContentsId: view });
     pty.generations.set(terminalId, 1);
-    ledger.set(terminalId, spawned ? { generation: 1, spawnOk: true } : { generation: 1 });
-    pty.emit("spawn-result", terminalId, { success: spawned, id: terminalId });
+    ledger.set(terminalId, pending ? { generation: 1 } : { generation: 1, spawnOk: true });
+    if (!pending) {
+      pty.emit("spawn-result", terminalId, { success: true, id: terminalId, launchGeneration: 1 });
+    }
+  };
+  const nudge = () => {
+    for (const listener of [...defaultListeners]) listener();
   };
 
   beforeEach(() => {
@@ -284,13 +292,42 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
   it("makes a run in this machine's own view the hub once it has spawned", async () => {
     views.set(11, "proj");
     install();
-    start("proj:0", "s1", 11, false);
+    start("proj:0", "s1", 11, true);
+    nudge();
     await settle();
     expect(policy().getHub()).toBeNull();
-    ledger.set("t-s1", { generation: 1, spawnOk: true });
-    pty.emit("spawn-result", "t-s1", { success: true, id: "t-s1" });
+    pty.emit("spawn-result", "t-s1", { success: true, id: "t-s1", launchGeneration: 1 });
     await settle();
     expect(policy().getHub()).toMatchObject({ projectId: "proj", slot: 0, sessionId: "s1" });
+  });
+
+  it("never gives the hub to a spawn that failed, and gives it to the next run instead", async () => {
+    views.set(11, "proj");
+    install();
+    start("proj:0", "s1", 11, true);
+    // The pty-host refused it: the pending entry goes, the lane stays bound.
+    pty.generations.delete("t-s1");
+    ledger.set("t-s1", { generation: 1, spawnOk: false, closedAt: 1 });
+    pty.emit("spawn-result", "t-s1", { success: false, id: "t-s1", launchGeneration: 1 });
+    await settle();
+    expect(policy().getHub()).toBeNull();
+    start("proj:1", "s2", 11);
+    await settle();
+    expect(policy().getHub()).toMatchObject({ slot: 1 });
+  });
+
+  it("keeps a run's spawn when a duplicate spawn of the same terminal is refused", async () => {
+    views.set(11, "proj");
+    accepts = false;
+    install();
+    start("proj:0", "s1", 11);
+    // The ledger now describes the refused attempt; the first one is still the live run.
+    ledger.set("t-s1", { generation: 2, spawnOk: false, closedAt: 1 });
+    pty.emit("spawn-result", "t-s1", { success: false, id: "t-s1", launchGeneration: 2 });
+    accepts = true;
+    nudge();
+    await settle();
+    expect(policy().getHub()).toMatchObject({ slot: 0, launchGeneration: 1 });
   });
 
   it("leaves a run alone whose view shows another project, or is no view of this machine", async () => {
@@ -311,12 +348,12 @@ describe("installAssistantMessagingPolicy applying the saved default (#13441)", 
     await settle();
     expect(policy().getHub()).toBeNull();
     accepts = true;
-    for (const listener of [...defaultListeners]) listener();
+    nudge();
     await settle();
     // Still no host to hear from.
     expect(policy().getHub()).toBeNull();
     messagingHost = true;
-    for (const listener of [...defaultListeners]) listener();
+    nudge();
     await settle();
     expect(policy().getHub()).not.toBeNull();
   });

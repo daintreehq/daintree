@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
+import type { SpawnResult } from "../../../shared/types/pty-host.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { isRemoteEndpointHandle } from "../../ipc/endpoint.js";
@@ -142,6 +143,10 @@ export function installAssistantMessagingPolicy(
 ): () => void {
   const store = new AssistantExchangeStore(openExchangeDatabase());
   closeExchangesLeftOpen(store);
+  // The incarnation of each PTY whose spawn succeeded. A pending spawn already
+  // has a live generation, and the lifecycle ledger can't stand in for this: a
+  // refused duplicate leaves it describing the failed attempt, and it evicts.
+  const spawned = new Map<string, number>();
   const policy = new AssistantMessagingPolicy({
     getRunningLaneSession: (projectId, slot) =>
       helpSessionService.getRunningLaneSession(projectId, slot),
@@ -157,6 +162,8 @@ export function installAssistantMessagingPolicy(
         ),
     getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
     spawnConfirmed: (terminalId, launchGeneration) => {
+      if (spawned.get(terminalId) === launchGeneration) return true;
+      // Spawned before this was installed, so only the ledger saw it.
       const entry = getLifecycleLedger().getEntry(terminalId);
       return (
         entry?.generation === launchGeneration &&
@@ -186,19 +193,28 @@ export function installAssistantMessagingPolicy(
   // A spawn is when a run can be replaced in place, and when one starts. The
   // client may not exist yet, but nothing can be enrolled without a running
   // PTY, so every change tries again.
-  const reconcile = () => {
+  const reconcile = (terminalId: string, result: SpawnResult | undefined) => {
+    if (result?.success === true) {
+      const generation =
+        result.launchGeneration ?? getPtyClient()?.getLiveGeneration(terminalId) ?? null;
+      if (generation !== null) spawned.set(terminalId, generation);
+    }
     policy.reconcile();
     defaults.schedule();
   };
   // A run that ends can free the hub for a sibling (a declined hub, say)
   // without any enrollment changing.
   const runEnded = () => defaults.schedule();
+  const ptyExited = (terminalId: string) => {
+    if (getPtyClient()?.getLiveGeneration(terminalId) == null) spawned.delete(terminalId);
+    runEnded();
+  };
   let watched: PtyClient | null = null;
   const watchPty = () => {
     if (watched) return;
     watched = getPtyClient();
     watched?.on("spawn-result", reconcile);
-    watched?.on("exit", runEnded);
+    watched?.on("exit", ptyExited);
   };
   watchPty();
   const offPolicy = policy.onChange(() => {
@@ -381,6 +397,7 @@ export function installAssistantMessagingPolicy(
   defaults.schedule();
   return () => {
     defaults.dispose();
+    spawned.clear();
     offDefault();
     offSessionEnded();
     offReattached();
@@ -404,7 +421,7 @@ export function installAssistantMessagingPolicy(
     offHosts();
     offPolicy();
     watched?.off("spawn-result", reconcile);
-    watched?.off("exit", runEnded);
+    watched?.off("exit", ptyExited);
     watched = null;
     runtime.dispose();
     policy.dispose();
