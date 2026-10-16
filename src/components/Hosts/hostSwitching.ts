@@ -114,19 +114,28 @@ export function notifyHostSwitchFailure(
   });
 }
 
+export interface SwitchToHostOptions {
+  /** The window ended up where it was: the switch failed, or was cancelled or overtaken. */
+  onStayed?: () => void;
+  /** What to focus in the project once it is showing; ignored without a project. */
+  focusIntent?: ProjectFocusOnActivateIntent;
+  /**
+   * The project is showing, here, in a new window, or in the window that
+   * already had it — heard on a Retry from the failure toast as well.
+   */
+  onLanded?: () => void;
+}
+
 /**
  * Switch this window (or a new one) to a host, optionally straight into one of
  * its projects, and with that project a pane to focus once it is showing.
- * `onStayed` hears when the window ends up where it was: the switch failed, or
- * was cancelled or overtaken by a newer navigation. Resolves to where the
- * switch landed, or null when it failed (the failure toast has said so).
  */
 export async function switchToHost(
   hostId: HostId,
   newWindow: boolean,
   projectId?: string,
-  options?: { onStayed?: () => void; focusIntent?: ProjectFocusOnActivateIntent }
-): Promise<SwitchWindowHostResult | null> {
+  options?: SwitchToHostOptions
+): Promise<void> {
   const focusIntent = projectId === undefined ? undefined : options?.focusIntent;
   try {
     const result = await window.electron.remoteHosts.switchWindowHost({
@@ -136,16 +145,17 @@ export async function switchToHost(
       ...(focusIntent === undefined ? {} : { focusIntent }),
     });
     if (result?.outcome === "superseded") options?.onStayed?.();
+    if (result?.outcome === "switched" || result?.outcome === "focused-elsewhere") {
+      options?.onLanded?.();
+    }
     followSwitchResult(result);
-    return result ?? null;
   } catch (error) {
     options?.onStayed?.();
+    // The retry is the same switch, heard by the same caller.
     notifyHostSwitchFailure(
       hostId,
       error,
-      () =>
-        void switchToHost(hostId, newWindow, projectId, focusIntent ? { focusIntent } : undefined)
+      () => void switchToHost(hostId, newWindow, projectId, options)
     );
-    return null;
   }
 }

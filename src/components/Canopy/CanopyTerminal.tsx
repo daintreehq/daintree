@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Terminal } from "@xterm/xterm";
@@ -77,7 +77,7 @@ interface CanopyTerminalProps {
   /** Return was typed straight into the terminal and the run took it. */
   onSubmitted?: () => void;
   /** Go to the run's own pane: the way to see a screen this view couldn't show. */
-  onGoTo?: () => void;
+  onGoTo?: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
 /**

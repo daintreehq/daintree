@@ -1156,17 +1156,16 @@ function CanopyInbox({
         // Another host's run: the window moves to that host and project (or a
         // new one opens there, or the window already showing it comes
         // forward), and the pane is focused wherever it lands. The panel
-        // stays open on a switch that didn't happen; its toast says why.
+        // stays open on a switch that didn't happen; its toast says why, and
+        // its Retry closes the panel once it lands.
         const focusIntent = { intent: "focus-panel", panelId: item.runId } as const;
-        void switchToHost(hostId, newWindow, item.workspaceId, { focusIntent }).then((result) => {
-          if (
-            result === null ||
-            result.outcome === "superseded" ||
-            result.outcome === "choose-project"
-          ) {
-            return;
-          }
-          close();
+        void switchToHost(hostId, newWindow, item.workspaceId, {
+          focusIntent,
+          onLanded: () => {
+            // A panel since closed, or showing another host, is the user's newer choice.
+            if (!mountedRef.current || listHostRef.current !== hostId) return;
+            if (useCanopyStore.getState().isOpen) close();
+          },
         });
         return;
       }

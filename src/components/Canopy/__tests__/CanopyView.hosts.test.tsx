@@ -469,7 +469,7 @@ describe("the Canopy host picker", () => {
     expect(toast.title).toBe("Couldn't switch to studio-01");
     state.switchWindowHost.mockClear();
     await act(async () => {
-      toast.actions?.find((action) => action.label === "Retry")?.onClick();
+      void toast.actions?.find((action) => action.label === "Retry")?.onClick();
     });
     expect(state.switchWindowHost).toHaveBeenCalledWith({
       hostId: "studio",
@@ -477,6 +477,46 @@ describe("the Canopy host picker", () => {
       projectId: "p1",
       focusIntent: { intent: "focus-panel", panelId: "remote-run" },
     });
+    // The retry landed: the panel closes as the first try would have.
+    await settle();
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+  });
+
+  it("closes once the window already showing the run's project came forward", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    state.switchWindowHost.mockResolvedValueOnce({
+      outcome: "focused-elsewhere",
+      hostId: "studio",
+      projectId: "p1",
+      targetWindowId: 2,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+    });
+    await settle();
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+  });
+
+  it("leaves the panel open when the user moved to another host before the switch landed", async () => {
+    installElectron();
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    let land: (result: unknown) => void = () => {};
+    state.switchWindowHost.mockImplementationOnce(() => new Promise((resolve) => (land = resolve)));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+    });
+    act(() => useCanopyStore.getState().setHostId(null));
+    await settle();
+    await act(async () => {
+      land({ outcome: "focused-elsewhere", hostId: "studio", projectId: "p1", targetWindowId: 2 });
+    });
+    await settle();
+    expect(useCanopyStore.getState().isOpen).toBe(true);
   });
 
   it("renames another host's run on that host", async () => {
@@ -529,7 +569,7 @@ describe("the Canopy host picker", () => {
     act(() => useCanopyStore.getState().setHostId(null));
     await settle();
     await act(async () => {
-      toast.actions?.find((action) => action.label === "Undo")?.onClick();
+      void toast.actions?.find((action) => action.label === "Undo")?.onClick();
     });
     expect(state.invoke).toHaveBeenCalledWith("studio", "canopy:untrash", 7);
     expect(own.untrash).not.toHaveBeenCalled();

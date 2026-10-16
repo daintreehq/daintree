@@ -681,7 +681,7 @@ export function CanopyCard({
           reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item, "terminal")}
-          onGoTo={() => onOpen(item)}
+          onGoTo={(event) => onOpen(item, isNewWindowClick(event))}
         />
         {canReply ? (
           <div ref={replyHostRef} data-keybindings-isolated="" className="contents">

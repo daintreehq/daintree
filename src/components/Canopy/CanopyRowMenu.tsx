@@ -8,11 +8,13 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { isMac } from "@/lib/platform";
+import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { canReplyTo } from "./CanopyCard";
 import { itemArchived, type CanopyItem } from "./canopyModel";
 
 export interface CanopyRowMenuActions {
-  onOpen: (item: CanopyItem) => void;
+  /** `newWindow`: Cmd/Ctrl held, so another host's run opens in a new window. */
+  onOpen: (item: CanopyItem, newWindow?: boolean) => void;
   onReply: (item: CanopyItem) => void;
   onToggleRead: (item: CanopyItem) => void;
   /** Read the run's screen again, words included: for a reading that looks wrong. */
@@ -55,7 +57,12 @@ export function CanopyRowMenu({
           event.preventDefault();
         }}
       >
-        <ContextMenuItem aria-keyshortcuts="Enter" onSelect={() => actions.onOpen(item)}>
+        {/* On click rather than select, so a Cmd/Ctrl-click keeps its modifier;
+            a key select clicks too, with none held. */}
+        <ContextMenuItem
+          aria-keyshortcuts="Enter"
+          onClick={(event) => actions.onOpen(item, isNewWindowClick(event))}
+        >
           Go to terminal
           <ContextMenuShortcut shortcut="Enter" />
         </ContextMenuItem>
