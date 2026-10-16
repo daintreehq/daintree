@@ -1418,3 +1418,106 @@ describe("WorktreeHeader — the sync line with no counts and no base", () => {
     );
   });
 });
+
+describe("WorktreeHeader custom title (#13409)", () => {
+  const prWorktree = {
+    ...baseWorktree,
+    sourcePrNumber: 314,
+    linked: {
+      providerId: "github",
+      pr: {
+        ref: { providerId: "github", owner: "o", repo: "r", number: 314, rawData: null },
+        title: "Fix flaky terminal search",
+        url: "https://github.com/o/r/pull/314",
+        state: "open",
+      },
+    },
+    issueNumber: 99,
+    issueTitle: "Terminal search flakes",
+  } as WorktreeState;
+
+  it("leads with the title and moves an issue headline, with its title, above the branch", () => {
+    const { container } = renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 100, issueTitle: "Fix the thing" },
+      branchLabel: "feature/fix-the-thing",
+      customTitle: "Hotfix",
+      badges: { onOpenIssue: noop },
+    });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Hotfix");
+    const issueButtons = container.querySelectorAll('button[aria-label*="Open issue"]');
+    expect(issueButtons.length).toBe(1);
+    expect(issueButtons[0]!.getAttribute("aria-label")).toBe("Open issue #100: Fix the thing");
+    expect(screen.getByText(/fix-the-thing/)).toBeDefined();
+  });
+
+  it("keeps PR provenance from sourcePrNumber: the PR moves down with its title, then the issue", () => {
+    const { container } = renderHeader({
+      worktree: prWorktree,
+      customTitle: "Release prep",
+      badges: { onOpenPR: noop, onOpenIssue: noop },
+    });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Release prep");
+    const prButtons = container.querySelectorAll('button[aria-label*="pull request"]');
+    expect(prButtons.length).toBe(1);
+    expect(prButtons[0]!.getAttribute("aria-label")).toBe(
+      "Open open pull request #314: Fix flaky terminal search"
+    );
+    expect(screen.getByText("Fix flaky terminal search")).toBeDefined();
+    const issueButton = screen.getByRole("button", {
+      name: "Open issue #99: Terminal search flakes",
+    });
+    // The displaced PR comes first, as the headline it replaced.
+    expect(
+      prButtons[0]!.compareDocumentPosition(issueButton) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("keeps a displaced PR badge's click action", () => {
+    const onOpenPR = vi.fn();
+    renderHeader({
+      worktree: prWorktree,
+      isActive: true,
+      customTitle: "Release prep",
+      badges: { onOpenPR, onOpenIssue: noop },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /pull request #314/ }));
+    expect(onOpenPR).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts the branch under a title on a branch-only worktree", () => {
+    renderHeader({ branchLabel: "feature/test", customTitle: "Spike" });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Spike");
+    expect(screen.getByText(/test/)).toBeDefined();
+  });
+
+  it("replaces the project name on main but keeps main's branch row", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, isMainWorktree: true, name: "daintree-app", branch: "main" },
+      isMainWorktree: true,
+      isMainOnStandardBranch: true,
+      branchLabel: "main",
+      customTitle: "Integration",
+    });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Integration");
+    expect(screen.queryByTestId("primary-worktree-project-name")).toBeNull();
+    expect(screen.getByText("main")).toBeDefined();
+  });
+
+  it("shows only the title when collapsed", () => {
+    const { container } = renderHeader({
+      worktree: prWorktree,
+      isCollapsed: true,
+      customTitle: "Release prep",
+      badges: { onOpenPR: noop, onOpenIssue: noop },
+    });
+
+    expect(screen.getByTestId("worktree-custom-title").textContent).toBe("Release prep");
+    expect(container.querySelectorAll('button[aria-label*="pull request"]').length).toBe(0);
+    expect(container.querySelectorAll('button[aria-label*="Open issue"]').length).toBe(0);
+  });
+});

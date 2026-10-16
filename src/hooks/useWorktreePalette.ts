@@ -4,6 +4,7 @@ import { useWorktreeSelectionStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { scoreWorktree } from "@/lib/worktreeFilters";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 
 export type UseWorktreePaletteReturn = UseSearchablePaletteReturn<WorktreeState> & {
   activeWorktreeId: string | null;
@@ -35,16 +36,22 @@ export function useWorktreePalette({
     });
   }, [worktrees, activeWorktreeId]);
 
-  const filterWorktrees = useCallback((items: WorktreeState[], query: string): WorktreeState[] => {
-    if (!query.trim()) return items;
-    const matched = items.filter((worktree) => scoreWorktree(worktree, query) > 0);
-    return [...matched].sort((a, b) => {
-      const scoreA = scoreWorktree(a, query);
-      const scoreB = scoreWorktree(b, query);
-      if (scoreA !== scoreB) return scoreB - scoreA;
-      return 0;
-    });
-  }, []);
+  const customTitles = useWorktreeFilterStore((state) => state.worktreeCustomTitles);
+  const filterWorktrees = useCallback(
+    (items: WorktreeState[], query: string): WorktreeState[] => {
+      if (!query.trim()) return items;
+      const score = (worktree: WorktreeState) =>
+        scoreWorktree(worktree, query, customTitles[worktree.id]);
+      const matched = items.filter((worktree) => score(worktree) > 0);
+      return [...matched].sort((a, b) => {
+        const scoreA = score(a);
+        const scoreB = score(b);
+        if (scoreA !== scoreB) return scoreB - scoreA;
+        return 0;
+      });
+    },
+    [customTitles]
+  );
 
   const { results, selectedIndex, isStale, close, ...paletteRest } =
     useSearchablePalette<WorktreeState>({

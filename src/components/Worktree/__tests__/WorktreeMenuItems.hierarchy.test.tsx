@@ -781,6 +781,30 @@ describe("WorktreeMenuItems — Organize", () => {
     expect(onSetLabelColor).toHaveBeenLastCalledWith(null);
   });
 
+  it("leads the Label submenu with Edit title…, above the colours", () => {
+    const onEditTitle = vi.fn();
+    renderWorktreeMenu({ onSetLabelColor: vi.fn(), onEditTitle });
+
+    const editTitle = screen.getByText("Edit title…").closest("button")!;
+    const firstColour = screen.getAllByRole("menuitemradio")[0]!;
+    expect(
+      editTitle.compareDocumentPosition(firstColour) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+
+    fireEvent.click(editTitle);
+    expect(onEditTitle).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Edit title… on the main worktree", () => {
+    renderWorktreeMenu({
+      worktree: makeWorktree({ isMainWorktree: true }),
+      onSetLabelColor: vi.fn(),
+      onEditTitle: vi.fn(),
+    });
+
+    expect(screen.getByText("Edit title…")).not.toBeNull();
+  });
+
   it("checks None on an unlabelled worktree", () => {
     renderWorktreeMenu({ onSetLabelColor: vi.fn() });
 

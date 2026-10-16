@@ -42,6 +42,8 @@ export interface WorktreeHeaderProps {
   onToggleCollapse?: (e: React.MouseEvent) => void;
   contentId?: string;
   branchLabel: string;
+  /** Normalised custom title (#13409); takes the headline slot when set. */
+  customTitle?: string;
   sessionStates?: Record<AgentState, number>;
   sessionTotal?: number;
   /** Unread hand-backs, counted apart from `sessionStates`. */
@@ -83,6 +85,7 @@ export function WorktreeHeader({
   onToggleCollapse,
   contentId,
   branchLabel,
+  customTitle,
   sessionStates,
   sessionTotal,
   sessionUnread,
@@ -106,8 +109,13 @@ export function WorktreeHeader({
   // worktrees (created from the PR dropdown, #8888) invert the default
   // issue-first headline: the PR title leads, with the linked issue shown
   // underneath, and it renders even during the cold-title gap (→ "#NNN").
-  const headline = getWorktreeHeadline(worktree);
-  const isPrOriginated = headline.kind === "pr";
+  //
+  // A custom title (#13409) replaces only the label, so the kind below is still
+  // the computed one. Provenance reads `sourcePrNumber` regardless, so it can
+  // never follow whatever the headline slot happens to show.
+  const headline = getWorktreeHeadline(worktree, customTitle);
+  const hasCustomTitle = headline.customTitle !== undefined;
+  const isPrOriginated = Boolean(worktree.sourcePrNumber);
   const hasDisplayTitle = headline.kind === "pr" || headline.kind === "issue";
   const displayTitle =
     headline.kind === "pr" || headline.kind === "issue" ? headline.title : undefined;
@@ -218,7 +226,22 @@ export function WorktreeHeader({
               aria-hidden="true"
             />
           )}
-          {hasDisplayTitle ? (
+          {hasCustomTitle ? (
+            <CustomTitleHeadline
+              title={headline.customTitle!}
+              displaced={
+                isCollapsed
+                  ? [headline.computedLabel!, branchLabel].filter(
+                      (line, i, lines) => line && lines.indexOf(line) === i
+                    )
+                  : isMainStandardLayout
+                    ? [worktree.name]
+                    : []
+              }
+              isActive={isActive}
+              isMuted={isMuted}
+            />
+          ) : hasDisplayTitle ? (
             isPrOriginated ? (
               <PRBadge
                 prNumber={worktree.sourcePrNumber!}
@@ -409,6 +432,7 @@ export function WorktreeHeader({
       {!isCollapsed &&
         !isMainStandardLayout &&
         (hasDisplayTitle ||
+          hasCustomTitle ||
           worktree.issueNumber ||
           (worktree.linked?.pr &&
             worktree.linked.pr.state !== "closed" &&
@@ -427,11 +451,66 @@ export function WorktreeHeader({
             hasUpstreamDelta={hasUpstreamDelta}
             hasAuthFailedSignIn={hasAuthFailedSignIn}
             hasDisplayTitle={hasDisplayTitle}
+            hasCustomTitle={hasCustomTitle}
             isPrOriginated={isPrOriginated}
             hasPlanFile={hasPlanFile}
             badges={badges}
           />
         )}
     </div>
+  );
+}
+
+/**
+ * The custom title in the headline slot, in the headline's own type. With
+ * something displaced to name — the project on main, or the computed headline
+ * and branch on a collapsed card, where the stack beneath is hidden — the
+ * tooltip always carries it; otherwise it only discloses a truncated title.
+ */
+function CustomTitleHeadline({
+  title,
+  displaced,
+  isActive,
+  isMuted,
+}: {
+  title: string;
+  displaced: string[];
+  isActive: boolean;
+  isMuted?: boolean;
+}) {
+  const span = (
+    <span
+      className={cn(
+        "truncate text-sm leading-[inherit] transition-colors duration-150",
+        isActive
+          ? "text-text-primary font-medium"
+          : isMuted
+            ? "text-text-secondary font-normal"
+            : "text-text-secondary font-medium"
+      )}
+      data-testid="worktree-custom-title"
+    >
+      {title}
+    </span>
+  );
+  if (displaced.length === 0) {
+    return <TruncatedTooltip content={title}>{span}</TruncatedTooltip>;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{span}</TooltipTrigger>
+      <TooltipContent
+        side="bottom"
+        className="max-w-xs"
+        data-testid="worktree-custom-title-tooltip"
+      >
+        <span className="block font-medium">{title}</span>
+        {displaced.map((line) => (
+          <span key={line} className="mt-0.5 block text-text-secondary">
+            {line}
+          </span>
+        ))}
+      </TooltipContent>
+    </Tooltip>
   );
 }

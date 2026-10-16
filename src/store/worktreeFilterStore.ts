@@ -15,6 +15,10 @@ import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
 import { isWorktreeTypeId, type WorktreeTypeId } from "@/lib/worktreeTypes";
 import { isWorktreeLabelToken, type WorktreeLabelToken } from "@shared/theme/worktreeColors";
+import {
+  isWorktreeCustomTitleTooLong,
+  normalizeWorktreeCustomTitle,
+} from "@/lib/worktreeCustomTitle";
 
 export type OrderBy = "recent" | "created" | "alpha" | "manual";
 
@@ -68,6 +72,8 @@ interface WorktreeFilterState {
   collapsedWorktrees: string[];
   /** Worktree id → label colour token. Absent means no label (#13408). */
   worktreeLabelColors: Record<string, WorktreeLabelToken>;
+  /** Worktree id → custom title, normalised. Absent means the computed headline (#13409). */
+  worktreeCustomTitles: Record<string, string>;
   manualOrder: string[];
   /** Transient session-only quick-state chip filter (not persisted). */
   quickStateFilter: QuickStateFilter;
@@ -96,6 +102,8 @@ interface WorktreeFilterActions {
   toggleWorktreeCollapsed: (id: string) => void;
   isWorktreeCollapsed: (id: string) => boolean;
   setWorktreeLabelColor: (id: string, token: WorktreeLabelToken | null) => void;
+  /** Normalises the title; an empty or over-length result is the caller's to reject, null or blank clears. */
+  setWorktreeCustomTitle: (id: string, title: string | null) => void;
   setManualOrder: (order: string[]) => void;
   pruneStaleWorktreeIds: (validIds: ReadonlySet<string>) => void;
   setQuickStateFilter: (filter: QuickStateFilter) => void;
@@ -149,6 +157,8 @@ interface ProjectScopedState {
   collapsedWorktrees: string[];
   /** Worktree id → label colour token. Absent means no label (#13408). */
   worktreeLabelColors: Record<string, WorktreeLabelToken>;
+  /** Worktree id → custom title, normalised. Absent means the computed headline (#13409). */
+  worktreeCustomTitles: Record<string, string>;
   manualOrder: string[];
   quickStateFilter: QuickStateFilter;
   devServerFilters: Set<DevServerFilter>;
@@ -174,6 +184,8 @@ interface ProjectPersistedShape {
   collapsedWorktrees: string[];
   /** Worktree id → label colour token. Absent means no label (#13408). */
   worktreeLabelColors: Record<string, WorktreeLabelToken>;
+  /** Worktree id → custom title, normalised. Absent means the computed headline (#13409). */
+  worktreeCustomTitles: Record<string, string>;
   manualOrder: string[];
 }
 
@@ -243,6 +255,18 @@ function labelColorsOrUndefined(value: unknown): Record<string, WorktreeLabelTok
   const result: Record<string, WorktreeLabelToken> = {};
   for (const [id, token] of Object.entries(value)) {
     if (isWorktreeLabelToken(token)) result[id] = token;
+  }
+  return result;
+}
+
+/** Keeps only titles that still normalise to something within the limit, so a hand-edited entry can't put a blank or oversized headline on a card. */
+function customTitlesOrUndefined(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const result: Record<string, string> = {};
+  for (const [id, raw] of Object.entries(value)) {
+    if (typeof raw !== "string") continue;
+    const title = normalizeWorktreeCustomTitle(raw);
+    if (title && !isWorktreeCustomTitleTooLong(title)) result[id] = title;
   }
   return result;
 }
@@ -470,6 +494,7 @@ function toProjectFiltersPersisted(
     pinnedWorktrees: arrayOrUndefined<string>(raw.pinnedWorktrees) ?? [],
     collapsedWorktrees: arrayOrUndefined<string>(raw.collapsedWorktrees) ?? [],
     worktreeLabelColors: labelColorsOrUndefined(raw.worktreeLabelColors) ?? {},
+    worktreeCustomTitles: customTitlesOrUndefined(raw.worktreeCustomTitles) ?? {},
     manualOrder: arrayOrUndefined<string>(raw.manualOrder) ?? [],
   };
 }
@@ -543,6 +568,11 @@ function mergeProjectFiltersPersistedWrite({
         inc.worktreeLabelColors,
         disk.worktreeLabelColors
       ),
+      worktreeCustomTitles: pickFieldByWriterDelta(
+        base.worktreeCustomTitles,
+        inc.worktreeCustomTitles,
+        disk.worktreeCustomTitles
+      ),
       manualOrder: pickFieldByWriterDelta(base.manualOrder, inc.manualOrder, disk.manualOrder),
     },
   };
@@ -562,6 +592,7 @@ const _projectStore = create<ProjectScopedState>()(
       pinnedWorktrees: _legacySeed.pinnedWorktrees ?? [],
       collapsedWorktrees: _legacySeed.collapsedWorktrees ?? [],
       worktreeLabelColors: {},
+      worktreeCustomTitles: {},
       manualOrder: _legacySeed.manualOrder ?? [],
       quickStateFilter: "all",
       devServerFilters: new Set<DevServerFilter>(),
@@ -583,6 +614,7 @@ const _projectStore = create<ProjectScopedState>()(
         pinnedWorktrees: state.pinnedWorktrees,
         collapsedWorktrees: state.collapsedWorktrees,
         worktreeLabelColors: state.worktreeLabelColors,
+        worktreeCustomTitles: state.worktreeCustomTitles,
         manualOrder: state.manualOrder,
       }),
       migrate: (persistedState, version) => {
@@ -634,6 +666,8 @@ const _projectStore = create<ProjectScopedState>()(
           collapsedWorktrees: p?.collapsedWorktrees ?? current.collapsedWorktrees,
           worktreeLabelColors:
             labelColorsOrUndefined(p?.worktreeLabelColors) ?? current.worktreeLabelColors,
+          worktreeCustomTitles:
+            customTitlesOrUndefined(p?.worktreeCustomTitles) ?? current.worktreeCustomTitles,
           manualOrder: p?.manualOrder ?? current.manualOrder,
         };
       },
@@ -765,6 +799,20 @@ const _actions: WorktreeFilterActions = {
       return { worktreeLabelColors: { ...state.worktreeLabelColors, [id]: token } };
     });
   },
+  setWorktreeCustomTitle: (id, title) => {
+    const next = title === null ? "" : normalizeWorktreeCustomTitle(title);
+    if (isWorktreeCustomTitleTooLong(next)) return;
+    _projectStore.setState((state) => {
+      const current = state.worktreeCustomTitles[id];
+      if (!next) {
+        if (current === undefined) return state;
+        const { [id]: _removed, ...rest } = state.worktreeCustomTitles;
+        return { worktreeCustomTitles: rest };
+      }
+      if (current === next) return state;
+      return { worktreeCustomTitles: { ...state.worktreeCustomTitles, [id]: next } };
+    });
+  },
   setManualOrder: (order) => {
     _projectStore.setState({ manualOrder: order });
   },
@@ -777,7 +825,10 @@ const _actions: WorktreeFilterActions = {
       const labelIds = Object.keys(state.worktreeLabelColors);
       const keptLabelIds = labelIds.filter((id) => validIds.has(id));
       const labelsChanged = keptLabelIds.length !== labelIds.length;
-      if (!pinnedChanged && !collapsedChanged && !labelsChanged) return state;
+      const titleIds = Object.keys(state.worktreeCustomTitles);
+      const keptTitleIds = titleIds.filter((id) => validIds.has(id));
+      const titlesChanged = keptTitleIds.length !== titleIds.length;
+      if (!pinnedChanged && !collapsedChanged && !labelsChanged && !titlesChanged) return state;
       const patch: Partial<ProjectScopedState> = {};
       if (pinnedChanged) patch.pinnedWorktrees = pinned;
       if (collapsedChanged) patch.collapsedWorktrees = collapsed;
@@ -785,6 +836,11 @@ const _actions: WorktreeFilterActions = {
         const labels: Record<string, WorktreeLabelToken> = {};
         for (const id of keptLabelIds) labels[id] = state.worktreeLabelColors[id]!;
         patch.worktreeLabelColors = labels;
+      }
+      if (titlesChanged) {
+        const titles: Record<string, string> = {};
+        for (const id of keptTitleIds) titles[id] = state.worktreeCustomTitles[id]!;
+        patch.worktreeCustomTitles = titles;
       }
       return patch;
     });
@@ -901,6 +957,7 @@ function _computeMergedState(): WorktreeFilterStore {
     pinnedWorktrees: p.pinnedWorktrees,
     collapsedWorktrees: p.collapsedWorktrees,
     worktreeLabelColors: p.worktreeLabelColors,
+    worktreeCustomTitles: p.worktreeCustomTitles,
     manualOrder: p.manualOrder,
     quickStateFilter: p.quickStateFilter,
     ..._actions,

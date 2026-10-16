@@ -316,3 +316,46 @@ describe("isMainWorktreeOnStandardBranch", () => {
     expect(isMainWorktreeOnStandardBranch(createWorktree(overrides))).toBe(false);
   });
 });
+
+describe("getWorktreeHeadline — custom title", () => {
+  it("replaces only the label, keeping the computed kind and its fields", () => {
+    const headline = getWorktreeHeadline(
+      createWorktree({ sourcePrNumber: 456, ...withLinkedPr(456, "Update dependencies") }),
+      "Release prep"
+    );
+    expect(headline).toEqual({
+      kind: "pr",
+      number: 456,
+      title: "Update dependencies",
+      label: "Release prep",
+      customTitle: "Release prep",
+      computedLabel: "#456 Update dependencies",
+    });
+  });
+
+  it("keeps the displaced name of every kind as the computed label", () => {
+    const issue = getWorktreeHeadline(
+      createWorktree({ issueNumber: 7, issueTitle: "Crash on start" }),
+      "Hotfix"
+    );
+    const main = getWorktreeHeadline(
+      createWorktree({ isMainWorktree: true, name: "daintree", branch: "main" }),
+      "Integration"
+    );
+    const branch = getWorktreeHeadline(createWorktree({ branch: "chore/x" }), "Cleanup");
+
+    expect([issue.kind, issue.computedLabel]).toEqual(["issue", "#7 Crash on start"]);
+    expect([main.kind, main.computedLabel]).toEqual(["main", "daintree"]);
+    expect([branch.kind, branch.computedLabel, branch.label]).toEqual([
+      "branch",
+      "chore/x",
+      "Cleanup",
+    ]);
+  });
+
+  it("is the computed headline, unchanged, without a title", () => {
+    const worktree = createWorktree({ branch: "chore/x" });
+    expect(getWorktreeHeadline(worktree, undefined)).toEqual(getWorktreeHeadline(worktree));
+    expect(getWorktreeHeadline(worktree, "")).toEqual({ kind: "branch", label: "chore/x" });
+  });
+});

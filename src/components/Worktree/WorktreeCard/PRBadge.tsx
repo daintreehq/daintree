@@ -34,7 +34,11 @@ interface PRBadgeProps {
    * for worktrees created from the PR dropdown (#8888), mirroring IssueBadge.
    */
   isHeadline?: boolean;
-  /** PR title to show when `isHeadline` is set. */
+  /**
+   * PR title. The headline always shows it; a non-headline badge shows it in
+   * place of the bare number when given, which only the PR a custom title
+   * displaced does (#13409).
+   */
   prTitle?: string;
 }
 
@@ -93,9 +97,9 @@ export function PRBadge({
     !missingCredential;
 
   const ariaLabel = missingCredential
-    ? `Pull request #${prNumber}${isHeadline && prTitle ? `: ${prTitle}` : ""}. Add a forge access token to see PR details`
+    ? `Pull request #${prNumber}${prTitle ? `: ${prTitle}` : ""}. Add a forge access token to see PR details`
     : `Open ${prStateLabel} pull request #${prNumber}` +
-      (isHeadline && prTitle ? `: ${prTitle}` : "") +
+      (prTitle ? `: ${prTitle}` : "") +
       (ciVisual ? ` — ${ciVisual.ariaLabel}` : "") +
       (freshnessCause === "rate-limit"
         ? " — forge rate limited"
@@ -166,6 +170,18 @@ export function PRBadge({
                   </span>
                 ))}
             </span>
+          ) : prTitle ? (
+            // The IssueBadge's subordinate title form, so a displaced PR and a
+            // displaced issue read as the same kind of line.
+            <span
+              className={cn(
+                "truncate flex-1 min-w-0",
+                underlineOnHover && "hover:underline",
+                missingCredential ? "text-text-secondary" : "text-text-primary"
+              )}
+            >
+              {prTitle}
+            </span>
           ) : (
             <span
               className={cn(
@@ -204,9 +220,9 @@ export function PRBadge({
         aria-label={
           data && !missingCredential
             ? describePRTooltip(data, freshness, prCiStatus, {
-                // The subordinate badge shows only the number, so the card's
-                // description is the only place its title is spoken.
-                includeTitle: !(isHeadline && prTitle),
+                // A badge drawn without its title shows only the number, so the
+                // card's description is the only place that title is spoken.
+                includeTitle: !prTitle,
               })
             : undefined
         }

@@ -4,6 +4,8 @@ import type { Issue } from "@shared/types/forge";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import type { ConfirmDialogState } from "./hooks/useWorktreeActions";
+import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
+import { EditWorktreeTitleDialog } from "./EditWorktreeTitleDialog";
 
 const LazyWorktreeDeleteDialog = lazy(() =>
   import("../WorktreeDeleteDialog").then((m) => ({ default: m.WorktreeDeleteDialog }))
@@ -23,6 +25,10 @@ export interface WorktreeDialogsProps {
   onCloseIssuePicker: () => void;
   onAttachIssue: (issue: Issue) => void;
   onDetachIssue: () => void;
+  showTitleDialog: boolean;
+  onCloseTitleDialog: () => void;
+  customTitle: string | undefined;
+  restoreTitleDialogFocusTo?: RestoreFocusTarget;
 }
 
 export function WorktreeDialogs({
@@ -35,6 +41,10 @@ export function WorktreeDialogs({
   onCloseIssuePicker,
   onAttachIssue,
   onDetachIssue,
+  showTitleDialog,
+  onCloseTitleDialog,
+  customTitle,
+  restoreTitleDialogFocusTo,
 }: WorktreeDialogsProps) {
   // Keep-mounted is NOT for a close animation — it avoids re-suspending on
   // reopen of a lazily-loaded dialog.
@@ -53,6 +63,14 @@ export function WorktreeDialogs({
       >
         {confirmDialog.isOpen ? confirmDialog.children : undefined}
       </ConfirmDialog>
+
+      <EditWorktreeTitleDialog
+        isOpen={showTitleDialog}
+        onClose={onCloseTitleDialog}
+        worktreeId={worktree.id}
+        currentTitle={customTitle}
+        restoreFocusTo={restoreTitleDialogFocusTo}
+      />
 
       {deleteDialogMounted && (
         <Suspense fallback={null}>

@@ -114,7 +114,15 @@ function scoreField(field: string, query: string, startsWith: number, contains: 
   return 0;
 }
 
-export function scoreWorktree(worktree: Worktree | WorktreeState, query: string): number {
+/**
+ * `customTitle` is the worktree's title from the filter store (#13409), scored
+ * at headline weight. Passed in rather than read here so this stays pure.
+ */
+export function scoreWorktree(
+  worktree: Worktree | WorktreeState,
+  query: string,
+  customTitle?: string
+): number {
   const q = query.toLowerCase().trim();
   if (!q) return 0;
 
@@ -124,6 +132,7 @@ export function scoreWorktree(worktree: Worktree | WorktreeState, query: string)
   const prTitle = (worktree.linked?.pr?.title ?? "").toLowerCase();
 
   return Math.max(
+    scoreField((customTitle ?? "").toLowerCase(), q, 4, 3),
     scoreField(issueTitle, q, 4, 3),
     scoreField(name, q, 4, 3),
     scoreField(branch, q, 2, 1),
@@ -141,13 +150,17 @@ export function scoreWorktree(worktree: Worktree | WorktreeState, query: string)
  * the sidebar never has: a query of spaces scores nothing and so hides every
  * row. A caller that wants whitespace to read as empty trims first.
  */
-export function matchesWorktreeQuery(worktree: Worktree | WorktreeState, query: string): boolean {
+export function matchesWorktreeQuery(
+  worktree: Worktree | WorktreeState,
+  query: string,
+  customTitle?: string
+): boolean {
   if (query.length === 0) return true;
   const exactNum = parseExactNumber(query);
   if (exactNum !== null) {
     return worktree.issueNumber === exactNum || worktree.linked?.pr?.ref.number === exactNum;
   }
-  return scoreWorktree(worktree, query) > 0;
+  return scoreWorktree(worktree, query, customTitle) > 0;
 }
 
 export function computeStatus(
@@ -180,6 +193,8 @@ export interface FilterState {
   hasAgentFilter: boolean;
   activityFilters: Set<ActivityFilter>;
   devServerFilters: Set<DevServerFilter>;
+  /** Worktree id → custom title, so the query matches titles too (#13409). */
+  customTitles?: Readonly<Record<string, string>>;
 }
 
 export function matchesFilters(
@@ -189,7 +204,9 @@ export function matchesFilters(
   isActive: boolean,
   sessionsByWorktreeId?: Record<string, DevPreviewSessionState>
 ): boolean {
-  if (!matchesWorktreeQuery(worktree, filters.query)) return false;
+  if (!matchesWorktreeQuery(worktree, filters.query, filters.customTitles?.[worktree.id])) {
+    return false;
+  }
 
   // Status filters (OR within category)
   if (filters.statusFilters.size > 0) {
@@ -369,12 +386,13 @@ export function sortWorktreesByRelevance<T extends Worktree | WorktreeState>(
   query: string,
   orderBy: OrderBy,
   pinnedWorktrees: string[] = [],
-  manualOrder: string[] = []
+  manualOrder: string[] = [],
+  customTitles?: Readonly<Record<string, string>>
 ): T[] {
   const sorted = sortWorktrees(worktrees, orderBy, pinnedWorktrees, manualOrder);
   if (!query.trim()) return sorted;
 
-  const scores = new Map(sorted.map((w) => [w.id, scoreWorktree(w, query)]));
+  const scores = new Map(sorted.map((w) => [w.id, scoreWorktree(w, query, customTitles?.[w.id])]));
   // Stable sort preserves sortWorktrees order as tiebreaker. The external
   // partition is re-applied as the primary key: a strong query match must not
   // pull an outside-the-project worktree back above the project's own (#11434).
@@ -589,7 +607,7 @@ export function computeChipCounts(
     if (hasQuery) {
       const matchesQuery =
         exactQuery === null
-          ? scoreWorktree(worktree, filters.query) > 0
+          ? scoreWorktree(worktree, filters.query, filters.customTitles?.[worktree.id]) > 0
           : worktree.issueNumber === exactQuery || worktree.linked?.pr?.ref.number === exactQuery;
       if (!matchesQuery) continue;
     }

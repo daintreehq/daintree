@@ -23,6 +23,7 @@ import {
   ROW_MENU_TARGET_CLASS,
 } from "@/components/ui/paletteRowStyles";
 import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
@@ -278,10 +279,14 @@ export function WorktreeOverviewRow({
   onFocusLost,
 }: WorktreeOverviewRowProps) {
   const marks = useSessionMarks(worktree.id);
-  const headline = getWorktreeHeadline(worktree);
+  const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
+  const headline = getWorktreeHeadline(worktree, customTitle);
   const branchLabel = getWorktreeBranchLabel(worktree);
-  const title =
-    headline.kind === "issue" || headline.kind === "pr"
+  // A custom title (#13409) names the row; the glyph below still follows the
+  // computed kind, so it keeps saying where the worktree came from.
+  const title = headline.customTitle
+    ? headline.customTitle
+    : headline.kind === "issue" || headline.kind === "pr"
       ? (headline.title ?? branchLabel)
       : worktree.isMainWorktree
         ? worktree.name
@@ -295,7 +300,10 @@ export function WorktreeOverviewRow({
   // for a bare branch — whose name then IS the title, set in mono as the
   // sidebar sets it. The branch's own type mark rides with the branch line.
   const isBranchTitled =
-    !worktree.isMainWorktree && headline.kind !== "issue" && headline.kind !== "pr";
+    !headline.customTitle &&
+    !worktree.isMainWorktree &&
+    headline.kind !== "issue" &&
+    headline.kind !== "pr";
   const headlinePr = headline.kind === "pr" ? worktree.linked?.pr : undefined;
   const TypeIcon = worktree.isMainWorktree
     ? Sprout

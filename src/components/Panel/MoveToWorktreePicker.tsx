@@ -162,18 +162,29 @@ interface OrderPrefs {
   orderBy: OrderBy;
   pinnedWorktrees: string[];
   manualOrder: string[];
+  customTitles: Readonly<Record<string, string>>;
 }
 
-function toRow(worktree: WorktreeState, currentWorktreeId: string | undefined): PickerRow {
-  const headline = getWorktreeHeadline(worktree);
+function toRow(
+  worktree: WorktreeState,
+  currentWorktreeId: string | undefined,
+  customTitle: string | undefined
+): PickerRow {
+  const headline = getWorktreeHeadline(worktree, customTitle);
+  // A custom title (#13409) is a title like an issue's, whatever it displaced,
+  // so the branch goes underneath it.
   const detail =
-    headline.kind === "pr" || headline.kind === "issue"
-      ? getWorktreeBranchLabel(worktree)
-      : headline.kind === "main"
-        ? (worktree.branch ?? null)
-        : null;
+    headline.customTitle !== undefined
+      ? getWorktreeBranchLabel(worktree).trim() || null
+      : headline.kind === "pr" || headline.kind === "issue"
+        ? getWorktreeBranchLabel(worktree)
+        : headline.kind === "main"
+          ? (worktree.branch ?? null)
+          : null;
   const isBranchTitled =
-    headline.kind === "branch" && getWorktreeBranchLabel(worktree).trim() !== "";
+    headline.customTitle === undefined &&
+    headline.kind === "branch" &&
+    getWorktreeBranchLabel(worktree).trim() !== "";
   return {
     worktree,
     headline,
@@ -195,7 +206,9 @@ function orderForQuery(
   prefs: OrderPrefs
 ): readonly WorktreeState[] {
   if (!query) return ordered;
-  const matches = ordered.filter((worktree) => matchesWorktreeQuery(worktree, query));
+  const matches = ordered.filter((worktree) =>
+    matchesWorktreeQuery(worktree, query, prefs.customTitles[worktree.id])
+  );
   const main = matches.filter((worktree) => worktree.isMainWorktree);
   const rest = matches.filter((worktree) => !worktree.isMainWorktree);
   return [
@@ -205,7 +218,8 @@ function orderForQuery(
       query,
       prefs.orderBy,
       prefs.pinnedWorktrees,
-      prefs.manualOrder
+      prefs.manualOrder,
+      prefs.customTitles
     ),
   ];
 }
@@ -239,6 +253,7 @@ function MoveToWorktreePickerBody({
       orderBy: state.orderBy,
       pinnedWorktrees: state.pinnedWorktrees,
       manualOrder: state.manualOrder,
+      customTitles: state.worktreeCustomTitles,
     }))
   );
 
@@ -249,7 +264,7 @@ function MoveToWorktreePickerBody({
   const rows = useMemo(
     () =>
       orderForQuery(ordered, deferredQuery, prefs).map((worktree) =>
-        toRow(worktree, currentWorktreeId)
+        toRow(worktree, currentWorktreeId, prefs.customTitles[worktree.id])
       ),
     [ordered, deferredQuery, prefs, currentWorktreeId]
   );

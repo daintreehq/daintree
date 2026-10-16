@@ -21,6 +21,7 @@ function resetWorktreeFilterStore() {
     pinnedWorktrees: [],
     collapsedWorktrees: [],
     worktreeLabelColors: {},
+    worktreeCustomTitles: {},
     manualOrder: [],
     quickStateFilter: "all",
   });
@@ -387,6 +388,46 @@ describe("worktreeFilterStore", () => {
     });
   });
 
+  describe("setWorktreeCustomTitle", () => {
+    it("normalises, replaces and clears a title", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "  Release   prep ");
+      store.setWorktreeCustomTitle("wt-2", "Integration");
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+        "wt-1": "Release prep",
+        "wt-2": "Integration",
+      });
+
+      store.setWorktreeCustomTitle("wt-1", "\u200B ");
+      store.setWorktreeCustomTitle("wt-2", null);
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({});
+    });
+
+    it("is a no-op for an unchanged title, nothing to clear, or an over-long title", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "Integration");
+      const before = useWorktreeFilterStore.getState().worktreeCustomTitles;
+
+      store.setWorktreeCustomTitle("wt-1", " Integration ");
+      store.setWorktreeCustomTitle("wt-other", null);
+      store.setWorktreeCustomTitle("wt-1", "x".repeat(81));
+
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toBe(before);
+    });
+
+    it("survives clearAll, which only resets search and filters", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "Integration");
+      store.setQuery("abc");
+
+      store.clearAll();
+
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+        "wt-1": "Integration",
+      });
+    });
+  });
+
   describe("pruneStaleWorktreeIds", () => {
     it("removes pins and collapsed entries not in validIds", () => {
       const store = useWorktreeFilterStore.getState();
@@ -413,6 +454,29 @@ describe("worktreeFilterStore", () => {
       expect(useWorktreeFilterStore.getState().worktreeLabelColors).toEqual({
         "wt-1": "category-teal",
       });
+    });
+
+    it("removes titles for worktrees not in validIds and keeps the rest", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "Integration");
+      store.setWorktreeCustomTitle("wt-gone", "Spike");
+
+      store.pruneStaleWorktreeIds(new Set(["wt-1"]));
+
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toEqual({
+        "wt-1": "Integration",
+      });
+    });
+
+    it("preserves title map identity when no title is stale", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeCustomTitle("wt-1", "Integration");
+      store.setWorktreeLabelColor("wt-stale", "category-blue");
+      const before = useWorktreeFilterStore.getState().worktreeCustomTitles;
+
+      store.pruneStaleWorktreeIds(new Set(["wt-1"]));
+
+      expect(useWorktreeFilterStore.getState().worktreeCustomTitles).toBe(before);
     });
 
     it("preserves label map identity when no label is stale", () => {
@@ -1368,6 +1432,59 @@ describe("worktreeFilterStore cross-view write merge (#11351)", () => {
     const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
 
     expect(store.getState().worktreeLabelColors).toEqual({ "wt-1": "category-violet" });
+  });
+
+  it("a stale same-project window's write preserves a sibling's custom title", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400);
+
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          worktreeCustomTitles: { "wt-main": "Integration" },
+          manualOrder: [],
+        },
+      })
+    );
+
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: {
+      state: { worktreeCustomTitles: Record<string, string>; query: string };
+    } = JSON.parse(backing.get(PROJECT_KEY)!);
+    expect(projectBlob.state.worktreeCustomTitles).toEqual({ "wt-main": "Integration" });
+    expect(projectBlob.state.query).toBe("needle");
+  });
+
+  it("hydrates titles, normalising them and dropping blank, over-long or non-string entries", async () => {
+    installLocalStorage({
+      [PROJECT_KEY]: JSON.stringify({
+        version: 2,
+        state: {
+          worktreeCustomTitles: {
+            "wt-1": "  Release  prep ",
+            "wt-2": "\u200B",
+            "wt-3": "x".repeat(81),
+            "wt-4": 7,
+          },
+        },
+      }),
+    });
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect(store.getState().worktreeCustomTitles).toEqual({ "wt-1": "Release prep" });
   });
 
   it("a stale same-project window's write preserves a sibling's 'Has an agent' filter", async () => {

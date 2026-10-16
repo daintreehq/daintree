@@ -123,6 +123,7 @@ export function WorktreeOverviewModal({
     pinnedWorktrees,
     manualOrder,
     quickStateFilter,
+    customTitles,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
       // The field's own value, not the debounced persisted `query`: the list has
@@ -143,6 +144,7 @@ export function WorktreeOverviewModal({
       pinnedWorktrees: state.pinnedWorktrees,
       manualOrder: state.manualOrder,
       quickStateFilter: state.quickStateFilter,
+      customTitles: state.worktreeCustomTitles,
     }))
   );
   const devServerSessions = useWorktreeDevServerStore((s) => s.sessionsByWorktreeId);
@@ -223,6 +225,7 @@ export function WorktreeOverviewModal({
       hasAgentFilter,
       activityFilters,
       devServerFilters,
+      customTitles,
     }),
     [
       liveQuery,
@@ -233,6 +236,7 @@ export function WorktreeOverviewModal({
       hasAgentFilter,
       activityFilters,
       devServerFilters,
+      customTitles,
     ]
   );
 

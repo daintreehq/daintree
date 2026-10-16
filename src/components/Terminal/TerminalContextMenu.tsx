@@ -16,6 +16,7 @@ import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
@@ -241,6 +242,8 @@ type MenuPanel = ReturnType<typeof usePanelStore.getState>["panelsById"][string]
  * worktree, and existence. Activity, agent-state and focus writes would
  * otherwise re-render every closed menu. The live menu gets every write.
  */
+const NO_CUSTOM_TITLES: Readonly<Record<string, string>> = {};
+
 function createMenuPanelSelector(terminalId: string, isMenuLive: boolean) {
   let held: MenuPanel | undefined;
   return (state: { panelsById: Record<string, MenuPanel> }): MenuPanel | undefined => {
@@ -333,6 +336,9 @@ function TerminalContextMenuBody({
   // the time; only the live menu lists worktrees, so a git-status pass on any
   // worktree doesn't re-render every closed menu.
   const worktrees = useSidebarWorktreeOrder({ enabled: isMenuLive });
+  const customTitles = useWorktreeFilterStore((state) =>
+    isMenuLive ? state.worktreeCustomTitles : NO_CUSTOM_TITLES
+  );
   // What the panel's plugin published for its menus (#13213), read only while
   // the menu is live for the same reason.
   const publishedViewMenuItems = usePanelViewMenuItems(terminalId, isMenuLive);
@@ -1289,7 +1295,7 @@ function TerminalContextMenuBody({
               onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
             >
               <FolderGit2 className={ICON_CLASS} />
-              {getWorktreeHeadline(wt).label}
+              {getWorktreeHeadline(wt, customTitles[wt.id]).label}
             </ContextMenuItem>
           );
         })}
