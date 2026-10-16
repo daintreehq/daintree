@@ -225,18 +225,20 @@ function makePass(
     lastWatcherEventAt: 0,
     upstreamRef: null,
   });
-  const baseDivergence = baseDivergenceOverride ?? new BaseDivergence(
-    {
-      branch: host.branch,
-      isMainWorktree: false,
-      mainBranch: host.mainBranch,
-      linkedPrBaseRef: undefined,
-      path: host.path,
-      wslInvocation: host.wslInvocation,
-      abortSignal: host.abortSignal,
-    },
-    statPrecheck
-  );
+  const baseDivergence =
+    baseDivergenceOverride ??
+    new BaseDivergence(
+      {
+        branch: host.branch,
+        isMainWorktree: false,
+        mainBranch: host.mainBranch,
+        linkedPrBaseRef: undefined,
+        path: host.path,
+        wslInvocation: host.wslInvocation,
+        abortSignal: host.abortSignal,
+      },
+      statPrecheck
+    );
   const watcherController = makeWatcherController();
   const pollingStrategy = makePollingStrategy();
   const noteReader = makeNoteReader();

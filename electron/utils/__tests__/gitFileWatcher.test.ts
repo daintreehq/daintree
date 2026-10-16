@@ -495,7 +495,9 @@ describe("GitFileWatcher", () => {
     gitWatcher.setUpstreamRef("refs/remotes/origin/feature/x");
     gitWatcher.setUpstreamRef("refs/remotes/origin/feature/y");
     const cb = callbackFor(pathJoin(remotes, "feature"));
-    expect(vi.mocked(watch).mock.calls.filter(([p]) => p === pathJoin(remotes, "feature"))).toHaveLength(1);
+    expect(
+      vi.mocked(watch).mock.calls.filter(([p]) => p === pathJoin(remotes, "feature"))
+    ).toHaveLength(1);
 
     cb?.("rename", "x");
     await vi.advanceTimersByTimeAsync(150);

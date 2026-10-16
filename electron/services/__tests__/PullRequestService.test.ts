@@ -4343,9 +4343,7 @@ describe("PullRequestService", () => {
 
     it("ignores an upstream that names a different branch than the PR's head", async () => {
       makeHarness(ci("failure", "sha1"));
-      const { pullRequestService, detected, update } = await settle(
-        "refs/remotes/origin/develop"
-      );
+      const { pullRequestService, detected, update } = await settle("refs/remotes/origin/develop");
 
       update("sha2");
 
