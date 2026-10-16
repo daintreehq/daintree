@@ -401,7 +401,12 @@ export class HostSetupService {
         return createWslCommandChannel({
           distro: supported.distro,
           run: this.deps.run,
-          keepalive: keepalive ? (distro) => keepalive.touch(distro) : undefined,
+          // Not while the host is removed or re-pointed: its distro was just let go.
+          keepalive: keepalive
+            ? (distro) => {
+                if (!this.deps.isRetiring?.(supported)) keepalive.touch(distro);
+              }
+            : undefined,
         });
       }
     }

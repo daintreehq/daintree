@@ -109,11 +109,12 @@ export function quotePowerShellArg(arg: string): string {
   return `'${arg.replace(/['\u2018-\u201b]/g, (quote) => quote + quote)}'`;
 }
 
-/** Source quoting for commands assembled for the project's host. */
+/** Source quoting for commands assembled for the project's host (its shell unless named). */
 export function quoteLaunchArgOptional(arg: string, platform?: "windows" | "posix"): string {
   if (isSafeUnescaped(arg) || isSafeShellOption(arg)) return arg;
-  const windows = platform === "windows" || (platform === undefined && isWindows());
-  return windows ? quotePowerShellArg(arg) : escapeShellArg(arg, "posix");
+  return (platform ?? agentCommandDialect()) === "windows"
+    ? quotePowerShellArg(arg)
+    : escapeShellArg(arg, "posix");
 }
 
 /**

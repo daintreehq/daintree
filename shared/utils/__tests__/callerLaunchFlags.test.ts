@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   appendCallerLaunchFlagsToCommand,
   readCallerLaunchFlags,
   splitCallerLaunchFlags,
 } from "../callerLaunchFlags.js";
+import { setAgentCommandDialectResolver } from "../shellEscape.js";
 
 describe("splitCallerLaunchFlags", () => {
   it("splits the caller's tail off the settings-derived flags", () => {
@@ -72,6 +73,22 @@ describe("appendCallerLaunchFlagsToCommand", () => {
     expect(appendCallerLaunchFlagsToCommand("claude", ["--model", "sonnet"])).toBe(
       "claude --model sonnet"
     );
+  });
+
+  describe("with no dialect named", () => {
+    const originalPlatform = process.platform;
+    afterEach(() => {
+      setAgentCommandDialectResolver(null);
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    });
+
+    it("quotes for the host's shell: bash for a WSL project under a Windows Shell", () => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      expect(appendCallerLaunchFlagsToCommand("claude", ["don't"])).toBe("claude 'don''t'");
+      setAgentCommandDialectResolver(() => "posix");
+      // PowerShell's doubled apostrophe would reach bash as "dont".
+      expect(appendCallerLaunchFlagsToCommand("claude", ["don't"])).toBe("claude 'don'\\''t'");
+    });
   });
 
   it("leaves the command alone when there is nothing to append", () => {
