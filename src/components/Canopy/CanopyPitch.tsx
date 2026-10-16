@@ -10,6 +10,7 @@ import { SectionBar } from "./CanopySectionBar";
 import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
 import { itemNeedsAttention } from "./canopyModel";
 import { useListReorderMotion } from "./useListReorderMotion";
+import { CanopyHeaderCenter } from "./CanopyHostPicker";
 import {
   CANOPY_BETA_TERMS,
   CANOPY_PRIVACY_URL,
@@ -50,6 +51,8 @@ interface CanopyPitchProps {
   onHide: () => Promise<void>;
   /** Where the keyboard goes when the offer closes: what had it when the panel opened. */
   restoreFocusTo?: () => HTMLElement | null;
+  /** The host picker, when there is another host to show: the offer is this host's alone. */
+  hostPicker?: React.ReactNode;
 }
 
 const FAILED: Record<"on" | "hide", string> = {
@@ -69,6 +72,7 @@ export function CanopyPitch({
   onTurnOn,
   onHide,
   restoreFocusTo,
+  hostPicker,
 }: CanopyPitchProps) {
   const [pending, setPending] = useState<"on" | "hide" | null>(null);
   const [failed, setFailed] = useState<"on" | "hide" | null>(null);
@@ -108,7 +112,7 @@ export function CanopyPitch({
     >
       <AppDialog.Header>
         <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
-        <span className="flex-1" />
+        <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
         <AppDialog.CloseButton />
       </AppDialog.Header>
       <div className="flex min-h-0 flex-1">

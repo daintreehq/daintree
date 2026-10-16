@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { FolderGit2, GitBranch } from "@/components/icons";
 import { WorkspaceTile } from "@/components/Pilot/WorkspaceTile";
 import type { CanopyItem } from "./canopyModel";
+import { ownCanopyApi, type CanopyApi } from "./canopyHostSource";
 
 /**
  * Branches already read, by incarnation, so going back to a row says where it
@@ -23,15 +24,22 @@ export function __resetCanopyPlaceForTests(): void {
   branches.clear();
 }
 
-function useRunBranch(runId: string, spawnedAt: number, agentState: string | undefined) {
-  const key = `${runId}:${spawnedAt}`;
+function useRunBranch(
+  hostId: string,
+  runId: string,
+  spawnedAt: number,
+  agentState: string | undefined,
+  runBranch: CanopyApi["runBranch"]
+) {
+  // Run ids mean something only on their own host.
+  const key = `${hostId}:${runId}:${spawnedAt}`;
   const [read, setRead] = useState<{ key: string; branch: string | null } | null>(null);
   // Read again as the agent moves on, and now and then while it works: a turn,
   // or the user in another terminal, can check out another branch.
   useEffect(() => {
     let live = true;
     const readBranch = () =>
-      window.electron.canopy.runBranch(runId, { spawnedAt }).then(
+      runBranch(runId, { spawnedAt }).then(
         (branch) => {
           if (!live) return;
           remember(key, branch);
@@ -49,7 +57,7 @@ function useRunBranch(runId: string, spawnedAt: number, agentState: string | und
       live = false;
       clearInterval(timer);
     };
-  }, [key, runId, spawnedAt, agentState]);
+  }, [key, runId, spawnedAt, agentState, runBranch]);
   if (read?.key === key) return { known: true, branch: read.branch };
   return branches.has(key)
     ? { known: true, branch: branches.get(key) ?? null }
@@ -62,9 +70,27 @@ function useRunBranch(runId: string, spawnedAt: number, agentState: string | und
  * terminal. A folder outside git, or on a detached HEAD, is named by its
  * folder instead.
  */
-export function CanopyPlace({ item, id }: { item: CanopyItem; id: string }) {
+export function CanopyPlace({
+  item,
+  id,
+  hostId = "",
+  runBranch = ownCanopyApi.runBranch,
+}: {
+  item: CanopyItem;
+  id: string;
+  /** The host the run is on, when it isn't the window's own. */
+  hostId?: string;
+  /** Read on the host the run is on: another host's folders mean nothing here. */
+  runBranch?: CanopyApi["runBranch"];
+}) {
   const { row, workspace } = item;
-  const { known, branch } = useRunBranch(item.runId, row.run.spawnedAt, row.run.agentState);
+  const { known, branch } = useRunBranch(
+    hostId,
+    item.runId,
+    row.run.spawnedAt,
+    row.run.agentState,
+    runBranch
+  );
   const fallback = known && branch === null ? row.worktreeLabel : null;
 
   return (

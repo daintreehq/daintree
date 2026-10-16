@@ -24,6 +24,12 @@ export interface CanopyRowMenuActions {
   onTrash: (item: CanopyItem) => void;
   /** The menu opened or closed: the list holds still while it is open. */
   onOpenChange: (open: boolean) => void;
+  /**
+   * The run is on another host: only what that host's Canopy can do from here
+   * is offered. Going to its terminal, replying, renaming and trashing act on
+   * the window's own host, so they are left out until they can reach the run's.
+   */
+  readingOnly?: boolean;
 }
 
 /**
@@ -37,6 +43,7 @@ export function CanopyRowMenu({
   ...actions
 }: CanopyRowMenuActions & { item: CanopyItem; children: ReactNode }) {
   const archived = itemArchived(item);
+  const readingOnly = actions.readingOnly === true;
   const trashChord = isMac() ? "Meta+Backspace" : "Control+Backspace";
   // Rename and Reply send focus into the pane on purpose — the run's name
   // field, or its composer: the menu closing must not hand it back to the row
@@ -55,11 +62,13 @@ export function CanopyRowMenu({
           event.preventDefault();
         }}
       >
-        <ContextMenuItem aria-keyshortcuts="Enter" onSelect={() => actions.onOpen(item)}>
-          Go to terminal
-          <ContextMenuShortcut shortcut="Enter" />
-        </ContextMenuItem>
-        {canReplyTo(item) && (
+        {!readingOnly && (
+          <ContextMenuItem aria-keyshortcuts="Enter" onSelect={() => actions.onOpen(item)}>
+            Go to terminal
+            <ContextMenuShortcut shortcut="Enter" />
+          </ContextMenuItem>
+        )}
+        {!readingOnly && canReplyTo(item) && (
           <ContextMenuItem
             aria-keyshortcuts="R"
             onSelect={() => {
@@ -71,7 +80,7 @@ export function CanopyRowMenu({
             <ContextMenuShortcut shortcut="R" />
           </ContextMenuItem>
         )}
-        <ContextMenuSeparator />
+        {!readingOnly && <ContextMenuSeparator />}
         {!archived && (
           <ContextMenuItem aria-keyshortcuts="U" onSelect={() => actions.onToggleRead(item)}>
             {item.unread ? "Mark as read" : "Mark as unread"}
@@ -85,27 +94,31 @@ export function CanopyRowMenu({
           {archived ? "Move to inbox" : "Archive"}
           <ContextMenuShortcut shortcut="E" />
         </ContextMenuItem>
-        <ContextMenuItem
-          aria-keyshortcuts="F2"
-          onSelect={() => {
-            focusMovedRef.current = true;
-            actions.onRename(item);
-          }}
-        >
-          Rename…
-          <ContextMenuShortcut shortcut="F2" />
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        {/* Arms Trash in the agent's pane, as its first press would; the
-            second press there confirms it. */}
-        <ContextMenuItem
-          destructive
-          aria-keyshortcuts={trashChord}
-          onSelect={() => actions.onTrash(item)}
-        >
-          Trash terminal…
-          <ContextMenuShortcut shortcut={trashChord} />
-        </ContextMenuItem>
+        {!readingOnly && (
+          <>
+            <ContextMenuItem
+              aria-keyshortcuts="F2"
+              onSelect={() => {
+                focusMovedRef.current = true;
+                actions.onRename(item);
+              }}
+            >
+              Rename…
+              <ContextMenuShortcut shortcut="F2" />
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            {/* Arms Trash in the agent's pane, as its first press would; the
+                second press there confirms it. */}
+            <ContextMenuItem
+              destructive
+              aria-keyshortcuts={trashChord}
+              onSelect={() => actions.onTrash(item)}
+            >
+              Trash terminal…
+              <ContextMenuShortcut shortcut={trashChord} />
+            </ContextMenuItem>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

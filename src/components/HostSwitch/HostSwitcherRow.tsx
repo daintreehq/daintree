@@ -5,7 +5,7 @@ import { pluralize } from "@/lib/pluralize";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatBytes } from "@/lib/formatBytes";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { HollowCircle, SpinnerCircle } from "@/components/icons";
+import { AgentCounts, MetricDash } from "@/components/Hosts/AgentCounts";
 import { PlatformGlyph } from "@/components/Hosts/PlatformGlyph";
 import { LinkMark } from "@/components/Hosts/LinkMark";
 import { HostNameText } from "@/components/Hosts/HostNameText";
@@ -64,48 +64,6 @@ function HostName({ name, dim }: { name: string; dim: boolean }) {
   );
 }
 
-function AgentCounts({ summary }: { summary: HostMetricsSummary }) {
-  const observed = summary.agentsObserved;
-  if (!observed) return <Dash label="Agent activity unknown" />;
-  const { working, waiting } = observed;
-  const spoken =
-    working === 0 && waiting === 0
-      ? "No agents waiting or working"
-      : `Agents: ${[waiting > 0 && `${waiting} waiting`, working > 0 && `${working} working`]
-          .filter(Boolean)
-          .join(", ")}`;
-  return (
-    <span className="flex items-center gap-2 text-xs tabular-nums text-text-primary">
-      <span className="sr-only">{spoken} (observed)</span>
-      {working === 0 && waiting === 0 ? (
-        <span aria-hidden="true" className="text-text-secondary">
-          0
-        </span>
-      ) : (
-        <>
-          {/* Waiting leads: it's the one asking for something. */}
-          <span aria-hidden="true" className="flex w-7 items-center gap-1">
-            {waiting > 0 && (
-              <>
-                <HollowCircle className="h-3 w-3 shrink-0 text-state-waiting" />
-                {waiting}
-              </>
-            )}
-          </span>
-          <span aria-hidden="true" className="flex w-7 items-center gap-1">
-            {working > 0 && (
-              <>
-                <SpinnerCircle className="h-3 w-3 shrink-0 animate-spin-slow text-state-working motion-reduce:animate-none" />
-                {working}
-              </>
-            )}
-          </span>
-        </>
-      )}
-    </span>
-  );
-}
-
 function CpuCell({
   summary,
   history,
@@ -114,7 +72,7 @@ function CpuCell({
   history: readonly HostMetricsSummary[];
 }) {
   const cpu = summary.cpuPercent;
-  if (cpu === null) return <Dash label="CPU not measured" />;
+  if (cpu === null) return <MetricDash label="CPU not measured" />;
   const series = cpuSeries(history.slice(0, SPARK_SAMPLES));
   const measured = series.filter((value) => value !== null).length;
   const hot = cpu >= CPU_HOT;
@@ -156,7 +114,7 @@ const PRESSURE = {
  */
 function MemoryCell({ summary }: { summary: HostMetricsSummary }) {
   const pressure = summary.memoryPressure;
-  if (pressure === null) return <Dash label="Memory pressure not measured" />;
+  if (pressure === null) return <MetricDash label="Memory pressure not measured" />;
   const level = PRESSURE[pressure];
   const { memoryUsedBytes: used, memoryTotalBytes: total } = summary;
   const capacity =
@@ -186,18 +144,10 @@ function MemoryCell({ summary }: { summary: HostMetricsSummary }) {
 function LinkCell({ row }: { row: HostMenuRow }) {
   if (row.isLocal) return <span className="text-right text-xs text-text-secondary">local</span>;
   const rtt = row.connection?.status === "connected" ? row.connection.rttMs : null;
-  if (rtt === null) return <Dash label="Round trip not measured" align="right" />;
+  if (rtt === null) return <MetricDash label="Round trip not measured" align="right" />;
   return (
     <span className="text-right text-xs tabular-nums text-text-primary">
       {Math.round(rtt)} ms<span className="sr-only"> round trip</span>
-    </span>
-  );
-}
-
-function Dash({ label, align }: { label: string; align?: "right" }) {
-  return (
-    <span className={cn("text-xs text-text-secondary", align === "right" && "text-right")}>
-      –<span className="sr-only">{label}</span>
     </span>
   );
 }
@@ -336,13 +286,21 @@ export function HostSwitcherRow({
       </span>
       {live ? (
         <>
-          {summary ? <AgentCounts summary={summary} /> : <Dash label="Agent activity unknown" />}
+          {summary ? (
+            <AgentCounts summary={summary} />
+          ) : (
+            <MetricDash label="Agent activity unknown" />
+          )}
           {summary ? (
             <CpuCell summary={summary} history={history} />
           ) : (
-            <Dash label="CPU not reported yet" />
+            <MetricDash label="CPU not reported yet" />
           )}
-          {summary ? <MemoryCell summary={summary} /> : <Dash label="Memory not reported yet" />}
+          {summary ? (
+            <MemoryCell summary={summary} />
+          ) : (
+            <MetricDash label="Memory not reported yet" />
+          )}
           <LinkCell row={row} />
         </>
       ) : (

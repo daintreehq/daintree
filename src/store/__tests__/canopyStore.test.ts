@@ -147,3 +147,70 @@ describe("orders", () => {
     expect(reloaded.getState().orders.project?.ids).toEqual(["c"]);
   });
 });
+
+describe("orders per host", () => {
+  const stored = (): unknown =>
+    JSON.parse(window.localStorage.getItem("daintree-canopy-order") ?? "{}");
+  const reload = async () => {
+    vi.resetModules();
+    return (await import("../canopyStore")).useCanopyStore;
+  };
+  afterEach(() => {
+    window.localStorage.removeItem("daintree-canopy-order");
+    delete window.__DAINTREE_HOST_ID__;
+  });
+
+  it("keys each host's order by the host, and never mixes them", async () => {
+    useCanopyStore.getState().setOrder("all", { ids: ["mine"], rankedFor: 1, urgent: [] });
+    useCanopyStore.getState().setHostOrder("studio", { ids: ["theirs"], rankedFor: 1, urgent: [] });
+    expect(stored()).toEqual({ "local|all": ["mine"], "studio|all": ["theirs"] });
+    const reloaded = await reload();
+    expect(reloaded.getState().orders.all?.ids).toEqual(["mine"]);
+    expect(reloaded.getState().hostOrders.studio?.ids).toEqual(["theirs"]);
+  });
+
+  it("opens this machine on the order kept before orders were per host, and moves it", async () => {
+    window.localStorage.setItem("daintree-canopy-order", JSON.stringify({ all: ["old"] }));
+    const reloaded = await reload();
+    expect(reloaded.getState().orders.all?.ids).toEqual(["old"]);
+    reloaded.getState().setOrder("all", { ids: ["new"], rankedFor: 1, urgent: [] });
+    expect(stored()).toEqual({ "local|all": ["new"] });
+  });
+
+  it("never opens another host's list on this machine's old order", async () => {
+    window.localStorage.setItem("daintree-canopy-order", JSON.stringify({ all: ["old"] }));
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    const reloaded = await reload();
+    // A window on the studio host: its own list is the studio's, which has no order yet.
+    expect(reloaded.getState().orders.all).toBeUndefined();
+    // This machine, shown from there, still opens on its own.
+    expect(reloaded.getState().hostOrders.local?.ids).toEqual(["old"]);
+  });
+});
+
+describe("the host shown", () => {
+  afterEach(() => {
+    useCanopyStore.setState({ isOpen: false, hostId: null, mode: "unset" });
+    delete window.__DAINTREE_HOST_ID__;
+  });
+
+  it("opens on the window's own host every time", () => {
+    useCanopyStore.getState().open();
+    useCanopyStore.getState().setHostId("studio");
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+    // Asked to open while already open: what it shows stands.
+    useCanopyStore.getState().open();
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+    useCanopyStore.getState().close();
+    useCanopyStore.getState().toggle();
+    expect(useCanopyStore.getState().hostId).toBeNull();
+  });
+
+  it("takes the window's own host as no other host", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    useCanopyStore.getState().setHostId("studio");
+    expect(useCanopyStore.getState().hostId).toBeNull();
+    useCanopyStore.getState().setHostId("local");
+    expect(useCanopyStore.getState().hostId).toBe("local");
+  });
+});

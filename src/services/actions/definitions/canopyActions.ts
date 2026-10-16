@@ -15,6 +15,18 @@ function canopyShown(): boolean {
   return useCanopyStore.getState().mode !== "hidden";
 }
 
+const OTHER_HOST_REASON =
+  "Canopy is showing another host's agents. Use Mark all read in its panel.";
+
+/**
+ * The panel is open on another host: this action reads and marks the window's
+ * own host, which is not what the user is looking at.
+ */
+function showingOtherHost(): boolean {
+  const { isOpen, hostId } = useCanopyStore.getState();
+  return isOpen && hostId !== null;
+}
+
 const AGENTS_UNKNOWN_REASON = "Canopy hasn't listed this project's agents yet.";
 const CANOPY_OFF_REASON = "Canopy isn't on. Turn it on from its panel or Settings > Canopy.";
 
@@ -72,17 +84,20 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     scope: "renderer",
     nonRepeatable: true,
     isVisible: canopyShown,
-    isEnabled: () => canopyOn() && projectRunsInScope() !== undefined,
+    isEnabled: () => canopyOn() && !showingOtherHost() && projectRunsInScope() !== undefined,
     disabledReason: () =>
       !canopyShown()
         ? CANOPY_HIDDEN_REASON
         : !canopyOn()
           ? CANOPY_OFF_REASON
-          : projectRunsInScope() === undefined
-            ? AGENTS_UNKNOWN_REASON
-            : undefined,
+          : showingOtherHost()
+            ? OTHER_HOST_REASON
+            : projectRunsInScope() === undefined
+              ? AGENTS_UNKNOWN_REASON
+              : undefined,
     keywords: ["canopy", "inbox", "read", "unread", "clear", "agents"],
     run: async () => {
+      if (showingOtherHost()) return;
       const snapshot = useCanopyStore.getState().snapshot;
       if (!snapshot?.activated) return;
       const archived = new Set(

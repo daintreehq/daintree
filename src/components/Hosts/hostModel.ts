@@ -166,7 +166,7 @@ function lastSeenOf(entry: HostListEntry): number | null {
 }
 
 /** A row's metrics only count while the link is up: a disconnected host has told us nothing new. */
-function liveSummary(row: HostMenuRow): HostMetricsSummary | null {
+export function liveSummary(row: HostMenuRow): HostMetricsSummary | null {
   if (row.isLocal) return row.summary;
   return row.connection?.status === "connected" ? row.summary : null;
 }
