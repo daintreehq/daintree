@@ -144,6 +144,7 @@ export interface GeneratedIpcInvokeMap {
     args: [
       hostId: string,
       channel:
+        | "canopy:answer"
         | "canopy:archive"
         | "canopy:get-snapshot"
         | "canopy:mark-all-read"
@@ -158,6 +159,9 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:set-read"
         | "canopy:set-scope"
         | "canopy:set-shown"
+        | "canopy:terminal-input"
+        | "canopy:terminal-send-key"
+        | "canopy:terminal-submit"
         | "canopy:trash"
         | "canopy:unarchive"
         | "canopy:untrash"

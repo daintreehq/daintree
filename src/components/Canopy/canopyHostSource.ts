@@ -65,6 +65,67 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
   };
 }
 
+/**
+ * What the live pane, its composer and the one-key answers ask of the host the
+ * run is on. `holdsSize` is the window's own host alone: a panel reading
+ * another host follows the size that host's window gave the terminal, and
+ * takes nothing it would have to hand back.
+ */
+export interface CanopyTerminalApi {
+  holdsSize: boolean;
+  watchTerminal: ElectronCanopy["watchTerminal"];
+  unwatchTerminal: ElectronCanopy["unwatchTerminal"];
+  terminalInput: ElectronCanopy["terminalInput"];
+  terminalResize: ElectronCanopy["terminalResize"];
+  terminalSubmit: ElectronCanopy["terminalSubmit"];
+  terminalSendKey: ElectronCanopy["terminalSendKey"];
+  answer: ElectronCanopy["answer"];
+  onTerminalData: ElectronCanopy["onTerminalData"];
+  /** The link to the host came back: what the pane showed was dropped there, so it opens again. */
+  onResync: (callback: () => void) => () => void;
+}
+
+const NO_RESYNC = () => () => {};
+
+export const ownCanopyTerminalApi: CanopyTerminalApi = {
+  holdsSize: true,
+  watchTerminal: (...args) => window.electron.canopy.watchTerminal(...args),
+  unwatchTerminal: (...args) => window.electron.canopy.unwatchTerminal(...args),
+  terminalInput: (...args) => window.electron.canopy.terminalInput(...args),
+  terminalResize: (...args) => window.electron.canopy.terminalResize(...args),
+  terminalSubmit: (...args) => window.electron.canopy.terminalSubmit(...args),
+  terminalSendKey: (...args) => window.electron.canopy.terminalSendKey(...args),
+  answer: (...args) => window.electron.canopy.answer(...args),
+  onTerminalData: (callback) => window.electron.canopy.onTerminalData(callback),
+  onResync: NO_RESYNC,
+};
+
+/** The same, on another host's Canopy; its terminal is never resized from here. */
+export function remoteCanopyTerminalApi(hostId: HostId): CanopyTerminalApi {
+  const on =
+    <C extends CanopyHostChannel>(channel: C) =>
+    (...args: IpcInvokeMap[C]["args"]) =>
+      canopyHostClient.invoke(hostId, channel, ...args);
+  return {
+    holdsSize: false,
+    watchTerminal: on("canopy:watch-terminal"),
+    unwatchTerminal: on("canopy:unwatch-terminal"),
+    terminalInput: on("canopy:terminal-input"),
+    terminalResize: () => Promise.resolve(),
+    terminalSubmit: on("canopy:terminal-submit"),
+    terminalSendKey: on("canopy:terminal-send-key"),
+    answer: on("canopy:answer"),
+    onTerminalData: (callback) =>
+      canopyHostClient.onEvent((event) => {
+        if (event.hostId === hostId && event.kind === "terminal-data") callback(event.chunk);
+      }),
+    onResync: (callback) =>
+      canopyHostClient.onEvent((event) => {
+        if (event.hostId === hostId && event.kind === "resync") callback();
+      }),
+  };
+}
+
 export interface RemoteCanopyState {
   canopy: CanopySnapshot | null;
   fleet: FleetSnapshot | null;

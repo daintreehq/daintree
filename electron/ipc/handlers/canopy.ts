@@ -59,6 +59,7 @@ import {
 import { isImageAttachmentPath } from "../../../shared/utils/imageAttachmentInput.js";
 import { planChoice } from "../../../shared/utils/terminalChoice.js";
 import { AppError } from "../../utils/errorTypes.js";
+import { isCanopyViewerEndpointId } from "../../remote/canopy/linkMethods.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
 import { getGitBranch } from "../../utils/gitUtils.js";
 import { events } from "../../services/events.js";
@@ -816,6 +817,15 @@ function drivenElsewhere(projectId: string | null): AppError {
   });
 }
 
+/**
+ * A panel reading this host from a view bound elsewhere. It types as its own
+ * machine's windows do, but never sizes a terminal (the window showing it here
+ * owns that) and has no files on this machine to attach.
+ */
+function isViewer(ctx: IpcContext): boolean {
+  return isCanopyViewerEndpointId(ctx.endpoint.endpointId);
+}
+
 function assertDrivesRun(ctx: IpcContext, runId: string): void {
   if (!drivesRun(ctx, runId)) throw drivenElsewhere(requirePtyClient().getTerminalProjectId(runId));
 }
@@ -900,7 +910,7 @@ export const canopyNamespace = defineIpcNamespace({
           target.spawnedAt,
           ticket,
           generation,
-          () => drivesRun(ctx, runId)
+          isViewer(ctx) ? () => false : () => drivesRun(ctx, runId)
         );
       },
       { withContext: true }
@@ -1009,6 +1019,7 @@ export const canopyNamespace = defineIpcNamespace({
       async (ctx, watchId: number, cols: number, rows: number): Promise<void> => {
         requireActivated();
         checkRateLimit(CANOPY_METHOD_CHANNELS.terminalResize, 60, 10_000);
+        if (isViewer(ctx)) return;
         // Ignored rather than refused, as `terminal:resize` ignores one: the
         // panel keeps reading at whatever size the driver's pane gave it.
         const watched = watchedTerminal(ctx.webContentsId, watchId);
@@ -1052,6 +1063,14 @@ export const canopyNamespace = defineIpcNamespace({
             !imagePaths.every((path) => typeof path === "string" && isImageAttachmentPath(path)))
         ) {
           throw new Error("Invalid attachments");
+        }
+        // A path the viewer's machine named is nothing on this one.
+        if (imagePaths !== undefined && imagePaths.length > 0 && isViewer(ctx)) {
+          throw new AppError({
+            code: "VALIDATION",
+            message: "a Canopy viewer named image paths from another machine",
+            userMessage: "Images can't be sent to an agent on another host.",
+          });
         }
         const watched = requireWatched(ctx.webContentsId, watchId);
         // The stream ends on exit, but a submit is worth one more look at the
@@ -1241,6 +1260,12 @@ export const canopyNamespace = defineIpcNamespace({
               (generation !== null && !pty.isLiveGeneration(runId, generation))
             ) {
               throw answerRefused("That terminal has moved on since the list showed it.");
+            }
+            // The panel that asked is gone: the rest of the answer is no one's.
+            if (ctx.endpoint.isClosed()) {
+              throw answerRefused(
+                "Canopy closed before the answer was finished. Nothing more was pressed."
+              );
             }
             // Control can move to another screen between keys.
             if (!drivesRun(ctx, runId)) {

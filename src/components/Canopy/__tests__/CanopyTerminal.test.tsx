@@ -30,6 +30,9 @@ vi.mock("@xterm/xterm", () => ({
       };
     }
     open() {}
+    reset() {
+      xterm.current!.writes.push("<reset>");
+    }
     write(data: string | Uint8Array, callback?: () => void) {
       xterm.current!.writes.push(data);
       callback?.();
@@ -73,6 +76,7 @@ import {
   _resetCanopyWatchBurstForTests,
   type CanopyStreamState,
 } from "../CanopyTerminal";
+import type { CanopyTerminalApi } from "../canopyHostSource";
 
 let pushChunk: (chunk: CanopyTerminalData) => void = () => {};
 let openStream: (view: CanopyTerminalView) => void = () => {};
@@ -140,6 +144,9 @@ function mount(onGoTo?: () => void) {
   );
   return { ...view, states, frame: view.container.querySelector("[data-canopy-terminal]")! };
 }
+
+/** Past the pane's size settle, so a hold it would ask for has been asked for. */
+const PAST_SIZE_SETTLE_MS = 200;
 
 /** Long enough for xterm's composition timer, and the gesture's, to have run. */
 const COMPOSITION_SENT_MS = 10;
@@ -390,5 +397,135 @@ describe("CanopyTerminal", () => {
     );
     goTo?.click();
     expect(onGoTo).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a run on another host (#13387)", () => {
+    function remoteApi() {
+      const opens: Array<(view: CanopyTerminalView) => void> = [];
+      let resync: () => void = () => {};
+      let push: (chunk: CanopyTerminalData) => void = () => {};
+      const api: CanopyTerminalApi = {
+        holdsSize: false,
+        watchTerminal: vi.fn(
+          () => new Promise<CanopyTerminalView>((resolve) => opens.push(resolve))
+        ),
+        unwatchTerminal: vi.fn(async () => {}),
+        terminalInput: vi.fn(async () => {}),
+        terminalResize: vi.fn(async () => {}),
+        terminalSubmit: vi.fn(async () => {}),
+        terminalSendKey: vi.fn(async () => {}),
+        answer: vi.fn(async () => {}),
+        onTerminalData: (callback) => {
+          push = callback;
+          return () => {};
+        },
+        onResync: (callback) => {
+          resync = callback;
+          return () => {};
+        },
+      };
+      return {
+        api,
+        opens,
+        resync: () => resync(),
+        push: (chunk: CanopyTerminalData) => push(chunk),
+      };
+    }
+
+    function mountRemote(remote: ReturnType<typeof remoteApi>, reconnecting = false) {
+      const states: CanopyStreamState[] = [];
+      const element = (down: boolean) => (
+        <CanopyTerminal
+          runId="run-1"
+          spawnedAt={100}
+          api={remote.api}
+          reconnecting={down}
+          onStreamChange={(state) => states.push(state)}
+        />
+      );
+      const view = render(element(reconnecting));
+      return {
+        ...view,
+        states,
+        setReconnecting: (down: boolean) => view.rerender(element(down)),
+        frame: view.container.querySelector("[data-canopy-terminal]")!,
+      };
+    }
+
+    it("follows the size the host's own window gave the terminal, freezing and sizing nothing", async () => {
+      cell.current = { width: 8, height: 16 };
+      const remote = remoteApi();
+      mountRemote(remote);
+      await act(async () =>
+        remote.opens[0]!({ watchId: 3, snapshot: { data: "S", cols: 90, rows: 30 } })
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
+      });
+      expect(remote.api.terminalResize).not.toHaveBeenCalled();
+      expect(pane.events).toEqual([]);
+      remote.push({ kind: "data", watchId: 3, runId: "run-1", data: "x" });
+      expect(xterm.current!.writes).toEqual(["S", "x"]);
+      // Nor does the local window's own channel hear any of it.
+      expect(terminalResize).not.toHaveBeenCalled();
+    });
+
+    it("stops input while the link is down, says so, and starts again from a fresh screen", async () => {
+      const remote = remoteApi();
+      const view = mountRemote(remote);
+      await act(async () =>
+        remote.opens[0]!({ watchId: 3, snapshot: { data: "OLD", cols: 80, rows: 24 } })
+      );
+      expect(view.states.at(-1)?.watchId).toBe(3);
+
+      view.setReconnecting(true);
+      expect(view.states.at(-1)?.watchId).toBeNull();
+      expect(view.container.querySelector("[data-canopy-reconnecting]")?.textContent).toBe(
+        "Reconnecting…"
+      );
+      // Typed at a screen the agent may no longer show: never sent, then or later.
+      fireEvent.keyDown(view.frame, { key: "y" });
+      xterm.current!.emitData("y");
+      expect(remote.api.terminalInput).not.toHaveBeenCalled();
+
+      // The link's return: the old stream died with it, so a new one is opened.
+      await act(async () => remote.resync());
+      expect(remote.opens).toHaveLength(2);
+      // Output still in flight for the old stream lands on nothing.
+      remote.push({ kind: "data", watchId: 3, runId: "run-1", data: "late" });
+      await act(async () =>
+        remote.opens[1]!({ watchId: 4, snapshot: { data: "NEW", cols: 80, rows: 24 } })
+      );
+      view.setReconnecting(false);
+      expect(xterm.current!.writes).toEqual(["OLD", "<reset>", "NEW"]);
+      expect(view.states.at(-1)?.watchId).toBe(4);
+      expect(view.container.querySelector("[data-canopy-reconnecting]")).toBeNull();
+      expect(remote.api.terminalInput).not.toHaveBeenCalled();
+    });
+
+    it("ignores the answer to a stream it asked for before the link dropped", async () => {
+      const remote = remoteApi();
+      const view = mountRemote(remote);
+      await act(async () => remote.resync());
+      await act(async () =>
+        remote.opens[1]!({ watchId: 5, snapshot: { data: "NEW", cols: 80, rows: 24 } })
+      );
+      await act(async () =>
+        remote.opens[0]!({ watchId: 4, snapshot: { data: "OLD", cols: 80, rows: 24 } })
+      );
+      expect(view.states.at(-1)?.watchId).toBe(5);
+      expect(xterm.current!.writes).toEqual(["<reset>", "NEW"]);
+    });
+
+    it("offers to try again when it couldn't show the terminal, there being no pane here to go to", async () => {
+      const remote = remoteApi();
+      const { container } = mountRemote(remote);
+      await act(async () => remote.opens[0]!({ watchId: 3, snapshot: null }));
+      const retry = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent === "Retry"
+      );
+      await act(async () => retry?.click());
+      expect(remote.opens).toHaveLength(2);
+    });
   });
 });

@@ -79,7 +79,7 @@ describe("CanopyViewers", () => {
   it("refuses a channel outside the allowed Canopy calls without running it", async () => {
     const s = setup();
     await expect(
-      s.viewers.invoke("k", () => params(), client, "canopy:terminal-submit", [])
+      s.viewers.invoke("k", () => params(), client, "canopy:terminal-resize", [])
     ).rejects.toMatchObject({ code: "VALIDATION" });
     expect(s.invoke).not.toHaveBeenCalled();
     expect(s.viewers.has("k")).toBe(false);
@@ -113,5 +113,19 @@ describe("CanopyViewers", () => {
     expect(s.observing()).toBe(true);
     s.viewers.close("b");
     expect(s.observing()).toBe(false);
+  });
+
+  it("takes a late unwatch for a viewer already gone without opening it again", async () => {
+    const s = setup();
+    const envelope = await s.viewers.invoke(
+      "k",
+      () => params(),
+      client,
+      "canopy:unwatch-terminal",
+      []
+    );
+    expect(envelope.ok).toBe(true);
+    expect(s.invoke).not.toHaveBeenCalled();
+    expect(s.viewers.has("k")).toBe(false);
   });
 });

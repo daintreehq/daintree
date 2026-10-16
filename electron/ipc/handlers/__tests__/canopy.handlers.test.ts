@@ -1143,10 +1143,11 @@ describe("canopy IPC", () => {
       getIpcDispatcher().setInvokeEnveloper(null);
     });
 
-    function remoteView(handle: number) {
+    function remoteView(handle: number, endpointId = `remote:${handle}`) {
       let closeListener: (() => void) | null = null;
+      let closed = false;
       const endpoint: ClientEndpoint = {
-        endpointId: `remote:${handle}`,
+        endpointId,
         clientId: "client-greg-mbp",
         projectId: "project-1",
         kind: "remote-view",
@@ -1161,7 +1162,7 @@ describe("canopy IPC", () => {
             },
           };
         },
-        isClosed: () => false,
+        isClosed: () => closed,
       };
       const call = (channel: string, ...args: unknown[]) =>
         getIpcDispatcher().invokeForEndpoint(
@@ -1177,8 +1178,68 @@ describe("canopy IPC", () => {
           channel,
           args
         );
-      return { endpoint, call, close: () => closeListener?.() };
+      return {
+        endpoint,
+        call,
+        close: () => {
+          closed = true;
+          closeListener?.();
+        },
+      };
     }
+
+    describe("a Canopy panel reading this host from another machine (#13387)", () => {
+      const viewer = (handle: number) => remoteView(handle, `canopy-viewer:v${-handle}`);
+      async function openViewerStream(handle: number) {
+        const view = viewer(handle);
+        const opened = (await view.call(CANOPY_METHOD_CHANNELS.watchTerminal, "run-1", {
+          spawnedAt: 100,
+        })) as { ok: boolean; data: { watchId: number } };
+        expect(opened.ok).toBe(true);
+        return { view, watchId: opened.data.watchId };
+      }
+
+      it("never sizes the terminal, even while its machine drives it", async () => {
+        lease.holder = "self";
+        const { view, watchId } = await openViewerStream(-11);
+        await view.call(CANOPY_METHOD_CHANNELS.terminalResize, watchId, 100, 30);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+        // Nothing held, so nothing is handed back when it lets go.
+        await view.call(CANOPY_METHOD_CHANNELS.unwatchTerminal);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+      });
+
+      it("types what its machine's window could, but sends no image path from that machine", async () => {
+        lease.holder = "self";
+        const { view, watchId } = await openViewerStream(-12);
+        const typed = (await view.call(CANOPY_METHOD_CHANNELS.terminalSubmit, watchId, "navy")) as {
+          ok: boolean;
+        };
+        expect(typed.ok).toBe(true);
+        const withImage = (await view.call(CANOPY_METHOD_CHANNELS.terminalSubmit, watchId, "look", [
+          "/Users/greg/Desktop/shot.png",
+        ])) as { ok: boolean };
+        expect(withImage.ok).toBe(false);
+        expect(state.submits).toHaveLength(1);
+      });
+
+      it("presses nothing more once the panel that answered is gone", async () => {
+        lease.holder = "self";
+        const view = viewer(-13);
+        ptyClient.write.mockImplementationOnce((_id: string, data: string) => {
+          view.close();
+          return state.writes.push(data);
+        });
+        const answered = (await view.call(
+          CANOPY_METHOD_CHANNELS.answer,
+          "run-1",
+          { spawnedAt: 100 },
+          "No, and tell Claude what to do differently"
+        )) as { ok: boolean };
+        expect(answered.ok).toBe(false);
+        expect(state.writes).toEqual(["\x1b[B"]);
+      });
+    });
 
     it("streams a watched terminal through the view's endpoint, and ends it when the endpoint closes", async () => {
       const release = vi.fn();

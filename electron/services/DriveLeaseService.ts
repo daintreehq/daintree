@@ -7,6 +7,7 @@ import type { LeaseGate } from "../ipc/dispatcher.js";
 import { getLocalClientRef, getLocalEndpoint } from "../ipc/localEndpoint.js";
 import { AppError } from "../utils/errorTypes.js";
 import { getChannelLeaseTarget } from "../ipc/channelLeasePolicy.js";
+import { isCanopyViewerEndpointId } from "../remote/canopy/linkMethods.js";
 import {
   resolveLeaseTarget,
   type LeaseTargetResolution,
@@ -761,6 +762,11 @@ function drives(
   endpoint: Pick<ClientEndpoint, "endpointId" | "clientId">
 ): boolean {
   if (holder === null || holder.endpointId === endpoint.endpointId) return true;
+  // A Canopy panel reading this host from another machine types as that
+  // machine's windows do: it drives where one of them holds the lease.
+  if (isCanopyViewerEndpointId(endpoint.endpointId)) {
+    return holder.clientId === endpoint.clientId;
+  }
   return holder.clientId === LOCAL_CLIENT_ID && endpoint.clientId === LOCAL_CLIENT_ID;
 }
 

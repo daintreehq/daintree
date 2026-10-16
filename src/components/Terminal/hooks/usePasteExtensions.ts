@@ -12,7 +12,12 @@ import { materialize } from "@/services/materialize";
 import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { trackUpload } from "../uploads/pendingUploads";
 
-export function usePasteExtensions(cwd: string, uploadSurface?: string) {
+/**
+ * `thisMachineOff`: the composer types to a terminal on another host, where a
+ * pasted image or file saved on this machine would be a path to nothing, so
+ * neither is taken.
+ */
+export function usePasteExtensions(cwd: string, uploadSurface?: string, thisMachineOff = false) {
   // `useEditorFactory` reads these extensions once, while building the initial
   // `EditorState`, under an effect keyed on `terminalId` alone — and no
   // compartment wraps them. A memo that rebuilt the extension when `cwd`
@@ -25,14 +30,17 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string) {
   "use no memo";
   const cwdRef = useRef(cwd);
   const uploadSurfaceRef = useRef(uploadSurface);
+  const offRef = useRef(thisMachineOff);
   useEffect(() => {
     cwdRef.current = cwd;
     uploadSurfaceRef.current = uploadSurface;
-  }, [cwd, uploadSurface]);
+    offRef.current = thisMachineOff;
+  }, [cwd, uploadSurface, thisMachineOff]);
 
   const imagePasteExtension = useMemo(
     () =>
       createImagePasteHandler(async (view) => {
+        if (offRef.current) return;
         try {
           // Tracked in a remote window, so sending waits for the image to reach the host.
           const surface = uploadSurfaceRef.current;
@@ -81,6 +89,7 @@ export function usePasteExtensions(cwd: string, uploadSurface?: string) {
   const filePasteExtension = useMemo(
     () =>
       createFilePasteHandler(async (view, files) => {
+        if (offRef.current) return;
         const surface = uploadSurfaceRef.current;
         const materialized = await materializeTransferSources(
           files.map((file) => ({ kind: "local", path: file.path })),

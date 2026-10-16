@@ -125,14 +125,32 @@ describe("CanopyHostsClient", () => {
       from: "studio",
     });
     expect(s.connections.get("studio")!.calls).toEqual([
-      [CanopyLinkMethod.INVOKE, { viewerId: "v1", channel: "canopy:get-snapshot", args: [] }],
+      [
+        CanopyLinkMethod.INVOKE,
+        { viewerId: "v1", channel: "canopy:get-snapshot", args: [], interactive: true },
+      ],
     ]);
     expect(s.touched).toContain("studio");
   });
 
-  it("refuses typing into a run, and any channel outside Canopy's reads and actions", async () => {
+  it("types into and answers the run it shows, on the host it is on", async () => {
     const s = setup();
-    for (const channel of ["canopy:terminal-input", "canopy:answer", "terminal:write"]) {
+    await s.client.invoke(VIEW, "studio", "canopy:terminal-input", [3, "y"]);
+    await s.client.invoke(VIEW, "studio", "canopy:answer", ["run-1", { spawnedAt: 1 }, "Yes"]);
+    expect(s.connections.get("studio")!.calls.map(([, payload]) => payload)).toEqual([
+      { viewerId: "v1", channel: "canopy:terminal-input", args: [3, "y"], interactive: true },
+      {
+        viewerId: "v1",
+        channel: "canopy:answer",
+        args: ["run-1", { spawnedAt: 1 }, "Yes"],
+        interactive: true,
+      },
+    ]);
+  });
+
+  it("refuses resizing a run's terminal, and any channel outside Canopy's reads and actions", async () => {
+    const s = setup();
+    for (const channel of ["canopy:terminal-resize", "terminal:write"]) {
       await expect(s.client.invoke(VIEW, "studio", channel, [])).rejects.toMatchObject({
         code: "VALIDATION",
       });
@@ -246,5 +264,17 @@ describe("CanopyHostsClient", () => {
       .get("studio")!
       .calls.filter(([method]) => method === CanopyLinkMethod.RELEASE);
     expect(releases).toHaveLength(1);
+  });
+
+  it("takes an unwatch for a host the view no longer reads without opening a viewer to say it", async () => {
+    const s = setup();
+    await s.client.invoke(VIEW, "studio", "canopy:watch-terminal", []);
+    s.client.release(VIEW, "studio");
+    const before = s.connections.get("studio")!.calls.length;
+    await expect(
+      s.client.invoke(VIEW, "studio", "canopy:unwatch-terminal", [])
+    ).resolves.toBeUndefined();
+    expect(s.connections.get("studio")!.calls.slice(before)).toEqual([]);
+    expect(s.inUse("studio")).toBe(false);
   });
 });

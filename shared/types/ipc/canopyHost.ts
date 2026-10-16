@@ -5,9 +5,10 @@ import type { IpcInvokeMap } from "./maps.js";
 
 /**
  * The Canopy calls a view can make on a host other than its own: its reads,
- * and the inbox actions it takes on runs there. Typing into a run, answering
- * it and resizing its terminal are not among them; who may do that from
- * another host is decided separately.
+ * the inbox actions it takes on runs there, and typing into and answering the
+ * run it shows. Those writes are held to that host's drive lease, as a window
+ * on it would be. Resizing a terminal is not among them: a panel reading
+ * another host follows the size its own window gave the terminal.
  */
 export const CANOPY_HOST_CHANNELS = [
   "canopy:get-snapshot",
@@ -28,6 +29,10 @@ export const CANOPY_HOST_CHANNELS = [
   "canopy:run-branch",
   "canopy:watch-terminal",
   "canopy:unwatch-terminal",
+  "canopy:terminal-input",
+  "canopy:terminal-submit",
+  "canopy:terminal-send-key",
+  "canopy:answer",
   "canopy:set-mode",
   "fleet:get-snapshot",
 ] as const;

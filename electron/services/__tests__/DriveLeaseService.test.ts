@@ -485,6 +485,83 @@ describe("DriveLeaseService", () => {
   });
 });
 
+describe("DriveLeaseService and a Canopy panel reading this host (#13387)", () => {
+  // Never registered: a viewer is a caller, not a view of a project.
+  const viewerFrom = (clientId: string) =>
+    new FakeEndpoint("canopy-viewer:v1", clientId, null, "remote-view");
+  const laptopClient = {
+    clientId: "greg-mbp-id",
+    clientName: "greg-mbp",
+    platform: "darwin" as const,
+    kind: "remote" as const,
+  };
+
+  it("types where its own machine's window holds the project, and nowhere another does", async () => {
+    const hostWindow = local(1);
+    const laptopWindow = remote("s1:e1", "greg-mbp-id");
+    const studioWindow = remote("s2:e1", "studio-id");
+    for (const endpoint of [hostWindow, laptopWindow, studioWindow]) registry.add(endpoint);
+    service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
+    service.noteEndpointClient(studioWindow.endpointId, {
+      ...laptopClient,
+      clientId: "studio-id",
+      clientName: "studio",
+    });
+    await settle();
+    const laptopViewer = viewerFrom("greg-mbp-id");
+
+    service.takeOver("p", laptopWindow);
+    expect(service.isDriving("p", laptopViewer)).toBe(true);
+    expect(service.projectsDrivenElsewhere(laptopViewer).has("p")).toBe(false);
+
+    service.takeOver("p", studioWindow);
+    expect(service.isDriving("p", laptopViewer)).toBe(false);
+    expect(service.projectsDrivenElsewhere(laptopViewer).get("p")?.clientId).toBe("studio-id");
+
+    // The host's own screen holds it: another machine has control.
+    service.takeOver("p", hostWindow);
+    expect(service.isDriving("p", laptopViewer)).toBe(false);
+  });
+
+  it("is held to the same rule as its machine, taking nothing by typing", async () => {
+    const hostWindow = local(1);
+    const laptopWindow = remote("s1:e1", "greg-mbp-id");
+    registry.add(hostWindow);
+    registry.add(laptopWindow);
+    service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
+    await settle();
+    const holder = service.takeOver("p", laptopWindow);
+    const laptopViewer = viewerFrom("greg-mbp-id");
+
+    expect(service.isDriving("p", laptopViewer)).toBe(true);
+    // Driving through its machine's lease is not holding it.
+    expect(service.getHolder("p")).toEqual(holder);
+    expect(service.drivingLeaseId("p", laptopViewer)).toBe(holder.leaseId);
+  });
+
+  it("leaves another machine's ordinary windows as they were", async () => {
+    const laptopWindow = remote("s1:e1", "greg-mbp-id");
+    const laptopSecondWindow = remote("s1:e2", "greg-mbp-id");
+    registry.add(laptopWindow);
+    registry.add(laptopSecondWindow);
+    service.noteEndpointClient(laptopWindow.endpointId, laptopClient);
+    service.noteEndpointClient(laptopSecondWindow.endpointId, laptopClient);
+    await settle();
+    service.takeOver("p", laptopWindow);
+
+    expect(service.isDriving("p", laptopSecondWindow)).toBe(false);
+  });
+
+  it("this machine's own panel reading itself from a remote-bound view types with its windows", async () => {
+    const hostWindow = local(1);
+    registry.add(hostWindow);
+    await settle();
+    service.takeOver("p", hostWindow);
+
+    expect(service.isDriving("p", viewerFrom("local"))).toBe(true);
+  });
+});
+
 describe("DriveLeaseService panel notices", () => {
   const panelNotices = (endpoint: FakeEndpoint) =>
     endpoint.allEvents().filter((event) => event.type === "panels-changed");
