@@ -177,7 +177,8 @@ export function wslDistroOf(connection: HostConnection): string | null {
 export function sameHostConnection(a: HostConnection, b: HostConnection): boolean {
   if (a.kind === "ssh" && b.kind === "ssh") return a.target === b.target;
   // WSL looks distro names up without regard to case.
-  if (a.kind === "wsl" && b.kind === "wsl") return a.distro.toLowerCase() === b.distro.toLowerCase();
+  if (a.kind === "wsl" && b.kind === "wsl")
+    return a.distro.toLowerCase() === b.distro.toLowerCase();
   return false;
 }
 
@@ -246,9 +247,7 @@ export function readStoredHostConnection(entry: {
   sshTarget?: unknown;
 }): HostConnection | null {
   const connection = entry.connection as
-    | { kind?: unknown; target?: unknown; distro?: unknown }
-    | null
-    | undefined;
+    { kind?: unknown; target?: unknown; distro?: unknown } | null | undefined;
   if (connection && typeof connection === "object") {
     if (connection.kind === "ssh" && typeof connection.target === "string") {
       return sshConnection(connection.target);

@@ -40,7 +40,8 @@ describe("withWslDiagnostics", () => {
   it("moves wsl.exe's own stdout message to stderr when wsl.exe itself failed", () => {
     const failed: CommandResult = {
       code: 4294967295,
-      stdout: "There is no distribution with the supplied name.\r\nError code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND\r\n",
+      stdout:
+        "There is no distribution with the supplied name.\r\nError code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND\r\n",
       stderr: "",
       spawnError: null,
       timedOut: false,

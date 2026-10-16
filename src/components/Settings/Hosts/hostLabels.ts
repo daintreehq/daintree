@@ -239,7 +239,10 @@ export function canWaitForIdle(impact: HostRestartImpact): boolean {
  * a WSL distro is only kept running by this app, so its terminals and agents
  * end once WSL stops it.
  */
-export function removeHostOutcome(connection: HostConnection | undefined, hostName: string): {
+export function removeHostOutcome(
+  connection: HostConnection | undefined,
+  hostName: string
+): {
   label: string;
   sentence: string;
 } {

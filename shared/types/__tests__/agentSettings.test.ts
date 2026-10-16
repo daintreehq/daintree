@@ -1729,9 +1729,7 @@ describe("launch commands built for another machine's shell", () => {
     // PowerShell's doubled apostrophe would reach bash as "dont stop".
     expect(command.endsWith(` 'don'\\''t stop'`)).toBe(true);
     expect(command).not.toContain("'don''t");
-    expect(buildResumeCommand("claude", "session", ["--value=$(x)"])).toContain(
-      "'--value=$(x)'"
-    );
+    expect(buildResumeCommand("claude", "session", ["--value=$(x)"])).toContain("'--value=$(x)'");
   });
 
   it("leaves this machine's own platform in charge when nothing says otherwise", () => {

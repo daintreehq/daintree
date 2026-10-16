@@ -588,8 +588,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
           )}
           {discovered !== null && discovered.length > 0 && (
             <p className="mt-2 text-xs text-text-secondary">
-              Projects, terminals and agents run inside the distribution you pick, with its own
-              git and tools. Whether Daintree is ready there is checked next.
+              Projects, terminals and agents run inside the distribution you pick, with its own git
+              and tools. Whether Daintree is ready there is checked next.
             </p>
           )}
         </div>

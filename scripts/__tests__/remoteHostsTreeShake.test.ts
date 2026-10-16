@@ -162,7 +162,8 @@ describe("Remote Hosts build gate tree-shaking", () => {
       ).toBe(true);
     }
     const hostModules = remote.filter(
-      (input) => input.startsWith("electron/remote/host/") || input === "electron/remote/hostBoot.ts"
+      (input) =>
+        input.startsWith("electron/remote/host/") || input === "electron/remote/hostBoot.ts"
     );
     expect(hostModules.filter((input) => !SHELL_SAFE_HOST_MODULES.has(input))).toEqual([]);
     // The WSL client is what a Windows build is for.

@@ -15,10 +15,7 @@ import {
 const TOKEN = "ab".repeat(32);
 const WSL = "C:\\Windows\\System32\\wsl.exe";
 const HOST_COMMAND = ["/tmp/.mount_Daintr1/daintree"];
-const DEV_HOST_COMMAND = [
-  "/home/dt/dt-src/node_modules/electron/dist/electron",
-  "/home/dt/dt-src",
-];
+const DEV_HOST_COMMAND = ["/home/dt/dt-src/node_modules/electron/dist/electron", "/home/dt/dt-src"];
 
 const discovery = (command: string[] | null = HOST_COMMAND) =>
   JSON.stringify({
@@ -188,7 +185,10 @@ describe("WslTransport", () => {
 
   it("retries other wsl.exe failures: a distro that failed to start may start next time", async () => {
     const { transport } = setup([
-      result({ code: 4294967295, stdout: "The operation timed out.\nError code: Wsl/Service/0x8007045b\n" }),
+      result({
+        code: 4294967295,
+        stdout: "The operation timed out.\nError code: Wsl/Service/0x8007045b\n",
+      }),
     ]);
     const error = await transport.open(signal()).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(TransportError);

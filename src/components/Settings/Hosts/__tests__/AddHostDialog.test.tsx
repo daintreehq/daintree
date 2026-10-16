@@ -759,9 +759,9 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
     expect(names).toEqual(["Ubuntu-24.04", "archlinux", "Legacy", "Debian"]);
     expect(screen.queryByPlaceholderText("user@devbox.local")).toBeNull();
     expect(screen.getByText("WSL 1 can't run Daintree")).toBeTruthy();
-    expect(
-      (screen.getByRole("button", { name: /Legacy/ }) as HTMLButtonElement).disabled
-    ).toBe(true);
+    expect((screen.getByRole("button", { name: /Legacy/ }) as HTMLButtonElement).disabled).toBe(
+      true
+    );
     expect((screen.getByRole("button", { name: /Debian/ }) as HTMLButtonElement).disabled).toBe(
       true
     );
@@ -795,7 +795,9 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
     fireEvent.click(await screen.findByRole("button", { name: /FedoraLinux-44/ }));
     fireEvent.click(screen.getByRole("button", { name: "Check distribution" }));
     expect(
-      await screen.findByText("FedoraLinux-44 runs without systemd, which Daintree's Host mode needs.")
+      await screen.findByText(
+        "FedoraLinux-44 runs without systemd, which Daintree's Host mode needs."
+      )
     ).toBeTruthy();
     expect(screen.getByText("wsl --terminate FedoraLinux-44")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Plan install" })).toBeNull();
@@ -830,7 +832,11 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
       <AddHostDialog
         isOpen
         onClose={() => {}}
-        existing={{ hostId: "ubuntu", name: "Ubuntu", connection: { kind: "wsl", distro: "Ubuntu" } }}
+        existing={{
+          hostId: "ubuntu",
+          name: "Ubuntu",
+          connection: { kind: "wsl", distro: "Ubuntu" },
+        }}
       />
     );
     fireEvent.click(await screen.findByRole("button", { name: "Check host" }));

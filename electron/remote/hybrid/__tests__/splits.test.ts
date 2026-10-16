@@ -822,9 +822,7 @@ describe("opening host files", () => {
           code: "INVALID_PATH",
         });
       }
-      mocks.realpath.mockResolvedValueOnce(
-        "\\\\wsl.localhost\\Ubuntu-24.04\\home\\dt\\evil.exe"
-      );
+      mocks.realpath.mockResolvedValueOnce("\\\\wsl.localhost\\Ubuntu-24.04\\home\\dt\\evil.exe");
       await expect(
         invoke(CHANNELS.SYSTEM_OPEN_PATH, [{ path: "/home/dt/notes.txt" }])
       ).rejects.toMatchObject({ code: "INVALID_PATH" });
@@ -904,7 +902,12 @@ describe("opening host files", () => {
 
   it("builds a WSL editor URL with the distro encoded and refuses one that isn't a distro name", () => {
     expect(
-      buildRemoteEditorUrl({ editorId: null, wslDistro: "Ubuntu 22.04 LTS", path: "/home/a.ts", line: 2 })
+      buildRemoteEditorUrl({
+        editorId: null,
+        wslDistro: "Ubuntu 22.04 LTS",
+        path: "/home/a.ts",
+        line: 2,
+      })
     ).toBe("vscode://vscode-remote/wsl+Ubuntu%2022.04%20LTS/home/a.ts:2");
     expect(
       buildRemoteEditorUrl({ editorId: "cursor", wslDistro: "Debian", path: "/srv/x.ts" })

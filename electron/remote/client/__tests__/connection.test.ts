@@ -57,7 +57,13 @@ describe("host connections", () => {
     expect(parseHostConnection({ kind: "wsl", distro: " Ubuntu-24.04 " })).toEqual(
       wslConnection("Ubuntu-24.04")
     );
-    for (const distro of ["Debian", "archlinux", "FedoraLinux-44", "Ubuntu 22.04 LTS", "my_distro"]) {
+    for (const distro of [
+      "Debian",
+      "archlinux",
+      "FedoraLinux-44",
+      "Ubuntu 22.04 LTS",
+      "my_distro",
+    ]) {
       expect(parseHostConnection({ kind: "wsl", distro })).toEqual(wslConnection(distro));
     }
     expect(() => requireHostConnection({ kind: "wsl", distro: "--exec" })).toThrow(

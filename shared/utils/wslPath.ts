@@ -15,7 +15,7 @@ import { isValidWslDistroName } from "../types/remoteHosts.js";
 export function wslUncPath(distro: string, posixPath: string): string | null {
   if (!isValidWslDistroName(distro)) return null;
   if (!posixPath.startsWith("/")) return null;
-  if (/[\0-\x1f\x7f\\:*?"<>|]/.test(posixPath)) return null;
+  if (hasControlCharacter(posixPath) || /[\\:*?"<>|]/.test(posixPath)) return null;
   const segments = posixPath.split("/").filter((segment) => segment.length > 0);
   if (segments.some((segment) => !isWindowsNameable(segment))) return null;
   return `\\\\wsl.localhost\\${distro}${segments.length > 0 ? `\\${segments.join("\\")}` : "\\"}`;
@@ -28,4 +28,12 @@ function isWindowsNameable(segment: string): boolean {
   if (segment === "." || segment === "..") return false;
   if (segment.endsWith(".") || segment.endsWith(" ")) return false;
   return !RESERVED_WINDOWS_NAME.test(segment);
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
 }

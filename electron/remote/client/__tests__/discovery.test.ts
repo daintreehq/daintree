@@ -5,11 +5,7 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, default: { ...actual, hostname: () => "studio" } };
 });
-import {
-  sshConnection,
-  sshTargetOf,
-  wslConnection,
-} from "../../../../shared/types/remoteHosts.js";
+import { sshConnection, sshTargetOf, wslConnection } from "../../../../shared/types/remoteHosts.js";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import {
   discoverHosts,
@@ -239,7 +235,13 @@ describe("discoverHosts", () => {
     // studio-03.local may or may not be the tailnet's studio-03: nothing vouches for it.
     // greg's account on bigbox is added; the row names no account, so it warns rather than blocks.
     expect(
-      hosts.map((h) => [h.name, sshTargetOf(h.connection), h.source, h.alreadyAdded, !!h.knownMachine])
+      hosts.map((h) => [
+        h.name,
+        sshTargetOf(h.connection),
+        h.source,
+        h.alreadyAdded,
+        !!h.knownMachine,
+      ])
     ).toEqual([
       ["studio-03", "studio-03.tail1234.ts.net", "tailscale", false, false],
       ["bigbox", "bigbox.tail1234.ts.net", "tailscale", false, true],
@@ -362,11 +364,13 @@ describe("discoverHosts", () => {
         { kind: "ssh", target: "greg@100.64.0.12" },
       ],
     });
-    expect(hosts.map((h) => [sshTargetOf(h.connection), h.alreadyAdded, !!h.knownMachine])).toEqual([
-      ["100.64.0.3", false, true],
-      ["100.64.0.9", false, false],
-      ["c.tail1234.ts.net", false, true],
-    ]);
+    expect(hosts.map((h) => [sshTargetOf(h.connection), h.alreadyAdded, !!h.knownMachine])).toEqual(
+      [
+        ["100.64.0.3", false, true],
+        ["100.64.0.9", false, false],
+        ["c.tail1234.ts.net", false, true],
+      ]
+    );
     expect(machineKey("greg@100.64.0.3")).toBe("100.64.0.3");
     expect(machineKey("Studio.Local.")).toBe("studio.local");
   });
@@ -475,4 +479,3 @@ describe("discoverWslDistros", () => {
     ).toEqual([]);
   });
 });
-

@@ -140,7 +140,9 @@ export class WslTransport implements LinkTransport {
 
   private async readLaunchCommand(signal: AbortSignal): Promise<string[]> {
     const { distro } = this.options;
-    const script = buildWslDiscoveryScript(this.options.runtimeDirNames ?? [LINUX_RUNTIME_DIR_NAME]);
+    const script = buildWslDiscoveryScript(
+      this.options.runtimeDirNames ?? [LINUX_RUNTIME_DIR_NAME]
+    );
     const result = withWslDiagnostics(
       await this.options.run(this.wslPath, wslExecArgs(distro, ["/bin/sh", "-c", script]), {
         timeoutMs: this.options.discoveryTimeoutMs ?? DISCOVERY_TIMEOUT_MS,
