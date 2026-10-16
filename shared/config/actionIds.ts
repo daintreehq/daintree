@@ -71,6 +71,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.openChanges",
   "worktree.overview.open",
   "worktree.overview.close",
+  "worktree.setLabelColor",
 
   // -- worktreeResourceActions --
   "worktree.resource.provision",

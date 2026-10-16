@@ -23,6 +23,12 @@ import {
   areProjectNotificationsMuted,
 } from "../../store/projectSettingsStore";
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
+import {
+  worktreeLabelDisplayName,
+  WORKTREE_LABEL_COLORS,
+  type WorktreeLabelToken,
+} from "@shared/theme/worktreeColors";
+import { worktreeLabelColorStyle } from "./worktreeLabelColorStyle";
 import { errorsClient, worktreeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { useGitForcePushStore } from "@/store/gitForcePushStore";
@@ -219,6 +225,12 @@ export function WorktreeCard({
     state.collapsedWorktrees.includes(worktree.id)
   );
   const toggleWorktreeCollapsed = useWorktreeFilterStore((state) => state.toggleWorktreeCollapsed);
+  const labelColor = useWorktreeFilterStore(
+    (state) => state.worktreeLabelColors[worktree.id] ?? null
+  );
+  const labelAriaSuffix = labelColor
+    ? `, Label colour: ${worktreeLabelDisplayName(labelColor)}`
+    : "";
 
   const canCollapse = variant !== "grid";
   const effectiveIsCollapsed = canCollapse && isCollapsed;
@@ -464,6 +476,16 @@ export function WorktreeCard({
     void actionService.dispatch(
       "worktree.openIssue",
       { worktreeId: worktree.id },
+      { source: "user" }
+    );
+  };
+
+  const handleSetLabelColor = (token: WorktreeLabelToken | null) => {
+    const color =
+      token === null ? null : WORKTREE_LABEL_COLORS.find((c) => c.token === token)!.name;
+    void actionService.dispatch(
+      "worktree.setLabelColor",
+      { worktreeId: worktree.id, color },
       { source: "user" }
     );
   };
@@ -960,6 +982,8 @@ export function WorktreeCard({
     onTogglePin: isExternal ? undefined : handleTogglePin,
     onToggleCollapse: canCollapse ? () => toggleWorktreeCollapsed(worktree.id) : undefined,
     isCollapsed: effectiveIsCollapsed,
+    labelColor,
+    onSetLabelColor: handleSetLabelColor,
     onLaunchAgent,
     onMoveUp,
     onMoveDown,
@@ -1063,12 +1087,13 @@ export function WorktreeCard({
           data-drop-target={isPanelDropTarget ? "true" : undefined}
           data-worktree-branch={branchLabel}
           data-worktree-is-main={isMainWorktree ? "true" : undefined}
+          data-label-color={variant === "sidebar" && labelColor ? labelColor : undefined}
           data-resource-status={resourceStatusLabel ?? undefined}
           data-deleting={isBeingDeleted && !deleteError ? "true" : undefined}
           aria-busy={isBeingDeleted && !deleteError ? "true" : undefined}
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
-          aria-label={`Worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}`}
+          aria-label={`Worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}${labelAriaSuffix}`}
           onMouseDown={isMultiSelectEnabled ? suppressShiftClickTextSelection : undefined}
           onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
@@ -1127,6 +1152,29 @@ export function WorktreeCard({
 
               The geometry, and the reason every number in it is what it is,
               lives in `WorktreeStatusTick`. */}
+          {/* The colour label: a 3px bar down the leading edge, inside the
+              16px gutter every card already has, so applying or clearing it
+              moves nothing. Identity, not state — hover, selection, collapse
+              and drag leave it alone, and it never takes the accent.
+
+              The status tick shares this edge, and a continuous line under a
+              segmented mark bridges its gaps — the segment count is the only
+              thing telling cleanup from finished. So the bar is cut out around
+              the tick (sidebar.css masks it per `data-cutout`), leaving real
+              transparency rather than a painted patch, which is what makes the
+              cut-out match whatever surface the card is on at the time.
+
+              Above the content column (the grip's hover plate is in there),
+              below the full-card overlays (the drop ring wins its own edge). */}
+          {variant === "sidebar" && labelColor && (
+            <div
+              aria-hidden="true"
+              data-testid="worktree-label-bar"
+              data-cutout={chipState === null ? undefined : effectiveIsCollapsed ? "square" : "bar"}
+              className="worktree-label-bar"
+              style={worktreeLabelColorStyle(labelColor)}
+            />
+          )}
           {chipState !== null && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1174,7 +1222,7 @@ export function WorktreeCard({
                 "absolute inset-0 z-0 outline-hidden",
                 (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
               )}
-              aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}`}
+              aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${labelAriaSuffix}`}
               // The row's marks are non-focusable, so this button is where a
               // keyboard user meets them: described by each mark's words, and,
               // collapsed, revealing the alarm's tooltip while ringed.

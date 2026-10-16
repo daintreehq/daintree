@@ -20,6 +20,7 @@ function resetWorktreeFilterStore() {
     hideMainWorktree: false,
     pinnedWorktrees: [],
     collapsedWorktrees: [],
+    worktreeLabelColors: {},
     manualOrder: [],
     quickStateFilter: "all",
   });
@@ -345,6 +346,47 @@ describe("worktreeFilterStore", () => {
     expect(next.manualOrder).toEqual(["wt-2", "wt-3"]);
   });
 
+  describe("setWorktreeLabelColor", () => {
+    it("sets, replaces and clears a label", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-teal");
+      store.setWorktreeLabelColor("wt-2", "category-violet");
+      store.setWorktreeLabelColor("wt-1", "category-pink");
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toEqual({
+        "wt-1": "category-pink",
+        "wt-2": "category-violet",
+      });
+
+      store.setWorktreeLabelColor("wt-1", null);
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toEqual({
+        "wt-2": "category-violet",
+      });
+    });
+
+    it("is a no-op when the colour is unchanged or there is nothing to clear", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-blue");
+      const before = useWorktreeFilterStore.getState().worktreeLabelColors;
+
+      store.setWorktreeLabelColor("wt-1", "category-blue");
+      store.setWorktreeLabelColor("wt-other", null);
+
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toBe(before);
+    });
+
+    it("survives clearAll, which only resets search and filters", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-teal");
+      store.setQuery("abc");
+
+      store.clearAll();
+
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toEqual({
+        "wt-1": "category-teal",
+      });
+    });
+  });
+
   describe("pruneStaleWorktreeIds", () => {
     it("removes pins and collapsed entries not in validIds", () => {
       const store = useWorktreeFilterStore.getState();
@@ -359,6 +401,29 @@ describe("worktreeFilterStore", () => {
       const next = useWorktreeFilterStore.getState();
       expect(next.pinnedWorktrees).toEqual(["wt-1", "wt-2"]);
       expect(next.collapsedWorktrees).toEqual(["wt-2"]);
+    });
+
+    it("removes labels for worktrees not in validIds and keeps the rest", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-teal");
+      store.setWorktreeLabelColor("wt-gone", "category-pink");
+
+      store.pruneStaleWorktreeIds(new Set(["wt-1"]));
+
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toEqual({
+        "wt-1": "category-teal",
+      });
+    });
+
+    it("preserves label map identity when no label is stale", () => {
+      const store = useWorktreeFilterStore.getState();
+      store.setWorktreeLabelColor("wt-1", "category-blue");
+      store.pinWorktree("wt-stale");
+      const before = useWorktreeFilterStore.getState().worktreeLabelColors;
+
+      store.pruneStaleWorktreeIds(new Set(["wt-1"]));
+
+      expect(useWorktreeFilterStore.getState().worktreeLabelColors).toBe(before);
     });
 
     it("preserves array identity when nothing is stale", () => {
@@ -1251,6 +1316,58 @@ describe("worktreeFilterStore cross-view write merge (#11351)", () => {
     );
     expect(projectBlob.state.typeFilters).toEqual(["design"]);
     expect(projectBlob.state.query).toBe("needle");
+  });
+
+  it("a stale same-project window's write preserves a sibling's label", async () => {
+    const backing = installLocalStorage({});
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+    vi.advanceTimersByTime(400);
+
+    backing.set(
+      PROJECT_KEY,
+      JSON.stringify({
+        version: 2,
+        state: {
+          query: "",
+          statusFilters: [],
+          typeFilters: [],
+          prIssueFilters: [],
+          sessionFilters: [],
+          activityFilters: [],
+          pinnedWorktrees: [],
+          collapsedWorktrees: [],
+          worktreeLabelColors: { "wt-main": "category-teal" },
+          manualOrder: [],
+        },
+      })
+    );
+
+    store.getState().setQuery("needle");
+    vi.advanceTimersByTime(400);
+
+    const projectBlob: {
+      state: { worktreeLabelColors: Record<string, string>; query: string };
+    } = JSON.parse(backing.get(PROJECT_KEY)!);
+    expect(projectBlob.state.worktreeLabelColors).toEqual({ "wt-main": "category-teal" });
+    expect(projectBlob.state.query).toBe("needle");
+  });
+
+  it("hydrates labels and drops entries that are not a known label token", async () => {
+    installLocalStorage({
+      [PROJECT_KEY]: JSON.stringify({
+        version: 2,
+        state: {
+          worktreeLabelColors: {
+            "wt-1": "category-violet",
+            "wt-2": "category-green",
+            "wt-3": 7,
+          },
+        },
+      }),
+    });
+    const { useWorktreeFilterStore: store } = await import("../worktreeFilterStore");
+
+    expect(store.getState().worktreeLabelColors).toEqual({ "wt-1": "category-violet" });
   });
 
   it("a stale same-project window's write preserves a sibling's 'Has an agent' filter", async () => {

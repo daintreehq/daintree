@@ -76,6 +76,7 @@ export {
   Settings2, // managing a list of things in Settings — hosts, presets — kept apart from Settings, which is project settings
   Sprout, // origin / first step (main worktree, first agent launch)
   Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas
+  Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
   TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
   Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there

@@ -202,6 +202,90 @@ html[data-dragging="true"]
   --card-edge: inset 2px 0 0 var(--theme-selection-outline);
 }
 
+/* A labelled card's leading edge already carries its colour bar, and a neutral
+   2px edge on top of it would read as part of the label. The cursor edge moves
+   to the right there; it already skips the active row, so it never meets the
+   selection edge (#13408). */
+[data-worktree-row]:focus-visible
+  .sidebar-worktree-card[data-label-color]:not([data-active="true"]):not([data-drop-target="true"]),
+.sidebar-root
+  [role="grid"]:focus-visible
+  [data-worktree-row][data-keyboard-cursor="true"]
+  .sidebar-worktree-card[data-label-color]:not([data-active="true"]):not(
+    [data-drop-target="true"]
+  ) {
+  --card-edge: inset -2px 0 0 var(--theme-selection-outline);
+}
+
+/* The colour label's ink, shared by the bar and the menu swatch so the two
+   always match. `--worktree-label-color` is the chosen category token, set
+   inline. 10% of `text-primary` mixed in is what holds every label at 3:1
+   (WCAG 1.4.11) against the resting, hovered and selected card on every
+   built-in theme and colour-vision mode — the raw tokens dip to 2.75:1 (pink,
+   red-green, light themes). Local to the label, so the category tokens and
+   everything else that reads them stay as they are.
+   `worktreeLabelContrast.test.ts` reads the weight from here. */
+.worktree-label-bar,
+.worktree-label-swatch {
+  background-color: color-mix(in oklab, var(--worktree-label-color) 90%, var(--theme-text-primary));
+}
+
+/* The colour label (#13408). Full height of the card's padding box, so it ends
+   at the 2px gutter rather than running into the next card. `z-index: 15` puts
+   it over the content column (`z-10`, where the grip's hover plate lives) and
+   under the `z-20` full-card overlays, so the drop ring keeps its own edge. */
+.worktree-label-bar {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  z-index: 15;
+  pointer-events: none;
+}
+
+/* Cut out around the status tick: 2px of card surface above and below it. The
+   tick sits at 4px from the top, 16px tall on an expanded card and 6px square
+   on a collapsed one, and is wider than the bar, so the gap spans the bar's
+   whole width. A mask leaves real transparency, so the gap is whatever surface
+   the card is on — resting, hovered, selected or drop target. */
+.worktree-label-bar[data-cutout="bar"] {
+  mask-image: linear-gradient(to bottom, #000 2px, transparent 2px, transparent 22px, #000 22px);
+}
+
+.worktree-label-bar[data-cutout="square"] {
+  mask-image: linear-gradient(to bottom, #000 2px, transparent 2px, transparent 12px, #000 12px);
+}
+
+.worktree-label-swatch {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-xs);
+}
+
+/* Forced colors would flatten the hue to the canvas, and the hue is the whole
+   label. Keep it, and draw a CanvasText boundary so it holds against any
+   system background. The mask still applies, so the cut-out survives. */
+@media (forced-colors: active) {
+  .worktree-label-bar,
+  .worktree-label-swatch {
+    forced-color-adjust: none;
+  }
+
+  .worktree-label-bar {
+    box-shadow: 1px 0 0 CanvasText;
+  }
+
+  .worktree-label-bar:dir(rtl) {
+    box-shadow: -1px 0 0 CanvasText;
+  }
+
+  .worktree-label-swatch {
+    box-shadow: 0 0 0 1px CanvasText;
+  }
+}
+
 /* Reveal the per-row action toolbar whenever the row has keyboard focus
    (or any descendant does). Uses `:focus-visible` / `:has(:focus-visible)`
    rather than `:focus` / `:focus-within` so mousedown on a button does not

@@ -745,6 +745,48 @@ describe("WorktreeMenuItems — Organize", () => {
     expect(screen.getByText("Move down").closest("button")).toHaveProperty("disabled", true);
   });
 
+  it("offers Label on the main worktree, which cannot be pinned", () => {
+    renderWorktreeMenu({
+      worktree: makeWorktree({ isMainWorktree: true }),
+      onSetLabelColor: vi.fn(),
+    });
+
+    expect(screen.getByText("Organize")).not.toBeNull();
+    expect(screen.getByText("Label")).not.toBeNull();
+    expect(screen.queryByText("Pin to top")).toBeNull();
+  });
+
+  it("checks the current colour and dispatches only a change", () => {
+    const onSetLabelColor = vi.fn();
+    renderWorktreeMenu({ labelColor: "category-blue", onSetLabelColor });
+
+    const radios = screen.getAllByRole("menuitemradio");
+    expect(radios.map((r) => r.textContent?.trim())).toEqual([
+      "None",
+      "Teal",
+      "Blue",
+      "Violet",
+      "Pink",
+    ]);
+    expect(radios.filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(1);
+    expect(screen.getByText("Blue").closest("button")!.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(screen.getByText("Blue"));
+    expect(onSetLabelColor).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("Pink"));
+    expect(onSetLabelColor).toHaveBeenLastCalledWith("category-pink");
+
+    fireEvent.click(screen.getByText("None"));
+    expect(onSetLabelColor).toHaveBeenLastCalledWith(null);
+  });
+
+  it("checks None on an unlabelled worktree", () => {
+    renderWorktreeMenu({ onSetLabelColor: vi.fn() });
+
+    expect(screen.getByText("None").closest("button")!.getAttribute("aria-checked")).toBe("true");
+  });
+
   it("omits the move rows for a card variant that cannot be reordered", () => {
     renderWorktreeMenu({ onToggleCollapse: vi.fn() });
 

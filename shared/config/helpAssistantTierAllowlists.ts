@@ -170,6 +170,10 @@ export const FULL_TIER_ADDONS = [
   // The teardown command is project-defined and may destroy a remote resource,
   // so it keeps `danger: "confirm"`. The deletes run it implicitly too.
   "worktree.resource.teardown",
+  // The one piece of sidebar organisation an agent is offered (#13408): an
+  // orchestrator can mark the worktree it is steering the user towards. A
+  // per-project label the user sees and clears from the card menu, nothing more.
+  "worktree.setLabelColor",
 
   // Resume spawns a pane; the record owns its launch directory (#11908).
   "agentSessionHistory.list",
