@@ -293,6 +293,13 @@ export interface HelpLaunchOptions {
    * by a launch of the default.
    */
   pinAgent?: boolean;
+  /**
+   * Auto-launch woke the lane on the agent its captured conversation belongs
+   * to (#13442), not on the default. Only resuming that conversation justifies
+   * it: when seeding shows the capture is gone or another agent's, the launch
+   * stands down rather than start this agent fresh over it.
+   */
+  wakeCaptured?: boolean;
 }
 
 // Help sessions keep their own bypass and model settings, but a CLI's
@@ -1206,18 +1213,24 @@ export class HelpSessionController {
     // A lane holding a captured conversation wakes on the agent that had it
     // (#13442): a tab started on another agent and then hibernated is still
     // that agent's tab, and launching the default there would miss the resume
-    // and start a stranger's conversation in its place.
+    // and start a stranger's conversation in its place. An agent the user just
+    // picked in Settings for this lane still wins.
+    const helpState = useHelpPanelStore.getState();
     const captured =
-      useHelpPanelStore.getState().hibernateSessions[
-        assistantSlotKey(inputs.currentProject.id, this.slot)
-      ]?.agentId;
+      helpState.hibernateSessions[assistantSlotKey(inputs.currentProject.id, this.slot)]?.agentId;
     if (
       captured &&
       captured !== inputs.preferredAgentId &&
+      !helpState.agentSwitchRequest &&
       inputs.supportedInstalledAgentIds.includes(captured)
     ) {
       this._hasAutoLaunched = true;
-      this.launch({ agentId: captured, isAutoLaunch: true, replaceExisting: true });
+      this.launch({
+        agentId: captured,
+        isAutoLaunch: true,
+        replaceExisting: true,
+        wakeCaptured: true,
+      });
       return;
     }
 
@@ -1648,6 +1661,13 @@ export class HelpSessionController {
           : useHelpPanelStore.getState().hibernateSessions[
               assistantSlotKey(launchProject.id, this.slot)
             ];
+        // Main may have held a newer capture for another agent, which seeding
+        // just mirrored here. Starting the woken agent fresh would bury it, so
+        // stand down: the lane's empty state offers to resume what main kept.
+        if (options.wakeCaptured && hibernated?.agentId !== launchAgentId) {
+          this._abandonInFlightLaunch(reservedId, session, { resetAutoLaunch: false });
+          return;
+        }
         if (hibernated && hibernated.agentId === launchAgentId && folderPath) {
           const resumed = await this._spawnResumed(
             launchAgentId,

@@ -20,6 +20,8 @@ import {
   selectSlotTerminalIds,
 } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
+import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
@@ -181,7 +183,10 @@ export function ToolbarAssistantButton({
   // there is a choice to make; the plain click above is untouched either way.
   const agentChoices = useAssistantAgentChoices();
   const hasAgentChoice = agentChoices.length > 1;
-  const canOpenSession = useHelpPanelStore(selectHasRoomForSession);
+  const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  const scratchId = useScratchStore((s) => s.currentScratch?.id ?? null);
+  const workspaceId = projectId ?? scratchId;
+  const canOpenSession = useHelpPanelStore((s) => selectHasRoomForSession(s, workspaceId));
 
   const pip = describePip(mcp);
   const agentPip = describeAgentPip(unreadState);

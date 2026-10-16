@@ -1375,3 +1375,42 @@ describe("helpPanelStore persistence migration", () => {
     });
   });
 });
+
+describe("selectHasRoomForSession (#13442)", () => {
+  const lane = (overrides: { terminalId?: string; sessionId?: string } = {}) => ({
+    terminalId: overrides.terminalId ?? null,
+    agentId: null,
+    sessionId: overrides.sessionId ?? null,
+    conversationTouched: false,
+    figures: [],
+    activeFigureNumber: null,
+  });
+
+  it("finds room in a free slot, or an open tab with nothing in it", async () => {
+    const { useHelpPanelStore: store, selectHasRoomForSession } = await import("../helpPanelStore");
+    store.setState({ sessions: { 0: lane({ terminalId: "t0" }) }, hibernateSessions: {} });
+    expect(selectHasRoomForSession(store.getState(), "p1")).toBe(true);
+
+    store.setState({
+      sessions: {
+        0: lane({ terminalId: "t0" }),
+        1: lane({ sessionId: "s1" }),
+        2: lane(),
+      },
+    });
+    expect(selectHasRoomForSession(store.getState(), "p1")).toBe(true);
+  });
+
+  it("finds none once every tab holds a session or a conversation waiting to resume", async () => {
+    const { useHelpPanelStore: store, selectHasRoomForSession } = await import("../helpPanelStore");
+    store.setState({
+      sessions: { 0: lane({ terminalId: "t0" }), 1: lane({ sessionId: "s1" }), 2: lane() },
+      hibernateSessions: {
+        [slotKey("p1", 2)]: { sessionId: "kept", cwd: "/help.codex", agentId: "codex" },
+      },
+    });
+    expect(selectHasRoomForSession(store.getState(), "p1")).toBe(false);
+    // Another project's capture doesn't hold this project's tab.
+    expect(selectHasRoomForSession(store.getState(), "p2")).toBe(true);
+  });
+});

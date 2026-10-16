@@ -737,6 +737,45 @@ describe("HelpSessionController — picked past-session resume (#13206)", () => 
     ctrl.stop();
   });
 
+  it("stands a woken launch down when main's newer capture belongs to another agent (#13442)", async () => {
+    const ctrl = new HelpSessionController();
+    ctrl.start();
+    ctrl["_launchGen"] = 7;
+    primeProvision();
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("term-woken");
+    // Auto-launch woke the lane for Codex from this view's capture, but main
+    // holds a newer Claude conversation for it, which seeding mirrors here.
+    takeMock().mockResolvedValueOnce({
+      agentId: "claude",
+      agentSessionId: "claude-newer",
+      cwd: "/help",
+      claimId: "claim-1",
+    });
+    helpPanelState.setHibernateSession = vi.fn(
+      (projectId: string, slot: number, entry: unknown) => {
+        helpPanelState.hibernateSessions[slotKey(projectId, slot)] = entry;
+      }
+    );
+
+    await ctrl["_executeLaunch"](
+      7,
+      { agentId: "codex", isAutoLaunch: true, replaceExisting: true, wakeCaptured: true },
+      { id: "p1", path: "/repo" },
+      undefined
+    );
+
+    // Nothing starts over the Claude conversation; its provision is let go.
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+    expect(actionService.dispatch).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-pick");
+    expect(ctrl.getSnapshot().phase).not.toBe("live");
+    ctrl.stop();
+  });
+
   it("never falls back to resume-latest or a fresh launch when the pick can't be resumed", async () => {
     const ctrl = new HelpSessionController();
     ctrl.start();
@@ -883,8 +922,30 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
 
     expect(launch).toHaveBeenCalledTimes(1);
     expect(launch).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "codex", isAutoLaunch: true, replaceExisting: true })
+      expect.objectContaining({
+        agentId: "codex",
+        isAutoLaunch: true,
+        replaceExisting: true,
+        wakeCaptured: true,
+      })
     );
+  });
+
+  it("lets an agent just picked in Settings for the lane beat the one that held it", () => {
+    const ctrl = new HelpSessionController();
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    helpPanelState.hibernateSessions[slotKey("p1", 0)] = {
+      sessionId: "codex-thread",
+      cwd: "/help.codex",
+      agentId: "codex",
+    };
+    Object.assign(helpPanelState, { agentSwitchRequest: { id: 3, agentId: "claude" } });
+    try {
+      ctrl.syncInputs({ ...readyInputs, supportedInstalledAgentIds: ["claude", "codex"] });
+      expect(launch).toHaveBeenCalledWith(expect.objectContaining({ agentId: "claude" }));
+    } finally {
+      Object.assign(helpPanelState, { agentSwitchRequest: null });
+    }
   });
 
   it("falls back to the default when the agent that held the lane can't run here", () => {

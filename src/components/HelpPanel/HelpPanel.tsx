@@ -1089,7 +1089,9 @@ export function HelpPanel({
   const sessionBodyId = `${tabIdBase}-body`;
   const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
   const canOpenParallelSession = openSlots.length < MAX_ASSISTANT_SLOTS;
-  const canStartSessionWithAgent = useHelpPanelStore(selectHasRoomForSession);
+  const canStartSessionWithAgent = useHelpPanelStore((s) =>
+    selectHasRoomForSession(s, activeWorkspaceId)
+  );
 
   // Subscribed rather than read through `getState()` inside the panel-store selectors
   // below: a background lane that binds a terminal changes only this, and without the
