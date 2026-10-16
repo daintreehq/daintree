@@ -101,11 +101,6 @@ async function selectSubtab(window: Page, tablist: string, name: string): Promis
   await expect(list.getByRole("tab", { name, selected: true })).toBeVisible({ timeout: T_SHORT });
 }
 
-// Remote Hosts is not built for Windows, so Settings → Hosts is absent there.
-const RENDERED_GLOBAL_TAB_IDS = GLOBAL_SETTINGS_TAB_IDS.filter(
-  (id) => id !== "hosts" || process.platform !== "win32"
-);
-
 interface TabExpectation {
   /** Title text when it is more than the nav label (`headerTitle` in the registry). */
   title?: string;
@@ -233,7 +228,6 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
     },
   },
   voice: {},
-  // Registered only where Remote Hosts exists; see RENDERED_GLOBAL_TAB_IDS.
   hosts: {},
   canopy: {
     content: async (window) => {
@@ -427,9 +421,9 @@ test.describe("Core: Settings", () => {
       await expect(navTab(window, "general")).toHaveAttribute("aria-selected", "true");
 
       expect([...(await renderedNavTabIds(window))].sort()).toEqual(
-        [...RENDERED_GLOBAL_TAB_IDS].sort()
+        [...GLOBAL_SETTINGS_TAB_IDS].sort()
       );
-      for (const id of RENDERED_GLOBAL_TAB_IDS) {
+      for (const id of GLOBAL_SETTINGS_TAB_IDS) {
         await test.step(id, () => expectTabRenders(window, id, GLOBAL_TABS[id]));
       }
       await closeSettingsWithEscape(window);
