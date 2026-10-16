@@ -111,11 +111,13 @@ vi.mock("@/components/ui/popover", () => ({
   ),
   PopoverContent: ({
     children,
+    id,
     onPointerDownOutside,
     onInteractOutside,
     onEscapeKeyDown,
   }: {
     children: React.ReactNode;
+    id?: string;
     onPointerDownOutside?: DismissHandler;
     onInteractOutside?: DismissHandler;
     onEscapeKeyDown?: DismissHandler;
@@ -123,7 +125,11 @@ vi.mock("@/components/ui/popover", () => ({
     popoverHandlers.onPointerDownOutside = onPointerDownOutside;
     popoverHandlers.onInteractOutside = onInteractOutside;
     popoverHandlers.onEscapeKeyDown = onEscapeKeyDown;
-    return <div data-testid="popover-content">{children}</div>;
+    return (
+      <div data-testid="popover-content" id={id}>
+        {children}
+      </div>
+    );
   },
 }));
 
@@ -219,16 +225,26 @@ describe("UnreadContainer", () => {
     const trigger = screen.getByRole("button", {
       name: "Unread: 2 agents across all worktrees, 1 in this one",
     });
-    expect(trigger.getAttribute("aria-controls")).toBe("unread-container-popover");
+    const controls = trigger.getAttribute("aria-controls");
+    expect(controls).not.toBe("waiting-container-popover");
+    expect(document.getElementById(controls!)?.getAttribute("data-testid")).toBe("popover-content");
   });
 
   it("names no reason on a row, even when the wait underneath is a question", () => {
-    mockTerminals = [makeTerminal({ id: "t1", agentState: "waiting", waitingReason: "question" })];
+    mockTerminals = [
+      makeTerminal({
+        id: "t1",
+        agentState: "waiting",
+        waitingReason: "question",
+        activityHeadline: "Asked a question",
+      }),
+    ];
     render(<UnreadContainer />);
 
     expect(screen.queryByTestId("waiting-reason-badge-t1")).toBeNull();
     const row = screen.getByTestId("unread-single-item");
     expect(row.getAttribute("aria-label")).toBe("Focus claude");
+    expect(row.textContent).not.toContain("Asked a question");
     // The observation itself still rides on the row.
     expect(row.getAttribute("data-waiting-reason")).toBe("question");
   });
@@ -252,8 +268,11 @@ describe("UnreadContainer", () => {
     expect(titles).toEqual(["Focus older", "Focus newer"]);
   });
 
-  it("gathers a tab group's unread members under one header", () => {
-    mockTerminals = [makeTerminal({ id: "t1" }), makeTerminal({ id: "t2" })];
+  it("gathers a tab group's unread members under one header, still naming no reason", () => {
+    mockTerminals = [
+      makeTerminal({ id: "t1" }),
+      makeTerminal({ id: "t2", title: "codex", agentState: "waiting", waitingReason: "question" }),
+    ];
     mockTabGroups = new Map([
       [
         "g1",
@@ -269,7 +288,11 @@ describe("UnreadContainer", () => {
     render(<UnreadContainer />);
 
     const header = screen.getByRole("button", { name: /Tab group \(2 unread\)/ });
-    expect(header.getAttribute("aria-controls")).toBe("unread-group-g1");
+    const region = document.getElementById(header.getAttribute("aria-controls")!);
+    expect(region?.getAttribute("role")).toBe("region");
+    expect(region?.querySelectorAll('[data-testid="unread-single-item"]')).toHaveLength(2);
+    expect(screen.queryByTestId("waiting-reason-badge-t2")).toBeNull();
+    expect(screen.getByRole("button", { name: "Focus codex" })).toBeTruthy();
   });
 
   it("focuses the hand-back it was opened for", () => {

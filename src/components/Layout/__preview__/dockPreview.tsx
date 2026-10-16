@@ -129,6 +129,11 @@ function waiting(minutesAgo: number, reason: WaitingReason = "prompt"): PaneOver
   };
 }
 
+/** An agent that finished its turn and handed it back, unread. */
+function handedBack(minutesAgo: number): PaneOverrides {
+  return { agentState: "completed", lastStateChange: FROZEN_NOW - minutesAgo * 60_000 };
+}
+
 function fromAgent(spec: PaneOverrides & { id: string }): PanelInstance {
   const { id, title, ...rest } = spec;
   return pane(id, title ?? id, rest);
@@ -204,6 +209,9 @@ const FIXTURES: Record<string, Fixture> = {
       }),
       shell,
       ...elsewhere().slice(0, 3),
+      fromAgent(
+        agent("x-done", "gemini", { ...handedBack(5), worktreeId: "wt-12383", location: "grid" })
+      ),
       fromAgent(
         agent("x-err", "codex", {
           agentState: "exited",
@@ -319,6 +327,32 @@ const FIXTURES: Record<string, Fixture> = {
       } as TabGroup,
     ],
   },
+  // The Unread popover: hand-backs nobody has read, beside a Waiting pill.
+  unread: {
+    what: "three unread hand-backs, one here, beside one agent waiting elsewhere",
+    panels: [
+      fromAgent(
+        agent("u-1", "claude", {
+          ...handedBack(4),
+          location: "grid",
+          lastObservedTitle: "Tighten the unread popover rows",
+        })
+      ),
+      fromAgent(
+        agent("u-2", "codex", { ...handedBack(11), worktreeId: "wt-12383", location: "grid" })
+      ),
+      fromAgent(
+        agent("u-3", "gemini", { ...handedBack(26), worktreeId: "wt-thumbs", location: "grid" })
+      ),
+      fromAgent(
+        agent("e-1", "claude", {
+          ...waiting(2, "approval"),
+          worktreeId: "wt-main",
+          location: "grid",
+        })
+      ),
+    ],
+  },
   // The chip cues and the rail's scroll affordances — `dock-cues-review` flips
   // `activityStatus`/`agentState` through `window.__dockPreview` to catch them
   // mid-flight, and a narrow frame makes this rail overflow.
@@ -407,14 +441,15 @@ usePanelStore.setState({
 
 /**
  * The fleet's view of each agent, which is what the Waiting and Unread pills
- * read. An approval, question or error wait is an ask; a plain prompt is an
- * unread hand-back, the common end of a turn.
+ * read. An approval, question or error wait is an ask on its own. A plain
+ * prompt only waits when Canopy read a question in it, which is how the
+ * Waiting fixtures keep their unlabelled rows. A finished turn is an unread
+ * hand-back.
  */
 function fleetRun(panel: PtyPanelData): FleetRunRow {
-  const handBack =
-    panel.agentState !== undefined && isHandBackStop(panel.agentState, panel.waitingReason)
-      ? { stoppedAt: panel.lastStateChange ?? FROZEN_NOW }
-      : undefined;
+  const stoppedAt = panel.lastStateChange ?? FROZEN_NOW;
+  const promptWait =
+    panel.agentState === "waiting" && isHandBackStop(panel.agentState, panel.waitingReason);
   return {
     runId: panel.id,
     workspaceId: "proj-daintree",
@@ -423,7 +458,10 @@ function fleetRun(panel: PtyPanelData): FleetRunRow {
     waitingReason: panel.waitingReason,
     spawnedAt: FROZEN_NOW - 3_600_000,
     cwd: panel.cwd,
-    ...(handBack ? { handBack } : {}),
+    ...(panel.agentState === "completed" ? { handBack: { stoppedAt } } : {}),
+    ...(promptWait
+      ? { canopy: { kind: "asked" as const, quote: "Want me to keep going?", readAt: stoppedAt } }
+      : {}),
   };
 }
 

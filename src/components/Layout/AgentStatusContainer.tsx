@@ -59,9 +59,10 @@ export interface AgentStatusConfig {
   popoverLabel: string;
   heading: string;
   /**
-   * Whether rows name the reason the agent stopped. Off for hand-backs: a
-   * question wait Canopy read as not asking is still `question` underneath,
-   * and an amber Question chip would claim the ask Canopy ruled out.
+   * Whether rows say why the agent stopped: the reason chip and the activity
+   * headline, which for an agent is its state in words ("Waiting for input",
+   * "Asked a question"). Off for hand-backs, which are never waiting, and a
+   * question wait Canopy read as not asking is still `question` underneath.
    */
   showReasons: boolean;
   /** Row order; groups take the place of their first member. */
@@ -429,6 +430,7 @@ function AgentSingleItem({
   // Only classifier-backed reasons earn a chip — the `prompt` fallback stays
   // an unlabeled row so the list doesn't overclaim.
   const reason = showReasons ? actionableWaitingReason(terminal.waitingReason) : null;
+  const headline = showReasons ? terminal.activityHeadline : undefined;
   const context = [showWorktreeInline ? worktreeName : undefined, task].filter(Boolean).join(" · ");
   const ageId = useId();
 
@@ -446,7 +448,7 @@ function AgentSingleItem({
           data-waiting-reason={terminal.waitingReason ?? "unknown"}
           onClick={() => onActivate(terminal, groupId)}
           className={ROW_TARGET_CLASS}
-          aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}${terminal.activityHeadline ? ` — ${terminal.activityHeadline}` : ""}`}
+          aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}${headline ? ` — ${headline}` : ""}`}
           aria-describedby={terminal.lastStateChange != null ? ageId : undefined}
         >
           <TerminalIcon
@@ -459,13 +461,11 @@ function AgentSingleItem({
             <span className="min-w-0 max-w-[65%] shrink-0 truncate text-xs font-medium text-text-primary">
               {title}
             </span>
-            {(context || terminal.activityHeadline) && (
+            {(context || headline) && (
               <span className="min-w-0 truncate text-2xs text-text-secondary">
                 {context}
-                {context && terminal.activityHeadline && " · "}
-                {terminal.activityHeadline && (
-                  <span className="italic">{terminal.activityHeadline}</span>
-                )}
+                {context && headline && " · "}
+                {headline && <span className="italic">{headline}</span>}
               </span>
             )}
           </span>

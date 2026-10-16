@@ -31,6 +31,12 @@ import {
 
 const isInTrashFn = () => false;
 
+// The fleet store is real, so a snapshot one test delivers would otherwise
+// carry into the next.
+beforeEach(() => {
+  useFleetSnapshotStore.setState({ snapshot: null });
+});
+
 type RunOverrides = Partial<FleetRunRow> & { runId: string };
 
 function deliverRuns(runs: RunOverrides[]) {
@@ -89,6 +95,7 @@ function setupTerminals(
 function setupBoth(
   terminals: Array<{
     id: string;
+    kind?: string;
     worktreeId?: string;
     agentState?: string;
     waitingReason?: string;
@@ -774,27 +781,51 @@ describe("the dock's agent pills read the fleet bands", () => {
     expect(ids(unread.result.current)).toEqual(["here"]);
     expect(demand.result.current).toBe(1);
 
+    // No forced rerender: the fleet push alone has to reach a mounted pill.
     handBacks({ stoppedAt: 2, seenAt: 3 });
-    unread.rerender();
-    demand.rerender();
     expect(unread.result.current).toEqual([]);
     expect(demand.result.current).toBe(0);
   });
 
+  it("fills a mounted pill when the first snapshot lands", () => {
+    setupBoth([{ id: "t1", agentState: "waiting", waitingReason: "approval", location: "grid" }]);
+    const waiting = renderHook(() => useWaitingTerminals());
+    expect(waiting.result.current).toEqual([]);
+
+    deliverAsks(["t1"]);
+    expect(ids(waiting.result.current)).toEqual(["t1"]);
+  });
+
+  it("leaves out a panel the fleet hasn't reported, even once it has reported others", () => {
+    setupBoth([
+      { id: "reported", agentState: "waiting", waitingReason: "approval", location: "grid" },
+      { id: "unreported", agentState: "waiting", waitingReason: "approval", location: "grid" },
+    ]);
+    deliverAsks(["reported"]);
+
+    expect(ids(renderHook(() => useWaitingTerminals()).result.current)).toEqual(["reported"]);
+    expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(1);
+  });
+
   it("counts both pills' visible agents for the dock's status", () => {
     setupBoth([
-      { id: "ask", agentState: "waiting", waitingReason: "error", location: "grid" },
+      { id: "error", agentState: "waiting", waitingReason: "error", location: "grid" },
+      { id: "approval", agentState: "waiting", waitingReason: "approval", location: "grid" },
       { id: "hand-back", agentState: "completed", location: "dock" },
       { id: "read", agentState: "completed", location: "grid" },
       { id: "working", agentState: "working", location: "grid" },
+      { id: "browser", kind: "browser", location: "grid" },
     ]);
     deliverRuns([
-      { runId: "ask", agentState: "waiting", waitingReason: "error" },
+      { runId: "error", agentState: "waiting", waitingReason: "error" },
+      { runId: "approval", agentState: "waiting", waitingReason: "approval" },
       { runId: "hand-back", agentState: "completed", handBack: { stoppedAt: 2 } },
       { runId: "read", agentState: "completed", handBack: { stoppedAt: 2, seenAt: 3 } },
       { runId: "working", agentState: "working" },
+      // A run id that lands on a panel which isn't a terminal counts for nothing.
+      { runId: "browser", agentState: "waiting", waitingReason: "approval" },
     ]);
 
-    expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(2);
+    expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(3);
   });
 });
