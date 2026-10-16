@@ -192,7 +192,10 @@ export function AgentStatusContainer({
         item.type === "group"
           ? (item.group.worktreeId ?? item.memberTerminals[0]?.worktreeId)
           : item.terminal.worktreeId;
-      ((worktreeId ?? null) === (activeWorktreeId ?? null) ? here : elsewhere).push(item);
+      // An `if`, not `(cond ? here : elsewhere).push`: the compiler can't lower
+      // a `??` inside a ternary's test and bails the whole component.
+      if ((worktreeId ?? null) === (activeWorktreeId ?? null)) here.push(item);
+      else elsewhere.push(item);
     }
     return { hereItems: here, elsewhereItems: elsewhere };
   }, [displayItems, activeWorktreeId]);
