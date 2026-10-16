@@ -1381,7 +1381,6 @@ function CanopyInbox({
     undoReads,
     api,
     terminalApi,
-    otherHost,
     hostId,
   ]);
 
@@ -1553,8 +1552,7 @@ function CanopyInbox({
     if (!selected) return;
     if (event.key === "Enter") {
       event.preventDefault();
-      // Cmd/Ctrl+Enter: another host's run opens in a new window, as a click does.
-      handlers.onOpen(selected, isNewWindowClick(event));
+      handlers.onOpen(selected);
       return;
     }
     if (event.key === "F2") {

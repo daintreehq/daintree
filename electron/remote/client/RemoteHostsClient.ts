@@ -919,6 +919,8 @@ export class RemoteHostsClient {
     }
     const targetProjectId = projectId;
     const targetPath = projectPath;
+    // Passed only when there is one, so a plain switch opens as it always has.
+    const focusArg: [] | [ProjectFocusOnActivateIntent] = focusIntent ? [focusIntent] : [];
     let releaseClaim: () => void = () => {};
     const switching = this.inSwitchTurn(windowId, async (): Promise<SwitchWindowHostResult> => {
       // Checked again in turn: a newer request may have arrived while this
@@ -988,7 +990,7 @@ export class RemoteHostsClient {
 
       try {
         if (!remote) {
-          await this.options.windows.openLocalProject(windowId, targetProjectId, focusIntent);
+          await this.options.windows.openLocalProject(windowId, targetProjectId, ...focusArg);
           return { outcome: "switched", hostId: LOCAL_HOST_ID, projectId: targetProjectId };
         }
         // Set above for every remote switch that names a project; never open a pathless view.
@@ -1006,7 +1008,7 @@ export class RemoteHostsClient {
           hostId,
           targetProjectId,
           targetPath,
-          focusIntent
+          ...focusArg
         );
       } catch (error) {
         // The view didn't move, so neither does the binding: they never name

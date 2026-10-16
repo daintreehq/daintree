@@ -426,16 +426,17 @@ describe("the Canopy host picker", () => {
     expect(useCanopyStore.getState().isOpen).toBe(false);
   });
 
-  it("opens another host's run in a new window on a modified click or Enter", async () => {
+  it("opens another host's run in a new window on a modified click", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
     render(<CanopyView />);
     await settle();
-    const row = document.getElementById("canopy-card-remote-run")!;
-    act(() => row.focus());
     // Both modifiers, so the platform's own new-window key is among them.
     await act(async () => {
-      fireEvent.keyDown(row, { key: "Enter", metaKey: true, ctrlKey: true });
+      fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }), {
+        metaKey: true,
+        ctrlKey: true,
+      });
     });
     await settle();
     expect(state.switchWindowHost).toHaveBeenCalledWith(
