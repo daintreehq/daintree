@@ -87,6 +87,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     revokeByWebContentsId: async () => undefined,
     revokeSession: async () => undefined,
     setMessagingReach: () => {},
+    setRunbooksHostState: () => {},
   },
 }));
 

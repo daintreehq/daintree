@@ -7,6 +7,37 @@ export const DAINTREE_RUNBOOKS_MCP_URL = "https://assistant.daintree.org/v1/dain
 // the production endpoint.
 export const RUNBOOKS_MCP_URL_ENV_VAR = "DAINTREE_RUNBOOKS_MCP_URL";
 
+/**
+ * What this machine's Remote Hosts look like when an assistant launches (#13411):
+ * none configured, some configured but none connected with messaging on, or at
+ * least one connected with messaging on.
+ */
+export type RunbooksHostsState = "none" | "configured" | "connected";
+
+/** The coarse host state runbook search is told; never names, counts or ids. */
+export interface RunbooksHostState {
+  hosts: RunbooksHostsState;
+  /** Another machine's assistant can message this one: it is a lane. */
+  laneReachable: boolean;
+}
+
+export const RUNBOOKS_HOSTS_HEADER = "Daintree-Hosts";
+export const RUNBOOKS_LANE_HEADER = "Daintree-Lane";
+
+/**
+ * The request headers that tell runbook search the caller's host state, sent on
+ * every POST by the agent CLI. No state means no headers: the caller is
+ * unreported and searches the whole catalog. The lane header is left out
+ * rather than sent as a "no", because the backend reads any value but
+ * `reachable` as a malformed snapshot and drops the hosts value with it.
+ */
+export function buildRunbooksHostHeaders(state: RunbooksHostState | null): Record<string, string> {
+  if (!state) return {};
+  const headers: Record<string, string> = { [RUNBOOKS_HOSTS_HEADER]: state.hosts };
+  if (state.laneReachable) headers[RUNBOOKS_LANE_HEADER] = "reachable";
+  return headers;
+}
+
 export const RUNBOOKS_BLOCK_START = "<!-- DAINTREE_RUNBOOKS_START -->";
 export const RUNBOOKS_BLOCK_END = "<!-- DAINTREE_RUNBOOKS_END -->";
 

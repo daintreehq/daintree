@@ -8,6 +8,7 @@ import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
+import type { RunbooksHostsState } from "../../services/helpSessionRunbooks.js";
 import { setAssistantMessagingRuntime } from "../../services/mcp-server/assistantMessagingTools.js";
 import { setHostMessagingRuntime } from "../../services/mcp-server/hostMessagingTools.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
@@ -115,6 +116,25 @@ function viewShellOf(
   }
   // Only one of this machine's project views showing the run's own project.
   return getProjectForWebContents(handle) === projectId ? { kind: "local" } : null;
+}
+
+/**
+ * This machine's hosts as runbook search is told them (#13411), from what the
+ * hub's `host.list` reads: connected means a host this Shell lets its assistant
+ * message is connected right now. Hosts this Shell can't observe are unreported
+ * rather than guessed down to "none connected".
+ */
+export function observedRunbooksHostsState(
+  hasHosts: boolean,
+  observed: readonly ObservedHost[] | null
+): RunbooksHostsState | null {
+  if (!hasHosts) return "none";
+  if (observed === null) return null;
+  return observed.some(
+    (host) => host.assistantMessagingEnabled && host.connection.status === "connected"
+  )
+    ? "connected"
+    : "configured";
 }
 
 function openExchangeDatabase(): Database.Database | null {
@@ -303,6 +323,13 @@ export function installAssistantMessagingPolicy(
     defaults.schedule();
   });
   const offPolicyReannounce = policy.onChange(payReannounce);
+  // Read at each provision and held for that session; a host that connects later counts from the
+  // next. A lane is an assistant a hub on another machine can enroll, so only listening as a host
+  // makes one: a hub's own assistant hears from its hosts, but not as their lane.
+  helpSessionService.setRunbooksHostState(() => {
+    const hosts = observedRunbooksHostsState(deps.hasHosts(), deps.observeHosts?.() ?? null);
+    return hosts === null ? null : { hosts, laneReachable: runtime.listensAsHost() };
+  });
   const onAvailabilityChanged = deps.onAvailabilityChanged;
   const stopListening = onAvailabilityChanged
     ? runtime.onAvailabilityChanged(onAvailabilityChanged)
@@ -416,6 +443,7 @@ export function installAssistantMessagingPolicy(
     unregisterRuntime();
     unregisterSurface();
     helpSessionService.setMessagingReach(null);
+    helpSessionService.setRunbooksHostState(null);
     unregisterWaker();
     unregisterPolicy();
     offHosts();

@@ -201,11 +201,12 @@ export class AssistantMessagingRuntime {
 
   /** Whether a lane here could be one a remote Shell enrolls, and so write to its hub. */
   isSendReachable(helpSessionId: string): boolean {
-    return (
-      this.deps.policy.isSupported() &&
-      this.deps.getSessionLane(helpSessionId) !== null &&
-      this.deps.outbox?.() !== undefined
-    );
+    return this.listensAsHost() && this.deps.getSessionLane(helpSessionId) !== null;
+  }
+
+  /** Whether a Shell on another machine could enroll a lane here: this machine listens as a host. */
+  listensAsHost(): boolean {
+    return this.deps.policy.isSupported() && this.deps.outbox?.() !== undefined;
   }
 
   getInbox(

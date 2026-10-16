@@ -12,6 +12,7 @@ const views = vi.hoisted(() => new Map<number, string>());
 const ledger = vi.hoisted(
   () => new Map<string, { generation: number; spawnOk?: boolean; closedAt?: number }>()
 );
+const runbooksHostState = vi.hoisted(() => ({ read: null as (() => unknown) | null }));
 const pty = vi.hoisted(() => {
   const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const generations = new Map<string, number>();
@@ -51,6 +52,9 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
 
     addSessionReattachedListener: () => () => {},
     setMessagingReach: () => {},
+    setRunbooksHostState: (read: (() => unknown) | null) => {
+      runbooksHostState.read = read;
+    },
   },
 }));
 vi.mock("../../../services/DriveLeaseService.js", () => ({ peekDriveLeaseService: () => null }));
@@ -70,6 +74,7 @@ import type { HostProjectViewResult } from "../../client/hostProjectViews.js";
 import type { ExchangeRecord } from "../../exchange/types.js";
 import type { MovedExchange } from "../AssistantExchangeClient.js";
 import type { LaneEnrollment } from "../AssistantMessagingPolicy.js";
+import type { ObservedHost } from "../HubMessagingRuntime.js";
 import { installAssistantMessagingPolicy, wakeHubForMoved } from "../install.js";
 
 describe("installAssistantMessagingPolicy", () => {
@@ -109,6 +114,86 @@ describe("installAssistantMessagingPolicy", () => {
   afterEach(() => {
     uninstall?.();
     uninstall = null;
+  });
+
+  describe("runbook host state (#13411)", () => {
+    const observed = (overrides: Partial<ObservedHost> = {}): ObservedHost => ({
+      hostId: "studio",
+      name: "studio-01",
+      assistantMessagingEnabled: true,
+      connection: { status: "disconnected" },
+      lastSeenAt: null,
+      summary: null,
+      ...overrides,
+    });
+    const connected = { status: "connected", rttMs: 12, handshake: {} as never } as const;
+    let seen: ObservedHost[] | undefined;
+    const installObserving = () =>
+      (uninstall = installAssistantMessagingPolicy({
+        isHostMessagingEnabled: () => false,
+        hasHosts: () => hosts.length > 0,
+        onHostsChanged: () => () => {},
+        observeHosts: seen === undefined ? undefined : () => seen ?? [],
+      }));
+    const read = () => runbooksHostState.read?.();
+
+    beforeEach(() => {
+      seen = [];
+      runbooksHostState.read = null;
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "reports no hosts, and no lane where nothing here listens as a host",
+      () => {
+        installObserving();
+        expect(read()).toEqual({ hosts: "none", laneReachable: false });
+      }
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "reports a listening host with no hosts of its own as a reachable lane",
+      () => {
+        const unregisterOutbox = registerRemoteService("assistantHostOutbox", {} as never);
+        try {
+          installObserving();
+          expect(read()).toEqual({ hosts: "none", laneReachable: true });
+        } finally {
+          unregisterOutbox();
+        }
+      }
+    );
+
+    it("reports hosts as configured until one this Shell messages is connected", () => {
+      hosts = ["studio", "attic"];
+      seen = [
+        observed(),
+        observed({ hostId: "attic", assistantMessagingEnabled: false, connection: connected }),
+      ];
+      installObserving();
+      // Having hosts makes this machine their hub, not a lane of theirs.
+      expect(read()).toEqual({ hosts: "configured", laneReachable: false });
+
+      seen = [observed({ connection: connected })];
+      expect(read()).toEqual({ hosts: "connected", laneReachable: false });
+
+      seen = [];
+      expect(read()).toEqual({ hosts: "configured", laneReachable: false });
+    });
+
+    it("reports nothing when hosts exist but can't be observed", () => {
+      hosts = ["studio"];
+      seen = undefined;
+      installObserving();
+      expect(read()).toBeNull();
+    });
+
+    it("stops reporting once uninstalled", () => {
+      installObserving();
+      expect(runbooksHostState.read).not.toBeNull();
+      uninstall?.();
+      uninstall = null;
+      expect(runbooksHostState.read).toBeNull();
+    });
   });
 
   it("gives enrolled lanes their views back on each session opening, retrying until windows are back (#13392)", async () => {

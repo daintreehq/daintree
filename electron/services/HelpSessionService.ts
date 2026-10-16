@@ -42,7 +42,9 @@ import {
   buildConfirmationsAddendum,
   buildMessagingAddendum,
   buildRunbooksAddendum,
+  buildRunbooksHostHeaders,
   resolveRunbooksMcpUrl,
+  type RunbooksHostState,
 } from "./helpSessionRunbooks.js";
 import { agentSupportsAssistantContent, syncAssistantContent } from "./AssistantContentMirror.js";
 import {
@@ -50,6 +52,7 @@ import {
   readCodexNativeServerNames,
   toCodexMcpServerArgs,
   toJsonMcpServerEntry,
+  tomlInlineTable,
   type AssistantUserConfig,
   type AssistantUserInstructions,
   type AssistantUserMcpServer,
@@ -166,6 +169,15 @@ export async function codexTrustArgs(sessionPath: string): Promise<string[]> {
 
 function runbooksEnabled(settings: { daintreeControl: boolean; runbookSearch: boolean }): boolean {
   return settings.daintreeControl && settings.runbookSearch;
+}
+
+/** The runbook server's entry in a Claude or Copilot MCP config: literal headers, never `${VAR}`. */
+function runbooksJsonEntry(headers: Record<string, string>): Record<string, unknown> {
+  return {
+    type: "http",
+    url: resolveRunbooksMcpUrl(),
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+  };
 }
 
 const SCRATCH_BLOCK_MARKERS = {
@@ -733,6 +745,7 @@ export class HelpSessionService {
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
   private messagingReach: (() => boolean) | null = null;
+  private runbooksHostState: (() => RunbooksHostState | null) | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
 
   setMcpRegistry(registry: WindowRegistry): void {
@@ -750,6 +763,29 @@ export class HelpSessionService {
   /** Whether cross-host messaging can reach a lane on this machine; null where it never can. */
   setMessagingReach(reach: (() => boolean) | null): void {
     this.messagingReach = reach;
+  }
+
+  /** What runbook search is told about this machine's Remote Hosts (#13411); null where nothing is told. */
+  setRunbooksHostState(read: (() => RunbooksHostState | null) | null): void {
+    this.runbooksHostState = read;
+  }
+
+  /**
+   * The runbook entry's host-state headers, read once per provision so every
+   * entry the session gets reports one snapshot, held until it relaunches. A
+   * read that fails sends none: an unreported caller searches the whole catalog.
+   */
+  private readRunbooksHostHeaders(settings: {
+    daintreeControl: boolean;
+    runbookSearch: boolean;
+  }): Record<string, string> {
+    if (!runbooksEnabled(settings) || !this.runbooksHostState) return {};
+    try {
+      return buildRunbooksHostHeaders(this.runbooksHostState());
+    } catch (err) {
+      console.warn("[HelpSessionService] Couldn't read the Remote Host state for runbooks:", err);
+      return {};
+    }
   }
 
   /**
@@ -1276,6 +1312,7 @@ export class HelpSessionService {
     pathHash: string
   ): Promise<ProvisionResult | null> {
     const settings = this.readSettings();
+    const runbooksHeaders = this.readRunbooksHostHeaders(settings);
     // Every help agent — the Daintree Assistant included — provisions at the
     // tool set the user configured. Agent identity never widens the MCP
     // surface: `core` is the default, `full` is an explicit user choice, and
@@ -1543,7 +1580,8 @@ export class HelpSessionService {
             settings,
             port,
             token,
-            userConfig.mcpServers
+            userConfig.mcpServers,
+            runbooksHeaders
           );
           await this.writeClaudeSettings(
             sessionPath,
@@ -1553,7 +1591,13 @@ export class HelpSessionService {
             input.projectPath
           );
         } else if (input.agentId === "copilot") {
-          await this.writeCopilotMcpConfig(sessionPath, settings, port, userConfig.mcpServers);
+          await this.writeCopilotMcpConfig(
+            sessionPath,
+            settings,
+            port,
+            userConfig.mcpServers,
+            runbooksHeaders
+          );
         } else {
           // Codex and any other agent skip `writeMcpConfig`, so when the
           // template hash gate (#7525) also skips `fs.cp`, a `.mcp.json` from a
@@ -1589,7 +1633,7 @@ export class HelpSessionService {
       input.agentId === "codex"
         ? [
             ...(await codexTrustArgs(sessionPath)),
-            ...this.buildCodexLaunchArgs(settings, port),
+            ...this.buildCodexLaunchArgs(settings, port, runbooksHeaders),
             ...toCodexMcpServerArgs(
               userConfig.mcpServers,
               userConfig.warnings,
@@ -1712,7 +1756,8 @@ export class HelpSessionService {
    */
   private buildCodexLaunchArgs(
     settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
-    port: number | null
+    port: number | null,
+    runbooksHeaders: Record<string, string> = {}
   ): string[] {
     const args: string[] = [];
     // Daintree's own servers skip Codex's per-call approval prompt, as the
@@ -1754,6 +1799,13 @@ export class HelpSessionService {
         `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.url="${resolveRunbooksMcpUrl()}"`,
         ...approve(RUNBOOKS_MCP_SERVER_NAME)
       );
+      // An inline table: the header names' hyphens can't go in a dotted key.
+      if (Object.keys(runbooksHeaders).length > 0) {
+        args.push(
+          "-c",
+          `mcp_servers.${RUNBOOKS_MCP_SERVER_NAME}.http_headers=${tomlInlineTable(runbooksHeaders)}`
+        );
+      }
     }
     return args;
   }
@@ -3117,7 +3169,8 @@ export class HelpSessionService {
     settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null,
     token: string,
-    userServers: Record<string, AssistantUserMcpServer> = {}
+    userServers: Record<string, AssistantUserMcpServer> = {},
+    runbooksHeaders: Record<string, string> = {}
   ): Promise<string> {
     // User servers first; Daintree's names are reserved at parse time, so
     // nothing below can be shadowed by them.
@@ -3132,10 +3185,7 @@ export class HelpSessionService {
       };
     }
     if (runbooksEnabled(settings)) {
-      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = {
-        type: "http",
-        url: resolveRunbooksMcpUrl(),
-      };
+      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = runbooksJsonEntry(runbooksHeaders);
     }
     if (settings.daintreeControl && port) {
       // Bake the literal token into the file rather than `${DAINTREE_MCP_TOKEN}`
@@ -3255,7 +3305,8 @@ export class HelpSessionService {
     sessionPath: string,
     settings: { daintreeControl: boolean; docSearch: boolean; runbookSearch: boolean },
     port: number | null,
-    userServers: Record<string, AssistantUserMcpServer> = {}
+    userServers: Record<string, AssistantUserMcpServer> = {},
+    runbooksHeaders: Record<string, string> = {}
   ): Promise<void> {
     const mcpServers: Record<string, unknown> = {};
     for (const [name, server] of Object.entries(userServers)) {
@@ -3268,10 +3319,7 @@ export class HelpSessionService {
       };
     }
     if (runbooksEnabled(settings)) {
-      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = {
-        type: "http",
-        url: resolveRunbooksMcpUrl(),
-      };
+      mcpServers[RUNBOOKS_MCP_SERVER_NAME] = runbooksJsonEntry(runbooksHeaders);
     }
     if (settings.daintreeControl && port) {
       mcpServers["daintree"] = {
@@ -3280,6 +3328,8 @@ export class HelpSessionService {
         headers: { Authorization: `Bearer ${COPILOT_BEARER_PLACEHOLDER}` },
       };
     }
+    // Shared by every Copilot lane of the project, so a launch reads the host
+    // state of whichever provision wrote this file last.
     const target = path.join(sessionPath, ".mcp.json");
     await resilientAtomicWriteFile(
       target,
