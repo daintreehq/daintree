@@ -10,7 +10,7 @@ Three folders are easy to confuse:
 
 - **`assistant/` in the Daintree repo** (this directory) is the app-owned template. It ships in the app bundle as `Resources/assistant` and is never edited at runtime.
 - **`~/.daintree/assistant/`** (and a project's `.daintree/assistant/`) is the user's own content: instructions, commands, skills and reference files they author. `AssistantContentMirror` and `AssistantUserConfig` layer it onto each session; it never feeds back into this template.
-- **`userData/help-sessions/<project hash>/`** is the provisioned session directory the assistant actually runs in, refreshed from this template on every launch.
+- **`userData/help-sessions/<project hash>/`** is the provisioned session directory the assistant actually runs in. It is reused across launches; the template is re-copied into it whenever the bundled template changes (tracked by a `.template-hash` stamp), while the MCP wiring and settings overlay are rewritten on every provision.
 
 Daintree launches the assistant in its session directory automatically via the assistant panel — users don't need to `cd` anywhere manually.
 
@@ -168,7 +168,7 @@ For development against a local runbook server, set `DAINTREE_RUNBOOKS_MCP_URL` 
 
 ## How Daintree Launches the Assistant
 
-The main Daintree app copies this template into the project's session directory under `userData/help-sessions/`, then spawns the agent CLI with that session directory as its working directory. The agent auto-discovers its config files and enters assistant mode. From the app side, this is handled by the assistant panel and `HelpSessionService`; the panel provides a dedicated UI for talking to the assistant within Daintree itself.
+The main Daintree app provisions the project's session directory under `userData/help-sessions/` from this template, then spawns the agent CLI with that session directory as its working directory. The agent auto-discovers its config files and enters assistant mode. From the app side, this is handled by the assistant panel and `HelpSessionService`; the panel provides a dedicated UI for talking to the assistant within Daintree itself.
 
 ## Maintenance
 
