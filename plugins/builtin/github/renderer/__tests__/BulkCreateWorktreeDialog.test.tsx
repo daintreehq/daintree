@@ -37,6 +37,7 @@ const createdWorktree = (worktreeId: string, branch = "feature/x") => ({
 const mockGetAvailableBranch = vi.fn();
 const mockGetDefaultPath = vi.fn();
 const mockListBranches = vi.fn();
+const mockGetRecentBranches = vi.fn();
 const mockFetchPRBranch = vi.fn();
 const mockAssignIssue = vi.fn();
 const mockLogError = vi.fn();
@@ -52,6 +53,7 @@ vi.mock("@/clients", async (importOriginal) => ({
     getAvailableBranch: (...args: unknown[]) => mockGetAvailableBranch(...args),
     getDefaultPath: (...args: unknown[]) => mockGetDefaultPath(...args),
     listBranches: (...args: unknown[]) => mockListBranches(...args),
+    getRecentBranches: (...args: unknown[]) => mockGetRecentBranches(...args),
     fetchPRBranch: (...args: unknown[]) => mockFetchPRBranch(...args),
   },
   forgeClient: {
@@ -344,6 +346,7 @@ function setupWorktreeCreateMocks() {
     { name: "main", current: true, remote: false },
     { name: "origin/main", current: false, remote: true },
   ]);
+  mockGetRecentBranches.mockResolvedValue([]);
 }
 
 const makePR = (n: number, title?: string, headRef?: string): PR => ({
@@ -2442,7 +2445,7 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
   it("names the recipe trigger from the rail label", () => {
     render(<BulkCreateWorktreeDialog {...issueProps} />);
 
-    const trigger = screen.getByRole("combobox");
+    const trigger = screen.getByRole("combobox", { name: "Recipe" });
     expect(trigger.getAttribute("aria-label")).toBeNull();
     expect(trigger.id).toBeTruthy();
     expect(railLabel("Recipe").htmlFor).toBe(trigger.id);
@@ -2790,5 +2793,156 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
     expect(screen.getByText(/couldn't find remote ref/)).toBeTruthy();
     expect(screen.getByText(/1 failed/)).toBeTruthy();
+  });
+});
+
+describe("BulkCreateWorktreeDialog — base branch", () => {
+  const issueProps = {
+    isOpen: true,
+    onClose: vi.fn(),
+    mode: "issue" as const,
+    selectedIssues: [makeIssue(1), makeIssue(2)],
+    selectedPRs: [] as PR[],
+    onComplete: vi.fn(),
+  };
+
+  async function createAndSettle() {
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(2000);
+  }
+
+  it("defaults to the branch the repo root has checked out", async () => {
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: false, remote: false },
+      { name: "develop", current: true, remote: false },
+    ]);
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockListBranches).toHaveBeenCalledWith("/test/root");
+    expect(screen.getByRole("combobox", { name: "Base" }).textContent).toContain("develop");
+
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("develop");
+      expect(options.fromRemote).toBe(false);
+    }
+  });
+
+  it("falls back to the main worktree's branch when the branch list fails to load", async () => {
+    mockListBranches.mockRejectedValue(new Error("git exploded"));
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByText("Couldn't load branches. Using main.")).toBeTruthy();
+
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("main");
+      expect(options.fromRemote).toBe(false);
+    }
+  });
+
+  it("uses the main worktree's branch when Create runs before the list loads", async () => {
+    mockListBranches.mockReturnValue(new Promise(() => {}));
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    expect(calls[0]![0].baseBranch).toBe("main");
+    expect(calls[0]![0].fromRemote).toBe(false);
+  });
+
+  it("creates every issue from a picked remote branch", async () => {
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, remote: false },
+      { name: "origin/release", current: false, remote: "origin" },
+    ]);
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("combobox", { name: "Base" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("option", { name: /origin\/release/ }));
+    });
+
+    await createAndSettle();
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(2);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("origin/release");
+      expect(options.fromRemote).toBe(true);
+    }
+  });
+
+  it("retries on the base Create was pressed with, even if the list lands later", async () => {
+    let resolveList: (list: unknown[]) => void = () => {};
+    mockListBranches.mockReturnValue(
+      new Promise((resolve) => {
+        resolveList = resolve;
+      })
+    );
+    mockWorktreeCreate
+      .mockRejectedValueOnce(new Error("fatal: invalid reference"))
+      .mockRejectedValueOnce(new Error("fatal: invalid reference"));
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    await createAndSettle();
+    expect(screen.getByText(/2 failed/)).toBeTruthy();
+
+    await act(async () => {
+      resolveList([
+        { name: "main", current: false, remote: false },
+        { name: "develop", current: true, remote: false },
+      ]);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      screen.getByText("Retry failed").click();
+    });
+    await advanceTimersGradually(2000);
+
+    const calls = mockWorktreeCreate.mock.calls;
+    expect(calls.length).toBe(4);
+    for (const [options] of calls) {
+      expect(options.baseBranch).toBe("main");
+    }
+  });
+
+  it("offers no base picker in PR mode", () => {
+    render(
+      <BulkCreateWorktreeDialog
+        {...issueProps}
+        mode="pr"
+        selectedIssues={[]}
+        selectedPRs={[makePR(10)]}
+      />
+    );
+
+    expect(screen.queryByText("Base")).toBeNull();
+    expect(mockListBranches).not.toHaveBeenCalled();
   });
 });

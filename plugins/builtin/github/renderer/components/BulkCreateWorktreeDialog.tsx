@@ -42,6 +42,13 @@ import {
   CLONE_LAYOUT_ID,
 } from "@/components/Worktree/hooks/useRecipePicker";
 import { RecipePickerPopover } from "@/components/Worktree/views/RecipePickerPopover";
+import { BaseBranchCombobox } from "@/components/Worktree/views/BaseBranchCombobox";
+import { useBranchPicker } from "@/components/Worktree/hooks/useBranchPicker";
+import {
+  deriveDefaultBaseBranch,
+  type BranchOption,
+  type BranchWorktreeRef,
+} from "@/components/Worktree/branchPickerUtils";
 import { FormGrid, FormRow, FormSection } from "@/components/Worktree/views/WorktreeFormLayout";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
 import { spawnPanelsFromRecipe } from "@/components/Worktree/panelSpawning";
@@ -234,6 +241,85 @@ export function BulkCreateWorktreeDialog({
 
   // Plan worktrees
   const worktreeMap = useWorktreeStore((s) => s.worktrees);
+
+  // Base branch for issue mode. PR mode checks out each PR's own head, so it
+  // never loads or offers one.
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [branchLoadFailed, setBranchLoadFailed] = useState(false);
+  const [recentBranchNames, setRecentBranchNames] = useState<string[]>([]);
+  const [pickedBase, setPickedBase] = useState<{ name: string; fromRemote: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || mode !== "issue" || !projectPath) return;
+    let isCurrent = true;
+    setBranches([]);
+    setBranchesLoading(true);
+    setBranchLoadFailed(false);
+    setRecentBranchNames([]);
+    worktreeClient
+      .listBranches(projectPath)
+      .then((list) => {
+        if (isCurrent) setBranches(list);
+      })
+      .catch((err) => {
+        if (!isCurrent) return;
+        logError("Failed to load branches for bulk create", err);
+        setBranchLoadFailed(true);
+      })
+      .finally(() => {
+        if (isCurrent) setBranchesLoading(false);
+      });
+    worktreeClient
+      .getRecentBranches(projectPath)
+      .then((recent) => {
+        if (isCurrent) setRecentBranchNames(recent);
+      })
+      .catch(() => {});
+    return () => {
+      isCurrent = false;
+    };
+  }, [isOpen, mode, projectPath]);
+
+  const worktreeByBranch = useMemo(() => {
+    const map = new Map<string, BranchWorktreeRef>();
+    for (const wt of worktreeMap.values()) {
+      if (wt.branch) map.set(wt.branch, { id: wt.id, name: wt.name });
+    }
+    return map;
+  }, [worktreeMap]);
+
+  // Until the list loads (or if it never does), the main worktree's checkout is
+  // the base, exactly as before the picker existed — so a fast Create or a
+  // failed load still behaves the way an untouched run always has.
+  const mainWorktreeBranch = useMemo(() => {
+    for (const wt of worktreeMap.values()) {
+      if (wt.isMainWorktree) return wt.branch;
+    }
+    return undefined;
+  }, [worktreeMap]);
+  const baseBranch = useMemo(() => {
+    if (pickedBase) return pickedBase;
+    const derived = branches.length > 0 ? deriveDefaultBaseBranch(branches) : null;
+    if (derived?.name) return derived;
+    return mainWorktreeBranch ? { name: mainWorktreeBranch, fromRemote: false } : null;
+  }, [pickedBase, branches, mainWorktreeBranch]);
+
+  const handleBaseBranchSelect = useCallback((option: BranchOption) => {
+    setPickedBase({ name: option.name, fromRemote: option.isRemote });
+  }, []);
+
+  const baseBranchPicker = useBranchPicker({
+    branches,
+    selectedBranch: baseBranch?.name ?? "",
+    recentBranchNames,
+    worktreeByBranch,
+    onSelect: handleBaseBranchSelect,
+  });
+  const closeBaseBranchPicker = baseBranchPicker.setOpen;
+  // The base Create was pressed with. Retry reuses it, so a branch list that
+  // lands after submission can't move a retried item onto a different base.
+  const submittedBaseRef = useRef<{ name: string; fromRemote: boolean } | null>(null);
   const planned = useMemo(() => {
     if (mode === "pr") {
       const existingPRNumbers = new Set<number>();
@@ -297,9 +383,12 @@ export function BulkCreateWorktreeDialog({
     if (isOpen && !prevIsOpenRef.current) {
       dispatchProgress({ type: "RESET" });
       batchTrackingRef.current = new Map();
+      setPickedBase(null);
+      submittedBaseRef.current = null;
+      closeBaseBranchPicker(false);
     }
     prevIsOpenRef.current = isOpen;
-  }, [isOpen]);
+  }, [isOpen, closeBaseBranchPicker]);
 
   const runBatch = useCallback(
     async (toCreate: PlannedWorktree[]) => {
@@ -313,6 +402,7 @@ export function BulkCreateWorktreeDialog({
       };
       activeRunRef.current = activeRun;
 
+      const runBase = submittedBaseRef.current;
       const rootPath = currentProject?.path;
       if (!rootPath) {
         // handleCreate already dispatched START, so returning bare would strand
@@ -605,11 +695,9 @@ export function BulkCreateWorktreeDialog({
                   // to a live lookup only for items that had no pre-query
                   // result (e.g., retry after a worktree-store-detected
                   // short-circuit branch was later removed).
-                  const mainWorktree = Array.from(
-                    getCurrentViewStore().getState().worktrees.values()
-                  ).find((w) => w.isMainWorktree);
-                  const baseBranch = mainWorktree?.branch;
-                  if (!baseBranch) throw new Error("No main worktree found for base branch");
+                  // Captured when this run started, so a pick made after the
+                  // run began can't move items still in the queue.
+                  if (!runBase) throw new Error("No base branch to create from");
 
                   const pre = precomputed.get(itemNumber);
                   const availableBranch =
@@ -623,10 +711,10 @@ export function BulkCreateWorktreeDialog({
                   if (runIdRef.current !== currentRunId) return;
 
                   const created = await createWorktree({
-                    baseBranch,
+                    baseBranch: runBase.name,
                     newBranch: availableBranch,
                     path,
-                    fromRemote: false,
+                    fromRemote: runBase.fromRemote,
                     useExistingBranch: false,
                   });
 
@@ -1004,6 +1092,7 @@ export function BulkCreateWorktreeDialog({
       }
 
       batchTrackingRef.current = new Map();
+      submittedBaseRef.current = baseBranch;
       dispatchProgress({
         type: "START",
         issueNumbers: toCreate.map((p) => p.item.number),
@@ -1019,6 +1108,7 @@ export function BulkCreateWorktreeDialog({
     recipeSelectionTouchedRef,
     setLastSelectedWorktreeRecipeIdByProject,
     runBatch,
+    baseBranch,
   ]);
 
   const handleRetryFailed = useCallback(async () => {
@@ -1256,6 +1346,31 @@ export function BulkCreateWorktreeDialog({
                     </span>
                   )}
                 </div>
+              </FormRow>
+            )}
+
+            {mode === "issue" && (
+              <FormRow
+                label="Base"
+                htmlFor="base-branch"
+                hint={
+                  branchLoadFailed ? (
+                    <span className="text-xs text-text-secondary">
+                      {baseBranch
+                        ? `Couldn't load branches. Using ${baseBranch.name}.`
+                        : "Couldn't load branches."}
+                    </span>
+                  ) : undefined
+                }
+              >
+                <BaseBranchCombobox
+                  baseBranch={baseBranch?.name ?? ""}
+                  controller={baseBranchPicker}
+                  disabled={branchesLoading || branchLoadFailed}
+                  unavailableLabel={
+                    branches.length === 0 ? (baseBranch?.name ?? "No base branch") : undefined
+                  }
+                />
               </FormRow>
             )}
 

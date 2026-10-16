@@ -66,6 +66,24 @@ export function toBranchOption(branch: BranchInfo): BranchOption {
 }
 
 /**
+ * The base a new worktree starts from when nobody picks one: the branch the
+ * repo root has checked out, then main/master, then whatever is first. Shared by
+ * the single and bulk create dialogs so an untouched run lands on the same base
+ * in both.
+ */
+export function deriveDefaultBaseBranch(branchList: readonly BranchInfo[]): {
+  name: string;
+  fromRemote: boolean;
+} {
+  const currentBranch = branchList.find((b) => b.current);
+  const mainBranch =
+    branchList.find((b) => b.name === "main") || branchList.find((b) => b.name === "master");
+  const name = currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
+  const info = branchList.find((b) => b.name === name);
+  return { name, fromRemote: !!info?.remote };
+}
+
+/**
  * `useExtendedSearch` gives space-separated tokens implicit AND semantics, which
  * is the whole reason `feat terr` can reach `feature/voxel-terrain`: without it
  * Fuse compares the query — spaces included — as one Bitap pattern.

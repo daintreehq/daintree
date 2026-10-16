@@ -38,7 +38,11 @@ import { useNewWorktreeProjectSettings } from "./hooks/useNewWorktreeProjectSett
 import { useBranchInput } from "./hooks/useBranchInput";
 import { useBranchValidation } from "./hooks/useBranchValidation";
 import { useBranchPicker } from "./hooks/useBranchPicker";
-import type { BranchOption, BranchWorktreeRef } from "./branchPickerUtils";
+import {
+  deriveDefaultBaseBranch,
+  type BranchOption,
+  type BranchWorktreeRef,
+} from "./branchPickerUtils";
 import { usePrefixPicker } from "./hooks/usePrefixPicker";
 import {
   useRecipePicker,
@@ -87,18 +91,6 @@ const branchListCache = new Map<string, BranchInfo[]>();
 
 export function clearBranchListCache(): void {
   branchListCache.clear();
-}
-
-function deriveDefaultBaseBranch(branchList: BranchInfo[]): {
-  name: string;
-  fromRemote: boolean;
-} {
-  const currentBranch = branchList.find((b) => b.current);
-  const mainBranch =
-    branchList.find((b) => b.name === "main") || branchList.find((b) => b.name === "master");
-  const name = currentBranch?.name || mainBranch?.name || branchList[0]?.name || "";
-  const info = branchList.find((b) => b.name === name);
-  return { name, fromRemote: !!info?.remote };
 }
 
 /**
