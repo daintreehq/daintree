@@ -16,6 +16,13 @@ export const ENABLE_HOST_MODE_FLAG = "--enable-host-mode";
  */
 export const HOST_MODE_HANDOFF_FLAG = "--host-mode-handoff";
 /**
+ * With {@link ENABLE_HOST_MODE_FLAG}, `--update-channel=<stable|nightly>`: the
+ * channel of the Shell whose setup just installed this build here, so a fresh
+ * host updates along with it instead of the default. Only setup sends it, and
+ * only to a machine that had no Daintree before.
+ */
+export const UPDATE_CHANNEL_FLAG = "--update-channel";
+/**
  * Bridge stdin/stdout to the Daintree already running here (see
  * `remote/host/attachStdio.ts`) and exit: never a second instance, never a
  * window, never a backend.
@@ -36,6 +43,16 @@ export function isHostModeRequested(argv: readonly string[]): boolean {
 
 export function isHostModeEnableRequested(argv: readonly string[]): boolean {
   return argv.includes(ENABLE_HOST_MODE_FLAG);
+}
+
+/** The update channel host setup asked for alongside its enable request, if any. */
+export function requestedUpdateChannel(argv: readonly string[]): "stable" | "nightly" | null {
+  if (!isHostModeEnableRequested(argv)) return null;
+  for (const arg of argv) {
+    if (arg === `${UPDATE_CHANNEL_FLAG}=stable`) return "stable";
+    if (arg === `${UPDATE_CHANNEL_FLAG}=nightly`) return "nightly";
+  }
+  return null;
 }
 
 export function isAttachStdioRequested(argv: readonly string[]): boolean {

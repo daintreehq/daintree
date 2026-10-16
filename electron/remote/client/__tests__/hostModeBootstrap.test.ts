@@ -14,6 +14,7 @@ import {
   SERVICE_STATE_SCRIPT,
   linuxHandoffScript,
   MAC_ENABLE_SCRIPT,
+  macEnableScript,
   START_UNIT_SCRIPT,
   writeUnitScript,
 } from "../hostModeBootstrap.js";
@@ -174,6 +175,9 @@ describe("bootstrapHostMode on a Mac", () => {
     expect(calls.map((c) => c.script)).toEqual([MAC_ENABLE_SCRIPT]);
     expect(MAC_ENABLE_SCRIPT).toBe(
       "open -n -g -a '/Applications/Daintree.app' --args --host-mode --enable-host-mode"
+    );
+    expect(macEnableScript("nightly")).toBe(
+      "open -n -g -a '/Applications/Daintree.app' --args --host-mode --enable-host-mode --update-channel=nightly"
     );
     expect(seen.count()).toBe(3);
     expect(result.probe.hostModeState).toMatchObject({ enabled: true, startAtLogin: true });
@@ -336,6 +340,24 @@ describe("bootstrapHostMode on a headless Linux host", () => {
     expect(calls.some((c) => c.script === ENABLE_LINGER_SCRIPT)).toBe(false);
     expect(calls[0]!.script).toBe(SAVE_UNIT_SCRIPT);
     expect(result).toMatchObject({ lingerRefused: null, probe: { hostModeListening: true } });
+  });
+
+  it("hands a host this setup just installed this machine's update channel with the enable request", async () => {
+    const { channel, calls } = scripted();
+    await bootstrapHostMode({ kind: "wsl", distro: "Debian" }, await outcomeOf(linux({})), {
+      channel,
+      probe: probes([
+        linux({ unit: "enabled" }),
+        linux({ unit: "enabled", listening: true }),
+        linux({ unit: "enabled", listening: true, state: state() }),
+      ]).probe,
+      sleep: async () => {},
+      now: clock(),
+      updateChannel: "nightly",
+    });
+    expect(calls.at(-1)!.script).toBe(
+      "'/opt/Daintree/daintree' --host-mode --enable-host-mode --update-channel=nightly --host-mode-handoff </dev/null >/dev/null 2>&1; echo \"@@dt:handoff $?\""
+    );
   });
 
   it("runs an AppImage unpacked, in the unit and the handoff, where there is no FUSE", async () => {

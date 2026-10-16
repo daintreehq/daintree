@@ -208,7 +208,7 @@ These were open questions with defaults chosen; each matches the code today.
 - Ctrl+V image interception is on by default, in remote windows' agent terminals only.
 - Uploads confirm at 50 MB and refuse at 500 MB (5,000 files per folder, declared for folder upload).
 - "Add to project" drop ships.
-- Hosts follow the client's release channel for installs; a host's own updater channel is untouched.
+- Hosts follow the client's release channel for installs. A machine that had no Daintree before setup installed it takes the client's update channel when Host mode is turned on (`--update-channel=<stable|nightly>` beside `--enable-host-mode`), so its own updater follows the same feed: left on the default, a nightly host would "update" to the stable release its version sorts below. A host that already had Daintree keeps its own channel.
 - Viewless MCP execution is gated to Host mode, not the plain local app.
 - Settings → Hosts is visible on macOS and Linux as the single entry point for adding the first host; everything else stays hidden until a host exists.
 - Framing runs in main, not a utility process (see [Testing](#testing)); no separate bridge binary on the host: the stdio fallback runs the host's own Daintree with `--attach-stdio`.

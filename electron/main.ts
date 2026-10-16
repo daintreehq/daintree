@@ -159,6 +159,7 @@ import {
   isHostModeEnableRequested,
   isHostModeHandoffOnly,
   isHostModeRequested,
+  requestedUpdateChannel,
   resolveHostModeLaunch,
 } from "./boot/hostModeLaunch.js";
 import { isEitherRemoteRoleSupported, isRemoteHostSupported } from "./remote/buildGate.js";
@@ -498,12 +499,23 @@ if (!gotTheLock) {
   // Host setup from another machine (`--enable-host-mode`, on this launch or a
   // later one): switch Host mode on for good, not just for this run.
   let hostModeEnableRequested = isRemoteHostSupported() && isHostModeEnableRequested(process.argv);
+  // The Shell that just installed this build here follows this channel; so does this host.
+  let setupUpdateChannel = isRemoteHostSupported() ? requestedUpdateChannel(process.argv) : null;
   let remoteHostsStarted = false;
   const listenForHandedOffHostMode = (): void => {
     const hostMode = getRemoteService("hostMode");
     if (!hostMode) return;
     const enable = hostModeEnableRequested;
     hostModeEnableRequested = false;
+    const channel = setupUpdateChannel;
+    setupUpdateChannel = null;
+    if (enable && channel) {
+      void import("./services/AutoUpdaterService.js")
+        .then(({ autoUpdaterService }) => autoUpdaterService.setChannel(channel))
+        .catch((error: unknown) => {
+          console.error("[MAIN] Couldn't take the update channel host setup asked for:", error);
+        });
+    }
     const started: Promise<unknown> = enable
       ? hostMode.enableFromSetup()
       : hostMode.startListening();
@@ -1015,7 +1027,10 @@ if (!gotTheLock) {
     onHostModeRequested: isRemoteHostSupported()
       ? (commandLine) => {
           hostModeHandedOff = true;
-          if (isHostModeEnableRequested(commandLine)) hostModeEnableRequested = true;
+          if (isHostModeEnableRequested(commandLine)) {
+            hostModeEnableRequested = true;
+            setupUpdateChannel = requestedUpdateChannel(commandLine);
+          }
           // Before the remote runtime is up, its startup reads the flag instead.
           if (remoteHostsStarted) listenForHandedOffHostMode();
         }

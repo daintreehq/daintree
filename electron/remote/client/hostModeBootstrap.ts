@@ -8,12 +8,14 @@ import {
   HOST_MODE_FLAG,
   HOST_MODE_HANDOFF_FLAG,
   HOST_MODE_HANDOFF_NOBODY_EXIT_CODE,
+  UPDATE_CHANNEL_FLAG,
 } from "../../boot/hostModeLaunch.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { APPIMAGE_EXTRACT_AND_RUN_ENV, systemdUnitFor } from "../host/startAtLogin.js";
 import type { CommandResult } from "./commandRunner.js";
 import { DEB_EXECUTABLE, LINUX_UNIT_NAME, MAC_APP_PATH, type ProbeOutcome } from "./hostProbe.js";
+import type { UpdateChannel } from "./installPlan.js";
 import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 
 /**
@@ -47,6 +49,12 @@ export interface HostModeBootstrapDeps {
   probe(): Promise<ProbeOutcome>;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   now?: () => number;
+  /**
+   * Set only when this setup installed Daintree on a machine that had none:
+   * the channel it then follows, this machine's. A host that was already
+   * there keeps its own.
+   */
+  updateChannel?: UpdateChannel;
 }
 
 function sq(value: string): string {
@@ -194,16 +202,22 @@ export function lastRunError(journal: string): string | null {
   return null;
 }
 
-/** Hand `--enable-host-mode` to the Daintree running on a Linux host; prints its exit status. */
-export function linuxHandoffScript(target: ReturnType<typeof linuxLaunchTarget>): string {
-  const env = target.appImageExtractAndRun ? `${APPIMAGE_EXTRACT_AND_RUN_ENV}=1 ` : "";
-  return `${env}${sq(target.executable)} ${HOST_MODE_FLAG} ${ENABLE_HOST_MODE_FLAG} ${HOST_MODE_HANDOFF_FLAG} </dev/null >/dev/null 2>&1; echo "${MARK}handoff $?"`;
+function channelArg(updateChannel: UpdateChannel | undefined): string {
+  return updateChannel ? ` ${UPDATE_CHANNEL_FLAG}=${updateChannel}` : "";
 }
 
-/** Launch (or hand over to) Daintree on a Mac, in its logged-in session. */
+/** Hand `--enable-host-mode` to the Daintree running on a Linux host; prints its exit status. */
+export function linuxHandoffScript(
+  target: ReturnType<typeof linuxLaunchTarget>,
+  updateChannel?: UpdateChannel
+): string {
+  const env = target.appImageExtractAndRun ? `${APPIMAGE_EXTRACT_AND_RUN_ENV}=1 ` : "";
+  return `${env}${sq(target.executable)} ${HOST_MODE_FLAG} ${ENABLE_HOST_MODE_FLAG}${channelArg(updateChannel)} ${HOST_MODE_HANDOFF_FLAG} </dev/null >/dev/null 2>&1; echo "${MARK}handoff $?"`;
+}
+
 /**
  * Start a host that is already set up, exactly as it was set up: Host mode for
- * this run on a Mac (no saved setting touched, unlike {@link MAC_ENABLE_SCRIPT}),
+ * this run on a Mac (no saved setting touched, unlike {@link macEnableScript}),
  * the existing user service on Linux (never written here).
  */
 // `-n`: without it LaunchServices only reactivates a Daintree already running
@@ -212,7 +226,12 @@ export function linuxHandoffScript(target: ReturnType<typeof linuxLaunchTarget>)
 export const MAC_START_SCRIPT = `open -n -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG}`;
 export const LINUX_START_SCRIPT = `systemctl --user start ${LINUX_UNIT_NAME}`;
 
-export const MAC_ENABLE_SCRIPT = `open -n -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG} ${ENABLE_HOST_MODE_FLAG}`;
+/** Launch (or hand over to) Daintree on a Mac, in its logged-in session. */
+export function macEnableScript(updateChannel?: UpdateChannel): string {
+  return `open -n -g -a ${sq(MAC_APP_PATH)} --args ${HOST_MODE_FLAG} ${ENABLE_HOST_MODE_FLAG}${channelArg(updateChannel)}`;
+}
+
+export const MAC_ENABLE_SCRIPT = macEnableScript();
 
 /** Host mode is on for good there: listening, saved, and start at login in place. */
 export function hostModeConfirmed(outcome: ProbeOutcome): boolean {
@@ -303,7 +322,10 @@ export async function bootstrapHostMode(
   let confirmed: ProbeOutcome;
   try {
     if (probe.platform === "darwin") {
-      const started = await deps.channel.exec(MAC_ENABLE_SCRIPT, { timeoutMs: 30_000, signal });
+      const started = await deps.channel.exec(macEnableScript(deps.updateChannel), {
+        timeoutMs: 30_000,
+        signal,
+      });
       if (started.code !== 0) {
         throw new AppError({
           code: "INTERNAL",
@@ -378,7 +400,7 @@ export async function bootstrapHostMode(
       // Unpacking an AppImage without FUSE takes a while before it can hand over.
       const handoff = await run(
         deps.channel,
-        linuxHandoffScript(target),
+        linuxHandoffScript(target, deps.updateChannel),
         "Couldn't reach Daintree on the host",
         target.appImageExtractAndRun ? 5 * 60_000 : 120_000
       );
