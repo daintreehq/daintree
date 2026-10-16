@@ -363,3 +363,41 @@ html[data-dragging="true"]
     background-color: Highlight;
   }
 }
+
+/* The header's host tag: the toolbar host chip's identity at a whisper. The
+   same indigo marks its server glyph, a faint wash of it is the tag's ground,
+   and a soft halo of that light sits behind it, the toolbar's light pool at a
+   fraction of the strength. Flat and rimless, with no hover or press: a lit
+   edge gave it a firmer outline than the header's own buttons, so it read as
+   the more clickable thing in the row. */
+.sidebar-remote-host {
+  --_wash: 9%;
+  --_halo: 16%;
+  background-color: color-mix(in oklab, var(--remote-light) var(--_wash), transparent);
+  box-shadow: 0 0 12px 1px color-mix(in oklab, var(--remote-light) var(--_halo), transparent);
+}
+
+:where(.light, [data-color-mode="light"]) .sidebar-remote-host {
+  --_wash: 10%;
+  --_halo: 22%;
+}
+
+.sidebar-remote-host-source {
+  color: var(--remote-ink);
+}
+
+@media (prefers-contrast: more) {
+  .sidebar-remote-host {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px var(--theme-border-strong);
+  }
+}
+
+/* Gradients and shadows are dropped here anyway; the glyph and name carry the
+   meaning, so the tag takes plain text ink and no outline that would read as a
+   button. */
+@media (forced-colors: active) {
+  .sidebar-remote-host-source {
+    color: CanvasText;
+  }
+}

@@ -1893,8 +1893,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           !hasNonMainWorktrees && "border-b border-divider"
         )}
       >
-        <div className="flex min-w-0 items-baseline gap-1.5">
-          <h2 className="shrink-0 text-text-primary font-semibold text-sm tracking-wide">
+        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          {/* Heading navigation lands here, not on the tag, so the host rides in
+              the heading's name, and stays there when the tag hides. */}
+          <h2
+            className="shrink-0 text-text-primary font-semibold text-sm tracking-wide"
+            aria-label={
+              remoteHostName === null ? undefined : `Worktrees, on host ${remoteHostName}`
+            }
+          >
             Worktrees
           </h2>
           {remoteHostParts && !showReconnecting && (
@@ -1902,30 +1909,33 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             // in the remote hue the toolbar above it wears. It repeats the host
             // chip, so it is the first thing to go — when the header is too
             // narrow for the name's distinguishing end, or "Reconnecting…"
-            // needs the room.
-            <span
-              data-testid="sidebar-remote-host"
-              className="hidden min-w-0 items-center gap-1 self-center text-xs text-text-secondary @[18rem]/header:flex"
-            >
-              <Server className="h-3 w-3 shrink-0 text-category-slate-text" aria-hidden="true" />
-              {/* One gapless run, so the name's parts never read as separate words. */}
-              <span className="flex min-w-0">
-                <span className="shrink-0 whitespace-pre">on </span>
-                {/* A few characters of a long head always show: "g…" names nothing. */}
-                <span
-                  className={cn(
-                    "truncate",
-                    remoteHostParts.nameHead.length > 4 ? "min-w-[4ch]" : "shrink-0"
-                  )}
-                >
-                  {remoteHostParts.nameHead}
-                </span>
-                <span className="shrink-0">{remoteHostParts.nameTail}</span>
-                {remoteHostParts.nameDomain && (
-                  <span className="min-w-0 shrink-[100] truncate">
-                    {remoteHostParts.nameDomain}
+            // needs the room. Centred in the free run between the title and the
+            // actions, so it sits in its own light rather than trailing the title.
+            <span className="hidden min-w-0 flex-1 justify-center self-center @[18rem]/header:flex">
+              <span
+                data-testid="sidebar-remote-host"
+                aria-hidden="true"
+                className="sidebar-remote-host flex h-5 min-w-0 cursor-default items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs text-text-secondary"
+              >
+                <Server className="sidebar-remote-host-source h-3 w-3 shrink-0" />
+                {/* One gapless run, so the name's parts never read as separate words. */}
+                <span className="flex min-w-0">
+                  {/* A few characters of a long head always show: "g…" names nothing. */}
+                  <span
+                    className={cn(
+                      "truncate",
+                      remoteHostParts.nameHead.length > 4 ? "min-w-[4ch]" : "shrink-0"
+                    )}
+                  >
+                    {remoteHostParts.nameHead}
                   </span>
-                )}
+                  <span className="shrink-0">{remoteHostParts.nameTail}</span>
+                  {remoteHostParts.nameDomain && (
+                    <span className="min-w-0 shrink-[100] truncate">
+                      {remoteHostParts.nameDomain}
+                    </span>
+                  )}
+                </span>
               </span>
             </span>
           )}
