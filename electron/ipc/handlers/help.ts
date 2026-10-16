@@ -529,7 +529,13 @@ async function handleListPastSessions(
   const projectPath =
     projectStore.getProjectById(projectId)?.path ?? scratchStore.getScratchById(projectId)?.path;
   if (!projectPath) return [];
-  return lister.listHelpPastSessions(helpSessionService.getSessionPathForProject(projectPath), {
+  const codexPath = helpSessionService.getSessionPathForProject(projectPath, "codex");
+  const legacyPath = helpSessionService.getLegacySessionPathForProject(projectPath);
+  const paths = {
+    claude: helpSessionService.getSessionPathForProject(projectPath, "claude"),
+    codex: codexPath === legacyPath ? [codexPath] : [codexPath, legacyPath],
+  };
+  return lister.listHelpPastSessions(paths, {
     claudeProjectsRoot:
       claudeStore.resolvePaneClaudeProjectsRoot() ?? lister.defaultClaudeProjectsRoot(),
     listCodexSessions: (cwd) => codex.listCodexSessionsForCwd(cwd),

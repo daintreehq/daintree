@@ -41,13 +41,16 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onSelect,
     destructive,
+    disabled,
   }: {
     children: ReactNode;
     onSelect?: (e: Event) => void;
     destructive?: boolean;
+    disabled?: boolean;
   }) => (
     <button
       data-destructive={destructive || undefined}
+      disabled={disabled}
       onClick={() => onSelect?.(new Event("select"))}
     >
       {children}
@@ -272,6 +275,50 @@ describe("HelpPanelHeader", () => {
         const labelledBy = item.getAttribute("aria-labelledby");
         expect(container.querySelector(`[id="${labelledBy}"]`)?.textContent).not.toContain(hint);
       }
+    });
+  });
+
+  describe("new session on a named agent (#13442)", () => {
+    const menuItems = (container: HTMLElement) => [
+      ...container.querySelectorAll<HTMLButtonElement>("[data-testid='overflow-menu'] > button"),
+    ];
+
+    it("lists every agent that can run the assistant, ahead of resuming a past session", () => {
+      const onNewSessionWithAgent = vi.fn();
+      const { container } = renderHeader({
+        newSessionAgentIds: ["claude", "codex"],
+        canStartNewSession: true,
+        onNewSessionWithAgent,
+      });
+      const names = menuItems(container).map((item) => item.textContent);
+      expect(names.slice(0, 3)).toEqual([
+        "New session with Claude",
+        "New session with Codex",
+        "Resume a past session…",
+      ]);
+      fireEvent.click(menuItems(container)[1]!);
+      expect(onNewSessionWithAgent).toHaveBeenCalledWith("codex");
+    });
+
+    it("offers nothing to choose with one agent, and parks the items at the ceiling", () => {
+      const { container: single } = renderHeader({
+        newSessionAgentIds: ["claude"],
+        canStartNewSession: true,
+        onNewSessionWithAgent: vi.fn(),
+      });
+      expect(
+        menuItems(single).some((item) => item.textContent?.startsWith("New session with"))
+      ).toBe(false);
+
+      const { container: full } = renderHeader({
+        newSessionAgentIds: ["claude", "codex"],
+        canStartNewSession: false,
+        onNewSessionWithAgent: vi.fn(),
+      });
+      const agentItems = menuItems(full).filter((item) =>
+        item.textContent?.startsWith("New session with")
+      );
+      expect(agentItems.map((item) => item.disabled)).toEqual([true, true]);
     });
   });
 });

@@ -112,11 +112,6 @@ const START_REFUSALS: Record<
     code: "lane_unavailable",
     detail: `That project already runs ${MAX_ASSISTANT_SLOTS} assistants, its limit. Use one of them.`,
   },
-  "agent-mismatch": {
-    code: "policy_rejected",
-    detail:
-      "That project's assistants run a different agent CLI, and a project's assistants share one. Use theirs, or omit agentId.",
-  },
   "no-window": {
     code: "lane_unavailable",
     detail:

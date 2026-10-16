@@ -77,19 +77,23 @@ function isFreeHelpLane(state: HelpPanelState, workspaceId: string, slot: number
  * The lane `help.launchAgent` may launch into without displacing anything
  * (#13192): the active tab if it is free, else another free tab, else a slot
  * no tab occupies yet (`isNew`). Null when every slot holds a session.
+ * `isKept` marks further slots as taken — ones main still keeps a conversation
+ * for that this view's store doesn't know about yet.
  */
 function pickHelpLaunchLane(
   state: HelpPanelState,
-  workspaceId: string
+  workspaceId: string,
+  isKept: (slot: number) => boolean = () => false
 ): { slot: number; isNew: boolean } | null {
-  if (isFreeHelpLane(state, workspaceId, state.activeSlot)) {
+  const isFree = (slot: number) => isFreeHelpLane(state, workspaceId, slot) && !isKept(slot);
+  if (isFree(state.activeSlot)) {
     return { slot: state.activeSlot, isNew: false };
   }
   for (const slot of ASSISTANT_SLOTS) {
-    if (isFreeHelpLane(state, workspaceId, slot)) return { slot, isNew: false };
+    if (isFree(slot)) return { slot, isNew: false };
   }
   for (const slot of ASSISTANT_SLOTS) {
-    if (!state.sessions[slot] && !isHeldHelpSlot(state, workspaceId, slot)) {
+    if (!state.sessions[slot] && !isHeldHelpSlot(state, workspaceId, slot) && !isKept(slot)) {
       return { slot, isNew: true };
     }
   }
@@ -178,13 +182,13 @@ function releaseStaleHelpLane(
 }
 
 /**
- * The agent another lane of this workspace is running or will resume with.
- * Lanes of one project share a session folder and must run one agent — main
- * refuses a mismatch with `MIXED_AGENT_LANES` — so a help launch beside them
- * has to join that agent rather than fail on the default. A live lane proves
- * its agent launches; a hibernated one only counts while the assistant can
- * still run it, since main doesn't hold it against the launch and a missing
- * CLI or a retired agent would.
+ * The agent another lane of this workspace is running or will resume with —
+ * evidence that this machine runs it, for a help launch whose default can't be
+ * resolved yet (a host's cold view before CLI availability arrives). Lanes on
+ * different agents run in directories of their own, so a resolved default
+ * always wins over it. A live lane proves its agent launches; a hibernated one
+ * only counts while the assistant can still run it, since a missing CLI or a
+ * retired agent wouldn't.
  */
 function siblingLaneAgentId(
   state: HelpPanelState,
@@ -253,8 +257,7 @@ function keptLaneAgentId(
 const LANE_CLAIM_MAX_HOLD_MS = 120_000;
 
 /** How the past-session picker's pick went — the picker acts on `lanes-full`. */
-export type HelpPastSessionPickOutcome =
-  "focused" | "resumed" | "lanes-full" | "agent-mismatch" | "unavailable";
+export type HelpPastSessionPickOutcome = "focused" | "resumed" | "lanes-full" | "unavailable";
 
 /**
  * The lane already holding this conversation: a live lane whose terminal was
@@ -379,27 +382,6 @@ async function resumeHelpPastSession(args: {
   const claimKey = assistantSlotKey(workspace.id, target.slot);
   if (claimedHelpLaneKeys.has(claimKey)) return { outcome: "lanes-full" };
 
-  // Lanes of one project share a folder and one agent; main refuses a mix.
-  // Lanes of one project share a folder and one agent, and main refuses a
-  // second agent beside a live one. Only live tabs count: a capture left by a
-  // closed tab is no obstacle, and counting it would block the switch the
-  // message below tells the user to make.
-  const targetSlot = target.slot;
-  const sibling = ASSISTANT_SLOTS.filter((slot) => slot !== targetSlot)
-    .map((slot) => state.sessions[slot])
-    .find((lane) => lane?.terminalId && lane.agentId)?.agentId;
-  if (sibling && sibling !== args.agentId) {
-    notify({
-      type: "warning",
-      title: "Session uses a different agent",
-      message:
-        "Assistant tabs in one project share an agent. Close the other tabs to reopen this session.",
-      priority: "high",
-      context: { eventKind: "uiFeedback" },
-    });
-    return { outcome: "agent-mismatch" };
-  }
-
   claimedHelpLaneKeys.add(claimKey);
   let controller: HelpSessionController;
   try {
@@ -442,6 +424,84 @@ async function resumeHelpPastSession(args: {
   revealHelpLane(target.slot);
   holdLaneClaimUntilSettled(controller, claimKey);
   return { outcome: "resumed" };
+}
+
+/** How a "New session with…" pick went. */
+export type HelpNewSessionOutcome = "started" | "lanes-full" | "unavailable";
+
+/**
+ * Start one session on `agentId` (#13442) without touching the assistant's
+ * default, which later sessions keep starting on. It lands where a help launch
+ * would — the active tab when it is empty, else another free one, else a new
+ * tab — so it never displaces a conversation, including one main still keeps
+ * for a tab this view hasn't restored yet.
+ */
+async function startHelpSessionWithAgent(
+  agentId: string
+): Promise<{ outcome: HelpNewSessionOutcome }> {
+  const projectState = useProjectStore.getState();
+  const workspace = projectState.currentProject ?? useScratchStore.getState().currentScratch;
+  if (!workspace) {
+    notifyLaunchFailed(
+      agentId,
+      projectState.isBootstrapped ? LAUNCH_BLOCKED_NO_WORKSPACE : LAUNCH_BLOCKED_LOADING
+    );
+    return { outcome: "unavailable" };
+  }
+  await ensureHelpPanelRuntime();
+  const kept = await readKeptLaneAgents(workspace.id);
+  const target = pickHelpLaunchLane(useHelpPanelStore.getState(), workspace.id, (slot) =>
+    kept.has(slot)
+  );
+  if (!target) {
+    notify({
+      type: "warning",
+      title: "Assistant tabs full",
+      message: `All ${MAX_ASSISTANT_SLOTS} assistant tabs are in use. Close one to start another session.`,
+      priority: "high",
+      context: { eventKind: "uiFeedback" },
+    });
+    return { outcome: "lanes-full" };
+  }
+
+  const claimKey = assistantSlotKey(workspace.id, target.slot);
+  claimedHelpLaneKeys.add(claimKey);
+  let controller: HelpSessionController;
+  try {
+    const { acquireHelpSessionController } =
+      await import("@/controllers/helpSessionControllerRegistry");
+    controller = acquireHelpSessionController(target.slot);
+  } catch (err) {
+    claimedHelpLaneKeys.delete(claimKey);
+    logError("Failed to load the assistant to start a session", err);
+    return { outcome: "unavailable" };
+  }
+  // An empty tab can still be starting the default's session; this launch
+  // would drop on its re-entrancy guard, so say so rather than report a start.
+  const phase = controller.getSnapshot().phase;
+  if (phase !== "idle" && phase !== "live") {
+    claimedHelpLaneKeys.delete(claimKey);
+    notify({
+      type: "warning",
+      title: "Assistant tab is busy",
+      message: "That tab is still starting a session. Try again once it's ready.",
+      priority: "high",
+      context: { eventKind: "uiFeedback" },
+    });
+    return { outcome: "unavailable" };
+  }
+  // A Settings pick still waiting for a session would switch this one to the
+  // default the moment it binds (#13345), undoing the choice just made.
+  const pendingSwitch = useHelpPanelStore.getState().agentSwitchRequest;
+  if (pendingSwitch) useHelpPanelStore.getState().clearAgentSwitchRequest(pendingSwitch.id);
+  // Queued before a new tab appears, or its first input sync would auto-launch
+  // the default into it. Pinned so a failed launch waits on Retry for this
+  // agent rather than being replaced by the default's.
+  controller.launchWhenReady({ agentId, replaceExisting: true, pinAgent: true });
+  if (target.isNew) useHelpPanelStore.getState().ensureSlot(target.slot);
+  revealHelpLane(target.slot);
+  holdLaneClaimUntilSettled(controller, claimKey);
+  return { outcome: "started" };
 }
 
 export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -603,6 +663,9 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
       }
 
       let agentId: string;
+      // The default as resolved against what this machine can run; null until
+      // CLI availability is known, when `agentId` below is only a guess.
+      let resolvedDefault: string | null = null;
       if (parsed?.agentId) {
         agentId = parsed.agentId;
       } else {
@@ -614,7 +677,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         // deprecated tier, or an unimplemented injection mode). An explicit
         // `args.agentId` still goes straight to that gate, so an experimental
         // agent stays launchable by name.
-        const resolved = isInitialized
+        resolvedDefault = isInitialized
           ? getDefaultAgentId(
               defaultAgent,
               undefined,
@@ -622,7 +685,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
               new Set(getAssistantSupportedAgentIds())
             )
           : null;
-        agentId = resolved ?? "claude";
+        agentId = resolvedDefault ?? "claude";
       }
 
       let session: Awaited<ReturnType<typeof window.electron.help.provisionSession>> | null = null;
@@ -689,7 +752,15 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
           const canLaunch = (id: string) =>
             wired.includes(id) &&
             (!isInitialized || !isBuiltInAgentId(id) || isAgentLaunchable(availability[id]));
+          // The lane's own kept conversation first: its agent is what resumes
+          // there. Then the default — a sibling tab on another agent is no
+          // reason to leave it, since lanes on different agents run in
+          // directories of their own. A sibling's agent only stands in for a
+          // default that couldn't be resolved.
+          const ownKept = keptAgents.get(targetSlot);
           agentId =
+            (ownKept && canLaunch(ownKept) ? ownKept : null) ??
+            resolvedDefault ??
             siblingLaneAgentId(panelState, workspace.id, targetSlot, canLaunch) ??
             keptLaneAgentId(keptAgents, targetSlot, canLaunch) ??
             agentId;
@@ -842,6 +913,24 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         claimedHelpLaneKeys.delete(claimKey);
       }
     },
+  }));
+
+  actions.set("help.newSessionWithAgent", () => ({
+    id: "help.newSessionWithAgent",
+    title: "New assistant session with agent",
+    description:
+      "Start one Daintree Assistant session on a chosen agent, leaving the default as is",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Picked from the assistant's own menus. An agent starting a help session
+    // has `help.launchAgent`, which already takes an agent.
+    mcpVisibility: "hidden",
+    palette: { mode: "hidden" },
+    keywords: ["assistant", "session", "agent", "claude", "codex"],
+    argsSchema: z.object({ agentId: z.string().min(1) }),
+    run: async (args: { agentId: string }) => startHelpSessionWithAgent(args.agentId),
   }));
 
   actions.set("help.resumePastSession", () => ({

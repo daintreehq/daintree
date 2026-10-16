@@ -286,6 +286,13 @@ export interface HelpLaunchOptions {
    * a fresh launch.
    */
   resumeTarget?: { sessionId: string };
+  /**
+   * The user picked this agent for this one launch (#13442), over the default.
+   * Until it goes live the lane belongs to that pick: auto-launch stands down,
+   * so a failed launch waits on Retry for this agent instead of being replaced
+   * by a launch of the default.
+   */
+  pinAgent?: boolean;
 }
 
 // Help sessions keep their own bypass and model settings, but a CLI's
@@ -385,6 +392,8 @@ export class HelpSessionController {
    * auto-launch stands down and view-reveal recovery leaves the launch alone.
    */
   private _lastResumeTarget: HelpLaunchOptions["resumeTarget"] = undefined;
+  /** The agent the latest launch was pinned to (`pinAgent`), until it goes live. */
+  private _lastPinnedAgentId: string | null = null;
 
   private readonly _versionGate = new HelpVersionGate({
     getSnapshot: () => this._snapshot,
@@ -536,7 +545,12 @@ export class HelpSessionController {
    */
   retryLaunch(agentId: string): void {
     const resumeTarget = this._lastResumeTarget;
-    this.launch(resumeTarget ? { agentId, replaceExisting: true, resumeTarget } : { agentId });
+    const pinAgent = this._lastPinnedAgentId === agentId;
+    this.launch(
+      resumeTarget
+        ? { agentId, replaceExisting: true, resumeTarget }
+        : { agentId, ...(pinAgent ? { pinAgent } : {}) }
+    );
   }
 
   /**
@@ -883,6 +897,7 @@ export class HelpSessionController {
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
     this._lastResumeTarget = options.resumeTarget;
+    this._lastPinnedAgentId = options.pinAgent ? launchAgentId : null;
 
     // A launch supersedes any revoked-session banner — the user is starting a
     // fresh session, so the prior session's revocation no longer applies (#10017).
@@ -1172,9 +1187,9 @@ export class HelpSessionController {
     // must never start a billed session. Placed ahead of the visibility check
     // so a visibilityEpoch re-arm can't bypass consent on a restore.
     if (!inputs.autoLaunchEnabled) return;
-    // A picked conversation owns this lane — queued, in flight, or failed and
-    // waiting on Retry. A blank session must not take its place.
-    if (this._queuedLaunch || this._lastResumeTarget) return;
+    // A picked conversation or agent owns this lane — queued, in flight, or
+    // failed and waiting on Retry. A blank session must not take its place.
+    if (this._queuedLaunch || this._lastResumeTarget || this._lastPinnedAgentId) return;
     if (typeof document !== "undefined" && document.hidden) return;
     if (!inputs.isOpen) return;
     if (!inputs.isReadyToLaunch) return;
@@ -1633,6 +1648,7 @@ export class HelpSessionController {
             // from here leaves the marker set so the `finally` releases it.
             unreleasedHibernation = null;
             this._lastResumeTarget = undefined;
+            this._lastPinnedAgentId = null;
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
             // A picked conversation needs no cleanup on main: its spawn carries
             // `agentSessionId`, which main records as the lane's pointer in
@@ -1789,6 +1805,7 @@ export class HelpSessionController {
         this._pendingSessionId = null;
       }
       reached = true;
+      this._lastPinnedAgentId = null;
       this._patch({ phase: "live" });
       window.electron.help.markTerminal(finalTerminalId).catch((err) => {
         logError("Failed to mark help terminal", err);

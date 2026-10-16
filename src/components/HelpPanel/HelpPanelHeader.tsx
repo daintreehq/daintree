@@ -14,6 +14,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { SurfaceHeader, SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/SurfaceHeader";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { NewSessionWithAgentLabel } from "./NewSessionWithAgentLabel";
 import type { AgentState } from "@/types";
 
 /** The panel-chrome action button: `icon-xs` (24px target) with a 14px glyph. */
@@ -106,6 +107,11 @@ interface HelpPanelHeaderProps {
   onClose: () => void;
   isFocused?: boolean;
   messaging?: HelpPanelMessagingControls | null;
+  /** Agents a session can be started on by name; offered only when there are several. */
+  newSessionAgentIds?: readonly string[];
+  /** False at the session ceiling, which parks the agent items rather than hiding them. */
+  canStartNewSession?: boolean;
+  onNewSessionWithAgent?: (agentId: string) => void;
 }
 
 export function HelpPanelHeader({
@@ -119,6 +125,9 @@ export function HelpPanelHeader({
   onClose,
   isFocused = false,
   messaging = null,
+  newSessionAgentIds = [],
+  canStartNewSession = false,
+  onNewSessionWithAgent,
 }: HelpPanelHeaderProps) {
   // The panel closes on Escape through the escape stack, which the global
   // keybinding layer pops at window capture — before Radix's menu sees the key.
@@ -182,7 +191,9 @@ export function HelpPanelHeader({
               the session. "Start new session" read as "give me another session",
               which is the strip's `+` — and this is the one that throws the
               current conversation away. Opening a parallel session is NOT
-              mirrored here: the strip's `+` is its single home. */}
+              mirrored here: the strip's `+` is its single home. Opening one on
+              a particular agent is, because the `+` starts the default and has
+              no room to ask (#13442). */}
           {canRestartConversation && (
             <>
               <DropdownMenuItem destructive onSelect={onRestartConversation}>
@@ -192,6 +203,17 @@ export function HelpPanelHeader({
               <DropdownMenuSeparator />
             </>
           )}
+          {onNewSessionWithAgent &&
+            newSessionAgentIds.length > 1 &&
+            newSessionAgentIds.map((agentId) => (
+              <DropdownMenuItem
+                key={agentId}
+                disabled={!canStartNewSession}
+                onSelect={() => onNewSessionWithAgent(agentId)}
+              >
+                <NewSessionWithAgentLabel agentId={agentId} />
+              </DropdownMenuItem>
+            ))}
           <DropdownMenuItem onSelect={onResumePastSession}>
             <History className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Resume a past session…

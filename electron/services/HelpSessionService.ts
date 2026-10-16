@@ -62,6 +62,8 @@ import {
 } from "./helpSessionProjectMetadata.js";
 import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import {
+  ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH,
+  ASSISTANT_AGENT_DIR_KEY_PATTERN,
   ASSISTANT_LANE_CONFIG_DIR,
   ASSISTANT_SLOTS,
   assistantLaneMcpConfigName,
@@ -517,6 +519,28 @@ function projectPathHash(projectPath: string): string {
   return createHash("sha256").update(projectPath).digest("hex").slice(0, PROJECT_HASH_LEN);
 }
 
+const SAFE_AGENT_DIR_KEY = new RegExp(`^${ASSISTANT_AGENT_DIR_KEY_PATTERN}$`);
+
+/**
+ * What qualifies an agent's session directory: null for Claude, which keeps
+ * the bare project hash (see `shared/config/assistantSlots.ts`); the id itself
+ * for an id that is already a safe, bounded directory name (every built-in);
+ * otherwise a digest. A user-defined id may carry uppercase, dots or any
+ * length, and two that differ only by case would share one directory on a
+ * case-insensitive filesystem.
+ */
+export function assistantAgentDirKey(agentId: string): string | null {
+  if (agentId === "claude") return null;
+  if (agentId.length <= ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH && SAFE_AGENT_DIR_KEY.test(agentId)) {
+    return agentId;
+  }
+  return createHash("sha256").update(agentId).digest("hex").slice(0, PROJECT_HASH_LEN);
+}
+
+function agentSessionDirName(pathHash: string, agentId: string): string {
+  return assistantSessionDirName(pathHash, assistantAgentDirKey(agentId));
+}
+
 /**
  * Deterministic SHA-256 over the bundled help template. The hash is content-
  * only (no mtimes, no inode metadata): walk the tree, sort by full relative
@@ -606,7 +630,6 @@ export type HelpSessionErrorCode =
   | "MCP_SERVER_NOT_STARTED"
   | "MCP_PROBE_FAILED"
   | "USER_CONTENT_SYNC_FAILED"
-  | "MIXED_AGENT_LANES"
   | "LANE_OCCUPIED"
   | "UNSUPPORTED_ASSISTANT_AGENT";
 
@@ -1258,11 +1281,16 @@ export class HelpSessionService {
     const sessionId = randomUUID();
     const token = randomBytes(SESSION_TOKEN_BYTES).toString("hex");
     const sessionsRoot = this.getSessionsRoot();
-    // One directory per PROJECT, shared by every lane. Claude's workspace-trust
-    // and `.mcp.json` approval prompts are both per folder, so this is what
-    // makes them fire once per project rather than once per lane. Anything a
-    // lane must not share — its MCP bearer — lives in a per-lane file below.
-    const sessionPath = path.join(sessionsRoot, assistantSessionDirName(pathHash));
+    // One directory per (PROJECT, AGENT), shared by every lane on that agent.
+    // Claude's workspace-trust and `.mcp.json` approval prompts are both per
+    // folder, so this is what makes them fire once per project rather than
+    // once per lane. Anything a lane must not share — its MCP bearer — lives in
+    // a per-lane file below. Lanes on another agent get their own directory,
+    // because the files here are agent-shaped: the user-content mirror retires
+    // whatever the current agent doesn't use, a non-Claude provision strips the
+    // Claude hooks, and Claude empties the `.mcp.json` Copilot reads.
+    const sessionDirName = agentSessionDirName(pathHash, input.agentId);
+    const sessionPath = path.join(sessionsRoot, sessionDirName);
 
     if (settings.daintreeControl) {
       try {
@@ -1279,35 +1307,6 @@ export class HelpSessionService {
           `Daintree Assistant needs the in-process MCP server, but it isn't ready: ${reason}`
         );
       }
-    }
-
-    // One agent per project's lanes. The shared directory holds files that are
-    // agent-shaped as well as lane-shaped: the user-content mirror writes each
-    // agent's skills and removes the other's, Copilot needs the shared
-    // `.mcp.json` that a Claude provision empties, and the settings overlay is
-    // Claude's. Serializing the writes keeps them whole; it does not make two
-    // agents' versions of them coexist. The renderer already keeps lanes on one
-    // preferred agent, so this only ever fires for an explicit `help.launch` of
-    // a different agent while a sibling is live, and it fails closed with a
-    // reason rather than letting that lane quietly clobber its sibling's setup.
-    //
-    // Runs BEFORE the displacement below, or the refusal would be paid for with
-    // the caller's own lane: displacement revokes and kills this slot's prior
-    // session, so a rejected launch would leave the user with a dead lane AND
-    // an error. The predicate only matches `record.slot !== slot`, which
-    // displacement never touches, so the order is behaviour-preserving.
-    const liveSibling = [...this.sessionsByToken.values()].find(
-      (record) =>
-        !record.revoked &&
-        record.projectId === input.projectId &&
-        record.slot !== slot &&
-        record.agentId !== input.agentId
-    );
-    if (liveSibling) {
-      throw new HelpSessionError(
-        "MIXED_AGENT_LANES",
-        `Another session in this project is running ${liveSibling.agentId}; sessions of one project share a folder and have to use the same agent. Stop it first, or open the new session with ${liveSibling.agentId}.`
-      );
     }
 
     // Checked inside the lane lock, so nothing can take the lane between this
@@ -1339,14 +1338,15 @@ export class HelpSessionService {
     // serialize sibling lanes behind it. Never throws.
     const projectFacts = await this.readProjectFacts(input.projectId, input.projectPath);
 
-    // Every lane of a project provisions into ONE directory, so the file work
-    // below is serialized per directory as well as per lane. The lane lock
-    // above guards the single-backend invariant; this one guards the template
-    // copy and its hash stamp, the user-content mirror and its manifest, the
-    // markdown scratch addendum and the shared `.mcp.json` — all of which two
-    // lanes provisioning at once would otherwise write over each other.
+    // Every lane of a project on one agent provisions into ONE directory, so
+    // the file work below is serialized per directory as well as per lane. The
+    // lane lock above guards the single-backend invariant; this one guards the
+    // template copy and its hash stamp, the user-content mirror and its
+    // manifest, the markdown scratch addendum and the shared `.mcp.json` — all
+    // of which two lanes provisioning at once would otherwise write over each
+    // other.
     const { scratchPath, port, laneMcpConfigPath, userConfig } = await this.withDirectoryLock(
-      pathHash,
+      sessionDirName,
       async () => {
         await fs.mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
         await fs.chmod(sessionsRoot, 0o700).catch(() => {});
@@ -1505,7 +1505,9 @@ export class HelpSessionService {
         // Another live lane of this project may still be pointing at an older
         // sidecar; it is only safe to retire old ones when none is.
         // A sibling mid-provision counts too: it may already have published
-        // its pointer and not yet registered its record.
+        // its pointer and not yet registered its record. Project-wide rather
+        // than per directory: a lane on another agent's directory only delays
+        // the retirement here, which is the safe direction to be wrong in.
         const ownLockKey = assistantSlotKey(input.projectId, slot);
         const siblingLaneLive =
           [...this.sessionsByToken.values()].some(
@@ -2758,10 +2760,11 @@ export class HelpSessionService {
    * Whether `name` is a session directory we own and must keep.
    *
    * Load-bearing: `gcStaleSessions` recursively DELETES every directory this
-   * rejects. Only the bare project hash passes — every lane of a project shares
-   * it — so both legacy shapes are collected: per-launch UUID directories from
-   * the oldest model, and the `<hash>-sN` per-lane directories that preceded the
-   * shared one. See `isAssistantSessionDirName` for why neither is worth keeping.
+   * rejects. Only a project hash passes, bare or qualified by an agent key —
+   * every lane of a project on one agent shares it — so both legacy shapes are
+   * collected: per-launch UUID directories from the oldest model, and the
+   * `<hash>-sN` per-lane directories that preceded the shared one. See
+   * `isAssistantSessionDirName` for why neither is worth keeping.
    */
   private isProjectHashDirName(name: string): boolean {
     return isAssistantSessionDirName(name, PROJECT_HASH_LEN);
@@ -2781,11 +2784,11 @@ export class HelpSessionService {
     return this.mcpServerModule;
   }
 
-  /** Serializes filesystem work on one project's shared session directory. */
+  /** Serializes filesystem work on one shared session directory, keyed by its name. */
   private readonly directoryLocks = new Map<string, Promise<void>>();
 
-  private async withDirectoryLock<T>(pathHash: string, fn: () => Promise<T>): Promise<T> {
-    const previous = this.directoryLocks.get(pathHash);
+  private async withDirectoryLock<T>(dirName: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.directoryLocks.get(dirName);
     let release!: () => void;
     const next = new Promise<void>((resolve) => {
       release = resolve;
@@ -2793,14 +2796,14 @@ export class HelpSessionService {
     // Same shape as `provisionLocks`: chain, remember the chained promise, and
     // only drop the entry if this call is still the tail.
     const tail = (previous ?? Promise.resolve()).then(() => next);
-    this.directoryLocks.set(pathHash, tail);
+    this.directoryLocks.set(dirName, tail);
     if (previous) await previous;
     try {
       return await fn();
     } finally {
       release();
-      if (this.directoryLocks.get(pathHash) === tail) {
-        this.directoryLocks.delete(pathHash);
+      if (this.directoryLocks.get(dirName) === tail) {
+        this.directoryLocks.delete(dirName);
       }
     }
   }
@@ -2961,11 +2964,24 @@ export class HelpSessionService {
   }
 
   /**
-   * The directory every assistant lane of `projectPath` runs in — the same
-   * path `provisionSession` derives — so a reader can find the transcripts
-   * the agents filed under it (#13206). Pure: never creates the directory.
+   * The directory `agentId`'s assistant lanes of `projectPath` run in — the
+   * same path `provisionSession` derives — so a reader can find the
+   * transcripts that agent filed under it (#13206). Pure: never creates the
+   * directory.
    */
-  getSessionPathForProject(projectPath: string): string {
+  getSessionPathForProject(projectPath: string, agentId: string): string {
+    return path.join(
+      this.getSessionsRoot(),
+      agentSessionDirName(projectPathHash(projectPath), agentId)
+    );
+  }
+
+  /**
+   * The directory every assistant lane of `projectPath` ran in before lanes on
+   * different agents were split apart — the bare project hash, now Claude's.
+   * A non-Claude agent's earlier conversations were filed against it.
+   */
+  getLegacySessionPathForProject(projectPath: string): string {
     return path.join(this.getSessionsRoot(), assistantSessionDirName(projectPathHash(projectPath)));
   }
 

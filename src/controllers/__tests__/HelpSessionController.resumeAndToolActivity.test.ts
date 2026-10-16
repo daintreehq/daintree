@@ -708,6 +708,7 @@ describe("HelpSessionController — picked past-session resume (#13206)", () => 
     };
     // As `launch()` records it before handing off to `_executeLaunch`.
     ctrl["_lastResumeTarget"] = { sessionId: "picked-123" };
+    ctrl["_lastPinnedAgentId"] = "claude";
 
     await ctrl["_executeLaunch"](
       7,
@@ -732,6 +733,7 @@ describe("HelpSessionController — picked past-session resume (#13206)", () => 
     expect(takeMock()).not.toHaveBeenCalled();
     // Live, so the lane no longer belongs to the pick.
     expect(ctrl["_lastResumeTarget"]).toBeUndefined();
+    expect(ctrl["_lastPinnedAgentId"]).toBeNull();
     ctrl.stop();
   });
 
@@ -844,6 +846,43 @@ describe("HelpSessionController — launchWhenReady (#13206)", () => {
     ctrl["_lastResumeTarget"] = undefined;
     ctrl.retryLaunch("claude");
     expect(launch).toHaveBeenLastCalledWith({ agentId: "claude" });
+  });
+
+  it("does not auto-launch the default over a failed launch of an agent picked by name (#13442)", () => {
+    const ctrl = new HelpSessionController();
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    // The pick ran and failed: the lane is idle with no terminal, consent is on,
+    // and the default is a different agent.
+    ctrl["_lastPinnedAgentId"] = "codex";
+
+    ctrl.syncInputs(readyInputs);
+    ctrl.handleViewRevealed();
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed pinned launch on the agent picked, and keeps it pinned", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const launch = vi.spyOn(ctrl, "launch").mockImplementation(() => {});
+    ctrl["_lastPinnedAgentId"] = "codex";
+
+    ctrl.retryLaunch("codex");
+    expect(launch).toHaveBeenLastCalledWith({ agentId: "codex", pinAgent: true });
+  });
+
+  it("pins a launch made with pinAgent, and a launch without it lets go", () => {
+    const ctrl = new HelpSessionController();
+    ctrl.syncInputs({ ...readyInputs, autoLaunchEnabled: false });
+    const execute = vi.fn().mockResolvedValue(undefined);
+    ctrl["_executeLaunch"] = execute;
+
+    ctrl.launch({ agentId: "codex", replaceExisting: true, pinAgent: true });
+    expect(ctrl["_lastPinnedAgentId"]).toBe("codex");
+
+    ctrl["_isLaunching"] = false;
+    ctrl.launch({ agentId: "claude" });
+    expect(ctrl["_lastPinnedAgentId"]).toBeNull();
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it("launches immediately when the lane is already ready", () => {
