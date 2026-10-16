@@ -1,4 +1,4 @@
-import type { FleetRunRow, RunCanopyRefinement } from "@shared/types/ipc/fleet";
+import type { FleetRunRow, FleetSnapshot, RunCanopyRefinement } from "@shared/types/ipc/fleet";
 import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
 import { canopyPlacement } from "@shared/utils/canopyRefinement";
 
@@ -51,7 +51,11 @@ export const FLEET_BANDS = [
 export type FleetBand = (typeof FLEET_BANDS)[number];
 
 /** Bands that constitute a demand on the user — the ones an idle fleet has none of. */
-const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["blocked", "needs-you", "review"]);
+export const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>([
+  "blocked",
+  "needs-you",
+  "review",
+]);
 
 export function isDemandBand(band: FleetBand): boolean {
   return DEMAND_BANDS.has(band);
@@ -86,6 +90,40 @@ export const ATTENTION_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>
 ]);
 export const WORKING_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["running"]);
 export const FINISHED_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["review", "done"]);
+/** The unread half of Finished: hand-backs nobody has had in front of them yet. */
+export const UNREAD_FILTER_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["review"]);
+
+const bandRunKeyCache = new WeakMap<FleetSnapshot, Map<ReadonlySet<FleetBand>, string>>();
+
+/**
+ * Every run in one of `bands`, as one sorted string of run ids (terminal ids).
+ * A primitive, so a store selector over it only re-renders when membership
+ * changes rather than on every fleet push. A snapshot not yet delivered holds
+ * nobody: the park, snooze and hand-back facts are unknown, and guessing them
+ * from the panel would count every prompt as a question.
+ *
+ * Cached per snapshot and band set, so `bands` must be a module constant.
+ */
+export function fleetBandRunKey(
+  snapshot: FleetSnapshot | null,
+  bands: ReadonlySet<FleetBand>
+): string {
+  if (snapshot === null) return "";
+  let bySet = bandRunKeyCache.get(snapshot);
+  if (bySet === undefined) {
+    bySet = new Map();
+    bandRunKeyCache.set(snapshot, bySet);
+  }
+  const cached = bySet.get(bands);
+  if (cached !== undefined) return cached;
+  const ids: string[] = [];
+  for (const run of snapshot.runs) {
+    if (bands.has(bandForRun(run))) ids.push(run.runId);
+  }
+  const key = ids.sort().join("\n");
+  bySet.set(bands, key);
+  return key;
+}
 
 /**
  * Which band a run belongs to.

@@ -16,10 +16,13 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 }));
 
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import {
   useTerminalNotificationCounts,
   useConflictedWorktrees,
   useWaitingTerminals,
+  useUnreadTerminals,
+  useDemandTerminalCount,
   useBackgroundedTerminals,
   useBackgroundPanelStats,
   useErrorTerminals,
@@ -27,6 +30,26 @@ import {
 } from "../useTerminalSelectors";
 
 const isInTrashFn = () => false;
+
+type RunOverrides = Partial<FleetRunRow> & { runId: string };
+
+function deliverRuns(runs: RunOverrides[]) {
+  act(() => {
+    useFleetSnapshotStore.getState().applySnapshot({
+      runs: runs.map((run) => ({ workspaceId: "p1", spawnedAt: 1, cwd: "/repo", ...run })),
+      changedAt: 4,
+      degraded: false,
+      lastSuccessfulAt: 4,
+    });
+  });
+}
+
+/** The fleet reporting each of these terminals as asking for an approval. */
+function deliverAsks(ids: string[]) {
+  deliverRuns(
+    ids.map((runId) => ({ runId, agentState: "waiting", waitingReason: "approval" as const }))
+  );
+}
 
 function setupEmptyWorktrees() {
   useWorktreeStoreMock.mockImplementation(
@@ -288,6 +311,7 @@ describe("useWaitingTerminals", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetWorktreeIdCacheForTests();
+    useFleetSnapshotStore.setState({ snapshot: null });
   });
 
   it("returns only waiting visible terminals", () => {
@@ -296,6 +320,12 @@ describe("useWaitingTerminals", () => {
       { id: "t2", agentState: "working", location: "grid" },
       { id: "t3", agentState: "waiting", location: "trash" },
       { id: "t4", agentState: "waiting", location: "background" },
+    ]);
+    deliverRuns([
+      { runId: "t1", agentState: "waiting", waitingReason: "approval" },
+      { runId: "t2", agentState: "working" },
+      { runId: "t3", agentState: "waiting", waitingReason: "approval" },
+      { runId: "t4", agentState: "waiting", waitingReason: "approval" },
     ]);
 
     const { result } = renderHook(() => useWaitingTerminals());
@@ -312,6 +342,7 @@ describe("useWaitingTerminals", () => {
       ],
       worktrees
     );
+    deliverAsks(["t1", "t2"]);
 
     const { result } = renderHook(() => useWaitingTerminals());
     expect(result.current).toHaveLength(1);
@@ -482,6 +513,8 @@ describe("buildWorktreeIds memoization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetWorktreeIdCacheForTests();
+    useFleetSnapshotStore.setState({ snapshot: null });
+    deliverAsks(["t1", "t2"]);
   });
 
   it("returns correct IDs when Map reference changes but keys stay the same", () => {
@@ -616,11 +649,16 @@ describe("hand-backs are not waits", () => {
       { id: "read", agentState: "waiting", location: "grid" },
       { id: "approval", agentState: "waiting", waitingReason: "approval", location: "grid" },
     ]);
-    deliverHandBacks(["unread"], false);
-    deliverHandBacks(["unread", "read"], true);
+    deliverRuns([
+      { runId: "unread", agentState: "waiting", handBack: { stoppedAt: 2 } },
+      { runId: "read", agentState: "waiting", handBack: { stoppedAt: 2, seenAt: 3 } },
+      { runId: "approval", agentState: "waiting", waitingReason: "approval" },
+    ]);
 
     const waiting = renderHook(() => useWaitingTerminals());
     expect(waiting.result.current.map((t) => t.id)).toEqual(["approval"]);
+    const unread = renderHook(() => useUnreadTerminals());
+    expect(unread.result.current.map((t) => t.id)).toEqual(["unread"]);
     const counts = renderHook(() => useTerminalNotificationCounts());
     expect(counts.result.current.waitingCount).toBe(1);
     const stats = renderHook(() => useBackgroundPanelStats("none", true));
@@ -634,5 +672,129 @@ describe("hand-backs are not waits", () => {
 
     deliverHandBacks(["t1"], false);
     expect(result.current.waitingCount).toBe(0);
+  });
+});
+
+describe("the dock's agent pills read the fleet bands", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
+    useFleetSnapshotStore.setState({ snapshot: null });
+  });
+
+  const ids = (terminals: Array<{ id: string }>) => terminals.map((t) => t.id);
+
+  it("holds nobody before the first fleet snapshot, whatever the panels say", () => {
+    setupBoth([
+      { id: "prompt", agentState: "waiting", location: "grid" },
+      { id: "approval", agentState: "waiting", waitingReason: "approval", location: "grid" },
+    ]);
+
+    expect(renderHook(() => useWaitingTerminals()).result.current).toEqual([]);
+    expect(renderHook(() => useUnreadTerminals()).result.current).toEqual([]);
+    expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(0);
+    // The Dock badge and window title still count the ask they can see.
+    expect(renderHook(() => useTerminalNotificationCounts()).result.current.waitingCount).toBe(2);
+  });
+
+  it("leaves parked and snoozed agents out of both pills", () => {
+    setupBoth([
+      { id: "parked", agentState: "waiting", waitingReason: "approval", location: "grid" },
+      { id: "snoozed", agentState: "waiting", location: "grid" },
+    ]);
+    deliverRuns([
+      {
+        runId: "parked",
+        agentState: "waiting",
+        waitingReason: "approval",
+        park: { parkedAt: 1 },
+      },
+      {
+        runId: "snoozed",
+        agentState: "waiting",
+        handBack: { stoppedAt: 2 },
+        snooze: { snoozedAt: 1, snoozedUntil: 10 },
+      },
+    ]);
+
+    expect(renderHook(() => useWaitingTerminals()).result.current).toEqual([]);
+    expect(renderHook(() => useUnreadTerminals()).result.current).toEqual([]);
+  });
+
+  it("counts a prompt wait with no hand-back record in neither pill", () => {
+    setupBoth([{ id: "t1", agentState: "waiting", waitingReason: "prompt", location: "grid" }]);
+    deliverRuns([{ runId: "t1", agentState: "waiting", waitingReason: "prompt" }]);
+
+    expect(renderHook(() => useWaitingTerminals()).result.current).toEqual([]);
+    expect(renderHook(() => useUnreadTerminals()).result.current).toEqual([]);
+  });
+
+  it("follows Canopy: an ask read in a hand-back waits, a question it read as no ask is unread", () => {
+    setupBoth([
+      { id: "asked", agentState: "completed", location: "grid" },
+      { id: "not-asking", agentState: "waiting", waitingReason: "question", location: "grid" },
+    ]);
+    deliverRuns([
+      {
+        runId: "asked",
+        agentState: "completed",
+        handBack: { stoppedAt: 2, seenAt: 3 },
+        canopy: { kind: "asked", quote: "Ship it?", readAt: 3 },
+      },
+      {
+        runId: "not-asking",
+        agentState: "waiting",
+        waitingReason: "question",
+        canopy: { kind: "not-asking", quote: "All tests pass.", readAt: 3, seen: false },
+      },
+    ]);
+
+    expect(ids(renderHook(() => useWaitingTerminals()).result.current)).toEqual(["asked"]);
+    expect(ids(renderHook(() => useUnreadTerminals()).result.current)).toEqual(["not-asking"]);
+  });
+
+  it("drains Unread when the hand-back is seen, and keeps Unread to visible terminals", () => {
+    setupBoth([
+      { id: "here", agentState: "completed", location: "grid" },
+      { id: "trashed", agentState: "completed", location: "trash" },
+      { id: "backgrounded", agentState: "completed", location: "background" },
+    ]);
+    const handBacks = (handBack: FleetRunRow["handBack"]) =>
+      deliverRuns(
+        ["here", "trashed", "backgrounded", "no-panel"].map((runId) => ({
+          runId,
+          agentState: "completed" as const,
+          handBack,
+        }))
+      );
+
+    handBacks({ stoppedAt: 2 });
+    const unread = renderHook(() => useUnreadTerminals());
+    const demand = renderHook(() => useDemandTerminalCount());
+    expect(ids(unread.result.current)).toEqual(["here"]);
+    expect(demand.result.current).toBe(1);
+
+    handBacks({ stoppedAt: 2, seenAt: 3 });
+    unread.rerender();
+    demand.rerender();
+    expect(unread.result.current).toEqual([]);
+    expect(demand.result.current).toBe(0);
+  });
+
+  it("counts both pills' visible agents for the dock's status", () => {
+    setupBoth([
+      { id: "ask", agentState: "waiting", waitingReason: "error", location: "grid" },
+      { id: "hand-back", agentState: "completed", location: "dock" },
+      { id: "read", agentState: "completed", location: "grid" },
+      { id: "working", agentState: "working", location: "grid" },
+    ]);
+    deliverRuns([
+      { runId: "ask", agentState: "waiting", waitingReason: "error" },
+      { runId: "hand-back", agentState: "completed", handBack: { stoppedAt: 2 } },
+      { runId: "read", agentState: "completed", handBack: { stoppedAt: 2, seenAt: 3 } },
+      { runId: "working", agentState: "working" },
+    ]);
+
+    expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(2);
   });
 });

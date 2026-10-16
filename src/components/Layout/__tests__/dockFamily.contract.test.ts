@@ -8,7 +8,7 @@ import { readIndexCss } from "@/__tests__/support/hostCss";
 
 /**
  * The dock is one family: the worktree's chips, the project's status pills,
- * and the four status popovers. These are the rules that keep it one family,
+ * and the five status popovers. These are the rules that keep it one family,
  * stated as rules rather than as today's class names.
  */
 
@@ -18,7 +18,7 @@ const read = (file: string) => fs.readFileSync(path.join(LAYOUT, file), "utf8");
 
 const CHIPS = ["DockedTerminalItem.tsx", "DockedTabGroup.tsx", "DockedNonPtyPanelItem.tsx"];
 const POPOVERS = [
-  "WaitingContainer.tsx",
+  "AgentStatusContainer.tsx",
   "BackgroundContainer.tsx",
   "StatusContainer.tsx",
   "TrashContainer.tsx",
@@ -116,7 +116,7 @@ describe("dock status popovers", () => {
       expect(source, file).toContain("focusHandoff.onContentKeyDown");
     }
     for (const file of [
-      "WaitingContainer.tsx",
+      "AgentStatusContainer.tsx",
       "BackgroundContainer.tsx",
       "StatusContainer.tsx",
       "TrashBinItem.tsx",
