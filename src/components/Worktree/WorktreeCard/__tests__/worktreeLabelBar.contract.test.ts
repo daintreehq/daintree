@@ -61,7 +61,7 @@ describe("worktree label bar cut-out (#13408)", () => {
 
   it("moves the keyboard-cursor edge to the right on a labelled card", () => {
     const rule = sidebarCss.match(
-      /\.sidebar-worktree-card\[data-label-color\]:not\(\[data-active="true"\]\)[^{]*\{([^}]*)\}/
+      /\.sidebar-worktree-card\[data-label\]:not\(\[data-active="true"\]\)[^{]*\{([^}]*)\}/
     );
     expect(rule?.[1]).toMatch(/--card-edge:\s*inset -2px 0 0 var\(--theme-selection-outline\)/);
   });

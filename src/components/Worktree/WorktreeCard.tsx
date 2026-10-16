@@ -1087,7 +1087,7 @@ export function WorktreeCard({
           data-drop-target={isPanelDropTarget ? "true" : undefined}
           data-worktree-branch={branchLabel}
           data-worktree-is-main={isMainWorktree ? "true" : undefined}
-          data-label-color={variant === "sidebar" && labelColor ? labelColor : undefined}
+          data-label={variant === "sidebar" && labelColor ? labelColor : undefined}
           data-resource-status={resourceStatusLabel ?? undefined}
           data-deleting={isBeingDeleted && !deleteError ? "true" : undefined}
           aria-busy={isBeingDeleted && !deleteError ? "true" : undefined}
