@@ -24,7 +24,7 @@ Your runbook search for this request: `"Work batches of issues in parallel workt
 - **Each unit's whole chain is one command, `/work <n>`**, sent unchanged with no brief.
 - **No `handback` on `/work` or `/prs:merge`**, for `daintree.agents.run-agent-command`'s reason: Daintree appends its instruction to the prompt text, which would become the command's arguments. Both print their own end markers, read exactly with `terminal.readLastMessageOwned`. The pick is a sentence, so it takes `handback`.
 - **`/prs:merge` lands every eligible open PR in the repository**, not only this batch's.
-- **Teardown is wanted**: after each merge, a landed unit's pane is closed and its worktree deleted (its branch stays).
+- **Teardown is total**: once each round's merge has finished, every worktree this run created is closed out through the Daintree MCP (`worktree.deleteOwned`), landed or not, after its panes are closed. Branches and PRs stay, so nothing committed is lost. Any worktree left on disk is reported with its reason.
 - **A recurring cron replaces the per-turn `ScheduleWakeup` backstop.** A wakeup loop isn't restored on `claude --resume` (that stalled a `/work` wave for an hour on 2026-10-14) and ends at a maximum duration. The cron is still the one pacing mechanism.
 
 ## Preflight, once per run
@@ -33,7 +33,7 @@ Your runbook search for this request: `"Work batches of issues in parallel workt
 2. `slashCommands.list` with `agentId: "claude"` and the main path as `projectPath`: `/next-batch`, `/work` and `/prs:merge` must each be listed once. Otherwise stop before launching anything, and say which.
 3. A checkpoint for this repository that is neither `done` nor `cancelled` is an active run: resume it instead.
 4. If the main checkout isn't clean and on the base, say so now: the merge step waits for it.
-5. Tell the user in a few lines: batch size, one round or drain, any filters, that `/prs:merge` lands every eligible PR, that landed worktrees are deleted, and that a question from any pane parks the run until they answer it.
+5. Tell the user in a few lines: batch size, one round or drain, any filters, that `/prs:merge` lands every eligible PR, that every worktree the run creates is deleted after each merge (each delete may ask them to confirm), and that a question from any pane parks the run until they answer it.
 6. Write the checkpoint, then create the cron.
 
 ## Pacing
@@ -54,7 +54,7 @@ Unit statuses: `setting-up`, `dispatching`, `running`, `done` (finished with a P
 {"agentId":"claude","worktreeId":"<worktree id>","name":"Batch <k> · #13401","prompt":"/work 13401","requestedId":"<fresh id, saved first>","notify":true,"replyLines":12,"focusPolicy":"preserve"}
 ```
 
-Claude launches go one at a time. A good result has `launched: true` and the requested `worktreeId`. On a lost or ambiguous reply, `terminal.list` with `terminalId` set to the saved `requestedId` (it becomes the pane's `id`) and check its `title`, `agentId` and `worktreeId`; never launch on top of it. `launched: false` with a null `spawnStatus` is an unspecified failure (one cause: the hard open-panel ceiling): close this run's panes that tidy would close anyway and retry once. Still failing: fail that unit, or for the pick or merge pane stop the run and tell the user.
+Claude launches go one at a time. A good result has `launched: true` and the requested `worktreeId`. On a lost or ambiguous reply, `terminal.list` with `terminalId` set to the saved `requestedId` (it becomes the pane's `id`) and check its `title`, `agentId` and `worktreeId`; never launch on top of it. `launched: false` with a null `spawnStatus` is an unspecified failure (one cause: the hard open-panel ceiling): close this run's panes that tidy would close anyway and retry once. Still failing: fail that unit; for the pick pane stop the run, and for the merge pane tidy (step 5) and then stop, telling the user either way.
 
 ## Every check
 
@@ -94,26 +94,31 @@ With filters, the first sentence becomes `Run /next-batch with a count of <size>
 
 No recipe: it would make each create wait for the user's confirmation, with no notice. `assignToSelf` claims the issue at once so no later pick selects it; an `assignmentError` is only noted (`/work` assigns too). On a lost reply or a collision, look for the branch in `worktree.list`: this run's own create is adopted; any other existing branch fails the unit and is never reused.
 
-Launch only on `setupState: "ready"`. Wait with `worktree.waitUntilReady` (`timeoutMs: 25000`, at most two calls this turn); `timedOut` is the wait running out, not the setup. Not ready yet: stay `setting-up`, re-read with `timeoutMs: 0` on each check, launch once ready. `needs-approval` makes it `blocked`; `failed`, `timed-out` or `unknown` fails it, worktree kept. Then launch `/work <n>` per Every launch.
+Launch only on `setupState: "ready"`. Wait with `worktree.waitUntilReady` (`timeoutMs: 25000`, at most two calls this turn); `timedOut` is the wait running out, not the setup. Not ready yet: stay `setting-up`, re-read with `timeoutMs: 0` on each check, launch once ready. `needs-approval` makes it `blocked`; `failed`, `timed-out` or `unknown` fails it; tidy deletes its worktree with the rest. Then launch `/work <n>` per Every launch.
 
 ## 3. Watch
 
 A unit's marker is a last reply ending with the line `WORK_COMPLETE`. Then `gh pr list --repo <owner>/<repo> --head <branch> --state all --json number,state,url`: a PR makes it `done`, whatever CI failures it reports (the merge deals with CI). No PR, with a reply saying nothing needed changing, makes it `no-op`; keep its stated evidence for the report. No PR otherwise fails it, and so does `CATASTROPHIC_STOP`. Look up a unit's PR whatever its status: a unit can open its PR and then stop. Nudge text: `Continue the /work pipeline for #<n> from where you stopped, through to WORK_COMPLETE.`
 
-When every unit has settled: if no unit has a PR, skip the merge and go to step 6. Otherwise go to step 4 in the same turn. A `blocked` unit holds the merge until the user answers or skips it, and so does any unit still working, skipped or not.
+When every unit has settled: if no unit has a PR, skip the merge and go to step 5. Otherwise go to step 4 in the same turn. A `blocked` unit holds the merge until the user answers or skips it, and so does any unit still working, skipped or not.
 
 ## 4. Merge
 
 `/prs:merge` keeps the main checkout on the base and fast-forwards it, so first require `git -C <main path> status --porcelain` to print nothing and the branch to be the base. If not, report it and wait; never switch or clean the checkout yourself. Then launch `/prs:merge` in the main worktree per Every launch (name `Batch <k> · merge`, no `handback`).
 
-It runs for an hour or more and ends turns by itself while its background agents, train checks and CI watchers run, so for this pane idle without a marker is normal: never nudge it on schedule or fail it for stopping. Only `CATASTROPHIC_STOP` or an exited process fails it. After 60 minutes idle with no output change and no question, take one screen read and nudge once (`Continue the merge pipeline.`), then report it as stuck and keep waiting. Never tidy an unfinished merge. An `AskUserQuestion` is `blocked` per Every check.
+It runs for an hour or more and ends turns by itself while its background agents, train checks and CI watchers run, so for this pane idle without a marker is normal: never nudge it on schedule or fail it for stopping. Only `CATASTROPHIC_STOP` or an exited process fails it; a failed merge goes to step 5 with its pane kept for the user, then the run stops. After 60 minutes idle with no output change and no question, take one screen read and nudge once (`Continue the merge pipeline.`), then report it as stuck and keep waiting. Never tidy a merge that is still running, idle without its marker, or blocked. An `AskUserQuestion` is `blocked` per Every check.
 
-Its marker is a last reply that **starts** with `**MERGE PIPELINE COMPLETE**`; the summary under it runs long, so read with `maxBytes: 16000` and page back with `message.nextCursor` to the reply's start. The phrase inside progress text is not a finish. Then `gh pr view <pr> --repo <owner>/<repo> --json state,mergedAt` for every unit PR, and carry the summary's Reverted and Deferred PRs and final-base line into your report. A reverted PR is not landed: that unit keeps its pane and worktree.
+Its marker is a last reply that **starts** with `**MERGE PIPELINE COMPLETE**`; the summary under it runs long, so read with `maxBytes: 16000` and page back with `message.nextCursor` to the reply's start. The phrase inside progress text is not a finish. Then `gh pr view <pr> --repo <owner>/<repo> --json state,mergedAt` for every unit PR, and carry the summary's Reverted and Deferred PRs and final-base line into your report. A reverted PR is not landed; its branch and PR stay for the user.
 
 ## 5. Tidy
 
-1. **Close panes.** `terminal.closeMany` the merge pane and the panes of units whose PR landed (merged and not reverted) or that were `no-op`. A pane is closed only when its `results` item is `ok` and its `result.closedIds` holds the pane's id. Failed, blocked and unlanded units keep their panes for the user.
-2. **Delete worktrees.** For each landed unit whose pane is confirmed closed and whose tree is clean (`git -C <path> status --porcelain` prints nothing), `worktree.deleteOwned`, one at a time. Record each outcome: `CONFIRMATION_TIMEOUT` is pending and `USER_REJECTED` is kept. Neither is retried automatically, and neither holds the next round.
+Runs once the merge has completed, failed, or been skipped. It clears out every worktree this run created, whatever the unit's status: `done`, `no-op`, `failed`, `skipped`, unlanded, reverted, or a setup that never became ready. Before closing a pane, its unit's outcome and reason are already in the checkpoint, because the report is all the user has once it's gone.
+
+1. **Close the merge pane** if the merge completed (a failed merge keeps its pane): `terminal.closeMany`. A pane is closed only when its `results` item is `ok` and its `result.closedIds` holds the pane's id.
+2. **Clear each unit's worktree, one at a time.**
+   - **Check it.** `git -C <path> status --porcelain` must print nothing, and `terminal.list` with its `worktreeId`, once as is and once with `location: "background"`, must list no pane this run didn't open. A dirty tree is uncommitted work that `worktree.deleteOwned` never forces past, and a foreign pane means the user is working there: keep that worktree and its pane, and report why. A failed read keeps it too.
+   - **Close its pane** if one is still open, with `terminal.closeMany`, confirmed as in 1. A unit that never launched a pane, or whose pane `terminal.list` no longer shows, goes straight to delete. A pane that won't close keeps the worktree.
+   - **Delete it** with `worktree.deleteOwned` and the unit's worktree id. The branch stays. Record each outcome: `CONFIRMATION_TIMEOUT` is pending, `USER_REJECTED` is kept, and `RESOURCE_NOT_OWNED` (see Resume) is kept and listed for the user. None is retried automatically, and none holds the next round.
 
 ## 6. Report, then continue or stop
 
@@ -140,12 +145,14 @@ Without `drain`, the run ends after one round. At the end: the final report, the
 
 On `resume`, or a check that finds this skill missing from your context: read the checkpoint, and stop there if it is `cancelled` or `done`. `CronList`, and recreate the cron if it is missing or older than 6 days. Before any launch, reconcile with live state: `terminal.list` (the `Batch` panes), `worktree.list` (`issueNumber`, `issue-<n>` branches) and `gh pr list --repo`. Then re-arm `terminal.notifyWhenIdle` on working panes and continue from the phase shown.
 
-With no checkpoint, never infer size, drain or filters. Report the `Batch` panes you find, merge panes included even when idle, as unresolved earlier work, and ask the user how to go on. A new help session can read and close earlier panes but owns none of their worktrees, so `worktree.deleteOwned` refuses those: list them for the user instead.
+A checkpoint carries ids, not authority. The same help session reconnecting keeps what it created, but a new help session can read and close earlier panes and owns none of their worktrees, so `worktree.deleteOwned` refuses those with `RESOURCE_NOT_OWNED`: tidy lists them for the user instead.
+
+With no checkpoint, never infer size, drain or filters. Report the `Batch` panes you find, merge panes included even when idle, as unresolved earlier work, and ask the user how to go on.
 
 ## Final report
 
 - Rounds run, and each issue with its PR and final state.
-- Failed, blocked, reverted and unlanded units, with their worktree paths and pane names, kept for the user.
+- Failed, blocked, reverted and unlanded units, with their branch, PR and why they didn't land.
 - Issues this run assigned that have no landed PR. An assigned issue never reaches a later `/next-batch`, so the user may want to unassign them.
-- Worktree deletes still pending or refused.
+- Every worktree this run created that is still on disk, with its path, pane name and why: dirty, a foreign pane, delete pending or refused, or a run that stopped before tidy.
 - Anything you could not verify.
