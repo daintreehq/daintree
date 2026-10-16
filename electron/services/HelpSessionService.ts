@@ -124,7 +124,7 @@ const DEFAULT_DEBUG_LOGGING = false;
 
 // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB) and
 // truncates past it without telling the model. The bundled AGENTS.md is held
-// to 24 KiB by `build-help-prompts.test.mjs`; user instructions are inlined
+// to 24 KiB by `build-assistant-prompts.test.mjs`; user instructions are inlined
 // only while the whole file stays under this, less headroom for Codex's own
 // framing. Past it they go to a sibling file the block points at instead.
 const AGENTS_MD_INLINE_BUDGET_BYTES = 31 * 1024;
@@ -1174,7 +1174,7 @@ export class HelpSessionService {
    * once per project; the .mcp.json bearer is rotated on every provision.
    *
    * One directory serves every lane of the project. On every call:
-   *   1. Copy the bundled help/ template into the dir (overwrites — picks up
+   *   1. Copy the bundled assistant/ template into the dir (overwrites — picks up
    *      bundled-asset updates without losing the trust acceptance).
    *   2. Write this lane's MCP wiring: for Claude, a per-lane `--mcp-config`
    *      file under `.lanes/` carrying the fresh literal bearer, with the
@@ -1189,7 +1189,9 @@ export class HelpSessionService {
 
     const helpFolder = getHelpFolderPath();
     if (!helpFolder) {
-      console.warn("[HelpSessionService] Bundled help folder unavailable — cannot provision");
+      console.warn(
+        "[HelpSessionService] Bundled assistant template unavailable — cannot provision"
+      );
       return null;
     }
 

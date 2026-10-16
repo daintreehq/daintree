@@ -480,7 +480,7 @@ export const FIXTURES: Record<string, Fixture> = {
           command: "npm run packages:build",
           description: "Build every plugin SDK workspace package",
         },
-        { id: "r-help", name: "build:help", command: "npm run build:help" },
+        { id: "r-help", name: "build:assistant", command: "npm run build:assistant" },
       ];
       const saved: RunCommand[] = [
         {

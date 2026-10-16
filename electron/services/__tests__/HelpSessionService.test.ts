@@ -147,7 +147,7 @@ vi.mock("../AssistantUserConfig.js", async (importOriginal) => {
 import { HelpSessionService, codexTrustArgs, projectRuleRoots } from "../HelpSessionService.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
-  const helpDir = path.join(root, "help");
+  const helpDir = path.join(root, "assistant");
   await fs.mkdir(path.join(helpDir, ".claude"), { recursive: true });
   await fs.writeFile(
     path.join(helpDir, ".mcp.json"),
@@ -1209,7 +1209,7 @@ describe("HelpSessionService", () => {
     // fixture) catches that drift.
     // Vitest runs from the repo root, so the real bundled file is at a
     // stable relative path — not a test fixture.
-    const bundledPath = path.join(process.cwd(), "help", ".claude", "settings.json");
+    const bundledPath = path.join(process.cwd(), "assistant", ".claude", "settings.json");
     const bundled = JSON.parse(await fs.readFile(bundledPath, "utf-8"));
 
     // Delete the bundled fixture's settings so readBundledSettings is
@@ -3801,7 +3801,7 @@ describe("HelpSessionService", () => {
       const result = await service.provisionSession(codexInput());
       if (!result) throw new Error("expected result");
 
-      // The bundled help template carries .mcp.json from the help/ folder
+      // The bundled help template carries .mcp.json from the assistant/ folder
       // (copied via fs.cp), so the bundled file exists on disk — but the
       // Codex branch must NOT rewrite it with the Claude-shaped daintree
       // entry that bakes a literal bearer token.

@@ -844,7 +844,7 @@ describe("bundled help template invariant", () => {
       "..",
       "..",
       "..",
-      "help"
+      "assistant"
     );
     await expect(fs.stat(path.join(repoHelpDir, "CLAUDE.md"))).resolves.toBeTruthy();
     for (const root of [".claude/commands", ".claude/skills", ".agents", "reference"]) {
