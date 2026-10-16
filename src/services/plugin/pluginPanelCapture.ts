@@ -81,11 +81,61 @@ function clips(el: Element): boolean {
   );
 }
 
-function isRaisedFixed(el: Element): boolean {
+function zIndexOf(el: Element): number {
   const style = getComputedStyle(el);
-  if (style.position !== "fixed") return false;
+  if (style.position === "static" || style.position === "") return 0;
   const z = Number.parseInt(style.zIndex, 10);
-  return Number.isFinite(z) && z > 0;
+  return Number.isFinite(z) ? z : 0;
+}
+
+function isRaisedFixed(el: Element): boolean {
+  return getComputedStyle(el).position === "fixed" && zIndexOf(el) > 0;
+}
+
+/** Highest z-index on the way from `el` up to `top`, inclusive: where `el` stacks among layers. */
+function stackLevel(el: Element, top: Element): number {
+  let level = 0;
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    level = Math.max(level, zIndexOf(node));
+    if (node === top) break;
+  }
+  return level;
+}
+
+const TRANSPARENT = new Set(["", "transparent", "rgba(0, 0, 0, 0)"]);
+const GRAPHIC_TAGS = new Set(["IMG", "SVG", "CANVAS", "VIDEO", "IFRAME", "PICTURE", "OBJECT"]);
+
+/**
+ * Whether the element itself puts pixels on screen. A transparent wrapper —
+ * a dropdown's full-window host kept mounted while closed, a toast stack's
+ * padding — covers nothing; what it holds is judged on its own.
+ */
+function paints(el: Element): boolean {
+  if (GRAPHIC_TAGS.has(el.tagName.toUpperCase())) return true;
+  for (const node of el.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE && node.textContent?.trim()) return true;
+  }
+  const style = getComputedStyle(el);
+  if (!TRANSPARENT.has(style.backgroundColor)) return true;
+  if (style.backgroundImage !== "" && style.backgroundImage !== "none") return true;
+  if (style.boxShadow !== "" && style.boxShadow !== "none") return true;
+  const backdrop = style.getPropertyValue("backdrop-filter");
+  if (backdrop !== "" && backdrop !== "none") return true;
+  for (const side of ["Top", "Right", "Bottom", "Left"] as const) {
+    const width = Number.parseFloat(style.getPropertyValue(`border-${side.toLowerCase()}-width`));
+    const color = style.getPropertyValue(`border-${side.toLowerCase()}-color`);
+    if (width > 0 && !TRANSPARENT.has(color)) return true;
+  }
+  return false;
+}
+
+/** Whether anything in `root`'s subtree, outside the panel, paints over `rect`. */
+function coversRect(root: Element, frame: HTMLElement, rect: PluginPanelCaptureRect): boolean {
+  for (const el of [root, ...root.querySelectorAll("*")]) {
+    if (frame.contains(el) || el.contains(frame)) continue;
+    if (intersects(el.getBoundingClientRect(), rect) && isPainted(el) && paints(el)) return true;
+  }
+  return false;
 }
 
 /** The panel's one mounted frame, or a refusal saying why there is none to capture. */
@@ -184,29 +234,35 @@ export function assertPanelCapturable(
   if (location !== "dialog" && useUIStore.getState().overlayStack.length > 0) throw blocked();
 
   // Everything portalled out of the app root — dialogs, menus, tooltips,
-  // toasts, the panel-move overlay — paints over the app. Portals stack in
-  // insertion order, so only the ones after the panel's own layer (when the
-  // panel is itself in one, as a dialog panel is) are above it.
+  // toasts, the panel-move overlay — paints over it. Where the panel is in a
+  // portal of its own (a dialog panel), a layer is above it when it stacks
+  // higher, or level and later in the document.
   const layers = Array.from(document.body.children);
-  const ownLayer = layers.findIndex((layer) => layer.contains(frame));
+  const ownIndex = layers.findIndex((layer) => layer.contains(frame));
+  const ownLayer = ownIndex === -1 ? null : layers[ownIndex]!;
+  const ownLevel = ownLayer ? stackLevel(frame, ownLayer) : 0;
+  const inAppRoot = ownLayer !== null && ownLayer.id === "root";
   for (const [index, layer] of layers.entries()) {
-    if (index <= ownLayer && ownLayer !== -1) continue;
-    if (layer.contains(frame)) continue;
+    if (layer === ownLayer) continue;
+    const rootLevel = zIndexOf(layer);
     // Parked behind the app on purpose (the terminal offscreen container).
-    if (Number.parseInt(getComputedStyle(layer).zIndex, 10) < 0) continue;
-    for (const el of [layer, ...layer.querySelectorAll("*")]) {
-      if (intersects(el.getBoundingClientRect(), rect) && isPainted(el)) throw blocked();
+    if (rootLevel < 0) continue;
+    if (!inAppRoot) {
+      // The highest anything in it stacks; a lower layer holding one raised
+      // child is counted as raised, which can only refuse more.
+      let level = rootLevel;
+      for (const el of layer.querySelectorAll("*")) level = Math.max(level, zIndexOf(el));
+      if (level < ownLevel || (level === ownLevel && index < ownIndex)) continue;
     }
+    if (coversRect(layer, frame, rect)) throw blocked();
   }
 
-  // Inside the app root, floating layers that skip the portal and fixed
-  // layers raised above the panels (a drag preview, a popover in place).
-  const appRoot = ownLayer === -1 ? null : layers[ownLayer];
-  const scope = appRoot ?? document.body;
-  for (const el of scope.querySelectorAll("*")) {
+  // Inside the panel's own layer, floating layers that skip the portal and
+  // fixed layers raised above the panels (a drag preview, a popover in place).
+  for (const el of (ownLayer ?? document.body).querySelectorAll("*")) {
     if (frame.contains(el) || el.contains(frame)) continue;
     if (!el.matches(FLOATING_LAYER_SELECTOR) && !isRaisedFixed(el)) continue;
-    if (intersects(el.getBoundingClientRect(), rect) && isPainted(el)) throw blocked();
+    if (coversRect(el, frame, rect)) throw blocked();
   }
 
   for (let row = 0; row < HIT_GRID; row++) {
@@ -220,12 +276,17 @@ export function assertPanelCapturable(
   return rect;
 }
 
+/**
+ * Whether the panel stayed put. Strict: under zoom, a fraction of a CSS pixel
+ * is enough to move an edge across the capture's whole-pixel boundary.
+ */
 export function sameRect(a: PluginPanelCaptureRect, b: PluginPanelCaptureRect): boolean {
+  const SETTLED = 0.01;
   return (
-    Math.abs(a.x - b.x) < 0.5 &&
-    Math.abs(a.y - b.y) < 0.5 &&
-    Math.abs(a.width - b.width) < 0.5 &&
-    Math.abs(a.height - b.height) < 0.5
+    Math.abs(a.x - b.x) < SETTLED &&
+    Math.abs(a.y - b.y) < SETTLED &&
+    Math.abs(a.width - b.width) < SETTLED &&
+    Math.abs(a.height - b.height) < SETTLED
   );
 }
 

@@ -26,6 +26,7 @@ import {
   assertPanelCapturable,
   consoleMessagesForPlugin,
   locatePanelFrame,
+  sameRect,
 } from "../pluginPanelCapture";
 
 function box(left: number, top: number, width: number, height: number): DOMRect {
@@ -161,6 +162,7 @@ describe("assertPanelCapturable", () => {
     // A toast in the strip between sample rows, and pointer-events: none.
     const toaster = portal(box(0, 0, 0, 0), { role: "region", style: "pointer-events: none" });
     const toast = document.createElement("div");
+    toast.textContent = "Saved";
     toast.getBoundingClientRect = () => box(380, 52, 120, 6);
     toaster.appendChild(toast);
 
@@ -173,21 +175,29 @@ describe("assertPanelCapturable", () => {
     const preview = document.createElement("div");
     preview.style.position = "fixed";
     preview.style.zIndex = "999";
-    preview.getBoundingClientRect = () => box(150, 100, 40, 40);
+    const ghost = document.createElement("div");
+    ghost.style.backgroundColor = "rgb(20, 20, 20)";
+    ghost.getBoundingClientRect = () => box(150, 100, 40, 40);
+    preview.appendChild(ghost);
     appRoot().appendChild(preview);
 
     expect(() => assertPanelCapturable("p1", frame, "grid")).toThrow(/close it and retry/);
   });
 
-  it("ignores layers elsewhere, hidden, parked behind the app, or inside the panel", () => {
+  it("ignores layers elsewhere, hidden, transparent, parked behind the app, or inside the panel", () => {
     const frame = mountFrame("p1");
     hitTarget = frame;
-    portal(box(900, 600, 100, 100), { role: "menu" });
-    const hidden = portal(box(100, 50, 400, 300), { "data-portal-boundary": "true" });
+    portal(box(900, 600, 100, 100), { role: "menu", style: "background-color: red" });
+    const hidden = portal(box(100, 50, 400, 300), { style: "background-color: red" });
     hidden.checkVisibility = () => false;
-    portal(box(0, 0, 2000, 2000), { style: "position: fixed; z-index: -1" });
+    portal(box(0, 0, 2000, 2000), {
+      style: "position: fixed; z-index: -1; background-color: red",
+    });
+    // A closed dropdown's host stays mounted: full-window, but draws nothing.
+    portal(box(0, 0, 1200, 800), { style: "position: fixed; z-index: 70; pointer-events: none" });
     const own = document.createElement("div");
     own.setAttribute("role", "listbox");
+    own.style.backgroundColor = "red";
     own.getBoundingClientRect = () => box(120, 60, 50, 50);
     frame.appendChild(own);
 
@@ -196,15 +206,34 @@ describe("assertPanelCapturable", () => {
 
   it("lets a dialog panel through layers beneath it but not one above it", () => {
     useUIStore.setState({ overlayStack: ["panel-dialog-a", "panel-dialog-b"] });
-    portal(box(0, 0, 1200, 800), { role: "dialog" });
-    const dialog = portal(box(0, 0, 1200, 800), { role: "dialog" });
+    const scrim = "position: fixed; z-index: 60; background-color: rgba(0, 0, 0, 0.5)";
+    portal(box(0, 0, 1200, 800), { role: "dialog", style: scrim });
+    const dialog = portal(box(0, 0, 1200, 800), { role: "dialog", style: scrim });
     const frame = mountFrame("p1", box(100, 50, 400, 300), dialog);
     frame.dataset.panelLocation = "dialog";
     hitTarget = frame;
 
     expect(() => assertPanelCapturable("p1", frame, "dialog")).not.toThrow();
 
-    portal(box(0, 0, 1200, 800), { role: "alertdialog" });
+    portal(box(0, 0, 1200, 800), { role: "alertdialog", style: scrim });
+    expect(() => assertPanelCapturable("p1", frame, "dialog")).toThrow(/close it and retry/);
+  });
+
+  it("refuses a higher layer over a dialog panel even when it was mounted first", () => {
+    useUIStore.setState({ overlayStack: ["panel-dialog"] });
+    // A toast stack mounts once and stays; its z is above the dialogs'.
+    const toaster = portal(box(0, 0, 0, 0), { style: "position: fixed; z-index: 80" });
+    const toast = document.createElement("div");
+    toast.textContent = "Build failed";
+    toast.getBoundingClientRect = () => box(380, 60, 120, 40);
+    toaster.appendChild(toast);
+    const dialog = portal(box(0, 0, 1200, 800), {
+      role: "dialog",
+      style: "position: fixed; z-index: 60",
+    });
+    const frame = mountFrame("p1", box(100, 50, 400, 300), dialog);
+    hitTarget = frame;
+
     expect(() => assertPanelCapturable("p1", frame, "dialog")).toThrow(/close it and retry/);
   });
 
@@ -253,6 +282,15 @@ describe("assertPanelCapturable", () => {
     );
 
     expect(() => assertPanelCapturable("p1", frame, "grid")).toThrow(/close it and retry/);
+  });
+});
+
+describe("sameRect", () => {
+  it("treats a fraction of a pixel as movement, since zoom can carry it across a pixel edge", () => {
+    const at = { x: 100, y: 50, width: 400, height: 300 };
+    expect(sameRect(at, { ...at })).toBe(true);
+    expect(sameRect(at, { ...at, x: 100.4 })).toBe(false);
+    expect(sameRect(at, { ...at, height: 299.8 })).toBe(false);
   });
 });
 
